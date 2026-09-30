@@ -133,3 +133,17 @@ parent-value replacement, undeclared-field isolation, text fallback, and incompa
 output types. The negative checkpoint test confirms the child completed while the failed
 first parent node wrote no partial parent checkpoint. Clippy with tests and warnings denied
 passes. Typed output deployment/browser acceptance remains open.
+
+## Main terminal-admission compatibility
+
+The combined worker image deploys at
+`sha256:8ae04bb922fd7954e505108178ba0e7b93b55ddf72c305b4377f5299ce1f2e18`.
+The first negative persistent-chat check exposes a missing cross-service registration:
+Main's `runtimegrpc/output/server.go::runtimeFailurePolicyForError` rejects the new safe
+message despite its existing wire error code. Worker logs retain the exact cause but terminal
+publication is rejected, leaving chat 763 running. This is not UI acceptance.
+
+Main now admits only the exact child-input message under `PIPELINE_INPUT_INVALID`, retaining
+the old direct-tool message. Arbitrary details and the same text under another code remain
+rejected. The output transport package tests pass. Coordinated deployment and recovery of the
+rejected terminal remain pending. This registration requires no schema migration.

@@ -1060,8 +1060,13 @@ type runtimeFailurePolicy struct {
 	Retryable   bool
 }
 
+const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."
+
 // Input sections use fixed public messages. Never accept an arbitrary worker reason.
 func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
+		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true
+	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT {
 		switch payload.GetSafeMessage() {
 		case "The request cannot start because the user message exceeds a platform size limit. Shorten the message or attach the content as a file. This is not a model token limit.",
