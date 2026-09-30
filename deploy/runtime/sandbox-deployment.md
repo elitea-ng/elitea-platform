@@ -183,3 +183,14 @@ The chart default uses `ceph-rbd`, which requires a separate Ceph provisioner.
 Keep persistent storage enabled and complete the authenticated Redis bootstrap Job before starting workers.
 A separate Redis does not inherit existing browser sessions or queued commands.
 Drain active executions and verify dispatch state before changing application ownership.
+
+
+### Preserve certificate names during rehearsal migration
+
+Inspect certificate SANs before moving existing runtime material to Kubernetes.
+Match the Redis URL hostname to the server certificate, including the authentication and worker configuration.
+Use a matching Service alias or issue a certificate for the intended Service name.
+Never disable certificate verification to accommodate a different chart default.
+Stage Main and worker with zero replicas, then verify their material initialization before changing ownership.
+Verify no live claims, pending commands, or group lag before switching to a separate runtime Redis.
+Keep the prior containers and data volumes available until application and browser verification pass.

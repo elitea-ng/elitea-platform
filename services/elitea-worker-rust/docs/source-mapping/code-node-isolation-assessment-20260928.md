@@ -2432,3 +2432,48 @@ A temporary localhost port forward verifies the runtime CA chain and the `elitea
 The verification closes the port forward after the handshake.
 This proves the TLS transport dependency only. Main, worker, and browser execution remain unverified in Kubernetes.
 No Docker network membership or application ownership changes.
+
+
+## Kubernetes application and browser acceptance, 2026-09-30
+
+The rehearsal now runs Main, Rust worker, supervisor, web, browser edge, platform edge, runtime Redis, cache Redis, and object storage in Kubernetes.
+PostgreSQL, the LLM gateway, OIDC mock, and trace collector remain external rehearsal dependencies through their existing host-published endpoints.
+No Docker network attachment is added. This is not a claim of a fully self-contained Kubernetes deployment.
+
+Main and worker first deploy with zero replicas. Their isolated material initialization Jobs both complete.
+The object-store snapshot follows stopped admission and a check for zero live execution claims.
+Its 923136-byte archive transfers with an identical SHA-256 digest before extraction into a separate Kubernetes volume.
+The original object-store volume remains unchanged. Docker services restart after the snapshot.
+The final cutover checks zero pending commands and zero consumer-group lag before changing ownership.
+The 23 expired historical claims and two historical dispatched rows remain unchanged.
+
+The first Main startup fails TLS verification because the retained Redis certificate names `runtime-redis`.
+The chart example uses `elitea-runtime-redis`. Automatic rollback restores Docker Main and worker.
+A certificate-matching Kubernetes Service and configured endpoint correct the mismatch without disabling TLS verification.
+The second startup succeeds. Kubernetes Main and worker become Ready without restarts.
+Docker Main, worker, and browser edge stop and remain available for rollback.
+The rehearsal browser endpoint uses a localhost-only Kubernetes port forward.
+
+A fresh Chrome tab opens persistent chat 757 and submits the existing four-language state fixture.
+The production Main grant issuer authorizes the normal supervisor profiles; no fixture signer participates.
+Execution `5e3cbcf7391fe0e31c6cdb800c9e6eb8` reaches `SUCCEEDED`.
+Python sorts five records. JavaScript groups them. TypeScript checks the state. Rust verifies the final result.
+The UI shows count 5, total 31, fruit 24, veg 7, and all four completed steps.
+Reload preserves the exact final result once for this turn.
+The supervisor ledger contains four completed receipts with Kubernetes runtime identities.
+All execution Pods are removed after durable completion.
+
+A second browser submission uses an empty array and fails the Python assertion.
+The ledger adds one failed Kubernetes receipt. No later-language receipt is created for that run.
+The UI shows `PIPELINE_CODE_FAILED`, recovery guidance, and operator-only diagnostic instructions.
+Its support message reference is `dde18897-121c-50c0-a92a-0cf90ee13059`.
+This verifies direct pipeline failure propagation through the Kubernetes backend.
+
+Existing source mappings remain authoritative: `sandbox/dispatch.rs` owns durable worker dispatch intent.
+`sandbox/ledger.rs` owns supervisor receipts; `sandbox/kubernetes/runtime.rs` owns Pod execution and identity checks.
+Main owns grant issuance, while the worker owns graph checkpoints and result propagation.
+The Kubernetes paths reuse the Docker Code-node graph and UI contracts rather than a second implementation.
+
+Kubernetes UI cancellation, worker-loss recovery, resource exhaustion, and ephemeral-editor testing remain open.
+The browser connection badge remains disconnected while the execution-event stream delivers the result; that indicator needs separate investigation.
+No load, soak, external provider, or package-installation claim follows from these Code-only tests.

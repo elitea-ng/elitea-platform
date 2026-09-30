@@ -88,7 +88,9 @@ Kubernetes deployment material and runtime images are built and deployed to an i
 The four-language state fixture passes through the live Kubernetes adapter, including repeated receipt reads and Pod cleanup.
 The deployed supervisor passes mTLS peer rejection and mid-execution restart recovery with an isolated fixture signer.
 Recovery retains the original execution Pod UID and returns an identical persisted receipt after retry.
-Main-issued authorization and full Kubernetes application/UI acceptance remain open.
+Main-issued authorization and persistent-chat Kubernetes execution pass on 2026-09-30.
+Chat 757 verifies the four-language state result, reload, a failed Python node, and terminal Pod cleanup.
+Kubernetes cancellation, worker-loss UI recovery, resource-exhaustion behavior, and ephemeral-editor acceptance remain open.
 Gate 5 remains open for those checks and the remaining pipeline requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
