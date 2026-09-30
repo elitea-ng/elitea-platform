@@ -2530,3 +2530,47 @@ It receives exit code 137 and `memory_limit`, verifies an identical repeated rec
 Six Kubernetes client tests and two supervisor classification tests pass. Clippy passes with warnings denied.
 This is live adapter evidence. Deployment and browser acceptance for this memory failure remain pending.
 CPU throttling, deadline exhaustion, and performance acceptance retain their separate gates.
+
+
+## Shared build-host pressure, 2026-09-30
+
+The rehearsal shares an 8 GiB Docker VM with the current platform and release compilation.
+During supervisor compilation, the VM exhausts swap and the isolated Minikube container records OOM events.
+The Kubernetes API stops responding. This event is separate from the bounded Code memory-exhaustion test.
+The build is cancelled through its identified client. BuildKit records a terminal error.
+The existing Minikube profile restarts without recreating volumes. Its services recover after Redis becomes ready.
+The localhost browser port forward is restored.
+
+The supervisor Containerfile accepts an optional `CARGO_BUILD_JOBS` build argument.
+A one-job build still overlaps enough resident memory to produce another node OOM event.
+Build concurrency alone is therefore not a sufficient host memory guarantee.
+Minikube confirms that the isolated rehearsal node stops while the build continues. Current-platform containers remain unchanged.
+The single-job build completes after the rehearsal node stops. The existing node then restarts with its retained volumes.
+The supervisor rolls out with the memory receipt fix. Browser memory-failure acceptance remains pending.
+The Rust test targets compile after the deadline test helper uses the declared request timeout type.
+Do not interpret this shared build-host event as production runtime capacity evidence.
+
+## Kubernetes resource failure acceptance, 2026-09-30
+
+The supervisor deploys the memory receipt correction to the existing rehearsal.
+The cached image digest is `sha256:91449fff17c17fe84ea519c61398431839329c7c78ca4981e0c886428ee95234`.
+
+The live deadline test passes in 5.77 seconds. The live memory test passes in 4.45 seconds.
+Both tests verify repeated receipt retrieval and final Pod removal.
+The memory receipt reports `memory_limit` and exit code 137.
+The test helper uses the request contract's `u32` timeout.
+
+Persistent chat 759 runs pipeline 133 after the fixture replaces reserved state key `result` with `memory_probe`.
+The first attempt fails admission and does not test resource enforcement.
+The corrected execution is `57a83998b93acaba18cd1d6541065051`.
+Its only sandbox job reaches `failed` with `sandbox.memory_limit`.
+The job key is `ccb974eaa2af8a66475cdf9827c5bdf62a700fa293f0e54ee36e5e2aeeee1eb3`.
+The downstream sentinel does not run. No sandbox Pods remain.
+The browser shows Code-node failure guidance and restores the composer.
+The same failure remains visible after reload.
+Screenshot evidence: `elitea-kubernetes-memory-failure-20260930.png`.
+
+The fixture is `scripts/runtime/fixtures/code-memory-limit.yaml`.
+The live adapter checks are in `src/sandbox/kubernetes/live_tests.rs`.
+These checks extend the current-to-new mapping above. They do not prove production load capacity.
+The existing disconnected sidebar indicator remains a separate UI issue.

@@ -1,0 +1,38 @@
+# Rehearsal only: requires an enforced sandbox memory limit below 768 MiB.
+state:
+  input:
+    type: str
+  messages:
+    type: list
+  memory_probe:
+    type: dict
+entry_point: memory_limit
+nodes:
+  - id: memory_limit
+    type: code
+    language: javascript
+    input: [input]
+    code:
+      type: fixed
+      value: |
+        export default () => {
+          const pages = [];
+          for (let i = 0; i < 96; i++) {
+            const page = new Uint8Array(8 * 1024 * 1024);
+            page.fill(1);
+            pages.push(page);
+          }
+          return {unexpected: pages.length};
+        };
+    output: [memory_probe]
+    transition: forbidden_success
+  - id: forbidden_success
+    type: code
+    language: javascript
+    input: [memory_probe]
+    code:
+      type: fixed
+      value: |
+        export default () => ({unexpected: "DOWNSTREAM_MUST_NOT_RUN"});
+    output: [messages]
+    transition: END

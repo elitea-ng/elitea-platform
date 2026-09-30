@@ -152,6 +152,26 @@ async fn execute(runtime: &KubernetesRuntime, job: &PreparedJob) -> Value {
 #[tokio::test]
 #[ignore = "requires an isolated Kubernetes context, cached Deno image, and sandbox boundary resources"]
 async fn live_memory_exhaustion_has_terminal_receipt() {
+    // Touch bounded pages so this exercises the cgroup, not lazy virtual allocation.
+    live_failure_receipt(
+        "export default () => { const pages = []; for (let i = 0; i < 64; i++) { const page = new Uint8Array(8 * 1024 * 1024); page.fill(1); pages.push(page); } return pages.length; };",
+        30,
+        "memory_limit",
+    ).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated Kubernetes context, cached Deno image, and sandbox boundary resources"]
+async fn live_deadline_exhaustion_has_terminal_receipt() {
+    live_failure_receipt(
+        "export default async () => { await new Promise(resolve => setTimeout(resolve, 10000)); return {unexpected: true}; };",
+        2,
+        "timeout",
+    )
+    .await;
+}
+
+async fn live_failure_receipt(source: &str, timeout_seconds: u32, expected: &str) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let context = std::env::var("ELITEA_TEST_KUBE_CONTEXT").expect("explicit context required");
     let namespace =
@@ -178,10 +198,15 @@ async fn live_memory_exhaustion_has_terminal_receipt() {
         false,
     )
     .unwrap();
-    // Touch bounded pages so this exercises the cgroup, not lazy virtual allocation.
-    let job = PreparedJob::new(Language::JavaScript,
-        "export default () => { const pages = []; for (let i = 0; i < 64; i++) { const page = new Uint8Array(8 * 1024 * 1024); page.fill(1); pages.push(page); } return pages.length; };".into(),
-        BTreeMap::new(), runtime.image_digest().into(), "live-memory-v1".into(), 30).unwrap();
+    let job = PreparedJob::new(
+        Language::JavaScript,
+        source.into(),
+        BTreeMap::new(),
+        runtime.image_digest().into(),
+        "live-resource-v1".into(),
+        timeout_seconds,
+    )
+    .unwrap();
     let mut activation = [0; 32];
     SystemRandom::new().fill(&mut activation).unwrap();
     let identity = job
@@ -205,10 +230,17 @@ async fn live_memory_exhaustion_has_terminal_receipt() {
         }
     })
     .await
-    .expect("memory failure must terminate");
+    .expect("resource failure must terminate");
     let envelope: Value = serde_json::from_slice(&receipt).unwrap();
-    assert_eq!(envelope["status"], "memory_limit", "{envelope}");
+    assert_eq!(envelope["status"], expected, "{envelope}");
     assert_eq!(runtime.receipt(&bound).await.unwrap().unwrap(), receipt);
-    eprintln!("memory exhaustion receipt: {envelope}");
+    eprintln!("resource exhaustion receipt: {envelope}");
     runtime.cleanup(&bound).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while runtime.exists(&bound).await.unwrap() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("resource fixture cleanup deadline");
 }
