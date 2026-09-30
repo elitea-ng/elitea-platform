@@ -102,6 +102,8 @@ A live output-flood test verifies bounded capture, identical repeated failure re
 Docker and Kubernetes workspace-exhaustion tests verify failure receipts and cleanup with a full 256 MiB workspace.
 Kubernetes node PID limits are now explicit. Live Rust probes verify process-count enforcement on Docker and Kubernetes.
 Both return structured results, retain unchanged receipts, and clean up after rejecting additional child processes.
+Chat 765 verifies sequential child AskUser answers, worker replacement at the second pause, and isolated instruction variables.
+See the [child-variable mapping](source-mapping/child-pipeline-variables-20260930.md#child-clarification-routing-correction) for the UI decision-identity fix.
 Gate 5 remains open for the remaining pipeline, isolation, and capacity requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 The [Code functional audit](source-mapping/code-functional-parity-20260930.md) maps package imports, state, platform-client access, debug artifacts, and variable-source admission.

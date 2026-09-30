@@ -568,7 +568,7 @@ const pausedMessage: ChatMessage = {
   content: "",
   createdAt: "2026-01-01T00:00:00.000Z",
   questionId: "question-1",
-  hitlInterrupt: { tool_call_id: "call-1" },
+  hitlInterrupt: { interrupt_id: "int-1", tool_call_id: "call-1" },
 };
 
 function authorizationAction(
@@ -615,7 +615,7 @@ describe("continueHitl — a resume no transport accepted", () => {
     await handlers.continueHitl({ action: "approve" });
 
     const restored = history.read()[0];
-    expect(restored?.hitlInterrupt).toEqual({ tool_call_id: "call-1" });
+    expect(restored?.hitlInterrupt).toEqual(pausedMessage.hitlInterrupt);
     expect(restored?.isLoading).toBe(false);
     expect(restored?.isStreaming).toBe(false);
     expect(String(restored?.exception)).toContain("was not sent");
@@ -706,7 +706,7 @@ describe("continueHitl — the REST continuation", () => {
     expect(call.body["hitl_decisions"]).toBeUndefined();
   });
 
-  it("sends a clarification answer as a STRUCTURED hitl_value, not as the encoded string", async () => {
+  it("preserves the tool identity for a structured answer on the root thread", async () => {
     // `currentHITLValue` (agentexecution/route.go) admits a JSON object or a
     // JSON string for `answer` and canonicalises what it admitted; the worker
     // parses that text back with `AskUserRequest::format_answer` and renders
@@ -734,11 +734,14 @@ describe("continueHitl — the REST continuation", () => {
 
     const call = seen.calls[0]!;
     expect(call.contract).toBe("agent.continue.hitl.v1");
-    expect(call.body["hitl_action"]).toBe("answer");
-    expect(call.body["hitl_value"]).toEqual({ environment: "Staging", traits: ["Safe", "Fast"] });
-    // The root shape, not the decisions one: a single pause resumes with
-    // `hitl_action`, and the route REFUSES both in one body.
-    expect(call.body["hitl_decisions"]).toBeUndefined();
+    expect(call.body["hitl_decisions"]).toEqual([{
+      interrupt_id: "int-1",
+      tool_call_id: "call-1",
+      action: "answer",
+      value: { environment: "Staging", traits: ["Safe", "Fast"] },
+    }]);
+    expect(call.body["hitl_action"]).toBeUndefined();
+    expect(call.body["hitl_value"]).toBeUndefined();
     expect(emitSocket).not.toHaveBeenCalled();
   });
 
@@ -758,7 +761,9 @@ describe("continueHitl — the REST continuation", () => {
 
     await handlers.continueHitl({ action: "answer", value: JSON.stringify("Staging"), toolCallId: "call-1" });
 
-    expect(seen.calls[0]!.body["hitl_value"]).toBe("Staging");
+    expect(seen.calls[0]!.body["hitl_decisions"]).toEqual([{
+      interrupt_id: "int-1", tool_call_id: "call-1", action: "answer", value: "Staging",
+    }]);
   });
 
   it("falls back to the socket when the route refuses the resume", async () => {

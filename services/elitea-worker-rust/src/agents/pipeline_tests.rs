@@ -1890,6 +1890,75 @@ async fn pipeline_agent_node_resumes_parallel_nested_confirmations_without_ident
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pipeline_agent_variable_call_resumes_clarification() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let ((platform, model_facade, _, _), captured) = pipeline_runtime_cycles_with_capture(
+        &json!({
+            "agent_type":"agent", "instructions":"Audience={{audience}}",
+            "variables":[{"name":"audience","value":"users"}],
+            "meta":{"internal_tools":["ask_user"]}, "tools":[],
+            "llm_settings":{"model_name":"child-model","model_project_id":23,
+                "max_tokens":2048,"openai_compatible":true}
+        }),
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_text_response("clarified child")),
+        ],
+        2,
+    );
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::clone(&sessions),
+        Arc::clone(&checkpointer) as Arc<dyn Checkpointer>,
+    )
+    .with_runtime_clients(platform, model_facade);
+    let mut request = agent_pipeline_request("release-agent", "agent");
+    let instructions = request.payload.application["version_details"]["instructions"]
+        .as_str()
+        .unwrap()
+        .replace(
+            "    output:",
+            "      audience: {type: fixed, value: operators}\n    output:",
+        );
+    request.payload.application["version_details"]["instructions"] = json!(instructions);
+    let invocation = assembler.assemble(authorized(&request)).await.unwrap();
+    let (interrupts, _) = collect_pipeline_pause(invocation).await;
+    assert_eq!(interrupts.len(), 1);
+    let pending = &interrupts[0]["response_metadata"]["hitl_interrupts"][0];
+    let answer = r#"{"q1":"Staging"}"#;
+    request.binding.request_content_digest = [17; 32];
+    request.payload.should_continue = true;
+    request.payload.hitl_resume = true;
+    request.payload.hitl_action = Some("answer".to_owned());
+    request.payload.hitl_value = Some(answer.to_owned());
+    request.payload.hitl_decisions = vec![json!({
+        "interrupt_id":pending["interrupt_id"], "tool_call_id":pending["tool_call_id"],
+        "action":"answer", "value":answer
+    })];
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("Agent node clarification resume");
+    let browser = collect_pipeline_completion(invocation).await;
+    assert!(
+        browser
+            .iter()
+            .any(|event| event["content"] == "clarified child")
+    );
+    let captured = captured.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    for request in captured.iter() {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(body["messages"].as_array().unwrap().iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("Audience=operators"))
+        }));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pipeline_agent_node_resumes_parallel_nested_authorization_for_authorize_and_skip() {
     run_pipeline_agent_node_nested_authorization(true).await;
     run_pipeline_agent_node_nested_authorization(false).await;

@@ -257,3 +257,30 @@ All 21 tests selected by `cargo test --lib parallel_ --jobs 2` pass.
 These tests use local provider fixtures and the same process.
 They do not prove worker replacement, live clarification controls, or database recovery.
 The existing task-only clarification test also passes.
+
+## Child clarification routing correction
+
+Persistent chat 765 exposes a failed answer after worker replacement.
+The saved graph checkpoint and nested confirmation resolve correctly in a recorded-event probe.
+The persisted continuation request contains the correct interrupt identity but omits `tool_call_id`.
+The previous UI path preserves that field only when `childThreadId` exists.
+A saved Agent node can pause within the parent pipeline thread.
+Without the tool identity, Rust selects the static HITL-node resolver and rejects the decision.
+
+`apps/elitea-web/src/widgets/chat-box/ui/hooks/useChatBoxHandlers.hitl.ts` now retains explicit tool decisions on the root thread.
+Static HITL nodes retain their existing root-action contract.
+No checkpoint ownership, database schema, or authorization rule changes.
+
+The current SDK reference remains `runtime/tools/application.py` for invocation-local child state.
+The new Rust regression is `agents/pipeline_tests.rs::pipeline_agent_variable_call_resumes_clarification`.
+It verifies resumed child instructions retain the invocation override instead of the saved default.
+All 44 UI handler tests, UI typechecking, and the application build pass.
+The focused Rust regression, formatting, and Clippy with warnings denied pass.
+
+The rebuilt UI `elitea-web:ask-resume-20260930` passes persistent-chat acceptance in chat 765.
+The first child accepts the selected debugging topic and returns its joke.
+The second child pauses independently and accepts the free-text topic `Database indexes` after worker replacement.
+Worker UID changes from `84907700-439f-407d-8631-ca90c9a2beb9` to `fbf6e83f-093b-4292-aa5d-cef633153f4e`.
+The final report retains both results and the separate `operators/brief` and `users/formal` instruction values.
+Browser reload retains the same report without duplicate results.
+This verifies sequential child clarification recovery. It does not close broader Gate 5 composition or dependency installation.

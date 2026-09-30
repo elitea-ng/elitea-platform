@@ -108,7 +108,7 @@ function hitlContinueIdentity(params: HitlContinueBodyParams): Record<string, un
 }
 
 /**
- * The one decision a fan-out child's resume carries.
+ * The decision for a tool pause, including a child on the root thread.
  *
  * `thread_id` belongs at the TOP level of the body. Inside a decision entry
  * the route refuses it, because `currentHITLDecisions` admits only
@@ -142,7 +142,7 @@ function hitlFanoutDecision(params: HitlContinueBodyParams): HitlDecision | unde
 export function buildHitlContinueBody(params: HitlContinueBodyParams): Record<string, unknown> | undefined {
   const base = hitlContinueIdentity(params);
   if (base === undefined) return undefined;
-  if (params.action.childThreadId) {
+  if (params.action.childThreadId || params.action.toolCallId) {
     const decision = hitlFanoutDecision(params);
     return decision === undefined ? undefined : { ...base, hitl_decisions: [decision] };
   }
