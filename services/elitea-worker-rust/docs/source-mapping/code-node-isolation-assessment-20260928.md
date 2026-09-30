@@ -2421,3 +2421,14 @@ Redis starts with TLS on port 6380 and AOF enabled. Its authenticated readiness 
 The chart bootstrap Job completes and creates the isolated consumer groups.
 The retained Docker Redis and application are unchanged.
 Main, worker, and UI images are cached in Minikube, but application ownership has not switched.
+
+### Kubernetes platform edge verification
+
+The existing Helm platform-edge template now runs in the isolated Kubernetes rehearsal namespace.
+It uses the retained certificate identity through a Kubernetes TLS Secret.
+The container runs as user 65532 with a read-only root filesystem and all capabilities removed.
+The Deployment becomes Ready without restarts.
+A temporary localhost port forward verifies the runtime CA chain and the `elitea-platform-edge` hostname with TLS 1.3.
+The verification closes the port forward after the handshake.
+This proves the TLS transport dependency only. Main, worker, and browser execution remain unverified in Kubernetes.
+No Docker network membership or application ownership changes.
