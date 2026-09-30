@@ -435,8 +435,10 @@ See [repair recovery evidence](source-mapping/output-continuation-capacity-20260
 ### Gate 5 zero-argument direct tools
 
 Audit omitted versus explicit empty `input_mapping` for direct Toolkit/MCP nodes.
-The current Rust default inserts `messages`, which a strict zero-argument MCP schema rejects (collision setup chats 689/690).
-Verify current-platform behavior and define an explicit no-argument contract without silently changing existing message-mapping behavior.
+The earlier Rust default inserts `messages`, which a strict zero-argument MCP schema rejects (collision setup chats 689/690).
+The [empty-mapping correction](source-mapping/direct-tool-empty-mapping-20260930.md) preserves the current SDK distinction.
+Explicit empty mappings now send no arguments; omitted mappings retain the legacy message default.
+All 16 focused direct-tool tests pass. Deployment and browser acceptance remain open.
 
 ## Luna Full-window rehearsal configuration (2026-09-28)
 

@@ -51,7 +51,7 @@ struct RawDirectToolNodeDefinition {
     node_type: String,
     toolkit_name: String,
     tool: String,
-    #[serde(default)]
+    #[serde(default = "default_input_mapping")]
     input_mapping: BTreeMap<String, RawInputMapping>,
     #[serde(default)]
     input: Vec<String>,
@@ -1177,15 +1177,20 @@ impl ToolContext for PipelineToolContext {
     }
 }
 
+// Omitted mappings retain legacy message input. Explicit empty maps send no arguments.
+fn default_input_mapping() -> BTreeMap<String, RawInputMapping> {
+    BTreeMap::from([(
+        "messages".to_owned(),
+        RawInputMapping {
+            kind: "variable".to_owned(),
+            value: Value::String("messages".to_owned()),
+        },
+    )])
+}
+
 fn validate_input_mapping(
     raw: BTreeMap<String, RawInputMapping>,
 ) -> Result<BTreeMap<String, DirectToolInputMapping>, DirectToolConfigurationError> {
-    if raw.is_empty() {
-        return Ok(BTreeMap::from([(
-            "messages".to_owned(),
-            DirectToolInputMapping::Variable("messages".to_owned()),
-        )]));
-    }
     let mut mapping = BTreeMap::new();
     for (key, value) in raw {
         if !valid_tool_identity(&key) {

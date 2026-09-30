@@ -42,6 +42,8 @@ COPY services/elitea-worker-rust ./services/elitea-worker-rust
 WORKDIR /src/services/elitea-worker-rust
 
 FROM builder-base AS builder
+# Optional build-only concurrency bound for shared development hosts.
+ARG CARGO_BUILD_JOBS
 
 # The dependency build lives in the THREE CACHE MOUNTS below, not in a layer,
 # and that is deliberate: a cargo-chef style `target/` inside the image would

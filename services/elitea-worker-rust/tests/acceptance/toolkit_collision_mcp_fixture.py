@@ -5,7 +5,7 @@ import os
 import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-SOURCES = {"/release": "RELEASE-731", "/audit": "AUDIT-942"}
+SOURCES = {"/release": "RELEASE-731", "/audit": "AUDIT-942", "/empty": "EMPTY-ARGUMENTS-731"}
 TOOL = {
     "name": "lookup_record",
     "description": "Return the exact source marker from this toolkit.",
@@ -25,12 +25,13 @@ def respond(path, body):
         result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
                   "serverInfo": {"name": "toolkit-collision-fixture", "version": "1.0.0"}}
     elif method == "tools/list":
-        result = {"tools": [TOOL]}
+        tool = {**TOOL, "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}} if path == "/empty" else TOOL
+        result = {"tools": [tool]}
     elif method == "ping":
         result = {}
     elif method == "tools/call":
         params = body.get("params", {})
-        if not isinstance(params, dict) or params.get("name") != TOOL["name"] or params.get("arguments") != {"probe": "identity"}:
+        if not isinstance(params, dict) or params.get("name") != TOOL["name"] or params.get("arguments") != ({} if path == "/empty" else {"probe": "identity"}):
             return {"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32602, "message": "Invalid tool request"}}
         result = {"content": [{"type": "text", "text": json.dumps({"source": path[1:], "marker": SOURCES[path]})}], "isError": False}
     else:

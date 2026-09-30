@@ -1301,3 +1301,30 @@ async fn confirmation_capacity_does_not_restrict_ordinary_tool_input() {
     assert!(failure.to_string().contains("tool_confirmation"));
     assert_eq!(capture.lock().expect("capture").calls, 0);
 }
+
+#[tokio::test]
+async fn explicit_empty_direct_tool_mapping_sends_no_arguments() {
+    for kind in ["toolkit", "mcp"] {
+        let yaml = format!(
+            "id: lookup\ntype: {kind}\ntoolkit_name: Customer Support\ntool: search_records\ninput_mapping: {{}}\noutput: [messages]\ntransition: END\n"
+        );
+        let definition = DirectToolNodeDefinition::from_yaml(&yaml).unwrap();
+        let legacy =
+            DirectToolNodeDefinition::from_yaml(&yaml.replace("input_mapping: {}\n", "")).unwrap();
+        assert!(definition.input_mapping().is_empty());
+        assert_ne!(definition.config_digest(), legacy.config_digest());
+        let (resolver, capture) = fixture_runtime(json!("zero-argument-result"), true);
+        let node = DirectToolNode::new(definition, state_types(), resolver);
+        let state = HashMap::from([("messages".to_owned(), json!(["must not become arguments"]))]);
+        node.execute(&NodeContext::new(
+            state,
+            ExecutionConfig::new("zero-arguments"),
+            1,
+        ))
+        .await
+        .expect("explicit empty mapping executes");
+        let capture = capture.lock().unwrap();
+        assert_eq!(capture.calls, 1);
+        assert_eq!(capture.arguments, json!({}));
+    }
+}
