@@ -155,3 +155,31 @@ fn state_modifier_definition_is_strict_bounded_and_digest_stable() {
         assert!(StateModifierNodeDefinition::from_yaml(yaml).is_err());
     }
 }
+
+#[tokio::test]
+async fn state_modifier_renders_json_numbers_as_template_numbers() {
+    let definition = StateModifierNodeDefinition::from_yaml(
+        r"
+id: transform
+type: state_modifier
+template: '{{ count + 1 }}|{{ nested.amount * 2 }}|{{ (payload | from_json).count + 1 }}'
+input: [count, nested, payload]
+output: [result]
+",
+    )
+    .unwrap();
+    let context = NodeContext::new(
+        HashMap::from([
+            ("count".into(), json!(3)),
+            ("nested".into(), json!({"amount": 1.5})),
+            ("payload".into(), json!(r#"{"count": 4}"#)),
+        ]),
+        ExecutionConfig::new("numeric-template"),
+        0,
+    );
+    let output = StateModifierNode::new(definition)
+        .execute(&context)
+        .await
+        .unwrap();
+    assert_eq!(output.updates["result"], json!("4|3.0|5"));
+}

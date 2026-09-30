@@ -106,6 +106,7 @@ fn shared_pipeline_resolver(graph: Arc<CompiledGraph>) -> Arc<dyn PipelineApplic
         alias: "Research Agent".to_owned(),
         participant: ResolvedApplicationParticipant::Pipeline {
             graph,
+            variable_types: BTreeMap::new(),
             events: None,
             display_name: "Research Agent".to_owned(),
         },
@@ -856,4 +857,186 @@ fn indent_yaml(value: &str, count: usize) -> String {
         .map(|line| format!("{prefix}{line}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+const CHILD_VARIABLE_PIPELINE: &str = r#"
+state:
+  count: {type: int, value: 7}
+  label: str
+  items: list
+  enabled: {type: bool, value: true}
+  answer: str
+entry_point: report
+nodes:
+  - id: report
+    type: state_modifier
+    template: "{{ count }}|{{ label }}|{{ items | length }}|{{ enabled }}"
+    input: [count, label, items, enabled]
+    output: [answer]
+    transition: END
+"#;
+
+const PARENT_VARIABLE_PIPELINE: &str = r#"
+state:
+  topic: str
+  rows: list
+  answer: str
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: Research Agent
+    input_mapping:
+      task: {type: fixed, value: Report the values}
+      count: {type: fixed, value: 3}
+      label: {type: fstring, value: "for {topic}"}
+      items: {type: variable, value: rows}
+    input: [topic, rows]
+    output: [answer]
+    transition: END
+"#;
+
+fn child_variable_resolver(
+    checkpointer: Arc<MemoryCheckpointer>,
+) -> Arc<dyn PipelineApplicationResolver> {
+    let definition = PipelineDefinition::from_yaml(CHILD_VARIABLE_PIPELINE).unwrap();
+    let variable_types = definition.declared_variable_types();
+    let graph = definition
+        .compile_subgraph_with_runtime(checkpointer, &PipelineNodeRuntimes::default())
+        .unwrap();
+    Arc::new(FixtureApplicationResolver {
+        alias: "Research Agent".into(),
+        participant: ResolvedApplicationParticipant::Pipeline {
+            graph: Arc::new(graph),
+            variable_types,
+            events: None,
+            display_name: "Research Agent".into(),
+        },
+    })
+}
+
+#[tokio::test]
+async fn saved_child_pipeline_receives_typed_mappings_and_keeps_defaults() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let parent = PipelineDefinition::from_yaml(PARENT_VARIABLE_PIPELINE).unwrap();
+    let graph = parent
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(
+                None,
+                None,
+                Some(child_variable_resolver(checkpointer.clone())),
+            ),
+        )
+        .unwrap();
+    let state = graph
+        .invoke(
+            State::from([
+                ("topic".into(), json!("orders")),
+                ("rows".into(), json!([1, 2])),
+            ]),
+            ExecutionConfig::new("variables-parent"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["answer"], json!("3|for orders|2|True"));
+    assert!(!state.contains_key("count"));
+    let child = checkpointer
+        .load("variables-parent/delegate")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.state["count"], json!(3));
+    assert_eq!(child.state["items"], json!([1, 2]));
+    assert_eq!(child.state["enabled"], json!(true));
+    assert!(!child.state.contains_key("topic"));
+    assert!(!child.state.contains_key("rows"));
+}
+
+#[tokio::test]
+async fn child_variable_type_failure_stops_before_child_execution() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let parent = PipelineDefinition::from_yaml(
+        &PARENT_VARIABLE_PIPELINE.replace("value: 3", "value: wrong"),
+    )
+    .unwrap();
+    let graph = parent
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(
+                None,
+                None,
+                Some(child_variable_resolver(checkpointer.clone())),
+            ),
+        )
+        .unwrap();
+    assert!(
+        graph
+            .invoke(
+                State::from([
+                    ("topic".into(), json!("orders")),
+                    ("rows".into(), json!([1, 2])),
+                ]),
+                ExecutionConfig::new("invalid-variables")
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        checkpointer
+            .load("invalid-variables/delegate")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn child_variable_mappings_reject_control_fields_and_bind_configuration() {
+    let original = ApplicationNodeDefinition::from_yaml(AGENT_NODE).unwrap();
+    for name in [
+        "messages",
+        "input",
+        "__elitea_tool_resume_v1",
+        "__elitea_application_variable_8_delegate_count",
+        "state_types",
+    ] {
+        let yaml = PARENT_VARIABLE_PIPELINE.replace("      count:", &format!("      {name}:"));
+        assert!(PipelineDefinition::from_yaml(&yaml).is_err(), "{name}");
+    }
+    let augmented = AGENT_NODE.replace(
+        "input_mapping:\n",
+        "input_mapping:\n  count: {type: fixed, value: 3}\n",
+    );
+    let mapped = ApplicationNodeDefinition::from_yaml(&augmented).unwrap();
+    assert_ne!(original.config_digest(), mapped.config_digest());
+    assert!(
+        PipelineDefinition::from_yaml(
+            &PARENT_VARIABLE_PIPELINE.replace("value: rows", "value: missing")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn child_variable_names_must_exist_in_the_saved_child_schema() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let parent = PipelineDefinition::from_yaml(
+        &PARENT_VARIABLE_PIPELINE.replace("      count:", "      unknown_child_variable:"),
+    )
+    .unwrap();
+    assert!(
+        parent
+            .compile_with_runtime(
+                "parent",
+                checkpointer.clone(),
+                None,
+                &PipelineNodeRuntimes::new(None, None, Some(child_variable_resolver(checkpointer)))
+            )
+            .is_err()
+    );
 }

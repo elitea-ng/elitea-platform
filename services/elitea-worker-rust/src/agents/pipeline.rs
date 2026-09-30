@@ -974,6 +974,7 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
                 .compile_subgraph_with_runtime(checkpointer, &runtimes)
                 .map(|graph| ResolvedApplicationParticipant::Pipeline {
                     graph: Arc::new(graph),
+                    variable_types: definition.declared_variable_types(),
                     events: Some(events),
                     display_name,
                 })

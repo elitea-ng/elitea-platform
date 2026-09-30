@@ -9,6 +9,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 
 ## Progression status
 
+- [Saved child pipeline variables](source-mapping/child-pipeline-variables-20260930.md) add typed input mappings with isolated defaults. Deployment and browser acceptance remain open.
+
 - Gate 1 has pipeline turn, regeneration, and nested-resume fixes with regression coverage. Mixed-guard and collaborative proofs remain open.
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.

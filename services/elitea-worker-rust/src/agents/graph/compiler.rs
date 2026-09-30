@@ -469,6 +469,16 @@ impl PipelineNodeDefinition {
 }
 
 impl PipelineDefinition {
+    pub(crate) fn declared_variable_types(&self) -> BTreeMap<String, String> {
+        self.state
+            .iter()
+            .filter(|(key, _)| {
+                !reserved_user_state_key(key) && !matches!(key.as_str(), "input" | "messages")
+            })
+            .map(|(key, kind)| (key.clone(), kind.clone()))
+            .collect()
+    }
+
     /// Parse and validate a complete frozen pipeline YAML document.
     pub(crate) fn from_yaml(yaml: &str) -> Result<Self, PipelineConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_PIPELINE_YAML_BYTES {
@@ -895,6 +905,9 @@ impl PipelineDefinition {
         ]);
         channels.extend(self.state.keys().cloned());
         for node in &self.nodes {
+            if let PipelineNodeDefinition::Application(application) = node {
+                channels.extend(application.variable_channels());
+            }
             channels.extend(node.input_keys().iter().cloned());
             channels.extend(node.output_keys().iter().cloned());
             channels.extend(node.cleaned_keys().iter().cloned());
@@ -1581,12 +1594,12 @@ fn validate_node_state(
     }
     match node {
         PipelineNodeDefinition::Application(node) => {
-            if let Some(key) = node.mapped_variable()
-                && !builtin_state_key(key)
-                && !state.contains_key(key)
+            if node
+                .mapped_variables()
+                .any(|key| !builtin_state_key(key) && !state.contains_key(key))
             {
                 return Err(PipelineConfigurationError::Invalid(
-                    "an Agent task mapping variable is not declared in pipeline state",
+                    "an Agent input mapping variable is not declared in pipeline state",
                 ));
             }
         }
@@ -1746,7 +1759,8 @@ fn builtin_state_key(key: &str) -> bool {
 }
 
 pub(super) fn reserved_user_state_key(key: &str) -> bool {
-    key == HITL_RESUME_STATE_KEY
+    key.starts_with("__elitea_application_variable_")
+        || key == HITL_RESUME_STATE_KEY
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY

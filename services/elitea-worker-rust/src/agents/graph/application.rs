@@ -70,7 +70,7 @@ struct RawInputMapping {
 
 #[derive(Clone)]
 enum ApplicationInputMapping {
-    Fixed(String),
+    Fixed(Value),
     Variable(String),
     Template(String),
 }
@@ -93,6 +93,7 @@ pub(crate) struct ApplicationNodeDefinition {
     id: String,
     selection: PipelineApplicationSelection,
     task: ApplicationInputMapping,
+    variables: BTreeMap<String, ApplicationInputMapping>,
     input: Vec<String>,
     output: Vec<String>,
     transition: Option<String>,
@@ -143,9 +144,9 @@ impl ApplicationNodeDefinition {
                 "the Agent node transition is malformed",
             ));
         }
-        if raw.input_mapping.len() != 1 || !raw.input_mapping.contains_key("task") {
+        if raw.input_mapping.is_empty() || raw.input_mapping.len() > MAX_NODE_VARIABLES {
             return Err(ApplicationConfigurationError::Invalid(
-                "the Agent node requires exactly one task input mapping",
+                "the Agent node input mapping must contain a task and bounded variables",
             ));
         }
         let task_mapping =
@@ -155,10 +156,28 @@ impl ApplicationNodeDefinition {
                     "the Agent task mapping is missing",
                 ))?;
         let task = parse_task_mapping(&task_mapping)?;
+        let mut variables = BTreeMap::new();
+        for (key, mapping) in raw.input_mapping {
+            if !valid_output_key(&key)
+                || super::compiler::reserved_user_state_key(&key)
+                || matches!(key.as_str(), "input" | "messages")
+            {
+                return Err(ApplicationConfigurationError::Invalid(
+                    "the child variable name is reserved or malformed",
+                ));
+            }
+            let value = if mapping.kind == "fixed" {
+                ApplicationInputMapping::Fixed(mapping.value)
+            } else {
+                parse_task_mapping(&mapping)?
+            };
+            variables.insert(key, value);
+        }
         Ok(Self {
             id: raw.id,
             selection: PipelineApplicationSelection { alias: raw.tool },
             task,
+            variables,
             input: raw.input,
             output: raw.output,
             transition: raw.transition,
@@ -181,11 +200,25 @@ impl ApplicationNodeDefinition {
         &self.output
     }
 
-    pub(super) fn mapped_variable(&self) -> Option<&str> {
-        match &self.task {
-            ApplicationInputMapping::Variable(key) => Some(key),
-            ApplicationInputMapping::Fixed(_) | ApplicationInputMapping::Template(_) => None,
-        }
+    pub(super) fn mapped_variables(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(&self.task)
+            .chain(self.variables.values())
+            .filter_map(|mapping| match mapping {
+                ApplicationInputMapping::Variable(key) => Some(key.as_str()),
+                _ => None,
+            })
+    }
+
+    fn variable_channel(&self, key: &str) -> String {
+        format!(
+            "__elitea_application_variable_{}_{}_{key}",
+            self.id.len(),
+            self.id
+        )
+    }
+
+    pub(super) fn variable_channels(&self) -> impl Iterator<Item = String> + '_ {
+        self.variables.keys().map(|key| self.variable_channel(key))
     }
 
     pub(super) fn transition(&self) -> Option<&str> {
@@ -200,7 +233,7 @@ impl ApplicationNodeDefinition {
         match &self.task {
             ApplicationInputMapping::Fixed(value) => {
                 digest_field(&mut context, b"fixed");
-                digest_field(&mut context, value.as_bytes());
+                digest_field(&mut context, value.as_str().unwrap_or_default().as_bytes());
             }
             ApplicationInputMapping::Variable(value) => {
                 digest_field(&mut context, b"variable");
@@ -209,6 +242,24 @@ impl ApplicationNodeDefinition {
             ApplicationInputMapping::Template(value) => {
                 digest_field(&mut context, b"fstring");
                 digest_field(&mut context, value.as_bytes());
+            }
+        }
+        for (key, mapping) in &self.variables {
+            digest_field(&mut context, b"child-variable");
+            digest_field(&mut context, key.as_bytes());
+            match mapping {
+                ApplicationInputMapping::Fixed(value) => {
+                    digest_field(&mut context, b"fixed");
+                    digest_field(&mut context, value.to_string().as_bytes());
+                }
+                ApplicationInputMapping::Variable(value) => {
+                    digest_field(&mut context, b"variable");
+                    digest_field(&mut context, value.as_bytes());
+                }
+                ApplicationInputMapping::Template(value) => {
+                    digest_field(&mut context, b"fstring");
+                    digest_field(&mut context, value.as_bytes());
+                }
             }
         }
         for key in &self.input {
@@ -230,7 +281,10 @@ impl ApplicationNodeDefinition {
 
     fn map_task(&self, state: &State) -> Result<String, ApplicationExecutionError> {
         let task = match &self.task {
-            ApplicationInputMapping::Fixed(value) => value.clone(),
+            ApplicationInputMapping::Fixed(value) => value
+                .as_str()
+                .ok_or(ApplicationExecutionError::InvalidTask)?
+                .to_owned(),
             ApplicationInputMapping::Variable(key) => state
                 .get(key)
                 .and_then(Value::as_str)
@@ -290,6 +344,7 @@ pub(crate) enum ResolvedApplicationParticipant {
     /// A saved pipeline invoked as a checkpointed native ADK subgraph.
     Pipeline {
         graph: Arc<CompiledGraph>,
+        variable_types: BTreeMap<String, String>,
         events: Option<PipelineNodeEventSender>,
         display_name: String,
     },
@@ -310,6 +365,22 @@ impl ApplicationNode {
         checkpointer: Arc<dyn Checkpointer>,
     ) -> Result<Self, ApplicationExecutionError> {
         let participant = resolver.resolve(definition.selection(), Arc::clone(&checkpointer))?;
+        if !definition.variables.is_empty() {
+            match &participant {
+                ResolvedApplicationParticipant::Pipeline { variable_types, .. } => {
+                    if definition
+                        .variables
+                        .keys()
+                        .any(|key| !variable_types.contains_key(key))
+                    {
+                        return Err(ApplicationExecutionError::InvalidTask);
+                    }
+                }
+                ResolvedApplicationParticipant::Agent(_) => {
+                    return Err(ApplicationExecutionError::Unavailable);
+                }
+            }
+        }
         Ok(Self {
             definition,
             state_types,
@@ -324,6 +395,9 @@ impl ApplicationNode {
             .with_input(APPLICATION_TASK_STATE_KEY, "input")
             .with_input(APPLICATION_MESSAGES_STATE_KEY, "messages")
             .with_output("elitea_response", APPLICATION_RESULT_STATE_KEY);
+        for key in self.definition.variables.keys() {
+            node = node.with_input(self.definition.variable_channel(key), key);
+        }
         for channel in [
             "session_id",
             "hitl_decisions",
@@ -351,6 +425,45 @@ impl ApplicationNode {
             .parent_schema()
             .ok_or_else(|| node_failure(self.name()))?;
         let mut state = context.state.clone();
+        if let ResolvedApplicationParticipant::Pipeline { variable_types, .. } = &self.participant
+            && !self.definition.variables.is_empty()
+        {
+            let user_state: State = context
+                .state
+                .iter()
+                .filter(|(key, _)| {
+                    (key.as_str() == "input" || self.state_types.contains_key(*key))
+                        && !super::compiler::reserved_user_state_key(key)
+                        && key.as_str() != "messages"
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            let mut mapped = BTreeMap::new();
+            for (key, mapping) in &self.definition.variables {
+                let value = match mapping {
+                    ApplicationInputMapping::Fixed(value) => value.clone(),
+                    ApplicationInputMapping::Variable(source) => user_state
+                        .get(source)
+                        .cloned()
+                        .ok_or_else(|| node_failure(self.name()))?,
+                    ApplicationInputMapping::Template(template) => Value::String(
+                        render_fstring(template, &user_state)
+                            .map_err(|_| node_failure(self.name()))?,
+                    ),
+                };
+                ensure_state_type(key, &value, variable_types)
+                    .map_err(|_| node_failure(self.name()))?;
+                mapped.insert(self.definition.variable_channel(key), value);
+            }
+            if serde_json::to_vec(&mapped)
+                .map_err(|_| node_failure(self.name()))?
+                .len()
+                > MAX_MAPPING_VALUE_BYTES
+            {
+                return Err(node_failure(self.name()));
+            }
+            state.extend(mapped);
+        }
         let call_id = format!("pipeline:{}:{}", self.name(), context.step);
         let checkpoint_thread_id = format!("{}/{}", context.config.thread_id, self.name());
         state.insert(APPLICATION_TASK_STATE_KEY.to_owned(), json!(task));
@@ -535,6 +648,7 @@ impl Node for ApplicationNode {
                     graph,
                     events,
                     display_name,
+                    ..
                 } => {
                     self.execute_pipeline(
                         context,
@@ -564,8 +678,7 @@ fn parse_task_mapping(
 ) -> Result<ApplicationInputMapping, ApplicationConfigurationError> {
     match raw.kind.as_str() {
         "fixed" => bounded_mapping_text(&raw.value)
-            .map(str::to_owned)
-            .map(ApplicationInputMapping::Fixed),
+            .map(|value| ApplicationInputMapping::Fixed(Value::String(value.to_owned()))),
         "variable" => {
             let key = bounded_mapping_text(&raw.value)?;
             if !valid_output_key(key) {
