@@ -1,10 +1,11 @@
-// Build-time package preparation. Never execute user source in this process.
+// Trusted image and on-demand preparation. Never execute user source here.
 import { loadPyodide } from "npm:pyodide@0.29.0";
 import { materializeWheels } from "./python_wheels.mjs";
 
 export async function preparePythonPackages(
   packageCacheDir,
   requirements = [],
+  { requireExactVersions = true, interpreter } = {},
 ) {
   if (
     !Array.isArray(requirements) || requirements.length > 128 ||
@@ -13,13 +14,14 @@ export async function preparePythonPackages(
     )
   ) {
     throw new Error(
-      "Python package profile must contain at most 128 pinned requirements",
+      "Python package profile must contain at most 128 bounded requirements",
     );
   }
   await Deno.mkdir(packageCacheDir, { recursive: true });
-  const python = await loadPyodide({ packageCacheDir });
+  const python = interpreter ?? await loadPyodide({ packageCacheDir });
   await python.loadPackage(["micropip", "packaging"]);
   python.globals.set("_elitea_requirements_json", JSON.stringify(requirements));
+  python.globals.set("_elitea_require_exact_versions", requireExactVersions);
   const frozen = await python.runPythonAsync(`
 import json
 import micropip
@@ -28,8 +30,10 @@ requirements = json.loads(_elitea_requirements_json)
 for raw in requirements:
     requirement = Requirement(raw)
     pins = list(requirement.specifier)
-    if (requirement.url or requirement.marker or len(pins) != 1
-        or pins[0].operator != '==' or '*' in pins[0].version):
+    if requirement.url or requirement.marker:
+        raise ValueError('Package preparation requires registry names without URLs or markers')
+    if (_elitea_require_exact_versions and (len(pins) != 1
+        or pins[0].operator != '==' or '*' in pins[0].version)):
         raise ValueError('Package profiles require exact versions without URLs or markers')
 await micropip.install(requirements)
 micropip.freeze()

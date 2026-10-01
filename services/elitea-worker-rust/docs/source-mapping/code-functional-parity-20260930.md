@@ -115,6 +115,8 @@ Browser and Kubernetes acceptance pass in persistent chat 767. A repeat run uses
 See the [dependency profile record](code-dependency-profiles-20261001.md) for deployment identities and npm verification.
 
 This is an immutable image-preparation path, not completed on-demand dependency acquisition.
+The [on-demand preparation component](code-python-demand-preparation-20261001.md) adds source discovery, native resolution, and verified frozen-content reuse.
+Its component and offline-container tests pass. Production dispatch, shared storage, recovery, and browser integration remain open.
 The default package profile remains empty. Operators can supply approved requirements when building a runtime profile.
 Approved npm image profiles now pass frozen offline resolution through Deno.
 On-demand preparation, Cargo profile expansion, and compiled-artifact caching remain open.

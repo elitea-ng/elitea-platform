@@ -119,6 +119,9 @@ The test Cargo profile adds locked dependencies. It does not implement user-sele
 Persistent reload preserves one result. All eight browser-run sandbox jobs complete and remove their Pods.
 Local probe runs take 9.5–10.0 seconds. Deployed four-receipt spans take 16.4–16.5 seconds.
 On-demand preparation, user-selected Cargo profiles, and compiled-artifact caching remain open.
+The [Python preparation component](source-mapping/code-python-demand-preparation-20261001.md) now discovers literal requirements and freezes native resolution.
+Focused integrity checks and offline execution pass with packages absent from the original image.
+This component is not connected to worker or supervisor dispatch. On-demand UI and recovery acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 
