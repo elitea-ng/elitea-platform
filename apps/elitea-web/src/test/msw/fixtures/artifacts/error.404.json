@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit S6): generic 404 error body shared by the artifacts.ts probes. Re-verified under R-M4 against the real writer: pkg/apierr/apierr.go:47-52 encodes Response{Error: message} — a FLAT {\"error\": string}, which is what this body is. (Worth stating because the sibling claim in transport/unauthorized.401.json was found overclaiming for exactly this reason in #582: the auth middleware writes a NESTED object through a different helper.) shared/api/artifacts.ts never parses a failure body — it dispatches on response.ok/status — so the value here is the shared errorBody schema, not the string.",
+  "note": "Synthetic (unit S6): generic 404 error body shared by the artifacts.ts probes. Re-verified under R-M4 against the real writer: pkg/apierr/apierr.go:47-52 encodes Response{Error: message} — a FLAT {\"error\": string}, which is what this body is. (Worth stating because the sibling claim in transport/unauthorized.401.json was found overclaiming for exactly this reason in #582: the auth middleware writes a NESTED object through a different helper.) shared/api/artifacts.ts never parses a failure body — it dispatches on response.ok/status — so the value here is the shared errorBody schema, not the string. RE-READ 2026-09-24 (R-M4): pkg/apierr/apierr.go Write now sits at :58-70 and still encodes the flat Response{Error} body at :63, with the json:\"error\" tag at :10.",
   "body": {
     "error": "not found"
   }

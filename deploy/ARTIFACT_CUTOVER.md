@@ -73,10 +73,10 @@ Compose model and refuses the retired router name.
    current platform before the cutover rather than copying objects nobody can
    then read.
 
-2. **Point `mc` at the target.**
+2. **Point `rc` at the target.**
 
    ```bash
-   mc alias set hybrid http://127.0.0.1:9000 elitea <secret>
+    rc alias set hybrid http://127.0.0.1:9000 elitea <secret>
    ```
 
    `<secret>` is `RUSTFS_SECRET_KEY` on the `runtime-artifacts` service. Use the

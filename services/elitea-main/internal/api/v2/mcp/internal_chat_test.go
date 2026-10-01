@@ -29,7 +29,7 @@ func (p *chatHandlerProbe) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	p.user, _ = auth.UserFromContext(r.Context())
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 func (p *chatHandlerProbe) List(w http.ResponseWriter, r *http.Request)              { p.serve(w, r) }
 func (p *chatHandlerProbe) Create(w http.ResponseWriter, r *http.Request)            { p.serve(w, r) }

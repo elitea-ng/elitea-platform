@@ -72,12 +72,12 @@ services:
       retries: 15
 
   rustfs-bucket-init:
-    image: quay.io/minio/mc:latest
+    image: rustfs/rc:latest
     entrypoint: ["sh", "-c"]
     command:
       - |
-        mc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret &&
-        mc mb --ignore-existing rustfs/elitea-artifacts
+        rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret &&
+        rc mb --ignore-existing rustfs/elitea-artifacts
     depends_on:
       rustfs:
         condition: service_healthy

@@ -1,5 +1,5 @@
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
@@ -141,6 +141,10 @@ export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
+  const target = useMemo(
+    () => resolveTargetParticipant(params.activeParticipant, params.participants),
+    [params.activeParticipant, params.participants],
+  );
   const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
     onContextChanged,
@@ -170,10 +174,6 @@ export function useChatBoxSend(
       // — including one addressed to an agent — as `agent.execute.adhoc.v1`.
       // That resolver joins on `entity_name='dummy'` and answers 422 for an
       // agent participant.
-      const target = resolveTargetParticipant(
-        params.activeParticipant,
-        params.participants,
-      );
       const isApplicationTurn =
         resolveStartContract(target) === conversationApi.contracts.application;
       if (
@@ -215,8 +215,7 @@ export function useChatBoxSend(
       params.llmSettings,
       getInternalToolsForSend,
       params.model,
-      params.activeParticipant,
-      params.participants,
+      target,
     ],
   );
 
@@ -253,10 +252,6 @@ export function useChatBoxSend(
         return NO_STREAM_TRANSPORT;
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
-      const target = resolveTargetParticipant(
-        params.activeParticipant,
-        params.participants,
-      );
       const isApplicationTurn =
         resolveStartContract(target) === conversationApi.contracts.application;
       const body = buildRegenerateBody({
@@ -291,8 +286,7 @@ export function useChatBoxSend(
       projectId,
       projectIdString,
       params.conversationUuid,
-      params.activeParticipant,
-      params.participants,
+      target,
       params.llmSettings,
       getInternalToolsForSend,
       params.model,

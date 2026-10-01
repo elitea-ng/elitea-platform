@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit S6): export-failure probe body. Re-verified under R-M4 against the two writers this route can reach: ExportImportGet's own not-found (eliteacore/handler.go:3147, {\"error\": \"application not found\"}) and pkg/apierr/apierr.go:47-52 — both a FLAT {\"error\": string}, as here. `exportMarkdown` (shared/lib/download.ts:124) returns {kind:'http', status} without reading the body, so this fixture's job is the schema.",
+  "note": "Synthetic (unit S6): export-failure probe body. Re-verified under R-M4 against the two writers this route can reach: ExportImportGet's own not-found (eliteacore/handler.go:3147, {\"error\": \"application not found\"}) and pkg/apierr/apierr.go:47-52 — both a FLAT {\"error\": string}, as here. `exportMarkdown` (shared/lib/download.ts:124) returns {kind:'http', status} without reading the body, so this fixture's job is the schema. RE-READ 2026-09-24 (R-M4): ExportImportGet now sits at eliteacore/handler.go:4687 and its own 404s write the flat {\"error\": \"application not found\"} at :4713 and :4724; apierr.Write now sits at pkg/apierr/apierr.go:58-70.",
   "body": {
     "error": "not found"
   }

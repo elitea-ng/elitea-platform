@@ -133,7 +133,7 @@ describe('ToolBase', () => {
       setEditToolDetail: vi.fn(), editField: vi.fn(), toolErrors: {},
       showValidation: false, setToolErrors: vi.fn(), schema,
     });
-    await waitFor(() => expect(getByText('Tools')).toBeInTheDocument());
+    await waitFor(() => expect(getByText(`Tools 0/${names.length}`)).toBeInTheDocument());
     expect(queryByText('Stale tool')).not.toBeInTheDocument();
     expect(queryByText('Echo marker') !== null).toBe(names.length > 0);
   });

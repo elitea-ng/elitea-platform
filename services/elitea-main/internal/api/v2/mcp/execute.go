@@ -141,19 +141,6 @@ const ToolkitExecutionUnavailableReason = "this MCP server can list this project
 	"them on this deployment because the durable direct-tool runtime is disabled. Agent tools in this project " +
 	"may still be available. Nothing was executed and nothing was changed."
 
-// runReadToolkitTool admits one exact catalog-selected operation and waits for its
-// fenced terminal result. Unlike an agent tool it creates no conversation: a
-// direct operation already has a durable execution record and one typed result.
-func (h *Handler) runReadToolkitTool(
-	ctx context.Context,
-	projectID int64,
-	actorUserID int64,
-	tool Tool,
-	arguments map[string]any,
-) map[string]any {
-	return h.runReadToolkitToolWithObserver(ctx, projectID, actorUserID, tool, arguments, nil)
-}
-
 type toolkitResultObserver func(context.Context, int64, int64, Tool, toolkitexecutionapp.ReadToolResultReference, ToolkitResumeUseCase) map[string]any
 
 func (h *Handler) runReadToolkitToolWithObserver(ctx context.Context, projectID, actorUserID int64, tool Tool, arguments map[string]any, observer toolkitResultObserver) map[string]any {
@@ -268,22 +255,6 @@ func toolkitResult(toolName string, result json.RawMessage) map[string]any {
 	return map[string]any{
 		"content": []map[string]any{{"type": "text", "text": text}},
 	}
-}
-
-// runAgentTool admits one turn and waits for it, bounded.
-//
-// It returns the CallToolResult body — either the agent's answer, or an
-// `isError` result whose text says what happened. It never returns a successful
-// result with no content.
-func (h *Handler) runAgentTool(
-	ctx context.Context,
-	schema string,
-	projectID int64,
-	actorUserID int64,
-	tool Tool,
-	task string,
-) map[string]any {
-	return h.runAgentToolWithObserver(ctx, schema, projectID, actorUserID, tool, task, nil)
 }
 
 type agentResultObserver func(context.Context, string, int64, int64, agentexecutionapp.CurrentApplicationStartOutcome, Tool) map[string]any

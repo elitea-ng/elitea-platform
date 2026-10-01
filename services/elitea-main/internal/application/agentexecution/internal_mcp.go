@@ -50,7 +50,7 @@ func freezeCurrentInternalMCP(version map[string]any, extra json.RawMessage, too
 		}
 	}
 	for _, entry := range mcpregistry.InternalBuilders() {
-		if !selected["internal_mcp"] && !(entry.Key == "skills" && selected["skill_builder"]) && !(entry.Key == "project_context" && selected["project_context_builder"]) {
+		if !selected["internal_mcp"] && (entry.Key != "skills" || !selected["skill_builder"]) && (entry.Key != "project_context" || !selected["project_context_builder"]) {
 			continue
 		}
 		kind := mcpregistry.InternalBuilderTypePrefix + entry.Key

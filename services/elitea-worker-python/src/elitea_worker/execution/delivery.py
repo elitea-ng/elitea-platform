@@ -69,6 +69,7 @@ from elitea_worker.execution.errors import (
     DeadlineExceeded,
     DependencyUnavailable,
     ExecutionCancelled,
+    ExecutionDraining,
     IncompatibleVersion,
     InternalFailure,
     InvalidInput,
@@ -683,7 +684,21 @@ class _ClaimLeaseMonitor:
             # synchronous callable may still be running or producing effects.
             self._cancellation = error
             self._state_changed.set()
+        except ExecutionDraining as error:
+            # Draining ends this claim permanently. Record the failure.
+            # Fail the monitor. A draining claim does not renew again.
+            self._failure = error
+            self._state_changed.set()
+            raise
         except WorkerError as error:
+            if error.retryable:
+                # A transient control-plane failure, for example a main
+                # replica being recreated, does not end this claim. The
+                # lease state lives in PostgreSQL. The recreated replica
+                # still honors this exact fence. Keep polling until a renewal
+                # succeeds. A DRAINING state or a non-retryable failure ends
+                # the monitor.
+                return
             self._failure = error
             self._state_changed.set()
             raise
@@ -3151,7 +3166,7 @@ def _require_running_desired_state(state: int) -> None:
     if state == common_pb2.DESIRED_EXECUTION_STATE_V1_CANCELLED:
         raise ExecutionCancelled()
     if state == common_pb2.DESIRED_EXECUTION_STATE_V1_DRAINING:
-        raise DependencyUnavailable("The execution is draining.")
+        raise ExecutionDraining()
     raise InvalidInput("The execution desired state is malformed.")
 
 
@@ -3390,11 +3405,11 @@ def _worker_error_from_runtime(error: errors_pb2.RuntimeErrorV1) -> WorkerError:
         return ExecutionCancelled()
     if code == errors_pb2.RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED:
         return DeadlineExceeded()
-    if code in {
-        errors_pb2.RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE,
-        errors_pb2.RUNTIME_ERROR_CODE_V1_INTERNAL,
-    }:
+    if code == errors_pb2.RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE:
         return DependencyUnavailable()
+    if code == errors_pb2.RUNTIME_ERROR_CODE_V1_INTERNAL:
+        # The server sends this code non-retryable as the unknown-error stop signal.
+        return InternalFailure()
     return InvalidInput("The runtime control response is malformed.")
 
 

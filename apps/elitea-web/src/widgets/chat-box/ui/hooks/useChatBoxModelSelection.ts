@@ -21,6 +21,13 @@ export interface UseChatBoxModelSelectionResult {
   readonly handleSelectModel: (model: LLMModel) => void;
 }
 
+/** Accept primitive project identities only; absent settings retain ordinary chat selection. */
+function matchesModelProject(projectId: string, configuredProject: unknown): boolean {
+  if (configuredProject == null) return true;
+  if (typeof configuredProject !== 'string' && typeof configuredProject !== 'number') return false;
+  return projectId === String(configuredProject);
+}
+
 export function useChatBoxModelSelection({
   projectId,
   selectedModelName,
@@ -37,7 +44,7 @@ export function useChatBoxModelSelection({
   const selectedLlmModel = useMemo(() => {
     const name = typeof configuredName === 'string' && configuredName ? configuredName : selectedModelName;
     const raw = modelsData?.items.find((m) => m.name === name &&
-      (configuredProject == null || String(m.project_id) === String(configuredProject)));
+      matchesModelProject(m.project_id, configuredProject));
     return raw ? toLlmModel(raw) : null;
   }, [modelsData?.items, selectedModelName, configuredName, configuredProject]);
   const handleSelectModel = useCallback(

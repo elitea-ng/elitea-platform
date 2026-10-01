@@ -3,7 +3,7 @@ import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Grid from '@mui/material/Grid';
-import type { SxProps, Theme } from '@mui/material/styles';
+import { gridContainerSx, historyButtonRowSx, leftGridItemSx, rightGridItemSx, spinnerContainerSx } from './ConfigurationTab.styles';
 
 import { ViewRunHistoryButton } from '@/shared/ui/ViewRunHistoryButton';
 
@@ -393,13 +393,3 @@ export function ConfigurationTab({
     </Grid>
   );
 }
-
-const spinnerContainerSx: SxProps<Theme> = { height: '100%', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' };
-
-const gridContainerSx: SxProps<Theme> = { height: '100%', maxHeight: '100%', paddingTop: '1rem', paddingBottom: '1.5rem', paddingLeft: '1.5rem', paddingRight: '1.5rem' };
-
-const leftGridItemSx: SxProps<Theme> = { overflow: 'auto', maxHeight: '100%', height: '100%' };
-
-const rightGridItemSx: SxProps<Theme> = { height: '100%', maxHeight: '100%' };
-
-const historyButtonRowSx: SxProps<Theme> = { display: 'flex', justifyContent: 'flex-end', width: '100%' };

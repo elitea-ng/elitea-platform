@@ -17,7 +17,7 @@ package agentexecution
 //     is runtime-authored, not form-authored).
 //   - Rust: the web list is exactly PLATFORM_INTERNAL_TOOLS (what the native
 //     runtime RECOGNIZES and SKIPS) plus the names it IMPLEMENTS
-//     (SKILLS_BUILDER_TOOL_NAME / PROJECT_CONTEXT_BUILDER_TOOL_NAME, #940 A8).
+//     (ASK_USER_TOOL_NAME / SKILLS_BUILDER_TOOL_NAME / PROJECT_CONTEXT_BUILDER_TOOL_NAME).
 //     A name must be in exactly one of the two: in neither, the runtime
 //     refuses the whole profile; in both, it would warn that a tool it is
 //     about to run is unavailable.
@@ -112,12 +112,12 @@ func TestInternalToolsCatalogueAgreesAcrossWebGoRustAndSQL(t *testing.T) {
 	// this gate fail with the relationship named, which is the whole point.
 	implementedSet := map[string]bool{}
 	for _, match := range regexp.MustCompile(
-		`(?m)^pub\(crate\) const (?:SKILLS_BUILDER_TOOL_NAME|PROJECT_CONTEXT_BUILDER_TOOL_NAME): &str = "([a-z_]+)";`,
+		`(?m)^pub\(crate\) const (?:ASK_USER_TOOL_NAME|SKILLS_BUILDER_TOOL_NAME|PROJECT_CONTEXT_BUILDER_TOOL_NAME): &str = "([a-z_]+)";`,
 	).FindAllStringSubmatch(rustSource, -1) {
 		implementedSet[match[1]] = true
 	}
-	if len(implementedSet) != 2 {
-		t.Fatalf("parsed %d implemented builder names from internal_tools.rs (%v) — the constant pattern stopped matching, so this half of the gate measured nothing", len(implementedSet), sortedNames(implementedSet))
+	if len(implementedSet) != 3 {
+		t.Fatalf("parsed %d implemented internal-tool names from internal_tools.rs (%v) — the constant pattern stopped matching, so this half of the gate measured nothing", len(implementedSet), sortedNames(implementedSet))
 	}
 	for name := range webSet {
 		if !skippedSet[name] && !implementedSet[name] {

@@ -12,7 +12,7 @@ import { ToolListError } from '@/shared/ui/ToolListError';
 import { toolkitTools } from '@/entities/toolkit';
 
 import { readToolkitTestAuthorization } from '../../api/toolkitTestAuthorization';
-import type { TestToolPaneProps } from './TestToolPane';
+import type { ToolkitTestAuthorizationRenderer } from './TestToolAuthorization.types';
 
 import { ToolArgumentPanel } from './ToolArgumentPanel';
 
@@ -115,7 +115,7 @@ import type { LLMModelSelectorProps } from '../../indexes/ui/IndexDetails/IndexC
  */
 export interface TestToolSettingsProps {
   readonly getAuthorizationReference?: (() => string | undefined) | undefined;
-  readonly renderAuthorization?: TestToolPaneProps['renderAuthorization'];
+  readonly renderAuthorization?: ToolkitTestAuthorizationRenderer | undefined;
   readonly projectId?: string | number | undefined;
   readonly toolkitId?: string | number | undefined;
   readonly selectedTool: string | null;

@@ -14,6 +14,30 @@ import {
 
 const NBSP = ' ';
 
+describe('measured provider usage', () => {
+  const measurement = { version: 1, phase: 'measured', provider_usage: { input_tokens: 120, output_tokens: 30 } };
+
+  it('preserves bounded provider counts from a measured response', () => {
+    const stats = toContextBudgetStats({ runtime_context: { measurement } });
+    expect(stats?.runtime?.providerUsage).toEqual({ inputTokens: 120, outputTokens: 30 });
+  });
+
+  it.each([
+    { input_tokens: -1, output_tokens: 30 },
+    { input_tokens: 120.5, output_tokens: 30 },
+    { input_tokens: 120, output_tokens: '30' },
+    { input_tokens: 2_147_483_647, output_tokens: 1 },
+  ])('omits invalid provider counts: %j', (provider_usage) => {
+    const stats = toContextBudgetStats({ runtime_context: { measurement: { ...measurement, provider_usage } } });
+    expect(stats?.runtime?.providerUsage).toBeUndefined();
+  });
+
+  it('omits provider counts while a response is compacting', () => {
+    const stats = toContextBudgetStats({ runtime_context: { measurement: { ...measurement, phase: 'compacting' } } });
+    expect(stats?.runtime?.providerUsage).toBeUndefined();
+  });
+});
+
 describe('formatNumberWithSpaces', () => {
   it.each([
     [0, '0'],

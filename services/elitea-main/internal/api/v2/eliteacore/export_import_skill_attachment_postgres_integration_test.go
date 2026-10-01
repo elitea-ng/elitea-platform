@@ -653,7 +653,10 @@ func TestImportedSkillIsReadableThroughTheSkillsRoute(t *testing.T) {
 		t.Fatalf("import status = %d, want %d, body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(
+		auth.ContextWithUser(context.Background(), auth.User{UserID: strconv.Itoa(importLinkPrincipal)}),
+		10*time.Second,
+	)
 	defer cancel()
 	var agentVersionID int
 	if err := pool.QueryRow(ctx, `SELECT id FROM p_1.application_versions`).Scan(&agentVersionID); err != nil {

@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit F4): auth/me-class response for GET /api/v2/social/author/ — binds verifySession (§5.4 behaviour 5). Field shape derived from the Go wire struct AuthorResponse at services/elitea-main/internal/api/v2/social/handler.go:51-58: id/name/email/avatar/description/personal_project_id are all json-tagged STRINGS with no omitempty (id is a string, not a number — intToStr at handler.go:193 et al); personalization is `any` with omitempty, hence absent here. Handler route: handler.go:24. RE-READ 2026-08-25 (R-M4): AuthorResponse still has exactly these six json-tagged strings with no omitempty, plus Personalization `any` with omitempty; only the line numbers had drifted.",
+  "note": "Synthetic (unit F4): auth/me-class response for GET /api/v2/social/author/ — binds verifySession (§5.4 behaviour 5). Field shape derived from the Go wire struct AuthorResponse at services/elitea-main/internal/api/v2/social/handler.go:51-58: id/name/email/avatar/description/personal_project_id are all json-tagged STRINGS with no omitempty (id is a string, not a number — intToStr at handler.go:193 et al); personalization is `any` with omitempty, hence absent here. Handler route: handler.go:24. RE-READ 2026-08-25 (R-M4): AuthorResponse still has exactly these six json-tagged strings with no omitempty, plus Personalization `any` with omitempty; only the line numbers had drifted. RE-READ 2026-09-24 (R-M4): AuthorResponse now sits at social/handler.go:98; the six core fields keep their json tags and no omitempty (:99-104), Personalization keeps any plus omitempty (:105), intToStr now sits at :970, and the GET /author/ routes now sit at :78-79; the added fields all carry omitempty, so this body is unchanged.",
   "body": {
     "id": "42",
     "name": "Synthetic User",

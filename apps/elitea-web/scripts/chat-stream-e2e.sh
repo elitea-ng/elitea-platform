@@ -349,6 +349,17 @@ EOF
 
 # shellcheck disable=SC2086 -- REPEAT_ARGS and SHARD_ARGS are deliberately word-split
 if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
+  # A caller (ci-web-e2e.yml, nightly-real-llm.yml, deepwiki-real-engine.yml)
+  # backgrounds a `docker pull` of this same image earlier in the job so it
+  # overlaps the build step, but nothing there waits on it or checks whether
+  # it won — a stalled or failed background pull would otherwise fall through
+  # to `docker run` pulling inline, once, on the daemon's own timeout, which is
+  # exactly the mcr.microsoft.com registry hiccup that broke PR #1001. Calling
+  # the retry script here is the wait: `image inspect` returns instantly if
+  # the background pull already finished, and if it did not — or failed — this
+  # retries with the same 5-attempt, 5s→80s backoff every compose image gets.
+  CONTAINER_BIN="${CONTAINER_BIN:-docker}" \
+    "${REPO_ROOT}/scripts/ci/pull-third-party-images.sh" --image "$PLAYWRIGHT_CONTAINER_IMAGE"
   "${CONTAINER_BIN:-docker}" run --rm --network host \
     -v "$WEB_DIR":/work -w /work \
     -e CI="${CI:-}" \

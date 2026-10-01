@@ -64,7 +64,7 @@ function modelRequestSettings(
 }
 
 /** Returns the validated loop bound that belongs in conversation metadata. */
-export function executionStepsLimit(
+function executionStepsLimit(
   settings: Readonly<Record<string, unknown>> | undefined,
 ): number | undefined {
   const value = settings?.['steps_limit'];

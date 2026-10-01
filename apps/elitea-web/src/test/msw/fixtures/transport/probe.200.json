@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic transport-probe body (unit F4, spec §6.5 R-M2): exercises the §5.4 HTTP-core behaviours against paths no real endpoint serves; no Channel-B capture exists for /__transport__/ probes by design.",
+  "note": "Synthetic transport-probe body (unit F4, spec §6.5 R-M2): exercises the §5.4 HTTP-core behaviours against paths no real endpoint serves; no Channel-B capture exists for /__transport__/ probes by design. RE-READ 2026-09-24 (R-M4): this fixture carries no Go wire claim; a grep of services/elitea-main/ still finds no endpoint mounted under /__transport__/.",
   "body": {
     "message": "transport probe ok"
   }

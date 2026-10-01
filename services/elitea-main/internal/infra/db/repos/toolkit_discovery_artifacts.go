@@ -229,7 +229,7 @@ func (r *ToolkitDiscoveryArtifactRepository) readDiscoveryObject(ctx context.Con
 	if err != nil {
 		return nil, discoveryArtifactError(ctx, err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	if a.length <= 0 || a.length > storage.MaxToolkitDiscoveryArtifactBytes || info.Size != a.length {
 		return nil, storage.ErrContentRejected
 	}

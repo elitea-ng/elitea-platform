@@ -332,7 +332,6 @@ func searchPage(ctx context.Context, tx pgx.Tx, s, kind string, f Filters, a fol
 	name := "e.name"
 	projection := "e.id,e.name"
 	where := "TRUE"
-	sort := "e.name"
 	switch kind {
 	case "application", "pipeline", "skill":
 		if kind == "skill" {
@@ -386,7 +385,7 @@ func searchPage(ctx context.Context, tx pgx.Tx, s, kind string, f Filters, a fol
 	if f.Query != "" && (kind == "toolkit" || kind == "credential") {
 		where += " AND " + name + " ILIKE " + p.bind("%"+f.Query+"%")
 	}
-	sort = values.Get(kind + "_sort")
+	sort := values.Get(kind + "_sort")
 	if sort == "" {
 		sort = values.Get("sort")
 	}

@@ -220,7 +220,6 @@ type externalCatalogAccess struct {
 }
 
 var errExternalCatalogIdentity = foldervisibility.ErrIdentity
-var errPartialFolderAccessProjection = foldervisibility.ErrPartialProjection
 
 // externalAccess uses the shared actor and folder projection authority.
 func (p postgresToolSource) externalAccess(ctx context.Context, schema string) (externalCatalogAccess, error) {

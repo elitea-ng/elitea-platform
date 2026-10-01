@@ -638,6 +638,55 @@ replica opens its own pools, and 63 replicas do not fit a stock
 A per-principal or per-project value above `maxStreams` fails `helm
 template`, and the same check fails the process at boot.
 
+#### The agent worker's delivery cap and replica sizing (issue #967)
+
+Each worker replica runs `delivery_max_concurrency` deliveries at once.
+The standalone stack and the chart start at 2. This change raises both
+to 32. The cap is configuration, not CPU.
+
+Two caps bound the same delivery in series. The serve loop admits
+`delivery_max_concurrency` deliveries at once. Each delivery then runs
+its agent in the synchronous SDK pool, which admits
+`sync_max_in_flight` calls at once on `sync_max_workers` threads. The
+lower cap wins. The chart raises all three together, and the comment
+above `worker.runtime.limits` names the coupling. Raise one without the
+others, and the unraised cap becomes the limit.
+
+The sizing formula is:
+
+    worker count = ceil(concurrent flows / delivery_max_concurrency)
+
+One worker's rate is `cap / flow duration`. Measured on the standalone
+stack on 2026-09-20 with the 2.5 s mock echo flow:
+
+| configuration | measured | formula |
+| --- | --- | --- |
+| 1 worker, cap 2 | 0.78 flows/s | 0.80 flows/s |
+| 3 workers, cap 2 | 2.15 flows/s | 2.40 flows/s |
+
+The formula reproduces both runs within 20%. A deployment that serves
+1000 concurrent flows needs `1000 / 32`, so about 32 workers at the
+raised cap. At the cap of 2 it needed 500.
+
+Two CI tests pin the caps at 32 on every run of the worker suite.
+`test_serve_loop_sustains_the_configured_delivery_cap` proves the serve
+loop runs 32 deliveries at once.
+`test_sync_pool_sustains_the_configured_in_flight_bound` proves the
+synchronous pool holds 32 in-flight calls.
+
+The cap is not free. Each active delivery holds a claim, a spool
+directory and one SDK thread. The chart sizes the pod for 32 at once:
+`worker.resources` requests 2 CPU and 4 Gi, and limits 8 CPU and 16 Gi.
+The measured worker CPU was about 0.4 at cap 2.
+
+`redis_read_batch` stays at 4. The KEDA scaler targets one delivery cap of
+pending entries per replica: `targetPendingEntries` is 32. One replica holds
+32 in-flight and 64 queued entries. The scaler adds a replica only when one
+cannot drain the backlog.
+
+The default `maxReplicas` of 10 caps a KEDA fleet at 320 concurrent flows.
+A manual fleet has no such ceiling. Raise `maxReplicas` when you serve more.
+
 Its material — the signing key, the verification keyring, the Redis password,
 the Redis CA and the three listener keypairs — comes from a **plain Kubernetes
 Secret**. Set `runtime.material.secretName`, and give the Secret one key for
@@ -944,6 +993,122 @@ at 0 in every run, so the shared pool, not Postgres, bounds the read plane.
 Without the pooler the same three replicas pin the server at 90 of 100
 connections. The next component to connect — usually a migration Job — then
 fails with `sorry, too many clients already`.
+
+## Scaling order with live workers (#968)
+
+The agent worker consumes commands from the Redis command stream. The worker
+has no consumption-pause. Its only drain is SIGTERM. On SIGTERM the worker
+stops intake and finishes in-flight work up to its 30 second shutdown
+deadline.
+
+It creates no shutdown ACK. Unfinished stream entries stay PENDING and
+remain reclaimable. Stopping the worker fleet loses no durable work.
+PostgreSQL stays the source of truth for execution state.
+
+Recreating one `elitea-main` replica drops the execution streams that
+replica holds. Client sessions must reconnect and replay. A worker execution
+that crosses that drop risks a failed turn and a PENDING retry. The drain
+order below stops a worker execution from crossing a main recreation.
+
+### Scale-down and recreation: drain, recreate, restore
+
+Run this order for every planned main scale-down or recreation with a live
+worker fleet:
+
+1. Stop worker consumption.
+2. Recreate or scale the `elitea-main` replica.
+3. Restore worker capacity.
+
+```bash
+# 1. Stop worker consumption. Idempotent. Prints each step.
+deploy/scripts/drain-workers.sh drain
+
+# 2. Recreate the main replica fleet, or scale it down and back up.
+kubectl rollout restart deployment/elitea-main -n elitea
+# or, to take the whole plane down:
+# Suspend the HPA for the window.
+# An active HPA owns spec.replicas and scales the plane back up.
+# Restore the HPA after the plane is back.
+kubectl scale deployment/elitea-main -n elitea --replicas=0
+kubectl scale deployment/elitea-main -n elitea --replicas=2
+
+# 3. Restore worker capacity.
+deploy/scripts/drain-workers.sh restore
+```
+
+`drain` scales the worker Deployment to 0 and waits until no worker pod
+remains. With KEDA enabled, it pauses the worker ScaledObject with
+`autoscaling.keda.sh/paused=true` and
+`autoscaling.keda.sh/paused-replicas="0"` instead. This stops KEDA from
+rescaling the fleet during the main replica recreation.
+
+`restore` removes the pause. A manual fleet returns to `worker.replicaCount`
+(1 by default). A KEDA fleet resumes the ScaledObject, which holds the fleet
+at `minReplicas`. Pass `--replicas N` to restore another count on a manual
+fleet. Run `status` at any point to see the current state.
+
+The kubectl sequence behind the drain order:
+
+Lines marked `# script` run by `deploy/scripts/drain-workers.sh`. Lines
+marked `# operator` run by the operator.
+
+```bash
+# manual fleet (no KEDA)
+# script
+kubectl scale deployment/elitea-worker -n elitea --replicas=0
+# operator
+kubectl rollout status deployment/elitea-main -n elitea
+# script
+kubectl scale deployment/elitea-worker -n elitea --replicas=1
+# script
+kubectl rollout status deployment/elitea-worker -n elitea
+
+# KEDA fleet
+# script
+kubectl annotate scaledobject/elitea-worker -n elitea --overwrite \
+  autoscaling.keda.sh/paused=true autoscaling.keda.sh/paused-replicas=0
+# operator
+kubectl rollout status deployment/elitea-main -n elitea
+# script
+kubectl annotate scaledobject/elitea-worker -n elitea \
+  autoscaling.keda.sh/paused- autoscaling.keda.sh/paused-replicas-
+```
+
+The `elitea-main` HPA ships enabled: 2 to 10 replicas, 70% CPU and 80%
+memory. An automatic scale-down drops execution streams mid-recreation,
+exactly like a manual one. Raise the HPA floor to the current main replica
+count before the drain order. The raised floor stops the HPA from scaling
+down during the window:
+
+```bash
+# 3 stands for the current main replica count
+kubectl patch hpa/elitea-main -n elitea --type merge \
+  -p '{"spec":{"minReplicas":3}}'
+```
+
+Restore the floor after `deploy/scripts/drain-workers.sh restore`. A GitOps
+deployment raises `main.autoscaling.minReplicas` in the Application values
+instead.
+
+### Scale-up: raise main first, then the workers
+
+Adding a main replica adds stream capacity. It does not drop existing
+streams. Raise `elitea-main` first. Raise the worker fleet when the pending
+queue depth needs it. An install without the pooler must read
+[The Postgres pooler and the connection budget (#964)](#the-postgres-pooler-and-the-connection-budget-964)
+before it raises the main replica count. With the pooler in the path, the
+same scale-up stays within the connection budget.
+
+```bash
+# 1. Add a main replica.
+kubectl scale deployment/elitea-main -n elitea --replicas=3
+
+# 2. Raise worker capacity when the queue needs it.
+kubectl scale deployment/elitea-worker -n elitea --replicas=2
+```
+
+A GitOps deployment changes `main.replicaCount` or `worker.replicaCount` in
+the Application values instead. The order is the same.
 
 ## What a Kubernetes install does NOT give you
 

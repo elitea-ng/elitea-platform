@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit S6): final-chunk ack — an array whose first element is the assembled attachment (upload.ts:90-91 reads `parsed[0]`). DERIVED FROM THE GO HANDLER, not captured: attachments.go:461 writes []attachmentCreated{{Filepath, FileSize}} at 201 Created, where Filepath is `/{bucket}/{conversationID}/{sanitized filename}` (:441, defaultAttachmentBucketName=:89). It replaces {id, filename, size} — the legacy Python shape. THIS ONE MATTERED: the production consumer `sanitizedNameFrom` (entities/conversation/lib/hooks/useUploadAttachments.ts:67) reads `filepath`, so against the old fixture every test took the degraded fallback branch and could not have caught a filepath regression.",
+  "note": "Synthetic (unit S6): final-chunk ack — an array whose first element is the assembled attachment (upload.ts:90-91 reads `parsed[0]`). DERIVED FROM THE GO HANDLER, not captured: attachments.go:461 writes []attachmentCreated{{Filepath, FileSize}} at 201 Created, where Filepath is `/{bucket}/{conversationID}/{sanitized filename}` (:441, defaultAttachmentBucketName=:89). It replaces {id, filename, size} — the legacy Python shape. THIS ONE MATTERED: the production consumer `sanitizedNameFrom` (entities/conversation/lib/hooks/useUploadAttachments.ts:67) reads `filepath`, so against the old fixture every test took the degraded fallback branch and could not have caught a filepath regression. RE-READ 2026-09-24 (R-M4): the 201 []attachmentCreated now sits at conversations/attachments.go:525-528, the {bucket}/{conversationID}/{sanitized filename} key now composes at :504, and defaultAttachmentBucketName now sits at :93.",
   "body": [
     {
       "filepath": "/chat-attachments/3f7c1e8a-9b2d-4c5e-8a1f-0d6b7c8e9f10/demo.bin",

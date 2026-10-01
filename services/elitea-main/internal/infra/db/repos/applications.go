@@ -198,9 +198,10 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		conditions = append(conditions, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM %s.application_versions fv JOIN %s.application_version_tag_association ft ON ft.version_id=fv.id WHERE fv.application_id=a.id)", s, s))
 	}
 	kinds := []string{"agent", "pipeline"}
-	if req.AgentsType == "classic" {
+	switch req.AgentsType {
+	case "classic":
 		kinds = []string{"agent"}
-	} else if req.AgentsType == "pipeline" {
+	case "pipeline":
 		kinds = []string{"pipeline"}
 	}
 	if access.FolderRestrictions {

@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit F4): 403 body for the §5.4 behaviour-2 path (401/403 → re-auth flow).",
+  "note": "Synthetic (unit F4): 403 body for the §5.4 behaviour-2 path (401/403 → re-auth flow). RE-READ 2026-09-24 (R-M4): this fixture carries no Go wire claim; the flat {\"error\": string} body is the shared errorBody schema for the re-auth path.",
   "body": {
     "error": "forbidden"
   }

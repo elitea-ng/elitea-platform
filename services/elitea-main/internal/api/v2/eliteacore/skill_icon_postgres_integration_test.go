@@ -33,6 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -130,7 +131,7 @@ func seedSkillIconSkill(t *testing.T, pool *pgxpool.Pool, name string) (skillID,
 // query the skills page serves — and returns version_details.meta.icon_meta.
 func readSkillIconMeta(t *testing.T, pool *pgxpool.Pool, skillID string) map[string]any {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 15*time.Second)
 	defer cancel()
 
 	skill, err := repos.NewSkillsRepo(pool).Get(ctx, "1", skillID)

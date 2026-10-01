@@ -1,10 +1,11 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-01. Main integration baseline: `6537ca30`.
+Updated: 2026-10-01. Main integration baseline: `8563c2d75` (release checks in progress).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
-[Main integration](source-mapping/main-integration-20260923.md) records conflict decisions, verification, migration-ledger reconciliation, and rehearsal deployment.
+[Prior main integration](source-mapping/main-integration-20260923.md) records earlier conflict decisions and rehearsal deployment.
+[Current integration](source-mapping/main-integration-20261001.md) records the migration collision, CI repairs, and preserved Point 5 checkpoint.
 Current-platform code defines business behavior, not a requirement to copy its implementation or security defects.
 
 ## Progression status

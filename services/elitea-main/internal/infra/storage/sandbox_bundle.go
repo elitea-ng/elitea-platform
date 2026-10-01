@@ -67,7 +67,7 @@ func sandboxDigest(value string) bool {
 		return false
 	}
 	for _, value := range []byte(value) {
-		if !(value >= '0' && value <= '9' || value >= 'a' && value <= 'f') {
+		if (value < '0' || value > '9') && (value < 'a' || value > 'f') {
 			return false
 		}
 	}
@@ -88,7 +88,7 @@ func sandboxFileName(value string) bool {
 		return false
 	}
 	for _, value := range []byte(value) {
-		if !(value >= '0' && value <= '9' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || strings.ContainsRune("_.+-", rune(value))) {
+		if (value < '0' || value > '9') && (value < 'a' || value > 'z') && (value < 'A' || value > 'Z') && !strings.ContainsRune("_.+-", rune(value)) {
 			return false
 		}
 	}

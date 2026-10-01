@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit F4): 4xx body for the §3.6 Result-discipline tests — a 404 must resolve to a Result value, never throw.",
+  "note": "Synthetic (unit F4): 4xx body for the §3.6 Result-discipline tests — a 404 must resolve to a Result value, never throw. RE-READ 2026-09-24 (R-M4): this fixture carries no Go wire claim; it is the 4xx body for the client Result-discipline tests.",
   "body": {
     "error": "not found"
   }

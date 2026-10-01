@@ -183,7 +183,7 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	}
 
 	typeSchema := settings
-	if hasHandWritten && !(toolkitType == "github" && catalogued) {
+	if hasHandWritten && (toolkitType != "github" || !catalogued) {
 		typeSchema = handWritten
 	} else {
 		typeSchema = withNameRequired(typeSchema)

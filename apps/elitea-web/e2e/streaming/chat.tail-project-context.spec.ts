@@ -2,7 +2,7 @@
  * Project Context INJECTION — the half `chat.project-context-injection.spec.ts`
  * says it does not prove: that the content saved in Settings > Project Context
  * actually reaches a turn's system prompt, that the per-agent "Ignore Project
- * Context" toggle keeps it out, and that a sub-agent never sees it.
+ * Context" toggle keeps it out, including during delegated sub-agent turns.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE GATE THESE TESTS USED TO DIE ON, AND WHAT REPLACED IT (#946)
@@ -31,9 +31,9 @@
  * recalled memories ride, which both workers already fold into the system
  * prompt (`internal/application/agentexecution/projectcontext.go`, and the
  * native runtime's `assembly.rs`). The per-agent "Ignore Project Context"
- * toggle is consulted there, off the frozen version's own `meta`, and a child
- * agent is never touched because a delegated child resolves its OWN version's
- * instructions inside the worker.
+ * toggle is consulted there, off the frozen version's own `meta`. A delegated
+ * child resolves its own version. Its toggle must prevent its own context
+ * snapshot and reject inherited parent context.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE SYSTEM PROMPT AND NOT THE ANSWER
@@ -85,6 +85,7 @@ import {
   readCallerPersonalProjectId,
   readMockLlmJournal,
   clearMockLlmJournal,
+  readVersion,
 } from '../fixtures/api';
 
 const API = `${BASE_URL}/api/v2`;
@@ -401,9 +402,8 @@ test('the per-agent Ignore Project Context toggle keeps the context out of its o
   }
 });
 
-/* onetest: ELITEA-0952 — Project Context is injected for the MASTER agent only: a sub-agent it
- * delegates to receives none of it. */
-test('Project Context is not passed down to a sub-agent', async ({ page }) => {
+/* onetest: ELITEA-0952 — An ignoring sub-agent receives no Project Context during delegation. */
+test('Project Context is omitted for a sub-agent with Ignore enabled', async ({ page }) => {
   test.setTimeout(420_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);
@@ -425,15 +425,23 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
     // continuation that quotes the result), so "the prompt carrying the phrase
     // appears once" would fail on a perfectly correct run.
     const childSentinel = `${AUTOTEST_PREFIX}CHILD-AGENT-MARK-${String(Date.now() % 1_000_000)}`;
+    // Both agents use one project. The child must opt out of its own context
+    // to distinguish context inheritance from its authorized project snapshot.
     const child = await createAgent(
       page,
       projectId,
       'child',
-      false,
+      true,
       `You are the sub-agent. ${childSentinel}. Answer the task you are given.`,
     );
+    agents.push(child);
+    const storedChild = await readVersion(page.request, child.agentId, child.versionId, projectId);
+    expect(
+      storedChild.meta['ignore_project_context'],
+      'the child version must persist Ignore Project Context before delegation',
+    ).toBe(true);
     const parent = await createAgent(page, projectId, 'parent');
-    agents.push(parent, child);
+    agents.push(parent);
 
     // The child attached to the parent VERSION — the same relation route the
     // agent page's picker sends (`chat.delegation.spec.ts`'s `attachChild`).
@@ -477,10 +485,14 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
     );
 
     await expect
-      .poll(async () => (await systemPrompts(page)).some((text) => text.includes(phrase)), {
-        timeout: 180_000,
-        message: 'the master agent never received the project context',
-      })
+      .poll(
+        async () =>
+          (await systemPrompts(page)).some((text) => !text.includes(childSentinel) && text.includes(phrase)),
+        {
+          timeout: 180_000,
+          message: 'the master agent never received the project context',
+        },
+      )
       .toBe(true);
 
     // The CHILD's own hop, identified by the child's instructions rather than
@@ -496,7 +508,7 @@ test('Project Context is not passed down to a sub-agent', async ({ page }) => {
     const prompts = await systemPrompts(page);
     expect(
       prompts.filter((text) => text.includes(childSentinel) && text.includes(phrase)),
-      'the project context reached the sub-agent’s own prompt — a sub-agent must not inherit it',
+      'the sub-agent with Ignore Project Context enabled must receive no project context',
     ).toEqual([]);
   } finally {
     await setProjectContext(page, projectId, {

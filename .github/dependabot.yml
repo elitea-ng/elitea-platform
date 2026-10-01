@@ -103,7 +103,10 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: cargo
-    directory: /services/elitea-worker-rust
+    directories:
+      - /services/elitea-worker-rust
+      - /services/elitea-code-runner
+      - /services/elitea-code-runner/adapters/rust
     schedule:
       interval: weekly
       day: saturday

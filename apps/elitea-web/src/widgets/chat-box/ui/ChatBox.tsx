@@ -9,12 +9,12 @@
  * imports sideways across those features — legal for widgets/, forbidden
  * for features/ (R-L1, `.dependency-cruiser.cjs`'s `no-sideways-features`).
  */
-import type { ComponentRef, Ref } from 'react';
+import type { ComponentRef } from 'react';
 import { memo, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 
 import { Box } from '@mui/material';
 import { useNavBlockerStore } from '@/widgets/app-shell';
-import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle } from '@/widgets/chat';
+import type { AttachmentButtonHandle, VoiceButtonHandle } from '@/widgets/chat';
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
 import { ChatMessageList, useDeleteMessageAlert } from '@/features/chat-messages';
@@ -34,10 +34,9 @@ import {
   buildCanvasProps, buildCreateHandlerProps, flattenChatBoxProps,
   resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
-import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
-import type { ChatBoxAgentEventSink, ChatBoxConversationProp } from './ChatBox.props';
 import { unwrapChatBoxConversation } from './ChatBox.props';
-import type { ChatBoxHandle } from './ChatBox.types';
+import type { ChatBoxHandle, ChatBoxProps } from './ChatBox.types';
+export type { ChatBoxProps } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
@@ -49,7 +48,7 @@ import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
 import { chatColumnSx, chatShellSx } from './ChatBox.layout';
 import { useChatBoxData } from './hooks/useChatBoxData';
-import { useChatBoxState, type ConversationStarter } from './hooks/useChatBoxState';
+import { useChatBoxState } from './hooks/useChatBoxState';
 import { useChatBoxHandlers } from './hooks/useChatBoxHandlers';
 import { useChatBoxParticipant } from './hooks/useChatBoxParticipant';
 import { useChatBoxModelSelection } from './hooks/useChatBoxModelSelection';
@@ -65,37 +64,6 @@ import { useStableRef } from './hooks/useStableRef';
 
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
 type NewChatInputHandle = ComponentRef<typeof NewChatInput>;
-
-/** @public Props for the ChatBox composition root. */
-export interface ChatBoxProps {
-  /** Host ref for the `ChatBoxHandle` (React 19 passes `ref` as a prop) — see `ChatBox.types.ts`. */
-  readonly ref?: Ref<ChatBoxHandle> | undefined;
-  /** Bundled to stay under the §3.5 component-props budget (one slot instead of two), which the `ref` prop above pushed this component over — see `ChatBox.props.ts`. */
-  readonly conversation?: ChatBoxConversationProp;
-  readonly hidden?: boolean;
-  readonly fromTheChat?: boolean;
-  readonly projectId?: string | number;
-  /** Bundled to stay under the §3.5 component-props budget (one slot instead of three). */
-  readonly user?: { readonly id?: string; readonly name?: string; readonly avatar?: string };
-  /** Bundled to stay under the §3.5 component-props budget (one slot instead of two). */
-  readonly participant?: { readonly active?: unknown; readonly onChange?: (participant: unknown) => void };
-  readonly setChatHistory?: React.Dispatch<React.SetStateAction<readonly unknown[]>>;
-  readonly conversationStarters?: readonly ConversationStarter[];
-  readonly isAgentsPage?: boolean;
-  /** Bundled to stay under the §3.5 component-props budget (one slot instead of two). */
-  readonly llm?: { readonly settings?: Readonly<Record<string, unknown>>; readonly onSetSettings?: (settings: Readonly<Record<string, unknown>>) => void };
-  /** Bundled to stay under the §3.5 component-props budget (one slot instead of two). */
-  readonly onDelete?: { readonly answer?: (messageId: string) => void; readonly all?: () => void };
-  /** Host-supplied composer extension points, bundled to stay under the §3.5 component-props budget (one slot instead of two, as `onDelete` above); both pass straight through. */
-  readonly extensions?: {
-    readonly contextIndicator?: React.ReactNode;
-    /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
-    readonly editorCallbacks?: ChatBoxEditorCallbacks;
-    /** Real lists for the composer's "+" menu — see `processes/chat/model/usePlusMenuEntities.ts`, which is the only layer allowed to fetch them. */
-    readonly entitySubmenus?: PlusChatButtonEntitySubmenus;
-    readonly onAgentEvent?: ChatBoxAgentEventSink | undefined; // The run of the turn, not only its answer — see `ChatBoxAgentEventSink`.
-  };
-}
 
 export type { ChatBoxHandle };
 

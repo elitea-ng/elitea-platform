@@ -358,7 +358,7 @@ dbInit:
 # stack's own topology) is exactly the case where turning this on is safe and
 # useful, so it is opt-in per install rather than assumed.
 #
-# Backend support: S3-compatible only (the same `mc` tool compose uses).
+# Backend support: S3-compatible only (the same `rc` tool compose uses — the RustFS CLI).
 # Azure/GCS container creation is not implemented here; enabling this with
 # main.env.STORAGE_BACKEND set to "azure" or "gcs" fails the Job on purpose
 # rather than silently skipping, so a mis-set flag is caught at install time.
@@ -366,12 +366,12 @@ objectInit:
   enabled: false
 
   image:
-    repository: quay.io/minio/mc
+    repository: rustfs/rc
     tag: "latest"
     pullPolicy: IfNotPresent
 
-  # Credentials for the `mc alias set` used to create the bucket. Static keys
-  # only — `mc` does not perform the ambient workload-identity credential
+  # Credentials for the `rc alias set` used to create the bucket. Static keys
+  # only — `rc` does not perform the ambient workload-identity credential
   # chains internal/infra/storage/s3 falls back to, so a cluster running S3
   # via workload identity (no S3_ACCESS_KEY/S3_SECRET_KEY Secret) cannot use
   # this Job and must pre-create the bucket out-of-band instead.
@@ -3172,11 +3172,10 @@ worker:
     # Entries pending in the consumer group, per replica. KEDA divides the
     # observed depth by this to get a replica count.
     #
-    # 4 rather than 1: a worker claims a small batch at a time
-    # (limits.redis_read_batch is 4 in values-standalone), so a target of 1
-    # would add a replica for a backlog one existing replica is already about
-    # to take.
-    targetPendingEntries: 4
+    # 32 = limits.delivery_max_concurrency: one replica drains a full cap of
+    # pending entries before the scaler wants a second. A smaller target adds
+    # replicas while the first still has free delivery slots.
+    targetPendingEntries: 32
 
     pollingIntervalSeconds: 15
 
@@ -3330,21 +3329,25 @@ worker:
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval.
     sensitiveTools: '{"*":["delete_file"]}'
+    # The delivery cap and the synchronous SDK pool cap the same executions in
+    # series. Raise delivery_max_concurrency together with sync_max_workers and
+    # sync_max_in_flight, or the pool bounds the delivery cap. The queue holds
+    # one item per delivery slot. redis_read_batch stays at 4.
     limits:
       redis_read_batch: 4
       redis_block_millis: 1000
       redis_reclaim_idle_millis: 60000
       redis_reclaim_interval_millis: 5000
       dependency_retry_millis: 250
-      delivery_max_concurrency: 2
-      delivery_queue_capacity: 4
-      sync_max_workers: 2
-      sync_max_in_flight: 2
+      delivery_max_concurrency: 32
+      delivery_queue_capacity: 64
+      sync_max_workers: 32
+      sync_max_in_flight: 32
       admission_timeout_millis: 5000
       grpc_deadline_millis: 5000
       content_timeout_millis: 15000
-      http_max_connections: 8
-      http_max_keepalive_connections: 4
+      http_max_connections: 32
+      http_max_keepalive_connections: 16
       output_max_queued_frames: 2
       output_max_queued_bytes: 131072
       output_max_sessions: 2
@@ -3383,11 +3386,11 @@ worker:
 
   resources:
     requests:
-      cpu: 200m
-      memory: 512Mi
-    limits:
       cpu: "2"
       memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
 
   podSecurityContext:
     runAsNonRoot: true

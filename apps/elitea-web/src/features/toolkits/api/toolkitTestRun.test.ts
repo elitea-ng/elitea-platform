@@ -102,7 +102,8 @@ describe('testToolkitTool', () => {
 
     const outcome = await testToolkitTool({ projectId: 'proj-1', toolkitId: 'tk-1', toolName: 'search_index', toolParams: {} });
 
-    expect(outcome).toMatchObject({ kind: 'timeout', lookup: 'request', taskId: expect.any(String) });
+    expect(outcome).toMatchObject({ kind: 'timeout', lookup: 'request' });
+    expect(outcome.kind === 'timeout' && outcome.taskId).toEqual(expect.any(String));
   });
 });
 

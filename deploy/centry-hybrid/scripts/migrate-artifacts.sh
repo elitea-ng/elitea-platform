@@ -33,7 +33,7 @@
 #     inventing values the API computes.
 #   * it deletes nothing from the source. The source tree is the rollback.
 #
-# It uses `mc` (quay.io/minio/mc), which is the client the compose stacks
+# It uses `rc` (rustfs/rc, the RustFS CLI), which is the client the compose stacks
 # already use to create the bucket (rustfs-bucket-init in
 # deploy/docker-compose.standalone-full.yml and runtime-artifacts-bucket-init in
 # deploy/centry-hybrid/pov-compose.yml). One client for the store, not two.
@@ -41,7 +41,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'USAGE'
-usage: migrate-artifacts.sh --source <libcloud-storage-root> --alias <mc-alias>
+usage: migrate-artifacts.sh --source <libcloud-storage-root> --alias <rc-alias>
                             [--container <bucket>] [--key-prefix <prefix>]
                             [--project <id>] [--dry-run] [--verify-only]
 
@@ -50,8 +50,8 @@ usage: migrate-artifacts.sh --source <libcloud-storage-root> --alias <mc-alias>
                  shared.yml (the reference deployment uses
                  /data/libcloud/storage, which is <centry>/pylon_main/libcloud/
                  storage on the host).
-  --alias        An `mc` alias that already addresses the target store, e.g.
-                 `mc alias set hybrid http://127.0.0.1:9000 elitea <secret>`.
+  --alias        An `rc` alias that already addresses the target store, e.g.
+                 `rc alias set hybrid http://127.0.0.1:9000 elitea <secret>`.
   --container    Target bucket. Default: elitea-artifacts. It must equal
                  STORAGE_CONTAINER on elitea-main.
   --key-prefix   Target key prefix. Default: empty. It must equal
@@ -91,9 +91,9 @@ if [[ ! -d "$source_root" ]]; then
   echo "source root does not exist: $source_root" >&2
   exit 2
 fi
-if ! command -v mc >/dev/null 2>&1; then
-  echo "mc is not on PATH. Install the MinIO client, or run this script inside" >&2
-  echo "quay.io/minio/mc with the source root and ~/.mc mounted." >&2
+if ! command -v rc >/dev/null 2>&1; then
+  echo "rc is not on PATH. Install the RustFS CLI, or run this script inside" >&2
+  echo "the rustfs/rc image with the source root mounted." >&2
   exit 2
 fi
 if ! command -v python3 >/dev/null 2>&1; then
@@ -208,7 +208,7 @@ while IFS=$'\t' read -r decoded encoded; do
       copied=$((copied + 1))
       continue
     fi
-    mc cp --quiet "$source_root/$encoded/$file_encoded" "$target"
+    rc cp --quiet "$source_root/$encoded/$file_encoded" "$target"
     copied=$((copied + 1))
   done < <(find "$source_root/$encoded" -maxdepth 1 -type f -exec basename {} \; | decode_names)
 done < <(find "$source_root" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | decode_names)
@@ -232,12 +232,12 @@ fi
 #
 # Count the objects the target now holds under the migrated prefixes and
 # compare with the number the walk produced. A copy loop that reports success
-# per object still leaves the question "are they all there", and `mc cp` is the
+# per object still leaves the question "are they all there", and `rc cp` is the
 # only thing that has answered it so far.
 listed=0
 while IFS= read -r line; do
   [[ -n "$line" ]] && listed=$((listed + 1))
-done < <(mc ls --recursive --quiet "$target_root/p/" 2>/dev/null | awk '{ print $NF }')
+done < <(rc ls --recursive "$target_root/p/" 2>/dev/null | awk '{ print $NF }')
 
 printf 'source objects walked: %d\n' "$copied"
 printf 'target objects listed: %d\n' "$listed"

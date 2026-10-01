@@ -13,7 +13,7 @@ import (
 func TestDelegatedTokenReferencesScopeExpiryRevocationAndReplacement(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	migration, err := os.ReadFile("../../migrations/shared/0130_mcp_oauth_tokens.sql")
+	migration, err := os.ReadFile("../../migrations/shared/0131_mcp_oauth_tokens.sql")
 	require.NoError(t, err)
 	for range 2 {
 		_, err = pool.Exec(ctx, string(migration))

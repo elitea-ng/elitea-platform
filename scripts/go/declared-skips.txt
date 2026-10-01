@@ -57,6 +57,10 @@ github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestIndexE
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector	TestCurrentIndexMetaWriterRealPgvector/installed_SDK_owns_one_completed_run_entry	ELITEA_TEST_SDK_PYTHON must name a Python that holds the installed SDK. The rest of this test runs in CI.
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestPostgresPgvectorSameTargetSerializationAcrossInstalledSDKProcess	Calls the pinned SDK entrypoint inside the running centry-elitea-indexer-worker-1 container, and checks an exact image digest. CI runs no worker container.
 
+# ── The probe needs native Python preparation output ────────────────────────
+
+github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage/conformance	TestPythonSandboxBundleSharedStore	Needs an operator-produced native Pyodide bundle and its recorded root via SANDBOX_BUNDLE_FIXTURE/SANDBOX_BUNDLE_ROOT. CI supplies S3 but produces no native preparer fixture. Bundle unit and mTLS component tests still run.
+
 # ── The backend decides, and the test says which way it decided ──────────────
 #
 # These are capability skips, not environment skips. Each emulator answers

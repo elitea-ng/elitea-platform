@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit F4): acknowledgement body for the POST replay probe — the byte-identical-retry test (§5.4, old eliteaApi.js:17-18 pre-cloned Request) asserts on the CAPTURED request bytes, not this body.",
+  "note": "Synthetic (unit F4): acknowledgement body for the POST replay probe — the byte-identical-retry test (§5.4, old eliteaApi.js:17-18 pre-cloned Request) asserts on the CAPTURED request bytes, not this body. RE-READ 2026-09-24 (R-M4): this fixture carries no Go wire claim and nothing in services/elitea-main/ constrains this body.",
   "body": {
     "received": true
   }

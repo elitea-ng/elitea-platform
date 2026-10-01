@@ -3,12 +3,12 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
 import { buildAuthorizationActions } from './authorizationActions';
+import { resolveAssistantFailureFields } from './normaliseAssistantFailure';
 import { buildToolActions, resolveAssistantToolInputs } from './toolActions';
 import type {
   HitlInterruptRawWire,
   MessageAuthorWire,
   MessageGroupWire,
-  MessageItemWire,
   MessageParticipantWire,
 } from './wire';
 import type { PersistedTraceSteps } from './traceSteps';
@@ -320,17 +320,6 @@ function resolveAssistantSummaryFields(meta: MessageGroupWire['meta']) {
   };
 }
 
-/** `exception` (line 299). */
-function resolveException(
-  messageGroup: MessageGroupWire,
-  meta: MessageGroupWire['meta'],
-  isError: boolean,
-  messageItems: readonly MessageItemWire[],
-): unknown {
-  if (!isError) return undefined;
-  return meta?.error || messageGroup.content || messageItems[0]?.item_details?.content;
-}
-
 /**
  * apps/elitea-ui/src/common/convertChatConversationMessages.js:111-313
  * `convertToAIAnswer`, ported. `createdAt`/`updatedAt` are kept as TWO
@@ -370,7 +359,6 @@ export function normaliseAssistantMessage(
     ...buildToolActions(thinkingSteps, toolCalls, createdAt, firstToolTimestampStart, foundParticipant),
     ...buildAuthorizationActions((meta ?? {}) as Record<string, unknown>, messageGroup.content, createdAt),
   ];
-  const exception = resolveException(messageGroup, meta, isError, messageItems);
 
   return {
     id: messageGroup.uuid,
@@ -384,8 +372,7 @@ export function normaliseAssistantMessage(
     ...assistantLinkageFields(messageGroup, messageGroups),
     ...(messageGroup.updated_at !== undefined ? { updatedAt: convertTime(messageGroup.updated_at) } : {}),
     ...assistantStreamingFields(messageGroup),
-    ...(exception !== undefined ? { exception } : {}),
-    ...(isError && typeof meta?.error_code === 'string' ? { failureCode: meta.error_code } : {}),
+    ...resolveAssistantFailureFields(messageGroup, meta, isError, messageItems),
     ...(messageGroup.likes !== undefined ? { likes: messageGroup.likes } : {}),
     ...assistantHitlFields(meta),
     ...assistantContinuationFields(meta),

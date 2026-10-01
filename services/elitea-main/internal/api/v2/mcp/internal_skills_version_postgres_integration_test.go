@@ -131,7 +131,7 @@ func TestInternalSkillListDatabaseFailureIsNotEmptySuccessPostgres(t *testing.T)
 	// The project schema does not exist in this isolated test database.
 	result, err := executor.Execute(context.Background(), 2147483647, 73, internalListSkills, map[string]any{})
 	if err == nil || result.status == http.StatusOK {
-		t.Fatal(fmt.Sprintf("failed list status=%d err=%v", result.status, err))
+		t.Fatalf("failed list status=%d err=%v", result.status, err)
 	}
 }
 

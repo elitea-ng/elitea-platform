@@ -32,6 +32,7 @@ import {
   useSyncChatMessage,
 } from '@/features/chat-messages';
 import type { ChatMessage } from '@/features/chat-messages';
+import { resolveSeededChatHistory } from './useChatBoxData.seed';
 import { useListModelsQuery } from '@/shared/api/configurationsApi';
 import type { ConfigModel } from '@/shared/api/configurationsApi';
 import { useSocketClient } from '@/shared/api/socket/client';
@@ -240,33 +241,21 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
   const seededIdentityRef = useRef<string | undefined>(seededIdentity);
 
   /*
-   * DEFECT this closes. The first send COMMITS the conversation before it tries
-   * any transport, and the page then routes to `/chat/{id}` — so the very act
-   * of adopting the row re-ran this effect with a server answer that has no
-   * messages in it yet, and the optimistic question (plus, on a refused turn,
-   * its failure bubble and error trace) was erased from the screen a moment
-   * after it was drawn. On a deployment with a live transport the socket sync
-   * put the persisted copy back and hid it; with no transport — every E2E stack
-   * (`VITE_SOCKET_SERVER: ""`) and any refused turn — nothing put it back and
-   * the reader's own question vanished.
-   *
-   * So an EMPTY server seed is not authoritative over a non-empty live history:
-   * it only means "the server has nothing to add yet". It replaces the history
-   * only when the reader really moved to a DIFFERENT conversation, which is the
-   * case the re-seed exists for. A seed that carries messages still wins, and
-   * the Create control resets the surface by remounting the subtree
-   * (`useCreateChatReset` keys it), so neither path is weakened here.
+   * WHO WINS when the server seed and the live transcript disagree:
+   * `./useChatBoxData.seed.ts`, which carries the rule and the two defects it
+   * closes — an EMPTY seed erasing the reader's own question after the first
+   * send adopts the conversation row, and a NON-EMPTY seed landing mid-turn and
+   * throwing away the tokens streamed so far.
    */
   useEffect(() => {
     const previousIdentity = seededIdentityRef.current;
     seededIdentityRef.current = seededIdentity;
     const seed = seedConversationForSync();
     const switchedConversation = previousIdentity !== undefined && previousIdentity !== seededIdentity;
-    const seedIsEmpty = (seed.chat_history ?? []).length === 0;
     setConversationForSync((prev) => {
       const live = prev.chat_history ?? [];
-      if (switchedConversation || !seedIsEmpty || live.length === 0) return seed;
-      return { ...seed, chat_history: live };
+      const kept = resolveSeededChatHistory(live, seed.chat_history ?? [], switchedConversation);
+      return kept === live ? { ...seed, chat_history: live } : seed;
     });
   }, [seedConversationForSync, seededIdentity]);
 

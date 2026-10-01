@@ -34,13 +34,13 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { ApplicationAnswerAuthorization } from './ApplicationAnswerAuthorization';
 import { AssistantAvatar } from './MessageAvatar';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
 import { RememberMemoryAction } from './RememberMemoryAction';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
-import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
@@ -58,7 +58,6 @@ import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
-import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 
 import type { ApplicationAnswerProps } from './ApplicationAnswer.types';
 
@@ -80,18 +79,6 @@ export type {
   ApplicationAnswerStatus,
   ApplicationAnswerTts,
 } from './ApplicationAnswer.types';
-
-function authorizationRequestId(action: SubAgentGroupable): string | undefined {
-  const draft = asDraft(action);
-  const metadata = (draft.toolMeta ?? {}) as Record<string, unknown>;
-  const value = draft.authorizationRequestId ?? metadata['authorization_request_id'] ?? metadata['interrupt_id'] ?? draft.id;
-  return typeof value === 'string' && value !== '' ? value : undefined;
-}
-
-/** Defensive read of a message-level token-limit pause signal — not yet a typed `ChatMessage` field (see module doc). */
-function getRequiresConfirmation(answer: ChatMessage): { readonly message?: string } | undefined {
-  return (answer as unknown as { requiresConfirmation?: { readonly message?: string } }).requiresConfirmation;
-}
 
 /**
  * `ApplicationAnswer` — renders an AI assistant's answer with markdown
@@ -122,7 +109,7 @@ export function ApplicationAnswer({
   // means something for the row TTS is CURRENTLY reading. Every other answer
   // row renders the same prop and must not highlight an unrelated offset.
   const currentSpokenRange = speakingMessageId === messageId ? spokenRange : undefined;
-  const requiresConfirmationSignal = getRequiresConfirmation(answer);
+  const requiresConfirmationSignal = answer.requiresConfirmation;
 
   const items = useMemo(() => readAnswerItems(answer.messageItems), [answer.messageItems]);
   // A canvas counts as content: an answer that is nothing but a canvas would
@@ -263,25 +250,11 @@ export function ApplicationAnswer({
         />
       )}
 
-      {authRequiredActions.map((action, index) => {
-        const requestId = authorizationRequestId(action);
-        const owner = asDraft(action).parent_agent_name || asDraft(action).name || 'Toolkit';
-        return (
-          <Box key={requestId ?? `authorization-${index}`} component="section"
-            aria-label={`${owner} authorization`} sx={{ p: 1.5, border: 1, borderColor: 'warning.main' }}>
-            <Typography variant="subtitle2">{owner} — Authorization required</Typography>
-            <Typography variant="body2">Execution is paused. The protected tool has not run.</Typography>
-            <ChatContinue
-              authRequired
-              disabled={!onContinueMcpExecution || !requestId}
-              onContinueWithoutAuth={() => { onContinueMcpExecution?.(messageId, true, requestId); }}
-              onAuthSuccess={() => { onContinueMcpExecution?.(messageId, false, requestId); }}
-              authRequiredAction={action as unknown as McpAuthRequiredAction}
-              renderAuthModal={renderAuthModal}
-            />
-          </Box>
-        );
-      })}
+      <ApplicationAnswerAuthorization
+        actions={authRequiredActions}
+        messageId={messageId}
+        continuation={{ onContinueMcpExecution, renderAuthModal }}
+      />
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 

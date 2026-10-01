@@ -48,7 +48,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import type { ToolkitTestAuthorization } from '../../api/toolkitTestAuthorization';
+import type { ToolkitTestAuthorizationRenderer } from './TestToolAuthorization.types';
 import { t } from '@/shared/i18n';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -68,15 +68,8 @@ import type { McpToolOption } from './useGetSelectedToolSchema';
 import { useGetSelectedToolSchema } from './useGetSelectedToolSchema';
 import { useToolkitTestToolRun } from './useToolkitTestToolRun';
 
-export interface ToolkitTestAuthorizationRenderProps {
-  readonly projectId: string;
-  readonly challenge: ToolkitTestAuthorization;
-  readonly onAuthorized: (reference: string) => Promise<void>;
-  readonly onSkip: () => void;
-}
-
 export interface TestToolPaneProps {
-  readonly renderAuthorization?: ((props: ToolkitTestAuthorizationRenderProps) => ReactNode) | undefined;
+  readonly renderAuthorization?: ToolkitTestAuthorizationRenderer | undefined;
   readonly projectId: string | number | undefined;
   readonly toolkitId: string | number | undefined;
   /** The toolkit being edited, as the form currently holds it — its `type` picks the tool catalogue and its `settings` the explicit tool list. */

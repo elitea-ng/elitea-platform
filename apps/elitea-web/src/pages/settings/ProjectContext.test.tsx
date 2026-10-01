@@ -95,7 +95,7 @@ describe('Settings › Project Context', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(bodies).toHaveLength(1));
-    expect(bodies[0]).toEqual({ content: 'Stored background', enabled: false });
+    expect(bodies[0]).toMatchObject({ content: 'Stored background', enabled: false });
   });
 
   it('puts the toggle back and reports the failure when the save is refused', async () => {

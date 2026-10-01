@@ -21,28 +21,8 @@ async function openAgentEditor(page: Page, agentId: string): Promise<void> {
   await expect(page.getByTestId('edit-application-configuration-tab-panel')).toBeVisible({ timeout: 20_000 });
 }
 
-/* elitea_issues: #5468 — "Save As Version" on an agent that has a Skill
-   attached must carry that attachment onto the new version, the same way it
-   already carries Toolkits and other configuration (Story 3/4: skill
-   attachment is agent-version configuration, not a side channel).
-   Reproduced against the current app: `SaveNewVersionButton.tsx`'s own doc
-   comment records that the generated `SaveApplicationNewVersionBody` type
-   LOOKS like it accepts a `copy_skills_from_version_id` passthrough field,
-   but the real Go handler decodes the body into a plain `map[string]any`
-   and reads only its own named keys — an unrecognised key is silently
-   ignored — so nothing on either side ever asks the new version to copy the
-   source version's skill attachments. This is a genuine, currently-present
-   product gap, not a stale legacy-app description: `test.fail` below fails
-   for exactly this reason (the new version's SKILLS section, and the
-   `application_skills` read behind it, come back empty). */
+/* elitea_issues: #5468 — new agent versions preserve attached Skills. */
 test('a Skill attached to an agent survives Save As Version', async ({ page, request }) => {
-  test.fail(
-    true,
-    '#5468: product gap — Save As Version does not preserve attached Skills (SaveNewVersionButton.tsx does not ' +
-      'send copy_skills_from_version_id, and the Go version-create handler has no code path that would honour it ' +
-      'if it did)',
-  );
-
   const agentName = uniqueName('agent');
   const skillName = uniqueName('skill');
   const agent = await createAgent(request, agentName);

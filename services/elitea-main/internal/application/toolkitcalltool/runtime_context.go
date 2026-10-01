@@ -62,7 +62,7 @@ func validMCPReference(reference string) bool {
 		return false
 	}
 	for _, value := range reference {
-		if !(value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '-') {
+		if (value < 'a' || value > 'z') && (value < 'A' || value > 'Z') && (value < '0' || value > '9') && value != '_' && value != '-' {
 			return false
 		}
 	}

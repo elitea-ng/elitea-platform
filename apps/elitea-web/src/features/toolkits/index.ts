@@ -119,4 +119,4 @@ export { useIndexesTabVisibility } from './lib/hooks/useIndexesTabVisibility';
  * Back to 20/20 — re-check before adding more.
  */
 
-export type { ToolkitTestAuthorizationRenderProps } from './ui/test-tools/TestToolPane';
+export type { ToolkitTestAuthorizationRenderProps } from './ui/test-tools/TestToolAuthorization.types';

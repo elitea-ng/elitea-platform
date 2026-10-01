@@ -15,6 +15,7 @@ import { ToolActionStatus } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
 import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization.types';
+export { extractCopyableContent } from './useChatBoxHandlers.content';
 
 /** A resolved HITL interrupt action from the user ('approve'/'reject'/'edit'/'block_with_comment'). `value` carries the rewritten prompt/comment text for 'edit'/'block_with_comment'. `childThreadId` (Track-2 independent fan-out child) is present only when this decision resumes ONE still-running child independently of its siblings. */
 export interface HitlInterruptAction {
@@ -296,17 +297,6 @@ export function buildChatContinuePayload(deps: ChatBoxHandlerDeps, params: { rea
 export function buildDeclinedServersList(ref: ChatBoxHandlerDeps['sessionDeclinedMcpServersRef']): readonly Record<string, unknown>[] {
   if (!ref) return [];
   return [...ref.current.entries()].map(([url, rest]) => ({ server_url: (rest.actual_server_url as string | undefined) || url, ...rest }));
-}
-function extractMessageItemText(rawItem: unknown): string {
-  const raw = rawItem as Record<string, unknown>;
-  const details = raw.item_details as Record<string, unknown> | undefined;
-  if (raw.item_type === 'canvas_message') return ((details?.latest_version as Record<string, unknown> | undefined)?.canvas_content as string | undefined) ?? '';
-  if (raw.item_type === 'attachment_message') return `[${(details?.name as string | undefined) ?? 'Attachment'}]`;
-  return (details?.content as string | undefined) ?? '';
-}
-export function extractCopyableContent(message: ChatMessage): string {
-  if (message.messageItems?.length) return message.messageItems.map(extractMessageItemText).join(', ');
-  return message.content || '';
 }
 export interface ResolvedConversation {
   readonly uuid?: string;

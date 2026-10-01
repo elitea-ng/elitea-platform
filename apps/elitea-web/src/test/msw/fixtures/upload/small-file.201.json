@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit S6): single-shot (non-chunked, file.size <= CHUNK_SIZE) upload ack. DERIVED FROM THE GO HANDLER, not captured: a request without all three chunk fields goes straight to finalizeAttachment (attachments.go:287-290), which writes the same 201 []attachmentCreated as the final chunk (:461). Replaces the legacy Python {id, filename, size} shape — see chunk-complete.201.json's note for why the field names are load-bearing.",
+  "note": "Synthetic (unit S6): single-shot (non-chunked, file.size <= CHUNK_SIZE) upload ack. DERIVED FROM THE GO HANDLER, not captured: a request without all three chunk fields goes straight to finalizeAttachment (attachments.go:287-290), which writes the same 201 []attachmentCreated as the final chunk (:461). Replaces the legacy Python {id, filename, size} shape — see chunk-complete.201.json's note for why the field names are load-bearing. RE-READ 2026-09-24 (R-M4): the non-chunked dispatch now sits at conversations/attachments.go:347-348 and still routes straight to finalizeAttachment (:450), which writes the same 201 at :525.",
   "body": [
     {
       "filepath": "/chat-attachments/3f7c1e8a-9b2d-4c5e-8a1f-0d6b7c8e9f10/small.txt",

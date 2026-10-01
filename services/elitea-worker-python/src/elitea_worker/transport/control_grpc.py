@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import grpc
 from elitea.runtime.v1 import control_pb2
 from google.protobuf.message import Message
 
 from elitea_worker.constants import MAX_GRPC_REQUEST_BYTES, MAX_GRPC_RESPONSE_BYTES
-from elitea_worker.execution.errors import ResourceExhausted
+from elitea_worker.execution.errors import (
+    AuthorizationFailure,
+    DeadlineExceeded,
+    DependencyUnavailable,
+    ResourceExhausted,
+    UnsupportedCapability,
+    WorkerError,
+)
 
 
 MetadataProvider = Callable[[], tuple[tuple[str, str], ...]]
+
+_ControlRequest = TypeVar("_ControlRequest", bound=Message)
+_ControlResponse = TypeVar("_ControlResponse", bound=Message)
 
 
 class GeneratedControlStub(Protocol):
@@ -93,7 +103,12 @@ def secure_control_channel(
 
 
 class ExecutionControlClient:
-    """One attempt per call; operation retry policy belongs to the caller."""
+    """One attempt per call. The caller owns the retry policy.
+
+    Each attempt maps a gRPC transport failure to a typed, safe
+    ``WorkerError``. A stale control channel never reaches the delivery path
+    as a raw exception.
+    """
 
     def __init__(
         self,
@@ -112,10 +127,9 @@ class ExecutionControlClient:
         self, request: control_pb2.ClaimCommandRequestV1
     ) -> control_pb2.ClaimCommandResponseV1:
         _require_wire_size(request, MAX_GRPC_REQUEST_BYTES, "control request")
-        response = await self._stub.ClaimCommand(
+        response = await self._typed_call(
+            self._stub.ClaimCommand,
             request,
-            timeout=self._deadline,
-            metadata=_validated_metadata(self._metadata()),
         )
         _require_wire_size(response, MAX_GRPC_RESPONSE_BYTES, "control response")
         return response
@@ -124,10 +138,9 @@ class ExecutionControlClient:
         self, request: control_pb2.RenewLeaseRequestV1
     ) -> control_pb2.RenewLeaseResponseV1:
         _require_wire_size(request, MAX_GRPC_REQUEST_BYTES, "control request")
-        response = await self._stub.RenewLease(
+        response = await self._typed_call(
+            self._stub.RenewLease,
             request,
-            timeout=self._deadline,
-            metadata=_validated_metadata(self._metadata()),
         )
         _require_wire_size(response, MAX_GRPC_RESPONSE_BYTES, "control response")
         return response
@@ -136,10 +149,9 @@ class ExecutionControlClient:
         self, request: control_pb2.BeginExecutionRequestV1
     ) -> control_pb2.BeginExecutionResponseV1:
         _require_wire_size(request, MAX_GRPC_REQUEST_BYTES, "control request")
-        response = await self._stub.BeginExecution(
+        response = await self._typed_call(
+            self._stub.BeginExecution,
             request,
-            timeout=self._deadline,
-            metadata=_validated_metadata(self._metadata()),
         )
         _require_wire_size(response, MAX_GRPC_RESPONSE_BYTES, "control response")
         return response
@@ -148,10 +160,9 @@ class ExecutionControlClient:
         self, request: control_pb2.AuthorizeInvocationRequestV1
     ) -> control_pb2.AuthorizeInvocationResponseV1:
         _require_wire_size(request, MAX_GRPC_REQUEST_BYTES, "control request")
-        response = await self._stub.AuthorizeInvocation(
+        response = await self._typed_call(
+            self._stub.AuthorizeInvocation,
             request,
-            timeout=self._deadline,
-            metadata=_validated_metadata(self._metadata()),
         )
         _require_wire_size(response, MAX_GRPC_RESPONSE_BYTES, "control response")
         return response
@@ -160,10 +171,9 @@ class ExecutionControlClient:
         self, request: control_pb2.ObserveDesiredStateRequestV1
     ) -> control_pb2.ObserveDesiredStateResponseV1:
         _require_wire_size(request, MAX_GRPC_REQUEST_BYTES, "control request")
-        response = await self._stub.ObserveDesiredState(
+        response = await self._typed_call(
+            self._stub.ObserveDesiredState,
             request,
-            timeout=self._deadline,
-            metadata=_validated_metadata(self._metadata()),
         )
         _require_wire_size(response, MAX_GRPC_RESPONSE_BYTES, "control response")
         return response
@@ -172,13 +182,62 @@ class ExecutionControlClient:
         self, request: control_pb2.PrepareSettlementRequestV1
     ) -> control_pb2.PrepareSettlementResponseV1:
         _require_wire_size(request, MAX_GRPC_REQUEST_BYTES, "control request")
-        response = await self._stub.PrepareSettlement(
+        response = await self._typed_call(
+            self._stub.PrepareSettlement,
             request,
-            timeout=self._deadline,
-            metadata=_validated_metadata(self._metadata()),
         )
         _require_wire_size(response, MAX_GRPC_RESPONSE_BYTES, "control response")
         return response
+
+    async def _typed_call(
+        self,
+        rpc: Callable[[_ControlRequest], Awaitable[_ControlResponse]],
+        request: _ControlRequest,
+    ) -> _ControlResponse:
+        try:
+            return await rpc(
+                request,
+                timeout=self._deadline,
+                metadata=_validated_metadata(self._metadata()),
+            )
+        except grpc.aio.AioRpcError as error:
+            raise _typed_control_failure(error) from error
+
+
+def _typed_control_failure(error: grpc.aio.AioRpcError) -> WorkerError:
+    """Map one gRPC transport status to the stable safe failure contract.
+
+    The raw status stays chained as the cause for in-process diagnostics.
+    A stale control channel surfaces as retryable ``DependencyUnavailable``
+    so the claim lease keeps living. A server-side denial surfaces
+    non-retryable.
+    """
+
+    code = error.code()
+    if code in (
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.CANCELLED,
+    ):
+        # CANCELLED names an RPC that the client or the server cancels.
+        # The client cancels its own RPCs with close() during the shared
+        # shutdown deadline. A recreated main replica tears down its
+        # connections. The client sees CANCELLED for the in-flight RPCs.
+        # The delivery winds down under that deadline and receives no
+        # shutdown ACK. This mapping keeps the lease monitor and the claim
+        # path on a stable, bounded retryable failure.
+        return DependencyUnavailable()
+    if code in (
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.PERMISSION_DENIED,
+    ):
+        return AuthorizationFailure()
+    if code is grpc.StatusCode.DEADLINE_EXCEEDED:
+        return DeadlineExceeded()
+    if code is grpc.StatusCode.RESOURCE_EXHAUSTED:
+        return ResourceExhausted()
+    if code is grpc.StatusCode.UNIMPLEMENTED:
+        return UnsupportedCapability()
+    return DependencyUnavailable()
 
 
 def _require_wire_size(message: Message, max_bytes: int, description: str) -> None:

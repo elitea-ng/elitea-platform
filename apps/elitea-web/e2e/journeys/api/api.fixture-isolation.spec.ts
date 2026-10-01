@@ -157,7 +157,7 @@ test('API-FX1: a conversation the fixture creates is FRESH — no message anothe
     const body = (await stored.json()) as {
       name?: string;
       message_groups?: readonly unknown[];
-      participants?: readonly unknown[];
+      participants?: readonly { readonly entity_name: string }[];
     };
 
     expect(body.name, 'the fixture must return the conversation it named').toBe(name);
@@ -167,9 +167,9 @@ test('API-FX1: a conversation the fixture creates is FRESH — no message anothe
         'message groups reads every one of them as its own',
     ).toEqual([]);
     expect(
-      body.participants ?? [],
-      'and no participants: a leftover agent would answer a turn the journey never armed',
-    ).toEqual([]);
+      (body.participants ?? []).map((participant) => participant.entity_name).sort(),
+      'only the default user and dummy participants may exist; no application or toolkit is armed',
+    ).toEqual(['dummy', 'user']);
   } finally {
     await deleteConversation(request, conversationId);
   }

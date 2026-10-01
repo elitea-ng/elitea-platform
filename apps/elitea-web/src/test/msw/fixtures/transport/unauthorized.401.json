@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit F4): a 401 body for the §5.4 behaviour-2 path. RE-READ 2026-08-25 (R-M4): this note used to claim the body was the byte-shape of the genuine 401 the Go auth middleware writes, and that is NO LONGER TRUE — internal/api/middleware/auth.go:129 writes a NESTED object via writeJSONError ({\"error\":{\"message\",\"type\",\"code\"}}, pinned by auth_test.go:60), not this flat {\"error\": string}. The body is left flat on purpose: these fixtures drive /__transport__/ paths no real endpoint serves, http.ts stores a failure body as `unknown` and never parses its shape, and the colocated errorBody schema in handlers/transport.ts is shared with the 403 and 404 fixtures. What was wrong here was the CLAIM, not the value.",
+  "note": "Synthetic (unit F4): a 401 body for the §5.4 behaviour-2 path. RE-READ 2026-08-25 (R-M4): this note used to claim the body was the byte-shape of the genuine 401 the Go auth middleware writes, and that is NO LONGER TRUE — internal/api/middleware/auth.go:129 writes a NESTED object via writeJSONError ({\"error\":{\"message\",\"type\",\"code\"}}, pinned by auth_test.go:60), not this flat {\"error\": string}. The body is left flat on purpose: these fixtures drive /__transport__/ paths no real endpoint serves, http.ts stores a failure body as `unknown` and never parses its shape, and the colocated errorBody schema in handlers/transport.ts is shared with the 403 and 404 fixtures. What was wrong here was the CLAIM, not the value. RE-READ 2026-09-24 (R-M4): the nested 401 still stands; writeJSONError now sits at middleware/auth.go:252 (shape at :238-247), the 401 refusal calls it at :525 with the \"missing authorization header\" answer at :514, and auth_test.go now pins the body at :69.",
   "body": {
     "error": "missing authorization header"
   }

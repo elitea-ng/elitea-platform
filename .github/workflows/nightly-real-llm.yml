@@ -65,10 +65,20 @@ jobs:
         # container path executes — not a host-only leftover.
         run: npm ci
       - name: Pre-pull the pinned Playwright container and the model image
+        # Bounded and non-fatal for the Playwright image: a single attempt
+        # here is purely an overlap optimisation with the build step below,
+        # not the last word on the image being present. chat-stream-e2e.sh
+        # (which apps/elitea-web/scripts/chat-stream-e2e.sh's `docker run`
+        # block runs) waits for this pull's result and retries with a
+        # bounded backoff immediately before that `docker run`, which is
+        # what an unretried inline pull racing the registry does not get —
+        # the mcr.microsoft.com timeout that killed PR #1001's index-stream
+        # job. The model image has no such retry yet: compose still pulls it
+        # inline at `up` if this background attempt loses.
         working-directory: ${{ github.workspace }}
         run: |
           timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
-            || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will pull it inline"
+            || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will retry it"
           timeout 900 docker compose -f deploy/docker-compose.standalone-full.yml --profile real-llm pull -q llm-real \
             || echo "::warning::pull of the real-model image failed or timed out; compose will pull it inline at up"
       - name: Build the stack images (shared cache)

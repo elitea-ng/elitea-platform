@@ -1,15 +1,8 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import './__mocks__/useChatBoxModelSelection.mock';
 import { useChatBoxModelSelection } from './useChatBoxModelSelection';
-
-vi.mock('@/shared/api/configurationsApi', () => ({
-  useListModelsQuery: () => ({ data: { items: [
-    { id: 'default', name: 'default-model', project_id: '9' },
-    { id: 'shared', name: 'pipeline-model', project_id: '1', display_name: 'Shared model' },
-    { id: 'private', name: 'pipeline-model', project_id: '9', display_name: 'Private model' },
-  ] } }),
-}));
 
 describe('pipeline test model selection', () => {
   it('shows the configured model and project instead of the chat default', () => {
@@ -48,5 +41,15 @@ describe('pipeline test model selection', () => {
     expect(result.current.selectedLlmModel?.id).toBe('default');
     act(() => result.current.handleSelectModel({ id: 'shared', name: 'pipeline-model' }));
     expect(setSelectedModel).toHaveBeenCalledWith({ name: 'pipeline-model', projectId: '1', supportsReasoning: false });
+  });
+
+  it('refuses an object project identity without invoking its string conversion', () => {
+    const toString = vi.fn(() => '1');
+    const { result } = renderHook(() => useChatBoxModelSelection({
+      projectId: '9', selectedModelName: 'default-model', setSelectedModel: vi.fn(),
+      llm: { settings: { model_name: 'pipeline-model', model_project_id: { toString } } },
+    }));
+    expect(result.current.selectedLlmModel).toBeNull();
+    expect(toString).not.toHaveBeenCalled();
   });
 });

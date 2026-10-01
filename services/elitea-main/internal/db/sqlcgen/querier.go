@@ -68,6 +68,10 @@ type Querier interface {
 	// never accept a schema from the caller.
 	CopyApplicationVersionSkills(ctx context.Context, arg CopyApplicationVersionSkillsParams) (int64, error)
 	CountActiveRuntimeExecutionsUpTo(ctx context.Context, arg CountActiveRuntimeExecutionsUpToParams) (int64, error)
+	// The live cap the reservation guard trigger computes, in ONE statement so both
+	// counts share a snapshot. Used by materialize to re-check the cap under the
+	// policy row lock when its reservation was reaped before it committed.
+	CountAgentAdmissionSlots(ctx context.Context, capabilityID string) (int64, error)
 	CountArtifactBucketObjects(ctx context.Context, bucketID int64) (int64, error)
 	CountAttachmentChunks(ctx context.Context, arg CountAttachmentChunksParams) (int64, error)
 	CountAuthUserRolesInMode(ctx context.Context, arg CountAuthUserRolesInModeParams) (int64, error)
@@ -465,6 +469,7 @@ type Querier interface {
 	LockToolkitCallToolPublication(ctx context.Context, arg LockToolkitCallToolPublicationParams) (LockToolkitCallToolPublicationRow, error)
 	LockToolkitExecuteReadEnvelope(ctx context.Context, arg LockToolkitExecuteReadEnvelopeParams) (LockToolkitExecuteReadEnvelopeRow, error)
 	LockToolkitExecuteReadPublication(ctx context.Context, arg LockToolkitExecuteReadPublicationParams) (LockToolkitExecuteReadPublicationRow, error)
+	MarkAgentAdmissionMaterialized(ctx context.Context, arg MarkAgentAdmissionMaterializedParams) (int64, error)
 	MarkAgentExecutionDispatched(ctx context.Context, arg MarkAgentExecutionDispatchedParams) (int64, error)
 	MarkAgentExecutionPublished(ctx context.Context, arg MarkAgentExecutionPublishedParams) (int64, error)
 	MarkArtifactBucketNotified(ctx context.Context, id int64) (int64, error)
@@ -491,13 +496,24 @@ type Querier interface {
 	PruneMCPOAuthClients(ctx context.Context) error
 	QuarantineExpiredTerminalIndexMetaInitializations(ctx context.Context, quarantineLimit int32) (int64, error)
 	QuarantineIndexMetaInitialization(ctx context.Context, arg QuarantineIndexMetaInitializationParams) (string, error)
+	// now() (STABLE) rather than clock_timestamp() (VOLATILE): the planner can only
+	// turn a STABLE cutoff into an index condition, and the DELETE is a single
+	// statement, so the two are the same instant here. With clock_timestamp() the
+	// planner ignored both partial indexes and heap-scanned the table every pass.
+	ReapAgentAdmissionReservations(ctx context.Context, arg ReapAgentAdmissionReservationsParams) (int64, error)
 	RefreshAgentExecutionPublication(ctx context.Context, arg RefreshAgentExecutionPublicationParams) (int64, error)
 	RefreshToolkitExecuteReadPublication(ctx context.Context, arg RefreshToolkitExecuteReadPublicationParams) (int64, error)
+	// Compensates a reserve whose materialize did not commit a new job (an error,
+	// a cancelled request, or a replay resolved against the durable job). Only an
+	// unmaterialized row is released, so this is a no-op after a successful
+	// materialize and safe to run on every non-created outcome.
+	ReleaseAgentAdmissionReservation(ctx context.Context, arg ReleaseAgentAdmissionReservationParams) (int64, error)
 	ReleaseIndexMetaInitialization(ctx context.Context, arg ReleaseIndexMetaInitializationParams) (int64, error)
 	ReleaseScheduledOccurrenceForRetry(ctx context.Context, arg ReleaseScheduledOccurrenceForRetryParams) (int64, error)
 	ReplaceCurrentConfiguration(ctx context.Context, arg ReplaceCurrentConfigurationParams) (ReplaceCurrentConfigurationRow, error)
 	ReplaceCurrentDeletedLLMApplicationReferences(ctx context.Context, arg ReplaceCurrentDeletedLLMApplicationReferencesParams) (ReplaceCurrentDeletedLLMApplicationReferencesRow, error)
 	RequestCurrentIndexIngestCancellation(ctx context.Context, arg RequestCurrentIndexIngestCancellationParams) (bool, error)
+	ReserveAgentAdmission(ctx context.Context, arg ReserveAgentAdmissionParams) (string, error)
 	ResetCurrentAgentResponse(ctx context.Context, arg ResetCurrentAgentResponseParams) (ResetCurrentAgentResponseRow, error)
 	// Chat history for this turn: one entry per prior message group, whose
 	// `content` is the group's items flattened into ONE LangChain content array.

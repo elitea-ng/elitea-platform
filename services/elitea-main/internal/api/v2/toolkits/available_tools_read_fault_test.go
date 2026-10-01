@@ -236,12 +236,3 @@ func TestAttachedToolsReportsARowThatFailsToScanAsAFailure(t *testing.T) {
 		t.Fatalf("read fault: %#v %v", tools, err)
 	}
 }
-
-func jsonHasEmptyToolsArray(body string) bool {
-	var resp map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		return false
-	}
-	raw, ok := resp["tools"]
-	return ok && string(raw) == "[]"
-}

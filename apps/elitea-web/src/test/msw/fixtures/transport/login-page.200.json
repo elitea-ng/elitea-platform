@@ -1,6 +1,6 @@
 {
-  "recordedAt": "2026-08-25",
+  "recordedAt": "2026-09-24",
   "synthetic": true,
-  "note": "Synthetic (unit F4): stand-in HTML for the forward-auth login page a session-expiry redirect lands on (spec §5.4 behaviour 2, secondary redirect-sniff signal; old eliteaApi.js:21-49).",
+  "note": "Synthetic (unit F4): stand-in HTML for the forward-auth login page a session-expiry redirect lands on (spec §5.4 behaviour 2, secondary redirect-sniff signal; old eliteaApi.js:21-49). RE-READ 2026-09-24 (R-M4): this fixture carries no Go wire claim; it stands in for the forward-auth login page on the client redirect-sniff path.",
   "body": "<html><body>forward-auth login page</body></html>"
 }

@@ -69,8 +69,10 @@ spec:
               value: {{ $env.S3_ENDPOINT_URL | default "https://s3.amazonaws.com" | quote }}
             - name: S3_REGION
               value: {{ $env.S3_REGION | default "us-east-1" | quote }}
-            - name: MC_HOST_ALIAS
+            - name: RC_HOST_ALIAS
               value: elitea-object-init
+            - name: HOME
+              value: /home/rc
             - name: ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -87,22 +89,25 @@ spec:
             - |
               if [ "$STORAGE_BACKEND" != "s3" ]; then
                 echo "ERROR: objectInit.enabled=true only supports STORAGE_BACKEND=s3" >&2
-                echo "       (mc has no equivalent for '$STORAGE_BACKEND' here)." >&2
+                echo "       (rc has no equivalent for '$STORAGE_BACKEND' here)." >&2
                 echo "       Pre-create the container out-of-band, or set" >&2
                 echo "       objectInit.enabled=false." >&2
                 exit 1
               fi
 
-              mc --config-dir /.mc alias set "$MC_HOST_ALIAS" "$S3_ENDPOINT_URL" "$ACCESS_KEY" "$SECRET_KEY"
-              mc --config-dir /.mc mb --ignore-existing --region "$S3_REGION" "$MC_HOST_ALIAS/$STORAGE_CONTAINER"
+              rc alias set "$RC_HOST_ALIAS" "$S3_ENDPOINT_URL" "$ACCESS_KEY" "$SECRET_KEY"
+              rc mb --ignore-existing --region "$S3_REGION" "$RC_HOST_ALIAS/$STORAGE_CONTAINER"
               echo "bucket $STORAGE_CONTAINER present on $S3_ENDPOINT_URL"
           resources:
             {{- toYaml $o.resources | nindent 12 }}
+          # rc writes its alias config to $HOME/.config/rc. The pod root is
+          # read-only, so the mount below carries the home dir; fsGroup makes
+          # the emptyDir group-owned, so the job user can write it.
           volumeMounts:
-            - name: mc-config
-              mountPath: /.mc
+            - name: rc-config
+              mountPath: /home/rc
       volumes:
-        - name: mc-config
+        - name: rc-config
           emptyDir: {}
       {{- with $o.nodeSelector }}
       nodeSelector:

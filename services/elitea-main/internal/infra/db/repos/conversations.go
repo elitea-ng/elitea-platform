@@ -1053,7 +1053,7 @@ func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, co
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var isAuthor bool
 	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT p.entity_name='user' AND p.entity_meta->>'id'=c.author_id::text FROM %s.chat_participant_mapping pm JOIN %s.chat_participants p ON p.id=pm.participant_id JOIN %s.chat_conversations c ON c.id=pm.conversation_id WHERE pm.conversation_id=$1 AND pm.participant_id=$2 FOR UPDATE OF pm`, s, s, s), id, participantID).Scan(&isAuthor)
 	if errors.Is(err, pgx.ErrNoRows) {

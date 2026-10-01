@@ -62,6 +62,72 @@ INSERT INTO elitea_runtime.agent_execution_jobs (
     sqlc.arg(sio_event)::text
 );
 
+-- name: ReserveAgentAdmission :one
+INSERT INTO elitea_runtime.agent_admission_reservations (
+    capability_id, idempotency_scope, idempotency_key,
+    execution_id, configured_max
+) VALUES (
+    sqlc.arg(capability_id)::text,
+    sqlc.arg(idempotency_scope)::text,
+    sqlc.arg(idempotency_key)::text,
+    sqlc.arg(execution_id)::text,
+    sqlc.arg(configured_max)::bigint
+)
+ON CONFLICT (capability_id, idempotency_scope, idempotency_key) DO NOTHING
+RETURNING execution_id;
+
+-- name: MarkAgentAdmissionMaterialized :execrows
+UPDATE elitea_runtime.agent_admission_reservations
+SET materialized_at = clock_timestamp()
+WHERE capability_id = sqlc.arg(capability_id)::text
+  AND idempotency_scope = sqlc.arg(idempotency_scope)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text
+  AND materialized_at IS NULL;
+
+-- name: ReleaseAgentAdmissionReservation :execrows
+-- Compensates a reserve whose materialize did not commit a new job (an error,
+-- a cancelled request, or a replay resolved against the durable job). Only an
+-- unmaterialized row is released, so this is a no-op after a successful
+-- materialize and safe to run on every non-created outcome.
+DELETE FROM elitea_runtime.agent_admission_reservations
+WHERE capability_id = sqlc.arg(capability_id)::text
+  AND idempotency_scope = sqlc.arg(idempotency_scope)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text
+  AND materialized_at IS NULL;
+
+-- name: CountAgentAdmissionSlots :one
+-- The live cap the reservation guard trigger computes, in ONE statement so both
+-- counts share a snapshot. Used by materialize to re-check the cap under the
+-- policy row lock when its reservation was reaped before it committed.
+SELECT ((
+    SELECT count(*)
+    FROM elitea_runtime.execution_jobs
+    WHERE capability_id = sqlc.arg(capability_id)::text
+      AND state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING')
+) + (
+    SELECT count(*)
+    FROM elitea_runtime.agent_admission_reservations
+    WHERE capability_id = sqlc.arg(capability_id)::text
+      AND materialized_at IS NULL
+))::bigint AS slots;
+
+-- now() (STABLE) rather than clock_timestamp() (VOLATILE): the planner can only
+-- turn a STABLE cutoff into an index condition, and the DELETE is a single
+-- statement, so the two are the same instant here. With clock_timestamp() the
+-- planner ignored both partial indexes and heap-scanned the table every pass.
+-- name: ReapAgentAdmissionReservations :execrows
+DELETE FROM elitea_runtime.agent_admission_reservations
+WHERE (
+    materialized_at IS NULL
+    AND reserved_at < now()
+        - (sqlc.arg(stale_seconds)::bigint * interval '1 second')
+)
+   OR (
+    materialized_at IS NOT NULL
+    AND materialized_at < now()
+        - (sqlc.arg(gc_seconds)::bigint * interval '1 second')
+);
+
 -- name: GetExpectedAgentExecutionHeader :one
 SELECT j.tenant_id,
        j.resource_project_id,

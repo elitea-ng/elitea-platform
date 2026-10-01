@@ -105,19 +105,27 @@ export function toContextBudgetStats(wire: unknown): ContextBudgetStats | undefi
   };
 }
 
+/** Provider counts are displayable only when both values and their sum fit the wire contract. */
+function readProviderUsage(value: unknown, phase: unknown): NonNullable<ContextBudgetStats['runtime']>['providerUsage'] {
+  if (!value || typeof value !== 'object' || phase !== 'measured') return undefined;
+  const usage = value as Record<string, unknown>;
+  const input = usage.input_tokens;
+  const output = usage.output_tokens;
+  if (typeof input !== 'number' || !Number.isSafeInteger(input) || input < 0 ||
+    typeof output !== 'number' || !Number.isSafeInteger(output) || output < 0 ||
+    input + output > 2_147_483_647) return undefined;
+  return { inputTokens: input, outputTokens: output };
+}
+
 /** Main serves only the latest response's admitted, fenced measurement. */
 function readRuntime(value: unknown): ContextBudgetStats['runtime'] {
   if (!value || typeof value !== 'object') return undefined;
   const source = value as Record<string, unknown>;
   const m = source.measurement as Record<string, unknown> | undefined;
   if (!m || m.version !== 1 || !['measured', 'compacting', 'compacted'].includes(String(m.phase))) return undefined;
-  const usage = m.provider_usage as Record<string, unknown> | undefined;
-  const validUsage = usage && m.phase === 'measured' &&
-    typeof usage.input_tokens === 'number' && Number.isSafeInteger(usage.input_tokens) && usage.input_tokens >= 0 &&
-    typeof usage.output_tokens === 'number' && Number.isSafeInteger(usage.output_tokens) && usage.output_tokens >= 0 &&
-    usage.input_tokens + usage.output_tokens <= 2_147_483_647;
+  const providerUsage = readProviderUsage(m.provider_usage, m.phase);
   return {
-    ...(validUsage ? { providerUsage: { inputTokens: usage.input_tokens as number, outputTokens: usage.output_tokens as number } } : {}),
+    ...(providerUsage ? { providerUsage } : {}),
     phase: m.phase as 'measured' | 'compacting' | 'compacted',
     active: source.active === true,
     legacy: m.budget_mode === 'legacy',

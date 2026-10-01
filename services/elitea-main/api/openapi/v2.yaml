@@ -8046,7 +8046,8 @@ components:
           description: Toolkit metadata, including MCP sharing options.
           x-elitea-passthrough: >-
             NOTE(W2): pgRepo.createToolkit and pgRepo.UpdateToolkit persist
-            this object in the existing elitea_tools.meta JSONB column.
+            this object in the existing elitea_tools.meta JSONB column
+            (services/elitea-main/internal/api/v2/toolkits/handler.go:1848-1877,2008-2010).
         settings:
           type: object
           additionalProperties: true
@@ -8083,7 +8084,8 @@ components:
             This replaces the stored object; preserve other metadata when editing.
           x-elitea-passthrough: >-
             NOTE(W2): pgRepo.createToolkit and pgRepo.UpdateToolkit persist
-            this object in the existing elitea_tools.meta JSONB column.
+            this object in the existing elitea_tools.meta JSONB column
+            (services/elitea-main/internal/api/v2/toolkits/handler.go:1848-1877,2008-2010).
         settings:
           type: object
           additionalProperties: true
@@ -8279,6 +8281,9 @@ components:
             tool_params:
               type: object
               additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): Original type-specific caller arguments remain unchanged for authorization retry
+                (services/elitea-main/internal/application/toolkitcalltool/result.go:43-46).
 
         ok:
           type: boolean
@@ -19241,7 +19246,12 @@ paths:
                         description: { type: string }
                   args_schemas:
                     type: object
-                    additionalProperties: { type: object, additionalProperties: true }
+                    additionalProperties:
+                      type: object
+                      additionalProperties: true
+                      x-elitea-passthrough: >-
+                        NOTE(W2): Each toolkit supplies its own JSON Schema for tool arguments
+                        (services/elitea-main/internal/application/toolkitdiscovery/service.go:48-51).
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }

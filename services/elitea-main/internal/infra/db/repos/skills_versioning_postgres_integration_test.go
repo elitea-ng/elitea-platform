@@ -515,12 +515,11 @@ func TestSkillsRepoPostgres_WorkerReadPathUnchangedByVersioning(t *testing.T) {
 func TestSkillsRepoPostgres_GetResolvesVersionAuthorFromUserTable(t *testing.T) {
 	pool := newSkillsTestPool(t)
 	repo := NewSkillsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{UserID: "1"}), 20*time.Second)
 	defer cancel()
 
-	// Both writers stamp author_id = 1 today (upsertBaseSkillVersion and
-	// CreateVersion both literal-1 it — a separate, pre-existing gap), so
-	// seeding user 1 is what makes the join resolvable at all.
+	// Seed the authenticated author's record so each version resolves through
+	// the user table.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.auth_core__user (id, email, name) VALUES (1, $1, $2)
 		 ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name`,
@@ -529,7 +528,7 @@ func TestSkillsRepoPostgres_GetResolvesVersionAuthorFromUserTable(t *testing.T) 
 	}
 
 	sk := createSkillWithBase(t, repo, ctx, "Authored")
-	if _, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{Name: "v1"}); err != nil {
+	if _, err := repo.CreateVersion(ctx, "1", sk.ID, skills.VersionCreateInput{AuthorID: 1, Name: "v1"}); err != nil {
 		t.Fatalf("create version: %v", err)
 	}
 
