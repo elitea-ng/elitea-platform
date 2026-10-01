@@ -217,7 +217,19 @@ Application-version, application-extra, and ad-hoc tools retain their IDs, names
 The adapter copies inputs and refuses unresolved prebuilt references rather than reading a local MCP configuration.
 Tests execute the installed SDK's constructor routing with the network transport replaced by a fixture.
 All 132 focused checks pass. One unrelated real-sandbox dependency test is deselected in this offline probe.
-The all-tools browser case still requires a fresh deployed pass.
+The unchanged all-tools browser case now passes on the fresh Main and Python adapter images.
+The run reports ten passes, including authentication and fixture checks, without retries.
+The agent stores every internal-tool toggle and returns a nonempty persisted answer.
+
+An intermediate local retest selects `gpt-4o-mini` and receives a provider 401.
+The isolated seed command inherits an ambient provider key and defaults to OpenAI mode.
+The immutable execution input already contains that model before SDK construction. The SDK does not replace the selected model.
+The operator explicitly seeds mock mode without ambient provider keys and removes the exact stale test configurations through product APIs.
+Both isolated projects then expose only `vllm/E2E-MOCK-MODEL` as their admitted chat model.
+No centry or rehearsal provider configuration changes.
+
+Fresh Python browser checks also pass HITL approve/reject routes, persisted message feedback, and canvas extraction.
+The run reports twelve passes, including authentication and fixture checks, without retries.
 
 The Python sensitive-tool fixture advertises HTTPS for its plain HTTP mock listener.
 The base compose file now advertises the existing HTTP listener.
