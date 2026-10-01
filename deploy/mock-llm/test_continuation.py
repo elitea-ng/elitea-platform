@@ -44,6 +44,21 @@ class ToolCallFixtureTest(unittest.TestCase):
         wrong_id = {**completed, "tool_call_id": "unrelated-call"}
         self.assertEqual(_script_for([self.user, wrong_id]).mode, "call_tool")
 
+    def test_replayed_call_with_reminted_id_completes_the_requested_call(self):
+        # The SDK's HITL resume replays the paused assistant message under a
+        # fresh call id; the pair still answers the scripted call.
+        replayed = {"role": "assistant", "content": "", "tool_calls": [
+            {**self.call, "id": "call_reminted"}]}
+        completed = {"role": "tool", "tool_call_id": "call_reminted", "content": "approved result"}
+        script = _script_for([self.user, self.notice, replayed, completed])
+        self.assertEqual(script.mode, "call_tool_resumed")
+        self.assertIn("approved result", script.reply)
+        self.assertNotIn("swarm", script.reply)
+        unscripted = {"role": "assistant", "content": "", "tool_calls": [{
+            **self.call, "id": "call_reminted",
+            "function": {"name": "unrelated_function", "arguments": "{}"}}]}
+        self.assertEqual(_script_for([self.user, unscripted, completed]).mode, "call_tool")
+
     def test_old_turn_result_and_repeated_operation_identities_remain_distinct(self):
         completed = {"role": "tool", "tool_call_id": self.call["id"], "content": "old completion"}
         self.assertEqual(_script_for([self.user, completed, self.user]).mode, "call_tool")

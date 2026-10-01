@@ -485,15 +485,32 @@ def _tool_results_this_turn(messages: list[dict], calls: list[dict]) -> list[str
     did not stop the one beside it" assertion is made of.
     """
     # A role-tool notice can precede the first model call. It is not a result
-    # for the requested call. Match modern results by the emitted call ID.
-    # Legacy function results carry only the requested function name.
+    # for the requested call. Match modern results by call ID: the one this
+    # mock emitted, or one an assistant message of this turn carries for a
+    # scripted function. A runtime that replays a paused turn (the SDK's HITL
+    # resume) re-mints the call ID, and a pair with a fresh ID still answers
+    # the call. Legacy function results carry only the requested function name.
     call_ids = {call["id"] for call in calls}
     function_names = {call["function"]["name"] for call in calls}
-    results: list[str] = []
+    current_turn: list[dict] = []
     for message in reversed(messages or []):
-        role = message.get("role")
-        if role == "user":
+        if message.get("role") == "user":
             break
+        current_turn.append(message)
+    for message in current_turn:
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") if isinstance(tool_call, dict) else None
+            if (
+                isinstance(function, dict)
+                and function.get("name") in function_names
+                and isinstance(tool_call.get("id"), str)
+            ):
+                call_ids.add(tool_call["id"])
+    results: list[str] = []
+    for message in current_turn:
+        role = message.get("role")
         call_id = message.get("tool_call_id")
         matching_call = isinstance(call_id, str) and call_id in call_ids
         legacy_function = (

@@ -77,6 +77,7 @@ import {
   clearMockToolJournal,
   createMockToolAgent,
   expectStoredAssistantAnswer,
+  fetchMockToolSpec,
   fillComposer,
   readMockToolJournal,
   readStoredHitlInterrupt,
@@ -805,6 +806,11 @@ test('the same sensitive tool called twice requires two distinct approvals', asy
   let fixture: MockToolAgentFixture | undefined;
   try {
     await clearMockToolJournal(page);
+    // The receipts are a stack property, not a contract: the native leg's
+    // https-only client cannot complete a call to the mock's `https://` base
+    // URL, so there a dispatched call comes back as `tool.unavailable` and the
+    // journal stays empty (`MockToolSpec.reachable`).
+    const { reachable } = await fetchMockToolSpec(page);
     fixture = await createMockToolAgent(page, 'repeat');
     await setToolkitGuardrails(guardrails({ openapi: [MOCK_TOOL_READ_OPERATION] }));
 
@@ -861,7 +867,7 @@ test('the same sensitive tool called twice requires two distinct approvals', asy
     expect(
       (await readMockToolJournal(page)).map(({ method, path, operation }) => ({ method, path, operation })),
       'the second invocation must not run before its approval',
-    ).toEqual(IS_NATIVE_RUNTIME ? [] : [receipt]);
+    ).toEqual(reachable && !IS_NATIVE_RUNTIME ? [receipt] : []);
 
     await decide(page, second, 'Approve');
     await expectStoredAssistantAnswer(page, fixture.projectId, fixture.conversationId, {
@@ -882,13 +888,17 @@ test('the same sensitive tool called twice requires two distinct approvals', asy
       'the stored reply must retain both authorized call results',
     ).toHaveLength(2);
     expect(
-      answer.match(/"sentinel"\s*:\s*"MOCKTOOLSTATUS"/g) ?? [],
-      'both stored results must carry the successful read receipt',
+      answer.match(
+        reachable ? /"sentinel"\s*:\s*"MOCKTOOLSTATUS"/g : /tool result \d+ said \{"error":"tool\.unavailable/g,
+      ) ?? [],
+      reachable
+        ? 'both stored results must carry the successful read receipt'
+        : 'both approved invocations must be dispatched to the unreachable tool host',
     ).toHaveLength(2);
     expect(
       (await readMockToolJournal(page)).map(({ method, path, operation }) => ({ method, path, operation })),
       'both authorized invocations must run exactly once',
-    ).toEqual([receipt, receipt]);
+    ).toEqual(reachable ? [receipt, receipt] : []);
     await expect(
       page.getByTestId('chat-hitl-actions'),
       'no dialog may remain after both approvals',
