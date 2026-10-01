@@ -122,6 +122,9 @@ On-demand preparation, user-selected Cargo profiles, and compiled-artifact cachi
 The [Python preparation component](source-mapping/code-python-demand-preparation-20261001.md) now discovers literal requirements and freezes native resolution.
 Focused integrity checks and offline execution pass with packages absent from the original image.
 This component is not connected to worker or supervisor dispatch. On-demand UI and recovery acceptance remain open.
+The [bundle admission consumer](source-mapping/code-python-bundle-admission-20261001.md) binds resolved Python content to the signed job.
+Offline execution and fifteen container probes verify content checks before user code and unchanged legacy receipts.
+Automatic preparation, shared content delivery, restart verification, and integrated UI acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

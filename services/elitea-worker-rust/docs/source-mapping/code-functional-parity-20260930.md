@@ -117,6 +117,9 @@ See the [dependency profile record](code-dependency-profiles-20261001.md) for de
 This is an immutable image-preparation path, not completed on-demand dependency acquisition.
 The [on-demand preparation component](code-python-demand-preparation-20261001.md) adds source discovery, native resolution, and verified frozen-content reuse.
 Its component and offline-container tests pass. Production dispatch, shared storage, recovery, and browser integration remain open.
+The [bundle admission consumer](code-python-bundle-admission-20261001.md) binds the dependency root to the signed request.
+The native launcher verifies delivered Python content before user code and preserves revision 1 receipt identities.
+Automatic supervisor preparation and package delivery remain open.
 The default package profile remains empty. Operators can supply approved requirements when building a runtime profile.
 Approved npm image profiles now pass frozen offline resolution through Deno.
 On-demand preparation, Cargo profile expansion, and compiled-artifact caching remain open.

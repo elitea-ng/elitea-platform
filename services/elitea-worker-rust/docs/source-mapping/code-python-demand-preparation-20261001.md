@@ -103,6 +103,8 @@ The Kubernetes adapter currently accepts only the code and runner manifest files
 It needs bounded dependency delivery before it can consume this bundle.
 The image launcher also needs an explicit dependency input before execution.
 Do not let its default image-asset copy overwrite the admitted lock.
+The [bundle admission consumer](code-python-bundle-admission-20261001.md) now implements that request identity and launcher verification.
+Automatic production delivery remains open.
 
 Implement bounded acquisition, cancellation, atomic publication, and durable preparation receipts in the owning supervisor path.
 The materializer bounds wheel content. The preceding native resolver still needs process, metadata, and time limits.

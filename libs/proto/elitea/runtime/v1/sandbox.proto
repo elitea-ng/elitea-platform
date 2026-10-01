@@ -69,8 +69,13 @@ service SandboxSupervisorService {
 
 message SubmitSandboxJobRequestV1 {
   SignedSandboxJobGrantV1 grant = 1;
-  // Bounded PreparedJob revision 1 JSON, at most 1 MiB. Source and selected state
-  // travel only over mTLS, never through a shared queue or a log field.
+  // Bounded PreparedJob revision 1 or 2 JSON, at most 1 MiB. Revision 2 adds
+  // dependency_bundle_sha256: 64 lowercase hexadecimal characters, for Python
+  // only. Its SHA-256 covers the resolved bundle record and file identities.
+  // Revision 1 has no bundle field. Package bytes use a separate data plane.
+  // The request digest includes the revision and dependency bundle identity.
+  // Source and selected state travel only over mTLS, never through a shared
+  // queue or a log field.
   bytes prepared_job_json = 2;
   reserved 3 to 15;
 }

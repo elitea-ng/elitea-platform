@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import tempfile
 
@@ -12,9 +13,16 @@ parser.add_argument("--image", required=True, help="already built immutable loca
 parser.add_argument("--runtime", choices=["deno", "rust"], default="deno")
 parser.add_argument("--python-packages", action="store_true", help="verify the prepared idna/python-slugify test profile")
 parser.add_argument("--javascript-packages", action="store_true", help="verify the prepared strip-ansi/slugify/csv-parse test profile")
+parser.add_argument("--python-bundle", type=Path, help="prepared Python bundle for revision 2 delivery checks")
+parser.add_argument("--bundle-digest", help="independently recorded SHA-256 of the Python bundle")
 args = parser.parse_args()
 if not args.image.startswith("sha256:"):
     parser.error("use a local immutable sha256 image ID")
+if bool(args.python_bundle) != bool(args.bundle_digest):
+    parser.error("provide both --python-bundle and --bundle-digest")
+if args.python_bundle:
+    if args.runtime != "deno" or len(args.bundle_digest) != 64 or any(c not in "0123456789abcdef" for c in args.bundle_digest):
+        parser.error("Python bundles require the Deno runtime and a lowercase SHA-256 digest")
 
 cases = [
     ("python", "python", "import asyncio\nawait asyncio.sleep(0)\nprint('diagnostic')\n{'answer': elitea_state['count'] + 1}", 15, "completed"),
@@ -57,14 +65,59 @@ if args.javascript_packages:
     cases.append(("javascript_unprepared_version", "javascript",
         "import slugify from 'npm:slugify@1.6.5'; export default slugify('A B');", 15, "failed"))
 
+bundle_errors = {
+    "python_bundle_wrong_root": "content changed after resolution",
+    "python_bundle_missing": "No such file or directory",
+    "python_bundle_missing_metadata": "No such file or directory",
+    "python_bundle_modified_wheel": "wheel does not match the native lock",
+    "python_bundle_modified_metadata": "content changed after resolution",
+    "python_bundle_downgrade": "invalid revision or Python dependency identity",
+    "python_bundle_other_language": "invalid revision or Python dependency identity",
+}
+if args.python_bundle:
+    cases.append(("python_bundle", "python",
+        "from humanize import intcomma\nassert intcomma(12345) == '12,345'\n{'answer': elitea_state['count'] + 1}", 15, "completed"))
+    for name in bundle_errors:
+        cases.append((name, "javascript" if name.endswith("other_language") else "python",
+            "print('ENTERED_UNVERIFIED_CODE')\n{'answer': 42}", 15, "failed"))
+
 for name, language, source, timeout, expected in cases:
     container = "elitea-code-runner-test-" + secrets.token_hex(6)
     with tempfile.TemporaryDirectory(prefix="elitea-code-runner-") as directory:
         request = Path(directory) / "job.json"
         request.write_text(json.dumps({"argv": ["/usr/local/bin/elitea-code-execute", "/workspace/.elitea-code.json"], "timeout_seconds": timeout}))
         code_request = Path(directory) / "code.json"
-        code_request.write_text(json.dumps({"revision": 1, "language": language, "source": source,
-            "input": {"count": 41}, "image_digest": args.image, "policy_revision": "probe-v1", "timeout_seconds": timeout}))
+        code = {"revision": 1, "language": language, "source": source,
+            "input": {"count": 41}, "image_digest": args.image, "policy_revision": "probe-v1", "timeout_seconds": timeout}
+        bundle_mount = []
+        if name.startswith("python_bundle"):
+            code.update(revision=2, dependency_bundle_sha256=args.bundle_digest)
+            if name == "python_bundle_wrong_root":
+                code["dependency_bundle_sha256"] = "0" * 64
+            if name == "python_bundle_downgrade":
+                code["revision"] = 1
+            if name != "python_bundle_missing":
+                bundle_dir = Path(directory) / "wheels"
+                bundle_dir.mkdir()
+                metadata = json.loads((args.python_bundle / "elitea-python-bundle.json").read_text())
+                names = [entry["name"] for entry in metadata["files"]] + ["elitea-python-bundle.json"]
+                for file_name in names:
+                    assert Path(file_name).name == file_name and not (args.python_bundle / file_name).is_symlink()
+                    shutil.copyfile(args.python_bundle / file_name, bundle_dir / file_name)
+                if name == "python_bundle_missing_metadata":
+                    (bundle_dir / "elitea-python-bundle.json").unlink()
+                if name == "python_bundle_modified_wheel":
+                    wheel = next(bundle_dir.glob("humanize-*.whl"))
+                    data = bytearray(wheel.read_bytes())
+                    data[0] ^= 1
+                    wheel.write_bytes(data)
+                if name == "python_bundle_modified_metadata":
+                    metadata["requirements"] = ["humanize==0.0.0"]
+                    (bundle_dir / "elitea-python-bundle.json").write_text(json.dumps(metadata))
+                for entry in bundle_dir.iterdir():
+                    entry.chmod(0o444)
+                bundle_mount = ["--mount", f"type=bind,source={bundle_dir},target=/workspace/wheels,readonly"]
+        code_request.write_text(json.dumps(code))
         code_request.chmod(0o644)
         request.chmod(0o644)
         created = False
@@ -77,6 +130,7 @@ for name, language, source, timeout, expected in cases:
                 "--tmpfs", f"/workspace:rw,{'exec' if args.runtime == 'rust' else 'noexec'},nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
                 "--mount", f"type=bind,source={request},target=/workspace/.elitea-job.json,readonly",
                 "--mount", f"type=bind,source={code_request},target=/workspace/.elitea-code.json,readonly",
+                *bundle_mount,
                 "--log-driver", "local", "--log-opt", "max-size=256m", "--log-opt", "max-file=1", "--log-opt", "compress=false",
                 args.image,
             ], check=True, stdout=subprocess.DEVNULL, timeout=20)
@@ -100,6 +154,9 @@ for name, language, source, timeout, expected in cases:
                 assert "error:" in receipt["stderr"], receipt
             if name == "rust_timeout":
                 assert "entered-user-code" in receipt["stderr"], receipt
+            if name in bundle_errors:
+                assert bundle_errors[name] in receipt["stderr"], receipt
+                assert "ENTERED_UNVERIFIED_CODE" not in receipt["stderr"] + receipt["stdout"], receipt
             # A fresh client reads the same terminal envelope after execution.
             assert subprocess.check_output(["docker", "logs", container], timeout=10) == first
             state = json.loads(subprocess.check_output([

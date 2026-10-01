@@ -1,5 +1,5 @@
 import { verifyPythonCodePackages } from "./prepare_python_code.mjs";
-import { executePython } from "./python.mjs";
+import { executePythonRequest } from "./python.mjs";
 
 const [directory, expectedDigest] = Deno.args;
 if (!directory || !expectedDigest) {
@@ -29,7 +29,13 @@ for (const mode of ["automatic", "inline range"]) {
       ? calculation
       : "import micropip\nawait micropip.install('humanize>=4.13,<4.14')\n" +
         calculation;
-    const result = await executePython(source, { seed: 42 }, directory);
+    const result = await executePythonRequest({
+      revision: 2,
+      language: "python",
+      dependency_bundle_sha256: expectedDigest,
+      source,
+      input: { seed: 42 },
+    }, directory);
     if (JSON.stringify(result) !== JSON.stringify(expected)) {
       throw new Error(
         `Prepared dependency calculation changed: ${JSON.stringify(result)}`,
@@ -39,3 +45,39 @@ for (const mode of ["automatic", "inline range"]) {
     await verifyPythonCodePackages(directory, expectedDigest);
   });
 }
+
+Deno.test("request verification rejects a substituted bundle before user code", async () => {
+  try {
+    await executePythonRequest({
+      revision: 2,
+      language: "python",
+      dependency_bundle_sha256: "0".repeat(64),
+      source: "raise RuntimeError('user code executed before verification')",
+      input: {},
+    }, directory);
+  } catch (error) {
+    if (!String(error).includes("content changed after resolution")) {
+      throw error;
+    }
+    return;
+  }
+  throw new Error("Substituted dependency identity was accepted");
+});
+
+Deno.test("request verification rejects dependency identity downgrade", async () => {
+  for (const revision of [1, 3]) {
+    try {
+      await executePythonRequest({
+        revision,
+        language: "python",
+        dependency_bundle_sha256: expectedDigest,
+        source: "raise RuntimeError('user code executed before verification')",
+        input: {},
+      }, directory);
+    } catch (error) {
+      if (!String(error).includes("request is invalid")) throw error;
+      continue;
+    }
+    throw new Error("Dependency identity downgrade was accepted");
+  }
+});

@@ -49,6 +49,25 @@ fn command(language: &str) -> Result<Command, &'static str> {
     Ok(command)
 }
 
+fn uses_dependency_bundle(request: &serde_json::Value) -> Result<bool, &'static str> {
+    match (
+        request.get("revision").and_then(serde_json::Value::as_u64),
+        request.get("dependency_bundle_sha256"),
+    ) {
+        (Some(1), None) => Ok(false),
+        (Some(2), Some(serde_json::Value::String(digest)))
+            if request.get("language").and_then(serde_json::Value::as_str) == Some("python")
+                && digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+        {
+            Ok(true)
+        }
+        _ => Err("Code request has an invalid revision or Python dependency identity"),
+    }
+}
+
 fn prepare() -> Result<Command, Box<dyn std::error::Error>> {
     if std::env::args().skip(1).collect::<Vec<_>>() != [REQUEST] {
         return Err("Code launcher accepts only the fixed prepared request path".into());
@@ -61,12 +80,13 @@ fn prepare() -> Result<Command, Box<dyn std::error::Error>> {
         return Err("Code request exceeds its size limit".into());
     }
     let request: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let prepared_dependencies = uses_dependency_bundle(&request)?;
     let language = request
         .get("language")
         .and_then(serde_json::Value::as_str)
         .ok_or("Code request has no language")?;
     let command = command(language)?;
-    if language == "python" {
+    if language == "python" && !prepared_dependencies {
         std::fs::create_dir_all("/workspace/wheels")?;
         // Image-owned assets only; never reuse another job's writable cache.
         for entry in std::fs::read_dir("/opt/elitea-wheels")? {
@@ -141,5 +161,25 @@ mod tests {
             assert!(args.contains(&required));
         }
         assert_eq!(command.get_envs().count(), 2);
+    }
+
+    #[test]
+    fn dependency_identity_cannot_downgrade_or_select_another_language() {
+        let root = "a".repeat(64);
+        assert!(
+            !uses_dependency_bundle(&serde_json::json!({"revision":1,"language":"python"}))
+                .unwrap()
+        );
+        assert!(uses_dependency_bundle(&serde_json::json!({"revision":2,"language":"python","dependency_bundle_sha256":root})).unwrap());
+        for request in [
+            serde_json::json!({"revision":1,"language":"python","dependency_bundle_sha256":root}),
+            serde_json::json!({"revision":2,"language":"rust","dependency_bundle_sha256":root}),
+            serde_json::json!({"revision":2,"language":"python"}),
+            serde_json::json!({"revision":2,"language":"python","dependency_bundle_sha256":root.to_uppercase()}),
+            serde_json::json!({"revision":2,"language":"python","dependency_bundle_sha256":format!("sha256:{root}")}),
+            serde_json::json!({"revision":1,"language":"python","dependency_bundle_sha256":null}),
+        ] {
+            assert!(uses_dependency_bundle(&request).is_err());
+        }
     }
 }

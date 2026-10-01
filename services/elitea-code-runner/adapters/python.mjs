@@ -1,6 +1,7 @@
 // Runs only inside the resource-limited Code container. Deno permissions alone
 // are not the isolation boundary. Never give this process platform credentials.
 import { loadPyodide } from "npm:pyodide@0.29.0";
+import { verifyPythonCodePackages } from "./prepare_python_code.mjs";
 
 const encoder = new TextEncoder();
 const MAX_RESULT_BYTES = 256 * 1024;
@@ -63,14 +64,15 @@ if 'micropip' not in _elitea_imports:
   }
 }
 
-if (import.meta.main) {
-  const [path, packageCacheDir] = Deno.args;
-  if (!path || !packageCacheDir || (await Deno.stat(path)).size > 1024 * 1024) {
-    throw new Error("Code request or package-cache configuration is invalid");
-  }
-  const request = JSON.parse(await Deno.readTextFile(path));
+export async function executePythonRequest(request, packageCacheDir) {
+  const hasBundle = Object.hasOwn(request, "dependency_bundle_sha256");
   if (
-    request.revision !== 1 || request.language !== "python" ||
+    !((request.revision === 1 && !hasBundle) ||
+      (request.revision === 2 && hasBundle &&
+        typeof request.dependency_bundle_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test(request.dependency_bundle_sha256) &&
+        request.dependency_bundle_sha256.length === 64)) ||
+    request.language !== "python" ||
     typeof request.source !== "string" ||
     encoder.encode(request.source).length > 256 * 1024 ||
     !request.input || Array.isArray(request.input) ||
@@ -78,10 +80,25 @@ if (import.meta.main) {
   ) {
     throw new Error("Code request is invalid for the Python runtime");
   }
-  const result = await executePython(
+  if (hasBundle) {
+    await verifyPythonCodePackages(
+      packageCacheDir,
+      request.dependency_bundle_sha256,
+    );
+  }
+  return await executePython(
     request.source,
     request.input,
     packageCacheDir,
   );
+}
+
+if (import.meta.main) {
+  const [path, packageCacheDir] = Deno.args;
+  if (!path || !packageCacheDir || (await Deno.stat(path)).size > 1024 * 1024) {
+    throw new Error("Code request or package-cache configuration is invalid");
+  }
+  const request = JSON.parse(await Deno.readTextFile(path));
+  const result = await executePythonRequest(request, packageCacheDir);
   console.log(JSON.stringify({ revision: 1, result }));
 }

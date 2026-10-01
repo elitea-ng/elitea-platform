@@ -316,6 +316,32 @@ mod tests {
         );
     }
     #[test]
+    fn signed_grant_binds_resolved_python_bundle_and_refuses_downgrade() {
+        let (key, verifier, baseline, mut claims) = fixture();
+        let prepared = job("print(42)")
+            .with_python_dependency_bundle("b".repeat(64))
+            .unwrap();
+        let baseline_grant = sign(&key, claims.encode_to_vec());
+        assert!(
+            verifier
+                .verify(&baseline_grant, "worker-1", &prepared, 1000)
+                .is_err()
+        );
+        claims.request_digest = prepared.fingerprint().unwrap().to_vec();
+        let grant = sign(&key, claims.encode_to_vec());
+        assert!(verifier.verify(&grant, "worker-1", &prepared, 1000).is_ok());
+        let changed = job("print(42)")
+            .with_python_dependency_bundle("c".repeat(64))
+            .unwrap();
+        assert!(verifier.verify(&grant, "worker-1", &changed, 1000).is_err());
+        assert!(
+            verifier
+                .verify(&grant, "worker-1", &baseline, 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn signature_and_strict_wire_validation_precede_admission() {
         let (key, verifier, request, claims) = fixture();
         let mut grant = sign(&key, claims.encode_to_vec());

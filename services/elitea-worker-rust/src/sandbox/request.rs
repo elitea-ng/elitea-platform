@@ -26,6 +26,8 @@ pub struct PreparedJob {
     image_digest: String,
     policy_revision: String,
     timeout_seconds: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dependency_bundle_sha256: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,7 +36,7 @@ pub struct InvalidRequest;
 
 impl PreparedJob {
     /// Construct only after runtime selection and invocation authorization.
-    /// Dependencies and wrappers must be fixed by the runtime image/policy revision.
+    /// Wrappers and baseline dependencies belong to the runtime image/policy revision.
     ///
     /// # Errors
     /// Returns `InvalidRequest` if a field or serialized request exceeds its bound.
@@ -77,9 +79,29 @@ impl PreparedJob {
             image_digest,
             policy_revision,
             timeout_seconds,
+            dependency_bundle_sha256: None,
         };
         job.bytes()?;
         Ok(job)
+    }
+
+    /// Bind resolved Python content before requesting an authorization grant.
+    /// The digest comes from a durable preparation receipt, not cache metadata.
+    /// # Errors
+    /// Returns `InvalidRequest` for another language, an invalid digest, or excessive bytes.
+    pub fn with_python_dependency_bundle(mut self, digest: String) -> Result<Self, InvalidRequest> {
+        if self.language != Language::Python
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(InvalidRequest);
+        }
+        self.revision = 2;
+        self.dependency_bundle_sha256 = Some(digest);
+        self.bytes()?;
+        Ok(self)
     }
 
     /// Decode bounded transport input and reapply every constructor invariant.
@@ -96,22 +118,26 @@ impl PreparedJob {
             image_digest: String,
             policy_revision: String,
             timeout_seconds: u32,
+            #[serde(default, deserialize_with = "dependency_digest")]
+            dependency_bundle_sha256: Option<String>,
         }
         if bytes.len() > 1024 * 1024 {
             return Err(InvalidRequest);
         }
         let wire: WireJob = serde_json::from_slice(bytes).map_err(|_| InvalidRequest)?;
-        if wire.revision != 1 {
-            return Err(InvalidRequest);
-        }
-        Self::new(
+        let job = Self::new(
             wire.language,
             wire.source,
             wire.input,
             wire.image_digest,
             wire.policy_revision,
             wire.timeout_seconds,
-        )
+        )?;
+        match (wire.revision, wire.dependency_bundle_sha256) {
+            (1, None) => Ok(job),
+            (2, Some(digest)) => job.with_python_dependency_bundle(digest),
+            _ => Err(InvalidRequest),
+        }
     }
 
     /// Serialize the exact prepared request for authenticated supervisor transport.
@@ -200,6 +226,12 @@ impl PreparedJob {
     }
 }
 
+fn dependency_digest<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
 fn validate_shape(
     value: &serde_json::Value,
     depth: usize,
@@ -268,6 +300,70 @@ mod tests {
     }
 
     #[test]
+    fn legacy_request_keeps_exact_bytes_and_receipt_identity() {
+        let expected = format!(
+            r#"{{"revision":1,"language":"python","source":"print(42)","input":{{}},"image_digest":"sha256:{}","policy_revision":"python-v1","timeout_seconds":30}}"#,
+            "a".repeat(64)
+        );
+        assert_eq!(job().to_transport().unwrap(), expected.as_bytes());
+        let fingerprint = job().fingerprint().unwrap();
+        let hex: String = fingerprint
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "fea55852b5400fa8b79583d698826a8ea1807af6ccf7a5cd40dddca99cfae067"
+        );
+    }
+
+    #[test]
+    fn prepared_python_content_binds_authorization_and_receipt_reuse() {
+        let original = job().with_python_dependency_bundle("b".repeat(64)).unwrap();
+        let decoded = PreparedJob::from_transport(&original.to_transport().unwrap()).unwrap();
+        assert_eq!(identity(&original), identity(&decoded));
+        assert_ne!(identity(&original), identity(&job()));
+        let changed = job().with_python_dependency_bundle("c".repeat(64)).unwrap();
+        assert_ne!(identity(&original), identity(&changed));
+        assert!(original.to_transport().unwrap().len() < 1024 * 1024);
+    }
+
+    #[test]
+    fn dependency_transport_rejects_downgrades_and_invalid_content_identity() {
+        let original = job().with_python_dependency_bundle("a".repeat(64)).unwrap();
+        for (field, value) in [
+            ("revision", serde_json::json!(1)),
+            ("revision", serde_json::json!(3)),
+            ("language", serde_json::json!("javascript")),
+            ("dependency_bundle_sha256", serde_json::json!(null)),
+            (
+                "dependency_bundle_sha256",
+                serde_json::json!("A".repeat(64)),
+            ),
+            (
+                "dependency_bundle_sha256",
+                serde_json::json!("a".repeat(63)),
+            ),
+            (
+                "dependency_bundle_sha256",
+                serde_json::json!(format!("sha256:{}", "a".repeat(64))),
+            ),
+        ] {
+            let mut wire: serde_json::Value =
+                serde_json::from_slice(&original.to_transport().unwrap()).unwrap();
+            wire[field] = value;
+            assert!(PreparedJob::from_transport(&serde_json::to_vec(&wire).unwrap()).is_err());
+        }
+        let mut wrong_language = job();
+        wrong_language.language = Language::Rust;
+        assert!(
+            wrong_language
+                .with_python_dependency_bundle("a".repeat(64))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn transport_rejects_schema_and_constructor_bypasses() {
         let original = job().to_transport().unwrap();
         for (field, value) in [
@@ -275,6 +371,7 @@ mod tests {
             ("language", serde_json::json!("shell")),
             ("source", serde_json::json!("")),
             ("timeout_seconds", serde_json::json!(3601)),
+            ("dependency_bundle_sha256", serde_json::json!(null)),
             ("extra", serde_json::json!(true)),
         ] {
             let mut value_map: serde_json::Value = serde_json::from_slice(&original).unwrap();
