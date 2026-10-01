@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Main integration and PR 883 release preparation](main-integration-20261001.md) records conflict resolution, migration identities, fresh CI repairs, and preserved Point 5 work.
+
 - `document-memory-library-assessment-20260923.md` assesses native document engines, Xberg extraction, and YantrikDB memory against pinned sources.
 
 - `nested-pipeline-checkpoint-scope-20260923.md` maps admitted child checkpoint threads and claim-fenced recovery.

@@ -474,8 +474,8 @@ def _tool_result_text_this_turn(messages: list[dict]) -> str | None:
     return None
 
 
-def _tool_results_this_turn(messages: list[dict]) -> list[str]:
-    """Every tool result belonging to the CURRENT turn, oldest first.
+def _tool_results_this_turn(messages: list[dict], calls: list[dict]) -> list[str]:
+    """Results for the scripted calls in the current turn, oldest first.
 
     The plural of `_tool_result_text_this_turn`, for the same reason
     `_call_tool_markers` is the plural of `_call_tool_marker`: a turn that
@@ -484,12 +484,25 @@ def _tool_results_this_turn(messages: list[dict]) -> list[str]:
     had never happened — which is exactly the difference a "the blocked call
     did not stop the one beside it" assertion is made of.
     """
+    # A role-tool notice can precede the first model call. It is not a result
+    # for the requested call. Match modern results by the emitted call ID.
+    # Legacy function results carry only the requested function name.
+    call_ids = {call["id"] for call in calls}
+    function_names = {call["function"]["name"] for call in calls}
     results: list[str] = []
     for message in reversed(messages or []):
         role = message.get("role")
         if role == "user":
             break
-        if role in ("tool", "function"):
+        call_id = message.get("tool_call_id")
+        matching_call = isinstance(call_id, str) and call_id in call_ids
+        legacy_function = (
+            role == "function"
+            and call_id is None
+            and isinstance(message.get("name"), str)
+            and message["name"] in function_names
+        )
+        if role in ("tool", "function") and (matching_call or legacy_function):
             results.append(_message_text(message))
     results.reverse()
     return results
@@ -955,12 +968,13 @@ def _script_for(messages: list[dict]) -> _ChatScript:
 
     markers = _call_tool_markers(prompt)
     if markers:
-        answered = _tool_results_this_turn(messages)
+        calls = _call_tool_calls_for(markers, prompt)
+        answered = _tool_results_this_turn(messages, calls)
         if not answered:
             # First pass: invoke every tool the prompt's markers name.
             return _ChatScript(
                 "",
-                _call_tool_calls_for(markers, prompt),
+                calls,
                 CHUNK_DELAY_SECONDS,
                 "call_tool",
             )

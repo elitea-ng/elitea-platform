@@ -58,9 +58,9 @@ Do not disable checksum validation or rerun applied SQL to bypass a mismatch.
 
 ## CI corrections
 
-The published failure logs belong to an older synthetic merge revision.
-Their status does not prove the current feature parent passes or fails.
-Run fresh checks after pushing the resolved candidate.
+The resolved merge is pushed as `f76fa006f`. GitHub reports it as mergeable.
+Fresh checks run against this head and expose additional release repairs.
+Those checks, rather than the older synthetic merge failures, determine release readiness.
 
 The catalogue drift test now reads the implemented `ASK_USER_TOOL_NAME` constant.
 The agentstate manifest assertion now includes the committed sandbox history through migration 9.
@@ -71,11 +71,94 @@ Patched ADK manifests use the worker lockfile's dependency closure.
 Their scanner exemptions explain why upstream source and patches move together.
 The data-processing manifest remains a fixed acceptance fixture.
 
+Fresh CI corrections preserve the production contracts:
+
+| Failure | Owning source and correction | Proof |
+| --- | --- | --- |
+| Helm treats disabled sandbox grants as an invalid empty setting. | `deploy/helm/tests/render-capabilities.sh` now distinguishes empty disabled audiences from exact active identities. Main `ConfigFromEnv`, `validateSandboxAudiences`, and grant-issuer construction already implement this distinction. | Three sandbox rendering suites, three chart lint commands, and `TestSandboxGrantAudiencesAreOptionalExactAndBounded` pass. Production defaults and validation remain unchanged. |
+| Binary guard rejects public peer-certificate fixtures. | `scripts/binary-allowlist.txt` names the five exact DER paths used by Rust `sandbox/peer_identity.rs`. The fixtures contain public certificates; their private keys were discarded. | The complete binary guard passes. No broad certificate or binary wildcard is added. |
+| Python image resolver selects cryptography 50.0.2 although the artifact lock pins 50.0.1. | Python `Containerfile` exports the existing 23 exact pins through `verify_locked_artifacts.py` before dependency resolution. Filename and digest verification remain mandatory. | Twelve focused tests pass. All 22 wheels for both Linux architectures and the locked source archive match their existing SHA-256 values. The lock bytes are unchanged. Full shipping-image proof remains in CI. |
+| Four DeepWiki fixtures exceed the 30-day freshness window. | The UI fixtures are explicitly identified as synthetic contract data and revalidated. The generation recorder executes source revision `ce679f11`; all five source digests, manifest projection, layout, and listed page identities match. | Twenty-two fixture, browser-list, and page-view tests pass. All 22 Web fixtures pass the unchanged freshness guard. These checks are not a new live HTTP capture. |
+| Web model selection displays None for real numeric project identities. | Main `CurrentModelCatalogItem.ProjectID` emits an integer. `useChatBoxModelSelection::matchesModelProject` normalizes both primitive identities with `String`, retaining refusal of nonprimitive settings. | Nine focused hook tests pass, including numeric IDs supplied by the actual HTTP query path. This restores the configured model; the failing chat screenshots are not accepted as new references. |
+| Branding export cannot be imported by its own dry-run endpoint. | `brandpackage.Service.Export` inlines the pack into a compiled app preview larger than the former 1 MiB entry cap. Import and export now share a bounded 2 MiB cap for `preview/app.html`. | The original 1029 KiB failure reproduces. Native export/import and HTTP multipart round-trip pass, including exact-limit acceptance and max-plus-one refusal. Other preview, pack, asset, and aggregate caps remain unchanged. |
+| Fixture cleanup reports no pipelines. | `e2e/fixtures/api.ts` now requests classic agents explicitly before its separate pipeline sweep. Main's unfiltered application list legitimately includes both classes. | The unit proof and API journey retain per-class removal and unrelated-row preservation assertions. The branding surface journey opens the real `/app/chat` route to avoid competing redirects. Deployed CI proof remains required. |
+
+The Linux sensitive-HITL test overflows its thread stack. Investigation identifies one unboxed
+`close_no_ack` future in `native_agent_lifecycle::execute_started`; the other terminal paths already box it.
+The correction boxes that same ownership boundary and retains the pause, acknowledgement, and skipped-completion assertions.
+A dedicated 2 MiB test thread guards the stack budget without increasing production or global test stacks.
+The 67 native output-delivery tests and strict all-feature library/test Clippy checks pass.
+The focused Linux arm64 test passes with Rust 1.97.1 and the unoptimized debug profile.
+Its explicit 2 MiB thread preserves the CI stack budget. Final x86_64 CI confirmation remains required.
+
+The Rust image scan finds system `libssl3` in the distroless C++ base, although the worker's
+HTTP, SQL, RPC, telemetry, and Kubernetes clients use rustls and have no native OpenSSL dependencies.
+The runtime now uses Debian's TLS-free distroless base with the required GCC runtime library.
+Its package records, checksums, and licenses remain available to scanners.
+Build-time checks resolve both shipped ELF library closures against the final runtime and verify
+CA roots, audit metadata, debug line tables, and symbols. The blocking vulnerability policy remains unchanged.
+Cached arm64 worker and supervisor binaries pass the library, checksum, license, and diagnostic checks.
+Trivy 0.72.0 detects eight Debian packages and 299 Rust package records in the resulting image.
+The scan reports zero HIGH/CRITICAL findings. The unchanged image scan gate passes.
+The image identity is `sha256:dc891e7f64922f6e5ffddf7be1600ab41fc13ac15c15e6c83ae613c3d1f50a01`.
+This cached arm64 proof does not replace final shipping-image and x86_64 CI checks.
+
+Seven visual references now match intentional controls introduced by earlier source changes.
+The admin references include Default Secrets from `a2f5be525`.
+The personalization references include Balanced and Full context controls from `95fbc6b96`.
+The pipeline references include model settings and send controls from `26ba7bbd1`.
+The references come from artifact `11172076649`, produced with Playwright `v1.62.1-noble`.
+Its archive SHA-256 is `81ef521d5f37ca7148916263a60490e5c6844e3138a92d3ed7799149dd867b00`.
+All seven references produce zero comparator differences across retries at the existing threshold.
+Two empty-pipeline references have small raw raster differences. They are not byte-identical across retries.
+The four chat references remain unchanged because numeric model selection requires a code repair.
+No comparison thresholds, masks, or coverage rules change.
+All 59 references use 6.56 MiB of the 12 MiB budget. The binary guard passes for 10,562 files.
+
+Project Context returns authoritative identity, revision time, and activation description in addition to content and enabled state.
+Its browser test now checks the exact five-field response and preserves the previous identity and omitted activation description.
+The HITL route test previously accepted a resolved review card as the completed continuation.
+Its journal read then observed a previous turn before the current model request arrived.
+The test now waits for the finalized continuation row and matches the exact project credential and user token.
+It retains exact resume-action and route checks. Production routing remains unchanged.
+Affected lint and Playwright collection pass. Fresh browser CI must confirm both repairs.
+
+Native sensitive-tool resumes use `hitl_decisions` with exact interrupt and tool-call identities.
+The toolkit browser test now checks those complete decisions. It preserves the SDK's existing root-action branch.
+Native tool notices use the call identity `elitea-skipped-internal-tools`.
+The mock previously treated every current-turn tool message as completion of the requested call.
+It now matches the emitted call identity and preserves legacy function-name matching.
+Thirteen mock tests pass, including unrelated notices, successful results, denials, errors, and repeated operation names.
+No Swarm behavior or browser assertion changes.
+
+The fresh-browser smoke test also exposes a send-path model-selection defect.
+The picker updates `llmSettings`, but the send path overwrites its model name with the previous default.
+Main `currentAdhocSnapshot` overlays that incorrect request value onto the persisted dummy settings.
+`useChatBoxSend` now selects one authoritative name from configured model settings before the default fallback.
+Conversation creation, initial requests, and regeneration use that name and preserve the configured model project identity.
+The actual HTTP regression checks participant settings, initial requests, and regeneration.
+Pipeline callback ownership remains unchanged.
+
+Main `ConversationsRepo.Create` inserts supplied participants before the automatic user and blank dummy participants.
+`addConversationParticipant` matches the existing dummy and uses `ON CONFLICT DO NOTHING` for its conversation mapping.
+The former follow-up participant request therefore discards the newly selected model settings.
+The creation adapter now supplies those settings in the initial request and removes the redundant follow-up request.
+The lifecycle adapter passes through the existing participants contract. No application schema or Main behavior changes.
+Fifty-three focused tests pass, including terminal-refresh restoration and the actual creation, start, and regeneration HTTP paths.
+Owned lint, full Web typecheck, and all five production build targets pass.
+The deployed browser creates conversation 778 with Haiku selected before the first message.
+The model remains selected after completion, reload, regeneration, and a second reload.
+The transcript retains one final answer. No new browser error appears during this check.
+An earlier notification-stream warning remains in the session. Chat streaming and model persistence pass independently.
+
 ## Preserved Point 5 work
 
 The pre-merge checkpoint contains 81 tracked and untracked files.
 A local preservation manifest verifies each file against its saved SHA-256.
 Retain the checkpoint until restoration and verification finish on the follow-up branch.
+The restoration audit verifies 48 tracked files and 33 new files against the checkpoint.
+Three paths need reconciliation: Web locale text, worker runtime settings, and the internal-tools catalogue test.
+Keep current release additions when applying their saved changes. Exclude the saved whitespace-only handler changes.
 
 The checkpoint includes Python preparation, indexed content delivery, inert hydration, dispatch fencing, and deployment controls.
 Focused verification passes before preservation:
@@ -109,10 +192,18 @@ Local candidate checks pass:
 
 The new Web bundle is deployed into the existing rehearsal Web container.
 A fresh browser verifies the ten supported node types and all four Code language controls.
-Pipeline 141 fails at Python during its editor Test run. The UI displays the typed failure and support reference.
-The browser reports no console errors. Runtime receipt diagnosis remains open.
-This Web check uses the existing rehearsal Main and worker images. It does not prove deployment of the merged Main.
+Pipeline 141 initially fails at Python during its editor Test run. The UI displays the typed failure and support reference.
+The rehearsal profiles selected older runtime images without the benchmark's prepared package closure.
+The worker and supervisor now select the matching immutable Deno and Rust images.
+Only those image identities change; policies, TLS, audiences, limits, and Main remain unchanged.
+The fresh persistent-chat regeneration passes all four languages and returns the expected hash
+`6a3c4d063a5ba0c21949cf7d67d4bda843cb50a0bc76169c19e2c5f7e272326d`.
+Reload preserves one final result, including the accepted/rejected counts and total.
+The fresh editor Test chat also completes all four stages with the same hash.
+The browser reports no console errors. The failed receipt remains unchanged.
+This check uses existing rehearsal Main and worker binaries. It does not prove deployment of the merged Main.
 
-Fresh GitHub CI and successful browser runtime acceptance remain required before release.
+The fresh browser checks pass on the existing rehearsal backend.
+Fresh GitHub CI remains required before release, including x86_64 stack and shipping-image checks.
 Do not treat preserved checkpoint tests as merged-candidate evidence.
 Do not close Gate 5 when PR 883 merges.

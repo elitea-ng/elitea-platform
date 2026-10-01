@@ -1405,9 +1405,10 @@ async function listAll(
  * ## The two things it used to miss, silently
  *
  *  1. **Pipelines.** `GET .../applications/prompt_lib/{project}` INNER JOINs
- *     `application_versions` on `agent_type != 'pipeline'` unless the caller
- *     sends `agents_type=pipeline` (`internal/infra/db/repos/applications.go`),
- *     so the classic listing NEVER carries a pipeline. Every
+ *     `application_versions` on `agent_type != 'pipeline'` in the old
+ *     implementation. The current unfiltered listing carries both classes;
+ *     explicit `agents_type=classic` and `agents_type=pipeline` filters keep
+ *     the deletion counts separate. Every
  *     `autotest_`-named pipeline survived every sweep, and the sweep said it
  *     was done.
  *  2. **Everything past row twenty**, per the `limit` clamp `listAll` above
@@ -1461,7 +1462,7 @@ export async function sweepAutotestEntities(
   // Classic agents and pipelines are two different listings of one table, and
   // the sweep needs both. See this function's own note.
   for (const [kind, query] of [
-    ['agent', ''],
+    ['agent', '?agents_type=classic'],
     ['pipeline', '?agents_type=pipeline'],
   ] as const) {
     try {

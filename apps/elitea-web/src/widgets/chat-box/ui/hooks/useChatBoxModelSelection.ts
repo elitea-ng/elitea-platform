@@ -22,10 +22,10 @@ export interface UseChatBoxModelSelectionResult {
 }
 
 /** Accept primitive project identities only; absent settings retain ordinary chat selection. */
-function matchesModelProject(projectId: string, configuredProject: unknown): boolean {
+function matchesModelProject(projectId: string | number, configuredProject: unknown): boolean {
   if (configuredProject == null) return true;
   if (typeof configuredProject !== 'string' && typeof configuredProject !== 'number') return false;
-  return projectId === String(configuredProject);
+  return String(projectId) === String(configuredProject);
 }
 
 export function useChatBoxModelSelection({

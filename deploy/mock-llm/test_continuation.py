@@ -6,7 +6,57 @@ import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer
 
-from server import Handler
+from server import Handler, _script_for
+
+
+class ToolCallFixtureTest(unittest.TestCase):
+    def setUp(self):
+        self.prompt = '[[mock:call_tool elitea_agent_4_v_5 {"task":"review"}]] hand it over'
+        self.user = {"role": "user", "content": self.prompt}
+        self.call = _script_for([self.user]).tool_calls[0]
+        self.notice = {"role": "tool", "tool_call_id": "elitea-skipped-internal-tools",
+                       "content": "internal tool 'swarm' is not available on this worker"}
+
+    def test_unrelated_swarm_notice_does_not_complete_the_requested_call(self):
+        for notice in [self.notice, {"role": "tool", "content": self.notice["content"]}]:
+            with self.subTest(notice=notice):
+                script = _script_for([self.user, notice])
+                self.assertEqual(script.mode, "call_tool")
+                self.assertEqual(script.tool_calls, [self.call])
+                self.assertEqual(script.reply, "")
+
+    def test_matching_completion_preserves_success_denial_and_error_results(self):
+        for result in ["ROUTE_TAG_REJECTED review", '{"type":"sensitive_tool_blocked"}', '{"error":"refused"}']:
+            with self.subTest(result=result):
+                completed = {"role": "tool", "tool_call_id": self.call["id"], "content": result}
+                script = _script_for([self.user, self.notice, completed])
+                self.assertEqual(script.mode, "call_tool_resumed")
+                self.assertIsNone(script.tool_calls)
+                self.assertIn(result, script.reply)
+                self.assertNotIn("swarm", script.reply)
+                self.assertTrue(script.reply.endswith("MOCKCALLTOOLEND"))
+
+    def test_legacy_function_results_match_the_requested_name(self):
+        completed = {"role": "function", "name": "elitea_agent_4_v_5", "content": "legacy completion"}
+        self.assertEqual(_script_for([self.user, completed]).mode, "call_tool_resumed")
+        unrelated = {**completed, "name": "unrelated_function"}
+        self.assertEqual(_script_for([self.user, unrelated]).mode, "call_tool")
+        wrong_id = {**completed, "tool_call_id": "unrelated-call"}
+        self.assertEqual(_script_for([self.user, wrong_id]).mode, "call_tool")
+
+    def test_old_turn_result_and_repeated_operation_identities_remain_distinct(self):
+        completed = {"role": "tool", "tool_call_id": self.call["id"], "content": "old completion"}
+        self.assertEqual(_script_for([self.user, completed, self.user]).mode, "call_tool")
+        prompt = "[[mock:call_tool same_operation]] [[mock:call_tool same_operation]]"
+        user = {"role": "user", "content": prompt}
+        calls = _script_for([user]).tool_calls
+        self.assertNotEqual(calls[0]["id"], calls[1]["id"])
+        results = [{"role": "tool", "tool_call_id": call["id"], "content": str(index)}
+                   for index, call in enumerate(calls)]
+        script = _script_for([user, self.notice, *results])
+        self.assertEqual(script.mode, "call_tool_resumed")
+        self.assertIn("tool result 1 said 0 tool result 2 said 1", script.reply)
+        self.assertNotIn("swarm", script.reply)
 
 
 class ContinuationFixtureTest(unittest.TestCase):

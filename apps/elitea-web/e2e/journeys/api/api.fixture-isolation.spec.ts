@@ -68,7 +68,9 @@ import { STORAGE_STATE } from '../../../playwright.config';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
+  createAgent,
   createConversation,
+  deleteAgent,
   deleteConversation,
   DEFAULT_PROJECT_ID,
   readProjectModels,
@@ -135,7 +137,8 @@ async function countNamed(
   return (body.rows ?? body.items ?? []).filter((row) => row.name === name).length;
 }
 
-/** The pipeline listing — the typed half the default listing cannot answer. */
+/** Explicit application classes keep sweep counts separate. */
+const CLASSIC_AGENTS = '&agents_type=classic';
 const PIPELINES = '&agents_type=pipeline';
 
 test('API-FX1: a conversation the fixture creates is FRESH — no message another journey wrote (legacy TestConversationIsolation::test_fixture_creates_fresh_conversation)', async ({
@@ -215,6 +218,7 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
   request,
 }) => {
   const conversationName = `${AUTOTEST_PREFIX}fx3_conv_${RUN}`;
+  const agentName = `${AUTOTEST_PREFIX}fx3_agent_${RUN}`;
   const pipelineName = `${AUTOTEST_PREFIX}fx3_pipe_${RUN}`;
   // Deliberately WITHOUT the prefix. This is the half a "nothing is left"
   // assertion cannot state on its own: a sweep that deleted the whole project
@@ -223,6 +227,7 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
   const bystanderName = `e2e_fixture_bystander_${RUN}`;
 
   const conversationId = await createConversation(request, conversationName);
+  const agent = await createAgent(request, agentName);
   const pipeline = await createPipelineThroughApi(request, pipelineName);
   const bystander = await createPipelineThroughApi(request, bystanderName);
 
@@ -238,6 +243,12 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
     expect(before.status(), 'the conversation this test created must exist before the sweep').toBe(
       200,
     );
+    await expect
+      .poll(async () => countNamed(request, 'elitea_core/applications', agentName, CLASSIC_AGENTS), {
+        timeout: 20_000,
+        message: 'the created agent never appeared in the classic listing',
+      })
+      .toBe(1);
     await expect
       .poll(async () => countNamed(request, 'elitea_core/applications', pipelineName, PIPELINES), {
         timeout: 20_000,
@@ -264,9 +275,12 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
       'the sweep must have removed at least the conversation this test created',
     ).toBeGreaterThanOrEqual(1);
     expect(
+      report.agents,
+      'the sweep must remove the classic agent through its own class listing',
+    ).toBeGreaterThanOrEqual(1);
+    expect(
       report.pipelines,
-      'the sweep must reach PIPELINES — the classic listing does not carry them, and a ' +
-        'sweep that reads only that listing leaves every autotest_ pipeline behind forever',
+      'the sweep must remove pipelines through their own class listing',
     ).toBeGreaterThanOrEqual(1);
 
     // ── and the rows really are gone, read back from the server ──────────
@@ -281,6 +295,10 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
       'the sweep reported success and left the conversation behind',
     ).toBe(404);
     expect(
+      await countNamed(request, 'elitea_core/applications', agentName, CLASSIC_AGENTS),
+      'the sweep left the classic agent behind',
+    ).toBe(0);
+    expect(
       await countNamed(request, 'elitea_core/applications', pipelineName, PIPELINES),
       'the sweep left the pipeline behind',
     ).toBe(0);
@@ -293,6 +311,7 @@ test('API-FX3: the autotest_ sweep really removes the rows, and removes ONLY tho
     // The bystander is this test's own row and the sweep will never take it.
     await deletePipeline(request, bystander);
     await deletePipeline(request, pipeline).catch(() => undefined);
+    await deleteAgent(request, agent.id).catch(() => undefined);
     await deleteConversation(request, conversationId).catch(() => undefined);
   }
 });

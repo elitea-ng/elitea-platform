@@ -352,6 +352,68 @@ func TestParse_Refusals(t *testing.T) {
 	})
 }
 
+func TestExportImportCompiledAppPreview(t *testing.T) {
+	svc, _ := newService(t)
+	// CI builds the trusted app preview at 1,004.11 kB. Export adds the pack.
+	svc.previews.App = []byte("<html><head></head><body>" + strings.Repeat("x", 1_004_110) + "</body></html>")
+	data, _, err := svc.Export(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := entries(t, data)
+	if len(got["preview/app.html"]) <= maxEntryBytes {
+		t.Fatal("the fixture must exceed the old preview limit after pack insertion")
+	}
+	if _, problems := svc.Parse(data); len(problems) != 0 {
+		t.Fatalf("an exported preview must import: %+v", problems)
+	}
+}
+
+func TestAppPreviewLimit(t *testing.T) {
+	svc, _ := newService(t)
+	data, _, err := svc.Export(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packJSON := bytes.TrimSuffix(entries(t, data)["brand-pack.json"], []byte("\n"))
+	svc.previews.App = bytes.Repeat([]byte("x"), maxAppPreviewBytes-len(InlinePack(nil, packJSON)))
+	data, _, err = svc.Export(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("the exact preview limit must export: %v", err)
+	}
+	files := entries(t, data)
+	if size := len(files["preview/app.html"]); size != maxAppPreviewBytes {
+		t.Fatalf("preview size = %d, want %d", size, maxAppPreviewBytes)
+	}
+	if _, problems := svc.Parse(data); len(problems) != 0 {
+		t.Fatalf("the exact preview limit must import: %+v", problems)
+	}
+
+	t.Run("export refuses one byte over the limit", func(t *testing.T) {
+		svc.previews.App = append(svc.previews.App, 'x')
+		if data, _, err := svc.Export(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "app preview") || len(data) != 0 {
+			t.Fatal("an oversized preview must not produce a package")
+		}
+	})
+	for _, tc := range []struct {
+		entry string
+		limit int
+	}{{"preview/app.html", maxAppPreviewBytes}, {"preview/login.html", maxEntryBytes}} {
+		t.Run("import refuses oversized "+tc.entry, func(t *testing.T) {
+			original := files[tc.entry]
+			defer func() { files[tc.entry] = original }()
+			files[tc.entry] = bytes.Repeat([]byte("x"), tc.limit+1)
+			_, problems := svc.Parse(buildZip(t, files))
+			for _, problem := range problems {
+				if problem.Entry == tc.entry && strings.Contains(problem.Reason, "the limit is") {
+					return
+				}
+			}
+			t.Fatalf("an oversized preview must be refused: %+v", problems)
+		})
+	}
+}
+
 func TestInlinePack_EscapesClosingTag(t *testing.T) {
 	out := InlinePack([]byte("<html><head></head><body></body></html>"), []byte(`{"name":"</script><script>alert(1)"}`))
 	if strings.Count(string(out), "</script>") != 1 {

@@ -78,6 +78,36 @@ func multipartZip(t *testing.T, target string, data []byte) *http.Request {
 	return req
 }
 
+func TestNativeBrandingPackageRoundTrip(t *testing.T) {
+	preview := []byte("<html><head></head><body>" + strings.Repeat("x", 1_004_110) + "</body></html>")
+	packages := brandpackage.New(nil, brandpackage.Previews{App: preview}, "test")
+	router := packageRouter(admin.NewHandler(nil, admin.WithBrandingPackages(packages)))
+	exported := httptest.NewRecorder()
+	router.ServeHTTP(exported, httptest.NewRequest(http.MethodGet, "/admin/branding/package/administration", nil))
+	if exported.Code != http.StatusOK {
+		t.Fatalf("export status %d: %s", exported.Code, exported.Body.String())
+	}
+	checked := httptest.NewRecorder()
+	router.ServeHTTP(checked, multipartZip(t, "/admin/branding/package/administration?dry_run=true", exported.Body.Bytes()))
+	if checked.Code != http.StatusOK {
+		t.Fatalf("dry-run status %d: %s", checked.Code, checked.Body.String())
+	}
+	var report struct {
+		OK       bool                   `json:"ok"`
+		DryRun   bool                   `json:"dry_run"`
+		Applied  bool                   `json:"applied"`
+		Problems []brandpackage.Problem `json:"problems"`
+		Manifest *brandpackage.Manifest `json:"manifest"`
+	}
+	if err := json.Unmarshal(checked.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK || !report.DryRun || report.Applied || len(report.Problems) != 0 ||
+		report.Manifest == nil || report.Manifest.Product != v2branding.ProductDefault().Product.Name {
+		t.Fatalf("dry-run report = %+v", report)
+	}
+}
+
 func TestBrandingPackageRoutes(t *testing.T) {
 	pack := v2branding.ProductDefault()
 	pack.Product.Name = "Acme AI"

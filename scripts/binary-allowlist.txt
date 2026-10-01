@@ -71,3 +71,11 @@ apps/elitea-web/src/entries/docs/content/img/*.webp
 # Inventory facade operations (185 operations). Listed by exact path so the
 # ceiling still applies to every other generated file.
 services/elitea-main/internal/api/generated/api.gen.go
+
+# Public, self-signed certificate fixtures verify sandbox peer identity parsing.
+# They contain no private keys. Exact paths exclude other binary files.
+services/elitea-worker-rust/src/sandbox/testdata/peer-cn.der
+services/elitea-worker-rust/src/sandbox/testdata/peer-dns.der
+services/elitea-worker-rust/src/sandbox/testdata/peer-email.der
+services/elitea-worker-rust/src/sandbox/testdata/peer-mixed.der
+services/elitea-worker-rust/src/sandbox/testdata/peer-spiffe.der

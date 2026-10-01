@@ -563,7 +563,7 @@ where
         tracing::info!(event = "agent_completion_selected");
         let finish_time = match sampled_time(clock.as_ref()) {
             Ok((_, time)) => time,
-            Err(code) => return run.close_no_ack(code, false).await,
+            Err(code) => return Box::pin(run.close_no_ack(code, false)).await,
         };
         let batch = match projector.finish_after_eos(completion, finish_time) {
             Ok(batch) => batch,

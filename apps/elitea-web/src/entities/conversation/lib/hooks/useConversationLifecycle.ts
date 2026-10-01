@@ -53,6 +53,7 @@ import {
 export interface NewConversationInput {
   readonly name: string;
   readonly isPrivate: boolean;
+  readonly participants?: readonly unknown[];
   readonly meta?: Readonly<Record<string, unknown>>;
 }
 
@@ -123,7 +124,7 @@ function useAsyncAction<A extends unknown[], R>(action: (...args: A) => Promise<
 export function useConversationLifecycle(projectId: string | number | undefined): UseConversationLifecycleResult {
   const create = useAsyncAction(async (input: NewConversationInput): Promise<ConversationWire | undefined> => {
     if (projectId === undefined) return undefined;
-    return conversationCreate({ projectId, name: input.name, is_private: input.isPrivate, participants: [], meta: input.meta ?? {} });
+    return conversationCreate({ projectId, name: input.name, is_private: input.isPrivate, participants: input.participants ?? [], meta: input.meta ?? {} });
   });
 
   const edit = useAsyncAction(async (input: EditConversationInput): Promise<ConversationWire | undefined> => {

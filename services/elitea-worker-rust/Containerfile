@@ -1,5 +1,22 @@
 # syntax=docker/dockerfile:1.7
 
+# Keep the GCC runtime from the same Debian release, with its package records and licenses.
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime-cc
+FROM rust:1.97.1-bookworm AS runtime-libraries
+COPY --from=runtime-cc /lib/ /cc-lib/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-12-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-12-base/ /runtime-files/usr/share/doc/gcc-12-base/
+COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
+RUN cd /cc-lib && \
+    set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
+    mkdir -p /runtime-files/lib && cp --parents "$1" /runtime-files/lib && \
+    ln -s gcc-12-base /runtime-files/usr/share/doc/libgcc-s1
+
+# Rust TLS uses rustls. This base retains glibc and CA roots without system OpenSSL.
+FROM gcr.io/distroless/base-nossl-debian12:nonroot AS runtime-base
+COPY --from=runtime-libraries /runtime-files/ /
+
 FROM rust:1.97.1-bookworm AS builder-base
 
 WORKDIR /src
@@ -36,6 +53,32 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo install cargo-auditable --locked --version 0.7.5
 
+# Resolve every shipped ELF dependency against the final runtime without starting the application.
+COPY <<'VERIFY' /usr/local/bin/verify-runtime
+set -eu
+artifact="$1"
+readelf --sections --wide "$artifact" > /tmp/runtime-sections
+grep -q '[.]debug_line ' /tmp/runtime-sections
+grep -q '[.]symtab ' /tmp/runtime-sections
+grep -q '[.]dep-v0 ' /tmp/runtime-sections
+readelf --dynamic "$artifact" > /tmp/runtime-dynamic
+if grep -Eq 'Shared library: \[(libssl|libcrypto)[.]' /tmp/runtime-dynamic; then
+    echo 'System OpenSSL is not part of this runtime.' >&2
+    exit 1
+fi
+test ! -e /runtime-root/var/lib/dpkg/status.d/libssl3
+test -z "$(find /runtime-root -name 'libssl.so*' -o -name 'libcrypto.so*')"
+test -s /runtime-root/etc/ssl/certs/ca-certificates.crt
+interpreter="$(readelf --program-headers --wide "$artifact" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')"
+test -n "$interpreter"
+triplet="$(gcc -dumpmachine)"
+"/runtime-root$interpreter" --inhibit-cache \
+    --library-path "/runtime-root/lib/$triplet:/runtime-root/usr/lib/$triplet:/runtime-root/lib:/runtime-root/usr/lib" \
+    --list "$artifact" > /tmp/runtime-libraries
+cat /tmp/runtime-libraries
+awk '$2 == "=>" && $3 !~ /^\/runtime-root\// { exit 1 }' /tmp/runtime-libraries
+VERIFY
+
 COPY libs/proto ./libs/proto
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
@@ -62,13 +105,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust
 
-# Verify the shipped artifact, not only Cargo profile intent.
-# Keep function symbols and source lines without local-variable debug data.
-RUN readelf --sections --wide /usr/local/bin/elitea-worker-rust > /tmp/worker-sections && \
-    grep -q '[.]debug_line ' /tmp/worker-sections && \
-    grep -q '[.]symtab ' /tmp/worker-sections
+# Check audit metadata, diagnostics, CA roots, and the complete runtime library closure.
+RUN --mount=from=runtime-base,target=/runtime-root,readonly \
+    sh /usr/local/bin/verify-runtime /usr/local/bin/elitea-worker-rust
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM runtime-base AS runtime
 
 COPY --from=builder \
     /usr/local/bin/elitea-worker-rust \
@@ -88,7 +129,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       --features sandbox-supervisor --bin elitea-sandbox-supervisor && \
     cp /cargo-target/release/elitea-sandbox-supervisor /usr/local/bin/elitea-sandbox-supervisor
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS supervisor
+RUN --mount=from=runtime-base,target=/runtime-root,readonly \
+    sh /usr/local/bin/verify-runtime /usr/local/bin/elitea-sandbox-supervisor
+
+FROM runtime-base AS supervisor
 COPY --from=supervisor-builder /usr/local/bin/elitea-sandbox-supervisor /usr/local/bin/elitea-sandbox-supervisor
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/elitea-sandbox-supervisor"]

@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-09-01",
-  "synthetic": false,
-  "note": "Object keys taken from the phase-P0 provider recording (conformance fixture generation/artifact_layout.json + generation/wiki_manifest.json, recorded by EXECUTING the legacy deepwiki_plugin at revision ce679f11). The ENVELOPE is elitea-main's ListObjects shape (GET /api/v2/artifacts/objects/{projectID}/{bucket}, objects.go), because that is the route the native feature uses. The legacy /artifacts/artifact(s)/default/... family the vendored bundle calls is served by no elitea-main route \u2014 see parity/notes/deepwiki-artifact-store.md. Every key in the manifest's pages[] is present here: the browser lists from the object listing and reads pages the manifest names, so a listing that omits a named page is the exact inconsistency DWIKI-002 and DWIKI-003 would trip over. fixtures.test.ts pins that.",
+  "recordedAt": "2026-10-01",
+  "synthetic": true,
+  "note": "Synthetic elitea-main ListObjects envelope whose object keys come from the pinned phase-P0 generation/artifact_layout.json and generation/wiki_manifest.json recordings. Revalidated on 2026-10-01 by replaying legacy source revision ce679f11, verifying all five source digests, and checking every manifest page is listed. Size, etag and timestamps are fixture data, not live storage measurements. The envelope matches GET /api/v2/artifacts/objects/{projectID}/{bucket}; the legacy artifact(s)/default routes are not used.",
   "body": {
     "common_prefixes": [
       "acme--notes-service--main/"

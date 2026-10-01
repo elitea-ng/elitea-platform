@@ -3,7 +3,6 @@ import { useCallback, useMemo } from "react";
 
 import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
-import { useAddParticipantMutation } from "@/entities/participant";
 import { getExecutionTokens } from "@/features/mcps";
 import type { useUploadAttachments } from "@/entities/conversation";
 
@@ -29,6 +28,7 @@ import {
   creationMeta,
   internalToolsSaveFailure,
   positiveParticipantId,
+  resolveSendModelName,
   resolveStartContract,
   resolveTargetParticipant,
 } from "./useChatBoxSend.helpers";
@@ -38,6 +38,7 @@ interface SendDeps {
   readonly createConversation: (input: {
     name: string;
     isPrivate: boolean;
+    participants?: readonly unknown[];
     meta?: Readonly<Record<string, unknown>>;
   }) => Promise<
     { readonly id?: string | number; readonly uuid?: string } | undefined
@@ -141,6 +142,7 @@ export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
+  const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
   const target = useMemo(
     () => resolveTargetParticipant(params.activeParticipant, params.participants),
     [params.activeParticipant, params.participants],
@@ -190,7 +192,7 @@ export function useChatBoxSend(
         projectId: projectIdString,
         payload,
         llmSettings: params.llmSettings,
-        modelName: params.model?.name,
+        modelName,
         isApplicationTurn,
         participantId:
           (isApplicationTurn
@@ -214,7 +216,7 @@ export function useChatBoxSend(
       projectIdString,
       params.llmSettings,
       getInternalToolsForSend,
-      params.model,
+      modelName,
       target,
     ],
   );
@@ -262,7 +264,7 @@ export function useChatBoxSend(
         questionId: input.questionId,
         question: input.question,
         llmSettings: params.llmSettings,
-        modelName: params.model?.name,
+        modelName,
         isApplicationTurn,
         participantId: positiveParticipantId(
           (target as { readonly id?: unknown } | null | undefined)?.id,
@@ -289,12 +291,11 @@ export function useChatBoxSend(
       target,
       params.llmSettings,
       getInternalToolsForSend,
-      params.model,
+      modelName,
     ],
   );
 
   const { deps } = params;
-  const { mutateAsync: addParticipants } = useAddParticipantMutation();
   const createConversationForSend = useCallback(
     async (question: string) => {
       const internalTools = await getInternalToolsForSend?.();
@@ -304,60 +305,28 @@ export function useChatBoxSend(
           t("widgets.chatBox.defaultConversationName", "New Chat"),
         isPrivate: true,
         meta: creationMeta(params.llmSettings, internalTools),
+        ...(!isAgentsPage && modelName ? {
+          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings: params.llmSettings }),
+        } : {}),
       });
       if (!created) return undefined;
 
-      const modelName = params.model?.name;
       if (!isAgentsPage && !modelName) {
-        // NOT silent, and not a refusal either. With no model there is nothing
-        // to put in the `dummy` participant. Every REST turn this
-        // conversation ever receives therefore resolves to no rows. The route
-        // answers `422 unsupported_agent_execution`. The conversation is still
-        // created because the socket path does not need that participant, so
-        // refusing here would break a deployment whose socket works.
-        //
-        // `model` is null exactly when the project has no model catalogue or
-        // the catalogue call failed. The user has to be told about that state.
+        // The conversation still exists when no model is available. Its blank
+        // responder cannot supply model settings for a REST turn.
         console.warn(
-          "[useChatBoxSend] no model is selected: created an ad-hoc conversation with no `dummy` participant, so its REST turns cannot resolve",
+          "[useChatBoxSend] no model is selected: created an ad-hoc conversation with no model settings, so its REST turns cannot resolve",
         );
-      }
-      if (
-        !isAgentsPage &&
-        modelName &&
-        created.id !== undefined &&
-        projectId !== undefined
-      ) {
-        try {
-          await addParticipants({
-            projectId,
-            conversationId: String(created.id),
-            participants: adhocParticipants({
-              userId: params.userId,
-              modelName,
-              llmSettings: params.llmSettings,
-            }),
-          });
-        } catch (error) {
-          // Not fatal to the send: the turn will fail its own admission with a
-          // message, which is more useful than swallowing the question here.
-          console.warn(
-            "[useChatBoxSend] could not add ad-hoc participants:",
-            error,
-          );
-        }
       }
       return pickIdAndUuid(created);
     },
     [
       deps,
       isAgentsPage,
-      projectId,
-      params.model,
+      modelName,
       params.userId,
       params.llmSettings,
       getInternalToolsForSend,
-      addParticipants,
     ],
   );
 

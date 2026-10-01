@@ -26,6 +26,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useConversationLifecycle } from '@/entities/conversation';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
@@ -48,14 +49,15 @@ interface Harness {
   readonly Probe: () => null;
 }
 
-function harness(overrides: Partial<UseChatBoxSendParams> = {}): Harness {
+function harness(overrides: Partial<UseChatBoxSendParams> = {}, createWithLifecycle = false): Harness {
   const api: { current: UseChatBoxSendResult | undefined } = { current: undefined };
   const agentEvents: { readonly type?: string }[] = [];
 
   function Probe(): null {
+    const lifecycle = useConversationLifecycle(7);
     api.current = useChatBoxSend({
       deps: {
-        createConversation: () => Promise.resolve(undefined),
+        createConversation: createWithLifecycle ? lifecycle.createConversation : () => Promise.resolve(undefined),
         uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }),
       },
       setChatHistory: () => undefined,
@@ -74,7 +76,7 @@ function harness(overrides: Partial<UseChatBoxSendParams> = {}): Harness {
   return { api, agentEvents, Probe };
 }
 
-/** `useChatBoxSend` reaches two real TanStack mutations (`useAddParticipantMutation`, and the transport's own). Retries off so a failed request surfaces as itself. */
+/** The real transport requires TanStack mutations. Disable retries so a failed request surfaces as itself. */
 function withQueryClient(children: ReactNode): ReactNode {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -106,6 +108,76 @@ afterEach(() => {
 });
 
 describe('useChatBoxSend — the flow editor’s run-event feed', () => {
+  it('retains a picked model in conversation participants, start, and regeneration', async () => {
+    const selectedSettings = { model_name: 'eu.anthropic.claude-haiku', model_project_id: 1, temperature: 0.6 };
+    let participantsBody: unknown;
+    let startBody: Record<string, unknown> | undefined;
+    let regenerateBody: Record<string, unknown> | undefined;
+    let redundantParticipantWrites = 0;
+    server.use(
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/7`, async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>;
+        participantsBody = body['participants'];
+        return HttpResponse.json({ id: 776, uuid: CONVERSATION_UUID, name: 'hello' });
+      }),
+      http.post(`${BASE}/elitea_core/participants/prompt_lib/7/776`, () => {
+        redundantParticipantWrites += 1;
+        return HttpResponse.json([]);
+      }),
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`, async ({ request }) => {
+        startBody = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL, response_message_id: 'resp-1' });
+      }),
+      http.post(`${BASE}/elitea_core/regenerate/prompt_lib/7/resp-1`, async ({ request }) => {
+        regenerateBody = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ task_id: 'exec-2', events_url: '/api/v2/executions/7/exec-2/events', response_message_id: 'resp-1' });
+      }),
+    );
+    const { api, Probe } = harness({
+      isAgentsPage: false,
+      activeParticipant: { id: 2, entity_name: 'dummy' },
+      participants: [{ id: 2, entity_name: 'dummy' }],
+      userId: '5',
+      llmSettings: selectedSettings,
+      model: { name: 'vllm/CONTINUATION-REPAIR-FIXTURE' },
+    }, true);
+    render(withQueryClient(<Probe />));
+    await act(async () => {
+      await api.current?.createConversationForSend('hello');
+      await api.current?.startStreamedExecution({
+        conversationUuid: CONVERSATION_UUID, payload: { question: 'hello', question_id: 'q-1' },
+      });
+      await api.current?.regenerateStreamedExecution({ messageId: 'resp-1', questionId: 'q-1', question: 'hello' });
+    });
+    const expectedSettings = { ...selectedSettings, stream: true };
+    expect(participantsBody).toEqual([
+      { entity_name: 'user', entity_meta: { id: 5 } },
+      { entity_name: 'dummy', entity_meta: {}, entity_settings: { llm_settings: expectedSettings } },
+    ]);
+    expect(redundantParticipantWrites).toBe(0);
+    expect(startBody?.['llm_settings']).toEqual(expectedSettings);
+    expect((regenerateBody?.['payload'] as Record<string, unknown> | undefined)?.['llm_settings']).toEqual(expectedSettings);
+  });
+
+  it.each([
+    { label: 'pipeline host', isAgentsPage: true, model: { name: 'pipeline-model' } },
+    { label: 'chat without a model', isAgentsPage: false, model: null },
+  ])('preserves creation defaults for $label', async ({ isAgentsPage, model }) => {
+    let participantsBody: unknown;
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    server.use(http.post(`${BASE}/elitea_core/conversations/prompt_lib/7`, async ({ request }) => {
+      participantsBody = (await request.json() as Record<string, unknown>)['participants'];
+      return HttpResponse.json({ id: 776, uuid: CONVERSATION_UUID, name: 'hello' });
+    }));
+    const { api, Probe } = harness({ isAgentsPage, model }, true);
+    render(withQueryClient(<Probe />));
+    await act(async () => {
+      expect(await api.current?.createConversationForSend('hello')).toEqual({ id: 776, uuid: CONVERSATION_UUID });
+    });
+    expect(participantsBody).toEqual([]);
+    warning.mockRestore();
+  });
+
   it('awaits session refresh and carries access tokens on start and regeneration', async () => {
     const tokenKey = 'credential:https://issuer.example';
     window.sessionStorage.setItem('el.mcp.tokens', JSON.stringify({

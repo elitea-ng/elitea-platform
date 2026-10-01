@@ -63,6 +63,15 @@ function modelRequestSettings(
   return modelSettings;
 }
 
+/** Picker settings own the model identity; the saved chat model supplies only the default. */
+export function resolveSendModelName(
+  settings: Readonly<Record<string, unknown>> | undefined,
+  fallbackName: string | undefined,
+): string | undefined {
+  const configuredName = settings?.['model_name'];
+  return typeof configuredName === 'string' && configuredName ? configuredName : fallbackName;
+}
+
 /** Returns the validated loop bound that belongs in conversation metadata. */
 function executionStepsLimit(
   settings: Readonly<Record<string, unknown>> | undefined,
@@ -245,7 +254,7 @@ export function adhocParticipants(input: {
   const llmSettings = { ...modelRequestSettings(input.llmSettings), model_name: input.modelName, stream: true };
   return [
     ...(input.userId !== undefined ? [{ entity_name: 'user', entity_meta: { id: Number(input.userId) } }] : []),
-    { entity_name: 'dummy', entity_meta: { name: input.modelName }, entity_settings: { llm_settings: llmSettings } },
+    { entity_name: 'dummy', entity_meta: {}, entity_settings: { llm_settings: llmSettings } },
   ];
 }
 

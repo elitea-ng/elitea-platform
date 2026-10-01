@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-09-01",
-  "synthetic": false,
-  "note": "The wiki manifest body, taken verbatim from the phase-P0 provider recording (conformance fixture generation/wiki_manifest.json), minus its _source block. Cache-key fields keep the recording's own <md5> placeholders — the recording did not resolve them either, and substituting a plausible hash here would be inventing a fact the fixture does not have.",
+  "recordedAt": "2026-10-01",
+  "synthetic": true,
+  "note": "Schema-2 manifest fixture projected from the pinned phase-P0 generation/wiki_manifest.json recording. Revalidated on 2026-10-01 by executing record_generation.py against source revision ce679f11 and verifying all five source digests and every retained body field. Legacy cache fields are omitted for the PostgreSQL provider. This is a deterministic contract fixture, not a fresh live HTTP capture.",
   "body": {
     "schema_version": 2,
     "wiki_id": "acme--notes-service--main",

@@ -39,6 +39,23 @@ describe('useConversationLifecycle', () => {
     expect(result.current.createError).toBeUndefined();
   });
 
+  it('seeds model settings before the server adds its blank responder', async () => {
+    let capturedBody: unknown;
+    server.use(http.post(`${BASE}/elitea_core/conversations/prompt_lib/7`, async ({ request }) => {
+      capturedBody = await request.json();
+      return HttpResponse.json({ id: 777, name: 'New' });
+    }));
+    const participants = [{
+      entity_name: 'dummy', entity_meta: {},
+      entity_settings: { llm_settings: { model_name: 'eu.anthropic.claude-haiku', model_project_id: 1 } },
+    }];
+    const { result } = renderHook(() => useConversationLifecycle(7));
+    await act(async () => {
+      await result.current.createConversation({ name: 'New', isPrivate: true, participants });
+    });
+    expect(capturedBody).toEqual({ name: 'New', is_private: true, participants, meta: {} });
+  });
+
   it('createConversation records an error and returns undefined on failure', async () => {
     server.use(http.post(`${BASE}/elitea_core/conversations/prompt_lib/7`, () => HttpResponse.json({ error: 'nope' }, { status: 500 })));
     const { result } = renderHook(() => useConversationLifecycle(7));

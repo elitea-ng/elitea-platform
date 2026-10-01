@@ -215,7 +215,7 @@ adminTest('J38d: the exported branding package imports back clean as a dry run',
   const checked = await page.request.post(`${API}/admin/branding/package/administration?dry_run=true`, {
     multipart: { file: { name: 'roundtrip-branding.zip', mimeType: 'application/zip', buffer: zip } },
   });
-  expect(checked.status(), `the dry run answered ${checked.status()}`).toBe(200);
+  expect(checked.status(), `the dry run answered ${checked.status()}: ${await checked.text()}`).toBe(200);
   const report = (await checked.json()) as {
     ok: boolean;
     dry_run: boolean;
@@ -354,7 +354,7 @@ adminTest(
       }
       try {
         // The un-branded shell first: what the pack must move away from.
-        await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded' });
+        await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
         await expect(page.getByTestId('brand-logo-mark').first()).toBeVisible({ timeout: 20_000 });
         const primaryBefore = await readPrimary(page);
         expect(primaryBefore, 'the theme declares --el-palette-primary-main on the root').not.toBe('');
@@ -384,7 +384,7 @@ adminTest(
         // Channel C end to end: rows → resolver → bootstrap.js → the global →
         // the theme and the document head. Each assertion is a different
         // consumer of the pack.
-        await page.goto(BASE_URL + '/app/', { waitUntil: 'domcontentloaded' });
+        await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
         // `PageTitleSetter` suffixes every title with the product name.
         await expect(page).toHaveTitle(new RegExp(`${escapeRegExp(name)}$`), { timeout: 20_000 });
         // A new hue drops the stated scheme tokens server-side, so the client

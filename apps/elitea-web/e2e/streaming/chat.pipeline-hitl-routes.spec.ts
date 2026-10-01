@@ -64,7 +64,6 @@ import { expect, test, type Page } from '@playwright/test';
 import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
-  expectStoredAssistantAnswer,
   readCallerPersonalProjectId,
   readMockLlmJournal,
   fillComposer,
@@ -225,6 +224,64 @@ async function resumeHitl(page: Page, action: 'Approve' | 'Reject'): Promise<voi
   expect(resumeBody.hitl_action, `the click must send the ${action} action`).toBe(action.toLowerCase());
 }
 
+/** The resolved review card is also finalized; only the continuation row proves the resumed leg completed. */
+async function expectResumedAnswer(
+  page: Page,
+  projectId: string,
+  conversationId: string,
+  token: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const stored = await page.request.get(
+          `${BASE_URL}/api/v2/elitea_core/messages/prompt_lib/${projectId}/${conversationId}`,
+        );
+        if (!stored.ok()) return { completed: false, includesToken: false };
+        const body = (await stored.json()) as {
+          items?: readonly {
+            role?: string;
+            content?: string;
+            metadata?: { is_error?: boolean; pipeline_hitl_parent?: unknown };
+          }[];
+        };
+        // BeginCurrentAgentPipelineHitlContinuation stamps this parent on the
+        // resumed row; the finalized pause instead has pipeline_hitl_resolution.
+        const assistant = body.items?.find(
+          (item) => item.role === 'assistant' && item.metadata?.pipeline_hitl_parent !== undefined,
+        );
+        return {
+          completed: assistant?.metadata?.is_error === false,
+          includesToken: assistant?.content?.includes(token) === true,
+        };
+      },
+      { timeout: 180_000, message: 'the resumed HITL leg must finalize its own successful answer' },
+    )
+    .toEqual({ completed: true, includesToken: true });
+}
+
+/** Bind the route proof to this project's exact turn, rather than the latest request from any conversation. */
+async function expectTurnRoute(page: Page, projectId: string, token: string, tag: string): Promise<void> {
+  let instructions: readonly string[] = [];
+  await expect
+    .poll(
+      async () => {
+        const entries = await readMockLlmJournal(page, projectId);
+        instructions = entries
+          .filter(
+            (entry) =>
+              entry.credential === `mock-key-project-${projectId}` &&
+              entry.history.some((message) => message.role === 'user' && message.text === token),
+          )
+          .map((entry) => entry.instructions);
+        return instructions.length;
+      },
+      { timeout: 30_000, message: 'the mock must record exactly one model request for this resumed turn' },
+    )
+    .toBe(1);
+  expect(instructions[0], 'this decision must reach its own downstream system prompt').toContain(tag);
+}
+
 test('a pipeline hitl node resumes each decision onto its OWN route — Approve, then Reject', async ({ page }) => {
   // One pipeline, driven twice (`--workers=1` — see header): pause is free (no
   // model call), but each resumed leg costs one. Two full round trips plus the
@@ -246,21 +303,13 @@ test('a pipeline hitl node resumes each decision onto its OWN route — Approve,
     await sendTurn(page, approveToken);
     await resumeHitl(page, 'Approve');
 
-    await expectStoredAssistantAnswer(page, projectId, approveConversation, {
-      timeout: 180_000,
-      contains: approveToken,
-      message: 'the Approve route never produced an answer — the resume did not reach a downstream node',
-    });
+    await expectResumedAnswer(page, projectId, approveConversation, approveToken);
 
     // THE branch proof. The mock echoes the SAME token on either route (the
     // `task: {type: variable, value: input}` mapping is identical on both
     // `llm` nodes), so only the SYSTEM prompt its journal recorded tells
     // "resumed onto llm_approved" apart from "resumed onto llm_rejected".
-    const afterApprove = await readMockLlmJournal(page);
-    expect(
-      afterApprove.at(-1)?.instructions ?? '',
-      'the Approve decision must resume onto the node pinned with the APPROVED system prompt',
-    ).toContain(APPROVED_TAG);
+    await expectTurnRoute(page, projectId, approveToken, APPROVED_TAG);
 
     // ── Run B: Reject, in a FRESH conversation off the SAME pipeline ────
     // A second `test()` would re-author the pipeline for no reason: the graph
@@ -280,18 +329,8 @@ test('a pipeline hitl node resumes each decision onto its OWN route — Approve,
     await sendTurn(page, rejectToken);
     await resumeHitl(page, 'Reject');
 
-    await expectStoredAssistantAnswer(page, projectId, rejectConversation, {
-      timeout: 180_000,
-      contains: rejectToken,
-      message: 'the Reject route never produced an answer — the resume did not reach a downstream node',
-    });
-
-    const afterReject = await readMockLlmJournal(page);
-    expect(
-      afterReject.at(-1)?.instructions ?? '',
-      'the Reject decision must resume onto the node pinned with the REJECTED system prompt, ' +
-        'not the one the Approve run reached',
-    ).toContain(REJECTED_TAG);
+    await expectResumedAnswer(page, projectId, rejectConversation, rejectToken);
+    await expectTurnRoute(page, projectId, rejectToken, REJECTED_TAG);
   } finally {
     await deletePipeline(page.request, pipeline);
   }

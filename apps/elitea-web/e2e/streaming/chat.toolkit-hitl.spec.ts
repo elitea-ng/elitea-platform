@@ -115,9 +115,9 @@ const BLOCKED_RESULT_TYPE = 'sensitive_tool_blocked';
 
 /**
  * Which runtime is answering the turns — `scripts/chat-stream-e2e.sh` is the
- * one place that knows, and it exports this. Read for exactly one assertion
- * (step 4's `tool_call_id`); everything else in this file is the same contract
- * on both legs. Local default is the native-runtime dev stack, as elsewhere.
+ * one place that knows, and it exports this. Native tool decisions carry
+ * the interrupt and call identities. The SDK uses the root action fields.
+ * Local default is the native-runtime dev stack, as elsewhere.
  */
 const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
@@ -316,12 +316,31 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
     hitl_resume?: boolean;
     hitl_action?: string;
     hitl_value?: unknown;
+    hitl_decisions?: readonly {
+      interrupt_id?: string;
+      tool_call_id?: string;
+      action?: string;
+      value?: unknown;
+    }[];
   };
   expect(rejectBody.hitl_resume, 'the body must declare itself a HITL resume').toBe(true);
-  expect(rejectBody.hitl_action, 'the comment control declines with block_with_comment').toBe(
-    'block_with_comment',
-  );
-  expect(rejectBody.hitl_value, 'the typed comment must reach the route').toBe(denialComment);
+  if (IS_NATIVE_RUNTIME) {
+    expect(rejectBody.hitl_decisions, 'the decision must bind the exact paused call').toEqual([
+      {
+        interrupt_id: blockedInterruptId,
+        tool_call_id: blockedCallId,
+        action: 'block_with_comment',
+        value: denialComment,
+      },
+    ]);
+    expect(rejectBody.hitl_action, 'a bound decision must not also send a root action').toBeUndefined();
+    expect(rejectBody.hitl_value, 'the comment belongs to the bound decision').toBeUndefined();
+  } else {
+    expect(rejectBody.hitl_action, 'the comment control declines with block_with_comment').toBe(
+      'block_with_comment',
+    );
+    expect(rejectBody.hitl_value, 'the typed comment must reach the route').toBe(denialComment);
+  }
 
   // ── 5. The block, as the RUNTIME recorded it ────────────────────────────
   //
@@ -437,9 +456,14 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
     MOCK_TOOL_READ_OPERATION,
   );
   const approvedInterruptId = readInterrupt.interrupt_id ?? '';
+  expect(approvedInterruptId, 'the second pause must carry an interrupt id').not.toBe('');
   expect(approvedInterruptId, 'the second pause must carry its own interrupt id').not.toBe(
     blockedInterruptId,
   );
+  const approvedCallId = readInterrupt.tool_call_id ?? '';
+  if (IS_NATIVE_RUNTIME) {
+    expect(approvedCallId, 'the second pause must carry its exact call id').not.toBe('');
+  }
 
   const approved = page.waitForResponse(
     (r) => CONTINUE_RE.test(r.url()) && r.request().method() === 'POST',
@@ -452,9 +476,33 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
     `the approval was refused: ${(await approveResponse.text()).slice(0, 300)}`,
   ).toBe(200);
   expect(
-    (JSON.parse(approveResponse.request().postData() ?? '{}') as { hitl_action?: string }).hitl_action,
-    'the approve control must send the approve action',
-  ).toBe('approve');
+    new URL(approveResponse.request().url()).searchParams.get('execution_contract'),
+    'the approval must use the HITL continuation contract',
+  ).toBe('agent.continue.hitl.v1');
+  const approveBody = JSON.parse(approveResponse.request().postData() ?? '{}') as {
+    hitl_resume?: boolean;
+    hitl_action?: string;
+    hitl_decisions?: readonly {
+      interrupt_id?: string;
+      tool_call_id?: string;
+      action?: string;
+      value?: unknown;
+    }[];
+  };
+  expect(approveBody.hitl_resume, 'the approval must declare a HITL resume').toBe(true);
+  if (IS_NATIVE_RUNTIME) {
+    expect(approveBody.hitl_decisions, 'the approval must bind the exact paused call').toEqual([
+      {
+        interrupt_id: approvedInterruptId,
+        tool_call_id: approvedCallId,
+        action: 'approve',
+        value: '',
+      },
+    ]);
+    expect(approveBody.hitl_action, 'a bound approval must not also send a root action').toBeUndefined();
+  } else {
+    expect(approveBody.hitl_action, 'the approve control must send the approve action').toBe('approve');
+  }
 
   // Same settle signal, and here it is load-bearing in the other direction:
   // the assertion below is a NEGATIVE one (`not.toContain`), which a

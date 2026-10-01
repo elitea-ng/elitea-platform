@@ -3387,9 +3387,26 @@ async fn stopped_native_coordinator_returns_an_explicitly_closeable_unstarted_jo
     drop(temporary);
 }
 
-#[tokio::test]
+#[test]
+fn sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_completion() {
+    // Match the CI thread budget without changing runtime or global stack settings.
+    std::thread::Builder::new()
+        .name("sensitive-hitl-2mib-stack".to_owned())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("bounded HITL test runtime")
+                .block_on(sensitive_interrupt_lifecycle_case());
+        })
+        .expect("bounded HITL test thread")
+        .join()
+        .expect("HITL lifecycle fits the bounded thread stack");
+}
+
 #[allow(clippy::too_many_lines)] // One end-to-end pause proof keeps authority ordering explicit.
-async fn sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_completion() {
+async fn sensitive_interrupt_lifecycle_case() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let outcome = preflight(output_root, "worker-1")

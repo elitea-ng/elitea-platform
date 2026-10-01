@@ -87,10 +87,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --no-deps \
     ./elitea-sdk \
     && test -f "/wheels/elitea_sdk-${ELITEA_SDK_VERSION}-py3-none-any.whl" \
+    && python ./services/elitea-worker-python/scripts/verify_locked_artifacts.py \
+      ./services/elitea-worker-python/elitea-sdk.lock.json \
+      /build/artifact-constraints.txt \
+      constraints \
     && python -m pip wheel \
     --wheel-dir /wheels \
     --find-links /wheels \
     --prefer-binary \
+    --constraint /build/artifact-constraints.txt \
     "elitea-sdk @ file:///wheels/elitea_sdk-${ELITEA_SDK_VERSION}-py3-none-any.whl" \
     ./libs/proto \
     "./services/elitea-worker-python[agent-current,indexing-current]" \
