@@ -72,3 +72,21 @@ Deno.test("non-JSON and oversized results fail instead of producing truncated st
     throw new Error("Invalid result accepted");
   }
 });
+
+Deno.test("frozen PyPI packages support import aliases and transitive dependencies offline", async () => {
+  for (
+    const prefix of [
+      "",
+      "import micropip\nawait micropip.install('python-slugify==8.0.4')\n",
+    ]
+  ) {
+    const result = await executePython(
+      `${prefix}from slugify import slugify\n{'slug': slugify('Hello déjà vu')}`,
+      {},
+      Deno.env.get("ELITEA_TEST_WHEEL_CACHE"),
+    );
+    if (result.slug !== "hello-deja-vu") {
+      throw new Error("Frozen dependency or import-name mapping failed");
+    }
+  }
+});

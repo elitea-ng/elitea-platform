@@ -8,6 +8,7 @@ const MAX_RESULT_BYTES = 256 * 1024;
 export async function executePython(source, input, packageCacheDir) {
   const python = await loadPyodide({
     packageCacheDir,
+    lockFileURL: `${packageCacheDir}/elitea-python-lock.json`,
     stdout: (text) => console.error(text),
     stderr: (text) => console.error(text),
   });
@@ -26,6 +27,15 @@ alita_state = elitea_state.copy()
   await python.loadPackage("micropip", {
     messageCallback: (text) => console.error(text),
   });
+  const automatic = python.runPython(
+    "'micropip' not in _elitea_find_imports(_elitea_source)",
+  );
+  if (automatic) {
+    // The frozen lock maps import names to distributions and their dependencies.
+    await python.loadPackagesFromImports(source, {
+      messageCallback: (text) => console.error(text),
+    });
+  }
   await python.runPythonAsync(`
 import micropip as _elitea_micropip
 _elitea_imports = _elitea_find_imports(_elitea_source)

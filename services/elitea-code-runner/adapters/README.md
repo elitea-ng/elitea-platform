@@ -27,7 +27,18 @@ disabled in the default Code container. Download authorization and a package
 proxy are not implemented by this adapter.
 
 For the offline compatibility tests, first prepare the cache using the existing
-`scripts/runtime/probe_deno_pyodide.mjs` workflow. From the repository root:
+`preload.mjs` preparation path with a JSON package profile containing
+`["idna==3.10", "python-slugify==8.0.4"]`. For example:
+
+```sh
+DENO_DIR=/path/to/deno-cache deno run --frozen \
+  --lock=services/elitea-code-runner/adapters/deno.lock \
+  --allow-read --allow-write=/path/to/wheels --allow-env=NODE_DEBUG \
+  --allow-net=cdn.jsdelivr.net,pypi.org,files.pythonhosted.org \
+  services/elitea-code-runner/adapters/preload.mjs /path/to/wheels /path/to/profile.json
+```
+
+The preparation process never executes user source. From the repository root:
 
 ```sh
 DENO_DIR=/path/to/deno-cache ELITEA_TEST_WHEEL_CACHE=/path/to/wheels \
@@ -127,3 +138,19 @@ rust`. The Docker supervisor now requires an explicit Rust-only compilation prof
 for this permission. Service configuration and worker routing to profiles remain open.
 The root filesystem remains read-only, UID remains non-root, network is disabled,
 and CPU/memory/PID/time limits cover both compilation and execution.
+
+
+## Approved Python package profiles
+
+`python-packages.json` is an operator-owned build input. The default list is empty.
+Use exact requirements, such as `python-slugify==8.0.4`, to prepare an approved image.
+Preparation rejects requirement URLs, version ranges, and environment markers.
+It freezes transitive versions and caches their verified wheels in the image.
+The immutable image digest binds this package set to sandbox dispatch and recovery.
+Runtime code can use ordinary imports or `await micropip.install(...)` offline.
+Unprepared packages and incompatible versions fail without enabling network access.
+
+The package tests use a separate profile with `idna==3.10` and `python-slugify==8.0.4`.
+Run `probe_code_adapters_container.py --image sha256:... --python-packages` against that image.
+The check includes a transitive dependency, an import alias, and an unavailable version.
+On-demand preparation and npm/Cargo package expansion remain separate work.

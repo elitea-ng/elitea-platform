@@ -80,3 +80,41 @@ Large-source review requires an explicit bounded presentation contract before ac
 The user is asked whether state-variable source needs separate approval or follows saved-pipeline authorization.
 Keep the current refusal until that policy is settled and the selected execution contract is implemented.
 Fixed-source execution remains unchanged.
+
+## Frozen Python dependency preparation
+
+The current SDK `infra/data/sandbox/main.ts::install_imports` resolves import names and installs missing packages through micropip.
+The new image preparation uses native `micropip.freeze()` and Pyodide lockfile loading.
+`services/elitea-code-runner/adapters/preload.mjs` accepts an operator-owned list of exact package requirements.
+The image embeds the resolved lockfile and wheel content, including transitive dependencies.
+The runtime image digest already participates in `sandbox/request.rs::PreparedJob` identity and authorization.
+Changing the package set therefore changes the admitted runtime identity.
+
+Pyodide 0.29 incorrectly joins frozen external wheel URLs to its CDN base during package loading.
+`adapters/python_wheels.mjs` materializes those references and replaces them with local wheel filenames.
+It preserves and verifies each frozen SHA-256 digest.
+Downloads accept only HTTPS PyPI wheel storage, reject redirects, and cap each external wheel at 32 MiB.
+The external wheel set has a 128 MiB bound. Each download has a 60-second timeout.
+These bounds cover wheel materialization, not micropip's preceding build-time metadata resolution.
+Existing cached content requires digest verification before reuse.
+
+`adapters/python.mjs` loads the frozen lockfile from the private execution cache.
+Native `loadPackagesFromImports` handles different import and distribution names.
+Explicit micropip calls retain their original order and version constraints.
+No execution-container network access is added.
+The Rust launcher copies immutable image assets into each job's private cache.
+
+Local tests pass with network denied: automatic imports, explicit installation, transitive dependencies, state handling, exceptions, and result bounds.
+Two cache tests verify source restrictions, offline reuse, and tamper rejection.
+All ten real Docker adapter checks pass with UID 10001, network disabled, and read-only root.
+They include automatic and explicit package installation, unavailable versions, subprocess denial, timeout, and identical repeated receipt reads.
+The verified image identity is `sha256:09bc755806d705f5251d2d059a8c4e82a38ceca213807922295da75d541b6f79`.
+The first container check exposes build-directory paths in the frozen lockfile.
+Preparation now normalizes verified local references and retains only the installed dependency closure.
+Browser and Kubernetes acceptance for this package profile remain pending.
+
+This is an immutable image-preparation path, not completed on-demand dependency acquisition.
+The default package profile remains empty. Operators can supply approved requirements when building a runtime profile.
+On-demand preparation, npm/Cargo dependencies, and compiled-artifact caching remain open.
+
+Native API references: [micropip freeze](https://micropip.pyodide.org/en/latest/project/api.html) and [Pyodide lockfiles](https://pyodide.org/en/0.29.0/usage/api/js-api.html).

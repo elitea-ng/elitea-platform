@@ -107,6 +107,9 @@ See the [child-variable mapping](source-mapping/child-pipeline-variables-2026093
 Gate 5 remains open for the remaining pipeline, isolation, and capacity requirements.
 Package/workspace authorization and compilation-cache performance remain tracked in the assessment.
 The [Code functional audit](source-mapping/code-functional-parity-20260930.md) maps package imports, state, platform-client access, debug artifacts, and variable-source admission.
+Frozen Python image profiles now pass offline automatic imports and explicit micropip installation in real Docker containers.
+The profile includes a PyPI package, a transitive dependency, and an import-name alias.
+On-demand preparation, npm/Cargo packages, and package-profile UI acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

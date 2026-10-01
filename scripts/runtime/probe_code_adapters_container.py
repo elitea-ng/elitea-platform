@@ -10,6 +10,7 @@ import tempfile
 parser = argparse.ArgumentParser()
 parser.add_argument("--image", required=True, help="already built immutable local image ID")
 parser.add_argument("--runtime", choices=["deno", "rust"], default="deno")
+parser.add_argument("--python-packages", action="store_true", help="verify the prepared idna/python-slugify test profile")
 args = parser.parse_args()
 if not args.image.startswith("sha256:"):
     parser.error("use a local immutable sha256 image ID")
@@ -23,6 +24,15 @@ cases = [
     ("process_denied", "javascript", "await new Deno.Command('/bin/sh').output(); export default null;", 15, "failed"),
     ("timeout", "javascript", "while (true) {} export default null;", 1, "timeout"),
 ]
+
+if args.python_packages:
+    if args.runtime != "deno":
+        parser.error("--python-packages requires the Deno runtime")
+    cases += [
+        ("python_import_dependency", "python", "from slugify import slugify\nassert slugify('Hello déjà vu') == 'hello-deja-vu'\n{'answer': 42}", 15, "completed"),
+        ("python_inline_dependency", "python", "import micropip\nawait micropip.install('python-slugify==8.0.4')\nfrom slugify import slugify\nassert slugify('Hello déjà vu') == 'hello-deja-vu'\n{'answer': 42}", 15, "completed"),
+        ("python_unprepared_version", "python", "import micropip\nawait micropip.install('python-slugify==0.0.0')", 15, "failed"),
+    ]
 
 if args.runtime == "rust":
     cases = [
