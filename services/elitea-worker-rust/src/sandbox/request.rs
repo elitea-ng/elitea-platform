@@ -276,6 +276,7 @@ impl std::io::Write for CappedBytes {
 #[cfg(all(test, feature = "sandbox-supervisor"))]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn job() -> PreparedJob {
         PreparedJob::new(
@@ -307,10 +308,12 @@ mod tests {
         );
         assert_eq!(job().to_transport().unwrap(), expected.as_bytes());
         let fingerprint = job().fingerprint().unwrap();
-        let hex: String = fingerprint
+        let hex = fingerprint
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+            .fold(String::with_capacity(64), |mut hex, byte| {
+                write!(hex, "{byte:02x}").unwrap();
+                hex
+            });
         assert_eq!(
             hex,
             "fea55852b5400fa8b79583d698826a8ea1807af6ccf7a5cd40dddca99cfae067"

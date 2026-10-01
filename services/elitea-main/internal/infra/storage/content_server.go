@@ -109,6 +109,7 @@ type ContentServer struct {
 	toolkitArtifacts ToolkitDiscoveryArtifactStore
 	runtimeBuilders  *RuntimeEntityBuilderService
 	runtimeArtifacts *RuntimeArtifactObjectService
+	sandboxBundles   *SandboxBundleContentService
 	maxBytes         int64
 	requests         chan struct{}
 	logger           *slog.Logger
@@ -336,6 +337,9 @@ func (s *ContentServer) WithRuntimeArtifacts(artifacts *RuntimeArtifactObjectSer
 // Routes exposes only the internal, claim-bound input data plane.
 func (s *ContentServer) Routes() http.Handler {
 	r := chi.NewRouter()
+	if s.sandboxBundles != nil {
+		r.Mount("/sandbox-bundles", s.sandboxBundles.Routes())
+	}
 	if s.toolkitArtifacts != nil {
 		r.Put("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.PutToolkitDiscoveryArtifact)
 		r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.GetToolkitDiscoveryArtifact)

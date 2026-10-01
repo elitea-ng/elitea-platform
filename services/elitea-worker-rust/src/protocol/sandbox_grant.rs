@@ -136,6 +136,7 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             .try_into()
             .map_err(|_| GrantRejected)?;
         if claims.cancel_only != cancel_only
+            || !claims.dependency_bundle_sha256.is_empty()
             || claims.revision != if cancel_only { 2 } else { 1 }
             || claims.generation == 0
             || !identity(&claims.tenant_id)
@@ -233,9 +234,38 @@ mod tests {
             issued_at_unix_millis: 1000,
             expires_at_unix_millis: 31000,
             generation: 1,
+            dependency_bundle_sha256: Vec::new(),
         };
         (key, verifier, job, claims)
     }
+    #[test]
+    fn content_grant_cannot_execute_or_cancel() {
+        let (key, verifier, job, mut claims) = fixture();
+        claims.revision = 3;
+        claims.dependency_bundle_sha256 = vec![9; 32];
+        let grant = sign(&key, claims.encode_to_vec());
+        assert!(verifier.verify(&grant, "worker-1", &job, 1000).is_err());
+        assert!(
+            verifier
+                .verify_cancellation(&grant, "worker-1", 1000)
+                .is_err()
+        );
+        // Neither changing purpose nor retaining a root on an old revision is valid.
+        claims.revision = 1;
+        assert!(
+            verifier
+                .verify(&sign(&key, claims.encode_to_vec()), "worker-1", &job, 1000)
+                .is_err()
+        );
+        claims.revision = 2;
+        claims.cancel_only = true;
+        assert!(
+            verifier
+                .verify_cancellation(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+                .is_err()
+        );
+    }
+
     #[test]
     fn cancellation_grant_cannot_submit_and_submission_grant_cannot_cancel() {
         let (key, verifier, job, mut claims) = fixture();

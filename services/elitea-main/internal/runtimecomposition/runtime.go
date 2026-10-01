@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
@@ -27,6 +28,7 @@ type Runtime struct {
 	publisher              publisherRunner
 	private                privateServerRunner
 	controlRedis           *redis.Client
+	sandboxSpoolDir        string
 	publicRoutes           PublicRoutes
 	configurationValidator configurationapp.CurrentSDKConfigurationValidator
 	closeOnce              sync.Once
@@ -194,6 +196,9 @@ func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		if r.controlRedis != nil {
 			r.closeErr = r.controlRedis.Close()
+		}
+		if r.sandboxSpoolDir != "" {
+			r.closeErr = errors.Join(r.closeErr, os.RemoveAll(r.sandboxSpoolDir))
 		}
 	})
 	return r.closeErr

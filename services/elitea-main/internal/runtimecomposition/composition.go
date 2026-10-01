@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
@@ -198,9 +199,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, err
 	}
 	closeRedis := true
+	var sandboxSpoolDir string
 	defer func() {
 		if closeRedis {
 			_ = controlRedis.Close()
+			if sandboxSpoolDir != "" {
+				if err := os.RemoveAll(sandboxSpoolDir); err != nil {
+					dependencies.Logger.Error("sandbox bundle staging cleanup failed")
+				}
+			}
 		}
 	}()
 
@@ -1012,6 +1019,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	controlServer, err := control.NewServer(control.ServerConfig{
 		SandboxGrants:         sandboxGrants,
+		SandboxBundles:        config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil,
 		MaxInputManifestBytes: maxInputManifestBytes,
 		MaxInputEntries:       maxInputEntries,
 		MaxInputContentBytes:  maxInputContentBytes,
@@ -1778,6 +1786,21 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// the honest old behaviour — the native worker skips the toolkit — instead
 	// of gaining a family whose every call answers 503.
 	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
+	if config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil {
+		sandboxSpoolDir, err = os.MkdirTemp("", "elitea-sandbox-bundles-")
+		if err != nil {
+			return nil, fmt.Errorf("create private sandbox bundle staging: %w", err)
+		}
+		bundleStore, err := storage.NewSandboxBundleStore(dependencies.ObjectStore, sandboxSpoolDir, 4)
+		if err != nil {
+			return nil, fmt.Errorf("construct sandbox bundle storage: %w", err)
+		}
+		bundleContent, err := storage.NewSandboxBundleContentService(bundleStore, verificationKeys, config.SandboxAudiences, time.Now)
+		if err != nil {
+			return nil, fmt.Errorf("construct sandbox bundle content service: %w", err)
+		}
+		contentServer.WithSandboxBundles(bundleContent)
+	}
 
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:          config.ControlAddress,
@@ -1860,6 +1883,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		publisher:              publisherRoot,
 		private:                privateServers,
 		controlRedis:           controlRedis,
+		sandboxSpoolDir:        sandboxSpoolDir,
 		publicRoutes:           publicRoutes,
 		configurationValidator: currentSDKConfigurationValidator,
 	}, nil

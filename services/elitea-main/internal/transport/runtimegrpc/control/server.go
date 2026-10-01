@@ -48,6 +48,7 @@ type ClaimInputResolver interface {
 
 type ServerConfig struct {
 	SandboxGrants         *SandboxGrantIssuer
+	SandboxBundles        bool
 	MaxInputManifestBytes int
 	MaxInputEntries       int
 	MaxInputContentBytes  uint64

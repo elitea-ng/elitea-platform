@@ -102,6 +102,8 @@ The storage boundary now rejects names before object-reference construction.
 ## Integration remains open
 
 Compose authenticated upload, publication, and download transport with this store.
+The [transport record](code-python-bundle-transport-20261001.md) now supplies content-only authority and verified TLS routes.
+Its native rehearsal case verifies shared-content transfer and replacement-listener reads.
 Bind supervisor content access to the verified recipient, resource project, operation, and bundle root.
 Do not treat a worker execution grant as unrestricted supervisor storage authority.
 Keep package bytes outside the sandbox control request and shared queue.

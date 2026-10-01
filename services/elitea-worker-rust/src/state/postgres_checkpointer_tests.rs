@@ -1445,6 +1445,7 @@ async fn sandbox_submission(over_tls: bool) {
         }
         .into(),
         audience: "fixture-supervisor".into(),
+        dependency_bundle_sha256: Vec::new(),
         issued_at_unix_millis: now,
         expires_at_unix_millis: now + 30000,
         generation: 1,

@@ -94,6 +94,7 @@ impl SandboxClient {
             .to_vec();
         authorization.audience.clone_from(&self.audience);
         authorization.cancel_only = false;
+        authorization.dependency_bundle_sha256.clear();
         let response = control.authorize_sandbox_job(authorization).await?;
         if response.rejection.is_some() {
             return Err(SandboxCallError::Rejected);
@@ -124,6 +125,7 @@ impl SandboxClient {
         authorization.request_digest = digest.to_vec();
         authorization.audience.clone_from(&self.audience);
         authorization.cancel_only = true;
+        authorization.dependency_bundle_sha256.clear();
         let response = control.authorize_sandbox_job(authorization).await?;
         if response.rejection.is_some() {
             return Err(SandboxCallError::Rejected);

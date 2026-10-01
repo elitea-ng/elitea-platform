@@ -53,6 +53,13 @@ func (s *Server) AuthorizeSandboxJob(ctx context.Context, request *runtimev1.Aut
 	if request == nil || hasUnknownFields(request.ProtoReflect()) || request.GetFence() == nil || request.GetIdentity() == nil || !sandboxIdentity(request.GetActivationId()) || len(request.GetRequestDigest()) != 32 {
 		return nil, status.Error(codes.InvalidArgument, "The sandbox authorization request is malformed.")
 	}
+	bundle := request.GetDependencyBundleSha256()
+	if len(bundle) != 0 && (len(bundle) != 32 || request.GetCancelOnly()) {
+		return nil, status.Error(codes.InvalidArgument, "Bundle storage requires one SHA-256 root and cannot authorize cancellation.")
+	}
+	if len(bundle) != 0 && !s.config.SandboxBundles {
+		return nil, status.Error(codes.Unimplemented, "Sandbox dependency storage is not enabled.")
+	}
 	if _, ok := issuer.audiences[request.GetAudience()]; !ok {
 		return nil, status.Error(codes.PermissionDenied, "The sandbox supervisor is not authorized.")
 	}
@@ -83,12 +90,16 @@ func (s *Server) AuthorizeSandboxJob(ctx context.Context, request *runtimev1.Aut
 	if request.GetCancelOnly() {
 		revision = 2
 	}
+	if len(bundle) != 0 {
+		revision = 3
+	}
 	now := issuer.now().UTC()
 	claims := &runtimev1.SandboxJobGrantClaimsV1{
 		Revision: revision, CancelOnly: request.GetCancelOnly(), TenantId: command.GetTenantId(), ProjectId: int32(project), ExecutionId: fence.ExecutionID,
 		ActivationId: request.GetActivationId(), RequestDigest: append([]byte(nil), request.GetRequestDigest()...),
 		SubmitterWorkloadIdentity: peer, Audience: request.GetAudience(), IssuedAtUnixMillis: now.UnixMilli(),
 		ExpiresAtUnixMillis: now.Add(30 * time.Second).UnixMilli(), Generation: fence.Generation,
+		DependencyBundleSha256: append([]byte(nil), bundle...),
 	}
 	exact, err := proto.MarshalOptions{Deterministic: true}.Marshal(claims)
 	if err != nil || len(exact) > 4096 {

@@ -30,7 +30,7 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"valid", "cancel-running", "cancel-stopped", "cancel-stale", "scope", "audience", "stale-fence", "cancelled", "signature", "capability", "disabled"} {
+	for _, name := range []string{"valid", "bundle", "bundle-disabled", "bundle-cancel", "bundle-length", "bundle-stopped", "cancel-running", "cancel-stopped", "cancel-stale", "scope", "audience", "stale-fence", "cancelled", "signature", "capability", "disabled"} {
 		t.Run(name, func(t *testing.T) {
 			calls := []string{}
 			lease := validLease()
@@ -42,8 +42,23 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 			verifier := sandboxVerifierStub{command: command}
 			config := testControlServerConfig()
 			config.SandboxGrants = issuer
+			config.SandboxBundles = true
 			expected := codes.PermissionDenied
+			if name == "bundle" || name == "bundle-disabled" || name == "bundle-cancel" || name == "bundle-length" || name == "bundle-stopped" {
+				request.DependencyBundleSha256 = bytes.Repeat([]byte{9}, 32)
+			}
 			switch name {
+			case "bundle-disabled":
+				config.SandboxBundles = false
+				expected = codes.Unimplemented
+			case "bundle-cancel":
+				request.CancelOnly = true
+				expected = codes.InvalidArgument
+			case "bundle-length":
+				request.DependencyBundleSha256 = []byte{9}
+				expected = codes.InvalidArgument
+			case "bundle-stopped":
+				lease.DesiredState = "CANCELLED"
 			case "cancel-running":
 				request.CancelOnly = true
 			case "cancel-stopped":
@@ -73,7 +88,7 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 				t.Fatal(err)
 			}
 			response, err := server.AuthorizeSandboxJob(context.Background(), request)
-			if name != "valid" && name != "cancel-running" && name != "cancel-stopped" {
+			if name != "valid" && name != "bundle" && name != "cancel-running" && name != "cancel-stopped" {
 				if status.Code(err) != expected {
 					t.Fatalf("got %v; expected %v", err, expected)
 				}
@@ -100,7 +115,10 @@ func TestSandboxGrantBindsVerifiedScopePeerAudienceAndRequest(t *testing.T) {
 			if request.CancelOnly {
 				revision = 2
 			}
-			if claims.CancelOnly != request.CancelOnly || claims.Revision != revision {
+			if name == "bundle" {
+				revision = 3
+			}
+			if claims.CancelOnly != request.CancelOnly || claims.Revision != revision || !bytes.Equal(claims.DependencyBundleSha256, request.DependencyBundleSha256) {
 				t.Fatal("incorrect grant purpose")
 			}
 			if claims.TenantId != "tenant" || claims.ProjectId != 2 || claims.SubmitterWorkloadIdentity != lease.Fence.WorkloadIdentity || claims.Audience != "sandbox-prod" || claims.ExpiresAtUnixMillis-claims.IssuedAtUnixMillis != 30000 || !bytes.Equal(claims.RequestDigest, request.RequestDigest) {

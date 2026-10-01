@@ -161,6 +161,7 @@ impl ClaimBoundSandboxAuthority {
             request_digest: Vec::new(),
             audience: String::new(),
             cancel_only: false,
+            dependency_bundle_sha256: Vec::new(),
         }
     }
 }

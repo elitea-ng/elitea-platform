@@ -92,9 +92,13 @@ type AuthorizeSandboxJobRequestV1 struct {
 	// Signed Main command is the authority for tenant and resource project.
 	SignedCommand *SignedWorkerCommandEnvelopeV1 `protobuf:"bytes,6,opt,name=signed_command,json=signedCommand,proto3" json:"signed_command,omitempty"`
 	// Stop authority cannot authorize submission. It can be issued after Stop.
-	CancelOnly    bool `protobuf:"varint,16,opt,name=cancel_only,json=cancelOnly,proto3" json:"cancel_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CancelOnly bool `protobuf:"varint,16,opt,name=cancel_only,json=cancelOnly,proto3" json:"cancel_only,omitempty"`
+	// Nonempty selects revision 3 content-only authority for this SHA-256 root.
+	// The original worker must hold an active claim. The exact audience is the
+	// recipient's canonical workload certificate identity. This cannot run code.
+	DependencyBundleSha256 []byte `protobuf:"bytes,17,opt,name=dependency_bundle_sha256,json=dependencyBundleSha256,proto3" json:"dependency_bundle_sha256,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AuthorizeSandboxJobRequestV1) Reset() {
@@ -176,6 +180,13 @@ func (x *AuthorizeSandboxJobRequestV1) GetCancelOnly() bool {
 	return false
 }
 
+func (x *AuthorizeSandboxJobRequestV1) GetDependencyBundleSha256() []byte {
+	if x != nil {
+		return x.DependencyBundleSha256
+	}
+	return nil
+}
+
 // No fence token, credential, source code or state enters the signed claims.
 // Lifetime is at most 30 seconds. The submitter must also match the verified
 // mTLS peer at the supervisor. A signature is not authority to replay a job.
@@ -193,9 +204,13 @@ type SandboxJobGrantClaimsV1 struct {
 	ExpiresAtUnixMillis       int64                  `protobuf:"varint,10,opt,name=expires_at_unix_millis,json=expiresAtUnixMillis,proto3" json:"expires_at_unix_millis,omitempty"`
 	Generation                uint64                 `protobuf:"varint,11,opt,name=generation,proto3" json:"generation,omitempty"`
 	// Revision 2 stop grants are valid only for CancelSandboxJob.
-	CancelOnly    bool `protobuf:"varint,32,opt,name=cancel_only,json=cancelOnly,proto3" json:"cancel_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CancelOnly bool `protobuf:"varint,32,opt,name=cancel_only,json=cancelOnly,proto3" json:"cancel_only,omitempty"`
+	// Revision 3 authorizes bounded bundle storage only. It is not a job grant.
+	// Main's private content listener matches audience to the verified TLS peer.
+	// Other revisions require this field to be empty. Exactly 32 bytes.
+	DependencyBundleSha256 []byte `protobuf:"bytes,33,opt,name=dependency_bundle_sha256,json=dependencyBundleSha256,proto3" json:"dependency_bundle_sha256,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *SandboxJobGrantClaimsV1) Reset() {
@@ -310,6 +325,13 @@ func (x *SandboxJobGrantClaimsV1) GetCancelOnly() bool {
 		return x.CancelOnly
 	}
 	return false
+}
+
+func (x *SandboxJobGrantClaimsV1) GetDependencyBundleSha256() []byte {
+	if x != nil {
+		return x.DependencyBundleSha256
+	}
+	return nil
 }
 
 // Ed25519 signs domain "elitea.sandbox.job-grant.ed25519.v1\x00", followed by
@@ -430,8 +452,20 @@ func (x *AuthorizeSandboxJobResponseV1) GetRejection() *RuntimeErrorV1 {
 type SubmitSandboxJobRequestV1 struct {
 	state protoimpl.MessageState   `protogen:"open.v1"`
 	Grant *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
-	// Bounded PreparedJob revision 1 JSON, at most 1 MiB. Source and selected state
-	// travel only over mTLS, never through a shared queue or a log field.
+	// Bounded PreparedJob revision 1 or 2 JSON, at most 1 MiB. Revision 2 adds
+	// dependency_bundle_sha256: 64 lowercase hexadecimal characters, for Python
+	// only. Its SHA-256 covers the resolved bundle record and file identities.
+	// Revision 1 has no bundle field. Package bytes use a separate data plane.
+	// The request digest includes the revision and dependency bundle identity.
+	// Python bundle JSON revision 1 has runtime="pyodide-0.29.0", requirements,
+	// files=[{name,bytes,sha256}], and digest. The root hashes UTF-8 JSON of
+	// {revision,runtime,requirements,files}, in this order, without whitespace.
+	// File entries use ASCII names in ascending order. Requirements use ASCII.
+	// Limits: 128 requirements of 256 bytes; 257 files; 128 MiB total content;
+	// 1 MiB lock; 32 MiB per wheel; 128 KiB bundle metadata. Store files first.
+	// Publish the bundle record only after all file content passes verification.
+	// Source and selected state travel only over mTLS, never through a shared
+	// queue or a log field.
 	PreparedJobJson []byte `protobuf:"bytes,2,opt,name=prepared_job_json,json=preparedJobJson,proto3" json:"prepared_job_json,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -652,7 +686,7 @@ var File_elitea_runtime_v1_sandbox_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/sandbox.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a elitea/runtime/v1/envelope.proto\"\x85\x03\n" +
+	"\x1felitea/runtime/v1/sandbox.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\"\xbf\x03\n" +
 	"\x1cAuthorizeSandboxJobRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
 	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12#\n" +
@@ -661,7 +695,8 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\baudience\x18\x05 \x01(\tR\baudience\x12W\n" +
 	"\x0esigned_command\x18\x06 \x01(\v20.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1R\rsignedCommand\x12\x1f\n" +
 	"\vcancel_only\x18\x10 \x01(\bR\n" +
-	"cancelOnlyJ\x04\b\a\x10\x10\"\xeb\x03\n" +
+	"cancelOnly\x128\n" +
+	"\x18dependency_bundle_sha256\x18\x11 \x01(\fR\x16dependencyBundleSha256J\x04\b\a\x10\x10\"\xa5\x04\n" +
 	"\x17SandboxJobGrantClaimsV1\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\rR\brevision\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1d\n" +
@@ -679,7 +714,8 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"generation\x18\v \x01(\x04R\n" +
 	"generation\x12\x1f\n" +
 	"\vcancel_only\x18  \x01(\bR\n" +
-	"cancelOnlyJ\x04\b\f\x10 \"w\n" +
+	"cancelOnly\x128\n" +
+	"\x18dependency_bundle_sha256\x18! \x01(\fR\x16dependencyBundleSha256J\x04\b\f\x10 \"w\n" +
 	"\x17SignedSandboxJobGrantV1\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12!\n" +
 	"\fclaims_bytes\x18\x02 \x01(\fR\vclaimsBytes\x12\x1c\n" +
@@ -768,8 +804,8 @@ func file_elitea_runtime_v1_sandbox_proto_init() {
 		return
 	}
 	file_elitea_runtime_v1_common_proto_init()
-	file_elitea_runtime_v1_errors_proto_init()
 	file_elitea_runtime_v1_envelope_proto_init()
+	file_elitea_runtime_v1_errors_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

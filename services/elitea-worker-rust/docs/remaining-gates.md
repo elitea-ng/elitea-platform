@@ -127,7 +127,9 @@ Offline execution and fifteen container probes verify content checks before user
 Automatic preparation, shared content delivery, restart verification, and integrated UI acceptance remain open.
 The [shared bundle storage record](source-mapping/code-python-shared-storage-20261001.md) verifies native content through Main's existing object store.
 Rehearsal RustFS publication, replacement-store reads, project separation, and offline execution of downloaded content pass.
-Authenticated transport, supervisor preparation receipts, backend delivery, and on-demand browser acceptance remain open.
+The [bundle transport record](source-mapping/code-python-bundle-transport-20261001.md) adds content-only grants and verified supervisor TLS delivery.
+Native bundle transfer through rehearsal RustFS, replacement-listener reads, and offline execution of downloaded packages pass.
+Supervisor preparation receipts, automatic backend delivery, and on-demand browser acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

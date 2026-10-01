@@ -3,8 +3,8 @@ syntax = "proto3";
 package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
-import "elitea/runtime/v1/errors.proto";
 import "elitea/runtime/v1/envelope.proto";
+import "elitea/runtime/v1/errors.proto";
 
 option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
@@ -22,6 +22,10 @@ message AuthorizeSandboxJobRequestV1 {
   reserved 7 to 15;
   // Stop authority cannot authorize submission. It can be issued after Stop.
   bool cancel_only = 16;
+  // Nonempty selects revision 3 content-only authority for this SHA-256 root.
+  // The original worker must hold an active claim. The exact audience is the
+  // recipient's canonical workload certificate identity. This cannot run code.
+  bytes dependency_bundle_sha256 = 17;
 }
 
 // No fence token, credential, source code or state enters the signed claims.
@@ -42,7 +46,21 @@ message SandboxJobGrantClaimsV1 {
   reserved 12 to 31;
   // Revision 2 stop grants are valid only for CancelSandboxJob.
   bool cancel_only = 32;
+  // Revision 3 authorizes bounded bundle storage only. It is not a job grant.
+  // Main's private content listener matches audience to the verified TLS peer.
+  // Other revisions require this field to be empty. Exactly 32 bytes.
+  bytes dependency_bundle_sha256 = 33;
 }
+
+// Bundle content uses Main's private mTLS HTTP listener, never this RPC body.
+// X-Elitea-Sandbox-Bundle-Grant carries strict base64 of SignedSandboxJobGrantV1.
+// /sandbox-bundles/{lowercase-root-hex}/files/{safe-name}: PUT multipart/form-data
+// with exactly two parts: "bundle" JSON metadata, then "file" binary content.
+// GET returns verified binary content. GET /sandbox-bundles/{root} returns JSON
+// metadata. POST to that path accepts JSON and publishes metadata last.
+// The grant audience must equal the verified recipient certificate identity.
+// Requests carry no caller-selected tenant or project. Revision 3 cannot run
+// or cancel code. The root, active worker claim, and resource scope are signed.
 
 // Ed25519 signs domain "elitea.sandbox.job-grant.ed25519.v1\x00", followed by
 // uint64 big-endian claims length and exact claims_bytes. Verify before decode.
