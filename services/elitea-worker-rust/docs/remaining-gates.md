@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-09-28. Main integration baseline: `6537ca30`.
+Updated: 2026-10-01. Main integration baseline: `6537ca30`.
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -113,7 +113,12 @@ Python package-profile acceptance passes in persistent chat 767, including repea
 Approved npm image profiles pass JavaScript/TypeScript resolution and unprepared-version rejection in real Docker containers.
 Pipeline 140 passes ephemeral-editor and persistent-chat package execution. Chat 769 preserves its exact result after reload.
 See the [dependency profile record](source-mapping/code-dependency-profiles-20261001.md) for package contracts and deployment evidence.
-On-demand preparation, Cargo profile expansion, and compiled-artifact caching remain open.
+The [data-processing benchmark](source-mapping/code-data-processing-benchmark-20261001.md) verifies 20,000 records through all four Code languages.
+Three isolated Docker runs, the editor Test chat, and persistent chat 771 pass exact result verification.
+The test Cargo profile adds locked dependencies. It does not implement user-selected runtime packages.
+Persistent reload preserves one result. All eight browser-run sandbox jobs complete and remove their Pods.
+Local probe runs take 9.5–10.0 seconds. Deployed four-receipt spans take 16.4–16.5 seconds.
+On-demand preparation, user-selected Cargo profiles, and compiled-artifact caching remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

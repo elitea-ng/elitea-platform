@@ -1,0 +1,245 @@
+state:
+  input:
+    type: str
+  messages:
+    type: list
+  python_data:
+    type: dict
+  javascript_data:
+    type: dict
+  typescript_data:
+    type: dict
+entry_point: python
+nodes:
+  - id: python
+    type: code
+    language: python
+    input: [input]
+    code:
+      type: fixed
+      value: |
+        import asyncio
+        import base64
+        import csv
+        import gzip
+        import io
+        import json
+        import time
+        from dataclasses import dataclass
+        import micropip
+
+        started = time.perf_counter()
+        await micropip.install(['python-slugify==8.0.4', 'python-dateutil==2.9.0.post0'])
+        from slugify import slugify
+        from dateutil.parser import isoparse
+
+        @dataclass(frozen=True, slots=True)
+        class Transaction:
+            identifier: int
+            category: int
+            cents: int
+            status: int
+
+            @property
+            def signed_cents(self):
+                return self.cents * self.status
+
+        class TransactionFactory:
+            def __init__(self, seed):
+                self.seed = seed
+                self.merchants = [slugify(name) for name in ['Café North', 'Déjà Vu', 'Office & Co', 'Travel Hub', 'Books Plus']]
+                self.days = [isoparse(f'2026-09-{day:02d}T12:00:00+00:00').date().isoformat() for day in range(1, 29)]
+
+            async def batch(self, first, last):
+                await asyncio.sleep(0)
+                return [Transaction(i, (i * 7 + self.seed) % 5, (i * 7919 + self.seed) % 100000 + 100,
+                                    0 if i % 19 == 0 else (-1 if i % 23 == 0 else 1)) for i in range(first, last)]
+
+        config = json.loads(elitea_state['input'])
+        count, seed = int(config['rows']), int(config['seed'])
+        assert 1 <= count <= 20000
+        factory = TransactionFactory(seed)
+        batches = await asyncio.gather(*(factory.batch(i, min(i + 500, count)) for i in range(0, count, 500)))
+        rows = sorted((row for batch in batches for row in batch), key=lambda row: (row.cents, row.identifier))
+        buffer = io.StringIO(newline='')
+        writer = csv.writer(buffer, lineterminator='\n')
+        writer.writerow(['id', 'category', 'cents', 'status'])
+        writer.writerows((row.identifier, row.category, row.cents, row.status) for row in rows)
+        raw = buffer.getvalue().encode()
+        compressed = gzip.compress(raw, compresslevel=6, mtime=0)
+        {'payload': base64.b64encode(compressed).decode(), 'rows': count, 'seed': seed,
+         'merchants': factory.merchants, 'first_day': factory.days[0], 'last_day': factory.days[-1],
+         'metrics': [{'stage': 'python', 'processing_ms': round((time.perf_counter() - started) * 1000, 3),
+                      'raw_bytes': len(raw), 'compressed_bytes': len(compressed)}]}
+    output: [python_data]
+    transition: javascript
+  - id: javascript
+    type: code
+    language: javascript
+    input: [python_data]
+    code:
+      type: fixed
+      value: |
+        import { parse } from 'npm:csv-parse@5.6.0/sync';
+        import { gzipSync, gunzipSync, strToU8, strFromU8 } from 'npm:fflate@0.8.2';
+        import { z } from 'npm:zod@3.24.2';
+
+        const rowSchema = z.tuple([z.number().int().nonnegative(), z.number().int().min(0).max(4),
+          z.number().int().positive(), z.union([z.literal(-1), z.literal(0), z.literal(1)])]);
+        function decodeBase64(value) { return Uint8Array.from(atob(value), c => c.charCodeAt(0)); }
+        function encodeBase64(value) {
+          let text = '';
+          for (let i = 0; i < value.length; i += 8192) text += String.fromCharCode(...value.subarray(i, i + 8192));
+          return btoa(text);
+        }
+        async function parseTransactions(payload) {
+          await Promise.resolve();
+          return parse(strFromU8(gunzipSync(decodeBase64(payload))), {columns: true})
+            .map(row => rowSchema.parse([Number(row.id), Number(row.category), Number(row.cents), Number(row.status)]));
+        }
+        function aggregate(rows) {
+          const groups = Array(5).fill(0);
+          for (const [, category, cents, status] of rows) groups[category] += cents * status;
+          return groups;
+        }
+        export default async function process(state) {
+          const started = performance.now();
+          const data = state.python_data;
+          const rows = await parseTransactions(data.payload);
+          rows.sort((a, b) => a[0] - b[0]);
+          if (rows.length !== data.rows || rows.some((row, i) => row[0] !== i)) throw new Error('Record identities changed');
+          const raw = strToU8(JSON.stringify(rows));
+          const compressed = gzipSync(raw, {level: 6});
+          return {...data, payload: encodeBase64(compressed), totals: aggregate(rows),
+            metrics: [...data.metrics, {stage: 'javascript', processing_ms: performance.now() - started,
+              raw_bytes: raw.length, compressed_bytes: compressed.length}]};
+        }
+    output: [javascript_data]
+    transition: typescript
+  - id: typescript
+    type: code
+    language: typescript
+    input: [javascript_data]
+    code:
+      type: fixed
+      value: |
+        import { gzipSync, gunzipSync, strToU8, strFromU8 } from 'npm:fflate@0.8.2';
+        import { z } from 'npm:zod@3.24.2';
+
+        type Row = [number, number, number, number];
+        type Metric = {stage: string; processing_ms: number; raw_bytes: number; compressed_bytes: number};
+        interface Data {payload: string; rows: number; seed: number; totals: number[]; metrics: Metric[]; [key: string]: unknown}
+        const rowSchema = z.tuple([z.number().int().nonnegative(), z.number().int().min(0).max(4),
+          z.number().int().positive(), z.union([z.literal(-1), z.literal(0), z.literal(1)])]);
+        class Ledger {
+          readonly totals = Array<number>(5).fill(0);
+          accepted = 0;
+          rejected = 0;
+          refunds = 0;
+          weighted = 0;
+          append(row: Row): void {
+            const [id, category, cents, status] = rowSchema.parse(row);
+            this.totals[category] += cents * status;
+            this.weighted += (id + 1) * cents * status;
+            if (status === 0) this.rejected++;
+            else { this.accepted++; if (status < 0) this.refunds++; }
+          }
+          async reconcile(rows: Row[]): Promise<void> {
+            for (let first = 0; first < rows.length; first += 500) {
+              for (const row of rows.slice(first, first + 500)) this.append(row);
+              await Promise.resolve();
+            }
+          }
+        }
+        function encode(value: Uint8Array): string {
+          let text = '';
+          for (let i = 0; i < value.length; i += 8192) text += String.fromCharCode(...value.subarray(i, i + 8192));
+          return btoa(text);
+        }
+        export default async function process(state: {javascript_data: Data}) {
+          const started = performance.now();
+          const data = state.javascript_data;
+          const raw = gunzipSync(Uint8Array.from(atob(data.payload), c => c.charCodeAt(0)));
+          const rows: Row[] = JSON.parse(strFromU8(raw));
+          const ledger = new Ledger();
+          await ledger.reconcile(rows);
+          if (JSON.stringify(ledger.totals) !== JSON.stringify(data.totals)) throw new Error('Cross-language totals disagree');
+          const sha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', raw)), b => b.toString(16).padStart(2, '0')).join('');
+          const compressed = gzipSync(strToU8(JSON.stringify(rows)), {level: 6});
+          return {...data, payload: encode(compressed), accepted: ledger.accepted, rejected: ledger.rejected,
+            refunds: ledger.refunds, weighted: ledger.weighted, sha256: sha,
+            metrics: [...data.metrics, {stage: 'typescript', processing_ms: performance.now() - started,
+              raw_bytes: raw.length, compressed_bytes: compressed.length}]};
+        }
+    output: [typescript_data]
+    transition: rust
+  - id: rust
+    type: code
+    language: rust
+    input: [typescript_data]
+    code:
+      type: fixed
+      value: |
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use flate2::read::GzDecoder;
+        use futures::{executor::block_on, future::join_all};
+        use serde::Deserialize;
+        use std::{io::Read, time::Instant};
+
+        #[derive(Deserialize)]
+        struct Transaction(u64, usize, i64, i64);
+        #[derive(Default)]
+        struct Ledger { totals: [i64; 5], accepted: u64, rejected: u64, refunds: u64, weighted: i64 }
+        trait Reducer {
+            fn append(&mut self, row: &Transaction) -> Result<(), Box<dyn std::error::Error>>;
+            fn merge(&mut self, other: Self);
+        }
+        impl Reducer for Ledger {
+            fn append(&mut self, row: &Transaction) -> Result<(), Box<dyn std::error::Error>> {
+                if row.1 >= 5 || row.2 <= 0 || !(-1..=1).contains(&row.3) { return Err("Invalid transaction".into()); }
+                self.totals[row.1] += row.2 * row.3;
+                self.weighted += (row.0 as i64 + 1) * row.2 * row.3;
+                if row.3 == 0 { self.rejected += 1; }
+                else { self.accepted += 1; if row.3 < 0 { self.refunds += 1; } }
+                Ok(())
+            }
+            fn merge(&mut self, other: Self) {
+                for (index, value) in other.totals.into_iter().enumerate() { self.totals[index] += value; }
+                self.accepted += other.accepted; self.rejected += other.rejected;
+                self.refunds += other.refunds; self.weighted += other.weighted;
+            }
+        }
+        async fn reduce(rows: &[Transaction]) -> Result<Ledger, Box<dyn std::error::Error>> {
+            let mut ledger = Ledger::default();
+            for row in rows { ledger.append(row)?; }
+            Ok(ledger)
+        }
+        async fn reconcile(rows: &[Transaction]) -> Result<Ledger, Box<dyn std::error::Error>> {
+            let mut ledger = Ledger::default();
+            for partial in join_all(rows.chunks(500).map(reduce)).await { ledger.merge(partial?); }
+            Ok(ledger)
+        }
+        pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let started = Instant::now();
+            let data = &state["typescript_data"];
+            let compressed = STANDARD.decode(data["payload"].as_str().ok_or("Missing payload")?)?;
+            let mut raw = Vec::new();
+            GzDecoder::new(compressed.as_slice()).take(2 * 1024 * 1024).read_to_end(&mut raw)?;
+            let rows: Vec<Transaction> = serde_json::from_slice(&raw)?;
+            if rows.len() as u64 != data["rows"].as_u64().ok_or("Missing row count")?
+                || rows.iter().enumerate().any(|(i, row)| row.0 != i as u64) { return Err("Record identities changed".into()); }
+            let ledger = block_on(reconcile(&rows))?;
+            if serde_json::json!(ledger.totals) != data["totals"] || serde_json::json!(ledger.weighted) != data["weighted"]
+                || serde_json::json!(ledger.accepted) != data["accepted"] || serde_json::json!(ledger.rejected) != data["rejected"]
+                || serde_json::json!(ledger.refunds) != data["refunds"] { return Err("Cross-language reconciliation failed".into()); }
+            let mut metrics = data["metrics"].as_array().ok_or("Missing metrics")?.clone();
+            metrics.push(serde_json::json!({"stage":"rust", "processing_ms":started.elapsed().as_secs_f64()*1000.0,
+                "raw_bytes":raw.len(), "compressed_bytes":compressed.len()}));
+            Ok(serde_json::json!({"status":"PASS", "rows":rows.len(), "seed":data["seed"],
+                "accepted":ledger.accepted,"rejected":ledger.rejected,"refunds":ledger.refunds,
+                "totals":ledger.totals,"total_cents":ledger.totals.iter().sum::<i64>(),"weighted":ledger.weighted,
+                "sha256":data["sha256"],"merchants":data["merchants"],"first_day":data["first_day"],"last_day":data["last_day"],
+                "metrics":metrics}))
+        }
+    output: [messages]
+    transition: END

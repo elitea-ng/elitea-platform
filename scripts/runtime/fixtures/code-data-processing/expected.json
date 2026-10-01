@@ -1,0 +1,27 @@
+{
+  "status": "PASS",
+  "rows": 20000,
+  "seed": 42,
+  "accepted": 18947,
+  "rejected": 1053,
+  "refunds": 824,
+  "totals": [
+    172648522,
+    173963025,
+    172815667,
+    173374311,
+    173639275
+  ],
+  "total_cents": 866440800,
+  "weighted": 8662764360486,
+  "sha256": "6a3c4d063a5ba0c21949cf7d67d4bda843cb50a0bc76169c19e2c5f7e272326d",
+  "merchants": [
+    "cafe-north",
+    "deja-vu",
+    "office-co",
+    "travel-hub",
+    "books-plus"
+  ],
+  "first_day": "2026-09-01",
+  "last_day": "2026-09-28"
+}
