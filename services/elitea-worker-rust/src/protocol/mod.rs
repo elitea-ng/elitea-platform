@@ -4,7 +4,7 @@ mod error;
 pub mod node_event;
 pub mod output;
 pub mod toolkit_execution;
-mod wire;
+pub(crate) mod wire;
 
 // Generated protobuf and gRPC clients mirror comments and method shapes owned
 // by the language-neutral schema generator, not this crate's handwritten API.

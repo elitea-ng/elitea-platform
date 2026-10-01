@@ -155,6 +155,45 @@ Run `probe_code_adapters_container.py --image sha256:... --python-packages` agai
 The check includes a transitive dependency, an import alias, and an unavailable version.
 On-demand preparation and Cargo package expansion remain separate work.
 
+## Retained Python preparation adapter
+
+`python_preparation_job.mjs` accepts no CLI arguments. The supervisor selects its fixed argv and the admitted preparation image.
+The adapter reads revision 1 `PreparationJob` from `/workspace/.elitea-code.json`.
+The request contains Python source, the preparer image digest, policy revision, and timeout.
+Unknown fields, duplicate fields, execution input, and caller package lists fail.
+The adapter never executes the source.
+
+The existing native planner discovers literal requirements and import names.
+The existing preparer resolves packages and freezes their native content.
+The existing verifier checks the frozen bytes before publication.
+The adapter creates the private directory `/workspace/python-dependencies` with mode `0700`.
+It atomically publishes `/workspace/.elitea-python-preparation.json` with mode `0600`.
+The bounded marker contains source identity, runtime policy identity, the original deadline, and native bundle metadata.
+Package metadata appears only in that marker. Native diagnostics are suppressed. Failures contain fixed safe error codes.
+
+The process holds the directory until the supervisor creates `/workspace/.elitea-python-preparation-release`.
+The release marker must be an empty regular file.
+The original timeout includes preparation, verification, publication, and holding.
+A restart requires the matching marker and native byte verification.
+A restart retains the original deadline and does not resolve packages again.
+A directory or partial marker without a valid published marker fails.
+
+The image must preload `prepare_python_code.mjs` and its dependencies.
+The supervisor fixes Deno permissions, the registry allowlist, and all interpreter arguments.
+Use the existing outer container-main-process runner to enforce the deadline and terminate descendants.
+The injected component tests require no interpreter installation or registry access:
+
+```sh
+deno test --cached-only --no-lock --no-config --no-prompt --deny-net \
+  --allow-read --allow-write \
+  services/elitea-code-runner/adapters/python_preparation_job_test.mjs
+```
+
+These tests use disposable temporary directories. Deno requires full file permissions to create their symlink rejection fixtures.
+The tests prove adapter holding and reuse behavior through injected native functions.
+Real container retention, supervisor publication, worker recovery, and deployment acceptance remain separate checks.
+See `../../elitea-worker-rust/docs/source-mapping/code-python-preparation-runner-20261001.md` for the source mapping and scope.
+
 ## Frozen npm dependency profiles
 
 `javascript-packages.json` supplies operator-owned image requirements. Its default list remains empty.

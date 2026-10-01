@@ -129,7 +129,13 @@ The [shared bundle storage record](source-mapping/code-python-shared-storage-202
 Rehearsal RustFS publication, replacement-store reads, project separation, and offline execution of downloaded content pass.
 The [bundle transport record](source-mapping/code-python-bundle-transport-20261001.md) adds content-only grants and verified supervisor TLS delivery.
 Native bundle transfer through rehearsal RustFS, replacement-listener reads, and offline execution of downloaded packages pass.
-Supervisor preparation receipts, automatic backend delivery, and on-demand browser acceptance remain open.
+The [Rust content client](source-mapping/code-python-content-client-20261001.md) now passes native mTLS download and publication against Main and rehearsal RustFS.
+It verifies the recorded root and every file, requests authority per transfer, and removes owned staging after release.
+The [preparation authority foundation](source-mapping/code-python-preparation-authority-20261001.md) adds a separate typed request and stable preparation activation.
+Preparation and execution grants cannot substitute for each other. Focused request and authority tests pass.
+The [preparation receipt](source-mapping/code-python-preparation-receipt-20261001.md) passes five selected live PostgreSQL checks, including existing receipt and dispatch behavior.
+The [trusted preparation adapter](source-mapping/code-python-preparation-runner-20261001.md) retains native files through real shared publication and confirmed release.
+Automatic supervisor dispatch, backend delivery, recovery integration, and on-demand browser acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

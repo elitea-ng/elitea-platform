@@ -1,5 +1,7 @@
 use sqlx::{PgPool, Row};
 
+use super::dependency_content::PythonDependencyBundle;
+
 /// Construct only from an authenticated invocation, never caller-selected tenant headers.
 #[derive(Clone)]
 pub struct JobScope {
@@ -144,6 +146,67 @@ impl JobLedger {
             failure_code: row.try_get("failure_code")?,
             runtime_id: row.try_get("runtime_id")?,
         })
+    }
+
+    /// Read immutable preparation metadata after owner replacement or terminal completion.
+    /// The recorded database digest supplies the bundle validation root.
+    /// # Errors
+    /// Returns `Missing`, `Conflict`, `Invalid`, or a database error.
+    pub async fn read_preparation_bundle(
+        &self,
+        scope: &JobScope,
+    ) -> Result<Option<PythonDependencyBundle>, LedgerError> {
+        let row = sqlx::query("SELECT request_digest,preparation_bundle_json FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice())
+            .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)?;
+        let digest: Vec<u8> = row.try_get("request_digest")?;
+        if digest.as_slice() != scope.digest {
+            return Err(LedgerError::Conflict);
+        }
+        let record: Option<String> = row.try_get("preparation_bundle_json")?;
+        record
+            .map(|record| {
+                #[derive(serde::Deserialize)]
+                struct RecordedRoot {
+                    digest: String,
+                }
+                let root: RecordedRoot =
+                    serde_json::from_str(&record).map_err(|_| LedgerError::Invalid)?;
+                PythonDependencyBundle::parse(record.as_bytes(), &root.digest)
+                    .map_err(|_| LedgerError::Invalid)
+            })
+            .transpose()
+    }
+
+    /// Record validated metadata before shared publication. Identical writes are idempotent.
+    /// A live dispatched lease admits one immutable bundle while cancellation remains absent.
+    /// # Errors
+    /// Returns `Conflict` for changed metadata, `Fenced` for lost authority, or a database error.
+    pub async fn record_preparation_bundle(
+        &self,
+        lease: &JobLease,
+        bundle: &PythonDependencyBundle,
+    ) -> Result<(), LedgerError> {
+        let record = std::str::from_utf8(bundle.record_json()).map_err(|_| LedgerError::Invalid)?;
+        let mut transaction = self.pool.begin().await?;
+        // Check database time after locking. A lock wait can outlive the lease.
+        let row = sqlx::query("WITH owned AS MATERIALIZED (SELECT preparation_bundle_json,lease_until FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND phase='dispatched' AND NOT cancellation_requested FOR UPDATE) SELECT preparation_bundle_json FROM owned WHERE lease_until > clock_timestamp()")
+            .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
+            .bind(&lease.owner).bind(lease.epoch).fetch_optional(&mut *transaction).await?
+            .ok_or(LedgerError::Fenced)?;
+        let recorded: Option<String> = row.try_get("preparation_bundle_json")?;
+        if let Some(recorded) = recorded {
+            if recorded != record {
+                return Err(LedgerError::Conflict);
+            }
+        } else {
+            let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=$7,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='dispatched' AND NOT cancellation_requested AND preparation_bundle_json IS NULL")
+                .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
+                .bind(&lease.owner).bind(lease.epoch).bind(record).execute(&mut *transaction).await?.rows_affected();
+            changed(count)?;
+        }
+        transaction.commit().await?;
+        Ok(())
     }
 
     /// Use database time so reconnects do not reset a running job's deadline.

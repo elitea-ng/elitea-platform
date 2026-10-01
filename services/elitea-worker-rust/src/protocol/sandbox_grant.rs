@@ -7,7 +7,7 @@ use super::{
     elitea::runtime::v1::{SandboxJobGrantClaimsV1, SignedSandboxJobGrantV1},
     wire::{Schema, scan_message},
 };
-use crate::sandbox::{ledger::JobScope, request::PreparedJob};
+use crate::sandbox::{ledger::JobScope, preparation::PreparationJob, request::PreparedJob};
 
 const DOMAIN: &[u8] = b"elitea.sandbox.job-grant.ed25519.v1\0";
 
@@ -18,6 +18,10 @@ pub struct GrantVerifier<R> {
 
 /// An authenticated scope, without the delegation signature or worker credentials.
 pub struct AuthorizedJob {
+    authority: VerifiedAuthority,
+}
+
+struct VerifiedAuthority {
     scope: JobScope,
     fingerprint: [u8; 32],
     cancel_only: bool,
@@ -25,15 +29,35 @@ pub struct AuthorizedJob {
 }
 impl AuthorizedJob {
     pub(crate) fn permits(&self, request: &PreparedJob, now_unix_millis: i64) -> bool {
-        !self.cancel_only
-            && now_unix_millis < self.expires_at_unix_millis
+        !self.authority.cancel_only
+            && now_unix_millis < self.authority.expires_at_unix_millis
             && request
                 .fingerprint()
-                .is_ok_and(|digest| digest == self.fingerprint)
+                .is_ok_and(|digest| digest == self.authority.fingerprint)
     }
     #[must_use]
     pub fn scope(&self) -> &JobScope {
-        &self.scope
+        &self.authority.scope
+    }
+}
+
+/// Preparation authority cannot be passed to execution admission.
+pub struct AuthorizedPreparation {
+    authority: VerifiedAuthority,
+}
+impl AuthorizedPreparation {
+    /// Recheck the exact preparation request and expiry before preparation admission.
+    #[must_use]
+    pub fn permits(&self, request: &PreparationJob, now_unix_millis: i64) -> bool {
+        !self.authority.cancel_only
+            && now_unix_millis < self.authority.expires_at_unix_millis
+            && request
+                .fingerprint()
+                .is_ok_and(|digest| digest == self.authority.fingerprint)
+    }
+    #[must_use]
+    pub fn scope(&self) -> &JobScope {
+        &self.authority.scope
     }
 }
 
@@ -44,7 +68,7 @@ impl AuthorizedCancellation {
         self.0.scope()
     }
     pub(crate) fn valid_at(&self, now: i64) -> bool {
-        self.0.cancel_only && now < self.0.expires_at_unix_millis
+        self.0.authority.cancel_only && now < self.0.authority.expires_at_unix_millis
     }
 }
 
@@ -80,7 +104,26 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         job: &PreparedJob,
         now_unix_millis: i64,
     ) -> Result<AuthorizedJob, GrantRejected> {
-        self.verify_operation(grant, peer, Some(job), now_unix_millis, false)
+        let fingerprint = job.fingerprint().map_err(|_| GrantRejected)?;
+        self.verify_operation(grant, peer, Some(fingerprint), now_unix_millis, false)
+            .map(|authority| AuthorizedJob { authority })
+    }
+
+    /// Verify Main's revision 1 grant over a preparation-specific fingerprint.
+    /// `peer` must come from verified mTLS, never caller-controlled metadata.
+    ///
+    /// # Errors
+    /// Returns `GrantRejected` for any signature, wire, request, peer, or lifetime mismatch.
+    pub fn verify_preparation(
+        &self,
+        grant: &SignedSandboxJobGrantV1,
+        peer: &str,
+        job: &PreparationJob,
+        now_unix_millis: i64,
+    ) -> Result<AuthorizedPreparation, GrantRejected> {
+        let fingerprint = job.fingerprint().map_err(|_| GrantRejected)?;
+        self.verify_operation(grant, peer, Some(fingerprint), now_unix_millis, false)
+            .map(|authority| AuthorizedPreparation { authority })
     }
 
     /// Verify a stop-only grant without receiving code or state.
@@ -93,17 +136,17 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         now_unix_millis: i64,
     ) -> Result<AuthorizedCancellation, GrantRejected> {
         self.verify_operation(grant, peer, None, now_unix_millis, true)
-            .map(AuthorizedCancellation)
+            .map(|authority| AuthorizedCancellation(AuthorizedJob { authority }))
     }
 
     fn verify_operation(
         &self,
         grant: &SignedSandboxJobGrantV1,
         peer: &str,
-        job: Option<&PreparedJob>,
+        expected_fingerprint: Option<[u8; 32]>,
         now_unix_millis: i64,
         cancel_only: bool,
-    ) -> Result<AuthorizedJob, GrantRejected> {
+    ) -> Result<VerifiedAuthority, GrantRejected> {
         if !identity(&grant.key_id)
             || !identity(peer)
             || grant.signature.len() != 64
@@ -148,10 +191,7 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             || !(1..=30_000).contains(&lifetime)
             || claims.issued_at_unix_millis > now_unix_millis
             || claims.expires_at_unix_millis <= now_unix_millis
-            || job.is_some_and(|job| {
-                job.fingerprint()
-                    .map_or(true, |actual| actual != fingerprint)
-            })
+            || expected_fingerprint.is_some_and(|actual| actual != fingerprint)
         {
             return Err(GrantRejected);
         }
@@ -167,7 +207,7 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         activation.copy_from_slice(hash.finish().as_ref());
         let scope = JobScope::new(claims.tenant_id, claims.project_id, activation, fingerprint)
             .map_err(|_| GrantRejected)?;
-        Ok(AuthorizedJob {
+        Ok(VerifiedAuthority {
             scope,
             fingerprint,
             cancel_only,
@@ -194,6 +234,15 @@ mod tests {
             Language::Python,
             source.into(),
             BTreeMap::new(),
+            format!("sha256:{}", "a".repeat(64)),
+            "v1".into(),
+            30,
+        )
+        .unwrap()
+    }
+    fn preparation(source: &str) -> PreparationJob {
+        PreparationJob::new(
+            source.into(),
             format!("sha256:{}", "a".repeat(64)),
             "v1".into(),
             30,
@@ -262,6 +311,239 @@ mod tests {
         assert!(
             verifier
                 .verify_cancellation(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn preparation_and_execution_authority_cannot_be_substituted() {
+        let (key, verifier, execution, mut claims) = fixture();
+        let request = preparation("print(42)");
+        assert_ne!(
+            execution.fingerprint().unwrap(),
+            request.fingerprint().unwrap()
+        );
+        let execution_grant = sign(&key, claims.encode_to_vec());
+        assert!(
+            verifier
+                .verify(&execution_grant, "worker-1", &execution, 1000)
+                .is_ok()
+        );
+        assert!(
+            verifier
+                .verify_preparation(&execution_grant, "worker-1", &request, 1000)
+                .is_err()
+        );
+
+        // Keep the same activation and material to isolate fingerprint purpose binding.
+        claims.request_digest = request.fingerprint().unwrap().to_vec();
+        let preparation_grant = sign(&key, claims.encode_to_vec());
+        let accepted = verifier
+            .verify_preparation(&preparation_grant, "worker-1", &request, 1000)
+            .unwrap();
+        assert!(accepted.permits(&request, 1000));
+        assert!(!accepted.permits(&preparation("print(43)"), 1000));
+        assert!(!accepted.permits(&request, 31000));
+        assert!(
+            verifier
+                .verify(&preparation_grant, "worker-1", &execution, 1000)
+                .is_err()
+        );
+        assert!(
+            verifier
+                .verify_cancellation(&preparation_grant, "worker-1", 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn preparation_grant_binds_every_immutable_field_peer_audience_and_lifetime() {
+        let (key, verifier, _, mut claims) = fixture();
+        let request = preparation("print(42)");
+        claims.request_digest = request.fingerprint().unwrap().to_vec();
+        let grant = sign(&key, claims.encode_to_vec());
+        assert!(
+            verifier
+                .verify_preparation(&grant, "worker-2", &request, 1000)
+                .is_err()
+        );
+        for now in [999, 31000] {
+            assert!(
+                verifier
+                    .verify_preparation(&grant, "worker-1", &request, now)
+                    .is_err()
+            );
+        }
+        for (source, image, policy, timeout) in [
+            ("print(43)", "a", "v1", 30),
+            ("print(42)", "b", "v1", 30),
+            ("print(42)", "a", "v2", 30),
+            ("print(42)", "a", "v1", 31),
+        ] {
+            let changed = PreparationJob::new(
+                source.into(),
+                format!("sha256:{}", image.repeat(64)),
+                policy.into(),
+                timeout,
+            )
+            .unwrap();
+            assert!(
+                verifier
+                    .verify_preparation(&grant, "worker-1", &changed, 1000)
+                    .is_err()
+            );
+        }
+        let mut changed = claims.clone();
+        changed.audience = "other".into();
+        assert!(
+            verifier
+                .verify_preparation(
+                    &sign(&key, changed.encode_to_vec()),
+                    "worker-1",
+                    &request,
+                    1000
+                )
+                .is_err()
+        );
+        let mut changed = claims.clone();
+        changed.expires_at_unix_millis += 1;
+        assert!(
+            verifier
+                .verify_preparation(
+                    &sign(&key, changed.encode_to_vec()),
+                    "worker-1",
+                    &request,
+                    1000
+                )
+                .is_err()
+        );
+        claims.expires_at_unix_millis = claims.issued_at_unix_millis;
+        assert!(
+            verifier
+                .verify_preparation(
+                    &sign(&key, claims.encode_to_vec()),
+                    "worker-1",
+                    &request,
+                    1000
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn preparation_cancellation_keeps_the_same_scope_after_worker_replacement() {
+        use crate::sandbox::preparation::preparation_activation;
+        use std::fmt::Write as _;
+
+        let (key, verifier, execution, mut claims) = fixture();
+        let execution_scope = verifier
+            .verify(
+                &sign(&key, claims.encode_to_vec()),
+                "worker-1",
+                &execution,
+                1000,
+            )
+            .unwrap();
+        let request = preparation("print(42)");
+        claims.activation_id =
+            preparation_activation(&[7; 32])
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    write!(hex, "{byte:02x}").unwrap();
+                    hex
+                });
+        claims.request_digest = request.fingerprint().unwrap().to_vec();
+        let preparation_grant = sign(&key, claims.encode_to_vec());
+        let accepted = verifier
+            .verify_preparation(&preparation_grant, "worker-1", &request, 1000)
+            .unwrap();
+        assert_ne!(
+            accepted.scope().runtime_identity().unwrap(),
+            execution_scope.scope().runtime_identity().unwrap()
+        );
+        claims.generation = 2;
+        claims.submitter_workload_identity = "worker-2".into();
+        let resumed = verifier
+            .verify_preparation(
+                &sign(&key, claims.encode_to_vec()),
+                "worker-2",
+                &request,
+                1000,
+            )
+            .unwrap();
+        assert_eq!(
+            accepted.scope().runtime_identity().unwrap(),
+            resumed.scope().runtime_identity().unwrap()
+        );
+        claims.revision = 2;
+        claims.cancel_only = true;
+        let cancellation_grant = sign(&key, claims.encode_to_vec());
+        assert!(
+            verifier
+                .verify_preparation(&cancellation_grant, "worker-2", &request, 1000)
+                .is_err()
+        );
+        let stop = verifier
+            .verify_cancellation(&cancellation_grant, "worker-2", 1000)
+            .unwrap();
+        assert!(stop.valid_at(1000));
+        assert_eq!(
+            accepted.scope().runtime_identity().unwrap(),
+            stop.scope().runtime_identity().unwrap()
+        );
+        assert!(
+            verifier
+                .verify_cancellation(&cancellation_grant, "worker-1", 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn preparation_rejects_content_grants_and_changed_signed_scope() {
+        let (key, verifier, _, mut claims) = fixture();
+        let request = preparation("print(42)");
+        claims.request_digest = request.fingerprint().unwrap().to_vec();
+        for revision in [1, 2, 3] {
+            let mut content = claims.clone();
+            content.revision = revision;
+            content.dependency_bundle_sha256 = vec![9; 32];
+            assert!(
+                verifier
+                    .verify_preparation(
+                        &sign(&key, content.encode_to_vec()),
+                        "worker-1",
+                        &request,
+                        1000
+                    )
+                    .is_err()
+            );
+        }
+        let mut changed = sign(&key, claims.encode_to_vec());
+        claims.tenant_id = "other-tenant".into();
+        changed.claims_bytes = claims.encode_to_vec();
+        assert!(
+            verifier
+                .verify_preparation(&changed, "worker-1", &request, 1000)
+                .is_err()
+        );
+        for suffix in [vec![0x60, 1], vec![8, 1]] {
+            let mut bytes = claims.encode_to_vec();
+            bytes.extend(suffix);
+            assert!(
+                verifier
+                    .verify_preparation(&sign(&key, bytes), "worker-1", &request, 1000)
+                    .is_err()
+            );
+        }
+        claims.revision = 3;
+        assert!(
+            verifier
+                .verify_preparation(
+                    &sign(&key, claims.encode_to_vec()),
+                    "worker-1",
+                    &request,
+                    1000
+                )
                 .is_err()
         );
     }

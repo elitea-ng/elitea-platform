@@ -1,5 +1,7 @@
 //! Code execution transport; runtime access is exclusive to the supervisor feature.
 pub mod client;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod dependency_content;
 pub(crate) mod dispatch;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod docker_supervisor;
@@ -11,6 +13,7 @@ pub mod ledger;
 pub mod material;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod peer_identity;
+pub mod preparation;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod process;
 pub mod request;

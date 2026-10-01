@@ -35,6 +35,7 @@ struct IsolatedPostgres {
 
 impl IsolatedPostgres {
     async fn create(database_url: &str) -> Self {
+        static DATABASE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
         let admin_options = PgConnectOptions::from_str(database_url)
             .expect("parse PostgreSQL component-test URL")
             .disable_statement_logging();
@@ -48,7 +49,12 @@ impl IsolatedPostgres {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let database_name = format!("elitea_rust_checkpoint_{}_{}", std::process::id(), unique);
+        let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let database_name = format!(
+            "elitea_rust_cp_{:x}_{:x}_{sequence:x}",
+            std::process::id(),
+            unique & u128::from(u64::MAX)
+        );
         sqlx::query(&format!("CREATE DATABASE {database_name}"))
             .execute(&admin_pool)
             .await
@@ -673,6 +679,319 @@ async fn postgres_application_subgraph_threads_are_admitted_fenced_and_durable()
 }
 
 #[cfg(feature = "sandbox-supervisor")]
+async fn preparation_receipt_database() -> IsolatedPostgres {
+    let database_url = env::var(TEST_DATABASE_URL)
+        .expect("ELITEA_TEST_DATABASE_URL is required for preparation receipt verification");
+    let isolated = IsolatedPostgres::create(&database_url).await;
+    sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
+        .execute(&isolated.pool)
+        .await
+        .unwrap();
+    for migration in [
+        include_str!("../../../elitea-main/migrations/agentstate/0004_sandbox_jobs.sql"),
+        include_str!("../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"),
+        include_str!(
+            "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
+        ),
+        include_str!("../../../elitea-main/migrations/agentstate/0008_sandbox_runtime_binding.sql"),
+        include_str!(
+            "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
+        ),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(&isolated.pool)
+            .await
+            .unwrap();
+    }
+    isolated
+}
+
+#[cfg(feature = "sandbox-supervisor")]
+fn preparation_receipt_bundle(
+    requirement: &str,
+) -> crate::sandbox::dependency_content::PythonDependencyBundle {
+    use std::fmt::Write as _;
+    let mut record = format!(
+        r#"{{"revision":1,"runtime":"pyodide-0.29.0","requirements":["{requirement}"],"files":[{{"name":"elitea-python-lock.json","bytes":2,"sha256":"{}"}}]}}"#,
+        "1".repeat(64)
+    );
+    let digest = ring::digest::digest(&ring::digest::SHA256, record.as_bytes());
+    let mut root = String::with_capacity(64);
+    for byte in digest.as_ref() {
+        write!(root, "{byte:02x}").unwrap();
+    }
+    record.pop();
+    write!(record, ",\"digest\":\"{root}\"}}").unwrap();
+    crate::sandbox::dependency_content::PythonDependencyBundle::parse(record.as_bytes(), &root)
+        .unwrap()
+}
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the ordered preparation receipt lifecycle and assertions together"
+)]
+async fn sandbox_preparation_receipts_preserve_exact_metadata_after_replacement() {
+    use crate::sandbox::ledger::{JobLedger, JobScope, LedgerError, Phase};
+    let isolated = preparation_receipt_database().await;
+    let ledger = JobLedger::new(isolated.pool.clone());
+    let scope = JobScope::new("preparation-test".into(), 2, [91; 32], [92; 32]).unwrap();
+    let bundle = preparation_receipt_bundle("example==1");
+    let different = preparation_receipt_bundle("example==2");
+    ledger.reserve(&scope).await.unwrap();
+    assert!(
+        ledger
+            .read_preparation_bundle(&scope)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let old = ledger
+        .claim(&scope, "same-supervisor".into(), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        ledger.record_preparation_bundle(&old, &bundle).await,
+        Err(LedgerError::Fenced)
+    ));
+    ledger.mark_dispatched(&old).await.unwrap();
+    let (first, repeated) = tokio::join!(
+        ledger.record_preparation_bundle(&old, &bundle),
+        ledger.record_preparation_bundle(&old, &bundle)
+    );
+    first.unwrap();
+    repeated.unwrap();
+    let recorded: String =
+        sqlx::query_scalar("SELECT preparation_bundle_json FROM elitea_runtime.sandbox_jobs")
+            .fetch_one(&isolated.pool)
+            .await
+            .unwrap();
+    assert_eq!(recorded.as_bytes(), bundle.record_json());
+    let in_flight = ledger.read(&scope).await.unwrap();
+    assert_eq!(in_flight.phase, Phase::Dispatched);
+    assert!(in_flight.result_json.is_none());
+    assert!(matches!(
+        ledger.record_preparation_bundle(&old, &different).await,
+        Err(LedgerError::Conflict)
+    ));
+    let conflict = JobScope::new("preparation-test".into(), 2, [91; 32], [93; 32]).unwrap();
+    assert!(matches!(
+        ledger.read_preparation_bundle(&conflict).await,
+        Err(LedgerError::Conflict)
+    ));
+    for foreign in [
+        JobScope::new("other-tenant".into(), 2, [91; 32], [92; 32]).unwrap(),
+        JobScope::new("preparation-test".into(), 3, [91; 32], [92; 32]).unwrap(),
+        JobScope::new("preparation-test".into(), 2, [94; 32], [92; 32]).unwrap(),
+    ] {
+        assert!(matches!(
+            ledger.read_preparation_bundle(&foreign).await,
+            Err(LedgerError::Missing)
+        ));
+    }
+    sqlx::query(
+        "UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second'",
+    )
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    for candidate in [&bundle, &different] {
+        assert!(matches!(
+            ledger.record_preparation_bundle(&old, candidate).await,
+            Err(LedgerError::Fenced)
+        ));
+    }
+    let replacement = JobLedger::new(isolated.pool.clone());
+    let current = replacement
+        .claim(&scope, "same-supervisor".into(), 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.observed_phase, Phase::Dispatched);
+    let recovered = replacement
+        .read_preparation_bundle(&scope)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.root(), bundle.root());
+    assert_eq!(recovered.record_json(), bundle.record_json());
+    assert!(matches!(
+        ledger.record_preparation_bundle(&old, &bundle).await,
+        Err(LedgerError::Fenced)
+    ));
+    replacement
+        .record_preparation_bundle(&current, &bundle)
+        .await
+        .unwrap();
+    assert!(matches!(
+        replacement
+            .record_preparation_bundle(&current, &different)
+            .await,
+        Err(LedgerError::Conflict)
+    ));
+    let result = r#"{"published_bundle":"verified"}"#;
+    replacement
+        .finish(&current, Phase::Completed, Some(result), None)
+        .await
+        .unwrap();
+    for candidate in [&bundle, &different] {
+        assert!(matches!(
+            replacement
+                .record_preparation_bundle(&current, candidate)
+                .await,
+            Err(LedgerError::Fenced)
+        ));
+    }
+    let terminal = replacement.read(&scope).await.unwrap();
+    assert_eq!(terminal.phase, Phase::Completed);
+    assert_eq!(terminal.result_json.as_deref(), Some(result));
+    assert_eq!(
+        replacement
+            .read_preparation_bundle(&scope)
+            .await
+            .unwrap()
+            .unwrap()
+            .record_json(),
+        bundle.record_json()
+    );
+    isolated.pool.close().await;
+}
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn sandbox_preparation_receipts_fence_cancellation_and_terminal_rows() {
+    use crate::sandbox::ledger::{JobLedger, JobScope, LedgerError, Phase};
+    let isolated = preparation_receipt_database().await;
+    let ledger = JobLedger::new(isolated.pool.clone());
+    let bundle = preparation_receipt_bundle("example==1");
+    let different = preparation_receipt_bundle("example==2");
+    for (key, phase, code) in [
+        (95, Phase::Failed, "sandbox.preparation_failed"),
+        (96, Phase::Uncertain, "sandbox.publication_unknown"),
+        (97, Phase::Cancelled, "sandbox.cancelled"),
+    ] {
+        let scope = JobScope::new("preparation-test".into(), 2, [key; 32], [98; 32]).unwrap();
+        ledger.reserve(&scope).await.unwrap();
+        let lease = ledger
+            .claim(&scope, "preparation-supervisor".into(), 30)
+            .await
+            .unwrap()
+            .unwrap();
+        ledger.mark_dispatched(&lease).await.unwrap();
+        ledger
+            .record_preparation_bundle(&lease, &bundle)
+            .await
+            .unwrap();
+        if phase == Phase::Cancelled {
+            ledger
+                .request_cancellation(&scope, "stop-owner")
+                .await
+                .unwrap();
+            for candidate in [&bundle, &different] {
+                assert!(matches!(
+                    ledger.record_preparation_bundle(&lease, candidate).await,
+                    Err(LedgerError::Fenced)
+                ));
+            }
+            assert_eq!(ledger.read(&scope).await.unwrap().phase, Phase::Dispatched);
+            assert_eq!(
+                ledger
+                    .read_preparation_bundle(&scope)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .record_json(),
+                bundle.record_json()
+            );
+        }
+        ledger
+            .finish(&lease, phase, None, Some(code))
+            .await
+            .unwrap();
+        for candidate in [&bundle, &different] {
+            assert!(matches!(
+                ledger.record_preparation_bundle(&lease, candidate).await,
+                Err(LedgerError::Fenced)
+            ));
+        }
+        let terminal = ledger.read(&scope).await.unwrap();
+        assert_eq!(terminal.phase, phase);
+        assert_eq!(terminal.failure_code.as_deref(), Some(code));
+        assert_eq!(
+            ledger
+                .read_preparation_bundle(&scope)
+                .await
+                .unwrap()
+                .unwrap()
+                .record_json(),
+            bundle.record_json()
+        );
+    }
+    isolated.pool.close().await;
+}
+
+#[cfg(feature = "sandbox-supervisor")]
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn sandbox_preparation_receipts_validate_recorded_body_and_schema_bound() {
+    use crate::sandbox::ledger::{JobLedger, JobScope, LedgerError};
+    let isolated = preparation_receipt_database().await;
+    let ledger = JobLedger::new(isolated.pool.clone());
+    let scope = JobScope::new("preparation-test".into(), 2, [99; 32], [100; 32]).unwrap();
+    ledger.reserve(&scope).await.unwrap();
+    // The bound measures stored bytes, including multibyte text.
+    for maximum in ["x".repeat(128 * 1024), "é".repeat(64 * 1024)] {
+        sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=$1")
+            .bind(maximum)
+            .execute(&isolated.pool)
+            .await
+            .unwrap();
+    }
+    for oversized in ["x".repeat(128 * 1024 + 1), "é".repeat(64 * 1024 + 1)] {
+        let error =
+            sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=$1")
+                .bind(oversized)
+                .execute(&isolated.pool)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("23514")
+        );
+    }
+    let bundle = preparation_receipt_bundle("example==1");
+    let mut changed: serde_json::Value = serde_json::from_slice(bundle.record_json()).unwrap();
+    changed["requirements"] = json!(["example==2"]);
+    for corrupt in ["{}".into(), serde_json::to_string(&changed).unwrap()] {
+        sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=$1")
+            .bind(corrupt)
+            .execute(&isolated.pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            ledger.read_preparation_bundle(&scope).await,
+            Err(LedgerError::Invalid)
+        ));
+    }
+    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=NULL")
+        .execute(&isolated.pool)
+        .await
+        .unwrap();
+    assert!(
+        ledger
+            .read_preparation_bundle(&scope)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    isolated.pool.close().await;
+}
+
+#[cfg(feature = "sandbox-supervisor")]
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
 #[expect(
@@ -696,6 +1015,12 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0008_sandbox_runtime_binding.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1040,6 +1365,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
@@ -1374,6 +1705,12 @@ async fn sandbox_submission(over_tls: bool) {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0008_sandbox_runtime_binding.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
     ))
     .execute(&isolated.pool)
     .await

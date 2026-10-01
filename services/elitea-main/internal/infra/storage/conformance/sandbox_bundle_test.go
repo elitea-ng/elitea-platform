@@ -10,14 +10,17 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -151,6 +154,9 @@ func TestPythonSandboxBundleSharedStore(t *testing.T) {
 	if _, err := replacement.OpenBundle(ctx, other, root); err == nil {
 		t.Fatal("another project read the bundle")
 	}
+	if binary := os.Getenv("SANDBOX_BUNDLE_RUST_TEST_BINARY"); binary != "" {
+		transfer.runRustClient(t, ctx, binary, directory)
+	}
 	t.Logf("Verified %d native bundle files over mTLS after replacement", len(loaded.FileNames()))
 }
 
@@ -168,6 +174,7 @@ type bundleTransfer struct {
 	client *http.Client
 	grant  string
 	root   string
+	ca     []byte
 }
 
 func newBundleTransfer(t *testing.T, store *storage.SandboxBundleStore, tenant, root string) *bundleTransfer {
@@ -181,27 +188,55 @@ func newBundleTransfer(t *testing.T, store *storage.SandboxBundleStore, tenant, 
 		t.Fatal(err)
 	}
 	now := time.Now()
-	template := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{"sandbox.test"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true}
-	cert, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, BasicConstraintsValid: true}
+	ca, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, public, private)
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf, err := x509.ParseCertificate(cert)
+	caCert, err := x509.ParseCertificate(ca)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
+	pool.AddCert(caCert)
+	clientPublic, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{"sandbox.test"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true}
+	clientCert, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, clientPublic, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPublic, serverPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTemplate := &x509.Certificate{SerialNumber: big.NewInt(3), DNSNames: []string{"localhost"},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		NotBefore:   now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true}
+	serverCert, err := x509.CreateCertificate(rand.Reader, serverTemplate, caCert, serverPublic, private)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewUnstartedServer(service.Routes())
-	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
+	mux := http.NewServeMux()
+	mux.Handle("/sandbox-bundles/", http.StripPrefix("/sandbox-bundles", service.Routes()))
+	server.Config.Handler = mux
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{serverCert}, PrivateKey: serverPrivate}}}
 	server.StartTLS()
 	t.Cleanup(server.Close)
 	client := server.Client()
 	transport := client.Transport.(*http.Transport).Clone()
 	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
-	transport.TLSClientConfig.Certificates = []tls.Certificate{{Certificate: [][]byte{cert}, PrivateKey: private}}
+	transport.TLSClientConfig.RootCAs = pool
+	transport.TLSClientConfig.Certificates = []tls.Certificate{{Certificate: [][]byte{clientCert}, PrivateKey: clientPrivate}}
 	client = &http.Client{Transport: transport, Timeout: 15 * time.Second}
 	t.Cleanup(transport.CloseIdleConnections)
 	digest, err := hex.DecodeString(root)
@@ -223,12 +258,48 @@ func newBundleTransfer(t *testing.T, store *storage.SandboxBundleStore, tenant, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &bundleTransfer{server: server, client: client, grant: base64.StdEncoding.EncodeToString(envelope), root: root}
+	return &bundleTransfer{server: server, client: client, grant: base64.StdEncoding.EncodeToString(envelope), root: root, ca: ca}
+}
+
+func (transfer *bundleTransfer) runRustClient(t *testing.T, ctx context.Context, binary, source string) {
+	t.Helper()
+	material := t.TempDir()
+	if err := os.Chmod(material, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transport := transfer.client.Transport.(*http.Transport)
+	client := transport.TLSClientConfig.Certificates[0]
+	key, err := x509.MarshalPKCS8PrivateKey(client.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: client.Certificate[0]}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})...)
+	envelope, err := base64.StdEncoding.DecodeString(transfer.grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		"client-combined.pem": combined,
+		"ca.pem":              pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: transfer.ca}),
+		"grant.pb":            envelope,
+	} {
+		if err := os.WriteFile(filepath.Join(material, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.CommandContext(ctx, binary, "sandbox::dependency_content::tests::live_native_mtls_download_and_publication", "--exact", "--ignored", "--nocapture")
+	command.Env = append(os.Environ(), "ELITEA_TEST_BUNDLE_ORIGIN="+transfer.server.URL,
+		"ELITEA_TEST_BUNDLE_TLS="+material, "ELITEA_TEST_BUNDLE_SOURCE="+source)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Rust package client failed: %v\n%s", err, output)
+	}
+	t.Logf("Rust client verifies native download, publication, authority rejection, and staging cleanup: %s", output)
 }
 
 func (transfer *bundleTransfer) request(t *testing.T, method, suffix, mediaType string, body []byte, expected int) []byte {
 	t.Helper()
-	request, err := http.NewRequest(method, transfer.server.URL+"/"+transfer.root+suffix, bytes.NewReader(body))
+	request, err := http.NewRequest(method, transfer.server.URL+"/sandbox-bundles/"+transfer.root+suffix, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
