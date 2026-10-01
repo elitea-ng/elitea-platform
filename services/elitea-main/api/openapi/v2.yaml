@@ -18540,60 +18540,69 @@ paths:
 
     post:
       operationId: pinEntity
-      summary: Pin an entity for the authenticated user
+      summary: Pin an entity for the project
       description: |
-        NOTE(W2): internal/api/v2/social/handler.go:307-325 (Pin). INSERTs
-        into p_{project_id}.social_pins (entity_name, entity_id, user_id) —
-        matches the social_pins table in
-        internal/infra/db/migrations/001_initial.sql:326-334 exactly, UNLIKE
-        Like/Unlike above (see likeApplication's NOTE(W2)) — the
-        centry.social_likes mismatch does NOT apply to Pin/Unpin.
+        Store one shared pin per project, entity type, and entity identifier.
+        Repeated requests update the last pinner and timestamp.
+        Conversation pins require the caller's existing chat detail access.
+        NOTE(W2): internal/infra/db/repos/social_pins.go:66 implements the shared
+        centry.social_pins key defined by migrations/shared/0064_centry_social_pins.sql.
       tags: [social]
       responses:
         '200':
-          description: >
-            Pinned (also returned as a silent no-op when the request reached
-            the handler with no auth context, or when the pool is unset —
-            handler.go:314)
+          description: Pinned or updated the shared project pin
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OkResponse'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '500':
-          description: Pin failed (pylon-era ok:false envelope)
+        '400': { $ref: '#/components/responses/400' }
+        '404': { $ref: '#/components/responses/404' }
+        '503':
+          description: Pin storage or project authorization is unavailable
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SocialActionErrorResponse'
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: Pin storage failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
     delete:
       operationId: unpinEntity
-      summary: Remove a pin for the authenticated user
+      summary: Remove a shared project pin
       description: |
-        NOTE(W2): internal/api/v2/social/handler.go:327-345 (Unpin). Same
-        table/column shape as Pin — matches the migration (see pinEntity's
-        NOTE(W2)).
+        Remove the project pin regardless of which member last pinned it.
+        Repeated requests succeed. Conversation access is required before removal.
+        NOTE(W2): internal/infra/db/repos/social_pins.go:108 uses the canonical shared key.
       tags: [social]
       responses:
         '200':
-          description: >
-            Unpinned (also returned as a silent no-op when the request
-            reached the handler with no auth context, or when the pool is
-            unset — handler.go:334)
+          description: Removed the shared pin or confirmed it is absent
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OkResponse'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '500':
-          description: Unpin failed (pylon-era ok:false envelope)
+        '400': { $ref: '#/components/responses/400' }
+        '404': { $ref: '#/components/responses/404' }
+        '503':
+          description: Pin storage or project authorization is unavailable
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SocialActionErrorResponse'
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: Unpin storage failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /social/feedbacks/default/{project_id}:
     parameters:

@@ -62,21 +62,19 @@ export function pickIdAndUuid(created: { readonly id?: string | number; readonly
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* Raw wire participant -> `entities/participant`'s `Participant`.     */
-/* `entities/participant`'s own normaliser (`lib/normalise.ts`) is not */
-/* re-exported from that slice's barrel (already 20/20, §3.5 cap) and  */
-/* R-L3 forbids a deep cross-slice import straight to it — a local     */
-/* equivalent, same "duplicate small normalisation logic across a      */
-/* layer boundary" precedent this codebase already uses repeatedly     */
-/* (e.g. `isMcpToolkitType`, duplicated 4-5x across `features/chat-    */
-/* input` for the identical reason).                                   */
-/* ------------------------------------------------------------------ */
+/* Raw wire participant -> `entities/participant`'s `Participant`. */
+/* The entity normaliser is not exported: its barrel is at the §3.5 cap. */
+/* Keep this adapter local to avoid a deep cross-slice import (R-L3). */
 const PARTICIPANT_TYPES = new Set(['application', 'toolkit', 'llm', 'user', 'pipeline', 'skill', 'dummy']);
 
 function readStr(record: Record<string, unknown> | null | undefined, key: string): string | undefined {
   const v = record?.[key];
   return typeof v === 'string' ? v : undefined;
+}
+
+function readIdentity(record: Record<string, unknown>, key: string): string | undefined {
+  const v = record[key];
+  return typeof v === 'string' ? v : typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : undefined;
 }
 
 /** Builds a `{[key]: value}` fragment only when `value` is defined — the `exactOptionalPropertyTypes`-safe way to conditionally set an optional field without ever assigning an explicit `undefined`. */
@@ -88,9 +86,9 @@ export function optField<K extends string, V>(key: K, value: V | undefined): { r
 function buildEntityMeta(entityMetaWire: Record<string, unknown> | null | undefined): Participant['entityMeta'] {
   if (!entityMetaWire) return undefined;
   return {
-    ...optField('id', readStr(entityMetaWire, 'id')),
+    ...optField('id', readIdentity(entityMetaWire, 'id')),
     ...optField('name', readStr(entityMetaWire, 'name')),
-    ...optField('projectId', readStr(entityMetaWire, 'project_id')),
+    ...optField('projectId', readIdentity(entityMetaWire, 'project_id')),
   };
 }
 

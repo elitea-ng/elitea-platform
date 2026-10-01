@@ -678,13 +678,19 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 		}
 	}
 
+	var restrictionActorID int64
 	if conv.IsPrivate != nil && *conv.IsPrivate {
+		var err error
+		restrictionActorID, err = chatauthority.Actor(ctx)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
 		current, err := r.Get(ctx, projectID, conversationID)
 		if err != nil {
 			return conversations.Conversation{}, err
 		}
-		if current.IsPrivate != nil && !*current.IsPrivate {
-			return conversations.Conversation{}, apierr.BadRequest("Public conversation cannot be changed to private")
+		if current.IsPrivate != nil && !*current.IsPrivate && current.CreatedBy != strconv.FormatInt(restrictionActorID, 10) {
+			return conversations.Conversation{}, apierr.BadRequest("Only the conversation creator can restrict access")
 		}
 	}
 	setClauses := "updated_at = now()"
@@ -738,13 +744,20 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 		return conversations.Conversation{}, err
 	}
 	args = append(args, id)
+	privacyCondition := ""
+	if conv.IsPrivate != nil && *conv.IsPrivate {
+		// Enforce creator authority in the write if another request publishes
+		// the conversation after the visibility read.
+		args = append(args, restrictionActorID)
+		privacyCondition = fmt.Sprintf(" AND (is_private OR author_id = $%d)", argIdx+1)
+	}
 	// `author_id` and `folder_id` are returned so the PUT response describes
 	// the same conversation the GET does. Omitting author_id was #128 defect
 	// 6: every update answered with `"created_by": ""`, so a client that
 	// refreshed its cache from the mutation response lost the owner.
-	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET %s WHERE id = $%d
+	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET %s WHERE id = $%d%s
 		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta, is_private, COALESCE(instructions,'')`,
-		s, setClauses, argIdx)
+		s, setClauses, argIdx, privacyCondition)
 
 	var c conversations.Conversation
 	var authorID int

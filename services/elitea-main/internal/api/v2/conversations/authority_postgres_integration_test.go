@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -239,6 +240,80 @@ func TestChatAuthorityPrivateReadsMutationsAndFolders(t *testing.T) {
 	callChatAuthority(t, router, "8", "PUT", "/1/folders/"+foreign.ID, `{"name":"Still forbidden"}`, 404)
 }
 
+func TestChatAuthorityCreatorRestrictionPreservesMembershipAndGrants(t *testing.T) {
+	pool := newChatAuthorityPool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE centry.project(id integer PRIMARY KEY);
+INSERT INTO centry.project VALUES (1),(2);
+CREATE TABLE public.auth_core__role(id integer PRIMARY KEY,name text,mode text);
+CREATE TABLE public.auth_core__user_role(user_id integer,role_id integer);
+`); err != nil {
+		t.Fatal(err)
+	}
+	repo := repos.NewConversationsRepo(pool)
+	publicFlag := false
+	created, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "Creator restriction", IsPrivate: &publicFlag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := conversations.NewHandler(repo).WithPool(pool)
+	router := chi.NewRouter()
+	router.With(middleware.RequireProjectAccess(pool), middleware.RequirePermissions("models.chat.conversation.update")).Put("/{projectID}/conversations/{conversationID}", h.Update)
+	path := "/1/conversations/" + created.ID
+	call := func(user auth.User, body string, want int) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		r = r.WithContext(auth.ContextWithUser(ctx, user))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("restriction actor=%s owner=%s: status=%d want=%d body=%s", user.ID, user.UserID, w.Code, want, w.Body.String())
+		}
+	}
+	granted := func(id string) auth.User {
+		return auth.User{ID: id, Permissions: []string{"models.chat.conversation.update"}}
+	}
+	// Project membership and an update grant do not grant creator authority.
+	call(granted("8"), `{"is_private":true,"author_id":8,"created_by":"8"}`, 400)
+	call(granted("9"), `{"is_private":true}`, 400)
+	call(granted("10"), `{"is_private":true}`, 403)
+	call(auth.User{ID: "7"}, `{"is_private":true}`, 403)
+	if _, err := pool.Exec(ctx, `DELETE FROM public.auth_core__project_user_role WHERE project_id=1 AND user_id=7`); err != nil {
+		t.Fatal(err)
+	}
+	call(granted("7"), `{"is_private":true}`, 403)
+	if _, err := pool.Exec(ctx, `INSERT INTO public.auth_core__project_user_role VALUES (1,7,2)`); err != nil {
+		t.Fatal(err)
+	}
+	// A token row ID cannot stand in for its verified owning user.
+	call(auth.User{ID: "7", TokenID: "7", AuthType: "token", Permissions: granted("7").Permissions}, `{"is_private":true}`, 403)
+	call(auth.User{ID: "7", UserID: "8", TokenID: "7", AuthType: "token", Permissions: granted("7").Permissions}, `{"is_private":true}`, 400)
+	var before int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.chat_participant_mapping WHERE conversation_id=$1`, created.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	call(auth.User{ID: "7", UserID: "7", TokenID: "88", AuthType: "token", Permissions: granted("7").Permissions}, `{"is_private":true,"author_id":8}`, 200)
+	var private bool
+	var author, after int
+	if err := pool.QueryRow(ctx, `SELECT is_private,author_id,(SELECT count(*) FROM p_1.chat_participant_mapping WHERE conversation_id=$1) FROM p_1.chat_conversations WHERE id=$1`, created.ID).Scan(&private, &author, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !private || author != 7 || after != before {
+		t.Fatalf("restriction changed identity or participants: private=%v author=%d participants=%d before=%d", private, author, after, before)
+	}
+	readRouter := chatAuthorityRouter(pool)
+	callChatAuthority(t, readRouter, "7", "GET", path, "", 200)
+	callChatAuthority(t, readRouter, "8", "GET", path, "", 404)
+	if err := repo.AddParticipant(ctx, "1", created.ID, map[string]any{"entity_name": "user", "entity_meta": map[string]any{"id": 8}}); err != nil {
+		t.Fatal(err)
+	}
+	callChatAuthority(t, readRouter, "8", "GET", path, "", 200)
+	// The public-project prohibition still applies to an authorized creator.
+	t.Setenv("ELITEA_AI_PROJECT_ID", "1")
+	call(granted("7"), `{"is_private":false}`, 400)
+}
+
 func TestChatAuthorityAdminExceptionsAndFailures(t *testing.T) {
 	pool := newChatAuthorityPool(t)
 	router := chatAuthorityRouter(pool)
@@ -423,7 +498,7 @@ func TestChatAuthorityPersonalizationContextAndParticipantMutations(t *testing.T
 		t.Fatalf("clear instructions failed: %+v %v", persisted, err)
 	}
 	callChatAuthority(t, r, "7", "PUT", "/1/conversations/"+created.ID, `{"is_private":false}`, 200)
-	callChatAuthority(t, r, "7", "PUT", "/1/conversations/"+created.ID, `{"is_private":true}`, 400)
+	callChatAuthority(t, r, "7", "PUT", "/1/conversations/"+created.ID, `{"is_private":true}`, 200)
 	appPath := fmt.Sprintf("/1/conversations/%s/participants/%d", created.ID, appID)
 	callChatAuthority(t, r, "7", "PUT", appPath, `{"llm_settings":{}}`, 200)
 	callChatAuthority(t, r, "7", "PUT", appPath, `{"llm_settings":{"model_name":"model","reasoning_effort":"high"}}`, 400)

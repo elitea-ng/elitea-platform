@@ -218,26 +218,14 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	visible, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
 	// Query conversations (indexes on conversation_id ensure fast joins elsewhere)
 	//
-	// THE PINNED SET COMES FROM `social_pins`, which is where the pin routes
-	// write it (`POST`/`DELETE /social/pin/prompt_lib/{p}/conversation/{id}`,
-	// and the `elitea_core/pin` pair beside them). It used to be read from
-	// `c.meta->>'is_pinned'`, a key NOTHING in this service or its client ever
-	// writes for a conversation — so "Pin on top" answered `{"ok": true}`, the
-	// sidebar moved the row optimistically, and the next listing put it back
-	// where it was. Legacy reads the same table (elitea_core/api/v2/
-	// folder.py:374-380 queries the social Pin model for
-	// `entity == 'conversation'`), so this restores the contract rather than
-	// inventing one. The `meta` key is kept as a fallback: a row that carries
-	// it stays pinned, which costs nothing and cannot unpin anybody.
-	//
+	// Project pins are shared. The row records the last pinner, not its reader.
+	// Chat authority still restricts the conversations returned by this listing.
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id,
-		       (COALESCE((c.meta->>'is_pinned')::boolean, false)
-		            OR EXISTS (SELECT 1 FROM centry.social_pins p
+		       EXISTS (SELECT 1 FROM centry.social_pins p
 		                       WHERE p.entity = 'conversation'
 		                         AND p.project_id = $2::text::integer
-		                         AND p.entity_id = c.id
-		                         AND p.user_id::text = $1)) AS is_pinned,
+		                         AND p.entity_id = c.id) AS is_pinned,
 		       c.is_private,
 		       c.created_at, c.updated_at
 		FROM %s.chat_conversations c

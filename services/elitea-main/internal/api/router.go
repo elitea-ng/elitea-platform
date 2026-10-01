@@ -3589,7 +3589,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Pin — left ungated on purpose, as #302's acceptance notes
 				// require: pylon serves it from social/api/v2/pin.py, which the
 				// legacy catalogue lists among the UNGUARDED handlers. Both verbs
-				// write only rows keyed by the caller's own user id.
+				// share one project/entity row. Handlers enforce chat visibility.
 				r.Post("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", coreHandler.Pin)
 				r.Delete("/pin/prompt_lib/{projectID}/{entityType}/{entityID}", coreHandler.Unpin)
 

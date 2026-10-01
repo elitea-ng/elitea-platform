@@ -30,10 +30,12 @@ import (
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 func generateID() string {
@@ -5384,39 +5386,20 @@ func (h *Handler) Permissions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Pin(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	entityType := chi.URLParam(r, "entityType")
-	entityID := chi.URLParam(r, "entityID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
+	pins := repos.NewCurrentSocialPinsRepository(h.pool)
+	if err := pins.Pin(r.Context(), chi.URLParam(r, "projectID"), chi.URLParam(r, "entityType"), chi.URLParam(r, "entityID")); err != nil {
+		apierr.Write(w, err)
 		return
 	}
-	ctx := r.Context()
-
-	user, _ := auth.UserFromContext(ctx)
-
-	q := fmt.Sprintf(`
-		INSERT INTO %s.social_pins (entity_name, entity_id, user_id)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (entity_name, entity_id, user_id) DO NOTHING`, s)
-	_, _ = h.pool.Exec(ctx, q, entityType, entityID, user.ID) // best-effort upsert
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *Handler) Unpin(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	entityType := chi.URLParam(r, "entityType")
-	entityID := chi.URLParam(r, "entityID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
+	pins := repos.NewCurrentSocialPinsRepository(h.pool)
+	if err := pins.Unpin(r.Context(), chi.URLParam(r, "projectID"), chi.URLParam(r, "entityType"), chi.URLParam(r, "entityID")); err != nil {
+		apierr.Write(w, err)
 		return
 	}
-	ctx := r.Context()
-
-	user, _ := auth.UserFromContext(ctx)
-
-	q := fmt.Sprintf(`DELETE FROM %s.social_pins WHERE entity_name = $1 AND entity_id = $2 AND user_id = $3`, s)
-	_, _ = h.pool.Exec(ctx, q, entityType, entityID, user.ID) // best-effort delete
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

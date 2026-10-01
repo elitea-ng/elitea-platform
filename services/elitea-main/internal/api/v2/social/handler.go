@@ -18,6 +18,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -799,46 +800,18 @@ func (h *Handler) Unlike(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Pin(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	entityType := chi.URLParam(r, "entityType")
-	entityID := chi.URLParam(r, "entityID")
-	ctx := r.Context()
-
-	user, ok := auth.UserFromContext(ctx)
-	if !ok || h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	q := fmt.Sprintf(`INSERT INTO %s.social_pins (entity_name, entity_id, user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, s)
-	if _, err := h.pool.Exec(ctx, q, entityType, entityID, user.ID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "failed to pin"})
+	pins := repos.NewCurrentSocialPinsRepository(h.pool)
+	if err := pins.Pin(r.Context(), chi.URLParam(r, "projectID"), chi.URLParam(r, "entityType"), chi.URLParam(r, "entityID")); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *Handler) Unpin(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	entityType := chi.URLParam(r, "entityType")
-	entityID := chi.URLParam(r, "entityID")
-	ctx := r.Context()
-
-	user, ok := auth.UserFromContext(ctx)
-	if !ok || h.pool == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	q := fmt.Sprintf(`DELETE FROM %s.social_pins WHERE entity_name = $1 AND entity_id = $2 AND user_id = $3`, s)
-	if _, err := h.pool.Exec(ctx, q, entityType, entityID, user.ID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "failed to unpin"})
+	pins := repos.NewCurrentSocialPinsRepository(h.pool)
+	if err := pins.Unpin(r.Context(), chi.URLParam(r, "projectID"), chi.URLParam(r, "entityType"), chi.URLParam(r, "entityID")); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
