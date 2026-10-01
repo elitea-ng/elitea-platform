@@ -672,6 +672,9 @@ services:
     environment:
       MOCK_LLM_PORT: "8090"
       MOCK_LLM_MODEL: "E2E-MOCK-MODEL"
+      # The SDK accepts the mock's plain HTTP tool listener. The native overlay
+      # retains HTTPS tool schemas for its HTTPS-only materialization contract.
+      MOCK_LLM_TOOL_BASE_URL: "http://llm-mock:8090/tool"
       # 0 by default — a fast reply is what every other consumer wants. The
       # chat streaming journey overrides it so "a partial answer was painted"
       # is deterministic rather than a race (see e2e/streaming/).

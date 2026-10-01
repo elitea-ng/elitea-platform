@@ -42,14 +42,14 @@ import {
 } from '../../fixtures/pipelines';
 
 /**
- * The Add-node menu labels for the nine node types the Rust pipeline
- * compiler admits (`parse_pipeline_node`,
- * `services/elitea-worker-rust/src/agents/graph/compiler.rs:1236`).
- * `Code` and `Custom` are deliberately NOT here: the compiler has no arm for
- * either, so a pipeline containing one cannot load.
+ * The Add-node menu labels for the ten node types the Rust pipeline
+ * compiler admits (`parse_pipeline_node` in
+ * `services/elitea-worker-rust/src/agents/graph/compiler.rs`).
+ * Code requires an admitted sandbox runtime to execute; Custom remains unsupported.
  */
 const ADMITTED_NODE_LABELS = [
   'Agent',
+  'Code',
   'Decision',
   'Human-in-the-loop',
   'LLM',
@@ -65,7 +65,9 @@ const ADMITTED_NODE_LABELS = [
  * COMPLETE the moment the node is added, so a pipeline holding them can be
  * saved with no further configuration.
  *
- * The three that are missing — Agent, Toolkit, MCP — are missing on purpose,
+ * The four that are missing — Agent, Toolkit, MCP, Code — require configuration.
+ * Code starts with empty source (`nodeDefaults.constants.ts::createCodeNodeData`).
+ * The other three are missing on purpose,
  * and their absence is a statement about this change rather than a gap in
  * it. Their runtime-required fields (`tool` for an Agent,
  * `toolkit_name`+`tool` for a direct tool) are seeded EMPTY: the runtime
@@ -78,7 +80,7 @@ const ADMITTED_NODE_LABELS = [
  * on the canvas by the test below instead.
  */
 const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
-  label => label !== 'Agent' && label !== 'Toolkit' && label !== 'MCP',
+  label => label !== 'Agent' && label !== 'Toolkit' && label !== 'MCP' && label !== 'Code',
 );
 
 /** Add one node of `label` through the editor's own menu — no store pokes. */
@@ -377,12 +379,8 @@ test('J16: a saved multi-node graph reloads as exactly the graph that was stored
 
 test('J16: the Add-node menu offers exactly the node types the pipeline compiler admits', async ({ page }) => {
   /*
-   * `Code` and `Custom` had no `parse_pipeline_node` arm
-   * (`services/elitea-worker-rust/src/agents/graph/compiler.rs:1236`), so a
-   * pipeline containing either was refused whole with "the pipeline contains
-   * a node type that is not enabled" (`compiler.rs:1267`). They are withheld
-   * from AUTHORING only — their renderers stay registered so stored
-   * documents holding one still display.
+   * The compiler admits Code through CodeNodeDefinition::from_yaml.
+   * Custom has no parse_pipeline_node arm and remains unavailable for authoring.
    */
   const name = `${AUTOTEST_PREFIX}menu-${Date.now() % 1e9}`;
   await createPipelineThroughUi(page, name);
@@ -395,7 +393,6 @@ test('J16: the Add-node menu offers exactly the node types the pipeline compiler
   for (const label of ADMITTED_NODE_LABELS) {
     await expect(menu.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
   }
-  await expect(menu.getByRole('menuitem', { name: 'Code', exact: true })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: 'Custom', exact: true })).toHaveCount(0);
   // Nothing else either — the menu is exactly the compiler's allow-list.
   await expect(menu.getByRole('menuitem')).toHaveCount(ADMITTED_NODE_LABELS.length);
@@ -415,7 +412,7 @@ test('J16: every node type the menu offers mints a compiler-legal id', async ({ 
    * SDK worker hid this by silently rewriting ids through `clean_string`; the
    * Rust worker never rewrites.
    *
-   * This covers all nine admitted types. The three that cannot be SAVED
+   * This covers all ten admitted types. The four that cannot be SAVED
    * unconfigured (see SAVEABLE_NODE_LABELS) are only reachable here; the
    * stored-document gate is the test after this one.
    */

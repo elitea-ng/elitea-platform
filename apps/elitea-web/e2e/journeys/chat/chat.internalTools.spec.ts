@@ -62,7 +62,7 @@ const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJEC
  * gate each entry sits behind. Names, not titles: the name is what the row is
  * keyed on and what `meta.internal_tools` stores; the title is only a label.
  */
-const UNGATED_TOOLS = ['data_analysis', 'planner', 'pyodide', 'swarm', 'lazy_tools_mode'] as const;
+const UNGATED_TOOLS = ['data_analysis', 'planner', 'ask_user', 'pyodide', 'swarm', 'lazy_tools_mode'] as const;
 /**
  * #940 A8's two chat-authored builder modules. Ungated like the five above —
  * neither declares `agentOnly` nor a `requiredToolkitType`, deliberately: a

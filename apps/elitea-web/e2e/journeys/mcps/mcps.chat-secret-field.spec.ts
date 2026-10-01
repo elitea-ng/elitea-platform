@@ -58,6 +58,20 @@ import {
   DEFAULT_PROJECT_ID,
 } from '../../fixtures/api';
 
+interface ParticipantRow {
+  readonly entity_name?: string;
+  readonly entity_meta?: { readonly id?: string | number; readonly project_id?: string | number };
+  readonly entity_settings?: { readonly toolkit_type?: string };
+}
+
+function toolkitIdentities(participants: readonly ParticipantRow[]) {
+  return participants.filter((participant) => participant.entity_name === 'toolkit').map((participant) => ({
+    id: String(participant.entity_meta?.id),
+    projectId: String(participant.entity_meta?.project_id),
+    type: participant.entity_settings?.toolkit_type,
+  }));
+}
+
 test('ELITEA-0725: an MCP toolkit attaches to a chat conversation as a participant', async ({ page }) => {
   const mcp = await createMcpConnection(page, DEFAULT_PROJECT_ID, `autotest-mcp-chat-secret-${Date.now()}`, {
     url: 'https://example.invalid/mcp',
@@ -81,22 +95,22 @@ test('ELITEA-0725: an MCP toolkit attaches to a chat conversation as a participa
       `attaching an MCP toolkit as a chat participant must succeed: ${(await attachResponse.text()).slice(0, 300)}`,
     ).toBe(200);
 
-    const attached = (await attachResponse.json()) as readonly { entity_name?: string }[];
-    expect(attached.length, 'the attach response must echo the row it created').toBeGreaterThan(0);
-    expect(attached[0]?.entity_name).toBe('toolkit');
+    const attached = (await attachResponse.json()) as readonly ParticipantRow[];
+    const expectedToolkit = [{ id: mcp.id, projectId: DEFAULT_PROJECT_ID, type: 'mcp' }];
+    expect(attached.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'toolkit', 'user']);
+    expect(toolkitIdentities(attached), 'the complete attach response must contain exactly the MCP row it created').toEqual(expectedToolkit);
 
     const conversationResponse = await page.request.get(
       `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
     );
     expect(conversationResponse.status()).toBe(200);
     const body = (await conversationResponse.json()) as {
-      participants?: readonly { entity_name?: string; entity_meta?: { id?: string } }[];
+      participants?: readonly ParticipantRow[];
     };
-    const mcpParticipant = body.participants?.find((p) => p.entity_meta?.id === mcp.id);
     expect(
-      mcpParticipant,
-      `the MCP participant must be readable back from the conversation: ${JSON.stringify(body.participants)}`,
-    ).toBeDefined();
+      toolkitIdentities(body.participants ?? []),
+      'the exact MCP identity and type must be readable back from the conversation',
+    ).toEqual(expectedToolkit);
   } finally {
     await deleteConversation(page.request, conversationId);
     await page.request.delete(`${API_BASE}/elitea_core/tool/prompt_lib/${DEFAULT_PROJECT_ID}/${mcp.id}`);

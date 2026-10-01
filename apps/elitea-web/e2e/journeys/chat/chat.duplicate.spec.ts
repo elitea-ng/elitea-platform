@@ -38,7 +38,11 @@ import {
   readConversationDetails,
   readStoredMessageGroups,
   setConversationPrivacy,
+  PUBLISH_AUTHOR_PROJECT_NAME,
+  readCallerIdentity,
+  resolvePublishAuthorProjectId,
 } from '../../fixtures/api';
+import { ensureProjectSelected } from '../../fixtures/project';
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-dup';
@@ -72,8 +76,9 @@ async function openRowMenu(page: Page, conversationId: string): Promise<void> {
   }).toPass({ timeout: 40_000 });
 }
 
-async function openChat(page: Page): Promise<void> {
+async function openChat(page: Page, projectName?: string): Promise<void> {
   await page.goto(BASE_URL + '/app/chat');
+  if (projectName !== undefined) await ensureProjectSelected(page, projectName);
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
   await openTodayGroup(page);
 }
@@ -95,12 +100,12 @@ async function readPinnedIds(page: Page): Promise<readonly string[]> {
  * cannot be missed between the gesture and the wait — same pattern
  * `chat.sharing.spec.ts`'s export tests use for their own POST/GET).
  */
-async function duplicateConversation(page: Page, conversationId: string): Promise<{ readonly id: string; readonly name: string }> {
+async function duplicateConversation(page: Page, conversationId: string, projectId = DEFAULT_PROJECT_ID): Promise<{ readonly id: string; readonly name: string }> {
   await openRowMenu(page, conversationId);
   const created = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
-      response.url().includes(`/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`) &&
+      response.url().includes(`/elitea_core/conversations/prompt_lib/${projectId}`) &&
       response.status() < 400,
     { timeout: 20_000 },
   );
@@ -110,8 +115,25 @@ async function duplicateConversation(page: Page, conversationId: string): Promis
   return { id: String(body.id), name: body.name ?? '' };
 }
 
-async function removeConversation(request: APIRequestContext, id: string | undefined): Promise<void> {
-  if (id !== undefined) await deleteConversation(request, id);
+async function removeConversation(request: APIRequestContext, id: string | undefined, projectId = DEFAULT_PROJECT_ID): Promise<void> {
+  if (id !== undefined) await deleteConversation(request, id, projectId);
+}
+
+interface ConfiguredParticipant {
+  readonly id: number;
+  readonly entity_name: string;
+  readonly entity_meta: Readonly<Record<string, unknown>>;
+  readonly entity_settings: Readonly<Record<string, unknown>>;
+}
+
+async function readParticipantSnapshot(request: APIRequestContext, id: string): Promise<readonly ConfiguredParticipant[]> {
+  const response = await request.get(`${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`);
+  expect(response.status(), await response.text()).toBe(200);
+  const body = await response.json() as { participants: readonly ConfiguredParticipant[] };
+  expect(Array.isArray(body.participants)).toBe(true);
+  return body.participants.map(({ id: participantId, entity_name, entity_meta, entity_settings }) => ({
+    id: participantId, entity_name, entity_meta, entity_settings,
+  })).sort((left, right) => left.id - right.id);
 }
 
 /* onetest: ELITEA-2616, ELITEA-2619 — Duplicate creates a new, independent conversation; the original is
@@ -160,33 +182,28 @@ test('D2: Duplicate preserves participants and their settings, and starts as an 
       entity_meta: { model_name: 'autotest-dup-model' },
       entity_settings: { temperature: 0.42 },
     });
-    const originalParticipants = (await readConversationDetails(page.request, originalId)).participants;
-    expect(originalParticipants, 'the seed must have taken before duplicating').toHaveLength(1);
+    const originalParticipants = await readParticipantSnapshot(page.request, originalId);
+    const caller = await readCallerIdentity(page.request);
+    expect(originalParticipants.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'llm', 'user']);
+    expect(originalParticipants.find((participant) => participant.entity_name === 'user')?.entity_meta['id']).toBe(Number(caller.id));
+    const originalModel = originalParticipants.find((participant) => participant.entity_name === 'llm' && participant.entity_meta['model_name'] === 'autotest-dup-model');
+    expect(originalModel?.entity_settings).toEqual({ temperature: 0.42 });
 
     await openChat(page);
     const duplicate = await duplicateConversation(page, originalId);
     duplicateId = duplicate.id;
 
     await expect
-      .poll(async () => (await readConversationDetails(page.request, duplicateId as string)).participants.length, {
+      .poll(async () => readParticipantSnapshot(page.request, duplicateId as string), {
         timeout: 15_000,
-        message: 'the duplicate must carry the original\'s participant',
+        message: 'the duplicate must preserve every participant identity and settings mapping',
       })
-      .toBe(1);
-    const duplicateParticipant = (await readConversationDetails(page.request, duplicateId)).participants[0];
-    expect(duplicateParticipant?.entity_name).toBe('llm');
-    expect(duplicateParticipant?.entity_meta?.['model_name']).toBe('autotest-dup-model');
-    // NOTE (measured, not a defect): `chat_participants` is keyed by
-    // identity on `(entity_name, entity_meta)`
-    // (`internal/infra/db/repos/conversations.go`'s `AddParticipant`) — an
-    // identical participant re-posted for a different conversation reuses
-    // the SAME participant row id and only adds a new mapping row. So
-    // `duplicateParticipant.id` legitimately EQUALS the original's here;
-    // what actually proves independence is the separate MAPPING (a
-    // `chat_participant_mapping` row scoped to `duplicateId`, which is why
-    // this participant shows up on the duplicate's own read at all,
-    // despite never being duplicated by conversation id).
-    expect(duplicateParticipant?.id).toBe(originalParticipants[0]?.id);
+      .toEqual(originalParticipants);
+    const duplicateModel = (await readParticipantSnapshot(page.request, duplicateId)).find((participant) =>
+      participant.entity_name === 'llm' && participant.entity_meta['model_name'] === 'autotest-dup-model',
+    );
+    expect(duplicateModel?.id).toBe(originalModel?.id);
+    expect(duplicateModel?.entity_settings).toEqual({ temperature: 0.42 });
 
     // No `chat_history` is ever read off the original — the duplicate opens
     // with nothing to play back.
@@ -231,18 +248,19 @@ test('D3: Duplicate of a pinned chat is itself unpinned; the original stays pinn
  * SECOND round of duplication (duplicate of a duplicate). */
 test('D4: Duplicate of a public chat is itself public and visible to a non-participant team member, through a nested duplication', async ({ page, browser }) => {
   test.setTimeout(120_000);
-  const originalId = await createConversation(page.request, uniqueName('d4-orig'));
+  const projectId = await resolvePublishAuthorProjectId(page.request);
+  const originalId = await createConversation(page.request, uniqueName('d4-orig'), projectId);
   let firstDuplicateId: string | undefined;
   let secondDuplicateId: string | undefined;
   try {
-    await setConversationPrivacy(page.request, originalId, false);
-    expect((await readConversationDetails(page.request, originalId)).is_private).toBe(false);
+    await setConversationPrivacy(page.request, originalId, false, projectId);
+    expect((await readConversationDetails(page.request, originalId, projectId)).is_private).toBe(false);
 
-    await openChat(page);
-    const firstDuplicate = await duplicateConversation(page, originalId);
+    await openChat(page, PUBLISH_AUTHOR_PROJECT_NAME);
+    const firstDuplicate = await duplicateConversation(page, originalId, projectId);
     firstDuplicateId = firstDuplicate.id;
     await expect
-      .poll(async () => (await readConversationDetails(page.request, firstDuplicateId as string)).is_private, {
+      .poll(async () => (await readConversationDetails(page.request, firstDuplicateId as string, projectId)).is_private, {
         timeout: 15_000,
         message: 'a duplicate of a public chat must itself be public',
       })
@@ -252,7 +270,7 @@ test('D4: Duplicate of a public chat is itself public and visible to a non-parti
     // the public flag is what makes it reachable, not participation.
     const otherMemberCtx = await browser.newContext({ storageState: STORAGE_STATE.admin });
     try {
-      const details = await readConversationDetails(otherMemberCtx.request, firstDuplicateId);
+      const details = await readConversationDetails(otherMemberCtx.request, firstDuplicateId, projectId);
       expect(details.is_private, 'a non-participant team member must be able to read a PUBLIC duplicate').toBe(false);
     } finally {
       await otherMemberCtx.close();
@@ -260,19 +278,19 @@ test('D4: Duplicate of a public chat is itself public and visible to a non-parti
 
     // Nested duplication: duplicating the duplicate preserves public
     // visibility through a second generation.
-    await openChat(page);
-    const secondDuplicate = await duplicateConversation(page, firstDuplicateId);
+    await openChat(page, PUBLISH_AUTHOR_PROJECT_NAME);
+    const secondDuplicate = await duplicateConversation(page, firstDuplicateId, projectId);
     secondDuplicateId = secondDuplicate.id;
     await expect
-      .poll(async () => (await readConversationDetails(page.request, secondDuplicateId as string)).is_private, {
+      .poll(async () => (await readConversationDetails(page.request, secondDuplicateId as string, projectId)).is_private, {
         timeout: 15_000,
         message: 'a duplicate of a duplicate of a public chat must remain public',
       })
       .toBe(false);
   } finally {
-    await removeConversation(page.request, secondDuplicateId);
-    await removeConversation(page.request, firstDuplicateId);
-    await removeConversation(page.request, originalId);
+    await removeConversation(page.request, secondDuplicateId, projectId);
+    await removeConversation(page.request, firstDuplicateId, projectId);
+    await removeConversation(page.request, originalId, projectId);
   }
 });
 

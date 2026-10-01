@@ -55,7 +55,6 @@ import {
   createAgentWithVersion,
   createTag,
   deleteAgent,
-  deleteAutotestTags,
   deleteTag,
   readAuthorProfile,
   readCallerIdentity,
@@ -80,6 +79,7 @@ const named = (tags: readonly { readonly name: string }[]): string[] =>
 test('the project tag list answers a total and rows envelope', async ({ request }) => {
   const tagName = autotestName('tag_envelope');
   const created = await createTag(request, tagName, { color: 'blue' });
+  const agent = await createAgentWithVersion(request, autotestName('envelope_agent'), { tags: [{ name: tagName }] });
   try {
     const envelope = await readTagsEnvelope(request);
     expect(typeof envelope['total'], `the list answered ${JSON.stringify(envelope).slice(0, 200)}`).toBe(
@@ -96,6 +96,7 @@ test('the project tag list answers a total and rows envelope', async ({ request 
     expect(mine?.['data']).toEqual({ color: 'blue' });
   } finally {
     await deleteTag(request, created.id);
+    await deleteAgent(request, agent.id);
   }
 });
 
@@ -108,25 +109,23 @@ test('the project tag list answers a total and rows envelope', async ({ request 
 test('a tag can be created and then deleted', async ({ request }) => {
   const tagName = autotestName('tag_write');
   const created = await createTag(request, tagName, { color: 'green' });
+  const agent = await createAgentWithVersion(request, autotestName('write_agent'), { tags: [{ name: tagName }] });
+  try {
+    expect(created.id, 'the create must address a stored row').not.toBe('0');
+    expect(created.id).not.toBe('');
+    expect(named(await readTags(request))).toContain(tagName);
 
-  expect(created.id, 'the create answered an id of 0, which addresses no row').not.toBe('0');
-  expect(created.id).not.toBe('');
-  expect(named(await readTags(request))).toContain(tagName);
+    const again = await createTag(request, tagName);
+    expect(again.id, 'a second create of the same name must reuse the row').toBe(created.id);
 
-  // Idempotent on the NAME: one name is one row per project, shared by every
-  // version that carries it, so a second create must answer the same row.
-  const again = await createTag(request, tagName);
-  expect(again.id, 'a second create of the same name made a second row').toBe(created.id);
-
-  expect(await deleteTag(request, created.id)).toBe(204);
-  expect(
-    named(await readTags(request)),
-    'the delete answered success and the tag is still in the list',
-  ).not.toContain(tagName);
-
-  // …and deleting it again says so, rather than answering the same 204 a real
-  // delete does.
-  expect(await deleteTag(request, created.id)).toBe(404);
+    expect(await deleteTag(request, created.id)).toBe(204);
+    expect(named(await readTags(request)), 'a deleted tag must leave discovery').not.toContain(tagName);
+    expect((await readVersion(request, agent.id, agent.versionId)).tags, 'delete must remove the version association').toEqual([]);
+    expect(await deleteTag(request, created.id)).toBe(404);
+  } finally {
+    await deleteTag(request, created.id);
+    await deleteAgent(request, agent.id);
+  }
 });
 
 /* ── the entity_coverage filters ──────────────────────────────────────────── */
@@ -168,12 +167,13 @@ test('the tag list can be narrowed to agents, to pipelines, and to everything', 
     );
     expect(pipelines, 'an agent’s tag is answered as a pipeline tag').not.toContain(agentTag);
 
-    // `all` is every tag row the project holds, which is the only coverage a
-    // tag nothing carries yet appears in.
+    // All coverage merges tags carried by visible entities.
     const everything = named(await readTags(request, { coverage: 'all' }));
-    for (const tag of [agentTag, pipelineTag, looseTag]) {
+    for (const tag of [agentTag, pipelineTag]) {
       expect(everything, `${tag} is missing from the whole-project list`).toContain(tag);
     }
+
+    expect(everything, 'unattached tags must remain outside discovery').not.toContain(looseTag);
 
     // The skill coverage is a third set, and neither of the two above is in
     // it: these tags are on applications.
@@ -190,10 +190,13 @@ test('the tag list can be narrowed to agents, to pipelines, and to everything', 
     );
     expect(refused.status(), await refused.text()).toBe(400);
   } finally {
-    await deleteAgent(request, agent.id);
-    await deleteAgent(request, pipeline.id);
+    for (const fixture of [agent, pipeline]) {
+      for (const tag of (await readVersion(request, fixture.id, fixture.versionId)).tags) {
+        if ([agentTag, pipelineTag].includes(tag.name)) await deleteTag(request, tag.id);
+      }
+      await deleteAgent(request, fixture.id);
+    }
     await deleteTag(request, loose.id);
-    await deleteAutotestTags(request, [agentTag, pipelineTag, looseTag]);
   }
 });
 
@@ -210,9 +213,11 @@ test('the tags given to an agent are stored, at creation and at save', async ({ 
     agentType: 'openai',
     tags: [{ name: atCreation, data: { color: 'blue' } }],
   });
+  const ownedTagIds = new Set<string>();
   try {
     // The ROW, through the editor's own reload — not the create's echo.
     const created = await readVersion(request, agent.id, agent.versionId);
+    for (const tag of created.tags) if (tag.name === atCreation) ownedTagIds.add(tag.id);
     expect(
       named(created.tags),
       'the tags sent at creation were accepted with a 201 and never stored',
@@ -234,14 +239,15 @@ test('the tags given to an agent are stored, at creation and at save', async ({ 
     expect(response.status(), `the save answered ${(await response.text()).slice(0, 200)}`).toBe(201);
 
     const saved = await readVersion(request, agent.id, agent.versionId);
+    for (const tag of saved.tags) if (tag.name === atSave) ownedTagIds.add(tag.id);
     expect(named(saved.tags)).toContain(atSave);
     expect(named(saved.tags), 'the tag the save dropped is still on the version').not.toContain(
       atCreation,
     );
     expect(named(await readTags(request))).toContain(atSave);
   } finally {
+    for (const id of ownedTagIds) await deleteTag(request, id);
     await deleteAgent(request, agent.id);
-    await deleteAutotestTags(request, [atCreation, atSave]);
   }
 });
 

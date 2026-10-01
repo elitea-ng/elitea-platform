@@ -34,6 +34,7 @@ import {
   DEFAULT_PROJECT_ID,
   deleteAgent,
   PUBLISHABLE_TAGS,
+  readCallerIdentity,
   readConversationDetails,
   unpublishAllVersions,
 } from '../../fixtures/api';
@@ -144,8 +145,14 @@ test('a conversation survives the withdrawal of the agent it uses', async ({ pag
     // the conversation would leave the page below showing an empty-state that
     // an unwary DOM check could read as "it opened fine".
     const details = await readConversationDetails(page.request, conversationId);
-    expect(details.participants, 'the withdrawn agent is still the conversation’s participant').toHaveLength(1);
-    expect(details.participants[0]?.entity_name).toBe('application');
+    const caller = await readCallerIdentity(page.request);
+    expect(details.participants.map((participant) => participant.entity_name).sort()).toEqual(['application', 'dummy', 'user']);
+    const user = details.participants.find((participant) => participant.entity_name === 'user');
+    expect(String(user?.entity_meta?.['id'])).toBe(caller.id);
+    const applications = details.participants.filter((participant) => participant.entity_name === 'application');
+    expect(applications, 'the withdrawn agent is still the conversation’s participant').toHaveLength(1);
+    expect(String(applications[0]?.entity_meta?.['id'])).toBe(agent.id);
+    expect(String(applications[0]?.entity_meta?.['project_id'])).toBe(DEFAULT_PROJECT_ID);
 
     // And the page opens. `chat-message-input` is the composer; its mere
     // PRESENCE is the "no crash, no 404" assertion, not a statement about

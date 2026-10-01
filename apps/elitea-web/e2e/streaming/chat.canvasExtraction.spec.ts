@@ -7,10 +7,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * The legacy API suite's canvas-extraction cases: turning a whole assistant
  * reply into a code canvas, and selecting a slice from the middle of one so
- * that the message becomes text / canvas / text. Its third case — an inverted
- * selection — needs no message at all and is asserted in
- * `e2e/journeys/api/api.chat-traces-canvas.spec.ts`, beside the route's other
- * refusals.
+ * that the message becomes text / canvas / text. An inverted selection is
+ * refused after authorization of this caller's actual stored message.
+ * The API journey checks unknown groups at the authority boundary.
  *
  * `chat.canvas.spec.ts` next door owns the canvas's EDIT path: create one,
  * change it, and find the change again. This file owns the SPLIT — what the
@@ -200,6 +199,22 @@ test('a canvas can be carved out of the middle of an answer and out of a whole m
     );
 
     const canvasesURL = `${BASE_URL}/api/v2/elitea_core/canvases/prompt_lib/${projectId}`;
+
+    const inverted = await page.request.post(canvasesURL, {
+      data: {
+        message_group_id: Number(answer?.id),
+        message_item_id: before[0]?.id,
+        name: 'Inverted selection',
+        canvas_type: 'code',
+        canvas_content_starts_at: endsAt,
+        canvas_content_ends_at: startsAt,
+      },
+    });
+    expect(inverted.status(), 'an authorized inverted range must fail before the split').toBe(400);
+    expect(await inverted.json()).toEqual({
+      error: 'canvas_content_starts_at must be <= canvas_content_ends_at',
+    });
+    expect(await readMessageItems(page, projectId, groupUuid), 'the refusal must leave the message unchanged').toEqual(before);
 
     // ── 1. the middle slice: one message becomes text / canvas / text ────
     const split = await page.request.post(canvasesURL, {

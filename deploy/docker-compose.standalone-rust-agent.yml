@@ -4,6 +4,10 @@
 #   -f deploy/docker-compose.standalone-full.yml \
 #   -f deploy/docker-compose.standalone-rust-agent.yml config
 services:
+  llm-mock:
+    environment:
+      MOCK_LLM_TOOL_BASE_URL: "https://llm-mock:8090/tool"
+
   elitea-main:
     environment:
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "false"

@@ -72,8 +72,8 @@ import {
   MOCK_TOOL_CREATE_SENTINEL,
   MOCK_TOOL_EFFECTFUL_OPERATION,
   MOCK_TOOL_READ_OPERATION,
-  callToolPrompt,
-  callToolWithArgumentsPrompt,
+  callToolPrompt as mockToolPrompt,
+  callToolWithArgumentsPrompt as mockToolWithArgumentsPrompt,
   clearMockToolJournal,
   createMockToolAgent,
   expectStoredAssistantAnswer,
@@ -97,11 +97,30 @@ const BLOCKED_RESULT_TYPE = 'sensitive_tool_blocked';
 
 /**
  * Which runtime is answering the turns — `scripts/chat-stream-e2e.sh` is the
- * one place that knows, and it exports this. Read for exactly ONE decision:
- * ELITEA-1003's gap is now closed on the native runtime and still open on the
- * SDK (see that test).
+ * one place that knows, and it exports this. The scripted argument shape and
+ * the ELITEA-1003 expectation depend on this leg.
  */
 const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
+
+/**
+ * The SDK adds `headers: {}` when the model omits that optional argument.
+ * Its checkpoint matcher then loses the original call identity. Explicit
+ * null stays aligned across schema parsing and checkpoint matching.
+ * This fixture does not repair the SDK's omitted-default behavior.
+ */
+function callToolWithArgumentsPrompt(
+  operation: string,
+  args: Readonly<Record<string, unknown>>,
+  tail: string,
+): string {
+  return mockToolWithArgumentsPrompt(operation, IS_NATIVE_RUNTIME ? args : { ...args, headers: null }, tail);
+}
+
+function callToolPrompt(operation: string, tail: string): string {
+  return IS_NATIVE_RUNTIME
+    ? mockToolPrompt(operation, tail)
+    : callToolWithArgumentsPrompt(operation, {}, tail);
+}
 
 /** The card's own title, verbatim — `SensitiveToolCard` in `ChatHitlActions.tsx`. */
 const CARD_TITLE = '⚠️ Sensitive Action Authorization Required';
@@ -273,6 +292,11 @@ test('the authorization card names the action, its parameters and the company po
       JSON.stringify(interrupt.tool_args ?? {}),
       'the stored pause must carry the arguments the card displayed',
     ).toContain(marker);
+    if (!IS_NATIVE_RUNTIME) {
+      expect(interrupt.tool_args, 'the SDK checkpoint must retain the explicit nullable header argument').toMatchObject({
+        headers: null,
+      });
+    }
 
     // Declined: the effectful operation must never run for a content assertion.
     await decide(page, card, 'Reject');
@@ -296,16 +320,21 @@ test('the authorization card names the action, its parameters and the company po
     //  - the native runtime sends the model's arguments through unchanged, so
     //    the `{}` the short marker form sends arrives as `{}` and the section
     //    must be ABSENT — which is ELITEA-1000 exactly;
-    //  - the SDK worker materialises the operation's schema defaults first, so
-    //    the SAME call arrives carrying `{regexp: null, headers: {}}`
-    //    (measured on a python-worker stack) and the section must be PRESENT
-    //    and show them.
+    //  - the SDK worker materialises schema defaults. Its marker supplies
+    //    explicit nullable headers to retain the call identity, so it arrives
+    //    carrying `{regexp: null, headers: null}` and the section must be
+    //    PRESENT and show them.
     //
     // A card that always rendered the section fails the first branch; one that
     // never rendered it fails the second. The onetest case's state is the
     // first, and it is reachable on the native leg.
     const bareInterrupt = await readStoredHitlInterrupt(page, fixture.projectId, bare);
     const bareArgs = bareInterrupt.tool_args;
+    if (!IS_NATIVE_RUNTIME) {
+      expect(bareArgs, 'schema defaults must not replace nullable headers in the SDK checkpoint').toMatchObject({
+        headers: null,
+      });
+    }
     const bareArgKeys =
       typeof bareArgs === 'object' && bareArgs !== null ? Object.keys(bareArgs as Record<string, unknown>) : [];
     if (bareArgKeys.length === 0) {

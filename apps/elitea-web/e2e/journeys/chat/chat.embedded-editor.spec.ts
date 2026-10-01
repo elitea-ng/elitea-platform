@@ -50,7 +50,7 @@ import { expect, test } from '@playwright/test';
 import type { APIRequestContext, Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createConversation, deleteConversation } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createConversation, deleteConversation, readCallerIdentity } from '../../fixtures/api';
 
 const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}`;
 
@@ -72,6 +72,14 @@ async function readParticipants(request: APIRequestContext, conversationId: stri
   expect(response.status()).toBe(200);
   const body = (await response.json()) as { participants?: readonly ParticipantRow[] };
   return body.participants ?? [];
+}
+
+async function readDefaultParticipants(request: APIRequestContext, conversationId: string): Promise<readonly ParticipantRow[]> {
+  const participants = await readParticipants(request, conversationId);
+  const caller = await readCallerIdentity(request);
+  expect(participants.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'user']);
+  expect(String(participants.find((participant) => participant.entity_name === 'user')?.entity_meta?.id)).toBe(caller.id);
+  return participants;
 }
 
 /** Opens the composer "+" menu's Pipelines submenu and clicks its "Create new" row. */
@@ -149,9 +157,8 @@ test('creating a pipeline from the chat composer opens a real form, keeps its co
   let pipelineId: string | undefined;
 
   try {
-    // Nothing is attached yet, so whatever the flow below attaches is the only
-    // thing that could have.
-    expect(await readParticipants(page.request, conversationId)).toEqual([]);
+    // The author and dummy exist. The create flow must add the first application.
+    const baseline = await readDefaultParticipants(page.request, conversationId);
 
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
@@ -239,14 +246,17 @@ test('creating a pipeline from the chat composer opens a real form, keeps its co
     await save.click();
 
     await expect
-      .poll(async () => (await readParticipants(page.request, conversationId)).map((row) => row.entity_name), {
+      .poll(async () => (await readParticipants(page.request, conversationId)).filter((participant) => participant.entity_name === 'application').map((participant) => participant.entity_name), {
         timeout: 30_000,
         message: 'saving a pipeline created from the "+" menu must attach it to the conversation',
       })
       .toEqual(['application']);
 
     const attached = await readParticipants(page.request, conversationId);
-    pipelineId = attached[0]?.entity_meta?.id === undefined ? undefined : String(attached[0].entity_meta.id);
+    const applications = attached.filter((participant) => participant.entity_name === 'application');
+    expect(applications).toHaveLength(1);
+    expect(attached.filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
+    pipelineId = applications[0]?.entity_meta?.id === undefined ? undefined : String(applications[0].entity_meta.id);
     expect(pipelineId, 'the attached participant must name the pipeline that was created').toBeDefined();
 
     // The dead-wiring assertion. Every control above was on screen before this
@@ -287,6 +297,7 @@ test('editing an existing pipeline participant loads its configuration, saves it
   let pipelineId: string | undefined;
 
   try {
+    const baseline = await readDefaultParticipants(page.request, conversationId);
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
 
@@ -300,12 +311,16 @@ test('editing an existing pipeline participant loads its configuration, saves it
     await page.getByTestId('pipeline-save-button').click();
 
     await expect
-      .poll(async () => (await readParticipants(page.request, conversationId)).length, {
+      .poll(async () => (await readParticipants(page.request, conversationId)).filter((participant) => participant.entity_name === 'application').length, {
         timeout: 30_000,
         message: 'the created pipeline must attach before it can be edited',
       })
       .toBe(1);
-    const created = (await readParticipants(page.request, conversationId))[0];
+    const attached = await readParticipants(page.request, conversationId);
+    const applications = attached.filter((participant) => participant.entity_name === 'application');
+    expect(applications).toHaveLength(1);
+    expect(attached.filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
+    const created = applications[0];
     pipelineId = created?.entity_meta?.id === undefined ? undefined : String(created.entity_meta.id);
     expect(pipelineId).toBeDefined();
 

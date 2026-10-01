@@ -85,7 +85,15 @@ const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJEC
 interface ParticipantRow {
   readonly id: number | string;
   readonly entity_name?: string;
+  readonly entity_meta?: { readonly id?: unknown; readonly project_id?: unknown };
   readonly entity_settings?: { readonly version_id?: string | number };
+}
+
+function applicationParticipant(rows: readonly ParticipantRow[], agentId: string) {
+  const row = rows.find((candidate) => candidate.entity_name === 'application' &&
+    String(candidate.entity_meta?.id) === agentId && String(candidate.entity_meta?.project_id) === DEFAULT_PROJECT_ID);
+  expect(row, 'the participant must match the application and its project').toBeDefined();
+  return row;
 }
 
 async function attachParticipants(
@@ -159,7 +167,7 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
         entity_settings: { version_id: agent.versionId },
       },
     ]);
-    const participantId = String(attached[0]?.id);
+    const participantId = String(applicationParticipant(attached, agent.id)?.id);
 
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
@@ -220,7 +228,7 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
       .poll(
         async () => {
           const rows = await readParticipants(page.request, conversationId);
-          return String(rows[0]?.entity_settings?.version_id);
+          return String(applicationParticipant(rows, agent.id)?.entity_settings?.version_id);
         },
         { timeout: 15_000, message: 'the switch must persist the new version_id server-side' },
       )
@@ -323,7 +331,7 @@ test('ELITEA-0386: editing a not-published agent participant\'s LLM settings fro
       .poll(
         async () => {
           const rows = await readParticipants(page.request, conversationId);
-          return String(rows[0]?.entity_settings?.version_id);
+          return String(applicationParticipant(rows, agent.id)?.entity_settings?.version_id);
         },
         { timeout: 15_000, message: 'the LLM-settings save must not clobber the participant\'s other entity_settings fields' },
       )
