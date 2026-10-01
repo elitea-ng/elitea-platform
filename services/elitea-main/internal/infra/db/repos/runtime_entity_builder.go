@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -26,8 +27,8 @@ import (
 // owner_id defect createSkillSQL's own doc comment records is exactly that
 // failure, found once already).
 //
-// The project id arrives as an int64 the caller resolved from the durable
-// claim. It is never read from a request: see
+// The project and actor IDs come from the authorized durable claim.
+// They are never read from a request: see
 // internal/infra/storage/runtime_entity_builder.go's module doc comment.
 type CurrentRuntimeEntityBuilderRepository struct {
 	pool   *pgxpool.Pool
@@ -64,10 +65,14 @@ var (
 func (r *CurrentRuntimeEntityBuilderRepository) UpsertRuntimeSkillByName(
 	ctx context.Context,
 	projectID int64,
+	actorID int64,
 	name string,
 	description string,
 	instructions string,
 ) (storage.RuntimeSkillRecord, error) {
+	if actorID <= 0 || actorID > math.MaxInt32 {
+		return storage.RuntimeSkillRecord{}, errors.New("runtime skill write: actor is invalid")
+	}
 	projectKey := strconv.FormatInt(projectID, 10)
 	tenantSchema := schema(projectKey)
 	ownerID, err := tenantschema.OwnerID(projectKey)
@@ -102,7 +107,7 @@ func (r *CurrentRuntimeEntityBuilderRepository) UpsertRuntimeSkillByName(
 		var insertedName, insertedDescription string
 		var createdAt any
 		if insertErr := tx.QueryRow(
-			ctx, createSkillSQL(tenantSchema), name, description, ownerID.Int64(),
+			ctx, createSkillSQL(tenantSchema), name, description, ownerID.Int64(), actorID,
 		).Scan(&skillID, &insertedName, &insertedDescription, &createdAt); insertErr != nil {
 			return storage.RuntimeSkillRecord{}, fmt.Errorf("runtime skill write: create: %w", insertErr)
 		}
@@ -119,7 +124,7 @@ func (r *CurrentRuntimeEntityBuilderRepository) UpsertRuntimeSkillByName(
 	if err != nil {
 		return storage.RuntimeSkillRecord{}, err
 	}
-	if _, err := upsertBaseSkillVersion(ctx, tx, tenantSchema, skillID, instructions, existingTags, ownerID.Int64()); err != nil {
+	if _, err := upsertBaseSkillVersion(ctx, tx, tenantSchema, skillID, instructions, existingTags, actorID); err != nil {
 		return storage.RuntimeSkillRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

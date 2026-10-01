@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -146,13 +147,13 @@ type RuntimeProjectContextRecord struct {
 	Found   bool
 }
 
-// RuntimeSkillSink writes one skill inside the project the CLAIM selected.
-// Implementations must not accept a project from the request: the caller
-// passes the authorized one.
+// RuntimeSkillSink writes one skill with the claim's project and actor.
+// The request cannot select either identity.
 type RuntimeSkillSink interface {
 	UpsertRuntimeSkillByName(
 		ctx context.Context,
 		projectID int64,
+		actorID int64,
 		name string,
 		description string,
 		instructions string,
@@ -196,31 +197,37 @@ func NewRuntimeEntityBuilderService(
 	}, nil
 }
 
-// authorizeProject runs the shared half of both writes: the agent-scoped claim
-// check and the project identity it resolves. It returns the project id and
-// nothing else, so neither caller can accidentally read a request-supplied
-// value in its place.
+// authorizeProject returns the project from the authorized durable claim.
+// Project Context writes do not need the claim's actor identity.
 func (service *RuntimeEntityBuilderService) authorizeProject(
 	ctx context.Context,
 	claim ContentClaim,
 ) (int64, error) {
+	authorization, err := service.authorizeBuilder(ctx, claim)
+	return authorization.ResourceProjectID, err
+}
+
+func (service *RuntimeEntityBuilderService) authorizeBuilder(
+	ctx context.Context,
+	claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return RuntimeContextAuthorization{}, err
 	}
 	authorization, err := service.authorizer.AuthorizeAgentRuntimeContext(ctx, claim)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return 0, contextErr
+			return RuntimeContextAuthorization{}, contextErr
 		}
 		if errors.Is(err, ErrContentUnauthorized) {
-			return 0, ErrContentUnauthorized
+			return RuntimeContextAuthorization{}, ErrContentUnauthorized
 		}
-		return 0, runtimeContextUnavailable(runtimeContextStageClaimAuthorize)
+		return RuntimeContextAuthorization{}, runtimeContextUnavailable(runtimeContextStageClaimAuthorize)
 	}
 	if authorization.ResourceProjectID <= 0 || authorization.ResourceProjectID > math.MaxInt32 {
-		return 0, runtimeContextUnavailable(runtimeContextStageProjectIdentity)
+		return RuntimeContextAuthorization{}, runtimeContextUnavailable(runtimeContextStageProjectIdentity)
 	}
-	return authorization.ResourceProjectID, nil
+	return authorization, nil
 }
 
 // WriteSkill creates or updates one skill for the claimed execution.
@@ -249,12 +256,18 @@ func (service *RuntimeEntityBuilderService) WriteSkill(
 		strings.TrimSpace(instructions) == "" {
 		return RuntimeSkillWriteContext{}, ErrContentRejected
 	}
-	projectID, err := service.authorizeProject(ctx, claim)
+	authorization, err := service.authorizeBuilder(ctx, claim)
 	if err != nil {
 		return RuntimeSkillWriteContext{}, err
 	}
+	actorID, err := strconv.ParseInt(authorization.ActorID, 10, 64)
+	if err != nil || actorID <= 0 || actorID > math.MaxInt32 ||
+		strconv.FormatInt(actorID, 10) != authorization.ActorID {
+		return RuntimeSkillWriteContext{}, runtimeContextUnavailable(runtimeContextStageExecutionActor)
+	}
+	projectID := authorization.ResourceProjectID
 	record, err := service.skills.UpsertRuntimeSkillByName(
-		ctx, projectID, name, description, instructions,
+		ctx, projectID, actorID, name, description, instructions,
 	)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {

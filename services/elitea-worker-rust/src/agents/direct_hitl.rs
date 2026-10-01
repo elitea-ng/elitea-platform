@@ -1233,25 +1233,13 @@ impl ResolvedDirectHitlDecision {
                 confirmation_decision: ToolConfirmationDecision::Deny,
             });
         }
-        // The rest of the message travels with the decision. A call an earlier
-        // card already settled keeps that settlement; a REPEAT of a settled
-        // tool inherits it, which is the "one authorization per tool per turn"
-        // contract the same-tool-twice case is made of; anything else is left
-        // undecided so ADK raises its own card for it.
+        // Keep exact decisions from earlier cards of this message. A sibling
+        // call needs its own decision, even with the same tool and arguments.
         for call in &self.replay_calls {
             if call.call_id == self.call_id {
                 continue;
             }
-            let settled = call.settled.as_ref().map_or_else(
-                || {
-                    (call.tool_name == self.tool_name).then(|| SettledDecision {
-                        decision: self.decision,
-                        comment: self.decision_value.clone(),
-                    })
-                },
-                |settled| Some(settled.clone()),
-            );
-            let Some(settled) = settled else {
+            let Some(settled) = call.settled.as_ref() else {
                 continue;
             };
             let policy = sensitive_tools

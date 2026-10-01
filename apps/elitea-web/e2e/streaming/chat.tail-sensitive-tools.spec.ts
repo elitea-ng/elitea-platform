@@ -723,25 +723,8 @@ test('two sensitive tools in one turn each raise their own authorization', async
   // still-undecided sensitive call and raises its own card for it
   // (`direct_hitl.rs`: `replay_calls_for` / `settled_decision`).
   //
-  // STILL OPEN ON THE SDK, and the mark is pinned to that leg rather than
-  // removed, so the native leg keeps asserting the fixed behaviour and the SDK
-  // leg goes green the day it is fixed rather than silently staying broken.
-  // MEASURED on the python worker: the second sensitive call is never offered
-  // and the card never appears. The fix does not belong in this repository —
-  // `services/elitea-worker-python` only CONFIGURES the guard
-  // (`sdk_adapter.py`'s `security.configure_sensitive_tools`), and the
-  // interrupt itself is raised inside elitea-sdk's
-  // `runtime/middleware/sensitive_tool_guard.py`, a different repository. Not a
-  // skip: a skip would stop measuring the leg altogether.
-  if (!IS_NATIVE_RUNTIME) {
-    test.fail(
-      true,
-      'ELITEA-1003 (#948): product gap (SDK/python worker only) — when one assistant message calls two ' +
-        'sensitive tools, only the FIRST raises an authorization dialog; the second is never offered ' +
-        'for a decision and never runs. Fixed on the native runtime in `direct_hitl.rs`; the SDK half ' +
-        'lives in elitea-sdk `sensitive_tool_guard.py`.',
-    );
-  }
+  // The Python fixture now preserves both call identities with explicit
+  // nullable headers. Both runtimes must offer and finish both decisions.
 
   let fixture: MockToolAgentFixture | undefined;
   try {
@@ -814,9 +797,9 @@ test('two sensitive tools in one turn each raise their own authorization', async
   }
 });
 
-/* onetest: ELITEA-1002 — the SAME sensitive tool called twice in one turn is authorized once: the
- * second invocation is auto-approved from the first decision, and BOTH complete. */
-test('the same sensitive tool called twice in one turn is authorized once', async ({ page }) => {
+/* onetest: ELITEA-1002 — each sensitive invocation requires its own approval, including two
+ * calls to the same tool. This follows the current SDK policy (#5245). */
+test('the same sensitive tool called twice requires two distinct approvals', async ({ page }) => {
   test.setTimeout(420_000);
 
   let fixture: MockToolAgentFixture | undefined;
@@ -839,20 +822,51 @@ test('the same sensitive tool called twice in one turn is authorized once', asyn
     await expect(card).toContainText(MOCK_TOOL_READ_OPERATION);
 
     const interrupts = await readStoredHitlInterrupts(page, fixture.projectId, fixture.conversationId, 1);
-    // ONE dialog: the folder's contract is that a decision taken for a tool
-    // covers its repeat invocation within the SAME turn. Asserted on the
-    // STORE, not by counting cards — a second interrupt that was raised and
-    // rendered off-screen would still be a second decision to take.
+    // Only the first invocation can be pending before its decision.
+    // Read the stored pause so an off-screen card cannot hide another one.
     expect(
       interrupts.length,
-      'the same sensitive tool called twice in one turn asked for a second decision — the folder’s ' +
-        'contract is one authorization per tool per turn',
+      'the turn must offer one invocation at a time',
     ).toBe(1);
+    const firstInterrupt = interrupts[0];
+    expect(firstInterrupt?.interrupt_id, 'the first approval must identify its own pause').toBeTruthy();
+    if (!IS_NATIVE_RUNTIME) {
+      expect(firstInterrupt?.tool_args).toMatchObject({ headers: null });
+    }
+    expect(
+      await readMockToolJournal(page),
+      'neither sensitive invocation may run before the first approval',
+    ).toEqual([]);
 
     await decide(page, card, 'Approve');
+
+    const second = page.getByTestId('chat-hitl-actions').last();
+    await expect(
+      second,
+      'the second invocation must request its own approval',
+    ).toBeVisible({ timeout: 120_000 });
+    await expect(second).toContainText(MOCK_TOOL_READ_OPERATION);
+    const secondInterrupt = await readStoredHitlInterrupt(page, fixture.projectId, fixture.conversationId);
+    expect(secondInterrupt.tool_name).toBe(MOCK_TOOL_READ_OPERATION);
+    expect(
+      secondInterrupt.interrupt_id,
+      'the second approval must not reuse the first pause identity',
+    ).not.toBe(firstInterrupt?.interrupt_id);
+    if (!IS_NATIVE_RUNTIME) {
+      expect(secondInterrupt.tool_args).toMatchObject({ headers: null });
+    }
+    const receipt = { method: 'GET', path: '/tool/status', operation: MOCK_TOOL_READ_OPERATION };
+    // Native pre-checks the whole batch before dispatch. Python executes the
+    // first approved call before it pauses on the second invocation.
+    expect(
+      (await readMockToolJournal(page)).map(({ method, path, operation }) => ({ method, path, operation })),
+      'the second invocation must not run before its approval',
+    ).toEqual(IS_NATIVE_RUNTIME ? [] : [receipt]);
+
+    await decide(page, second, 'Approve');
     await expectStoredAssistantAnswer(page, fixture.projectId, fixture.conversationId, {
       timeout: 240_000,
-      message: 'the single authorization did not carry the turn to completion',
+      message: 'both approvals must produce the stored continuation reply',
       contains: MOCK_CALL_TOOL_SENTINEL,
     });
     const answer =
@@ -861,12 +875,23 @@ test('the same sensitive tool called twice in one turn is authorized once', asyn
         .at(-1)?.content ?? '';
     expect(
       answer,
-      'the one authorization must not have produced a BLOCKED result — approving once must not ' +
-        'decline the repeat',
+      'neither approved invocation may produce a blocked result',
     ).not.toContain(BLOCKED_RESULT_TYPE);
+    expect(
+      answer.match(/tool result \d+ said /g) ?? [],
+      'the stored reply must retain both authorized call results',
+    ).toHaveLength(2);
+    expect(
+      answer.match(/"sentinel"\s*:\s*"MOCKTOOLSTATUS"/g) ?? [],
+      'both stored results must carry the successful read receipt',
+    ).toHaveLength(2);
+    expect(
+      (await readMockToolJournal(page)).map(({ method, path, operation }) => ({ method, path, operation })),
+      'both authorized invocations must run exactly once',
+    ).toEqual([receipt, receipt]);
     await expect(
       page.getByTestId('chat-hitl-actions'),
-      'no second dialog may be left open once the single authorization is given',
+      'no dialog may remain after both approvals',
     ).toHaveCount(0, { timeout: 60_000 });
   } finally {
     await fixture?.dispose();

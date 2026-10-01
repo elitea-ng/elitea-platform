@@ -41,12 +41,12 @@
     "read. Tier 1 and tier 2 hash those files in the checkout and REFUSE TO RUN",
     "when a digest differs, so the gates measure the content this file names.",
     "",
-    "THE LIST IS SCOPED ON PURPOSE. ci-python.yml applies the two patch",
+    "THE LIST IS SCOPED ON PURPOSE. ci-python.yml applies the admitted patch",
     "revisions with `git cherry-pick --no-commit`, so the CI tree is",
     "deliberately dirty. A whole-tree cleanliness check fails every CI run, and",
-    "that trap is why this states FILES instead. Both patches touch",
-    "elitea_sdk/runtime/toolkits/mcp.py, elitea_sdk/runtime/utils/mcp_adapter.py",
-    "and tests/ only, so neither digest below moves under them.",
+    "that trap is why this states FILES instead. The patches change MCP",
+    "discovery, tool groups, image generation, and sensitive-call resume.",
+    "They preserve both measured files, so neither digest below moves.",
     "",
     "WHEN THE SDK MOVES:",
     "  1. Update services/elitea-worker-python/elitea-sdk.lock.json as usual.",
@@ -73,7 +73,8 @@
       "5c9409779ac0a55f8bf74f6ef438977089187a14",
       "07ddc5cd67a0c747f83ca0e26421cde71bd97d9d",
       "4e631ed9e9523b33410a31bd2242c93fa9ec0b4b",
-      "afff234904b6d5de551436b53c078722f13ff4de"
+      "afff234904b6d5de551436b53c078722f13ff4de",
+      "9a0614571a693a86b497b0502456cf32745d530e"
     ],
     "contents": [
       {
@@ -85,6 +86,6 @@
         "sha256": "9cfac67a8a1c1d0eb43dbf6245f4ee03f659e4de4023cadf6921fa0e16bbed28"
       }
     ],
-    "verified_on": "2026-09-09"
+    "verified_on": "2026-10-01"
   }
 }

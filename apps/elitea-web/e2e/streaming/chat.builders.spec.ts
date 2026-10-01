@@ -90,9 +90,9 @@ function callTool(toolName: string, args: Record<string, unknown>): string {
   return `[[mock:call_tool ${toolName} ${JSON.stringify(args)}]]`;
 }
 
-/** The tool names the native runtime binds for the two modules (`internal_tools.rs`). */
+/** Skills use the native builder. Project Context uses Main's internal MCP catalogue. */
 const SKILL_TOOL = 'create_or_update_skill';
-const PROJECT_CONTEXT_TOOL = 'write_project_context';
+const PROJECT_CONTEXT_TOOL = 'put_prompt_lib_project-context';
 
 /** The module names the version stores (`INTERNAL_TOOLS_LIST`). */
 const SKILLS_BUILDER = 'skills_builder';
@@ -319,7 +319,21 @@ function builderResultCategory(
   if (content.includes('execution denied') || content.includes('not authorized')) return 'authorization_failed';
   if (content.includes('platform could not be reached')) return 'platform_unavailable';
   if (content.includes('was not saved')) return 'write_rejected';
-  if (!content.includes(`tool ${toolName} said `) || !content.includes('MOCKCALLTOOLEND')) return 'tool_result_missing';
+  const resultPrefix = `tool ${toolName} said `;
+  if (!content.includes(resultPrefix) || !content.includes('MOCKCALLTOOLEND')) return 'tool_result_missing';
+  if (toolName === PROJECT_CONTEXT_TOOL) {
+    // ADK preserves Main's JSON detail inside the MCP text-output envelope.
+    try {
+      const result = JSON.parse(content.slice(
+        content.indexOf(resultPrefix) + resultPrefix.length, content.lastIndexOf('MOCKCALLTOOLEND'),
+      ).trim()) as { output?: string };
+      const detail = JSON.parse(result.output ?? '') as { id?: number; content?: string; enabled?: boolean };
+      return typeof detail.id === 'number' && detail.id > 0 && typeof detail.content === 'string' &&
+        typeof detail.enabled === 'boolean' ? 'saved' : 'unexpected_tool_result';
+    } catch {
+      return 'unexpected_tool_result';
+    }
+  }
   return /(?:Created|Updated) (?:Skill|Project Context):/.test(content) ? 'saved' : 'unexpected_tool_result';
 }
 
@@ -499,7 +513,9 @@ test('a chat turn with Project Context Builder enabled writes the project contex
   await clearProjectContext(page, projectId);
 
   try {
-    const turn = await sendTurn(page, prepared, `${callTool(PROJECT_CONTEXT_TOOL, { content: first })} write that down`);
+    const turn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content: first,
+    })} write that down`);
     await expect
       .poll(async () => {
         await assertBuilderResult(page, prepared, turn);
@@ -567,7 +583,9 @@ test('a second Project Context Builder turn updates the context in place', async
   await clearProjectContext(page, projectId);
 
   try {
-    const firstTurn = await sendTurn(page, prepared, `${callTool(PROJECT_CONTEXT_TOOL, { content: first })} write that down`);
+    const firstTurn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content: first,
+    })} write that down`);
     await expect
       .poll(async () => {
         await assertBuilderResult(page, prepared, firstTurn);
@@ -580,7 +598,9 @@ test('a second Project Context Builder turn updates the context in place', async
 
     // THE assertion this test exists for. The start below was the 422 until
     // #946; a regression of that gate fails here first.
-    const secondTurn = await sendTurn(page, prepared, `${callTool(PROJECT_CONTEXT_TOOL, { content: second })} extend it`);
+    const secondTurn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content: second,
+    })} extend it`);
     await expect
       .poll(async () => {
         await assertBuilderResult(page, prepared, secondTurn);
@@ -656,12 +676,9 @@ test('the deployment reports whether the builder modules are served by its worke
  * write into. THAT MECHANISM DOES NOT EXIST HERE, and the cases' own
  * pass criteria are what survive the difference:
  *
- *   - "created without asking for project_id or user_id" — the tools' own
- *     `parameters_schema` (`services/elitea-worker-rust/src/agents/
- *     internal_tools.rs`) carries neither field, so the model CANNOT name a
- *     project even if it tried. The project comes from
- *     `ClaimBoundRuntimeContextAuthority` and is re-resolved by main on the
- *     claim-bound listener (`internal/infra/storage/content_server.go`);
+ *   - Skills take the project from the durable claim. Project Context uses
+ *     Main's internal MCP endpoint. Its declared schema requires `project_id`.
+ *     Main verifies that value against the endpoint project and the trusted actor's edit permission.
  *   - "the context appears only in the current project" and "other projects are
  *     unaffected" — that is a claim about two projects, and it is what the two
  *     tests below measure. The tests above prove the write LANDS in the
@@ -770,7 +787,9 @@ test('Project Context Builder writes the conversation’s own project context an
   const otherBefore = await readProjectContext(page, OTHER_PROJECT_ID);
 
   try {
-    const turn = await sendTurn(page, prepared, `${callTool(PROJECT_CONTEXT_TOOL, { content })} write that down`);
+    const turn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content,
+    })} write that down`);
     await expect
       .poll(async () => {
         await assertBuilderResult(page, prepared, turn);

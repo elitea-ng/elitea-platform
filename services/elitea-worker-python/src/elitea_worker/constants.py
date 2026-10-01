@@ -42,9 +42,11 @@ SDK_SOURCE_PATCH_REVISIONS = (
     # against the SDK's own main line. Drop this patch once that PR merges
     # and the pin moves to a released SDK version that includes it.
     "afff234904b6d5de551436b53c078722f13ff4de",
+    # Keep identical sensitive invocations distinct across saved graph resumes.
+    "9a0614571a693a86b497b0502456cf32745d530e",
 )
 SDK_PACKAGE_TREE_SHA256 = (
-    "28133c910d92f2710b70b2973765f4367da2f31ace80168c586c2cd7322c9c0d"
+    "42cd111fbb59fdb82406f853718f8033561369624c5d66eb10350dd58ff2f1c3"
 )
 # The configuration catalog has its own compatibility revision. SDK 0.9.8
 # preserves the exact admitted catalog digest, so upgrading the runtime must

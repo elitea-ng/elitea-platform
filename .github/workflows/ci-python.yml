@@ -274,6 +274,7 @@ jobs:
           # #864: imagegen toolkit, cherry-picked the same way as the two MCP
           # patches above. See the matching comment in the Containerfile.
           SDK_IMAGEGEN_PATCH: afff234904b6d5de551436b53c078722f13ff4de
+          SDK_SENSITIVE_RESUME_PATCH: 9a0614571a693a86b497b0502456cf32745d530e
         run: |
           git clone --filter=blob:none --no-checkout \
             https://github.com/EliteaAI/elitea-sdk.git \
@@ -285,10 +286,12 @@ jobs:
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_MCP_HARD_TIMEOUT_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_TOOL_GROUPS_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cat-file -e "${SDK_IMAGEGEN_PATCH}^{commit}"
+          git -C /tmp/elitea-sdk-current cat-file -e "${SDK_SENSITIVE_RESUME_PATCH}^{commit}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_MCP_PREFLIGHT_PATCH}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_MCP_HARD_TIMEOUT_PATCH}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_TOOL_GROUPS_PATCH}"
           git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_IMAGEGEN_PATCH}"
+          git -C /tmp/elitea-sdk-current cherry-pick --no-commit "${SDK_SENSITIVE_RESUME_PATCH}"
 
       - name: Install the pinned worker and protocol packages
         run: |

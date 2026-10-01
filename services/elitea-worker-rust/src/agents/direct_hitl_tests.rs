@@ -1,3 +1,10 @@
+use std::sync::{Arc, Mutex};
+
+use adk_rust::agent::LlmAgentBuilder;
+use adk_rust::futures::StreamExt as _;
+use adk_rust::runner::Runner;
+use adk_rust::session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
+use adk_rust::tool::BasicToolset;
 use adk_rust::{Content, Event, Part, ToolConfirmationDecision, ToolConfirmationRequest};
 use serde_json::{Value, json};
 
@@ -845,55 +852,379 @@ async fn a_second_sensitive_call_keeps_the_first_decision_and_is_offered_on_its_
 }
 
 #[test]
-fn a_repeat_of_a_decided_tool_inherits_that_decision_within_the_same_message() {
-    // ELITEA-1002: one authorization per tool per turn. The repeat carries its
-    // own call id, which ADK's pre-check keys on, so it needs the decision
-    // written out for it too.
+fn same_tool_siblings_need_separate_decisions_even_with_identical_arguments() {
     let first = json!({"value": 21});
-    let second = json!({"value": 42});
-    let calls = [
-        ("call-1", "double", first.clone()),
-        ("call-2", "double", second.clone()),
-    ];
-    let events = multi_call_events(&calls, 0);
-    let (interrupt_id, _) =
-        sensitive_call_identity("invocation-1", "call-1", "double", &first).expect("call identity");
+    for second in [first.clone(), json!({"value": 42})] {
+        let calls = [
+            ("call-1", "double", first.clone()),
+            ("call-2", "double", second),
+        ];
+        let events = multi_call_events(&calls, 0);
+        let (interrupt_id, _) = sensitive_call_identity("invocation-1", "call-1", "double", &first)
+            .expect("call identity");
+        for (action, comment) in [("approve", ""), ("block_with_comment", "stop")] {
+            let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+                action,
+                comment,
+                &interrupt_id,
+                "call-1",
+            ))
+            .expect("decision admission")
+            .resolve(&session(events.clone()))
+            .expect("exact session call")
+            .into_direct_replay(&sensitive_catalog(true))
+            .expect("exact call replay");
+            assert_eq!(replay.replay_call_ids(), vec!["call-1", "call-2"]);
+            assert_eq!(replay.approved_call_ids(), vec!["call-1"]);
+            assert_eq!(
+                replay.blocked_calls(),
+                if action == "approve" {
+                    Vec::new()
+                } else {
+                    vec![("call-1", "stop")]
+                },
+                "a denial must replace only the decided invocation"
+            );
+        }
+    }
+}
 
-    let approved = DirectHitlDecision::from_payload(&multi_call_payload(
-        "approve",
-        "",
-        &interrupt_id,
-        "call-1",
-    ))
-    .expect("decision admission")
-    .resolve(&session(events.clone()))
-    .expect("exact session call")
-    .into_direct_replay(&sensitive_catalog(true))
-    .expect("approved replay");
-    let mut ids = approved.approved_call_ids();
-    ids.sort_unstable();
-    assert_eq!(ids, vec!["call-1", "call-2"]);
+struct SameToolReplayFixture {
+    sessions: Arc<InMemorySessionService>,
+    calls: Arc<Mutex<Vec<(String, Value)>>>,
+    requests: Arc<Mutex<Vec<adk_rust::LlmRequest>>>,
+}
+
+impl SameToolReplayFixture {
+    async fn new(second_arguments: Value) -> Self {
+        let sessions = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(CreateRequest {
+                app_name: "elitea-agent-v1".to_owned(),
+                user_id: "user-1".to_owned(),
+                session_id: Some("session-1".to_owned()),
+                state: std::collections::HashMap::new(),
+            })
+            .await
+            .expect("fixture session");
+        let calls = [
+            ("call-1", "double", json!({"value": 21})),
+            ("call-2", "double", second_arguments),
+        ];
+        for event in multi_call_events(&calls, 0) {
+            sessions
+                .append_event("session-1", event)
+                .await
+                .expect("persisted initial pause");
+        }
+        Self {
+            sessions,
+            calls: Arc::default(),
+            requests: Arc::default(),
+        }
+    }
+
+    async fn stored_session(&self) -> Box<dyn adk_rust::session::Session> {
+        self.sessions
+            .get(GetRequest {
+                app_name: "elitea-agent-v1".to_owned(),
+                user_id: "user-1".to_owned(),
+                session_id: "session-1".to_owned(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .expect("persisted replay session")
+    }
+
+    async fn resume(&self, call_id: &str, action: &str) -> (String, Vec<Event>) {
+        let stored = self.stored_session().await;
+        let events = stored.events().all();
+        let confirmation = events.last().expect("pending confirmation");
+        let request = confirmation
+            .actions
+            .tool_confirmation
+            .as_ref()
+            .expect("pending card");
+        assert_eq!(request.function_call_id.as_deref(), Some(call_id));
+        let (interrupt_id, _) = sensitive_call_identity(
+            &confirmation.invocation_id,
+            call_id,
+            &request.tool_name,
+            &request.args,
+        )
+        .expect("pending card identity");
+        let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+            action,
+            "",
+            &interrupt_id,
+            call_id,
+        ))
+        .expect("exact decision")
+        .resolve(stored.as_ref())
+        .expect("persisted decision resolution")
+        .into_direct_replay(&sensitive_catalog(true))
+        .expect("read-only replay");
+        let tool: Arc<dyn adk_rust::Tool> = Arc::new(RecordedDoubleTool {
+            calls: Arc::clone(&self.calls),
+        });
+        let prepared = replay.bind(Arc::new(ReplayFinalLlm {
+            requests: Arc::clone(&self.requests),
+        }));
+        let (model, input, toolsets) = prepared.into_parts(vec![Arc::new(BasicToolset::new(
+            "fixture-tools",
+            vec![tool],
+        ))]);
+        let mut agent = LlmAgentBuilder::new("elitea-agent")
+            .model(model)
+            .require_tool_confirmation("double");
+        for toolset in toolsets {
+            agent = agent.toolset(toolset);
+        }
+        let (user_content, run_config) = input.into_parts();
+        let runner = Runner::builder()
+            .app_name("elitea-agent-v1")
+            .agent(Arc::new(agent.build().expect("replay agent")))
+            .session_service(self.sessions.clone())
+            .run_config(run_config)
+            .build()
+            .expect("replay runner");
+        let mut stream = runner
+            .run(
+                adk_rust::UserId::new("user-1").expect("user identity"),
+                adk_rust::SessionId::new("session-1").expect("session identity"),
+                user_content,
+            )
+            .await
+            .expect("replay stream");
+        let mut emitted = Vec::new();
+        while let Some(event) = stream.next().await {
+            emitted.push(event.expect("replay event"));
+        }
+        (interrupt_id, emitted)
+    }
+}
+
+struct RecordedDoubleTool {
+    calls: Arc<Mutex<Vec<(String, Value)>>>,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::Tool for RecordedDoubleTool {
+    fn name(&self) -> &'static str {
+        "double"
+    }
+
+    fn description(&self) -> &'static str {
+        "Double one integer."
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        context: Arc<dyn adk_rust::ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        let value = arguments["value"]
+            .as_i64()
+            .ok_or_else(|| adk_rust::AdkError::agent("fixture integer missing"))?;
+        self.calls
+            .lock()
+            .map_err(|_| adk_rust::AdkError::agent("fixture call lock failed"))?
+            .push((context.function_call_id().to_owned(), arguments));
+        Ok(json!({"value": value * 2}))
+    }
+}
+
+struct ReplayFinalLlm {
+    requests: Arc<Mutex<Vec<adk_rust::LlmRequest>>>,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::Llm for ReplayFinalLlm {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        request: adk_rust::LlmRequest,
+        _stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        self.requests
+            .lock()
+            .map_err(|_| adk_rust::AdkError::agent("fixture request lock failed"))?
+            .push(request);
+        Ok(Box::pin(adk_rust::futures::stream::once(async {
+            Ok(adk_rust::LlmResponse::new(
+                Content::new("model").with_text("Both calls completed."),
+            ))
+        })))
+    }
+}
+
+async fn finish_same_tool_replay(
+    fixture: &SameToolReplayFixture,
+    first_action: &str,
+    second_action: &str,
+    second_arguments: &Value,
+) -> Vec<Event> {
+    let (first_interrupt, first_run) = fixture.resume("call-1", first_action).await;
+    let cards = first_run
+        .iter()
+        .filter_map(|event| event.actions.tool_confirmation.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].function_call_id.as_deref(), Some("call-2"));
+    assert_eq!(cards[0].args, *second_arguments);
+    // ADK pre-checks the whole message before dispatching any tool.
+    assert!(fixture.calls.lock().expect("recorded calls").is_empty());
     assert!(
-        approved.blocked_calls().is_empty(),
-        "approving once must not decline the repeat"
+        fixture
+            .requests
+            .lock()
+            .expect("provider requests")
+            .is_empty()
     );
+    let (second_interrupt, second_run) = fixture.resume("call-2", second_action).await;
+    assert_ne!(first_interrupt, second_interrupt);
+    assert!(
+        second_run
+            .iter()
+            .all(|event| event.actions.tool_confirmation.is_none())
+    );
+    assert_eq!(fixture.requests.lock().expect("provider requests").len(), 1);
+    second_run
+}
 
-    let declined = DirectHitlDecision::from_payload(&multi_call_payload(
-        "block_with_comment",
-        "stop",
-        &interrupt_id,
-        "call-1",
-    ))
-    .expect("decision admission")
-    .resolve(&session(events))
-    .expect("exact session call")
-    .into_direct_replay(&sensitive_catalog(true))
-    .expect("declined replay");
-    assert_eq!(
-        declined.blocked_calls(),
-        vec![("call-1", "stop"), ("call-2", "stop")],
-        "a decline covers the repeat of the same tool, comment included"
-    );
+fn assert_same_tool_results(fixture: &SameToolReplayFixture, expected: &[(&str, Value)]) {
+    let requests = fixture.requests.lock().expect("provider requests");
+    let responses = requests[0]
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse {
+                function_response,
+                id: Some(id),
+                ..
+            } => Some((id.as_str(), &function_response.response)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 2);
+    for (call_id, response) in expected {
+        assert_eq!(
+            responses.iter().filter(|(id, _)| id == call_id).count(),
+            1,
+            "each call has exactly one result in provider history"
+        );
+        assert_eq!(
+            responses.iter().find(|(id, _)| id == call_id).unwrap().1,
+            response
+        );
+    }
+}
+
+#[tokio::test]
+async fn same_tool_siblings_pause_separately_then_execute_once() {
+    for second_arguments in [json!({"value": 21}), json!({"value": 42})] {
+        let fixture = SameToolReplayFixture::new(second_arguments.clone()).await;
+        let final_run =
+            finish_same_tool_replay(&fixture, "approve", "approve", &second_arguments).await;
+        assert_eq!(
+            *fixture.calls.lock().expect("recorded calls"),
+            vec![
+                ("call-1".to_owned(), json!({"value": 21})),
+                ("call-2".to_owned(), second_arguments.clone()),
+            ],
+            "each distinct approved invocation executes exactly once"
+        );
+        let second_result = second_arguments["value"].as_i64().unwrap() * 2;
+        assert_same_tool_results(
+            &fixture,
+            &[
+                ("call-1", json!({"value": 42})),
+                ("call-2", json!({"value": second_result})),
+            ],
+        );
+        assert!(final_run.iter().any(|event| {
+            event.content().is_some_and(|content| {
+                content.parts
+                    == Content::new("model")
+                        .with_text("Both calls completed.")
+                        .parts
+            })
+        }));
+        let stored = fixture.stored_session().await;
+        assert_eq!(
+            stored
+                .events()
+                .all()
+                .iter()
+                .flat_map(Event::tool_results)
+                .count(),
+            2,
+            "results persist once across both resumes"
+        );
+    }
+}
+
+#[tokio::test]
+async fn same_tool_sibling_denials_stay_bound_to_their_call_ids() {
+    let second_arguments = json!({"value": 42});
+    for (first_action, second_action, approved_id, approved_arguments, blocked_id) in [
+        (
+            "reject",
+            "approve",
+            "call-2",
+            second_arguments.clone(),
+            "call-1",
+        ),
+        (
+            "approve",
+            "reject",
+            "call-1",
+            json!({"value": 21}),
+            "call-2",
+        ),
+    ] {
+        let fixture = SameToolReplayFixture::new(second_arguments.clone()).await;
+        let final_run =
+            finish_same_tool_replay(&fixture, first_action, second_action, &second_arguments).await;
+        assert_eq!(
+            *fixture.calls.lock().expect("recorded calls"),
+            vec![(approved_id.to_owned(), approved_arguments.clone())],
+            "denial blocks only its invocation; the approved sibling runs once"
+        );
+        let blocked = super::direct_hitl::blocked_tool_result(
+            "double",
+            "Fixture Tools",
+            "fixture",
+            "Fixture Tools.double",
+            None,
+        );
+        let approved_result = approved_arguments["value"].as_i64().unwrap() * 2;
+        assert_same_tool_results(
+            &fixture,
+            &[
+                (blocked_id, blocked),
+                (approved_id, json!({"value": approved_result})),
+            ],
+        );
+        let denied = final_run
+            .iter()
+            .filter(|event| {
+                event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Deny)
+            })
+            .flat_map(Event::tool_results)
+            .collect::<Vec<_>>();
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0].call_id, Some(blocked_id));
+    }
 }
 
 #[test]

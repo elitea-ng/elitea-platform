@@ -72,6 +72,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
   expectStoredAssistantAnswer,
+  readStoredHitlInterrupt,
   readStoredTranscript,
 } from '../fixtures/api';
 
@@ -112,6 +113,7 @@ const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 
 /** The runtime-owned internal tool that produces the pause. */
 const ASK_USER_TOOL = 'ask_user';
+const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 test('an ask_user pause renders answerable controls, and the answer finishes the run', async ({ page }) => {
   // ── THE PYTHON LEG, AND WHY IT IS NO LONGER SKIPPED ─────────────────────
@@ -146,9 +148,8 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
   //     going leg-aware the way `chat.toolkit-hitl.spec.ts` does for
   //     `tool_call_id`.
   //
-  // E2E_WORKER comes from chat-stream-e2e.sh and is not read here: nothing in
-  // this journey may depend on which runtime is behind it. That is the
-  // assertion.
+  // Both runtimes receive the same answer value. The native pause also
+  // supplies a call identity, which selects a bound continuation decision.
 
   // Two model round trips with a human decision between them: create, save,
   // chat, admission, the pause, the resume and a second dispatch. Every wait
@@ -267,6 +268,7 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
   ).toBeDisabled();
 
   // ── 6. Answer it, through the UI ───────────────────────────────────────
+  const interrupt = await readStoredHitlInterrupt(page, projectId, conversationId);
   const resumed = page.waitForResponse(
     (r) => CONTINUE_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
@@ -292,20 +294,43 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
     hitl_action?: string;
     hitl_value?: unknown;
     hitl_resume?: boolean;
+    hitl_decisions?: readonly {
+      interrupt_id?: string;
+      tool_call_id?: string;
+      action?: string;
+      value?: unknown;
+    }[];
   };
   expect(resumeBody.hitl_resume, 'the body must declare itself a HITL resume').toBe(true);
-  expect(resumeBody.hitl_action, 'the clarification is answered with the `answer` action').toBe('answer');
   // STRUCTURED, keyed by the question id the model chose — the shape
   // `currentHITLValue` canonicalises and both runtimes read back
   // (`AskUserRequest::format_answer`; `_hitl_resume_value` into the SDK's
   // `AskUserTool._format_answer`). A body carrying the card's encoded JSON as
   // a plain string would also be accepted, and would reach the model as a
   // quoted blob. `environment` is the MODEL's own id, not a positional `q1`,
-  // and asserting it here is what makes this one payload for both legs.
-  expect(
-    resumeBody.hitl_value,
-    'the answer must reach the route as a structured value, not as an encoded string',
-  ).toEqual({ environment: OPTION_LABEL });
+  // Both runtimes must receive the same selected answer value.
+  if (IS_NATIVE_RUNTIME) {
+    const interruptId = interrupt.interrupt_id ?? '';
+    const toolCallId = interrupt.tool_call_id ?? '';
+    expect(interruptId, 'the native pause must identify its interrupt').not.toBe('');
+    expect(toolCallId, 'the native pause must identify the paused call').not.toBe('');
+    expect(resumeBody.hitl_decisions, 'the answer must bind the exact paused call').toEqual([
+      {
+        interrupt_id: interruptId,
+        tool_call_id: toolCallId,
+        action: 'answer',
+        value: { environment: OPTION_LABEL },
+      },
+    ]);
+    expect(resumeBody.hitl_action, 'a bound decision must not also send a root action').toBeUndefined();
+    expect(resumeBody.hitl_value, 'the structured answer belongs to the bound decision').toBeUndefined();
+  } else {
+    expect(resumeBody.hitl_action, 'the clarification is answered with the `answer` action').toBe('answer');
+    expect(
+      resumeBody.hitl_value,
+      'the answer must reach the route as a structured value, not as an encoded string',
+    ).toEqual({ environment: OPTION_LABEL });
+  }
 
   // ── 7. The composer is released — and the NEXT turn must be admitted ───
   //

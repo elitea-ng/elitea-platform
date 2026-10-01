@@ -276,6 +276,52 @@ Transfer timing and final-dispatch budget separation also remain open.
 
 ## Release acceptance
 
+Sensitive-call resume now follows the current SDK's per-invocation policy.
+SDK `sensitive_tool_guard.py` at `b5113a129` requires a separate decision for every sensitive invocation, including identical arguments.
+Rust `ResolvedDirectHitlDecision::into_direct_replay` previously copied one decision to undecided same-name sibling calls.
+It now preserves only exact settled decisions and leaves each undecided sibling for ADK confirmation.
+Sixteen focused tests and the persisted replay regression pass. Strict Clippy and formatting pass.
+ADK Runner tests verify two distinct pauses, exact result identities, denial isolation, and one execution per approved call.
+
+The deployed Python browser also exposes a separate SDK resume defect.
+After two approvals, retained checkpoints contain only the first identical call and its result.
+SDK `LLMNode::_build_resume_completion` selects the first name-and-argument match, even when that call already has a result.
+The fix selects an unfinished matching call and preserves the original call identities.
+Completed-call replay behavior and sensitive-tool policy remain unchanged.
+SDK draft PR `EliteaAI/elitea-sdk#679` publishes patch `9a0614571a693a86b497b0502456cf32745d530e`.
+The worker retains its existing SDK version and four patches, then admits this fifth immutable patch.
+Its 481-file package digest becomes `42cd111fbb59fdb82406f853718f8033561369624c5d66eb10350dd58ff2f1c3`.
+Thirteen regressions pass with the installed shipping dependency closure, including a rebuilt MemorySaver graph.
+The admitted five-patch source passes 43 contract and lock checks without skips.
+All four source projection checks pass. Gateway conformance passes seven tier-one tests and 29 tier-two assertions.
+The Gateway pin preserves both measured file digests. Its SDK patch list matches the worker lock.
+Fresh deployed browser checks remain required for both corrected runtimes.
+
+Native builder CI also identifies a Main skill-author regression.
+`createSkillSQL` separates owner and author in source commit `171d1bedb3`.
+The runtime skill repository still passes three arguments and uses the project owner as the version author.
+The existing claim authorization now supplies its durable actor through `RuntimeSkillSink`.
+The repository binds that actor as the fourth argument and keeps the owning project separate.
+Request-supplied actors, invalid actors, and unauthorized claims cannot write.
+Real PostgreSQL creation uses owner 1 and author 11. An update by actor 17 preserves both original authors and tags.
+Focused HTTP, claim, and repository tests pass without skips. Storage tests, vet, and formatting pass.
+
+Fresh Go CI rejects stale generated OpenAPI descriptions for both social pin operations.
+The source descriptions include current line references; the embedded generated specification still contains the previous text.
+The pinned generator runs with CI's Go 1.25.14 toolchain.
+Its output matches the CI diff exactly and reproduces byte-for-byte on a second run.
+Decoded specifications differ only in the two operation descriptions.
+API paths, types, validation, and runtime behavior remain unchanged.
+
+Native browser fixtures now use the current execution contracts.
+HITL continuation carries the exact interrupt and tool-call identities with the selected answer.
+MCP authorization uses the declared authorization proxy because protected tools remain hidden until authorization succeeds.
+Same-name MCP tools retain their toolkit-qualified identities.
+Project Context writes use the internal MCP tool `put_prompt_lib_project-context` and verify its JSON receipt.
+Skills writes retain the native builder tool and verify persisted instructions.
+Both runtimes require two decisions and two exact results for two sensitive invocations.
+These fixture changes preserve persistence, project isolation, and actual tool execution assertions.
+
 Local candidate checks pass:
 
 - All eleven Go workspace modules pass tests, vet, and pinned strict lint.

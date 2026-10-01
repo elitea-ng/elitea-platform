@@ -260,7 +260,7 @@ test('two MCP connections that publish the same tool name are both callable, und
     expect(
       history,
       'the run must carry ONE notice naming the colliding tool, both connections and both new names',
-    ).toContain(`tool '${COLLIDING_TOOL}' is published by more than one connection`);
+    ).toContain(`tool '${COLLIDING_TOOL}' uses a toolkit-qualified name; call `);
     for (const [connection, exposed] of [
       [firstName, firstExposed],
       [secondName, secondExposed],

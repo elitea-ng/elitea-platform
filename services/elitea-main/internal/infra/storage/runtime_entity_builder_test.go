@@ -23,17 +23,18 @@ import (
 // content.
 
 type builderSkillSinkFunc func(
-	context.Context, int64, string, string, string,
+	context.Context, int64, int64, string, string, string,
 ) (RuntimeSkillRecord, error)
 
 func (f builderSkillSinkFunc) UpsertRuntimeSkillByName(
 	ctx context.Context,
 	projectID int64,
+	actorID int64,
 	name string,
 	description string,
 	instructions string,
 ) (RuntimeSkillRecord, error) {
-	return f(ctx, projectID, name, description, instructions)
+	return f(ctx, projectID, actorID, name, description, instructions)
 }
 
 // builderProjectContextSink records what it was asked to write so a test can
@@ -74,15 +75,15 @@ func (s *builderProjectContextSink) WriteRuntimeProjectContext(
 func TestSkillWriteRouteTakesTheProjectFromTheClaimNotTheRequest(t *testing.T) {
 	t.Parallel()
 
-	var sawProject int64
+	var sawProject, sawActor int64
 	var sawName, sawDescription, sawInstructions string
 	server := newBuilderTestServer(
 		t,
 		builderAuthorizerForProject(4242),
 		builderSkillSinkFunc(func(
-			_ context.Context, projectID int64, name, description, instructions string,
+			_ context.Context, projectID, actorID int64, name, description, instructions string,
 		) (RuntimeSkillRecord, error) {
-			sawProject = projectID
+			sawProject, sawActor = projectID, actorID
 			sawName, sawDescription, sawInstructions = name, description, instructions
 			return RuntimeSkillRecord{SkillID: "77", Name: name, Created: true}, nil
 		}),
@@ -98,6 +99,7 @@ func TestSkillWriteRouteTakesTheProjectFromTheClaimNotTheRequest(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Equal(t, int64(4242), sawProject)
+	require.Equal(t, int64(11), sawActor)
 	require.Equal(t, "Daily Standup Summarizer", sawName)
 	require.Equal(t, "Summarizes daily standup notes into action items", sawDescription)
 	require.Equal(t, "Extract blockers, decisions and action items.", sawInstructions)
@@ -123,7 +125,7 @@ func TestSkillWriteRouteRefusesARequestThatNamesAProject(t *testing.T) {
 		t,
 		builderAuthorizerForProject(4242),
 		builderSkillSinkFunc(func(
-			context.Context, int64, string, string, string,
+			context.Context, int64, int64, string, string, string,
 		) (RuntimeSkillRecord, error) {
 			t.Fatal("a request carrying an unknown field must not reach the sink")
 			return RuntimeSkillRecord{}, nil
@@ -136,6 +138,38 @@ func TestSkillWriteRouteRefusesARequestThatNamesAProject(t *testing.T) {
 		"name": "Anything", "instructions": "Do something", "project_id": 9
 	}`))
 	require.Equal(t, http.StatusBadRequest, response.Code)
+}
+
+func TestSkillWriteRouteRefusesARequestThatNamesAnActor(t *testing.T) {
+	t.Parallel()
+
+	server := newBuilderTestServer(t, builderAuthorizerForProject(4242), nil, &builderProjectContextSink{})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, builderRequest(t, "skills", `{
+		"name": "Anything", "instructions": "Do something", "actor_id": 9
+	}`))
+	require.Equal(t, http.StatusBadRequest, response.Code)
+}
+
+func TestSkillWriteRouteRefusesAnInvalidClaimActorBeforeWriting(t *testing.T) {
+	t.Parallel()
+
+	for _, actorID := range []string{"", "0", "-1", "01", "+11", "1.0", "2147483648"} {
+		t.Run(actorID, func(t *testing.T) {
+			t.Parallel()
+			authorizer := agentRuntimeContextAuthorizerFunc(func(
+				context.Context, ContentClaim,
+			) (RuntimeContextAuthorization, error) {
+				return RuntimeContextAuthorization{ResourceProjectID: 4242, ActorID: actorID}, nil
+			})
+			server := newBuilderTestServer(t, authorizer, nil, &builderProjectContextSink{})
+			response := httptest.NewRecorder()
+			server.Routes().ServeHTTP(response, builderRequest(t, "skills", `{
+				"name": "Anything", "instructions": "Do something"
+			}`))
+			require.Equal(t, http.StatusServiceUnavailable, response.Code)
+		})
+	}
 }
 
 // An empty name or empty instructions is 422, not 500 and not a silent
@@ -155,7 +189,7 @@ func TestSkillWriteRouteRefusesAnUnstorableDocumentWith422(t *testing.T) {
 				t,
 				builderAuthorizerForProject(4242),
 				builderSkillSinkFunc(func(
-					context.Context, int64, string, string, string,
+					context.Context, int64, int64, string, string, string,
 				) (RuntimeSkillRecord, error) {
 					t.Fatal("an unstorable document must not reach the sink")
 					return RuntimeSkillRecord{}, nil
@@ -184,7 +218,7 @@ func TestBuilderRoutesRefuseAnUnauthorizedClaimBeforeWriting(t *testing.T) {
 			return RuntimeContextAuthorization{}, ErrContentUnauthorized
 		}),
 		builderSkillSinkFunc(func(
-			context.Context, int64, string, string, string,
+			context.Context, int64, int64, string, string, string,
 		) (RuntimeSkillRecord, error) {
 			t.Fatal("a refused claim must not reach the skill sink")
 			return RuntimeSkillRecord{}, nil
@@ -314,7 +348,7 @@ func TestBuilderRoutesRefuseAnOversizedBody(t *testing.T) {
 		t,
 		builderAuthorizerForProject(7),
 		builderSkillSinkFunc(func(
-			context.Context, int64, string, string, string,
+			context.Context, int64, int64, string, string, string,
 		) (RuntimeSkillRecord, error) {
 			t.Fatal("an oversized body must not reach the sink")
 			return RuntimeSkillRecord{}, nil
@@ -349,7 +383,7 @@ func newBuilderTestServer(
 	t.Helper()
 	if skills == nil {
 		skills = builderSkillSinkFunc(func(
-			context.Context, int64, string, string, string,
+			context.Context, int64, int64, string, string, string,
 		) (RuntimeSkillRecord, error) {
 			t.Fatal("this test must not reach the skill sink")
 			return RuntimeSkillRecord{}, nil
