@@ -641,6 +641,55 @@ def test_sdk_adapter_preserves_saved_mcp_configuration_at_each_current_construct
     assert client.adhoc_calls[0]["tools"] == [mcp]
 
 
+@pytest.mark.parametrize("location", ["application_version", "application_extra", "adhoc"])
+def test_sdk_adapter_binds_materialized_prebuilt_mcp_at_each_constructor(location) -> None:
+    client = _Client()
+    adapter = _adapter(client)
+    mcp = {
+        "id": 52,
+        "type": "mcp_elitea_internal_applications",
+        "name": "Applications",
+        "toolkit_name": "Applications",
+        "settings": {
+            "server_name": "mcp_elitea_internal_applications",
+            "url": "https://main.example.test/app/7/mcp/elitea_core/applications",
+            "headers": {"Authorization": "Bearer TEST_ONLY_CLAIM_ACTOR"},
+            "timeout": 300,
+            "ssl_verify": True,
+            "selected_tools": ["read_application"],
+            "excluded_tools": ["delete_application"],
+            "server_config": {"type": "stdio", "command": "must-not-run"},
+        },
+        "meta": {"mcp": True, "internal_builder": True},
+    }
+    payload = _request(application=location != "adhoc").payload
+    if location == "application_version":
+        payload.application["version_details"]["tools"] = [mcp]
+    else:
+        object.__setattr__(payload, "tools", [mcp])
+
+    if location == "adhoc":
+        assert adapter.execute_adhoc(payload) == {"mode": "adhoc"}
+        tools = client.adhoc_calls[0]["tools"]
+    else:
+        assert adapter.execute_application(payload) == {"mode": "application"}
+        call = client.application_calls[0]
+        tools = call["version_details"]["tools"] if location == "application_version" else call["tools"]
+
+    expected = dict(mcp)
+    expected["settings"] = dict(mcp["settings"], server_config={
+        "type": "http",
+        "url": mcp["settings"]["url"],
+        "headers": mcp["settings"]["headers"],
+        "timeout": 300,
+        "ssl_verify": True,
+    })
+    assert tools == [expected]
+    assert mcp["settings"]["server_config"] == {"type": "stdio", "command": "must-not-run"}
+    tools[0]["settings"]["headers"]["Authorization"] = "changed-in-sdk"
+    assert mcp["settings"]["headers"]["Authorization"] == "Bearer TEST_ONLY_CLAIM_ACTOR"
+
+
 def test_sdk_adapter_passes_current_runtime_skills_only_through_configurable() -> None:
     client = _Client()
     payload = _request().payload

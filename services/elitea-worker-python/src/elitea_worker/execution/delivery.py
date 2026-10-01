@@ -2465,26 +2465,42 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
                 claim_id=accepted.claim_id,
             )
         )
-        raw = await self._input_client.fetch_materialized(
-            grant,
-            source_immutable_version=accepted.entry.immutable_version,
-        )
-        message = parse_agent_execution_input(raw)
-        kind = (
-            AgentExecutionKind.APPLICATION
-            if accepted.verified.command.capability_id
-            == AGENT_EXECUTE_APPLICATION_CAPABILITY_ID
-            else AgentExecutionKind.ADHOC
-        )
-        request = agent_request_from(
-            message,
-            kind=kind,
-            input_bundle_id=receipt.input_bundle.input_bundle_id,
-            input_bundle_digest=bytes(receipt.input_bundle_ref.digest.value),
-            request_entry_id=accepted.entry.entry_id,
-            request_immutable_version=accepted.entry.immutable_version,
-            request_content_digest=accepted.entry.content.digest,
-        )
+        try:
+            raw = await self._input_client.fetch_materialized(
+                grant,
+                source_immutable_version=accepted.entry.immutable_version,
+            )
+        except WorkerError as error:
+            _emit_agent_internal_failure(
+                stage="input_materialization",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
+            raise
+        try:
+            message = parse_agent_execution_input(raw)
+            kind = (
+                AgentExecutionKind.APPLICATION
+                if accepted.verified.command.capability_id
+                == AGENT_EXECUTE_APPLICATION_CAPABILITY_ID
+                else AgentExecutionKind.ADHOC
+            )
+            request = agent_request_from(
+                message,
+                kind=kind,
+                input_bundle_id=receipt.input_bundle.input_bundle_id,
+                input_bundle_digest=bytes(receipt.input_bundle_ref.digest.value),
+                request_entry_id=accepted.entry.entry_id,
+                request_immutable_version=accepted.entry.immutable_version,
+                request_content_digest=accepted.entry.content.digest,
+            )
+        except WorkerError as error:
+            _emit_agent_internal_failure(
+                stage="input_decode",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
+            raise
         factory = self._client_context_factory
         if factory is None:
             raise DependencyUnavailable(
@@ -2503,7 +2519,12 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
                 raise AuthorizationFailure(
                     "The claim-scoped SDK project identity does not match the execution."
                 )
-        except WorkerError:
+        except WorkerError as error:
+            _emit_agent_internal_failure(
+                stage="input_context",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
             raise
         except Exception as error:
             _emit_agent_internal_failure(
@@ -2641,7 +2662,12 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
             )
         except _IndexProgressTransportFailure:
             raise
-        except WorkerError:
+        except WorkerError as error:
+            _emit_agent_internal_failure(
+                stage="execute_worker",
+                execution_id=receipt.identity.execution_id,
+                error=error,
+            )
             raise
         except _AgentTerminalFailure as error:
             # The turn ran and reported a failure. It is terminal: a retry

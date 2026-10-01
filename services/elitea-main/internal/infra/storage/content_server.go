@@ -429,6 +429,7 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if authorization.ExpectedLength > s.maxBytes {
+		s.logInputFailure(r, claim, "source_limit", http.StatusRequestEntityTooLarge, nil)
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -441,10 +442,12 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 		claim.ImmutableVersion,
 	)
 	if errors.Is(err, ErrContentNotFound) {
+		s.logInputFailure(r, claim, "source_open", http.StatusNotFound, err)
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 	if err != nil {
+		s.logInputFailure(r, claim, "source_open", http.StatusInternalServerError, err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -459,11 +462,13 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 	// artifact paths use a separately resumable streaming contract.
 	data, err := io.ReadAll(io.LimitReader(content, s.maxBytes+1))
 	if err != nil || int64(len(data)) != authorization.ExpectedLength || int64(len(data)) > s.maxBytes {
+		s.logInputFailure(r, claim, "source_read", http.StatusInternalServerError, err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	digest := sha256.Sum256(data)
 	if subtle.ConstantTimeCompare(digest[:], authorization.ExpectedDigest[:]) != 1 {
+		s.logInputFailure(r, claim, "source_digest", http.StatusInternalServerError, nil)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -476,10 +481,12 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, ErrContentRejected) {
 				status = http.StatusUnprocessableEntity
 			}
+			s.logInputFailure(r, claim, "materialization", status, err)
 			http.Error(w, http.StatusText(status), status)
 			return
 		}
 		if len(responseData) == 0 || int64(len(responseData)) > s.maxBytes {
+			s.logInputFailure(r, claim, "materialization_size", http.StatusUnprocessableEntity, nil)
 			http.Error(w, http.StatusText(http.StatusUnprocessableEntity), http.StatusUnprocessableEntity)
 			return
 		}
@@ -497,6 +504,17 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(responseData)
+}
+
+// Record fixed failure fields. Content, credentials, and error text stay private.
+func (s *ContentServer) logInputFailure(r *http.Request, claim ContentClaim, boundary string, status int, err error) {
+	s.logger.ErrorContext(r.Context(), "runtime input content failed",
+		"execution_id", claim.ExecutionID,
+		"generation", claim.Generation,
+		"boundary", boundary,
+		"status", status,
+		"stage", runtimeContextUnavailableStage(err),
+	)
 }
 
 func (s *ContentServer) PostEliteaClientToken(w http.ResponseWriter, r *http.Request) {

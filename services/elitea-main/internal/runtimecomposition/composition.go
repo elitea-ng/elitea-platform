@@ -1417,7 +1417,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct current index runtime: %w", err)
 		}
 		contentMaterializer := currentIndex.materializer
-		if toolkitRoute.rust {
+		// Agent and index inputs share this listener. Both worker implementations
+		// need the agent resolver for frozen MCP references.
+		if agentMaterializer != nil {
 			contentMaterializer = agentMaterializer
 		}
 		// One listener serves both capabilities, so when agent execution is

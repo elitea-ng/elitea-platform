@@ -159,6 +159,85 @@ The model remains selected after completion, reload, regeneration, and a second 
 The transcript retains one final answer. No new browser error appears during this check.
 An earlier notification-stream warning remains in the session. Chat streaming and model persistence pass independently.
 
+## Browser contract repairs
+
+Fresh CI at `3c10d0666` passes all 1,453 Rust tests, strict Clippy, and the release build.
+The Linux AMD64 shipping-image scan reports zero HIGH/CRITICAL findings.
+Helm Lint, Helm Template, and the binary-file guard pass in GitHub CI.
+These results cover that revision. Later browser repairs require new CI results.
+
+Browser artifacts expose three product defects and several obsolete test assumptions.
+The repairs preserve exact identities, authorization refusals, persisted values, and request readbacks.
+They do not remove failing journeys or relax visual thresholds.
+
+| Current source or contract | New implementation | Verification |
+| --- | --- | --- |
+| Core `rpc/chat_conversation.py:194-198` permits creator-only public-to-private changes. | Main `repos/conversations.go` checks the trusted actor and enforces the author condition atomically in SQL. | Nine PostgreSQL authority tests pass normally and with the race detector. Membership, grants, token ownership, and private visibility remain enforced. |
+| Social `models/pins.py` defines one project pin per entity. Core `api/v2/folder.py:396-420` reads those shared pins. | Both Main pin route families use `repos/social_pins.go`. The folder reader uses the same `centry.social_pins` table. | Fourteen PostgreSQL HTTP tests and sixteen race-enabled tests pass. Private-chat visibility and repeated unpin behavior remain enforced. |
+| Main participant metadata contains numeric user and project IDs. | Web `ChatBox.helpers.ts` accepts primitive numeric IDs and strings. Names remain strings; objects and unsafe integers remain invalid. | Eighty-one related tests pass. Solo-chat and multi-user browser acceptance pass. |
+| Conversation creation automatically includes its author and the default chat participant. | Journey fixtures select participants by exact entity, ID, and project. Duplicate checks preserve every participant and its settings. | Scoped lint, collection, and fixture helper checks pass. Fresh browser execution remains required. |
+| Tag discovery returns tags associated with visible entities. The public project forbids publishing private conversations. | Tag fixtures attach their own tags. Positive publish tests use the existing private author project. | Exact association, filtering, deletion, and visibility assertions remain. |
+| Balanced and Full settings define the new context policy. | Context journeys check saved policy selection, immutable existing conversations, and unknown pre-run capacity. | The tests retain policy readbacks without restoring the obsolete output-only budget. |
+| Canvas authority runs before range validation. | Unowned message groups require the exact non-disclosing 404. An owned group with an inverted range still requires 400. | The owned-message journey also checks that the stored message remains unchanged. |
+| Python resumes into the admitted response row. Rust preserves segmented direct HITL history. | The route journey checks the exact Python response ID or the Rust history segment, according to the selected runtime. | Both route decisions and exact model journal checks remain. Thirty related tests pass. |
+| Feedback is valid after a successful stored answer. | The feedback journey waits for its exact completed answer before applying reactions. | Exact reaction groups and persisted reaction readbacks remain. |
+
+The Core reference revision is `43a79a7654f9df03feef4859074fbf46eb2b8701`.
+The Social reference revision is `f53c2d67f751331f0834c3e67f94d6d58dfdc634`.
+These references define business behavior. Main retains its own typed errors, project middleware, and chat authority.
+OpenAPI and Web clients reproduce through their existing pinned generators.
+
+The document-canvas unit test now waits for asynchronous editor content before checking its exact text.
+Thirty-eight focused canvas tests pass. Three separate four-test repetitions also pass.
+No editor behavior changes.
+
+An isolated stack uses freshly built Main, Web, Python worker, gateway, and test services.
+The full 23-file WebKit scope passes 89 tests without retries or skips.
+The Chromium scope initially passes 87 tests and reports two fixture failures.
+Both fixtures now select the exact application participant and resend its persisted version settings.
+All 16 checks in the focused Chromium rerun pass.
+The browser also verifies pin, server listing, reload, one visible row, and unpin without page errors.
+The complete six-package Main test run passes against an isolated PostgreSQL database.
+Both generated API clients reproduce through their pinned generators. The deployment edge tests pass.
+
+The Python all-tools browser case initially ends with `DEPENDENCY_UNAVAILABLE` after successful admission.
+Safe Python diagnostics locate the failure at Main's scoped input-materialization response, before SDK construction.
+The frozen internal MCP references are valid. The executing actor has an active PAT.
+Both agent and index dispatch are enabled in the isolated deployment. The selected worker is Python.
+`internal/runtimecomposition/composition.go` incorrectly selects the index-only materializer unless the toolkit route uses Rust.
+That materializer has no prebuilt MCP resolver. It rejects the agent's frozen MCP references.
+The shared listener now selects the agent materializer whenever agent execution supplies it, for either worker implementation.
+The index-only fallback remains available when agent execution is disabled.
+Main logs fixed boundary, status, generation, and execution fields without private inputs or raw error text.
+Storage and composition package tests pass. Vet passes. Python diagnostic tests pass all thirteen cases.
+The unchanged browser retest passes input materialization and reaches SDK MCP construction.
+The SDK then rejects internal MCP names because it expects `server_config`, rather than the flat materialized URL and headers.
+The Python adapter now supplies the pinned SDK's explicit HTTP `server_config` from Main's materialized settings.
+Application-version, application-extra, and ad-hoc tools retain their IDs, names, filters, and metadata.
+The adapter copies inputs and refuses unresolved prebuilt references rather than reading a local MCP configuration.
+Tests execute the installed SDK's constructor routing with the network transport replaced by a fixture.
+All 132 focused checks pass. One unrelated real-sandbox dependency test is deselected in this offline probe.
+The all-tools browser case still requires a fresh deployed pass.
+
+The Python sensitive-tool fixture advertises HTTPS for its plain HTTP mock listener.
+The base compose file now advertises the existing HTTP listener.
+The native overlay retains its existing HTTPS schema contract.
+No production TLS policy changes.
+
+The pinned SDK also adds an empty header map to omitted arguments before checkpoint matching.
+Its matcher then replaces the original model call identity during resume.
+Python fixture markers explicitly send the supported nullable header argument to preserve that identity.
+Native markers remain unchanged. This fixture correction does not repair the SDK's omitted-default defect.
+The SDK reference revision is `b5113a129329b85d23c2d5c2bf55f18e307414ec`.
+Its `elitea_sdk/runtime/langchain/langraph_agent.py:3049` matches checkpoints, and lines 2012-2029 construct replacement resume calls.
+The argument normalizer is `elitea_sdk/runtime/langchain/utils.py:74-102`.
+Fresh sensitive-tool browser proof remains required.
+
+Builder journeys now verify exact application, project, version, participant, and admitted execution identities.
+Persistence polling reports bounded terminal categories without exposing raw tool results.
+Existing persistence assertions and deadlines remain unchanged.
+Typecheck, scoped lint, collection, and 60 journey-shape tests pass. Native browser proof remains required.
+
 ## Preserved Point 5 work
 
 The pre-merge checkpoint contains 81 tracked and untracked files.
