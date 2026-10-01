@@ -125,6 +125,9 @@ This component is not connected to worker or supervisor dispatch. On-demand UI a
 The [bundle admission consumer](source-mapping/code-python-bundle-admission-20261001.md) binds resolved Python content to the signed job.
 Offline execution and fifteen container probes verify content checks before user code and unchanged legacy receipts.
 Automatic preparation, shared content delivery, restart verification, and integrated UI acceptance remain open.
+The [shared bundle storage record](source-mapping/code-python-shared-storage-20261001.md) verifies native content through Main's existing object store.
+Rehearsal RustFS publication, replacement-store reads, project separation, and offline execution of downloaded content pass.
+Authenticated transport, supervisor preparation receipts, backend delivery, and on-demand browser acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

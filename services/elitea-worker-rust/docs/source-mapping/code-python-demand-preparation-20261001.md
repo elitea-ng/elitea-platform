@@ -105,6 +105,8 @@ The image launcher also needs an explicit dependency input before execution.
 Do not let its default image-asset copy overwrite the admitted lock.
 The [bundle admission consumer](code-python-bundle-admission-20261001.md) now implements that request identity and launcher verification.
 Automatic production delivery remains open.
+The [shared storage record](code-python-shared-storage-20261001.md) adds verified object-store publication and replacement-store reuse.
+Authenticated transport and supervisor preparation receipts remain open.
 
 Implement bounded acquisition, cancellation, atomic publication, and durable preparation receipts in the owning supervisor path.
 The materializer bounds wheel content. The preceding native resolver still needs process, metadata, and time limits.

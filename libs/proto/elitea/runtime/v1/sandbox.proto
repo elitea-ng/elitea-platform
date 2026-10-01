@@ -74,6 +74,13 @@ message SubmitSandboxJobRequestV1 {
   // only. Its SHA-256 covers the resolved bundle record and file identities.
   // Revision 1 has no bundle field. Package bytes use a separate data plane.
   // The request digest includes the revision and dependency bundle identity.
+  // Python bundle JSON revision 1 has runtime="pyodide-0.29.0", requirements,
+  // files=[{name,bytes,sha256}], and digest. The root hashes UTF-8 JSON of
+  // {revision,runtime,requirements,files}, in this order, without whitespace.
+  // File entries use ASCII names in ascending order. Requirements use ASCII.
+  // Limits: 128 requirements of 256 bytes; 257 files; 128 MiB total content;
+  // 1 MiB lock; 32 MiB per wheel; 128 KiB bundle metadata. Store files first.
+  // Publish the bundle record only after all file content passes verification.
   // Source and selected state travel only over mTLS, never through a shared
   // queue or a log field.
   bytes prepared_job_json = 2;

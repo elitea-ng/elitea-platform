@@ -5,6 +5,8 @@ Date: 2026-10-01. Gate 5 remains active.
 This change adds the dependency identity and execution consumer.
 It follows the [Python preparation component](code-python-demand-preparation-20261001.md).
 Automatic supervisor preparation, shared storage, and delivery remain open.
+The [shared storage follow-up](code-python-shared-storage-20261001.md) now verifies publication and replacement-store reads.
+Production preparation and delivery remain open.
 The deployed application still uses image dependency profiles.
 
 ## Source mapping

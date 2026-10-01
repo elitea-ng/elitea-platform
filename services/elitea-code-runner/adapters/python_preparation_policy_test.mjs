@@ -44,3 +44,8 @@ Deno.test("both preparation modes reject direct URLs and environment markers", a
 Deno.test("invalid requirement syntax fails in the native parser", async () => {
   await rejected("not a requirement !", false, /InvalidRequirement/);
 });
+Deno.test("metadata requirements reject controls and Unicode before resolution", async () => {
+  for (const requirement of ["", "humanize\n", "humanize\u2028", "humanizé"]) {
+    await rejected(requirement, false, /bounded ASCII requirements/);
+  }
+});

@@ -10,11 +10,12 @@ export async function preparePythonPackages(
   if (
     !Array.isArray(requirements) || requirements.length > 128 ||
     requirements.some((entry) =>
-      typeof entry !== "string" || entry.length > 256
+      typeof entry !== "string" || entry.length === 0 || entry.length > 256 ||
+      !/^[\x20-\x7e]+$/.test(entry)
     )
   ) {
     throw new Error(
-      "Python package profile must contain at most 128 bounded requirements",
+      "Python package profile must contain at most 128 bounded ASCII requirements",
     );
   }
   await Deno.mkdir(packageCacheDir, { recursive: true });

@@ -163,7 +163,8 @@ export async function verifyPythonCodePackages(directory, expectedDigest) {
   if (
     !Array.isArray(bundle.requirements) || bundle.requirements.length > 128 ||
     bundle.requirements.some((value) =>
-      typeof value !== "string" || value.length > 256
+      typeof value !== "string" || value.length === 0 || value.length > 256 ||
+      !/^[\x20-\x7e]+$/.test(value)
     ) ||
     bundle.digest !== expectedDigest ||
     JSON.stringify(bundle.files) !== JSON.stringify(files) ||
