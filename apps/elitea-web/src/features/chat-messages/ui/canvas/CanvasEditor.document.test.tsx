@@ -47,8 +47,8 @@ describe('CanvasEditor — document canvas (issue #879)', () => {
     const editor = await screen.findByTestId('canvas-document-editor');
     expect(editor).toBeTruthy();
     expect(screen.queryByTestId('chat-table-canvas-grid')).not.toBeInTheDocument();
-    expect(screen.getByText('A document')).toBeInTheDocument();
-    expect(screen.getByText('Some prose.')).toBeInTheDocument();
+    expect(await screen.findByText('A document')).toBeInTheDocument();
+    expect(await screen.findByText('Some prose.')).toBeInTheDocument();
   });
 
   it('offers no language-select dropdown for a document (it is a top-level canvas kind, like a table)', async () => {
