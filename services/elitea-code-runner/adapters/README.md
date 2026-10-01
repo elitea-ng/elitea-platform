@@ -20,9 +20,9 @@ worker must still apply its typed output/state boundary. Output is untrusted.
 `elitea_state` contains selected input, and `alita_state` is a shallow copy for
 legacy compatibility. Top-level await and explicit micropip installation are
 supported. An explicit micropip import leaves installation order and versions
-to the code. Otherwise missing imports are prepared through micropip; import names differing
-from distribution names need an explicit installation before the corresponding
-import. Package availability and egress are deployment policy. Network remains
+to the code. Otherwise Pyodide loads prepared packages through the frozen import-name mapping.
+Remaining missing imports use micropip and require available package content.
+Package availability and egress are deployment policy. Network remains
 disabled in the default Code container. Download authorization and a package
 proxy are not implemented by this adapter.
 
@@ -153,4 +153,24 @@ Unprepared packages and incompatible versions fail without enabling network acce
 The package tests use a separate profile with `idna==3.10` and `python-slugify==8.0.4`.
 Run `probe_code_adapters_container.py --image sha256:... --python-packages` against that image.
 The check includes a transitive dependency, an import alias, and an unavailable version.
-On-demand preparation and npm/Cargo package expansion remain separate work.
+On-demand preparation and Cargo package expansion remain separate work.
+
+## Frozen npm dependency profiles
+
+`javascript-packages.json` supplies operator-owned image requirements. Its default list remains empty.
+Use exact references, such as `npm:csv-parse@5.6.0`, including scoped names when needed.
+`prepare_javascript.mjs` rejects ranges, tags, URLs, local paths, and more than 128 references.
+It generates a module graph. Preparation does not execute the dependency modules.
+The image build uses native Deno cache resolution and records transitive versions and integrity values in the image lockfile.
+Preparation does not enable npm lifecycle scripts or native addons.
+Only the image build can update this lockfile. Runtime execution uses frozen, cached-only resolution.
+The launcher disables project configuration discovery and local `node_modules` generation.
+Network, subprocess, and FFI permissions remain denied.
+Changing package content changes the admitted runtime image identity.
+This does not implement package acquisition during a Code request.
+
+The optional test profile contains `npm:strip-ansi@7.1.0`, `npm:slugify@1.6.6`, and `npm:csv-parse@5.6.0`.
+It verifies a transitive dependency, CommonJS interoperability, and a package export subpath.
+Run `probe_code_adapters_container.py --image sha256:... --python-packages --javascript-packages` against the combined test image.
+The thirteen checks include both languages and rejection of an unprepared npm version.
+Native preparation uses build-system network and resource policy. Per-download acquisition limits remain future work.

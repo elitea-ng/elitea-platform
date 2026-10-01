@@ -109,7 +109,11 @@ Package/workspace authorization and compilation-cache performance remain tracked
 The [Code functional audit](source-mapping/code-functional-parity-20260930.md) maps package imports, state, platform-client access, debug artifacts, and variable-source admission.
 Frozen Python image profiles now pass offline automatic imports and explicit micropip installation in real Docker containers.
 The profile includes a PyPI package, a transitive dependency, and an import-name alias.
-On-demand preparation, npm/Cargo packages, and package-profile UI acceptance remain open.
+Python package-profile acceptance passes in persistent chat 767, including repeated isolated execution and browser reload.
+Approved npm image profiles pass JavaScript/TypeScript resolution and unprepared-version rejection in real Docker containers.
+Pipeline 140 passes ephemeral-editor and persistent-chat package execution. Chat 769 preserves its exact result after reload.
+See the [dependency profile record](source-mapping/code-dependency-profiles-20261001.md) for package contracts and deployment evidence.
+On-demand preparation, Cargo profile expansion, and compiled-artifact caching remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 

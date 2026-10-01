@@ -29,6 +29,12 @@ COPY adapters /opt/elitea-code
 ENV DENO_DIR=/opt/deno-cache
 RUN mkdir -p /opt/elitea-wheels && \
     deno cache --frozen --lock=/opt/elitea-code/deno.lock /opt/elitea-code/python.mjs /opt/elitea-code/javascript.mjs && \
+    deno run --no-config --no-prompt --deny-net \
+      --allow-read=/opt/elitea-code --allow-write=/opt/elitea-code \
+      /opt/elitea-code/prepare_javascript.mjs /opt/elitea-code/javascript-packages.json \
+      /opt/elitea-code/javascript-dependencies.mjs && \
+    deno cache --no-config --node-modules-dir=none --frozen=false \
+      --lock=/opt/elitea-code/deno.lock /opt/elitea-code/javascript-dependencies.mjs && \
     deno run --frozen --lock=/opt/elitea-code/deno.lock --no-prompt \
       --allow-read=/opt/deno-cache,/opt/elitea-wheels,/opt/elitea-code \
       --allow-write=/opt/elitea-wheels --allow-env=NODE_DEBUG \

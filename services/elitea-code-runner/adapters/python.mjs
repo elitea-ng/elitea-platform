@@ -22,8 +22,7 @@ from pyodide.code import find_imports as _elitea_find_imports
 elitea_state = _elitea_json.loads(_elitea_input_json)
 alita_state = elitea_state.copy()
 `);
-  // Preserve automatic preparation of missing imports. Distribution names which
-  // differ from import names still need explicit micropip installation in code.
+  // Preserve automatic preparation, including frozen import-name mappings.
   await python.loadPackage("micropip", {
     messageCallback: (text) => console.error(text),
   });

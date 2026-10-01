@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--image", required=True, help="already built immutable local image ID")
 parser.add_argument("--runtime", choices=["deno", "rust"], default="deno")
 parser.add_argument("--python-packages", action="store_true", help="verify the prepared idna/python-slugify test profile")
+parser.add_argument("--javascript-packages", action="store_true", help="verify the prepared strip-ansi/slugify/csv-parse test profile")
 args = parser.parse_args()
 if not args.image.startswith("sha256:"):
     parser.error("use a local immutable sha256 image ID")
@@ -41,6 +42,20 @@ if args.runtime == "rust":
         ("rust_error", "rust", 'pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { Err("expected-code-error".into()) }', 15, "failed"),
         ("rust_timeout", "rust", 'pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { println!("entered-user-code"); loop { std::hint::spin_loop(); } }', 15, "timeout"),
     ]
+
+if args.javascript_packages:
+    if args.runtime != "deno":
+        parser.error("--javascript-packages requires the Deno runtime")
+    for language in ("javascript", "typescript"):
+        cases.append((f"{language}_dependencies", language,
+            "import stripAnsi from 'npm:strip-ansi@7.1.0'; "
+            "import slugify from 'npm:slugify@1.6.6'; "
+            "import { parse } from 'npm:csv-parse@5.6.0/sync'; "
+            "const rows = parse('name,amount\\nHello World,2\\nSecond Row,3\\n', {columns:true}); "
+            "if (stripAnsi('\\u001b[31mred\\u001b[39m') !== 'red' || slugify(rows[0].name, {lower:true}) !== 'hello-world' || rows.reduce((n,r) => n + Number(r.amount),0) !== 5) throw new Error('Npm state mismatch'); "
+            "export default {answer:42};", 15, "completed"))
+    cases.append(("javascript_unprepared_version", "javascript",
+        "import slugify from 'npm:slugify@1.6.5'; export default slugify('A B');", 15, "failed"))
 
 for name, language, source, timeout, expected in cases:
     container = "elitea-code-runner-test-" + secrets.token_hex(6)

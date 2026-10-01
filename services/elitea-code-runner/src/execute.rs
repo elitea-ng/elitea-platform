@@ -28,6 +28,8 @@ fn command(language: &str) -> Result<Command, &'static str> {
         "run",
         "--no-prompt",
         "--cached-only",
+        "--no-config",
+        "--node-modules-dir=none",
         "--frozen",
         "--lock=/opt/elitea-code/deno.lock",
         "--allow-read=/opt/elitea-code,/opt/deno-cache,/workspace",
@@ -131,6 +133,8 @@ mod tests {
             "--deny-run",
             "--deny-ffi",
             "--cached-only",
+            "--no-config",
+            "--node-modules-dir=none",
             "--frozen",
             REQUEST,
         ] {

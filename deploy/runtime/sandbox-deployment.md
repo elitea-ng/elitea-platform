@@ -161,6 +161,8 @@ The default worker does not receive this Secret or Kubernetes service account pe
 
 Prepare the execution namespace, RBAC, network policy, node label, and `elitea-code` RuntimeClass first.
 Cache both runtime images under immutable registry digest references.
+Read the imported registry manifest digest from the cluster image store.
+Docker's local image identifier can differ after import. Verify the digest reference before issuing a sandbox request.
 Set `ELITEA_TEST_KUBE_CONTEXT`, `ELITEA_TEST_KUBE_NAMESPACE`, `ELITEA_TEST_KUBE_DENO_IMAGE`, and `ELITEA_TEST_KUBE_RUST_IMAGE` explicitly.
 The context must select an isolated test cluster. The test creates and deletes execution Pods.
 
