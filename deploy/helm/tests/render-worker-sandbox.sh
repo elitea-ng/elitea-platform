@@ -41,5 +41,5 @@ if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementatio
   echo 'Python worker silently accepted Rust-only runtime options' >&2
   exit 1
 fi
-rg -q 'require the Rust worker' "$work/error"
+grep -Fq 'require the Rust worker' "$work/error"
 echo 'Worker sandbox and recovery rendering checks passed'

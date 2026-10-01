@@ -113,7 +113,15 @@ All seven references produce zero comparator differences across retries at the e
 Two empty-pipeline references have small raw raster differences. They are not byte-identical across retries.
 The four chat references remain unchanged because numeric model selection requires a code repair.
 No comparison thresholds, masks, or coverage rules change.
-All 59 references use 6.56 MiB of the 12 MiB budget. The binary guard passes for 10,562 files.
+All 59 references use 6.56 MiB of the 12 MiB budget. The binary guard passes for 10,564 files.
+
+Release repair `ecb6a3277` is pushed. The fresh Helm run reaches all eight worker assertions successfully.
+It then fails because `render-worker-sandbox.sh` uses ripgrep, which is absent from the CI environment.
+The literal assertion now uses standard `grep -Fq`. Chart behavior and assertion scope remain unchanged.
+Verification runs with ripgrep excluded from the command path.
+The worker suite passes eight assertions. All thirteen scripts called by the lint job have no remaining ripgrep calls.
+Dependency-backed lint passes all three charts with the pinned NATS dependency in a temporary chart copy.
+Local lint uses Helm 4.1.0. The fresh CI check uses Helm 3.16.0.
 
 Project Context returns authoritative identity, revision time, and activation description in addition to content and enabled state.
 Its browser test now checks the exact five-field response and preserves the previous identity and omitted activation description.
