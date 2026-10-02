@@ -18,24 +18,51 @@
  * is a TEST file (dependency-cruiser excludes `*.test.*` from the layer gate,
  * see `.dependency-cruiser.cjs`'s `options.exclude`).
  */
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { logout as mcpLogout, setAccessToken } from '@/features/mcps/lib/storage';
+import { getTokenInfo, logout as mcpLogout, setAccessToken } from '@/features/mcps/lib/storage';
+import { getLogoutMarkerEventKey, loadLogoutMarker, publishLogout } from '@/shared/lib/oauthLogoutSync';
+import { createStorage } from '@/shared/lib/storage';
 
-import { MCP_TOKEN_CHANGE_EVENT, getAccessToken } from './mcpTokenStorage.helpers';
+import { MCP_TOKEN_CHANGE_EVENT, getAccessToken, logout } from './mcpTokenStorage.helpers';
+import { useSharepointTokenStatus } from '../hooks/useSharepointTokenStatus.hooks';
 
 /** The composite `"{configUuid}:{oauthEndpoint}"` key SharePoint credentials use (`token.helpers.ts`). */
 const SHAREPOINT_TOKEN_KEY = 'cfg-uuid-1:https://login.microsoftonline.com/tenant';
 
 beforeEach(() => {
   window.sessionStorage.clear();
+  window.localStorage.clear();
 });
 
 afterEach(() => {
   window.sessionStorage.clear();
+  window.localStorage.clear();
 });
 
 describe('SharePoint token reader ↔ features/mcps token writer', () => {
+  it('publishes the common logout marker and invalidates copied refresh grants', () => {
+    setAccessToken(SHAREPOINT_TOKEN_KEY, 'sp-token', 3600, undefined, undefined, 'refresh');
+    const copy = createStorage('session').get('mcp.tokens')!;
+    logout(SHAREPOINT_TOKEN_KEY);
+    expect(loadLogoutMarker(SHAREPOINT_TOKEN_KEY)).toBeGreaterThan(0);
+    // Another document still has its sessionStorage copy until the next read.
+    createStorage('session').set('mcp.tokens', copy);
+    expect(getAccessToken(SHAREPOINT_TOKEN_KEY)).toBeNull();
+    expect(getTokenInfo(SHAREPOINT_TOKEN_KEY)).toBeNull();
+  });
+
+  it('updates the older status widget after another tab logs out', () => {
+    setAccessToken(SHAREPOINT_TOKEN_KEY, 'sp-token', 3600, undefined, undefined, 'refresh');
+    const { result } = renderHook(() => useSharepointTokenStatus(SHAREPOINT_TOKEN_KEY));
+    expect(result.current.isLoggedIn).toBe(true);
+    publishLogout(SHAREPOINT_TOKEN_KEY);
+    act(() => { window.dispatchEvent(new StorageEvent('storage', {
+      key: getLogoutMarkerEventKey(SHAREPOINT_TOKEN_KEY), newValue: String(loadLogoutMarker(SHAREPOINT_TOKEN_KEY)),
+    })); });
+    expect(result.current.isLoggedIn).toBe(false);
+  });
   it('reads back a token written by the real features/mcps writer (the OAuth modal path)', () => {
     setAccessToken(SHAREPOINT_TOKEN_KEY, 'sp-oauth-token', 3600, null, null, null);
 

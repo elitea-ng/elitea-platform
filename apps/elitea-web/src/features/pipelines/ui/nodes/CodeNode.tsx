@@ -30,6 +30,7 @@ import { useCodeInputMapping } from '../../lib/flow-editor/hooks/useCodeInputMap
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
+import { CodeLanguageSelect } from './CodeLanguageSelect';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
@@ -138,6 +139,7 @@ export const CodeNode = memo(function CodeNode({ id, data, selected, llmSettings
         disabled={isRunningPipeline || disabled}
         modelConfig={pipelineLLMConfig as never}
       />
+      <CodeLanguageSelect id={id} disabled={Boolean(isRunningPipeline || disabled)} />
       <InputSelect
         id={id}
         label={t('pipelines.flowEditor.codeNode.inputLabel', 'Input')}

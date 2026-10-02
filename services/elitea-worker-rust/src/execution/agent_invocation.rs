@@ -36,6 +36,31 @@ pub(super) type OwnedFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static
 /// terminal ACK, settlement, Redis retirement, and lease shutdown have reached
 /// one closed outcome. Returning earlier would violate the supervisor contract.
 pub(super) trait AuthorizedAgentLifecycle: Send + Sync + 'static {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        _request: &'a crate::agents::AgentExecutionRequest,
+        _command: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        _session: crate::protocol::control::ClaimBoundSessionAuthority,
+        _lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        crate::agents::runtime::NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async {
+            Err(crate::agents::runtime::NativeAgentAssemblyError::new(
+                crate::agents::runtime::NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                "checkpoint inspection is unavailable",
+            ))
+        })
+    }
+
     fn run(&self, run: AuthorizedAgentRun) -> OwnedFuture<AgentAuthorizedLifecycleCompletion>;
 }
 

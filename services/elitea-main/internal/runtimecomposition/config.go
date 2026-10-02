@@ -29,7 +29,8 @@ const (
 type LookupEnv func(string) (string, bool)
 
 type Config struct {
-	Enabled bool
+	Enabled                 bool
+	ToolkitDiscoveryEnabled bool
 
 	CommandStream    string
 	MaxOutstanding   int64
@@ -56,6 +57,8 @@ type Config struct {
 	RedisCAFile                    string
 	RedisPoolSize                  int
 
+	// Empty keeps sandbox grant issuance disabled. Values are exact identities.
+	SandboxAudiences        []string
 	SigningKeyID            string
 	SigningKeyFile          string
 	VerificationKeyringFile string
@@ -176,6 +179,17 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED must be true or false")
 	}
+	discoveryEnabled, _ := lookup("ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED")
+	switch discoveryEnabled {
+	case "", "false":
+	case "true":
+		config.ToolkitDiscoveryEnabled = true
+	default:
+		return Config{}, errors.New("invalid toolkit discovery activation flag")
+	}
+	if config.ToolkitDiscoveryEnabled && !config.IndexIngestDispatchEnabled && !config.AgentExecutionDispatchEnabled {
+		return Config{}, errors.New("toolkit discovery requires an active worker dispatch")
+	}
 	indexSchedulingEnabled, _ := lookup("ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED")
 	switch indexSchedulingEnabled {
 	case "", "false":
@@ -219,6 +233,12 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, errors.New("runtime Redis pool size is invalid")
 	}
 	config.RedisPoolSize = int(poolSize)
+	if raw, ok := lookup("ELITEA_RUNTIME_SANDBOX_AUDIENCES"); ok && raw != "" {
+		if len(raw) > 16*257 {
+			return Config{}, errors.New("runtime sandbox audiences exceed the configuration bound")
+		}
+		config.SandboxAudiences = strings.Split(raw, ",")
+	}
 	if config.SigningKeyID, err = required("ELITEA_RUNTIME_SIGNING_KEY_ID"); err != nil {
 		return Config{}, err
 	}
@@ -276,6 +296,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.ToolkitDiscoveryEnabled && (!c.Enabled || (!c.IndexIngestDispatchEnabled && !c.AgentExecutionDispatchEnabled)) {
+		return errors.New("toolkit discovery requires an active worker runtime")
+	}
 	if !c.Enabled {
 		return nil
 	}
@@ -367,6 +390,9 @@ func (c Config) Validate() error {
 	}
 	if c.SigningKeyID == "" || len(c.SigningKeyID) > 256 || strings.ContainsAny(c.SigningKeyID, "\r\n\x00") {
 		return errors.New("runtime signing key ID is invalid")
+	}
+	if err := validateSandboxAudiences(c.SandboxAudiences); err != nil {
+		return err
 	}
 	addresses := []string{c.ControlAddress, c.OutputAddress, c.ContentAddress}
 	if addresses[0] == addresses[1] || addresses[0] == addresses[2] || addresses[1] == addresses[2] {
@@ -588,6 +614,23 @@ func validateTCPAddress(address string) error {
 	port, err := strconv.ParseUint(portValue, 10, 16)
 	if err != nil || port == 0 {
 		return errors.New("runtime listener address must include a numeric TCP port")
+	}
+	return nil
+}
+
+func validateSandboxAudiences(audiences []string) error {
+	if len(audiences) > 16 {
+		return errors.New("runtime sandbox audiences exceed the configuration bound")
+	}
+	seen := make(map[string]struct{}, len(audiences))
+	for _, audience := range audiences {
+		if audience == "" || len(audience) > 256 || strings.ContainsAny(audience, " ,*\r\n\t\x00") {
+			return errors.New("runtime sandbox audience must be an exact bounded identity")
+		}
+		if _, exists := seen[audience]; exists {
+			return errors.New("runtime sandbox audience is duplicated")
+		}
+		seen[audience] = struct{}{}
 	}
 	return nil
 }

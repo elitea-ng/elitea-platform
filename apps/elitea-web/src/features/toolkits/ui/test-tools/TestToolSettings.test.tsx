@@ -295,3 +295,21 @@ describe('TestToolSettings', () => {
     expect(lgUp['scrollbarWidth']).toBe('none');
   });
 });
+
+
+it('authorizes discovery with a server reference and replaces the challenge with tools', async () => {
+  const user = userEvent.setup();
+  const references: (string | null)[] = [];
+  server.use(http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/proj-1/19', ({ request }) => {
+    const reference = request.headers.get('X-MCP-Authorization-Reference');
+    references.push(reference);
+    return HttpResponse.json(reference ? { tools: [{ name: 'echo_marker' }], args_schemas: { echo_marker: { type: 'object' } } } : {
+      tools: [], args_schemas: {}, authorization_required: { toolkit_id: '19', toolkit_type: 'mcp', toolkit_name: 'Saved MCP', server_url: 'https://example.invalid/mcp', resource_metadata: {} },
+    });
+  }));
+  renderTestToolSettings({ toolkitId: '19', values: { type: 'mcp', settings: {} }, renderAuthorization: ({ onAuthorized }) => <button onClick={() => { void onAuthorized('A'.repeat(43)); }}>Authorize discovery</button> });
+  await user.click(await screen.findByRole('button', { name: 'Authorize discovery' }));
+  await user.click(await screen.findByLabelText('Tool'));
+  expect(await screen.findByRole('option', { name: 'Echo marker' })).toBeInTheDocument();
+  expect(references).toEqual([null, 'A'.repeat(43)]);
+});

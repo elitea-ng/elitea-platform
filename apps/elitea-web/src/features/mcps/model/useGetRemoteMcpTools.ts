@@ -25,14 +25,14 @@ import { useSocketClient } from '@/shared/api/socket/client';
 import type { McpSyncToolsParams, McpSyncToolsResponse } from '../api/mcpSyncTools';
 import { mcpSyncTools } from '../api/mcpSyncTools';
 import { isPrebuildMcpType, setConnectionVerified } from '../lib/storage';
-import { getAllTokens } from '../lib/tokenRefresh';
+import { getExecutionTokens } from '../lib/executionTokens';
 
 import type { UseMcpAuthCheckValues } from './useMcpAuthCheck';
 import { useMcpAuthModal } from './useMcpAuthModal';
 import type { McpAuthModalRenderProps, McpAuthModalValues } from './useMcpAuthModal';
 
 export interface UseGetRemoteMcpToolsOptions {
-  values?: (McpAuthModalValues & UseMcpAuthCheckValues & { settings?: { timeout?: number; ssl_verify?: boolean } }) | undefined;
+  values?: (McpAuthModalValues & UseMcpAuthCheckValues & { settings?: { timeout?: number | undefined; ssl_verify?: boolean | undefined } }) | undefined;
   toolkitType?: string | undefined;
   projectId?: string | number | undefined;
   onToolsFetched?: ((tools: readonly unknown[], argsSchemas: Record<string, unknown> | undefined) => void) | undefined;
@@ -61,8 +61,10 @@ export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseG
   // from the same two inputs, so they belong in one dependency slot.
   const mcpMeta = useMemo(() => {
     const effectiveToolkitType = toolkitType ?? values?.type;
-    return { isPrebuildMcp: isPrebuildMcpType(effectiveToolkitType), effectiveToolkitType };
-  }, [toolkitType, values?.type]);
+    return { isPrebuildMcp: isPrebuildMcpType(effectiveToolkitType), effectiveToolkitType, serverUrl: values?.settings?.url };
+  }, [toolkitType, values?.type, values?.settings?.url]);
+  const currentRequest = useRef('');
+  currentRequest.current = JSON.stringify({ values, mcpMeta, projectId });
 
   const onAuthSuccess = useCallback(() => {
     pendingRetryRef.current = true;
@@ -74,20 +76,26 @@ export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseG
 
   const executeFetch = useCallback(async () => {
     if (isLoading) return;
-    const serverUrl = values?.settings?.url;
-    const { isPrebuildMcp, effectiveToolkitType } = mcpMeta;
+    const { isPrebuildMcp, effectiveToolkitType, serverUrl } = mcpMeta;
 
     const validationError = validateSyncToolsInputs({ serverUrl, isPrebuildMcp, effectiveToolkitType });
     if (validationError) {
       onError?.(validationError);
       return;
     }
+    if (projectId === undefined) {
+      onError?.('A project is required to load MCP tools');
+      return;
+    }
 
     setIsLoading(true);
+    const requestIdentity = JSON.stringify({ values, mcpMeta, projectId });
     try {
-      const mcpTokens = getAllTokens();
+      const mcpTokens = await discoveryTokens(String(projectId), mcpMeta);
+      if (currentRequest.current !== requestIdentity) return;
       const requestParams = buildSyncToolsRequestParams(values, mcpMeta, projectId, socket.socket.id, mcpTokens);
       const response = await mcpSyncTools(requestParams);
+      if (currentRequest.current !== requestIdentity) return;
 
       applySyncToolsOutcome(classifySyncToolsResult(response), {
         handleMcpAuthRequired,
@@ -97,6 +105,7 @@ export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseG
         markConnectionVerified: () => markToolsFetchConnectionVerified(isPrebuildMcp, effectiveToolkitType, serverUrl),
       });
     } catch (error) {
+      if (currentRequest.current !== requestIdentity) return;
       onError?.(error instanceof Error ? error.message : 'Failed to fetch tools');
     } finally {
       setIsLoading(false);
@@ -106,8 +115,7 @@ export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseG
   useEffect(() => {
     if (!showModal && pendingRetryRef.current) {
       pendingRetryRef.current = false;
-      const timer = setTimeout(() => void executeFetch(), 500);
-      return () => clearTimeout(timer);
+      void executeFetch();
     }
     return undefined;
   }, [showModal, executeFetch]);
@@ -122,6 +130,14 @@ export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseG
   }, [values?.settings?.url, mcpMeta, executeFetch, onError]);
 
   return { fetchTools, isLoading, getModalProps };
+}
+
+/** Resource-scoped preview uses the same refresh contract as execution. */
+async function discoveryTokens(projectId: string, { serverUrl, isPrebuildMcp, effectiveToolkitType }: { serverUrl: string | undefined; isPrebuildMcp: boolean; effectiveToolkitType: string | undefined }): Promise<Record<string, unknown>> {
+  const tokens = await getExecutionTokens(projectId);
+  const prebuiltAlias = isPrebuildMcp ? effectiveToolkitType : undefined;
+  const key = serverUrl && tokens[serverUrl] ? serverUrl : prebuiltAlias;
+  return key && tokens[key] ? { [key]: tokens[key] } : {};
 }
 
 /** Maps a couple of common raw error substrings to friendlier copy (baseline: `useGetRemoteMcpTools.hooks.js:122-129`). */
@@ -160,13 +176,13 @@ function validateSyncToolsInputs(input: { serverUrl: string | undefined; isPrebu
 function buildSyncToolsRequestParams(
   values: UseGetRemoteMcpToolsOptions['values'],
   mcpMeta: { isPrebuildMcp: boolean; effectiveToolkitType: string | undefined },
-  projectId: string | number | undefined,
+  projectId: string | number,
   sid: string | undefined,
   mcpTokens: Record<string, unknown>,
 ): McpSyncToolsParams {
   const settings = values?.settings;
   return {
-    projectId: projectId ?? 1,
+    projectId,
     url: settings?.url,
     headers: settings?.headers,
     timeout: settings?.timeout ?? 60,

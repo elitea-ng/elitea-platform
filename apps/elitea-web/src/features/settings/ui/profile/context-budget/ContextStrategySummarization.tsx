@@ -21,7 +21,7 @@ interface SummaryLlmSettings {
 
 interface ContextFormData {
   enabled: boolean;
-  max_context_tokens: number;
+
   preserve_recent_messages: number;
   enable_summarization: boolean;
   summary_llm_settings: SummaryLlmSettings;
@@ -78,17 +78,17 @@ const ContextStrategySummarization = memo(
         {/* Summarization Instructions */}
         <Box sx={[styles.section, styles.sectionSummarizationInstruction]}>
           <InfoLabelWithTooltip
-            label={t('settings.profile.contextBudget.summarization.instructions', 'Summarization instructions')}
-            tooltip={t('settings.profile.contextBudget.summarization.instructionsTooltip', 'Custom instructions for how summaries should be generated')}
+            label={t('settings.memory.summarization.additionalGuidance', 'Additional summary guidance (optional)')}
+            tooltip={t('settings.memory.summarization.contractDescription', CONTEXT_MESSAGES.SUMMARY_CONTRACT_DESCRIPTION)}
           />
           <InputBase
             expand={{ minRows: 3, maxRows: 6 }}
             value={formData.summary_llm_settings.instructions}
             onChange={(e) => handleSummaryLLMInputChange(e as React.ChangeEvent<HTMLInputElement>, 'instructions')}
             error={!!errors.summary_llm_settings?.instructions}
-            helperText={errors.summary_llm_settings?.instructions}
+            helperText={errors.summary_llm_settings?.instructions ?? t('settings.memory.summarization.contractDescription', CONTEXT_MESSAGES.SUMMARY_CONTRACT_DESCRIPTION)}
             disabled={!isEnabled || !formData.enable_summarization}
-            placeholder={CONTEXT_MESSAGES.DEFAULT_SUMMARY_INSTRUCTION}
+            placeholder={t('settings.memory.summarization.guidancePlaceholder', CONTEXT_MESSAGES.SUMMARY_GUIDANCE_PLACEHOLDER)}
             containerSx={styles.formInput}
           />
         </Box>

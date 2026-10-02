@@ -11,6 +11,7 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { ExecutionEventData } from '@/shared/api/sse';
 
+import { settleContextProgress } from './chatStreamToolAction';
 import { nowIso, type ChatStreamContext } from './chatStreamShared';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 
@@ -25,7 +26,7 @@ import type { ChatMessage } from './convertMessagesToChatHistory';
  * `recordStreamFailure` below tell "settled a message" from "there was no
  * message to settle" without a second pass over the history.
  */
-export function settleInFlight(history: readonly ChatMessage[], exception?: unknown): readonly ChatMessage[] {
+export function settleInFlight(history: readonly ChatMessage[], exception?: unknown, failureCode?: string): readonly ChatMessage[] {
   let changed = false;
   const next = history.map((message) => {
     if (!message.isStreaming && !message.isLoading) return message;
@@ -35,7 +36,9 @@ export function settleInFlight(history: readonly ChatMessage[], exception?: unkn
       isStreaming: false,
       isLoading: false,
       isRegenerating: false,
+      toolActions: settleContextProgress(message.toolActions),
       ...(exception !== undefined ? { exception } : {}),
+      ...(failureCode !== undefined ? { failureCode } : {}),
     };
   });
   return changed ? next : history;
@@ -91,14 +94,17 @@ export function recordStreamFailure(
   context: ChatStreamContext | undefined,
   /** The question this refused turn answered — the transport's, since no frame supplied one. */
   questionId?: string,
+  /** Use the accepted run's persisted answer identity before its first frame. */
+  responseMessageId?: string,
+  failureCode?: string,
 ): readonly ChatMessage[] {
-  const settled = settleInFlight(history, exception);
+  const settled = settleInFlight(history, exception, failureCode);
   if (settled !== history) return settled;
   const identity = context ?? {};
   return [
     ...history,
     {
-      id: crypto.randomUUID(),
+      id: responseMessageId ?? crypto.randomUUID(),
       role: ROLES.Assistant,
       name: identity.name ?? '',
       content: '',
@@ -106,6 +112,7 @@ export function recordStreamFailure(
       isStreaming: false,
       isLoading: false,
       exception,
+      ...(failureCode !== undefined ? { failureCode } : {}),
       ...(questionId !== undefined ? { questionId } : {}),
       ...(identity.participantId !== undefined ? { participantId: identity.participantId } : {}),
       ...(identity.avatar !== undefined ? { avatar: identity.avatar } : {}),

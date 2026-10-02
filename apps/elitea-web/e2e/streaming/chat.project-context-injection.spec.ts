@@ -73,8 +73,11 @@ import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, readCallerPersonalProjectId } from '../fixtures/api';
 
 interface ProjectContextBody {
-  readonly content?: string;
-  readonly enabled?: boolean;
+  readonly id: number | null;
+  readonly content: string;
+  readonly enabled: boolean;
+  readonly activation_description: string | null;
+  readonly updated_at: string | null;
 }
 
 function projectContextUrl(projectId: string): string {
@@ -110,6 +113,17 @@ test('Project Context, once saved with content enabled, reads back what was save
     // write was a no-op — the assertion that discriminates is the READ.
     expect(savedBody.enabled, 'the save response itself must claim the toggle is ON').toBe(true);
     expect(savedBody.content, 'the save response itself must echo the content sent').toBe(phrase);
+    expect(Number.isInteger(savedBody.id), 'the save must return its persisted row identity').toBe(true);
+    expect(savedBody.id).toBeGreaterThan(0);
+    expect(savedBody.updated_at, 'the save must return its persisted revision time').toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?$/,
+    );
+    expect(savedBody.activation_description, 'an omitted activation description must retain its prior value').toBe(
+      priorState.activation_description,
+    );
+    if (priorState.id !== null) {
+      expect(savedBody.id, 'updating Project Context must retain its row identity').toBe(priorState.id);
+    }
 
     // THE assertion this file exists for: what a caller can actually observe
     // persisted, not what the write route claimed. A working save reads back
@@ -121,7 +135,13 @@ test('Project Context, once saved with content enabled, reads back what was save
       readBackBody,
       'Project Context must read back what was just saved — the enable/content pair must survive ' +
         'past the response that claimed to have written it',
-    ).toEqual({ content: phrase, enabled: true });
+    ).toEqual({
+      id: savedBody.id,
+      content: phrase,
+      enabled: true,
+      activation_description: priorState.activation_description,
+      updated_at: savedBody.updated_at,
+    });
   } finally {
     // Restored REGARDLESS of the assertion above — see the header. It
     // matters more now than it did: the save it undoes actually persists.

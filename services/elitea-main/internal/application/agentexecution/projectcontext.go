@@ -66,13 +66,13 @@ func (context CurrentProjectContext) InjectableText() string {
 	return strings.TrimSpace(context.Content)
 }
 
-// CurrentProjectContextResolver reads the project's context row. Implemented
+// CurrentProjectContextTextResolver reads the project's context row. Implemented
 // by internal/infra/db/repos.ProjectContextRepo over the same tenant
 // `configuration` row the Settings panel writes
 // (internal/api/v2/eliteacore/handler.go's UpdateProjectContext, #888) and the
 // read route serves (internal/api/v2/promptcontextreads/handler.go), so what a
 // user sees on that screen is what a turn is given — one row, one meaning.
-type CurrentProjectContextResolver interface {
+type CurrentProjectContextTextResolver interface {
 	ResolveCurrentProjectContext(ctx context.Context, projectID int64) (CurrentProjectContext, error)
 }
 
@@ -82,7 +82,7 @@ type CurrentProjectContextResolver interface {
 // keeps working, and a service nobody attaches it to injects no project
 // context — the behaviour every unit test that predates this file expects.
 func (service *CurrentApplicationStartService) WithProjectContext(
-	projectContext CurrentProjectContextResolver,
+	projectContext CurrentProjectContextTextResolver,
 ) *CurrentApplicationStartService {
 	service.projectContext = projectContext
 	return service
@@ -229,7 +229,7 @@ func appendCurrentApplicationProjectContext(
 	versionDetails json.RawMessage,
 	projectContextText string,
 ) json.RawMessage {
-	if projectContextText == "" || currentProjectContextIgnored(versionDetails) {
+	if projectContextText == "" || currentProjectContextIgnored(versionDetails) || hasFrozenProjectContext(versionDetails) {
 		return versionDetails
 	}
 	block := currentProjectContextBlock(projectContextText)
@@ -275,4 +275,10 @@ func appendCurrentInstructionsProjectContext(instructions, projectContextText st
 		return instructions
 	}
 	return appendCurrentInstructionsMemories(instructions, block)
+}
+
+// The typed snapshot owns activation and survives worker compaction.
+func hasFrozenProjectContext(version json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	return json.Unmarshal(version, &fields) == nil && len(fields["project_context"]) > 0 && string(fields["project_context"]) != "null"
 }

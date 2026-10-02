@@ -9,13 +9,8 @@
  *
  * DISCLOSED GAPS vs. baseline: payloads carry only fields this hook's deps
  * can supply — baseline's `generateMessagePayload`/
- * `generateApplicationStreamingPayload`/`getRegeneratePayload` (llm_settings
- * by participant type) and `McpAuthHelpers.getAllTokens()`/
- * `getServersWithoutTokens()` (`mcp_tokens`/`ignored_mcp_servers`, deep paths
- * in `features/mcps/lib/` not on that slice's public barrel — importing them
- * would violate `no-deep-slice-import-cross-slice`) aren't ported; same gaps
- * `useToolkitChat.types.ts` already records. `user_declined_mcp_servers`
- * (session-only) IS ported. `continueHitl`'s Track-1 "parallel fan-out"
+ * `generateApplicationStreamingPayload`/`getRegeneratePayload` still have
+ * participant-specific gaps. `continueHitl`'s Track-1 "parallel fan-out"
  * decision-batching isn't ported (each decision resumes independently);
  * Track-2's independent fan-out-child resume IS (routes on `childThreadId`).
  *
@@ -28,18 +23,9 @@
  * every approval paused server-side. It never emits after a route that
  * ACCEPTED the resume; that would run the agent twice.
  *
- * `resumeMcpFlow` now takes the same route with
- * `agent.continue.authorization.v1`. That contract REQUIRES an
- * `authorization_request_id`, and `./useChatBoxHandlers.mcpAuth` reads it back
- * off the `mcp_authorization_required` frame's own metadata — the one thing
- * this app was missing, and the whole reason MCP approval stayed socket-only.
- * The contract does NOT refuse a non-empty `user_declined_mcp_servers`, which
- * an earlier reading of it claimed: its arm requires that field to BE an
- * array, empty or not, and requires `mcp_tokens` and `ignored_mcp_servers` to
- * be present as well (`currentJSONArray`/`currentJSONObject`, not the HITL
- * arm's `emptyJSONArray`/`emptyJSONObject`).
- *
- * It still reverts its optimistic patch when no transport takes the resume.
+ * Delegated authorization uses its exact REST contract. It never falls back
+ * to the socket because that payload cannot identify the paused invocation.
+ * Authorization retains browser tokens and batches exact parallel decisions.
  */
 
 import { conversationApi } from "@/entities/conversation";

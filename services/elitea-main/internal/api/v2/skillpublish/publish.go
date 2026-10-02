@@ -188,8 +188,8 @@ func insertVersion(ctx context.Context, tx queryExecer, schema string, skillID i
 	}
 	var versionID int
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta, uuid)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, gen_random_uuid())
 		RETURNING id`, schema),
 		skillID, name, instructions, authorID, status, string(encodedMeta)).Scan(&versionID); err != nil {
 		return 0, err

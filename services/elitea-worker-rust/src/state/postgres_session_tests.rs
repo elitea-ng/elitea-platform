@@ -1,6 +1,7 @@
 use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adk_rust::session::{
@@ -19,17 +20,18 @@ use super::postgres_session::{
 };
 
 const TEST_DATABASE_URL: &str = "ELITEA_TEST_DATABASE_URL";
+static DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SESSION_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0002_agent_sessions.sql");
 
-struct IsolatedPostgres {
-    pool: PgPool,
+pub(crate) struct IsolatedPostgres {
+    pub(crate) pool: PgPool,
     admin_options: PgConnectOptions,
-    database_name: String,
+    pub(crate) database_name: String,
 }
 
 impl IsolatedPostgres {
-    async fn create(database_url: &str) -> Self {
+    pub(crate) async fn create(database_url: &str) -> Self {
         let admin_options = PgConnectOptions::from_str(database_url)
             .expect("parse PostgreSQL session component-test URL")
             .disable_statement_logging();
@@ -43,7 +45,11 @@ impl IsolatedPostgres {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let database_name = format!("elitea_rust_session_{}_{}", std::process::id(), unique);
+        let sequence = DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let database_name = format!(
+            "elitea_rust_session_{}_{unique}_{sequence}",
+            std::process::id()
+        );
         sqlx::query(&format!("CREATE DATABASE {database_name}"))
             .execute(&admin_pool)
             .await
@@ -97,14 +103,20 @@ impl Drop for IsolatedPostgres {
     }
 }
 
-async fn install_schema(pool: &PgPool) {
+pub(crate) async fn install_schema(pool: &PgPool) {
     sqlx::raw_sql(SESSION_MIGRATION)
         .execute(pool)
         .await
         .expect("apply session migration");
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0003_full_context_session_capacity.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("apply full context session capacity migration");
 }
 
-fn authority_for(
+pub(crate) fn authority_for(
     claim_id: &str,
     claim_attempt: u64,
     lease_epoch: u64,
@@ -476,4 +488,437 @@ async fn postgres_session_component_story() {
     replacement_lease.revoke();
     let revoked = replacement.health_check().await.expect_err("revoked lease");
     assert_eq!(revoked.code, "session.writer_not_current");
+}
+
+#[tokio::test]
+async fn postgres_session_full_context_survives_writer_replacement() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL full context test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-large-1", 1, 1, [0x22; 32]),
+        SessionLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate large context writer");
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .expect("create session");
+    let identity = session.try_identity().expect("identity");
+    let payload = json!({"request": "large model history ".repeat(220_000)});
+    let mut event = Event::with_id("large-checkpoint", "invocation-1");
+    event.author = "elitea-recovery".to_owned();
+    event
+        .actions
+        .state_delta
+        .insert("elitea.agent.recovery.v1".to_owned(), payload.clone());
+    for _ in 0..2 {
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: event.clone(),
+            })
+            .await
+            .expect("large checkpoint and exact redelivery");
+    }
+    // Shared app/user data must retain the smaller limit and fail atomically.
+    for key in ["app:oversized", "user:oversized"] {
+        let mut invalid = Event::with_id(key, "invocation-1");
+        invalid
+            .actions
+            .state_delta
+            .insert(key.to_owned(), json!("x".repeat(1024 * 1024)));
+        assert!(
+            service
+                .append_event_for_identity(AppendEventRequest {
+                    identity: identity.clone(),
+                    event: invalid,
+                })
+                .await
+                .is_err()
+        );
+    }
+    drop(service);
+    let replacement = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-large-2", 2, 2, [0x33; 32]),
+        SessionLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("replace writer");
+    let restored = replacement
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("restore full context");
+    assert_eq!(
+        restored.state().get("elitea.agent.recovery.v1"),
+        Some(payload)
+    );
+    assert_eq!(restored.events().len(), 1);
+    assert_eq!(restored.state().get("app:oversized"), None);
+    assert_eq!(restored.state().get("user:oversized"), None);
+}
+
+#[tokio::test]
+async fn superseded_recovery_markers_do_not_exhaust_active_view_or_erase_replay_evidence() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let limits = SessionLimits {
+        max_events: 2,
+        max_retained_event_bytes: 12_000,
+        ..SessionLimits::default()
+    };
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-1", 1, 1, [0x22; 32]),
+        limits,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .unwrap();
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".into(),
+            user_id: "user-1".into(),
+            session_id: Some("session-1".into()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let identity = session.try_identity().unwrap();
+    let mut message = Event::with_id("user-message", "invocation-1");
+    message.author = "user".into();
+    message.set_content(Content::new("user").with_text("Keep this original instruction."));
+    service
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: message,
+        })
+        .await
+        .unwrap();
+    let mut first = None;
+    for index in 0..12 {
+        let mut event = Event::with_id(format!("checkpoint-{index}"), "invocation-1");
+        event.author = "elitea-recovery".into();
+        event.actions.state_delta.insert(
+            "elitea.agent.recovery.v1".into(),
+            json!({"sequence":index,"request":"x".repeat(5_000)}),
+        );
+        if first.is_none() {
+            first = Some(event.clone());
+        }
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event,
+            })
+            .await
+            .expect("new checkpoint replaces active checkpoint capacity");
+    }
+    let first = first.unwrap();
+    service
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: first.clone(),
+        })
+        .await
+        .expect("old exact replay remains idempotent");
+    let mut changed = first;
+    changed
+        .actions
+        .state_delta
+        .insert("tampered".into(), json!(true));
+    assert_eq!(
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: changed
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "session.event_conflict"
+    );
+    assert_retained_recovery_view(&service, &database.pool).await;
+    database.pool.close().await;
+}
+
+async fn assert_retained_recovery_view(service: &PostgresSessionService, pool: &PgPool) {
+    let restored = service
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".into(),
+            user_id: "user-1".into(),
+            session_id: "session-1".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(restored.events().len(), 2);
+    assert_eq!(restored.events().at(0).unwrap().id, "user-message");
+    assert_eq!(restored.events().at(1).unwrap().id, "checkpoint-11");
+    assert_eq!(
+        restored.state().get("elitea.agent.recovery.v1").unwrap()["sequence"],
+        11
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM elitea_runtime.agent_session_events")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 13, "immutable ledger retains every original event");
+    let identity = restored.try_identity().unwrap();
+    let mut sibling = Event::with_id("sibling-checkpoint", "invocation-1");
+    sibling.author = "elitea-recovery".into();
+    sibling.branch = "other".into();
+    sibling
+        .actions
+        .state_delta
+        .insert("elitea.agent.recovery.v1".into(), json!({"sequence":12}));
+    assert_eq!(
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: sibling
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "session.resource_exhausted",
+        "a sibling cannot supersede another branch's marker"
+    );
+    let mut ordinary = Event::with_id("ordinary", "invocation-1");
+    ordinary.author = "elitea-recovery".into();
+    ordinary.set_content(Content::new("model").with_text("Keep this result."));
+    ordinary
+        .actions
+        .state_delta
+        .insert("elitea.agent.recovery.v1".into(), json!({"sequence":12}));
+    assert_eq!(
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity,
+                event: ordinary
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "session.resource_exhausted",
+        "content-bearing events remain subject to active capacity"
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One ordered story verifies repeated retirement, quota, and immutable replay.
+async fn model_history_snapshots_release_capacity_without_losing_controls_or_replay() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-1", 1, 1, [0x22; 32]),
+        SessionLimits {
+            max_events: 5,
+            ..SessionLimits::default()
+        },
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .unwrap();
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".into(),
+            user_id: "user-1".into(),
+            session_id: Some("session-1".into()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let identity = session.try_identity().unwrap();
+    let mut control = Event::with_id("control", "invocation-1");
+    control.author = "agent".into();
+    control.actions.transfer_to_agent = Some("child".into());
+    service
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: control,
+        })
+        .await
+        .unwrap();
+    let mut replay = None;
+    for cycle in 0..6 {
+        let mut snapshot = Event::with_id(format!("snapshot-{cycle}"), "invocation-1");
+        snapshot.author = "elitea-recovery".into();
+        snapshot.actions.state_delta.insert(
+            "elitea.agent.history_snapshot.v1".into(),
+            json!({"version":1,"agent_name":"agent"}),
+        );
+        snapshot.actions.state_delta.insert(
+            "elitea.agent.recovery.v1".into(),
+            json!({
+                "version":1,"execution_id":"execution-1","generation":1,
+                "definition_digest":vec![34;32],"invocation_id":"invocation-1",
+            "phase":"model_pending","model":{"request":adk_rust::LlmRequest::new("model",
+                vec![Content::new("user").with_text("Original instruction"),
+                    Content::new("model").with_text(format!("Summary {cycle}"))]
+            ),"tools":{}}
+            }),
+        );
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: snapshot,
+            })
+            .await
+            .expect("a new snapshot replaces covered history capacity");
+        let mut result = Event::with_id(format!("result-{cycle}"), "invocation-1");
+        result.author = "agent".into();
+        result.set_content(Content::new("model").with_text("Tool call response"));
+        if replay.is_none() {
+            replay = Some(result.clone());
+        }
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: result,
+            })
+            .await
+            .unwrap();
+        let mut boundary = Event::with_id(format!("tool-{cycle}"), "invocation-1");
+        boundary.author = "elitea-recovery".into();
+        boundary.actions.state_delta.insert(
+            "elitea.agent.recovery.v1".into(),
+            json!({"phase":"tool_may_have_started"}),
+        );
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: boundary,
+            })
+            .await
+            .unwrap();
+        let mut result = Event::with_id(format!("tool-result-{cycle}"), "invocation-1");
+        result.author = "agent".into();
+        result.set_content(Content::new("tool").with_text("Tool finished"));
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: result.clone(),
+            })
+            .await
+            .unwrap();
+        result.id = format!("overflow-{cycle}");
+        assert_eq!(
+            service
+                .append_event_for_identity(AppendEventRequest {
+                    identity: identity.clone(),
+                    event: result,
+                })
+                .await
+                .unwrap_err()
+                .code,
+            "session.resource_exhausted",
+            "the retained model snapshot must still count at a tool boundary"
+        );
+        let restored = service
+            .get(GetRequest {
+                app_name: "elitea-agent-v1".into(),
+                user_id: "user-1".into(),
+                session_id: "session-1".into(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+        let ids = restored
+            .events()
+            .all()
+            .into_iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                "control".to_owned(),
+                format!("snapshot-{cycle}"),
+                format!("result-{cycle}"),
+                format!("tool-{cycle}"),
+                format!("tool-result-{cycle}")
+            ]
+        );
+        assert_eq!(
+            restored.state().get("elitea.agent.recovery.v1").unwrap()["phase"],
+            "tool_may_have_started",
+            "history must not replace current recovery state"
+        );
+    }
+    let mut sibling = Event::with_id("new-branch", "invocation-1");
+    sibling.author = "agent".into();
+    sibling.branch = "child".into();
+    sibling.set_content(Content::new("model").with_text("Sibling history"));
+    assert_eq!(
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity: identity.clone(),
+                event: sibling,
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "session.resource_exhausted",
+        "branch admission must count the complete unprojected history"
+    );
+    let mut replay = replay.unwrap();
+    service
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: replay.clone(),
+        })
+        .await
+        .expect("retired exact replay remains idempotent");
+    replay.set_content(Content::new("model").with_text("Changed response"));
+    assert_eq!(
+        service
+            .append_event_for_identity(AppendEventRequest {
+                identity,
+                event: replay,
+            })
+            .await
+            .unwrap_err()
+            .code,
+        "session.event_conflict"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM elitea_runtime.agent_session_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, 25,
+        "all immutable events survive active history retirement"
+    );
+    database.pool.close().await;
 }

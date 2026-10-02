@@ -4,6 +4,7 @@ import { t } from '@/shared/i18n';
 import { isInternalToolAvailable, useRuntimeCapabilities } from '@/shared/api/runtimeCapabilities';
 import { AttachIcon } from '@/shared/ui/icons/attach-icon';
 import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
+import { ChatbotIcon } from '@/shared/ui/icons/chatbot-icon';
 import { ContextIcon } from '@/shared/ui/icons/context-icon';
 import { ImageIcon } from '@/shared/ui/icons/image-icon';
 import { McpIcon } from '@/shared/ui/icons/mcp-icon';
@@ -111,6 +112,12 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     infoTooltip: { text: 'Enable managing and tracking todo items for task planning.' },
   },
   {
+    name: 'ask_user',
+    title: 'Ask User',
+    icon: 'ChatbotIcon',
+    infoTooltip: { text: 'Let the agent ask clarifying questions and wait for your answers before continuing.' },
+  },
+  {
     // #872: as of the Python worker's image, this toggle actually executes
     // (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both
     // baked in at build time — services/elitea-worker-python/Containerfile).
@@ -176,6 +183,7 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
 export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
   AttachIcon,
   CalendarIcon,
+  ChatbotIcon,
   ContextIcon,
   ImageIcon,
   McpIcon,

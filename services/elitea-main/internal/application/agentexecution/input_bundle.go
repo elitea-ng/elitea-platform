@@ -148,7 +148,7 @@ func (f *InputBundleFactory) Build(
 
 func validateAuthoritativeInput(input *runtimev1.AgentExecutionInputV1) error {
 	if input == nil || input.GetSchemaRevision() != agentInputSchemaRevision ||
-		len(input.ProtoReflect().GetUnknown()) != 0 {
+		len(input.ProtoReflect().GetUnknown()) != 0 || !validCurrentProjectContextSnapshot(input.GetProjectContext()) {
 		return ErrInvalidAuthoritativeAgentInput
 	}
 	objectFields := [][]byte{

@@ -577,6 +577,11 @@ func mergeCurrentAgentTraceRows(
 	for _, incoming := range delta.toolCalls {
 		incoming.entry = sanitizeCurrentAgentJSON(incoming.entry).(map[string]any)
 		if index, ok := positions[incoming.key]; ok {
+			merged, err := mergeAgentToolOutputChunk(toolCalls[index].entry, incoming.entry)
+			if err != nil {
+				return nil, err
+			}
+			incoming.entry = merged
 			// A COMPLETED call whose output was chunked (#956) carries the
 			// chunk count instead of the text: its inline `tool_output` is
 			// empty by construction, and overwriting the accumulated text with
@@ -586,12 +591,21 @@ func mergeCurrentAgentTraceRows(
 			carryCurrentAgentChunkedOutput(toolCalls[index].entry, incoming.entry)
 			toolCalls[index] = incoming
 		} else {
+			merged, err := mergeAgentToolOutputChunk(nil, incoming.entry)
+			if err != nil {
+				return nil, err
+			}
+			incoming.entry = merged
 			positions[incoming.key] = len(toolCalls)
 			toolCalls = append(toolCalls, incoming)
 		}
 	}
 	toolCalls = dedupeCurrentAgentToolCalls(toolCalls)
-	thinkingSteps = mergeCurrentAgentThinkingSteps(thinkingSteps, delta.thinkingSteps)
+	var err error
+	thinkingSteps, err = mergeCurrentAgentThinkingSteps(thinkingSteps, delta.thinkingSteps)
+	if err != nil {
+		return nil, err
+	}
 
 	desired := make([]currentAgentTraceRow, 0, len(toolCalls)+len(thinkingSteps))
 	for _, toolCall := range toolCalls {
@@ -634,6 +648,9 @@ func reconstructCurrentAgentTrace(
 				"timestamp_start":  currentAgentTimeString(row.startedAt),
 				"timestamp_finish": currentAgentTimeString(row.finishedAt),
 			}
+			if chunk, ok := row.attrs["tool_output_chunk_v1"]; ok {
+				entry["tool_output_chunk_v1"] = chunk
+			}
 			if row.isError {
 				if value := stringPointerValue(row.toolOutput); value != nil && value != "" {
 					entry["error"] = value
@@ -670,6 +687,11 @@ func reconstructCurrentAgentTrace(
 			}
 			for _, key := range currentAgentHierarchyKeys {
 				if value, ok := row.attrs[key]; ok && value != nil {
+					entry[key] = value
+				}
+			}
+			for _, key := range []string{"text_chunk_v1", "thinking_chunk_v1"} {
+				if value, ok := row.attrs[key]; ok {
 					entry[key] = value
 				}
 			}
@@ -744,6 +766,11 @@ func currentAgentThinkingStepToRow(
 		displayMetadata["metadata"] = hierarchy
 	}
 	attrs := cloneCurrentAgentMap(hierarchy)
+	for _, key := range []string{"text_chunk_v1", "thinking_chunk_v1"} {
+		if value, ok := entry[key]; ok {
+			attrs[key] = value
+		}
+	}
 	if len(displayMetadata) != 0 {
 		attrs["response_metadata"] = displayMetadata
 	}
@@ -784,7 +811,7 @@ func currentAgentThinkingStepToRow(
 func mergeCurrentAgentThinkingSteps(
 	oldSteps,
 	newSteps []map[string]any,
-) []map[string]any {
+) ([]map[string]any, error) {
 	merged := append([]map[string]any(nil), oldSteps...)
 	positions := make(map[string]int, len(merged))
 	for index, step := range merged {
@@ -796,15 +823,23 @@ func mergeCurrentAgentThinkingSteps(
 		step := sanitizeCurrentAgentJSON(rawStep).(map[string]any)
 		identity := currentAgentThinkingIdentity(step)
 		if index, ok := positions[identity]; ok && identity != "" {
-			merged[index] = step
+			next, err := mergeAgentModelStep(merged[index], step)
+			if err != nil {
+				return nil, err
+			}
+			merged[index] = next
 			continue
 		}
 		if identity != "" {
 			positions[identity] = len(merged)
 		}
-		merged = append(merged, step)
+		next, err := mergeAgentModelStep(nil, step)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, next)
 	}
-	return merged
+	return merged, nil
 }
 
 func currentAgentThinkingIdentity(step map[string]any) string {
@@ -947,6 +982,9 @@ func currentAgentHierarchyMetadata(entry map[string]any) map[string]any {
 
 func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	attrs := map[string]any{}
+	if chunk, ok := entry["tool_output_chunk_v1"]; ok {
+		attrs["tool_output_chunk_v1"] = chunk
+	}
 	metadata := allowlistedCurrentAgentMetadata(currentAgentMap(entry, "metadata"))
 	for key, value := range currentAgentHierarchyMetadata(entry) {
 		if _, exists := metadata[key]; !exists {

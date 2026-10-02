@@ -23,20 +23,19 @@ type ToolkitCallToolDispatchPolicy = ExecutionDispatchPolicy
 
 var ErrPendingToolkitCallToolDispatchNotFound = errors.New("pending tool-run dispatch not found")
 
-// ToolkitCallToolJobsRepository is the durable half of the synchronous tool-run
-// producer. It owns admission, the one-shot publish and the settlement read.
-//
-// It has no per-capability binding table to write; see
-// internal/db/queries/runtime_toolkit_call_tool.sql for why, and what that
-// costs.
+// ToolkitCallToolJobsRepository owns toolkit admission and publication state.
+// Production admission stores its signed command in the same transaction.
+// The recovery publisher uses that command without a capability binding table.
 type ToolkitCallToolJobsRepository struct {
-	pool   *pgxpool.Pool
-	policy ToolkitCallToolDispatchPolicy
+	pool     *pgxpool.Pool
+	policy   ToolkitCallToolDispatchPolicy
+	preparer ToolkitCallToolEnvelopePreparer
 }
 
 func NewToolkitCallToolJobsRepository(
 	pool *pgxpool.Pool,
 	policy ToolkitCallToolDispatchPolicy,
+	preparers ...ToolkitCallToolEnvelopePreparer,
 ) (*ToolkitCallToolJobsRepository, error) {
 	if pool == nil {
 		return nil, errors.New("tool-run admission database is required")
@@ -44,7 +43,17 @@ func NewToolkitCallToolJobsRepository(
 	if err := policy.validate(); err != nil {
 		return nil, err
 	}
-	return &ToolkitCallToolJobsRepository{pool: pool, policy: policy}, nil
+	if len(preparers) > 1 {
+		return nil, errors.New("at most one tool-run envelope preparer is permitted")
+	}
+	repo := &ToolkitCallToolJobsRepository{pool: pool, policy: policy}
+	if len(preparers) == 1 {
+		if preparers[0] == nil {
+			return nil, errors.New("tool-run envelope preparer is required")
+		}
+		repo.preparer = preparers[0]
+	}
+	return repo, nil
 }
 
 func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
@@ -64,7 +73,7 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		return executionapp.AdmissionOutcome{}, err
 	}
 	if len(admission.Record.InputBundle.Manifest) > maxStoredInputManifestBytes ||
-		len(admission.Record.InputBundle.Entries) != 2 ||
+		len(admission.Record.InputBundle.Entries) != 3 ||
 		!boundedToolRunAdmissionStrings(admission) ||
 		admission.Record.Job.Generation > math.MaxInt64 ||
 		admission.Record.Outbox.Generation > math.MaxInt64 {
@@ -236,6 +245,23 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		CreatedAt:      timestamp(timing.AdmittedAt),
 	}); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert tool-run command outbox: %w", err)
+	}
+	// Commit command bytes with admission. A replacement process needs no caller state.
+	if r.preparer != nil {
+		envelope, err := r.prepareAdmissionEnvelope(ctx, admission, timing.Deadline)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, err
+		}
+		stored, err := txQueries.StorePreparedToolkitCallToolEnvelope(ctx, sqlcgen.StorePreparedToolkitCallToolEnvelopeParams{
+			OutboxID: admission.Record.Outbox.ID, EnvelopeBytes: envelope.Bytes,
+			EnvelopeDigest: envelope.Digest[:], SignatureProfile: envelope.SignatureProfile, KeyID: envelope.KeyID,
+		})
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("store admitted tool-run envelope: %w", err)
+		}
+		if stored != 1 {
+			return executionapp.AdmissionOutcome{}, errors.New("admitted tool-run envelope was not stored")
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("commit tool-run admission: %w", err)

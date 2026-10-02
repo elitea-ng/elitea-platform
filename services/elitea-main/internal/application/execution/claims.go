@@ -16,15 +16,16 @@ var (
 )
 
 type ClaimRequest struct {
-	CommandID            string
-	OutboxID             string
-	ExecutionID          string
-	Generation           uint64
-	CapabilityID         string
-	SignedEnvelopeDigest runtimedomain.Digest
-	WorkloadIdentity     string
-	WorkloadSessionID    string
-	ProducerID           string
+	AgentModelCheckpointRecovery bool
+	CommandID                    string
+	OutboxID                     string
+	ExecutionID                  string
+	Generation                   uint64
+	CapabilityID                 string
+	SignedEnvelopeDigest         runtimedomain.Digest
+	WorkloadIdentity             string
+	WorkloadSessionID            string
+	ProducerID                   string
 }
 
 // ClaimAbortDisposition records why a live, fully fenced claim was released
@@ -51,6 +52,7 @@ func (d ClaimAbortDisposition) valid() bool {
 type ClaimDisposition string
 
 const (
+	ClaimRecoverAgentModelCheckpoint     ClaimDisposition = "RECOVER_AGENT_MODEL_CHECKPOINT"
 	ClaimAccepted                        ClaimDisposition = "ACCEPTED"
 	ClaimRecoverTerminalACK              ClaimDisposition = "RECOVER_TERMINAL_ACK"
 	ClaimRecoverSettlement               ClaimDisposition = "RECOVER_SETTLEMENT"
@@ -65,7 +67,7 @@ const (
 
 func (d ClaimDisposition) valid() bool {
 	switch d {
-	case ClaimAccepted, ClaimRecoverTerminalACK, ClaimRecoverSettlement, ClaimSettledACK, ClaimObsoleteACK, ClaimActiveLeaseNoACK, ClaimRetryLaterNoACK, ClaimRetiredACK, ClaimRecoverRunningNoACK, ClaimRecoverAmbiguousInvocationNoACK:
+	case ClaimRecoverAgentModelCheckpoint, ClaimAccepted, ClaimRecoverTerminalACK, ClaimRecoverSettlement, ClaimSettledACK, ClaimObsoleteACK, ClaimActiveLeaseNoACK, ClaimRetryLaterNoACK, ClaimRetiredACK, ClaimRecoverRunningNoACK, ClaimRecoverAmbiguousInvocationNoACK:
 		return true
 	default:
 		return false
@@ -143,7 +145,7 @@ func (d ClaimDecision) validate(request ClaimRequest, leaseTTL ClaimLeaseTTLMill
 	if err := lease.Verify(d.LeaseObservedAt.UTC(), lease.Fence); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidClaim, err)
 	}
-	if d.Disposition == ClaimAccepted && lease.ExpiresAt.Sub(d.LeaseObservedAt) != leaseTTL.Duration() {
+	if (d.Disposition == ClaimAccepted || d.Disposition == ClaimRecoverAgentModelCheckpoint) && lease.ExpiresAt.Sub(d.LeaseObservedAt) != leaseTTL.Duration() {
 		return fmt.Errorf("%w: repository returned a lease outside the selected TTL", ErrInvalidClaim)
 	}
 	switch d.Disposition {

@@ -55,6 +55,14 @@ export const getListTagsResponseMock = (
   ).map(() => ({
     id: faker.number.int(),
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    application_count: faker.helpers.arrayElement([
+      faker.number.int({ min: 0 }),
+      undefined,
+    ]),
+    skill_count: faker.helpers.arrayElement([
+      faker.number.int({ min: 0 }),
+      undefined,
+    ]),
     data: faker.helpers.arrayElement([{}, null]),
   })),
   total: faker.number.int(),
@@ -66,6 +74,14 @@ export const getCreateTagResponseMock = (
 ): Tag => ({
   id: faker.number.int(),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_count: faker.helpers.arrayElement([
+    faker.number.int({ min: 0 }),
+    undefined,
+  ]),
+  skill_count: faker.helpers.arrayElement([
+    faker.number.int({ min: 0 }),
+    undefined,
+  ]),
   data: faker.helpers.arrayElement([{}, null]),
   ...overrideResponse,
 });

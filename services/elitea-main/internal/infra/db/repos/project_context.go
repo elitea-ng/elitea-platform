@@ -31,7 +31,7 @@ func NewProjectContextRepo(pool *pgxpool.Pool) *ProjectContextRepo {
 	return &ProjectContextRepo{pool: pool}
 }
 
-var _ agentexecutionapp.CurrentProjectContextResolver = (*ProjectContextRepo)(nil)
+var _ agentexecutionapp.CurrentProjectContextTextResolver = (*ProjectContextRepo)(nil)
 
 // ResolveCurrentProjectContext answers the project's stored context, or the
 // zero value when the project has no row at all.

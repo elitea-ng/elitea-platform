@@ -35,6 +35,7 @@ import {
   clickCreateButton,
   createConversation,
   deleteConversation,
+  readCallerIdentity,
 } from '../../fixtures/api';
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
@@ -143,14 +144,17 @@ test('the Create control leaves the open conversation for a blank one, and the n
 //
 // The legacy test asserted one thing — that the model selector showed
 // something. "Default settings" is a bigger statement than that, and every part
-// of it is cheap to read here: no transcript, no participants, no modules, and
+// of it is cheap to read here: no transcript, only the caller and default
+// responder participants, no modules, and
 // a model that is the project's default rather than the picker's `None`
 // fallback. Each of those is a real default a regression could break
 // independently (a conversation created with a stale participant list, or with
 // internal tools inherited from the last one, are both shapes the product has
 // produced).
 // ─────────────────────────────────────────────────────────────────────────────
-test('a conversation opens with an empty transcript, no participants, no modules and the default model', async ({ page }) => {
+test('a conversation opens with an empty transcript, default participants, no modules and the default model', async ({ page }) => {
+  const caller = await readCallerIdentity(page.request);
+  expect(caller.id).toMatch(/^\d+$/);
   const catalogue = await page.request.get(MODEL_CATALOGUE);
   expect(catalogue.status()).toBe(200);
   const items = ((await catalogue.json()) as { items?: readonly { name: string; display_name?: string; default?: boolean }[] }).items ?? [];
@@ -166,10 +170,16 @@ test('a conversation opens with an empty transcript, no participants, no modules
   const detail = await page.request.get(`${API_BASE}${CONVERSATION_PATH}/${conversationId}`);
   expect(detail.status()).toBe(200);
   const stored = (await detail.json()) as {
-    participants?: readonly unknown[];
+    participants?: readonly {
+      entity_name: string;
+      entity_meta?: { id?: string | number };
+    }[];
     meta?: { internal_tools?: readonly string[] };
   };
-  expect(stored.participants ?? []).toEqual([]);
+  const participants = stored.participants ?? [];
+  expect(participants.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'user']);
+  expect(String(participants.find((participant) => participant.entity_name === 'user')?.entity_meta?.id)).toBe(caller.id);
+  expect(participants.find((participant) => participant.entity_name === 'dummy')?.entity_meta).toEqual({});
   expect(stored.meta?.internal_tools ?? []).toEqual([]);
 
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
@@ -184,14 +194,16 @@ test('a conversation opens with an empty transcript, no participants, no modules
   await expect(page.getByTestId('model-selector-name')).toHaveText(expectedLabel, { timeout: 15_000 });
   expect(expectedLabel).not.toBe('None');
 
-  // No participants: the rail renders a section only for participants that
-  // exist, so both sections must be absent rather than empty.
+  // No configured agent or toolkit; only the caller appears in the users row.
   const expand = page.getByRole('button', { name: 'Expand participants' });
   await expect(expand).toBeVisible({ timeout: 20_000 });
   await expand.click();
   await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('participants-section-Agents')).toHaveCount(0);
-  await expect(page.getByTestId('users-section')).toHaveCount(0);
+  await expect(page.getByTestId('participants-section-Toolkits')).toHaveCount(0);
+  const users = page.getByTestId('users-section');
+  await expect(users).toBeVisible();
+  await expect(users.locator('[data-testid^="participant-item-"]')).toHaveCount(1);
 
   await checkA11y(page);
   await deleteConversation(page.request, conversationId);

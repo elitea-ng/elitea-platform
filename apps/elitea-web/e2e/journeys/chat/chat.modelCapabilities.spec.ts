@@ -34,6 +34,7 @@ import { expect, test } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import {
   AUTOTEST_PREFIX,
+  DEFAULT_PROJECT_ID,
   createConversation,
   deleteConversation,
 } from '../../fixtures/api';
@@ -44,6 +45,7 @@ const MODEL_CATALOGUE_GLOB = '**/configurations/models/**';
 /** One catalogue row, in the shape `toLlmModel.ts` reads. */
 interface MockModel {
   readonly id: string;
+  readonly project_id: number;
   readonly name: string;
   readonly display_name: string;
   readonly default?: boolean;
@@ -53,24 +55,28 @@ interface MockModel {
 
 const PLAIN_MODEL: MockModel = {
   id: 'e2e-cap-plain',
+  project_id: Number(DEFAULT_PROJECT_ID),
   name: 'e2e-cap-plain',
   display_name: 'E2E Plain Model',
   default: true,
 };
 const VISION_MODEL: MockModel = {
   id: 'e2e-cap-vision',
+  project_id: Number(DEFAULT_PROJECT_ID),
   name: 'e2e-cap-vision',
   display_name: 'E2E Vision Model',
   supports_vision: true,
 };
 const REASONING_MODEL: MockModel = {
   id: 'e2e-cap-reasoning',
+  project_id: Number(DEFAULT_PROJECT_ID),
   name: 'e2e-cap-reasoning',
   display_name: 'E2E Reasoning Model',
   supports_reasoning: true,
 };
 const BOTH_MODEL: MockModel = {
   id: 'e2e-cap-both',
+  project_id: Number(DEFAULT_PROJECT_ID),
   name: 'e2e-cap-both',
   display_name: 'E2E Vision+Reasoning Model',
   supports_vision: true,

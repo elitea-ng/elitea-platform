@@ -602,15 +602,24 @@ class EliteaSdkAgentAdapter:
         with self._execution_memory() as memory, _sdk_budget_boundary():
             application = payload.application
             version_details = deepcopy(application.get("version_details") or {})
+            if "tools" in version_details:
+                version_details["tools"] = _sdk_agent_tools(version_details["tools"])
             _serve_version_internal_tools(version_details)
+            instructions, project_context = _project_context_delivery(
+                version_details.get("instructions", ""), payload.project_context
+            )
+            if payload.project_context is not None:
+                version_details["instructions"] = instructions
+            version_details.pop("project_context", None)
             llm_kwargs = _llm_kwargs(payload.llm)
             executor = self._client.application(
                 application_id=application.get("id"),
                 application_version_id=application.get("version_id"),
-                tools=deepcopy(payload.tools) or None,
+                tools=_sdk_agent_tools(payload.tools) or None,
                 memory=memory,
                 application_variables=deepcopy(application.get("variables")),
                 version_details=version_details or None,
+                **({"project_context": project_context} if project_context else {}),
                 mcp_tokens=deepcopy(payload.mcp_tokens),
                 conversation_id=payload.conversation_id,
                 ignored_mcp_servers=list(payload.ignored_mcp_servers),
@@ -649,12 +658,15 @@ class EliteaSdkAgentAdapter:
                     "openai_compatible": llm_kwargs.get("openai_compatible", False),
                 },
             )
+            instructions, project_context = _project_context_delivery(
+                payload.application.get("instructions", "You are a helpful assistant."),
+                payload.project_context,
+            )
             executor = self._client.predict_agent(
                 llm=llm,
-                instructions=payload.application.get(
-                    "instructions", "You are a helpful assistant."
-                ),
-                tools=deepcopy(payload.tools),
+                instructions=instructions,
+                **({"project_context": project_context} if project_context else {}),
+                tools=_sdk_agent_tools(payload.tools),
                 chat_history=deepcopy(payload.chat_history),
                 memory=memory,
                 debug_mode=True if payload.debug_mode is None else payload.debug_mode,
@@ -848,6 +860,35 @@ class EliteaSdkAgentAdapter:
             project_id=self._project_id,
         ) as memory:
             yield memory
+
+
+def _sdk_agent_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Adapt claim-materialized MCP settings to the pinned SDK constructor.
+
+    The SDK routes ``mcp_*`` references through ``McpConfigToolkit``. It reads
+    URL and headers from ``server_config``, then consults local configuration
+    when that object is absent. Main has already resolved the executing actor
+    and immutable toolkit settings. Keep those values authoritative and retain
+    the original toolkit identity and filters.
+    """
+
+    adapted = deepcopy(tools)
+    for tool in adapted:
+        if not isinstance(tool, dict):
+            continue
+        kind = tool.get("type")
+        if not isinstance(kind, str) or not kind.startswith("mcp_"):
+            continue
+        settings = tool.get("settings")
+        url = settings.get("url") if isinstance(settings, dict) else None
+        if not isinstance(url, str) or not url:
+            raise DependencyUnavailable("The materialized MCP endpoint is unavailable.")
+        server_config: dict[str, Any] = {"type": "http", "url": url}
+        for name in ("headers", "timeout", "ssl_verify"):
+            if name in settings:
+                server_config[name] = deepcopy(settings[name])
+        settings["server_config"] = server_config
+    return adapted
 
 
 def _serve_version_internal_tools(version_details: dict[str, Any]) -> None:
@@ -1699,3 +1740,14 @@ def _indexing_client_type() -> type[Any]:
             "The installed Elitea SDK artifact does not match the admitted package tree."
         )
     return module.EliteAClient
+
+
+def _project_context_delivery(
+    instructions: str, snapshot: dict[str, str] | None,
+) -> tuple[str, dict[str, str] | None]:
+    """Keep Core's eager/on-demand split at the existing SDK boundary."""
+    if snapshot is None:
+        return instructions, None
+    if snapshot["activation_description"]:
+        return instructions, deepcopy(snapshot)
+    return f"# Project Context\n\n{snapshot['content']}\n\n---\n\n{instructions}", None

@@ -46,25 +46,27 @@ func (b ToolkitCallToolInputBinding) Validate() error {
 type ToolkitCallToolStatus string
 
 const (
-	ToolkitCallToolStatusOK                 ToolkitCallToolStatus = "ok"
-	ToolkitCallToolStatusToolError          ToolkitCallToolStatus = "tool_error"
-	ToolkitCallToolStatusUnsupportedToolkit ToolkitCallToolStatus = "unsupported_toolkit"
-	ToolkitCallToolStatusUnknownTool        ToolkitCallToolStatus = "unknown_tool"
+	ToolkitCallToolStatusOK                    ToolkitCallToolStatus = "ok"
+	ToolkitCallToolStatusAuthorizationRequired ToolkitCallToolStatus = "authorization_required"
+	ToolkitCallToolStatusToolError             ToolkitCallToolStatus = "tool_error"
+	ToolkitCallToolStatusUnsupportedToolkit    ToolkitCallToolStatus = "unsupported_toolkit"
+	ToolkitCallToolStatusUnknownTool           ToolkitCallToolStatus = "unknown_tool"
 )
 
 // ToolkitCallToolSummary is the bounded typed terminal result. The outer SDK
 // response is deliberately not represented: it can carry redeemed configuration
 // and other worker-local fields.
 type ToolkitCallToolSummary struct {
-	Status       ToolkitCallToolStatus
-	ResultJSON   string
-	Truncated    bool
-	ErrorMessage string
+	Status                ToolkitCallToolStatus
+	ResultJSON            string
+	Truncated             bool
+	ErrorMessage          string
+	AuthorizationRequired *executiondomain.ToolkitAuthorizationRequired
 }
 
 func (s ToolkitCallToolSummary) Validate() error {
 	switch s.Status {
-	case ToolkitCallToolStatusOK, ToolkitCallToolStatusToolError,
+	case ToolkitCallToolStatusOK, ToolkitCallToolStatusToolError, ToolkitCallToolStatusAuthorizationRequired,
 		ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool:
 	default:
 		return ErrInvalidToolkitCallToolOutput
@@ -74,6 +76,13 @@ func (s ToolkitCallToolSummary) Validate() error {
 			strings.ContainsRune(value, '\x00') {
 			return ErrInvalidToolkitCallToolOutput
 		}
+	}
+	if s.Status == ToolkitCallToolStatusAuthorizationRequired {
+		if s.AuthorizationRequired == nil || s.AuthorizationRequired.Validate() != nil || s.ErrorMessage != executiondomain.ToolkitAuthorizationMessage || s.ResultJSON != "" || s.Truncated {
+			return ErrInvalidToolkitCallToolOutput
+		}
+	} else if s.AuthorizationRequired != nil {
+		return ErrInvalidToolkitCallToolOutput
 	}
 	// The truncation contract, enforced on this side too. A worker that sent a
 	// body AND claimed truncation would have cut a JSON document in half.
@@ -119,6 +128,9 @@ func (r ToolkitCallToolResult) Validate() error {
 		return err
 	}
 	if r.Settings.EntryID == r.Arguments.EntryID {
+		return ErrInvalidToolkitCallToolOutput
+	}
+	if challenge := r.ResultSummary.AuthorizationRequired; challenge != nil && challenge.ToolkitType != r.ToolkitType {
 		return ErrInvalidToolkitCallToolOutput
 	}
 	return r.ResultSummary.Validate()
@@ -201,6 +213,10 @@ func (f ToolkitCallToolFrame) Validate() error {
 // needs no capability-owned table: every field is on execution_jobs,
 // input_bundles and input_bundle_entries.
 type ExpectedToolkitCallTool struct {
+	ToolkitID           string
+	ToolkitType         string
+	ToolkitName         string
+	ServerURL           string
 	TenantID            string
 	ResourceProjectID   string
 	ProjectionProjectID string
@@ -300,6 +316,11 @@ func (s *ToolkitCallToolService) IngestToolkitCallTool(
 		return ProjectionOutcome{}, ErrToolkitCallToolBindingMismatch
 	}
 
+	if challenge := frame.Result.ResultSummary.AuthorizationRequired; challenge != nil {
+		if challenge.ToolkitID != expected.ToolkitID || challenge.ToolkitType != expected.ToolkitType || challenge.ToolkitName != expected.ToolkitName || challenge.ServerURL != expected.ServerURL {
+			return ProjectionOutcome{}, ErrToolkitCallToolBindingMismatch
+		}
+	}
 	outcome, err := s.projector.ProjectToolkitCallTool(ctx, ToolkitCallToolProjection{
 		Frame: cloneToolkitCallToolFrame(frame),
 	})
@@ -319,6 +340,11 @@ func (s *ToolkitCallToolService) IngestToolkitCallTool(
 }
 
 func cloneToolkitCallToolFrame(frame ToolkitCallToolFrame) ToolkitCallToolFrame {
+	if challenge := frame.Result.ResultSummary.AuthorizationRequired; challenge != nil {
+		cloned := *challenge
+		cloned.ResourceMetadata = append([]byte(nil), challenge.ResourceMetadata...)
+		frame.Result.ResultSummary.AuthorizationRequired = &cloned
+	}
 	frame.EncodedResult = append([]byte(nil), frame.EncodedResult...)
 	frame.EncodedSettlement = append([]byte(nil), frame.EncodedSettlement...)
 	return frame

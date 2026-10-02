@@ -38,9 +38,9 @@ describe('Token', () => {
     expect(container.textContent).toContain('two');
   });
 
-  it('renders an ordered list as <ol>', () => {
-    const { container } = renderWithTheme(<Token token={lexOne('1. one\n2. two')} />);
-    expect(container.querySelector('ol')).not.toBeNull();
+  it('preserves the starting number of an ordered list', () => {
+    const { container } = renderWithTheme(<Token token={lexOne('4. four\n5. five')} />);
+    expect(container.querySelector('ol')?.start).toBe(4);
   });
 
   it('renders a task list item with a disabled checkbox reflecting its checked state', () => {

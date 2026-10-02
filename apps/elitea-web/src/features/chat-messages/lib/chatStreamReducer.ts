@@ -51,13 +51,16 @@
  * `applyChatStreamFrame`, `ChatStreamContext`, `ToolAction`,
  * `mcpSessionFromFrame` — so no importer changed.
  */
-import { findTarget, type ChatStreamContext } from './chatStreamShared';
+import { isTurnTerminalFrame } from './chatStreamTurnEnd';
+import { settleContextProgress } from './chatStreamToolAction';
+import { findTarget, replaceAt, type ChatStreamContext } from './chatStreamShared';
 import { reduceTurnFrame } from './chatStreamTurnFrames';
 import { reduceToolFrame } from './chatStreamToolFrames';
 import { reduceToolOutputChunkFrame } from './chatStreamToolOutputChunks';
 import { reduceThinkingFrame } from './chatStreamThinkingFrames';
 import { reduceInterruptFrame } from './chatStreamInterruptFrames';
 import { reduceSwarmFrame } from './chatStreamSwarmFrames';
+import { reduceContextFrame } from './chatStreamContextFrames';
 import { reduceSummaryFrame } from './chatStreamSummaryFrames';
 import { reduceMessageSyncFrame } from './chatStreamMessageSyncFrames';
 
@@ -89,17 +92,24 @@ export function applyChatStreamFrame(
   // string the switches (and the error case's `exception` fallback) want.
   const index = findTarget(history, frame);
 
-  return (
+  const next = (
     reduceTurnFrame(history, frame, type, context, index) ??
     reduceToolFrame(history, frame, type, index) ??
     reduceToolOutputChunkFrame(history, frame, type, index) ??
     reduceThinkingFrame(history, frame, type, index) ??
     reduceInterruptFrame(history, frame, type, context, index) ??
     reduceSwarmFrame(history, frame, type, context) ??
+    reduceContextFrame(history, frame, type, context, index) ??
     reduceSummaryFrame(history, frame, type, context, index) ??
     reduceMessageSyncFrame(history, frame, type, context) ??
     // Not yet ported (see the module doc). Returning the input reference is the
     // point: an unported frame must be inert, never a partial write.
     history
   );
+  if (!isTurnTerminalFrame(frame)) return next;
+  const target = findTarget(next, frame);
+  const message = next[target];
+  if (!message) return next;
+  const toolActions = settleContextProgress(message.toolActions);
+  return toolActions === message.toolActions ? next : replaceAt(next, target, { toolActions });
 }

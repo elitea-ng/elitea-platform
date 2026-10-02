@@ -769,6 +769,8 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
                 public_output = _public_load_skill_output(public_output)
             else:
                 self._tool_skill_identities.pop(selected, None)
+            if not failed and entry.get("tool_name") == "read_project_context":
+                public_output = "Project Context is active."
             entry["tool_output"] = public_output
             entry["error"] = _trace_text(value) if failed else None
             self._tools[selected] = entry
@@ -1517,9 +1519,13 @@ def _public_application_details(application: Any) -> Any:
     version_details = projected.get("version_details")
     if not isinstance(version_details, dict):
         return projected
+    public_version = dict(version_details)
+    public_version.pop("project_context", None)
+    public_application = dict(projected)
+    public_application["version_details"] = public_version
     skills = version_details.get("skills")
     if not isinstance(skills, list):
-        return projected
+        return public_application
     public_skills = []
     for raw in skills:
         if not isinstance(raw, dict):
@@ -1528,10 +1534,7 @@ def _public_application_details(application: Any) -> Any:
         skill = dict(raw)
         skill.pop("instructions", None)
         public_skills.append(skill)
-    public_version = dict(version_details)
     public_version["skills"] = public_skills
-    public_application = dict(projected)
-    public_application["version_details"] = public_version
     return public_application
 
 

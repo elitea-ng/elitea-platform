@@ -3,10 +3,37 @@ package runtimecomposition
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestRuntimeCloseRemovesOnlyOwnedSandboxStaging(t *testing.T) {
+	parent := t.TempDir()
+	owned := filepath.Join(parent, "owned")
+	if err := os.Mkdir(owned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(parent, "other")
+	if err := os.WriteFile(other, []byte("unrelated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{sandboxSpoolDir: owned}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(owned); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned staging remains: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type publisherRunnerStub struct {
 	started chan struct{}

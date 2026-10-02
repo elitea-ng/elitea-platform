@@ -32,10 +32,10 @@ describe('serializeProfileFormData', () => {
 
   it('serializes context management fields', () => {
     const result = serializeProfileFormData({
-      personalization: { default_context_management: { enabled: true, max_context_tokens: 8000, preserve_recent_messages: 5 } },
+      personalization: { default_context_management: { enabled: true, budget_mode: 'full', preserve_recent_messages: 5 } },
     }, null);
     expect(result.context_enabled).toBe(true);
-    expect(result.max_context_tokens).toBe(8000);
+    expect(result.budget_mode).toBe('full');
     expect(result.preserve_recent_messages).toBe(5);
   });
 
@@ -65,7 +65,7 @@ describe('deserializeProfileFormData', () => {
       persona: 'friendly',
       default_instructions: 'hi',
       context_enabled: true,
-      max_context_tokens: 8000,
+      budget_mode: 'full',
       preserve_recent_messages: 3,
       enable_summarization: false,
       summary_llm_settings: { instructions: 's', model_name: 'm', model_project_id: 'p', max_tokens: 1024 },
@@ -75,7 +75,7 @@ describe('deserializeProfileFormData', () => {
     expect(p.default_instructions).toBe('hi');
     const cm = p.default_context_management as Record<string, unknown>;
     expect(cm.enabled).toBe(true);
-    expect(cm.max_context_tokens).toBe(8000);
+    expect(cm.budget_mode).toBe('full');
     const s = p.default_summarization as Record<string, unknown>;
     expect(s.enable_summarization).toBe(false);
     expect(s.summary_model_name).toBe('m');
@@ -88,12 +88,12 @@ describe('createContextStrategyFormData', () => {
     const result = createContextStrategyFormData({
       ...PROFILE_INITIAL_VALUES,
       context_enabled: true,
-      max_context_tokens: 5000,
+      budget_mode: 'balanced',
       preserve_recent_messages: 2,
       enable_summarization: true,
     });
     expect(result.enabled).toBe(true);
-    expect(result.max_context_tokens).toBe(5000);
+    expect(result.budget_mode).toBe('balanced');
     expect(result.preserve_recent_messages).toBe(2);
     expect(result.enable_summarization).toBe(true);
   });

@@ -10,6 +10,7 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/protobuf/proto"
@@ -83,6 +84,45 @@ func TestAgentProducerKeepsRequestCredentialsAndOutputOffRedis(t *testing.T) {
 	}
 }
 
+func TestAgentProducerBuildsReferenceOnlyDirectToolkitCommand(t *testing.T) {
+	appender := &appenderStub{}
+	producer, err := NewAgentExecutionProducer(validAgentProducerConfig(), &signerStub{}, appender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := toolkitexecutionapp.ToolkitExecuteReadDispatch{
+		OutboxID: "toolkit-outbox-1", CommandID: "toolkit-command-1", ExecutionID: "toolkit-execution-1",
+		Generation: 1, DispatchOrdinal: 1, TenantID: "tenant-1", ResourceProjectID: "2",
+		ProjectionProjectID: "2", PrincipalRef: "actor-1", InputBundleID: "toolkit-bundle-1",
+		InputBundleVersion: "admission:toolkit-bundle-1", InputBundleMediaType: executiondomain.InputBundleManifestMediaType,
+		InputBundleByteLength: 512, InputBundleDigest: runtimedomain.SHA256([]byte("toolkit manifest")),
+		CapabilityID: executiondomain.ToolkitExecuteReadCapability, CapabilityVersion: "1",
+		ResourceClass: "toolkit-read", IsolationClass: "project", Priority: 1,
+		Deadline: time.Now().UTC().Add(time.Minute), LimitsRevision: "limits-v1", RequestEntryID: "toolkit-read-request",
+	}
+	prepared, err := producer.PrepareToolkitExecuteRead(context.Background(), dispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.AppendPrepared(context.Background(), dispatch.OutboxID, prepared); err != nil {
+		t.Fatal(err)
+	}
+	var envelope runtimev1.SignedWorkerCommandEnvelopeV1
+	if err := proto.Unmarshal(appender.value, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var command runtimev1.WorkerCommandV1
+	if err := proto.Unmarshal(envelope.GetWorkerCommandBytes(), &command); err != nil {
+		t.Fatal(err)
+	}
+	if command.GetCommandType() != runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ ||
+		command.GetCapabilityId() != executiondomain.ToolkitExecuteReadCapability ||
+		command.GetToolkitExecuteRead().GetRequestEntryId() != dispatch.RequestEntryID ||
+		command.GetAgentExecution() != nil {
+		t.Fatalf("direct toolkit reference contract changed: %+v", &command)
+	}
+}
+
 func TestAgentProducerMayShareTheIndexWorkerControlStream(t *testing.T) {
 	config := validAgentProducerConfig()
 	config.Stream = config.IndexIngestStream
@@ -133,6 +173,7 @@ func validAgentProducerConfig() AgentExecutionProducerConfig {
 		EnvelopeSchemaRevision:       base.EnvelopeSchemaRevision,
 		ApplicationCapabilityVersion: base.CapabilityVersion,
 		AdhocCapabilityVersion:       base.CapabilityVersion,
+		ToolkitReadCapabilityVersion: base.CapabilityVersion,
 		Limits:                       base.Limits,
 		AllowTestOnlyHMAC:            true,
 	}

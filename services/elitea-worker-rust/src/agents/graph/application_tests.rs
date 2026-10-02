@@ -45,6 +45,12 @@ impl Tool for FixtureApplicationTool {
         "saved Application fixture"
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(
+            json!({"type":"object", "properties": {"task":{"type":"string"}, "audience":{"type":"string"}}}),
+        )
+    }
+
     async fn execute(
         &self,
         context: Arc<dyn ToolContext>,
@@ -106,6 +112,7 @@ fn shared_pipeline_resolver(graph: Arc<CompiledGraph>) -> Arc<dyn PipelineApplic
         alias: "Research Agent".to_owned(),
         participant: ResolvedApplicationParticipant::Pipeline {
             graph,
+            variable_types: BTreeMap::new(),
             events: None,
             display_name: "Research Agent".to_owned(),
         },
@@ -180,7 +187,7 @@ fn agent_node_rejects_ambiguous_or_undeclared_contracts() {
             "task: {type: expression, value: topic}",
         ),
         AGENT_NODE.replace("output: [answer, messages]", "output: [answer, answer]"),
-        AGENT_NODE.replace("transition: END", "transition: 'bad target'"),
+        AGENT_NODE.replace("transition: END", "transition: 'bad/target'"),
         format!("{AGENT_NODE}\nvariables: {{}}"),
     ] {
         assert!(ApplicationNodeDefinition::from_yaml(&yaml).is_err());
@@ -843,6 +850,9 @@ fn resume_payload(thread_id: &str, interrupt_id: &str) -> AgentExecutionPayload 
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
+        model_context_limits: None,
+        summary_model: None,
     }
 }
 
@@ -853,4 +863,403 @@ fn indent_yaml(value: &str, count: usize) -> String {
         .map(|line| format!("{prefix}{line}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+const CHILD_VARIABLE_PIPELINE: &str = r#"
+state:
+  count: {type: int, value: 7}
+  label: str
+  items: list
+  enabled: {type: bool, value: true}
+  answer: str
+entry_point: report
+nodes:
+  - id: report
+    type: state_modifier
+    template: "{{ count }}|{{ label }}|{{ items | length }}|{{ enabled }}"
+    input: [count, label, items, enabled]
+    output: [answer]
+    transition: END
+"#;
+
+const PARENT_VARIABLE_PIPELINE: &str = r#"
+state:
+  topic: str
+  rows: list
+  answer: str
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: Research Agent
+    input_mapping:
+      task: {type: fixed, value: Report the values}
+      count: {type: fixed, value: 3}
+      label: {type: fstring, value: "for {topic}"}
+      items: {type: variable, value: rows}
+    input: [topic, rows]
+    output: [answer]
+    transition: END
+"#;
+
+fn child_variable_resolver(
+    checkpointer: Arc<MemoryCheckpointer>,
+) -> Arc<dyn PipelineApplicationResolver> {
+    let definition = PipelineDefinition::from_yaml(CHILD_VARIABLE_PIPELINE).unwrap();
+    let variable_types = definition.declared_variable_types();
+    let graph = definition
+        .compile_subgraph_with_runtime(checkpointer, &PipelineNodeRuntimes::default())
+        .unwrap();
+    Arc::new(FixtureApplicationResolver {
+        alias: "Research Agent".into(),
+        participant: ResolvedApplicationParticipant::Pipeline {
+            graph: Arc::new(graph),
+            variable_types,
+            events: None,
+            display_name: "Research Agent".into(),
+        },
+    })
+}
+
+#[tokio::test]
+async fn saved_child_pipeline_receives_typed_mappings_and_keeps_defaults() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let parent = PipelineDefinition::from_yaml(PARENT_VARIABLE_PIPELINE).unwrap();
+    let graph = parent
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(
+                None,
+                None,
+                Some(child_variable_resolver(checkpointer.clone())),
+            ),
+        )
+        .unwrap();
+    let state = graph
+        .invoke(
+            State::from([
+                ("topic".into(), json!("orders")),
+                ("rows".into(), json!([1, 2])),
+            ]),
+            ExecutionConfig::new("variables-parent"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["answer"], json!("3|for orders|2|True"));
+    assert!(!state.contains_key("count"));
+    let child = checkpointer
+        .load("variables-parent/delegate")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.state["count"], json!(3));
+    assert_eq!(child.state["items"], json!([1, 2]));
+    assert_eq!(child.state["enabled"], json!(true));
+    assert!(!child.state.contains_key("topic"));
+    assert!(!child.state.contains_key("rows"));
+}
+
+#[tokio::test]
+async fn child_variable_type_failure_stops_before_child_execution() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let parent = PipelineDefinition::from_yaml(
+        &PARENT_VARIABLE_PIPELINE.replace("value: 3", "value: wrong"),
+    )
+    .unwrap();
+    let graph = parent
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(
+                None,
+                None,
+                Some(child_variable_resolver(checkpointer.clone())),
+            ),
+        )
+        .unwrap();
+    let error = graph
+        .invoke(
+            State::from([
+                ("topic".into(), json!("orders")),
+                ("rows".into(), json!([1, 2])),
+            ]),
+            ExecutionConfig::new("invalid-variables"),
+        )
+        .await
+        .expect_err("wrong child input type must fail");
+    assert!(error.to_string().contains("Child pipeline input 'count'"));
+    assert!(error.to_string().contains("the child did not start"));
+    assert!(
+        checkpointer
+            .load("invalid-variables/delegate")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn child_input_type_failure_keeps_public_reason_through_event_stream() {
+    use super::node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let (sender, receiver) = pipeline_node_event_channel();
+    let child = PipelineDefinition::from_yaml(CHILD_VARIABLE_PIPELINE).unwrap();
+    let resolver = Arc::new(FixtureApplicationResolver {
+        alias: "Research Agent".into(),
+        participant: ResolvedApplicationParticipant::Pipeline {
+            variable_types: child.declared_variable_types(),
+            graph: Arc::new(
+                child
+                    .compile_subgraph_with_runtime(
+                        checkpointer.clone(),
+                        &PipelineNodeRuntimes::default(),
+                    )
+                    .unwrap(),
+            ),
+            events: Some(sender.clone()),
+            display_name: "Research Agent".into(),
+        },
+    });
+    let graph = PipelineDefinition::from_yaml(
+        &PARENT_VARIABLE_PIPELINE.replace("value: 3", "value: wrong"),
+    )
+    .unwrap()
+    .compile_with_runtime(
+        "parent",
+        checkpointer.clone(),
+        None,
+        &PipelineNodeRuntimes::new(None, None, Some(resolver)).with_events(sender),
+    )
+    .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some("child-type-error".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let agent =
+        PipelineNodeEventStreamingAgent::new(Arc::new(EliteaGraphAgent::new(graph)), receiver);
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut running = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new("child-type-error").unwrap(),
+        Content::new("user").with_text("run"),
+    )
+    .start()
+    .unwrap();
+    let error = loop {
+        match running.next_event().await {
+            Err(error) => break error,
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("wrong child input must not complete"),
+        }
+    };
+    assert_eq!(
+        error.upstream_code(),
+        Some("pipeline.child_input_type_invalid")
+    );
+    let kind = crate::protocol::output::model_failure(error.upstream_code());
+    assert_eq!(
+        kind,
+        crate::protocol::output::RuntimeFailureKind::PipelineChildInputTypeInvalid
+    );
+    assert!(
+        kind.safe_message()
+            .contains("child and later nodes did not run")
+    );
+}
+
+#[test]
+fn child_variable_mappings_reject_control_fields_and_bind_configuration() {
+    let original = ApplicationNodeDefinition::from_yaml(AGENT_NODE).unwrap();
+    for name in [
+        "messages",
+        "input",
+        "__elitea_tool_resume_v1",
+        "__elitea_application_variable_8_delegate_count",
+        "state_types",
+    ] {
+        let yaml = PARENT_VARIABLE_PIPELINE.replace("      count:", &format!("      {name}:"));
+        assert!(PipelineDefinition::from_yaml(&yaml).is_err(), "{name}");
+    }
+    let augmented = AGENT_NODE.replace(
+        "input_mapping:\n",
+        "input_mapping:\n  count: {type: fixed, value: 3}\n",
+    );
+    let mapped = ApplicationNodeDefinition::from_yaml(&augmented).unwrap();
+    assert_ne!(original.config_digest(), mapped.config_digest());
+    assert!(
+        PipelineDefinition::from_yaml(
+            &PARENT_VARIABLE_PIPELINE.replace("value: rows", "value: missing")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn child_variable_names_must_exist_in_the_saved_child_schema() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let parent = PipelineDefinition::from_yaml(
+        &PARENT_VARIABLE_PIPELINE.replace("      count:", "      unknown_child_variable:"),
+    )
+    .unwrap();
+    assert!(
+        parent
+            .compile_with_runtime(
+                "parent",
+                checkpointer.clone(),
+                None,
+                &PipelineNodeRuntimes::new(None, None, Some(child_variable_resolver(checkpointer)))
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn saved_child_outputs_keep_types_and_exclude_undeclared_fields() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let yaml = PARENT_VARIABLE_PIPELINE
+        .replace(
+            "  answer: str",
+            "  answer: str\n  count: int\n  items: list\n  fallback: str",
+        )
+        .replace(
+            "output: [answer]",
+            "output: [answer, count, items, fallback]",
+        );
+    let graph = PipelineDefinition::from_yaml(&yaml)
+        .unwrap()
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(None, None, Some(child_variable_resolver(checkpointer))),
+        )
+        .unwrap();
+    let state = graph
+        .invoke(
+            State::from([
+                ("topic".into(), json!("orders")),
+                ("rows".into(), json!([1, 2])),
+                ("count".into(), json!(999)),
+                ("items".into(), json!(["stale"])),
+            ]),
+            ExecutionConfig::new("typed-child-outputs"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["count"], json!(3));
+    assert_eq!(state["items"], json!([1, 2]));
+    assert_eq!(state["answer"], json!("3|for orders|2|True"));
+    assert_eq!(state["fallback"], state["answer"]);
+    assert!(!state.contains_key("enabled"));
+    assert!(!state.contains_key("label"));
+}
+
+#[tokio::test]
+async fn child_output_type_mismatch_does_not_apply_partial_parent_updates() {
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let yaml = PARENT_VARIABLE_PIPELINE
+        .replace("  answer: str", "  answer: str\n  count: str")
+        .replace("output: [answer]", "output: [answer, count]");
+    let graph = PipelineDefinition::from_yaml(&yaml)
+        .unwrap()
+        .compile_with_runtime(
+            "parent",
+            checkpointer.clone(),
+            None,
+            &PipelineNodeRuntimes::new(
+                None,
+                None,
+                Some(child_variable_resolver(checkpointer.clone())),
+            ),
+        )
+        .unwrap();
+    assert!(
+        graph
+            .invoke(
+                State::from([
+                    ("topic".into(), json!("orders")),
+                    ("rows".into(), json!([1, 2])),
+                    ("count".into(), json!("original")),
+                    ("answer".into(), json!("original-answer")),
+                ]),
+                ExecutionConfig::new("typed-child-output-error")
+            )
+            .await
+            .is_err()
+    );
+    // The failing first parent node must not publish a checkpoint containing partial updates.
+    assert!(
+        checkpointer
+            .load("typed-child-output-error")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // The child did complete; this is an output-contract failure, not an input rejection.
+    let child = checkpointer
+        .load("typed-child-output-error/delegate")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.state["count"], json!(3));
+}
+
+#[tokio::test]
+async fn saved_agent_receives_declared_per_call_variable_mapping() {
+    let definition = PipelineDefinition::from_yaml(
+        r#"
+state:
+  topic: str
+  answer: str
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: Research Agent
+    input_mapping:
+      task: {type: fixed, value: Investigate}
+      audience: {type: fstring, value: "team {topic}"}
+    input: [topic]
+    output: [answer]
+    transition: END
+"#,
+    )
+    .unwrap();
+    let (resolver, capture) = fixture_resolver(json!({"response":"done"}));
+    let graph = definition
+        .compile_with_runtime(
+            "parent",
+            Arc::new(MemoryCheckpointer::new()),
+            None,
+            &PipelineNodeRuntimes::new(None, None, Some(resolver)),
+        )
+        .unwrap();
+    let state = graph
+        .invoke(
+            State::from([("topic".into(), json!("ops"))]),
+            ExecutionConfig::new("agent-variables"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state["answer"], "done");
+    assert_eq!(
+        capture.lock().unwrap().arguments,
+        json!({"task":"Investigate", "audience":"team ops"})
+    );
+    assert!(!state.contains_key("audience"));
 }

@@ -1,0 +1,101 @@
+# Toolkit name compatibility
+
+## Current-platform reference
+
+SDK commit: `966526e8334354366dd161b606d73fe8e204b850`.
+
+- `elitea_sdk/runtime/utils/toolkit_identity.py::toolkit_identity_key` removes whitespace and underscores and uses lowercase text.
+- `elitea_sdk/runtime/tools/tool_binding.py::select_tools_for_binding` prefers exact toolkit and operation matches. A legacy spelling must resolve without ambiguity.
+
+These files define compatibility behavior. The Rust worker does not copy the Python implementation or use an unscoped operation-name fallback.
+
+## Rust mapping
+
+- `src/agents/pipeline.rs::PipelineExecutionProfile::validate_tool_snapshot` resolves legacy names against the frozen, admitted toolkit snapshot before policy checks.
+- `src/agents/pipeline.rs::legacy_toolkit_key` produces the compatibility key.
+- `src/agents/graph/compiler.rs::PipelineDefinition::resolve_legacy_toolkit_aliases` applies the result to direct Toolkit/MCP nodes and LLM tool selections.
+- `src/agents/graph/direct_tool.rs` and `src/agents/graph/llm.rs` retain the canonical alias in the execution definition.
+
+Exact names win. For example, `release_intelligence` can resolve to `release intelligence` when there is one matching admitted toolkit. If both names exist, an exact reference selects its own toolkit. A third spelling that matches both is rejected before a connection or tool call.
+
+Saved YAML, database schema, tool operation names, and application participant names do not change. Existing authorization, sensitivity, tool-kind, and selected-operation checks run against the canonical toolkit. A missing toolkit cannot fall back to another toolkit with the same operation name.
+
+## Verification
+
+The direct MCP legacy-name regression failed before the fix with `InvalidInput`.
+After the fix, all 51 `agents::pipeline_tests` pass. Coverage includes direct MCP execution, exact-name precedence, ambiguous-name rejection before connection, LLM selection admission, and static toolkit compatibility. Strict library/test Clippy and formatting checks pass.
+
+## Deployed acceptance
+
+Commit `78a8dc80b` is deployed as worker image `sha256:e65812f7cdb3c543db5fa4c32024f1559ca6b498391db5f70b2b527592458bb5`.
+The clean-commit release build passes and retains debug line tables and symbols.
+The deployment preserves the worker environment, five mounts, network, and resource limits.
+
+Fresh headed Playwright chat 683 uses saved pipeline 95, version 102.
+Its direct MCP node requests `RUST-_COMPACTION-_RECORDS`; admitted toolkit 71 remains `rust-compaction-records`.
+The real read-only `read_compaction_record` call returns `CEDAR-731`.
+The browser renders the result and preserves it after reload, with no page errors or execution failures. No browser responses are mocked.
+Execution `6c8d9d11219086b08acfbf7f563ac0d5` is `SUCCEEDED` in PostgreSQL.
+
+The local acceptance artifacts are `elitea-toolkit-legacy-result.json`, `elitea-toolkit-legacy-frames.json`, and `elitea-toolkit-legacy.png` in the temporary evidence directory. The screenshot was inspected.
+This closes deployed legacy-name acceptance for a direct MCP node. Live collision and LLM-loop compatibility acceptance remain open. Component checks do not close Gate 4.
+
+
+### LLM-loop acceptance is not yet proved
+
+Chats 684 and 685 terminate successfully but do not call the MCP tool.
+Their `agent_llm_start` events name `vllm/CONTINUATION-REPAIR-FIXTURE`; the final answer is the fixture echo.
+Chat 685 selects Haiku in the browser before submission, but the execution still names the fixture model.
+Do not count either run as toolkit acceptance. Trace selection through the chat request and admitted model before retrying.
+The relevant UI entry point is `apps/elitea-web/src/widgets/chat-box/ui/hooks/useChatBoxModelSelection.ts::handleSelectModel`.
+The test saved the display label `eu.anthropic.claude-haiku`, but the catalog identity is `eu.anthropic.claude-haiku-4-5-20251001-v1:0` in project 1.
+`internal/application/agentexecution/tools.go` falls back to the catalog default when the requested identity is absent. The default for these runs was the continuation fixture.
+The application execution contract deliberately omits chat-picker model overrides (`useChatBoxSend.helpers.ts`); the saved version selects the model. This is a test setup error, not evidence of a picker mutation failure.
+Use the catalog identity when creating the replacement acceptance version.
+
+
+### Real-provider LLM binding and persisted output
+
+Chat 686 uses application 98, version 105, with the catalog-verified Haiku identity.
+The LLM node selects `RUST-_COMPACTION-_RECORDS`. Its observed events name Haiku and show `read_compaction_record` with index 1, followed by a successful tool-end event with two output chunks.
+Execution `c5495bd58932e2b5694a6e9d7cf18be5` is `SUCCEEDED`.
+The first live-page final-answer assertion did not pass. A separate fresh-browser readback shows `CEDAR-731` and `blue`, and a second reload preserves the answer with no page errors. The rendered screenshot was inspected.
+This proves real-provider LLM binding and persisted output. It does not prove the original live-page final-answer assertion. Live same-operation collision acceptance remains open.
+
+
+### Final live-page acceptance
+
+Chat 687 exposed a test ordering error: the answer locator matched the tool trace before model completion, then reloaded. Its reload assertion timed out after 30 seconds.
+The corrected test waits for `pipeline_finish` before checking the final answer and reloading.
+Fresh chat 688 (application 100, version 107) passes with real Haiku, one `read_compaction_record(index=1)` call, one `pipeline_finish`, `CEDAR-731`, and `blue`.
+The final answer appears on the original page and remains after reload. There are no browser page errors or execution failures. No browser responses are mocked.
+Execution `e27485e321f3b1644a9bd7090337c2a4` is `SUCCEEDED`. The live screenshot was inspected.
+This closes direct MCP and LLM-loop legacy-name acceptance. Live same-operation collision coverage remains open.
+
+
+### Collision acceptance fixture
+
+`tests/acceptance/toolkit_collision_mcp_fixture.py` exposes two TLS MCP paths, `/release` and `/audit`, with the same read-only `lookup_record` operation. Each returns its own fixed source and marker.
+This provides independent execution evidence for the SDK toolkit-identity contract described above. It performs no external reads or writes, bounds requests to 4096 bytes, and requires explicit test-only enablement.
+Focused checks prove distinct source markers and unknown-path refusal. The fixture runs from stdin in the rehearsal emulator because its root filesystem is read-only. No image, credential, or filesystem policy was changed.
+Registration of the two test toolkits and browser acceptance remain pending. Fixture readiness is not runtime binding acceptance.
+
+
+### Collision setup findings
+
+Test toolkits 90 (`collision release`) and 91 (`collision audit`) use the TLS fixture on port 8445. An exact-host rehearsal egress rule admits that endpoint.
+Chats 689 and 690 reach the release endpoint, but the zero-argument fixture rejects a `messages` argument. `graph/direct_tool.rs::validate_input_mapping` supplies that argument for an empty mapping.
+This does not prove a toolkit identity error. Use an explicit fixture input for collision acceptance. Gate 5 must separately assess explicit empty mappings and zero-argument direct tool calls against current-platform behavior. Do not silently drop that case.
+
+
+### Deployed same-operation collision acceptance
+
+The fixture now requires `probe: identity`. This isolates toolkit routing from the separately recorded empty-mapping case.
+
+- Chat 691, application 103/version 110: two direct MCP nodes call `lookup_record` on toolkits 90 and 91. The final deterministic node renders both source markers in separate fields.
+- Chat 692, application 104/version 111: real Haiku calls `collisionaudit__lookup_record` and `collisionrelease__lookup_record`, each with the explicit probe. The endpoint log confirms one successful call to each source. The final answer pairs audit with `AUDIT-942` and release with `RELEASE-731`.
+
+Both fresh headed-browser checks wait for pipeline completion, verify both markers, and reload successfully. There are no page errors or execution failures and no mocked browser responses. Both screenshots were inspected.
+PostgreSQL records execution `554fded1ca9993aba2d4dc454c455807` (direct) and `d1adff4db907a6aabed0fb94326fcb67` (LLM loop) as `SUCCEEDED`.
+Local evidence uses the `elitea-collision-direct` and `elitea-collision-llm` result, frames, and screenshot files.
+These checks close the tested Gate 4 legacy-name and same-operation toolkit binding acceptance. They do not close other Gate 4 requirements or the Gate 5 zero-argument follow-up.

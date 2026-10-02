@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/envelope.proto";
+import "elitea/runtime/v1/errors.proto";
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// Main checks the original worker's verified mTLS session and active execution
+// fence. The audience is an exact configured supervisor identity, not a URL.
+// Request digests bind a deployment-selected runtime, policy, code and input.
+message AuthorizeSandboxJobRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  string activation_id = 3;
+  bytes request_digest = 4;
+  string audience = 5;
+  // Signed Main command is the authority for tenant and resource project.
+  SignedWorkerCommandEnvelopeV1 signed_command = 6;
+  reserved 7 to 15;
+  // Stop authority cannot authorize submission. It can be issued after Stop.
+  bool cancel_only = 16;
+  // Nonempty selects revision 3 content-only authority for this SHA-256 root.
+  // The original worker must hold an active claim. The exact audience is the
+  // recipient's canonical workload certificate identity. This cannot run code.
+  bytes dependency_bundle_sha256 = 17;
+}
+
+// No fence token, credential, source code or state enters the signed claims.
+// Lifetime is at most 30 seconds. The submitter must also match the verified
+// mTLS peer at the supervisor. A signature is not authority to replay a job.
+message SandboxJobGrantClaimsV1 {
+  uint32 revision = 1;
+  string tenant_id = 2;
+  int32 project_id = 3;
+  string execution_id = 4;
+  string activation_id = 5;
+  bytes request_digest = 6;
+  string submitter_workload_identity = 7;
+  string audience = 8;
+  int64 issued_at_unix_millis = 9;
+  int64 expires_at_unix_millis = 10;
+  uint64 generation = 11;
+  reserved 12 to 31;
+  // Revision 2 stop grants are valid only for CancelSandboxJob.
+  bool cancel_only = 32;
+  // Revision 3 authorizes bounded bundle storage only. It is not a job grant.
+  // Main's private content listener matches audience to the verified TLS peer.
+  // Other revisions require this field to be empty. Exactly 32 bytes.
+  bytes dependency_bundle_sha256 = 33;
+}
+
+// Bundle content uses Main's private mTLS HTTP listener, never this RPC body.
+// X-Elitea-Sandbox-Bundle-Grant carries strict base64 of SignedSandboxJobGrantV1.
+// /sandbox-bundles/{lowercase-root-hex}/files/{safe-name}: PUT multipart/form-data
+// with exactly two parts: "bundle" JSON metadata, then "file" binary content.
+// GET returns verified binary content. GET /sandbox-bundles/{root} returns JSON
+// metadata. POST to that path accepts JSON and publishes metadata last.
+// The grant audience must equal the verified recipient certificate identity.
+// Requests carry no caller-selected tenant or project. Revision 3 cannot run
+// or cancel code. The root, active worker claim, and resource scope are signed.
+
+// Ed25519 signs domain "elitea.sandbox.job-grant.ed25519.v1\x00", followed by
+// uint64 big-endian claims length and exact claims_bytes. Verify before decode.
+// There is no HMAC/test-profile fallback. Claims are bounded to 4096 bytes.
+message SignedSandboxJobGrantV1 {
+  string key_id = 1;
+  bytes claims_bytes = 2;
+  bytes signature = 3;
+  reserved 4 to 15;
+}
+
+message AuthorizeSandboxJobResponseV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  RuntimeErrorV1 rejection = 2;
+  reserved 3 to 15;
+}
+
+// Supervisor-only transport. Each retry needs a fresh Main grant and the same
+// prepared request. It reconciles the existing activation; it never restarts it.
+service SandboxSupervisorService {
+  rpc SubmitSandboxJob(SubmitSandboxJobRequestV1) returns (SubmitSandboxJobResponseV1);
+  rpc CancelSandboxJob(CancelSandboxJobRequestV1) returns (CancelSandboxJobResponseV1);
+}
+
+message SubmitSandboxJobRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  // Bounded PreparedJob revision 1 or 2 JSON, at most 1 MiB. Revision 2 adds
+  // dependency_bundle_sha256: 64 lowercase hexadecimal characters, for Python
+  // only. Its SHA-256 covers the resolved bundle record and file identities.
+  // Revision 1 has no bundle field. Package bytes use a separate data plane.
+  // The request digest includes the revision and dependency bundle identity.
+  // Python bundle JSON revision 1 has runtime="pyodide-0.29.0", requirements,
+  // files=[{name,bytes,sha256}], and digest. The root hashes UTF-8 JSON of
+  // {revision,runtime,requirements,files}, in this order, without whitespace.
+  // File entries use ASCII names in ascending order. Requirements use ASCII.
+  // Limits: 128 requirements of 256 bytes; 257 files; 128 MiB total content;
+  // 1 MiB lock; 32 MiB per wheel; 128 KiB bundle metadata. Store files first.
+  // Publish the bundle record only after all file content passes verification.
+  // Source and selected state travel only over mTLS, never through a shared
+  // queue or a log field.
+  bytes prepared_job_json = 2;
+  reserved 3 to 15;
+}
+
+enum SandboxJobStatusV1 {
+  SANDBOX_JOB_STATUS_V1_UNSPECIFIED = 0;
+  SANDBOX_JOB_STATUS_V1_PENDING = 1;
+  SANDBOX_JOB_STATUS_V1_COMPLETED = 2;
+  SANDBOX_JOB_STATUS_V1_FAILED = 3;
+  SANDBOX_JOB_STATUS_V1_CANCELLED = 4;
+  SANDBOX_JOB_STATUS_V1_UNCERTAIN = 5;
+}
+
+message SubmitSandboxJobResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  // Untrusted output, at most 512 KiB. The worker validates state projection.
+  bytes result_json = 2;
+  string failure_code = 3;
+  bool cleanup_pending = 4;
+  reserved 5 to 15;
+}
+
+// Cancellation carries identity only; source and state are not required.
+message CancelSandboxJobRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  reserved 2 to 15;
+}
+
+// Pending means the stop intent is durable, but termination is not confirmed.
+message CancelSandboxJobResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  bool cleanup_pending = 2;
+  reserved 3 to 15;
+}

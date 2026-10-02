@@ -61,10 +61,13 @@ helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
   -f "$CHART/values-standalone.yaml" >"$WORK/standalone.yaml"
 pass "the chart renders with values-standalone.yaml"
 
-# Every plane on, so the completeness check below sees the full name set.
+# Enable every dispatch plane and sandbox grants for the complete environment check.
 cat >"$WORK/all-planes.yaml" <<'YAML'
 main:
   runtime:
+    sandboxAudiences:
+      - dns:sandbox.test
+      - spiffe://elitea.test/sandbox/rust
     indexScheduling:
       enabled: true
       instanceId: elitea-main-0
@@ -72,7 +75,7 @@ YAML
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
   -f "$CHART/values-standalone.yaml" -f "$WORK/all-planes.yaml" \
   >"$WORK/all-planes-render.yaml"
-pass "the chart renders with every runtime dispatch plane on"
+pass "the chart renders with every runtime dispatch plane and sandbox grants on"
 
 # ---------------------------------------------------------------------------
 # 2. The rendered ConfigMap carries the flags, and the container consumes it.
@@ -263,6 +266,20 @@ fi
 # ---------------------------------------------------------------------------
 # 4. The runtime plane matches what the composition root requires.
 #
+# Empty sandbox audiences disable grant issuance. An active list must preserve exact identities.
+# ConfigFromEnv accepts an empty list; validateSandboxAudiences rejects empty entries in an active list.
+if [ -z "$(data ELITEA_RUNTIME_SANDBOX_AUDIENCES "$WORK/standalone.yaml")" ]; then
+  pass "sandbox grant issuance stays disabled without configured audiences"
+else
+  fail "the chart enables sandbox grant audiences without explicit configuration"
+fi
+if [ "$(data ELITEA_RUNTIME_SANDBOX_AUDIENCES "$WORK/all-planes-render.yaml")" = "dns:sandbox.test,spiffe://elitea.test/sandbox/rust" ]; then
+  pass "active sandbox grant audiences preserve the configured exact identities"
+else
+  fail "active sandbox grant audiences differ from the configured exact identities"
+fi
+
+# ---------------------------------------------------------------------------
 # Three extraction passes over config.go, matching the three ways it names an
 # environment variable:
 #   required("X") / integer("X")  — a literal
@@ -309,15 +326,15 @@ else
 $missing"
 fi
 
-# Every rendered runtime value must be non-empty. config.go treats an empty
-# value exactly like an absent one and refuses to start either way.
+# Every runtime value in this active fixture must be non-empty.
+# The sandbox audience check above also proves the disabled fixture stays empty.
 while read -r key; do
   [ -z "$key" ] && continue
   if [ -z "$(data "$key" "$WORK/all-planes-render.yaml")" ]; then
-    fail "$key renders empty, and config.go refuses an empty value"
+    fail "$key renders empty in the active runtime fixture"
   fi
 done <"$WORK/rendered-names.txt"
-pass "every rendered runtime value is non-empty"
+pass "every runtime value in the active fixture is non-empty"
 
 # Every runtime FILE path must sit under the directory the pod actually mounts.
 # A path outside it renders cleanly and then fails to open at boot.
@@ -498,6 +515,19 @@ if [ -z "$bad_keys" ]; then
   pass "every runtime file name is usable as a Kubernetes Secret key"
 else
   fail "these runtime file names cannot be Secret keys:$bad_keys"
+fi
+
+if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/standalone.yaml")" = "false" ]; then
+  pass "toolkit discovery stays disabled until explicitly enabled"
+else
+  fail "toolkit discovery is enabled by default"
+fi
+helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+  -f "$CHART/values-standalone.yaml" --set main.runtime.toolkitDiscovery.enabled=true >"$WORK/discovery.yaml"
+if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/discovery.yaml")" = "true" ]; then
+  pass "toolkit discovery activation reaches the rendered environment"
+else
+  fail "toolkit discovery activation is absent from the rendered environment"
 fi
 
 # The operator-supplied volume stays supported, and it renders NO init
@@ -870,6 +900,17 @@ refuses "index scheduling without index ingest" \
 refuses "a dispatch plane enabled while the runtime is off" \
   "runtime.enabled" \
   --set main.runtime.agentExecutionDispatch.enabled=true
+
+refuses "toolkit discovery while the runtime is off" \
+  "runtime.enabled" \
+  --set main.runtime.toolkitDiscovery.enabled=true
+
+refuses "toolkit discovery without worker dispatch" \
+  "needs an active agentExecutionDispatch or indexIngestDispatch" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.runtime.toolkitDiscovery.enabled=true \
+  --set main.runtime.agentExecutionDispatch.enabled=false \
+  --set main.runtime.indexIngestDispatch.enabled=false
 
 refuses "two dispatch planes sharing a stream with different consumer groups" \
   "consumer group" \

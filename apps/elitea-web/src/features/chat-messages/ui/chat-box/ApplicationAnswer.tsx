@@ -15,12 +15,8 @@
  * §3.5 component-props budget — see sibling `ActionView.tsx`/`entities/agents`
  * for the same established grouping pattern elsewhere in this Wave.
  *
- * Per-word TTS highlight sync (issue #625 item 1): `tts.spokenRange` reaches
- * `shared/ui/Markdown` now, but only for the row `tts.speakingMessageId`
- * names — `spokenRange` is one global offset range, not scoped to a message
- * id, so every other row must see `undefined` rather than highlight an
- * unrelated offset at the same position. `speakingSegments` still has no
- * reader; nothing in this pass needed it.
+ * TTS highlighting applies only to `tts.speakingMessageId` (#625).
+ * Other rows receive no range: the global offset is not scoped to a message.
  *
  * Canvas message items ARE rendered now (issue 853): `./AnswerMessageItems`
  * walks `message_items` in their stored order and mounts the ported `Canvas`
@@ -38,16 +34,20 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { ApplicationAnswerAuthorization } from './ApplicationAnswerAuthorization';
 import { AssistantAvatar } from './MessageAvatar';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
 import { RememberMemoryAction } from './RememberMemoryAction';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
-import type { McpAuthRequiredAction } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
+import { FailureReference } from '../error-trace/FailureReference';
+import { ContinuationError } from '../error-trace/ContinuationError';
+
+import { PersistedMessageTrace } from './PersistedMessageTrace';
 
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
@@ -58,7 +58,6 @@ import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
-import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 
 import type { ApplicationAnswerProps } from './ApplicationAnswer.types';
 
@@ -81,11 +80,6 @@ export type {
   ApplicationAnswerTts,
 } from './ApplicationAnswer.types';
 
-/** Defensive read of a message-level token-limit pause signal — not yet a typed `ChatMessage` field (see module doc). */
-function getRequiresConfirmation(answer: ChatMessage): { readonly message?: string } | undefined {
-  return (answer as unknown as { requiresConfirmation?: { readonly message?: string } }).requiresConfirmation;
-}
-
 /**
  * `ApplicationAnswer` — renders an AI assistant's answer with markdown
  * content, tool actions (accordion), error traces, HITL/continue prompts,
@@ -102,7 +96,7 @@ export function ApplicationAnswer({
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
-  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, hideContinueButton = false, renderAuthModal } = {},
+  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume } = {},
   feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
@@ -115,7 +109,7 @@ export function ApplicationAnswer({
   // means something for the row TTS is CURRENTLY reading. Every other answer
   // row renders the same prop and must not highlight an unrelated offset.
   const currentSpokenRange = speakingMessageId === messageId ? spokenRange : undefined;
-  const requiresConfirmationSignal = getRequiresConfirmation(answer);
+  const requiresConfirmationSignal = answer.requiresConfirmation;
 
   const items = useMemo(() => readAnswerItems(answer.messageItems), [answer.messageItems]);
   // A canvas counts as content: an answer that is nothing but a canvas would
@@ -158,8 +152,8 @@ export function ApplicationAnswer({
     return { swarmChildActions: swarm, nonSwarmChildActions: others };
   }, [toolActions, isProcessing]);
 
-  const authRequiredAction = useMemo(
-    () => toolActions.find((action) => asDraft(action).status === ToolActionStatus.actionRequired),
+  const authRequiredActions = useMemo(
+    () => toolActions.filter((action) => asDraft(action).status === ToolActionStatus.actionRequired),
     [toolActions],
   );
 
@@ -167,14 +161,6 @@ export function ApplicationAnswer({
     const list = Array.isArray(hitlInterrupts) && hitlInterrupts.length > 0 ? hitlInterrupts : hitlInterrupt ? [hitlInterrupt] : [];
     return list as unknown as readonly HitlInterrupt[];
   }, [hitlInterrupt, hitlInterrupts]);
-
-  const onContinueWithoutAuth = useCallback(() => {
-    onContinueMcpExecution?.(messageId, true);
-  }, [onContinueMcpExecution, messageId]);
-
-  const onAuthSuccess = useCallback(() => {
-    onContinueMcpExecution?.(messageId, false);
-  }, [onContinueMcpExecution, messageId]);
 
   const onContinueWithConfirmation = useCallback(() => {
     onContinueTokenLimitExecution?.(messageId);
@@ -207,9 +193,27 @@ export function ApplicationAnswer({
   const shouldRenderAnswerBlock =
     hasTextContent ||
     !!exception ||
-    (!!authRequiredAction && !!onContinueMcpExecution) ||
+    (authRequiredActions.length > 0 && !!onContinueMcpExecution) ||
     (!!requiresConfirmationSignal && !!onContinueTokenLimitExecution) ||
     effectiveHitlInterrupts.length > 0;
+
+  const renderedContent = canRenderContent && hasTextContent ? (
+    <AnswerContent
+      content={answer.content}
+      items={items}
+      messageGroupUuid={answer.id}
+      isStreaming={isStreaming}
+      spokenRange={currentSpokenRange}
+      onEditCanvas={onEditCanvas}
+      selectedCodeBlockInfo={selectedCodeBlockInfo}
+      onCreateCanvasFromSelection={onCreateCanvasFromSelection}
+    />
+  ) : null;
+  const continuationFailed = !!exception && answer.failureCode === 'OUTPUT_CONTINUATION_EXHAUSTED';
+  const textItems = items.filter((item) => item.kind === 'text');
+  const partialOutput = textItems.length > 0
+    ? textItems.map((item) => item.content).join('\n\n')
+    : answer.content;
 
   return (
     <Box
@@ -245,6 +249,14 @@ export function ApplicationAnswer({
           memoriesUsed={answer.memoriesUsed}
         />
       )}
+
+      <ApplicationAnswerAuthorization
+        actions={authRequiredActions}
+        messageId={messageId}
+        continuation={{ onContinueMcpExecution, renderAuthModal }}
+      />
+
+      {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isProcessing} />}
 
@@ -285,31 +297,18 @@ export function ApplicationAnswer({
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
           })}
         >
-          {canRenderContent && (
-            <AnswerContent
-              content={answer.content}
-              items={items}
-              messageGroupUuid={answer.id}
-              isStreaming={isStreaming}
-              spokenRange={currentSpokenRange}
-              onEditCanvas={onEditCanvas}
-              selectedCodeBlockInfo={selectedCodeBlockInfo}
-              onCreateCanvasFromSelection={onCreateCanvasFromSelection}
-            />
+          {continuationFailed ? (
+            <ContinuationError error={exception} partialOutput={partialOutput}>
+              {renderedContent}
+            </ContinuationError>
+          ) : (
+            <>
+              {renderedContent}
+              {!!exception && <ErrorTrace error={exception} />}
+            </>
           )}
 
-          {!!exception && <ErrorTrace error={exception} />}
-
-          {!!authRequiredAction && (
-            <ChatContinue
-              authRequired
-              disabled={!onContinueMcpExecution}
-              onContinueWithoutAuth={onContinueWithoutAuth}
-              onAuthSuccess={onAuthSuccess}
-              authRequiredAction={authRequiredAction as unknown as McpAuthRequiredAction}
-              renderAuthModal={renderAuthModal}
-            />
-          )}
+          {!!exception && <FailureReference messageId={messageId} code={answer.failureCode} />}
 
           {!hideContinueButton && !!requiresConfirmationSignal && (
             <ChatContinue

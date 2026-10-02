@@ -15,10 +15,12 @@ use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
 use crate::protocol::elitea::runtime::v1::{
-    AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, BeginExecutionRequestV1,
-    BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
+    AuthorizeAgentModelCheckpointRequestV1, AuthorizeAgentModelCheckpointResponseV1,
+    AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, AuthorizeSandboxJobRequestV1,
+    AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1, BeginExecutionResponseV1,
+    ClaimCommandRequestV1, ClaimCommandResponseV1, ObserveDesiredStateRequestV1,
+    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
+    RenewLeaseRequestV1, RenewLeaseResponseV1,
     runtime_control_service_client::RuntimeControlServiceClient,
 };
 
@@ -88,6 +90,22 @@ pub trait ControlRpc: Send + Sync {
         request: Request<AuthorizeInvocationRequestV1>,
     ) -> Result<Response<AuthorizeInvocationResponseV1>, Status>;
 
+    async fn authorize_agent_model_checkpoint(
+        &self,
+        _request: Request<AuthorizeAgentModelCheckpointRequestV1>,
+    ) -> Result<Response<AuthorizeAgentModelCheckpointResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "model checkpoint recovery is unavailable",
+        ))
+    }
+
+    async fn authorize_sandbox_job(
+        &self,
+        _request: Request<AuthorizeSandboxJobRequestV1>,
+    ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
+        Err(Status::unimplemented("sandbox grants are unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -141,6 +159,23 @@ impl ControlRpc for TonicControlRpc {
         request: Request<AuthorizeInvocationRequestV1>,
     ) -> Result<Response<AuthorizeInvocationResponseV1>, Status> {
         self.client.clone().authorize_invocation(request).await
+    }
+
+    async fn authorize_agent_model_checkpoint(
+        &self,
+        request: Request<AuthorizeAgentModelCheckpointRequestV1>,
+    ) -> Result<Response<AuthorizeAgentModelCheckpointResponseV1>, Status> {
+        self.client
+            .clone()
+            .authorize_agent_model_checkpoint(request)
+            .await
+    }
+
+    async fn authorize_sandbox_job(
+        &self,
+        request: Request<AuthorizeSandboxJobRequestV1>,
+    ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
+        self.client.clone().authorize_sandbox_job(request).await
     }
 
     async fn renew_lease(
@@ -254,6 +289,61 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             .map_err(|_| unavailable())?
             .map_err(|_| unavailable())?
             .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Perform one checkpoint-authorization attempt. An uncertain response is
+    /// never retried here because it can follow a committed authority receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error.
+    pub async fn authorize_agent_model_checkpoint(
+        &self,
+        message: AuthorizeAgentModelCheckpointRequestV1,
+    ) -> Result<AuthorizeAgentModelCheckpointResponseV1, ControlGrpcError> {
+        let request = self.request(message)?;
+        let response = timeout(
+            self.config.deadline,
+            self.rpc.authorize_agent_model_checkpoint(request),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable())?
+        .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Request one scoped sandbox grant using the verified workload session.
+    /// # Errors
+    /// Returns a bounded transport error or an explicit authorization rejection.
+    pub async fn authorize_sandbox_job(
+        &self,
+        message: AuthorizeSandboxJobRequestV1,
+    ) -> Result<AuthorizeSandboxJobResponseV1, ControlGrpcError> {
+        let request = self.request(message)?;
+        let response = timeout(
+            self.config.deadline,
+            self.rpc.authorize_sandbox_job(request),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|status| match status.code() {
+            tonic::Code::PermissionDenied
+            | tonic::Code::Unauthenticated
+            | tonic::Code::InvalidArgument
+            | tonic::Code::FailedPrecondition
+            | tonic::Code::Unimplemented => {
+                ControlGrpcError::InvalidConfiguration("Main did not authorize this sandbox job")
+            }
+            tonic::Code::ResourceExhausted => {
+                ControlGrpcError::ResourceExhausted("sandbox grant service is at capacity")
+            }
+            _ => unavailable(),
+        })?
+        .into_inner();
         validate_response(&response)?;
         Ok(response)
     }
@@ -384,6 +474,7 @@ mod tests {
         claim_response: Mutex<ClaimCommandResponseV1>,
         begin_response: Mutex<BeginExecutionResponseV1>,
         authorize_response: Mutex<AuthorizeInvocationResponseV1>,
+        sandbox_response: Mutex<AuthorizeSandboxJobResponseV1>,
         renew_response: Mutex<RenewLeaseResponseV1>,
         observe_response: Mutex<ObserveDesiredStateResponseV1>,
         settlement_response: Mutex<PrepareSettlementResponseV1>,
@@ -468,6 +559,32 @@ mod tests {
             ))
         }
 
+        async fn authorize_agent_model_checkpoint(
+            &self,
+            request: Request<AuthorizeAgentModelCheckpointRequestV1>,
+        ) -> Result<Response<AuthorizeAgentModelCheckpointResponseV1>, Status> {
+            self.record("checkpoint", &request)?;
+            self.delay().await;
+            let response = self
+                .authorize_response
+                .lock()
+                .expect("authorize lock")
+                .clone();
+            Ok(Response::new(AuthorizeAgentModelCheckpointResponseV1 {
+                disposition: response.disposition,
+                rejection: response.rejection,
+            }))
+        }
+
+        async fn authorize_sandbox_job(
+            &self,
+            request: Request<AuthorizeSandboxJobRequestV1>,
+        ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
+            self.record("sandbox", &request)?;
+            self.delay().await;
+            Ok(Response::new(self.sandbox_response.lock().unwrap().clone()))
+        }
+
         async fn renew_lease(
             &self,
             request: Request<RenewLeaseRequestV1>,
@@ -505,6 +622,37 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn checkpoint_authorization_is_one_attempt_on_failure_or_timeout() {
+        for delay in [false, true] {
+            let rpc = FakeRpc {
+                fail: !delay,
+                delay: delay.then_some(Duration::from_secs(1)),
+                ..FakeRpc::default()
+            };
+            let mut settings = config();
+            settings.deadline = Duration::from_millis(10);
+            let client = ControlGrpcClient::new(rpc, settings).expect("client");
+            let result = client
+                .authorize_agent_model_checkpoint(AuthorizeAgentModelCheckpointRequestV1::default())
+                .await;
+            assert!(matches!(result, Err(ControlGrpcError::Unavailable(_))));
+            assert_eq!(client.rpc.calls.lock().expect("calls").len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn sandbox_grant_uses_workload_metadata_and_deadline() {
+        let client = ControlGrpcClient::new(FakeRpc::default(), config()).unwrap();
+        client
+            .authorize_sandbox_job(AuthorizeSandboxJobRequestV1::default())
+            .await
+            .unwrap();
+        assert_eq!(*client.rpc.calls.lock().unwrap(), vec!["sandbox"]);
+        assert_eq!(client.rpc.metadata.lock().unwrap().len(), 2);
+        assert!(client.rpc.timeout.lock().unwrap().is_some());
+    }
+
     fn config() -> ControlGrpcConfig {
         ControlGrpcConfig {
             deadline: Duration::from_millis(1_250),
@@ -538,6 +686,14 @@ mod tests {
             .authorize_invocation(AuthorizeInvocationRequestV1::default())
             .await
             .expect("authorize");
+        let checkpoint = client
+            .authorize_agent_model_checkpoint(AuthorizeAgentModelCheckpointRequestV1::default())
+            .await
+            .expect("checkpoint");
+        assert_eq!(
+            checkpoint.disposition,
+            AuthorizeInvocationDispositionV1::AlreadyAuthorized as i32
+        );
         client
             .renew_lease(RenewLeaseRequestV1::default())
             .await
@@ -557,6 +713,7 @@ mod tests {
                 "claim",
                 "begin",
                 "authorize",
+                "checkpoint",
                 "renew",
                 "observe",
                 "settlement"

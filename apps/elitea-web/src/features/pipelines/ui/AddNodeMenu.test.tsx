@@ -38,16 +38,8 @@ describe('AddNodeMenu', () => {
     expect(labels).toEqual(sorted);
   });
 
-  /**
-   * The menu offered `Code` and `Custom`, for which the Rust pipeline
-   * compiler has no `parse_pipeline_node` arm at all
-   * (`services/elitea-worker-rust/src/agents/graph/compiler.rs:1236`), so
-   * adding either produced a pipeline that could not load ("the pipeline
-   * contains a node type that is not enabled", `compiler.rs:1267`). Both are
-   * withheld from AUTHORING; their renderers stay registered so stored
-   * documents containing them still display.
-   */
-  it('offers exactly the nine node types the pipeline compiler admits — no Code, no Custom', async () => {
+  /** Compiler code parsing is supported; execution requires an admitted sandbox (compiler.rs:1544 and :1029). Custom remains unsupported. */
+  it('offers exactly the ten node types the pipeline compiler admits, including Code and excluding Custom', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
 
@@ -57,12 +49,13 @@ describe('AddNodeMenu', () => {
       .getAllByRole('menuitem')
       .map(item => item.textContent);
 
-    expect(labels).not.toContain('Code');
+    expect(labels).toContain('Code');
     expect(labels).not.toContain('Custom');
 
     expect([...labels].sort()).toEqual(
       [
         'Agent',
+        'Code',
         'Decision',
         'Human-in-the-loop',
         'LLM',
@@ -88,16 +81,17 @@ describe('AddNodeMenu', () => {
   });
 
   it.each([
-    'Agent',
-    'Decision',
-    'Human-in-the-loop',
-    'LLM',
-    'MCP',
-    'Printer',
-    'Router',
-    'State modifier',
-    'Toolkit',
-  ])('the %s item dispatches a node type the compiler admits, by value not by label', async label => {
+    ['Agent', 'agent'],
+    ['Code', 'code'],
+    ['Decision', 'decision'],
+    ['Human-in-the-loop', 'hitl'],
+    ['LLM', 'llm'],
+    ['MCP', 'mcp'],
+    ['Printer', 'printer'],
+    ['Router', 'router'],
+    ['State modifier', 'state_modifier'],
+    ['Toolkit', 'toolkit'],
+  ])('the %s item dispatches its exact compiler-admitted node type', async (label, expectedType) => {
     // Guards the wiring, not just the copy: a label can be right while the
     // `onAddNode` payload is a type the runtime refuses.
     const user = userEvent.setup();
@@ -109,6 +103,8 @@ describe('AddNodeMenu', () => {
     await user.click(within(menu).getByText(label));
 
     const type = onAddNode.mock.calls[0]?.[0] as string;
+    expect(onAddNode).toHaveBeenCalledTimes(1);
+    expect(type).toBe(expectedType);
     expect(RuntimeContractConstants.isCompilerAdmittedNodeType(type)).toBe(true);
   });
 

@@ -172,13 +172,10 @@ test.describe('Skills version selector', () => {
     try {
       await addNamedVersion(page, skillId, 'draft-v1', 'Draft instructions.');
 
-      // A freshly created skill names NO default version at all
-      // (`skills.meta.default_version_id` is empty, and the read only reports
-      // the flag — it does not fall back to `base`), so neither row carries
-      // the marker yet. The same starting state `pipelines.version-selector.
-      // spec.ts` documents for a fresh pipeline.
+      // A fresh skill records base as its default, independently of the active draft.
       let menu = await openVersionMenu(page);
-      await expect(menu.getByTestId('agent-version-default-marker')).toHaveCount(0);
+      await expect(menu.getByTestId('agent-version-default-marker')).toHaveCount(1);
+      await expect(menu.getByRole('menuitem', { name: 'base', exact: true }).getByTestId('agent-version-default-marker')).toBeVisible();
       await page.keyboard.press('Escape');
 
       // "Set default" acts on the version the editor currently has open —
@@ -193,7 +190,7 @@ test.describe('Skills version selector', () => {
       await expect(menu.getByRole('menuitem', { name: /draft-v1/ }).getByTestId('agent-version-default-marker')).toBeVisible({
         timeout: 20_000,
       });
-      // The marker follows the DEFAULT, not the selection: `base` never gets it.
+      // The marker moves from base to the newly selected default.
       await expect(menu.getByRole('menuitem', { name: 'base', exact: true }).getByTestId('agent-version-default-marker')).toHaveCount(0);
     } finally {
       await deleteSkill(request, skillId);

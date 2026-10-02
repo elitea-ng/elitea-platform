@@ -54,6 +54,7 @@ import {
   createConversation,
   deleteAgent,
   deleteConversation,
+  readCallerIdentity,
 } from '../../fixtures/api';
 import { STORAGE_STATE } from '../../../playwright.config';
 
@@ -206,6 +207,7 @@ test('a partial update answers the whole conversation, not just the keys it was 
  * leave a client unable to start a turn in the conversation it just made.
  */
 test('a conversation create answers a serial id and a uuid, and starts empty', async ({ request }) => {
+  const caller = await readCallerIdentity(request);
   const name = autotestName('identity');
   const response = await request.post(CONVERSATIONS_PATH, { data: { name } });
   expect(response.status(), `the create was refused: ${(await response.text()).slice(0, 200)}`).toBe(201);
@@ -223,7 +225,11 @@ test('a conversation create answers a serial id and a uuid, and starts empty', a
     // identifier — the uuid path used to be a 500.
     const byUuid = await readConversation(request, String(created['uuid']));
     expect(String(byUuid['id'] ?? '')).toBe(conversationId);
-    expect((byUuid['participants'] as unknown[]) ?? [], 'a new conversation has no participants').toEqual([]);
+    const participants = (byUuid['participants'] as readonly Record<string, unknown>[]) ?? [];
+    expect(participants.map((participant) => participant['entity_name']).sort(), 'a new conversation starts with its author and dummy').toEqual(['dummy', 'user']);
+    const author = participants.find((participant) => participant['entity_name'] === 'user');
+    expect(String((author?.['entity_meta'] as Record<string, unknown>)?.['id'])).toBe(caller.id);
+    expect(String(byUuid['created_by'])).toBe(caller.id);
   } finally {
     await deleteConversation(request, conversationId);
   }
@@ -250,6 +256,11 @@ test('an attached agent participant records the project it belongs to', async ({
   const agentName = autotestName('attachag');
   const agent = await createAgent(request, agentName);
   try {
+    const caller = await readCallerIdentity(request);
+    const baseline = ((await readConversation(request, conversationId))['participants'] as readonly Record<string, unknown>[]) ?? [];
+    expect(baseline.map((participant) => participant['entity_name']).sort()).toEqual(['dummy', 'user']);
+    const author = baseline.find((participant) => participant['entity_name'] === 'user');
+    expect(String((author?.['entity_meta'] as Record<string, unknown>)?.['id'])).toBe(caller.id);
     const attached = await request.post(`${PARTICIPANTS_PATH}/${conversationId}`, {
       data: [
         {
@@ -264,8 +275,10 @@ test('an attached agent participant records the project it belongs to', async ({
 
     const stored = await readConversation(request, conversationId);
     const participants = (stored['participants'] as readonly Record<string, unknown>[]) ?? [];
-    expect(participants, 'the attach must be visible through the conversation read').toHaveLength(1);
-    const entityMeta = participants[0]?.['entity_meta'] as Record<string, unknown>;
+    const applications = participants.filter((participant) => participant['entity_name'] === 'application');
+    expect(applications, 'the attach must be visible through the conversation read').toHaveLength(1);
+    expect(participants.filter((participant) => participant['entity_name'] !== 'application')).toEqual(baseline);
+    const entityMeta = applications[0]?.['entity_meta'] as Record<string, unknown>;
     expect(String(entityMeta?.['id'] ?? '')).toBe(agent.id);
     expect(
       String(entityMeta?.['project_id'] ?? ''),
@@ -284,10 +297,9 @@ test('an attached agent participant records the project it belongs to', async ({
       ],
     });
     expect(again.status()).toBe(200);
-    expect(
-      ((await readConversation(request, conversationId))['participants'] as unknown[]) ?? [],
-      'the same agent attached twice must stay one participant',
-    ).toHaveLength(1);
+    const afterAgain = ((await readConversation(request, conversationId))['participants'] as readonly Record<string, unknown>[]) ?? [];
+    expect(afterAgain.filter((participant) => participant['entity_name'] === 'application'), 'the same agent attached twice must stay one participant').toEqual(applications);
+    expect(afterAgain.filter((participant) => participant['entity_name'] !== 'application')).toEqual(baseline);
   } finally {
     await deleteConversation(request, conversationId);
     await deleteAgent(request, agent.id);

@@ -105,7 +105,7 @@ func TestCurrentModelsRepositoryPreservesSectionShapesAndPublicSharedFilter(t *t
 func TestCurrentModelsRepositoryOrdersLLMDuplicatesForCurrentMaxTokenSelection(t *testing.T) {
 	queries := &currentModelQueriesStub{rows: []sqlcgen.ListCurrentModelConfigurationsRow{
 		currentModelRow(1, 7, configurationapp.CurrentModelSectionLLM, "Alpha Max", false,
-			`{"name":"alpha","context_window":200000,"max_output_tokens":32000,"supports_reasoning":true,"supports_vision":false,"low_tier":true,"mid_tier":true,"openai_compatible":true}`),
+			`{"name":"alpha","context_window":200000,"max_output_tokens":32000,"max_input_tokens":"170000","supports_reasoning":true,"supports_vision":false,"low_tier":true,"mid_tier":true,"openai_compatible":true}`),
 		currentModelRow(2, 7, configurationapp.CurrentModelSectionLLM, "Beta", false,
 			`{"name":"beta","max_output_tokens":8000}`),
 		currentModelRow(3, 7, configurationapp.CurrentModelSectionLLM, "Alpha Newer But Smaller", false,
@@ -143,6 +143,9 @@ func TestCurrentModelsRepositoryOrdersLLMDuplicatesForCurrentMaxTokenSelection(t
 		if item.Name == "alpha" {
 			alpha = item
 		}
+	}
+	if alpha.MaxInputTokens == nil || *alpha.MaxInputTokens != 170000 {
+		t.Fatal("catalogue lost the stored input ceiling")
 	}
 	if alpha.MaxOutputTokens == nil || *alpha.MaxOutputTokens != 32000 || alpha.DisplayName == nil || *alpha.DisplayName != "Alpha Max" {
 		t.Fatalf("deduplicated max-token LLM=%#v", alpha)

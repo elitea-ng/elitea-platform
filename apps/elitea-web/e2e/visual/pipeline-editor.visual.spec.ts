@@ -276,6 +276,8 @@ async function openEditor(page: Page, instructions: string): Promise<void> {
     timeout: 20_000,
   });
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 20_000 });
+  // External MCP opt-in is part of this configuration panel, not a visual mask.
+  await expect(page.getByRole('switch', { name: 'Enable MCP access' })).toBeVisible();
   // The GRAPH landmark is left to each caller, deliberately: `rf__wrapper`
   // proves the canvas mounted, not that this document's nodes are on it, and
   // the two documents used here terminate differently. Each test below names

@@ -91,6 +91,7 @@ export interface ConfigurationTypeDescriptor {
 export interface ConfigurationWire {
   readonly id?: string | number;
   readonly uid?: string;
+  readonly uuid?: string;
   readonly type: string;
   readonly data?: Readonly<Record<string, unknown>>;
   readonly elitea_title?: string;

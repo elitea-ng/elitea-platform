@@ -56,7 +56,7 @@ const READS_INPUT: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'hi
 const READS_OUTPUT: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'llm', 'state_modifier']);
 
 /** Families whose `input_mapping:` values can name a state variable — `compiler.rs:1302-1338`. */
-const READS_INPUT_MAPPING: ReadonlySet<string> = new Set(['toolkit', 'mcp', 'llm', 'printer']);
+const READS_INPUT_MAPPING: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'llm', 'printer']);
 
 /**
  * `yaml.rs:371-378` (`valid_output_key`) — non-empty, ≤256 bytes, no NUL/CR/LF.
@@ -176,8 +176,7 @@ export function declaredStateReferences(node: AdmissionNode): readonly RouteTarg
   const output = READS_OUTPUT.has(node.type) ? listTargets('output', raw.output) : [];
   const cleaned = node.type === 'state_modifier' ? listTargets('variables_to_clean', raw.variables_to_clean) : [];
   const mapped = READS_INPUT_MAPPING.has(node.type) ? mappedVariables(raw) : [];
-  const task = node.type === 'agent' ? mappedVariables(raw).filter((entry) => entry.field === 'input_mapping.task') : [];
-  return [...input, ...output, ...cleaned, ...mapped, ...task];
+  return [...input, ...output, ...cleaned, ...mapped];
 }
 
 /** Non-`messages` outputs — the compiler's own filter at `llm.rs:174` / `direct_tool.rs:182`. */

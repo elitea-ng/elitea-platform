@@ -10,9 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+use super::code::CodeNodeDefinition;
+use super::code_runtime::{CodeNode, CodeSandboxRuntime};
 use adk_rust::graph::{
-    Channel, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder, GraphError, Node,
-    NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder,
+    GraphError, Node, NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
 };
 use adk_rust::{Event, InvocationContext, Part};
 use async_trait::async_trait;
@@ -37,14 +39,14 @@ use super::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmNode, LlmNodeDefinition, LlmToolkitSelection,
     PipelineLlmAgentFactory,
 };
-use super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY;
+use super::node_events::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender};
 use super::printer::{
     PrinterInputMapping, PrinterNode, PrinterNodeDefinition, PrinterPauseCatalog, PrinterResetNode,
 };
 use super::resume::PipelineResume;
 use super::router::{RouterNode, RouterNodeDefinition};
 use super::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
-use super::yaml::{valid_graph_id, valid_output_key};
+use super::yaml::{MAX_NODE_ID_BYTES, valid_graph_id, valid_output_key};
 use super::{pipeline_completed_event, pipeline_result_event};
 
 const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
@@ -54,6 +56,7 @@ const MAX_STATIC_INTERRUPTS: usize = 128;
 const PIPELINE_RECURSION_LIMIT: usize = 100;
 const MAX_PIPELINE_RESULT_BYTES: usize = 512 * 1024;
 const SUBGRAPH_RESULT_NODE: &str = "__elitea_subgraph_result_v1";
+const SUBGRAPH_ENTRY_NODE: &str = "__elitea_subgraph_entry_v1";
 const PIPELINE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.config.v1\0";
 
 type ValidatedState = (
@@ -226,12 +229,23 @@ pub(crate) struct PipelineDefinition {
 /// Invocation-owned dependencies for executable pipeline node families.
 #[derive(Clone, Default)]
 pub(crate) struct PipelineNodeRuntimes {
+    events: Option<PipelineNodeEventSender>,
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     direct_tool: Option<Arc<dyn PipelineDirectToolResolver>>,
     application: Option<Arc<dyn PipelineApplicationResolver>>,
+    code: Option<Arc<dyn CodeSandboxRuntime>>,
 }
 
 impl PipelineNodeRuntimes {
+    pub(in crate::agents) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
+        self.code = Some(runtime);
+        self
+    }
+    pub(crate) fn with_events(mut self, events: PipelineNodeEventSender) -> Self {
+        self.events = Some(events);
+        self
+    }
+
     #[must_use]
     pub(crate) const fn new(
         llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
@@ -242,6 +256,8 @@ impl PipelineNodeRuntimes {
             llm,
             direct_tool,
             application,
+            events: None,
+            code: None,
         }
     }
 }
@@ -344,6 +360,7 @@ fn terminal_target<'a>(target: &'a str, terminal: &'a str) -> &'a str {
 
 #[derive(Clone)]
 enum PipelineNodeDefinition {
+    Code(CodeNodeDefinition),
     Application(ApplicationNodeDefinition),
     Decision(DecisionNodeDefinition),
     DirectTool(DirectToolNodeDefinition),
@@ -357,6 +374,7 @@ enum PipelineNodeDefinition {
 impl PipelineNodeDefinition {
     fn id(&self) -> &str {
         match self {
+            Self::Code(node) => node.id(),
             Self::Application(node) => node.id(),
             Self::Decision(node) => node.id(),
             Self::DirectTool(node) => node.id(),
@@ -370,6 +388,7 @@ impl PipelineNodeDefinition {
 
     fn input_keys(&self) -> &[String] {
         match self {
+            Self::Code(node) => node.input_keys(),
             Self::Application(node) => node.input_keys(),
             Self::Decision(node) => node.input_keys(),
             Self::DirectTool(node) => node.input_keys(),
@@ -383,6 +402,7 @@ impl PipelineNodeDefinition {
 
     fn output_keys(&self) -> &[String] {
         match self {
+            Self::Code(node) => node.output_keys(),
             Self::Application(node) => node.output_keys(),
             Self::DirectTool(node) => node.output_keys(),
             Self::Decision(_) | Self::Hitl(_) | Self::Printer(_) | Self::Router(_) => &[],
@@ -393,7 +413,8 @@ impl PipelineNodeDefinition {
 
     fn cleaned_keys(&self) -> &[String] {
         match self {
-            Self::Application(_)
+            Self::Code(_)
+            | Self::Application(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Hitl(_)
@@ -407,7 +428,8 @@ impl PipelineNodeDefinition {
     fn edit_state_key(&self) -> Option<&str> {
         match self {
             Self::Hitl(node) => node.edit_state_key(),
-            Self::Application(_)
+            Self::Code(_)
+            | Self::Application(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Llm(_)
@@ -419,6 +441,7 @@ impl PipelineNodeDefinition {
 
     fn route_targets(&self) -> Vec<&str> {
         match self {
+            Self::Code(node) => node.transition().into_iter().collect(),
             Self::Application(node) => node.transition().into_iter().collect(),
             Self::Decision(node) => node.route_targets().collect(),
             Self::DirectTool(node) => node.transition().into_iter().collect(),
@@ -432,6 +455,7 @@ impl PipelineNodeDefinition {
 
     fn config_digest(&self) -> [u8; 32] {
         match self {
+            Self::Code(node) => node.validated_digest(),
             Self::Application(node) => node.config_digest(),
             Self::Decision(node) => node.config_digest(),
             Self::DirectTool(node) => node.config_digest(),
@@ -445,13 +469,33 @@ impl PipelineNodeDefinition {
 }
 
 impl PipelineDefinition {
+    pub(crate) fn declared_variable_types(&self) -> BTreeMap<String, String> {
+        self.state
+            .iter()
+            .filter(|(key, _)| {
+                !reserved_user_state_key(key) && !matches!(key.as_str(), "input" | "messages")
+            })
+            .map(|(key, kind)| (key.clone(), kind.clone()))
+            .collect()
+    }
+
     /// Parse and validate a complete frozen pipeline YAML document.
     pub(crate) fn from_yaml(yaml: &str) -> Result<Self, PipelineConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_PIPELINE_YAML_BYTES {
             return Err(PipelineConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawPipelineDefinition>(yaml)
+        let mut document = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml)
             .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
+        let normalized_identifier_count = normalize_legacy_graph_identifiers(&mut document);
+        let raw = serde_yaml_ng::from_value::<RawPipelineDefinition>(document)
+            .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
+        if normalized_identifier_count > 0 {
+            tracing::warn!(
+                event = "pipeline_legacy_identifier_normalized",
+                normalized_identifier_count,
+                "normalized legacy pipeline graph identifiers for runtime compatibility"
+            );
+        }
         Self::from_raw(raw)
     }
 
@@ -515,6 +559,23 @@ impl PipelineDefinition {
     }
 
     #[must_use]
+    /// Recover deterministic nodes, model checkpoints, or durable sandbox receipts.
+    pub(crate) fn recovery_frontier_supported(&self, pending: &[String]) -> bool {
+        pending.iter().all(|id| {
+            self.nodes.iter().any(|node| {
+                node.id() == id
+                    && matches!(
+                        node,
+                        PipelineNodeDefinition::Llm(_)
+                            | PipelineNodeDefinition::Code(_)
+                            | PipelineNodeDefinition::StateModifier(_)
+                            | PipelineNodeDefinition::Decision(_)
+                            | PipelineNodeDefinition::Router(_)
+                    )
+            })
+        })
+    }
+
     pub(crate) fn entry_point(&self) -> &str {
         &self.entry_point
     }
@@ -539,6 +600,24 @@ impl PipelineDefinition {
         )
     }
 
+    pub(crate) fn resolve_legacy_toolkit_aliases(&mut self, aliases: &BTreeMap<String, String>) {
+        for node in &mut self.nodes {
+            match node {
+                PipelineNodeDefinition::DirectTool(node) => {
+                    node.resolve_legacy_toolkit_aliases(aliases);
+                }
+                PipelineNodeDefinition::Llm(node) => node.resolve_legacy_toolkit_aliases(aliases),
+                PipelineNodeDefinition::Application(_)
+                | PipelineNodeDefinition::Decision(_)
+                | PipelineNodeDefinition::Hitl(_)
+                | PipelineNodeDefinition::Printer(_)
+                | PipelineNodeDefinition::Router(_)
+                | PipelineNodeDefinition::Code(_)
+                | PipelineNodeDefinition::StateModifier(_) => {}
+            }
+        }
+    }
+
     /// Exact node-scoped toolkit selections, retained without credentials.
     pub(crate) fn llm_tool_selections(&self) -> impl Iterator<Item = &LlmToolkitSelection> {
         self.nodes.iter().flat_map(|node| match node {
@@ -549,6 +628,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Hitl(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
+            | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => &[],
         })
     }
@@ -563,7 +643,16 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Llm(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
+            | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => None,
+        })
+    }
+
+    /// Admitted node identifiers that can own an ADK subgraph thread.
+    pub(crate) fn application_node_ids(&self) -> impl Iterator<Item = &str> {
+        self.nodes.iter().filter_map(|node| match node {
+            PipelineNodeDefinition::Application(node) => Some(node.id()),
+            _ => None,
         })
     }
 
@@ -579,6 +668,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Llm(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
+            | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => None,
         })
     }
@@ -674,17 +764,35 @@ impl PipelineDefinition {
         }
         let state_schema = self.state_schema(self.runtime_channels());
         let result_policy = self.result_policy();
+        // A root HITL decision directly to END runs no data-producing node.
+        // Preserve its terminal value without presenting it as a new generation.
+        let reuses_result = resume
+            .as_ref()
+            .and_then(PipelineResume::terminal_decision)
+            .is_some_and(|(id, action)| {
+                self.nodes.iter().any(|node| {
+                    matches!(node, PipelineNodeDefinition::Hitl(hitl)
+                    if hitl.id() == id && hitl.route(action) == Some("END"))
+                })
+            });
         let node_checkpointer = Arc::clone(&checkpointer);
         let mut builder = PipelineGraphBuilder::Agent(Box::new(
             GraphAgent::builder(agent_name)
                 .description("Elitea stored pipeline")
-                .state_schema(state_schema)
+                .state_schema(state_schema.clone())
                 .edge(START, &self.entry_point)
                 .checkpointer_arc(checkpointer)
                 .recursion_limit(PIPELINE_RECURSION_LIMIT)
                 .max_concurrency(1)
                 .output_mapper(move |state| {
-                    vec![pipeline_completion_event_from_state(state, &result_policy)]
+                    let mut event = pipeline_completion_event_from_state(state, &result_policy);
+                    if reuses_result {
+                        event.provider_metadata.insert(
+                            super::agent::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                            "v1".to_owned(),
+                        );
+                    }
+                    vec![event]
                 }),
         ));
         for node in &self.nodes {
@@ -707,9 +815,13 @@ impl PipelineDefinition {
             builder = builder
                 .input_mapper(move |context| invocation_state(context, None, Some(&resume_state)));
         } else {
-            let defaults = self.state_defaults.clone();
-            builder = builder
-                .input_mapper(move |context| invocation_state(context, Some(&defaults), None));
+            builder = with_initial_checkpoint(
+                builder,
+                node_checkpointer,
+                state_schema,
+                self.state_defaults.clone(),
+                self.entry_point.clone(),
+            );
         }
         builder.build().map_err(PipelineConfigurationError::Graph)
     }
@@ -728,7 +840,12 @@ impl PipelineDefinition {
     ) -> Result<CompiledGraph, PipelineConfigurationError> {
         let state_schema = self.state_schema(self.runtime_channels());
         let result_policy = self.result_policy();
-        let graph = StateGraph::new(state_schema).add_edge(START, &self.entry_point);
+        // A completed no-op step persists initialized child input before any
+        // business node starts. Existing checkpoints retain their own frontier.
+        let graph = StateGraph::new(state_schema)
+            .add_node(PipelineSubgraphEntryNode)
+            .add_edge(START, SUBGRAPH_ENTRY_NODE)
+            .add_edge(SUBGRAPH_ENTRY_NODE, &self.entry_point);
         let mut builder = PipelineGraphBuilder::Subgraph {
             graph,
             terminal: SUBGRAPH_RESULT_NODE,
@@ -788,6 +905,9 @@ impl PipelineDefinition {
         ]);
         channels.extend(self.state.keys().cloned());
         for node in &self.nodes {
+            if let PipelineNodeDefinition::Application(application) = node {
+                channels.extend(application.variable_channels());
+            }
             channels.extend(node.input_keys().iter().cloned());
             channels.extend(node.output_keys().iter().cloned());
             channels.extend(node.cleaned_keys().iter().cloned());
@@ -806,6 +926,7 @@ impl PipelineDefinition {
         checkpointer: &Arc<dyn Checkpointer>,
     ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
         Ok(match node {
+            PipelineNodeDefinition::Code(node) => self.bind_code_node(builder, node, runtimes)?,
             PipelineNodeDefinition::Application(node) => {
                 self.bind_application_node(builder, node, runtimes, checkpointer)?
             }
@@ -825,11 +946,10 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next = builder.node(DirectToolNode::new(
-                    node.clone(),
-                    self.state.clone(),
-                    resolver,
-                ));
+                let mut next = builder.node(
+                    DirectToolNode::new(node.clone(), self.state.clone(), resolver)
+                        .with_events(runtimes.events.clone()),
+                );
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END
@@ -894,6 +1014,32 @@ impl PipelineDefinition {
                 next
             }
         })
+    }
+
+    fn bind_code_node(
+        &self,
+        builder: PipelineGraphBuilder,
+        node: &CodeNodeDefinition,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
+        let runtime = runtimes
+            .code
+            .clone()
+            .ok_or(PipelineConfigurationError::Unsupported(
+                "Code execution requires an admitted sandbox backend",
+            ))?;
+        let executable =
+            CodeNode::new(node.clone(), self.state.clone(), runtime).map_err(|_| {
+                PipelineConfigurationError::Invalid("Code state declarations are invalid")
+            })?;
+        let mut next = builder.node(executable.with_events(runtimes.events.clone()));
+        if let Some(transition) = node.transition() {
+            next = next.edge(
+                node.id(),
+                if transition == "END" { END } else { transition },
+            );
+        }
+        Ok(next)
     }
 
     fn bind_application_node(
@@ -993,6 +1139,7 @@ impl PipelineDefinition {
                 PipelineNodeDefinition::Application(node) => {
                     (node.transition(), node.output_keys())
                 }
+                PipelineNodeDefinition::Code(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::DirectTool(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Llm(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::StateModifier(node) => {
@@ -1026,10 +1173,133 @@ impl PipelineDefinition {
     }
 }
 
+/// Normalize only graph identifiers that the current Python compiler rewrites.
+///
+/// Older `EliteaUI` versions persisted labels such as `Agent 1` directly as node
+/// identifiers. The Python runtime passes every identifier and target through
+/// `clean_string`, so those documents execute as `Agent1`. New UI versions
+/// author strict identifiers, but they intentionally do not rewrite stored
+/// documents on load. This compatibility pass is therefore runtime-local. It
+/// preserves already-valid Rust identifiers, applies the Python transformation
+/// only to legacy values, and leaves malformed or oversized values for the
+/// normal validators to reject. Duplicate normalized node IDs are rejected by
+/// `parse_pipeline_nodes`.
+fn normalize_legacy_graph_identifiers(document: &mut serde_yaml_ng::Value) -> usize {
+    let Some(root) = document.as_mapping_mut() else {
+        return 0;
+    };
+    let mut count = 0;
+    normalize_mapping_graph_identifier(root, "entry_point", &mut count);
+    normalize_mapping_graph_identifier_sequence(root, "interrupt_before", &mut count);
+    normalize_mapping_graph_identifier_sequence(root, "interrupt_after", &mut count);
+
+    let Some(serde_yaml_ng::Value::Sequence(nodes)) = root.get_mut("nodes") else {
+        return count;
+    };
+    for node in nodes {
+        let Some(node) = node.as_mapping_mut() else {
+            continue;
+        };
+        normalize_mapping_graph_identifier(node, "id", &mut count);
+        normalize_mapping_graph_identifier(node, "transition", &mut count);
+        normalize_mapping_graph_identifier(node, "default_output", &mut count);
+        let node_type = node
+            .get("type")
+            .and_then(serde_yaml_ng::Value::as_str)
+            .map(str::to_owned);
+        match node_type.as_deref() {
+            Some("decision") => {
+                normalize_mapping_graph_identifier_sequence(node, "nodes", &mut count);
+            }
+            Some("router") => {
+                normalize_mapping_graph_identifier_sequence(node, "routes", &mut count);
+            }
+            Some("hitl") => {
+                if let Some(serde_yaml_ng::Value::Mapping(routes)) = node.get_mut("routes") {
+                    for target in routes.values_mut() {
+                        normalize_graph_identifier(target, &mut count);
+                    }
+                }
+            }
+            // Retain the identifier boundary for the separately gated parallel
+            // node so its later compiler integration cannot regress legacy
+            // branch labels.
+            Some("parallel") => {
+                if let Some(serde_yaml_ng::Value::Sequence(branches)) = node.get_mut("branches") {
+                    for branch in branches {
+                        let Some(branch) = branch.as_mapping_mut() else {
+                            continue;
+                        };
+                        normalize_mapping_graph_identifier(branch, "id", &mut count);
+                        normalize_mapping_graph_identifier(branch, "node", &mut count);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+fn normalize_mapping_graph_identifier(
+    mapping: &mut serde_yaml_ng::Mapping,
+    field: &str,
+    count: &mut usize,
+) {
+    if let Some(value) = mapping.get_mut(field) {
+        normalize_graph_identifier(value, count);
+    }
+}
+
+fn normalize_mapping_graph_identifier_sequence(
+    mapping: &mut serde_yaml_ng::Mapping,
+    field: &str,
+    count: &mut usize,
+) {
+    let Some(serde_yaml_ng::Value::Sequence(values)) = mapping.get_mut(field) else {
+        return;
+    };
+    for value in values {
+        normalize_graph_identifier(value, count);
+    }
+}
+
+fn normalize_graph_identifier(value: &mut serde_yaml_ng::Value, count: &mut usize) {
+    let serde_yaml_ng::Value::String(identifier) = value else {
+        return;
+    };
+    if valid_graph_id(identifier) || identifier.is_empty() || identifier.len() > MAX_NODE_ID_BYTES {
+        return;
+    }
+    let normalized = identifier
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        .map(|byte| if byte == b'.' { '_' } else { byte as char })
+        .collect::<String>();
+    if normalized.is_empty() || normalized.len() > MAX_NODE_ID_BYTES {
+        return;
+    }
+    *identifier = normalized;
+    *count += 1;
+}
+
 #[derive(Clone)]
 pub(super) struct PipelineResultPolicy {
     pub(super) terminal_data_keys: Vec<String>,
     pub(super) fallback_data_keys: Vec<String>,
+}
+
+struct PipelineSubgraphEntryNode;
+
+#[async_trait]
+impl Node for PipelineSubgraphEntryNode {
+    fn name(&self) -> &str {
+        SUBGRAPH_ENTRY_NODE
+    }
+
+    async fn execute(&self, _: &NodeContext) -> Result<NodeOutput, GraphError> {
+        Ok(NodeOutput::new())
+    }
 }
 
 struct PipelineSubgraphResultNode {
@@ -1175,6 +1445,37 @@ fn internal_result_key(key: &str) -> bool {
     INTERNAL_RESULT_KEYS.contains(&key)
 }
 
+/// Persist the first frontier before any node can call a model or tool.
+/// ADK restores it and receives no extra input, so append reducers run once.
+fn with_initial_checkpoint(
+    builder: GraphAgentBuilder,
+    checkpointer: Arc<dyn Checkpointer>,
+    schema: StateSchema,
+    defaults: BTreeMap<String, serde_json::Value>,
+    entry_point: String,
+) -> GraphAgentBuilder {
+    builder
+        .before_agent_callback(move |context| {
+            let checkpointer = checkpointer.clone();
+            let schema = schema.clone();
+            let defaults = defaults.clone();
+            let entry_point = entry_point.clone();
+            async move {
+                if checkpointer.load(context.session_id()).await?.is_none() {
+                    let mut state = schema.initialize_state();
+                    for (key, value) in invocation_state(context.as_ref(), Some(&defaults), None) {
+                        schema.apply_update(&mut state, &key, value);
+                    }
+                    let checkpoint =
+                        Checkpoint::new(context.session_id(), state, 0, vec![entry_point]);
+                    checkpointer.save(&checkpoint).await?;
+                }
+                Ok(())
+            }
+        })
+        .input_mapper(|_| State::new())
+}
+
 fn invocation_state(
     context: &dyn InvocationContext,
     defaults: Option<&BTreeMap<String, serde_json::Value>>,
@@ -1217,7 +1518,7 @@ fn parse_pipeline_nodes(
     let mut node_ids = BTreeSet::new();
     for raw_node in raw_nodes {
         let node = parse_pipeline_node(&raw_node)?;
-        if node.id() == SUBGRAPH_RESULT_NODE {
+        if matches!(node.id(), SUBGRAPH_RESULT_NODE | SUBGRAPH_ENTRY_NODE) {
             return Err(PipelineConfigurationError::Invalid(
                 "a pipeline node identifier is reserved",
             ));
@@ -1240,6 +1541,9 @@ fn parse_pipeline_node(
     let encoded = serde_yaml_ng::to_string(raw_node)
         .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
     match node_type {
+        "code" => CodeNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::Code)
+            .map_err(PipelineConfigurationError::Invalid),
         "decision" => DecisionNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Decision)
             .map_err(|_| PipelineConfigurationError::Invalid("a Decision node is invalid")),
@@ -1290,12 +1594,12 @@ fn validate_node_state(
     }
     match node {
         PipelineNodeDefinition::Application(node) => {
-            if let Some(key) = node.mapped_variable()
-                && !builtin_state_key(key)
-                && !state.contains_key(key)
+            if node
+                .mapped_variables()
+                .any(|key| !builtin_state_key(key) && !state.contains_key(key))
             {
                 return Err(PipelineConfigurationError::Invalid(
-                    "an Agent task mapping variable is not declared in pipeline state",
+                    "an Agent input mapping variable is not declared in pipeline state",
                 ));
             }
         }
@@ -1339,6 +1643,7 @@ fn validate_node_state(
         PipelineNodeDefinition::Decision(_)
         | PipelineNodeDefinition::Hitl(_)
         | PipelineNodeDefinition::Router(_)
+        | PipelineNodeDefinition::Code(_)
         | PipelineNodeDefinition::StateModifier(_) => {}
     }
     if node
@@ -1421,7 +1726,7 @@ fn default_state_value(kind: &str) -> serde_json::Value {
     }
 }
 
-fn state_value_matches(kind: &str, value: &serde_json::Value) -> bool {
+pub(super) fn state_value_matches(kind: &str, value: &serde_json::Value) -> bool {
     match kind {
         "str" => value.is_string(),
         "int" => value.as_i64().is_some() || value.as_u64().is_some(),
@@ -1453,8 +1758,9 @@ fn builtin_state_key(key: &str) -> bool {
     )
 }
 
-fn reserved_user_state_key(key: &str) -> bool {
-    key == HITL_RESUME_STATE_KEY
+pub(super) fn reserved_user_state_key(key: &str) -> bool {
+    key.starts_with("__elitea_application_variable_")
+        || key == HITL_RESUME_STATE_KEY
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
@@ -1464,6 +1770,7 @@ fn reserved_user_state_key(key: &str) -> bool {
                 | APPLICATION_MESSAGES_STATE_KEY
                 | APPLICATION_RESULT_STATE_KEY
                 | SUBGRAPH_RESULT_NODE
+                | SUBGRAPH_ENTRY_NODE
         )
         || matches!(
             key,
@@ -1522,6 +1829,7 @@ fn definition_digest(
     for node in nodes {
         digest_field(&mut context, node.id().as_bytes());
         let kind = match node {
+            PipelineNodeDefinition::Code(_) => b"code".as_slice(),
             PipelineNodeDefinition::Application(_) => b"agent".as_slice(),
             PipelineNodeDefinition::Decision(_) => b"decision".as_slice(),
             PipelineNodeDefinition::DirectTool(node) => {

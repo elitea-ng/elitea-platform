@@ -961,6 +961,26 @@ def test_load_skill_already_active_is_deduplicated() -> None:
     ]
 
 
+def test_project_context_snapshot_is_not_in_public_application_details():
+    from elitea_worker.handlers.agent_events import _public_application_details
+
+    for skills in (None, []):
+        version = {"project_context": {"content": "PRIVATE_PROJECT_INSTRUCTIONS"}}
+        if skills is not None:
+            version["skills"] = skills
+        source = {"version_details": version}
+        assert "PRIVATE_PROJECT_INSTRUCTIONS" not in str(_public_application_details(source))
+        assert source["version_details"]["project_context"]["content"] == "PRIVATE_PROJECT_INSTRUCTIONS"
+
+
+def test_project_context_tool_trace_withholds_instruction_body():
+    callback, events = _callback()
+    callback.on_tool_start({"name": "read_project_context"}, "{}", run_id="project-context")
+    callback.on_tool_end("PRIVATE_PROJECT_INSTRUCTIONS", run_id="project-context")
+    assert "PRIVATE_PROJECT_INSTRUCTIONS" not in str([_json(event) for event in events])
+    assert "Project Context is active." in str([_json(event) for event in events])
+
+
 def test_oversized_tool_result_is_chunked_rather_than_refused() -> None:
     """CHUNKED TOOL OUTPUT (#956), the emit half.
 

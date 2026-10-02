@@ -9,19 +9,22 @@
 
 use adk_rust::Content;
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 use super::attachments;
 use super::context_management::ContextManagementPlan;
 use super::internal_tools::{InternalToolCatalog, InternalToolError};
-use super::request::{AgentExecutionKind, AgentExecutionRequest, UserInput};
+use super::request::{
+    AgentExecutionKind, AgentExecutionRequest, MAX_AGENT_USER_INPUT_BYTES,
+    MAX_OUTPUT_CONTINUATION_BYTES, UserInput,
+};
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::variables::{self, AgentVariables};
 
 const MAX_MODEL_NAME_BYTES: usize = 256;
-const MAX_USER_INPUT_BYTES: usize = 512 * 1_024;
 const MAX_CHAT_HISTORY_MESSAGES: usize = 999;
 pub(super) const DEFAULT_AGENT_STEP_LIMIT: u32 = 25;
-const MAX_AGENT_STEP_LIMIT: u32 = 1_024;
+pub(crate) const MAX_AGENT_STEP_LIMIT: u32 = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReasoningEffort {
@@ -52,7 +55,67 @@ pub(crate) struct OrdinaryNoToolProfile {
     step_limit: u32,
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
+    context_budget: Option<super::context_budget::RequestContextBudget>,
+    summary_model: Option<Arc<SummaryModelProfile>>,
     internal_tools: InternalToolCatalog,
+    instruction_plan: super::instruction_authority::InstructionPlan,
+}
+
+/// Admitted independently from the task model before credential redemption.
+#[derive(Clone, Debug)]
+pub(crate) struct SummaryModelProfile {
+    pub(crate) model_name: String,
+    pub(crate) model_project_id: u32,
+    pub(crate) model_provider: OrdinaryModelProvider,
+    pub(crate) max_tokens: u32,
+    pub(crate) temperature: Option<f32>,
+    pub(crate) context_budget: super::context_budget::RequestContextBudget,
+}
+
+impl SummaryModelProfile {
+    pub(crate) fn admit(
+        snapshot: &super::request::SummaryModelSnapshot,
+        settings: &Map<String, Value>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        const KEYS: [&str; 5] = [
+            "model_name",
+            "model_project_id",
+            "openai_compatible",
+            "max_tokens",
+            "temperature",
+        ];
+        if snapshot
+            .llm_settings
+            .keys()
+            .any(|key| !KEYS.contains(&key.as_str()))
+        {
+            return Err(invalid_profile());
+        }
+        let model = validate_model(
+            &snapshot.llm_settings,
+            ModelFieldNames::APPLICATION,
+            None,
+            "",
+        )?;
+        let max_tokens = model.max_tokens.ok_or_else(invalid_profile)?;
+        if max_tokens > snapshot.model_context_limits.max_output_tokens {
+            return Err(invalid_profile());
+        }
+        let context_budget = super::context_budget::RequestContextBudget::resolve(
+            Some(snapshot.model_context_limits),
+            settings,
+            Some(max_tokens),
+        )?
+        .ok_or_else(invalid_profile)?;
+        Ok(Self {
+            model_name: model.model_name,
+            model_project_id: model.model_project_id,
+            model_provider: model.model_provider,
+            max_tokens,
+            temperature: model.temperature,
+            context_budget,
+        })
+    }
 }
 
 impl OrdinaryNoToolProfile {
@@ -111,6 +174,8 @@ impl OrdinaryNoToolProfile {
     ) -> Result<Self, NativeAgentAssemblyError> {
         let mode = if resume {
             CommonProfileMode::Continuation
+        } else if request.payload.is_regenerate {
+            CommonProfileMode::Regenerate
         } else {
             CommonProfileMode::Fresh
         };
@@ -143,6 +208,20 @@ impl OrdinaryNoToolProfile {
         let model = application_model_for_agent_type(request, "pipeline")?;
         let internal_tools = application_internal_tools(request)?;
         Ok(Self {
+            summary_model: request
+                .payload
+                .summary_model
+                .as_ref()
+                .map(|snapshot| {
+                    SummaryModelProfile::admit(snapshot, &request.payload.context_settings)
+                        .map(Arc::new)
+                })
+                .transpose()?,
+            context_budget: super::context_budget::RequestContextBudget::resolve(
+                request.payload.model_context_limits,
+                &request.payload.context_settings,
+                model.max_tokens,
+            )?,
             kind: request.kind,
             instructions: model.instructions,
             model_name: model.model_name,
@@ -155,6 +234,7 @@ impl OrdinaryNoToolProfile {
             chat_history: common.chat_history,
             context_management: common.context_management,
             internal_tools,
+            instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
         })
     }
 
@@ -175,6 +255,20 @@ impl OrdinaryNoToolProfile {
             }
         };
         Ok(Self {
+            summary_model: request
+                .payload
+                .summary_model
+                .as_ref()
+                .map(|snapshot| {
+                    SummaryModelProfile::admit(snapshot, &request.payload.context_settings)
+                        .map(Arc::new)
+                })
+                .transpose()?,
+            context_budget: super::context_budget::RequestContextBudget::resolve(
+                request.payload.model_context_limits,
+                &request.payload.context_settings,
+                model.max_tokens,
+            )?,
             kind: request.kind,
             instructions: model.instructions,
             model_name: model.model_name,
@@ -187,6 +281,7 @@ impl OrdinaryNoToolProfile {
             chat_history: common.chat_history,
             context_management: common.context_management,
             internal_tools,
+            instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
         })
     }
 
@@ -224,16 +319,11 @@ impl OrdinaryNoToolProfile {
         }
         validate_feature_array(version.get("tools"), true)?;
         let internal_tools = internal_tools_from_version(version)?;
-        validate_empty_feature_array(version.get("skills"), false)?;
+        validate_feature_array(version.get("skills"), false)?;
         validate_application_meta(version.get("meta"))?;
-        // A nested agent renders its OWN declared variables: the SDK reaches
-        // one through `client.application()` too (`runtime/tools/
-        // application.py:396`), which builds a fresh `LangChainAssistant` over
-        // the child's version and resolves the child's instructions there. The
-        // per-CALL overrides that path also passes — the arguments the model
-        // supplies for a variable-shaped agent tool — are a separate feature
-        // (a tool argument schema derived from the variable list) and stay
-        // unimplemented; only the child's stored values are served here.
+        // Render stored defaults for the frozen base profile. ApplicationAgentTool
+        // re-renders the original template with declared per-call overrides on a
+        // local profile clone, including when rebuilding an interrupted child.
         let variables = AgentVariables::admit(version, None)?;
         let instructions = version
             .get("instructions")
@@ -271,6 +361,30 @@ impl OrdinaryNoToolProfile {
             Some(_) => return Err(invalid_profile()),
         };
         Ok(Self {
+            summary_model: fallback.summary_model.clone(),
+            context_budget: {
+                let limits = match version.get("model_context_limits") {
+                    Some(value) => {
+                        Some(serde_json::from_value(value.clone()).map_err(|_| invalid_profile())?)
+                    }
+                    None if model.model_name == fallback.model_name
+                        && model.model_project_id == fallback.model_project_id =>
+                    {
+                        fallback.context_budget.map(|budget| budget.limits)
+                    }
+                    None => None,
+                };
+                match (limits, fallback.context_budget) {
+                    (Some(limits), Some(budget)) => {
+                        Some(budget.for_model(limits, model.max_tokens)?)
+                    }
+                    _ => super::context_budget::RequestContextBudget::resolve(
+                        limits,
+                        &Map::new(),
+                        model.max_tokens,
+                    )?,
+                }
+            },
             kind: AgentExecutionKind::Application,
             instructions: model.instructions,
             model_name: model.model_name,
@@ -281,8 +395,14 @@ impl OrdinaryNoToolProfile {
             temperature: model.temperature,
             step_limit: fallback.step_limit,
             chat_history: Vec::new(),
-            context_management: ContextManagementPlan::Disabled,
+            // The child owns its history. Carry only the admitted policy;
+            // its model capacity is resolved independently above.
+            context_management: fallback.context_management.clone(),
             internal_tools,
+            instruction_plan: super::instruction_authority::InstructionPlan::nested(
+                version,
+                &fallback.instruction_plan,
+            )?,
         })
     }
 
@@ -292,8 +412,21 @@ impl OrdinaryNoToolProfile {
     }
 
     #[must_use]
+    pub(crate) fn instruction_plan(&self) -> &super::instruction_authority::InstructionPlan {
+        &self.instruction_plan
+    }
+
+    #[must_use]
     pub(crate) fn instructions(&self) -> &str {
         &self.instructions
+    }
+
+    /// Replace only the invocation-local rendered prompt; all frozen capabilities stay intact.
+    pub(super) fn with_instructions(&self, instructions: String) -> Self {
+        Self {
+            instructions,
+            ..self.clone()
+        }
     }
 
     #[must_use]
@@ -337,8 +470,21 @@ impl OrdinaryNoToolProfile {
     }
 
     #[must_use]
+    pub(crate) const fn context_budget(
+        &self,
+    ) -> Option<super::context_budget::RequestContextBudget> {
+        self.context_budget
+    }
+
     pub(crate) fn context_management(&self) -> ContextManagementPlan {
         self.context_management.clone()
+    }
+
+    pub(crate) fn summary_model(&self) -> Option<&SummaryModelProfile> {
+        match self.context_management {
+            ContextManagementPlan::Disabled => None,
+            ContextManagementPlan::Summarize(_) => self.summary_model.as_deref(),
+        }
     }
 
     #[must_use]
@@ -372,7 +518,7 @@ fn validate_common_profile(
         UserInput::Text(text) if text.is_empty() || text.contains('\0') => {
             return Err(invalid_profile());
         }
-        UserInput::Text(text) if text.len() > MAX_USER_INPUT_BYTES => {
+        UserInput::Text(text) if text.len() > MAX_AGENT_USER_INPUT_BYTES => {
             return Err(resource_exhausted_profile());
         }
         UserInput::Text(_) => {}
@@ -387,23 +533,26 @@ fn validate_common_profile(
         CommonProfileMode::DirectGuardrailContinuation | CommonProfileMode::McpAuthorization
     );
     let regeneration = mode == CommonProfileMode::Regenerate;
+    // Fresh turns and regeneration can reuse session credentials without resuming a guard.
+    let allows_session_tokens = allows_mcp_authority
+        || matches!(
+            mode,
+            CommonProfileMode::Fresh | CommonProfileMode::Regenerate
+        );
     let output_continuation = mode == CommonProfileMode::OutputContinuation;
     let valid_truncated_content = payload
         .truncated_content
         .as_deref()
-        .is_some_and(|value| value.len() <= 64 * 1_024 && !value.contains('\0'));
-    if (!allows_mcp_authority
-        && (!payload.mcp_tokens.is_empty()
-            || !payload.ignored_mcp_servers.is_empty()
-            || !payload.user_declined_mcp_servers.is_empty()))
+        .is_some_and(|value| value.len() <= MAX_OUTPUT_CONTINUATION_BYTES && !value.contains('\0'));
+    if (!allows_session_tokens && !payload.mcp_tokens.is_empty())
+        || (!allows_mcp_authority
+            && (!payload.ignored_mcp_servers.is_empty()
+                || !payload.user_declined_mcp_servers.is_empty()))
         || payload.checkpoint_id.is_some()
         || payload.is_regenerate != regeneration
         || payload.supports_vision
         || payload.return_chat_history
-        || !payload.invoked_skills.is_empty()
-        || !payload.applied_skills.is_empty()
         || payload.auto_approve_sensitive_actions
-        || !payload.attached_skills.is_empty()
         || payload.parallel_reconcile.is_some()
         || !payload.parallel_terminal_errors.is_empty()
         || payload.exception_handling_enabled == Some(true)
@@ -411,7 +560,10 @@ fn validate_common_profile(
         || payload.next_input_suggestion.enabled
         || payload.debug
         || !payload.meta.is_empty()
-        || payload.persona != "generic"
+        || !matches!(
+            payload.persona.as_str(),
+            "generic" | "qa" | "nerdy" | "quirky" | "cynical" | "none" | "bare"
+        )
         || (output_continuation != valid_truncated_content)
     {
         return Err(unsupported_profile());
@@ -591,7 +743,7 @@ fn application_model_for_agent_type(
     validate_feature_array(version.get("tools"), true)?;
     InternalToolCatalog::from_values(version.get("internal_tools"))
         .map_err(internal_tool_profile_error)?;
-    validate_empty_feature_array(version.get("skills"), false)?;
+    validate_feature_array(version.get("skills"), false)?;
     validate_application_meta(version.get("meta"))?;
     let variables = AgentVariables::admit(version, Some(participant_variables))?;
     let instructions = version
@@ -760,6 +912,7 @@ fn adhoc_model(
     // react path — so the prompt IS rendered, with `current_date` as the only
     // defined name, and every other placeholder survives verbatim.
     let rendered = AgentVariables::default().render(instructions);
+    let rendered = adhoc_persona_instructions(&request.payload.persona, rendered);
     let instructions = rendered.as_str();
     let kwargs = request
         .payload
@@ -768,6 +921,32 @@ fn adhoc_model(
         .and_then(Value::as_object)
         .ok_or_else(invalid_profile)?;
     validate_model(kwargs, ModelFieldNames::ADHOC, None, instructions)
+}
+
+// SDK Assistant._prepare_prompt selects these styles only for ad-hoc chat.
+// Keep project instructions and tool authority in their existing owners.
+fn adhoc_persona_instructions(persona: &str, instructions: String) -> String {
+    let style = match persona {
+        "qa" => {
+            "Use a precise testing perspective. Examine requirements, risks, edge cases, and reproducible evidence."
+        }
+        "nerdy" => {
+            "Use an enthusiastic technical style. Explain concepts accurately with useful technical detail and relevant references."
+        }
+        "quirky" => {
+            "Use a playful, imaginative style with light humor and creative analogies. Keep answers accurate and useful."
+        }
+        "cynical" => {
+            "Use a skeptical, critically analytical style with dry humor. Challenge weak assumptions while remaining helpful and respectful."
+        }
+        // The SDK maps none to its default persona. Bare adds no persona text.
+        _ => return instructions,
+    };
+    if instructions.is_empty() {
+        style.to_owned()
+    } else {
+        format!("{instructions}\n\nResponse style: {style}")
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -787,6 +966,7 @@ impl ModelFieldNames {
             "temperature",
             "stream",
             "openai_compatible",
+            "max_tokens_auto",
         ],
     };
     const APPLICATION: Self = Self {
@@ -798,6 +978,7 @@ impl ModelFieldNames {
             "reasoning_effort",
             "temperature",
             "openai_compatible",
+            "max_tokens_auto",
         ],
     };
 }
@@ -841,7 +1022,12 @@ fn validate_model(
         .ok_or_else(invalid_profile)?
         .to_owned();
     let model_project_id = positive_u32(settings.get("model_project_id"))?;
-    let max_tokens = normalized_max_tokens(settings.get("max_tokens"))?;
+    let selected_tokens = normalized_max_tokens(settings.get("max_tokens"))?;
+    let max_tokens = match settings.get("max_tokens_auto") {
+        Some(Value::Bool(true)) => None,
+        None | Some(Value::Bool(false)) => selected_tokens,
+        Some(_) => return Err(invalid_profile()),
+    };
     let reasoning_effort = settings
         .get("reasoning_effort")
         .filter(|value| !value.is_null())
@@ -862,12 +1048,6 @@ fn validate_model(
     } else {
         OrdinaryModelProvider::NativeAnthropic
     };
-    if model_provider == OrdinaryModelProvider::NativeAnthropic
-        && reasoning_effort == Some(ReasoningEffort::None)
-        && adaptive_anthropic_model(&model_name)
-    {
-        return Err(invalid_profile());
-    }
     Ok(ValidatedModel {
         instructions: instructions.to_owned(),
         model_name,
@@ -882,27 +1062,6 @@ fn validate_model(
 fn anthropic_model_name(model_name: &str) -> bool {
     let model_name = model_name.to_ascii_lowercase();
     model_name.contains("anthropic") || model_name.contains("claude")
-}
-
-fn adaptive_anthropic_model(model_name: &str) -> bool {
-    let model_name = model_name.to_ascii_lowercase();
-    [
-        "opus-4-7",
-        "opus_4_7",
-        "opus-4.7",
-        "opus-4-8",
-        "opus_4_8",
-        "opus-4.8",
-        "sonnet-4-6",
-        "sonnet_4_6",
-        "sonnet-4.6",
-        "sonnet-5",
-        "sonnet_5",
-        "opus-5",
-        "opus_5",
-    ]
-    .iter()
-    .any(|pattern| model_name.contains(pattern))
 }
 
 fn positive_u32(value: Option<&Value>) -> Result<u32, NativeAgentAssemblyError> {
@@ -957,11 +1116,18 @@ fn bounded_runtime_identity(value: &str) -> bool {
 /// graph YAML, and an empty graph is not an unconstrained agent — it is a
 /// pipeline with nothing to run.
 fn bounded_instruction(value: &str, allow_empty: bool) -> bool {
-    (allow_empty || !value.is_empty()) && value.len() <= 64 * 1_024 && !value.contains('\0')
+    (allow_empty || !value.is_empty())
+        && value.len()
+            <= if allow_empty {
+                super::request::MAX_AGENT_INSTRUCTION_BYTES
+            } else {
+                64 * 1_024
+            }
+        && !value.contains('\0')
 }
 
 fn bounded_adhoc_instruction(value: &str) -> bool {
-    value.len() <= 64 * 1_024 && !value.contains('\0')
+    value.len() <= super::request::MAX_AGENT_INSTRUCTION_BYTES && !value.contains('\0')
 }
 
 fn bounded_text(value: &str, maximum: usize) -> bool {

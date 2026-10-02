@@ -19,7 +19,7 @@ use tonic::transport::Channel;
 use crate::agents::result::AgentResultBinding;
 use crate::agents::{AgentExecutionKind, AgentResultArtifact, AgentTerminalState};
 use crate::protocol::ProtocolError;
-use crate::protocol::command::VerifiedAgentCommand;
+use crate::protocol::command::{VerifiedAgentCommand, VerifiedToolkitExecuteReadCommand};
 use crate::protocol::control::{
     AcceptedTerminalClaimRecovery, AgentControlClient, AgentControlError,
     AgentExecutionOutputCursor, AgentProgressCommit, ClaimBoundAgentTerminal,
@@ -181,6 +181,11 @@ impl AgentOutputRecoveryRequiredNoAck {
     }
 }
 
+pub(crate) enum CheckpointPendingOutput {
+    Progress(Box<super::agent_delivery::CheckpointAgentDelivery>),
+    Terminal(Box<AcceptedTerminalOutputRecovery>),
+}
+
 /// Closed result of inspecting the current execution's durable output.
 pub enum AgentOutputPreflightOutcome {
     Empty(Box<EmptyAgentOutput>),
@@ -199,11 +204,11 @@ impl AgentOutputPreflightOutcome {
     }
 }
 
-struct AgentOutputSpoolPolicy {
-    root: PathBuf,
-    master_key: Arc<SpoolMasterKey>,
-    spool_limits: SpoolLimits,
-    output_config: OutputGrpcConfig,
+pub(super) struct AgentOutputSpoolPolicy {
+    pub(super) root: PathBuf,
+    pub(super) master_key: Arc<SpoolMasterKey>,
+    pub(super) spool_limits: SpoolLimits,
+    pub(super) output_config: OutputGrpcConfig,
 }
 
 /// Empty, validated output state plus its inseparable execution-bound reopen
@@ -218,9 +223,16 @@ pub(crate) struct PreparedAgentOutput {
 }
 
 impl PreparedAgentOutput {
+    pub(super) const fn new(
+        prepared: PreparedOutputSpool,
+        factory: AgentOutputSpoolFactory,
+    ) -> Self {
+        Self { prepared, factory }
+    }
+
     /// Persist one fresh terminal before any output endpoint is contacted and
     /// seal the exact bytes into the only allowed reconnect capability.
-    async fn persist_terminal(
+    pub(super) async fn persist_terminal(
         self,
         frame: &ExecutionOutputFrameV1,
     ) -> Result<(PreparedOutputSpool, AgentOutputSpoolReopener), OutputGrpcError> {
@@ -249,17 +261,24 @@ impl PreparedAgentOutput {
 
 /// Unique execution-bound factory. It carries no frame proof until a durable
 /// terminal is sealed into an [`AgentOutputSpoolReopener`].
-struct AgentOutputSpoolFactory {
+pub(super) struct AgentOutputSpoolFactory {
     policy: Arc<AgentOutputSpoolPolicy>,
     binding: Arc<crate::spool::ExecutionSpoolIdentity>,
 }
 
 impl AgentOutputSpoolFactory {
-    async fn reopen(&self) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
+    pub(super) fn new(
+        policy: Arc<AgentOutputSpoolPolicy>,
+        binding: Arc<crate::spool::ExecutionSpoolIdentity>,
+    ) -> Self {
+        Self { policy, binding }
+    }
+
+    pub(super) async fn reopen(&self) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
         open_prepared_spool(Arc::clone(&self.policy), Arc::clone(&self.binding)).await
     }
 
-    fn seal_terminal(self, expected_terminal: Vec<u8>) -> AgentOutputSpoolReopener {
+    pub(super) fn seal_terminal(self, expected_terminal: Vec<u8>) -> AgentOutputSpoolReopener {
         AgentOutputSpoolReopener {
             factory: self,
             expected_terminal,
@@ -1484,7 +1503,7 @@ impl AgentOutputSpoolReopener {
     /// Atomically replace the exact admitted terminal and advance the sealed
     /// reconnect proof only after the filesystem CAS succeeds.
     #[allow(dead_code)] // Called by the disabled terminal-recovery coordinator.
-    async fn replace_expected_terminal(
+    pub(super) async fn replace_expected_terminal(
         &mut self,
         expected: &ExecutionOutputFrameV1,
         replacement: &ExecutionOutputFrameV1,
@@ -1535,6 +1554,10 @@ impl AgentTerminalRecoveryConfig {
         Ok(Self {
             max_output_sessions,
         })
+    }
+
+    pub(super) const fn max_output_sessions(self) -> usize {
+        self.max_output_sessions
     }
 }
 
@@ -1756,11 +1779,35 @@ pub(crate) trait AgentTerminalReplay: Send + Sync {
 }
 
 #[async_trait]
+pub(crate) trait ToolkitTerminalReplay: Send + Sync {
+    async fn replay_toolkit_terminal(
+        &self,
+        spool: PreparedOutputSpool,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<DurablyAckedTerminal, OutputGrpcError>;
+}
+
+#[async_trait]
 impl AgentTerminalReplay for Channel {
     async fn replay_terminal(
         &self,
         spool: PreparedOutputSpool,
         verified: &VerifiedAgentCommand,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<DurablyAckedTerminal, OutputGrpcError> {
+        spool
+            .replay_terminal(self.clone(), verified, expected)
+            .await
+    }
+}
+
+#[async_trait]
+impl ToolkitTerminalReplay for Channel {
+    async fn replay_toolkit_terminal(
+        &self,
+        spool: PreparedOutputSpool,
+        verified: &VerifiedToolkitExecuteReadCommand,
         expected: &ExecutionOutputFrameV1,
     ) -> Result<DurablyAckedTerminal, OutputGrpcError> {
         spool
@@ -2260,6 +2307,7 @@ fn preflight_as_output_error(error: AgentOutputPreflightError) -> OutputGrpcErro
 /// The root key is process-owned and shared only for HKDF derivation. Each
 /// returned preflight value owns the execution-specific cipher and directory
 /// lock; the root key itself is never copied into a command or error.
+#[derive(Clone)]
 pub struct AgentOutputPreflight {
     policy: Arc<AgentOutputSpoolPolicy>,
 }
@@ -2280,6 +2328,10 @@ impl AgentOutputPreflight {
                 output_config,
             }),
         }
+    }
+
+    pub(super) fn shared_policy(&self) -> Arc<AgentOutputSpoolPolicy> {
+        Arc::clone(&self.policy)
     }
 
     /// Inspect one fresh delivery without contacting any runtime endpoint.
@@ -2384,6 +2436,170 @@ impl AgentOutputPreflight {
         Err(AgentOutputPreflightError::InvalidDurableState(
             "the pending agent output does not match the accepted claim",
         ))
+    }
+
+    /// Prepare checkpoint output without discarding unacknowledged frames.
+    /// Only structurally valid progress covered by Main's watermark is reconciled.
+    /// Pending terminal or uncovered progress requires exact replay first.
+    #[allow(dead_code)]
+    pub(crate) async fn prepare_checkpoint(
+        &self,
+        recovery: &super::agent_delivery::CheckpointAgentDelivery,
+    ) -> Result<Option<PreparedAgentOutput>, AgentOutputPreflightError> {
+        if !recovery.matches_output_transport(
+            &self.policy.output_config.workload_session_id,
+            &self.policy.output_config.producer_id,
+        ) {
+            return Err(AgentOutputPreflightError::InvalidConfiguration(
+                "the output transport identity does not match the checkpoint claim",
+            ));
+        }
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let mut prepared = factory.reopen().await?;
+        if let Some(frame) = prepared.pending_replay_frame() {
+            if prepared.pending_frame_count() != 1 {
+                return Err(AgentOutputPreflightError::InvalidDurableState(
+                    "the recovery spool contains multiple pending frames",
+                ));
+            }
+            if !recovery.covered_progress(&frame).map_err(|_| {
+                AgentOutputPreflightError::InvalidDurableState(
+                    "the recovery output frame is malformed",
+                )
+            })? {
+                return Ok(None);
+            }
+            let watermark = recovery.output_watermark();
+            tokio::task::spawn_blocking(move || prepared.reconcile_pending_through(watermark))
+                .await
+                .map_err(|_| {
+                    AgentOutputPreflightError::Unavailable(
+                        "checkpoint output reconciliation did not complete",
+                    )
+                })?
+                .map_err(AgentOutputPreflightError::Output)?;
+            prepared = factory.reopen().await?;
+            if prepared.pending_frame_count() != 0 {
+                return Ok(None);
+            }
+        }
+        Ok(Some(PreparedAgentOutput { prepared, factory }))
+    }
+
+    pub(crate) async fn prepare_checkpoint_pending(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+    ) -> Result<CheckpointPendingOutput, AgentOutputPreflightError> {
+        if !recovery.matches_output_transport(
+            &self.policy.output_config.workload_session_id,
+            &self.policy.output_config.producer_id,
+        ) {
+            return Err(AgentOutputPreflightError::InvalidConfiguration(
+                "the output transport identity does not match the checkpoint claim",
+            ));
+        }
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let mut prepared = factory.reopen().await?;
+        let Some(mut frame) = prepared.pending_replay_frame() else {
+            return Ok(CheckpointPendingOutput::Progress(Box::new(recovery)));
+        };
+        if prepared.pending_frame_count() != 1 {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "multiple pending recovery frames",
+            ));
+        }
+        let kind = recovery.validate_output(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState("invalid checkpoint output frame")
+        })?;
+        if kind == ValidatedAgentOutputFrameKind::Progress {
+            return Ok(CheckpointPendingOutput::Progress(Box::new(recovery)));
+        }
+        let replacement = recovery.terminal_replacement(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState(
+                "checkpoint terminal has no recovery authority",
+            )
+        })?;
+        if replacement != frame {
+            let expected = frame;
+            frame = replacement.clone();
+            prepared = tokio::task::spawn_blocking(move || {
+                prepared.replace_pending_agent_terminal_recovery(&expected, &replacement)?;
+                Ok::<_, OutputGrpcError>(prepared)
+            })
+            .await
+            .map_err(|_| {
+                AgentOutputPreflightError::Unavailable("terminal rebind did not complete")
+            })?
+            .map_err(AgentOutputPreflightError::Output)?;
+        }
+        let encoded = frame.encode_to_vec();
+        let (delivery, verified, claim) = recovery.into_terminal_parts();
+        Ok(CheckpointPendingOutput::Terminal(Box::new(
+            AcceptedTerminalOutputRecovery {
+                delivery,
+                verified,
+                claim,
+                spool: prepared,
+                frame,
+                reopener: factory.seal_terminal(encoded),
+            },
+        )))
+    }
+
+    /// Replay retained progress exactly once, then require a fresh claim.
+    /// Even an ACK cannot refresh the inspection's output watermark locally.
+    /// This method never grants model execution or retires the Redis delivery.
+    #[allow(dead_code)] // Enabled with checkpoint intake after output replacement.
+    pub(crate) async fn replay_checkpoint_progress<C: AgentProgressConnector>(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+        connector: &C,
+    ) -> Result<(), AgentOutputPreflightError> {
+        if !recovery.matches_output_transport(
+            &self.policy.output_config.workload_session_id,
+            &self.policy.output_config.producer_id,
+        ) {
+            return Err(AgentOutputPreflightError::InvalidConfiguration(
+                "the output transport identity does not match the checkpoint claim",
+            ));
+        }
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let prepared = factory.reopen().await?;
+        let Some(frame) = prepared.pending_replay_frame() else {
+            return Ok(());
+        };
+        if prepared.pending_frame_count() != 1 {
+            return Err(AgentOutputPreflightError::InvalidDurableState(
+                "the recovery spool contains multiple pending frames",
+            ));
+        }
+        let kind = recovery.validate_output(&frame).map_err(|_| {
+            AgentOutputPreflightError::InvalidDurableState("the recovery output frame is malformed")
+        })?;
+        if kind != ValidatedAgentOutputFrameKind::Progress {
+            // Terminal bytes require terminal replay and settlement ownership.
+            return Ok(());
+        }
+        let mut replay = connector
+            .start_progress_replay(prepared, &frame)
+            .await
+            .map_err(AgentOutputPreflightError::Output)?;
+        let decision = replay.wait().await;
+        // Close after every observed outcome, including rejection and error.
+        // On uncertainty the encrypted spool remains the replay authority.
+        let close = replay.close().await;
+        decision.map_err(AgentOutputPreflightError::Output)?;
+        close.map_err(AgentOutputPreflightError::Output)?;
+        Ok(())
     }
 
     /// Open the exact recovery spool without granting fresh execution.

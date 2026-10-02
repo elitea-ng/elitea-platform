@@ -105,6 +105,12 @@ func TestProvisionBuildsATenantEqualToTheReference(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	// Restored current-platform schemas use a SQLAlchemy client default here.
+	// They retain NOT NULL but have no PostgreSQL default for this column.
+	if _, err := pool.Exec(ctx, `ALTER TABLE centry.project ALTER COLUMN keycloak_groups DROP DEFAULT`); err != nil {
+		t.Fatalf("prepare restored-schema constraint: %v", err)
+	}
+
 	// A real account for the project_admin_email step to find.
 	var adminUserID int64
 	if err := pool.QueryRow(ctx, `
@@ -145,6 +151,13 @@ ON CONFLICT (name, mode) DO NOTHING`); err != nil {
 	}
 	projectID := result.ProjectID
 	schema := fmt.Sprintf("p_%d", projectID)
+	var emptyGroups bool
+	if err := pool.QueryRow(ctx, `SELECT keycloak_groups::jsonb = '{}'::jsonb FROM centry.project WHERE id = $1`, projectID).Scan(&emptyGroups); err != nil {
+		t.Fatalf("read project groups: %v", err)
+	}
+	if !emptyGroups {
+		t.Fatal("new project must have an empty group mapping")
+	}
 
 	// ── the tenant itself ────────────────────────────────────────────────
 	//

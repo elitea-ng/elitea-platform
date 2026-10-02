@@ -116,6 +116,19 @@ describe('ensureAuthServersAvailable', () => {
 });
 
 describe('buildStartFlowOptions', () => {
+  it.each(['mcp', 'openapi', 'sharepoint'])('keeps the %s resource separate from credential storage', (toolkitType) => {
+    const result = buildStartFlowOptions({
+      storageKey: 'configuration:https://issuer.example',
+      validated: { authServers: ['https://issuer.example'], oauthAuthorizationServer: undefined, oauthMetadata: undefined },
+      authWindow: {} as Window,
+      credentials: { clientId: 'client', clientSecret: '' },
+      scope: 'records.read',
+      flowContext: { toolkitId: '28', toolkitType, projectId: 2, serverUrl: 'https://protected.example/mcp' },
+      isPrebuildMcp: false,
+    });
+    expect(result.serverUrl).toBe('configuration:https://issuer.example');
+    expect(result.resourceUrl).toBe(toolkitType === 'mcp' ? 'https://protected.example/mcp' : undefined);
+  });
   it('builds options from params', () => {
     const result = buildStartFlowOptions({
       storageKey: 'https://server.com',
@@ -145,4 +158,3 @@ describe('buildStartFlowOptions', () => {
     expect(result.toolkitType).toBeUndefined();
   });
 });
-

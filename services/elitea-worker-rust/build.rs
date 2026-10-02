@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "elitea/runtime/v1/limits.proto",
         "elitea/runtime/v1/node_event.proto",
         "elitea/runtime/v1/output.proto",
+        "elitea/runtime/v1/sandbox.proto",
         "elitea/runtime/v1/toolkit.proto",
         "elitea/runtime/v1/validation.proto",
     ]
@@ -35,9 +36,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("cargo:rerun-if-changed={}", proto_root.display());
     println!("cargo:rerun-if-changed=build.rs");
+    for proto in &protos {
+        println!("cargo:rerun-if-changed={}", proto.display());
+    }
 
     tonic_prost_build::configure()
-        .build_server(false)
+        .build_server(env::var_os("CARGO_FEATURE_SANDBOX_SUPERVISOR").is_some())
         .include_file("elitea.rs")
         .compile_with_config(prost_config, &protos, &[proto_root])?;
 

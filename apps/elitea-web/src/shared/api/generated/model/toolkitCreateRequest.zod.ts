@@ -50,16 +50,19 @@ export const ToolkitCreateRequest = zod
         "Toolkit type key, e.g. `github`, `slack`, `sql`. The set is open — `toolkit_types` is served by a separate handler that this spec does not yet cover.\n",
       ),
     description: zod.string().optional(),
+    meta: zod
+      .record(zod.string(), zod.unknown())
+      .optional()
+      .describe("Toolkit metadata, including MCP sharing options."),
     settings: zod
       .record(zod.string(), zod.unknown())
       .optional()
       .describe(
         "Type-specific configuration, stored verbatim into `p_{project_id}.elitea_tools.settings`. Modelled open because the backend only validates it for `type: github`, which requires `repository` (non-empty) and `github_configuration`.\n",
       ),
-    meta: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "NOTE(1c): the handler decodes into `map[string]any` and the repository reads exactly `name`, `type`, `description` and `settings` (internal/api/v2/toolkits/handler.go:891-900). There is no Go struct to mirror, so this schema DEFINES the contract rather than reflecting one — keep it in step with pgRepo.CreateToolkit if that changes. `author_id` is deliberately absent: the handler overwrites it from the authenticated principal.\nOnly `type` is required. `name` is NOT enforced by the backend — `validateToolkitCreate` checks settings for `type: github` and nothing else, and the repository stores whatever `name` it is given, including an empty one. Marking `name` required here would make the generated client stricter than the server and reject requests the API accepts.\n",
+    "NOTE(1c): the handler decodes into `map[string]any` and the repository reads `name`, `type`, `description`, `settings`, and `meta` (internal/api/v2/toolkits/handler.go:891-900). There is no Go struct to mirror, so this schema DEFINES the contract rather than reflecting one — keep it in step with pgRepo.CreateToolkit if that changes. `author_id` is deliberately absent: the handler overwrites it from the authenticated principal.\nOnly `type` is required. `name` is NOT enforced by the backend — `validateToolkitCreate` checks settings for `type: github` and nothing else, and the repository stores whatever `name` it is given, including an empty one. Marking `name` required here would make the generated client stricter than the server and reject requests the API accepts.\n",
   );
 
 export type ToolkitCreateRequest = zod.input<typeof ToolkitCreateRequest>;

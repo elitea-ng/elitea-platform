@@ -109,7 +109,7 @@ describe('EditToolkit — Indexes "Run" tab settles over the REST test-tool run'
 
     await user.click(runButton);
 
-    await waitFor(() => expect(testToolBody).toEqual({ tool_name: 'search_index', tool_params: {} }));
+    await waitFor(() => expect(testToolBody).toEqual({ request_id: expect.any(String) as unknown, tool_name: 'search_index', tool_params: {}, llm_settings: { temperature: 0.6, max_tokens: -1 } }));
     // No handler is registered for a socket — a `chat_predict` emit here
     // would either no-op silently (masking the regression) or, if this
     // suite ever adds socket assertions, be the tell. The REST body landing

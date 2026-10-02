@@ -41,7 +41,7 @@
  * The share-by-link half is the one failure mode CI could never see, because
  * it is only visible to a SECOND person: a link that 404s for its recipient
  * looks perfect to the person who created it. The recipient is modelled with a
- * context of its own (`browser.newContext({ storageState: undefined })`) — not
+ * context of its own (`browser.newContext({ storageState: { cookies: [], origins: [] } })`) — not
  * by signing anything out. The suite's personas share one server-side session
  * and a logout revokes it for every worker, so a journey that ended a session
  * to prove anonymity would take the rest of the run with it.
@@ -61,12 +61,14 @@ import {
   createConversation,
   deleteConversation,
   describeRefusal,
+  PUBLISH_AUTHOR_PROJECT_NAME,
+  resolvePublishAuthorProjectId,
 } from '../../fixtures/api';
+import { ensureProjectSelected } from '../../fixtures/project';
 
 /** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-share';
 
-const CONVERSATION_PATH = `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}`;
 const FOLDERS_PATH = `${API_BASE}/elitea_core/folder/prompt_lib/${DEFAULT_PROJECT_ID}`;
 const SHARE_LINKS_PATH = `${API_BASE}/elitea_core/shared_chat_links/prompt_lib/${DEFAULT_PROJECT_ID}`;
 
@@ -82,8 +84,8 @@ function uniqueName(tag: string): string {
  * carry a stale copy. Throws on a non-2xx: a refusal returned as "still
  * private" would read exactly like a publish that did not take.
  */
-async function readIsPrivate(page: Page, conversationId: string): Promise<boolean> {
-  const url = `${CONVERSATION_PATH}/${conversationId}`;
+async function readIsPrivate(page: Page, conversationId: string, projectId = DEFAULT_PROJECT_ID): Promise<boolean> {
+  const url = `${API_BASE}/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`;
   const response = await page.request.get(url);
   if (!response.ok()) {
     throw new Error(
@@ -188,8 +190,9 @@ async function closeRowMenu(page: Page): Promise<void> {
 }
 
 /** Opens the chat surface with the rail's today group expanded. */
-async function openChat(page: Page): Promise<void> {
+async function openChat(page: Page, projectName?: string): Promise<void> {
   await page.goto(BASE_URL + '/app/chat');
+  if (projectName !== undefined) await ensureProjectSelected(page, projectName);
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
   await openTodayGroup(page);
 }
@@ -211,11 +214,12 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
    * (`apiRequestContext.delete`, measured on chromium).
    */
   test.setTimeout(120_000);
-  const conversationId = await createConversation(page.request, uniqueName('public'));
+  const projectId = await resolvePublishAuthorProjectId(page.request);
+  const conversationId = await createConversation(page.request, uniqueName('public'), projectId);
   try {
-    expect(await readIsPrivate(page, conversationId), 'a new conversation must start private').toBe(true);
+    expect(await readIsPrivate(page, conversationId, projectId), 'a new conversation must start private').toBe(true);
 
-    await openChat(page);
+    await openChat(page, PUBLISH_AUTHOR_PROJECT_NAME);
     await openRowMenu(page, conversationId);
 
     // The item, then its inline confirmation. The confirm REPLACES the row it
@@ -228,7 +232,7 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
     // THE SERVER, not the rail. The client patches its own list either way,
     // so a UI-only assertion here passes on the defect this closes.
     await expect
-      .poll(async () => readIsPrivate(page, conversationId), {
+      .poll(async () => readIsPrivate(page, conversationId, projectId), {
         timeout: 20_000,
         message: 'the conversation must be published on the server, not only in the list the client is holding',
       })
@@ -238,7 +242,7 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
     // what tells the menu this conversation is already public, so the control
     // that publishes it is no longer offered. This fails if the listing does
     // not carry `is_private`, which is where the second half of the defect was.
-    await openChat(page);
+    await openChat(page, PUBLISH_AUTHOR_PROJECT_NAME);
     await openRowMenu(page, conversationId);
     await expect(
       page.getByRole('menuitem', { name: 'Make public' }),
@@ -246,7 +250,7 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
     ).toHaveCount(0);
     await closeRowMenu(page);
   } finally {
-    await removeConversation(page.request, conversationId);
+    await deleteConversation(page.request, conversationId, projectId);
   }
 });
 
@@ -297,7 +301,7 @@ test('S2: a share link opens for a reader with no session, and dies when it is r
 
     // THE RECIPIENT. A context of its own, with no storage state: this is the
     // half nothing proved, and the half a link that 404s only ever fails in.
-    const reader = await browser.newContext({ storageState: undefined });
+    const reader = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     try {
       const readerPage = await reader.newPage();
       await readerPage.goto(shareUrl);
@@ -427,7 +431,7 @@ test('S4: the row menu exports the conversation, in the format the entry names',
     await page.getByRole('menuitem', { name: 'Markdown (.md)' }).click();
 
     const response = await exported;
-    expect(response.status(), `the export route must serve the document${await describeRefusal(response)}`).toBe(200);
+    expect(response.status(), `the export route must serve the document: ${response.statusText()}`).toBe(200);
     expect(
       response.headers()['content-disposition'] ?? '',
       'an export the browser renders instead of saving is not an export',
@@ -462,7 +466,7 @@ test('S5: the JSON export carries the conversation as data', async ({ page }) =>
     await page.getByRole('menuitem', { name: 'JSON (.json)' }).click();
 
     const response = await exported;
-    expect(response.status(), `the JSON export must be served${await describeRefusal(response)}`).toBe(200);
+    expect(response.status(), `the JSON export must be served: ${response.statusText()}`).toBe(200);
     const document = (await response.json()) as { readonly name?: string; readonly messages?: readonly unknown[] };
     expect(document.name, 'the document must name the conversation it exported').toBe(name);
     expect(Array.isArray(document.messages), 'the document must carry a transcript, even an empty one').toBe(true);

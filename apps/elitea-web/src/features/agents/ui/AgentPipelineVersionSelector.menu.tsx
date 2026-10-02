@@ -127,6 +127,7 @@ export function renderMenu(params: {
         return (
           <MenuItem
             key={version.id}
+            aria-label={formatVersionDisplayText(version)}
             onClick={onVersionClick(version)}
             sx={isSelected ? selectedMenuItemSx : menuItemSx}
           >

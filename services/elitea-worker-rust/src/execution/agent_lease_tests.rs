@@ -544,3 +544,57 @@ fn polling_configuration_matches_the_integer_millisecond_v1_profile() {
         assert!(!error.retryable());
     }
 }
+
+#[tokio::test]
+async fn checkpoint_inspection_requires_one_live_poll_without_fresh_authority() {
+    let state = Arc::new(FakeState::default());
+    let mut monitor = ClaimLeaseMonitor::start_checkpoint_inspection(
+        client(state.clone()),
+        crate::protocol::control::test_model_checkpoint_inspection(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    assert!(matches!(
+        monitor.activate().await,
+        ClaimLeaseActivation::Unavailable(_)
+    ));
+    assert!(state.calls.lock().expect("calls").is_empty());
+    let inspection = monitor
+        .activate_checkpoint_inspection()
+        .await
+        .unwrap_or_else(|_| panic!("live inspection"));
+    assert_eq!(*state.calls.lock().expect("calls"), ["renew", "observe"]);
+    let (_pending, session) = inspection.into_session_inspection();
+    assert_eq!(session.into_writer_binding().execution_id, "execution/one");
+    assert!(monitor.activate_checkpoint_inspection().await.is_err());
+    monitor.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn cancelled_or_expired_checkpoint_poll_never_issues_session_access() {
+    for cancelled in [true, false] {
+        let state = Arc::new(FakeState::default());
+        let clock = Arc::new(AtomicI64::new(NOW));
+        if cancelled {
+            state.observe.lock().expect("observe").desired_state =
+                DesiredExecutionStateV1::Cancelled as i32;
+        } else {
+            *state.clock_after_observe.lock().expect("clock") = Some((clock.clone(), NOW + 70_000));
+        }
+        let observed_clock = clock.clone();
+        let mut monitor = ClaimLeaseMonitor::start_checkpoint_inspection(
+            client(state),
+            crate::protocol::control::test_model_checkpoint_inspection(NOW + 60_000),
+            Arc::new(move || observed_clock.load(Ordering::SeqCst)),
+            config(Duration::from_secs(10)),
+        );
+        assert!(monitor.activate_checkpoint_inspection().await.is_err());
+        assert!(monitor.activate_checkpoint_inspection().await.is_err());
+        let closed = monitor.close().await;
+        if cancelled {
+            closed.expect("cancelled close");
+        } else {
+            assert!(matches!(closed, Err(ClaimLeaseError::LeaseLost(_))));
+        }
+    }
+}

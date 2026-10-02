@@ -54,11 +54,19 @@ import type {
 
 import type {
   ErrorResponse,
+  GetToolkitToolResult202,
+  GetToolkitToolResultParams,
   IndexConfigurationSaveRequest,
   IndexWriteAck,
   IndexWriteRefusal,
   InternalMcpPatStatus,
+  ListToolkitAvailableTools200,
   ListToolkitInstancesParams,
+  McpDcrProxyRequest,
+  McpDcrProxyResponse,
+  McpOAuthError,
+  McpOAuthProxyRequest,
+  McpOAuthProxyResponse,
   McpRegisteredServer,
   McpToolCallRequest,
   N400Response,
@@ -79,6 +87,48 @@ import type {
 
 import { eliteaFetch } from ".././mutator";
 
+export type HTTPStatusCode1xx = 100 | 101 | 102 | 103;
+export type HTTPStatusCode2xx = 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207;
+export type HTTPStatusCode3xx = 300 | 301 | 302 | 303 | 304 | 305 | 307 | 308;
+export type HTTPStatusCode4xx =
+  | 400
+  | 401
+  | 402
+  | 403
+  | 404
+  | 405
+  | 406
+  | 407
+  | 408
+  | 409
+  | 410
+  | 411
+  | 412
+  | 413
+  | 414
+  | 415
+  | 416
+  | 417
+  | 418
+  | 419
+  | 420
+  | 421
+  | 422
+  | 423
+  | 424
+  | 426
+  | 428
+  | 429
+  | 431
+  | 451;
+export type HTTPStatusCode5xx = 500 | 501 | 502 | 503 | 504 | 505 | 507 | 511;
+export type HTTPStatusCodes =
+  | HTTPStatusCode1xx
+  | HTTPStatusCode2xx
+  | HTTPStatusCode3xx
+  | HTTPStatusCode4xx
+  | HTTPStatusCode5xx;
+
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 const withQueryKey = <T extends object, K>(
@@ -98,6 +148,518 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type exchangeMcpOAuthGrantResponse200 = {
+  data: McpOAuthProxyResponse;
+  status: 200;
+};
+
+export type exchangeMcpOAuthGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type exchangeMcpOAuthGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type exchangeMcpOAuthGrantResponseDefault = {
+  data: McpOAuthError;
+  status: Exclude<HTTPStatusCodes, 200 | 401 | 403>;
+};
+
+export type exchangeMcpOAuthGrantResponseSuccess =
+  exchangeMcpOAuthGrantResponse200 & {
+    headers: Headers;
+  };
+export type exchangeMcpOAuthGrantResponseError = (
+  | exchangeMcpOAuthGrantResponse401
+  | exchangeMcpOAuthGrantResponse403
+  | exchangeMcpOAuthGrantResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type exchangeMcpOAuthGrantResponse =
+  exchangeMcpOAuthGrantResponseSuccess | exchangeMcpOAuthGrantResponseError;
+
+export const getExchangeMcpOAuthGrantUrl = (projectId: string) => {
+  return `/elitea_core/mcp_oauth_proxy/${projectId}`;
+};
+
+/**
+ * @summary Exchange or refresh a delegated OAuth grant
+ */
+export const exchangeMcpOAuthGrant = async (
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exchangeMcpOAuthGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<exchangeMcpOAuthGrantResponse>(
+    getExchangeMcpOAuthGrantUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mcpOAuthProxyRequest),
+    },
+  );
+};
+
+export const getExchangeMcpOAuthGrantQueryKey = (
+  projectId: string,
+  mcpOAuthProxyRequest?: McpOAuthProxyRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/mcp_oauth_proxy/${projectId}`,
+    mcpOAuthProxyRequest,
+  ] as const;
+};
+
+export const getExchangeMcpOAuthGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getExchangeMcpOAuthGrantQueryKey(projectId, mcpOAuthProxyRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+  > = ({ signal }) =>
+    exchangeMcpOAuthGrant(projectId, mcpOAuthProxyRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExchangeMcpOAuthGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+>;
+export type ExchangeMcpOAuthGrantQueryError =
+  N401Response | N403Response | McpOAuthError;
+
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+          TError,
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+          TError,
+          Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Exchange or refresh a delegated OAuth grant
+ */
+
+export function useExchangeMcpOAuthGrant<
+  TData = Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpOAuthProxyRequest: McpOAuthProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeMcpOAuthGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExchangeMcpOAuthGrantQueryOptions(
+    projectId,
+    mcpOAuthProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type registerMcpOAuthClientResponse200 = {
+  data: McpDcrProxyResponse;
+  status: 200;
+};
+
+export type registerMcpOAuthClientResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type registerMcpOAuthClientResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type registerMcpOAuthClientResponseDefault = {
+  data: McpOAuthError;
+  status: Exclude<HTTPStatusCodes, 200 | 401 | 403>;
+};
+
+export type registerMcpOAuthClientResponseSuccess =
+  registerMcpOAuthClientResponse200 & {
+    headers: Headers;
+  };
+export type registerMcpOAuthClientResponseError = (
+  | registerMcpOAuthClientResponse401
+  | registerMcpOAuthClientResponse403
+  | registerMcpOAuthClientResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type registerMcpOAuthClientResponse =
+  registerMcpOAuthClientResponseSuccess | registerMcpOAuthClientResponseError;
+
+export const getRegisterMcpOAuthClientUrl = (projectId: string) => {
+  return `/elitea_core/mcp_dcr_proxy/${projectId}`;
+};
+
+/**
+ * @summary Register an OAuth client and retain its secret in Main
+ */
+export const registerMcpOAuthClient = async (
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<registerMcpOAuthClientResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<registerMcpOAuthClientResponse>(
+    getRegisterMcpOAuthClientUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mcpDcrProxyRequest),
+    },
+  );
+};
+
+export const getRegisterMcpOAuthClientQueryKey = (
+  projectId: string,
+  mcpDcrProxyRequest?: McpDcrProxyRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/mcp_dcr_proxy/${projectId}`,
+    mcpDcrProxyRequest,
+  ] as const;
+};
+
+export const getRegisterMcpOAuthClientQueryOptions = <
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRegisterMcpOAuthClientQueryKey(projectId, mcpDcrProxyRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof registerMcpOAuthClient>>
+  > = ({ signal }) =>
+    registerMcpOAuthClient(projectId, mcpDcrProxyRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RegisterMcpOAuthClientQueryResult = NonNullable<
+  Awaited<ReturnType<typeof registerMcpOAuthClient>>
+>;
+export type RegisterMcpOAuthClientQueryError =
+  N401Response | N403Response | McpOAuthError;
+
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+          TError,
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+          TError,
+          Awaited<ReturnType<typeof registerMcpOAuthClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Register an OAuth client and retain its secret in Main
+ */
+
+export function useRegisterMcpOAuthClient<
+  TData = Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  mcpDcrProxyRequest: McpDcrProxyRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof registerMcpOAuthClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRegisterMcpOAuthClientQueryOptions(
+    projectId,
+    mcpDcrProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type getToolkitResponse200 = {
   data: ToolkitInstance;
@@ -1798,8 +2360,13 @@ export function useCreateToolkit<
 }
 
 export type listToolkitAvailableToolsResponse200 = {
-  data: ToolkitToolsPayload;
+  data: ListToolkitAvailableTools200;
   status: 200;
+};
+
+export type listToolkitAvailableToolsResponse400 = {
+  data: N400Response;
+  status: 400;
 };
 
 export type listToolkitAvailableToolsResponse401 = {
@@ -1812,9 +2379,24 @@ export type listToolkitAvailableToolsResponse403 = {
   status: 403;
 };
 
+export type listToolkitAvailableToolsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listToolkitAvailableToolsResponse422 = {
+  data: void;
+  status: 422;
+};
+
 export type listToolkitAvailableToolsResponse500 = {
   data: N500Response;
   status: 500;
+};
+
+export type listToolkitAvailableToolsResponse503 = {
+  data: void;
+  status: 503;
 };
 
 export type listToolkitAvailableToolsResponseSuccess =
@@ -1822,9 +2404,13 @@ export type listToolkitAvailableToolsResponseSuccess =
     headers: Headers;
   };
 export type listToolkitAvailableToolsResponseError = (
+  | listToolkitAvailableToolsResponse400
   | listToolkitAvailableToolsResponse401
   | listToolkitAvailableToolsResponse403
+  | listToolkitAvailableToolsResponse404
+  | listToolkitAvailableToolsResponse422
   | listToolkitAvailableToolsResponse500
+  | listToolkitAvailableToolsResponse503
 ) & {
   headers: Headers;
 };
@@ -1835,33 +2421,22 @@ export type listToolkitAvailableToolsResponse =
 
 export const getListToolkitAvailableToolsUrl = (
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
 ) => {
   return `/elitea_core/toolkit_available_tools/prompt_lib/${projectId}/${toolkitId}`;
 };
 
 /**
- * NOTE(#440): internal/api/v2/toolkits/handler.go:511-523
- * (AvailableTools) calling pgRepo.AvailableTools (:1086-1101). The query
- * joins `entity_tool_mapping` to `elitea_tools` on the toolkit id.
- * Registered at internal/api/router.go:1911-1912.
- *
- * GUARDRAILS FILTER THE RESULT. `filterBlockedTools`
- * (internal/api/v2/toolkits/guardrails.go:120-132) drops every row whose
- * TYPE this deployment blocks. The response stays 200 and the count
- * follows the filtered list, because a blocked type is not a tool the
- * caller may run.
- *
- * A LOST READ IS NOT AN EMPTY CATALOGUE (#381). Any repository fault —
- * a dead pool, a missing tenant schema, a bad row, a row set that ends
- * early — gives 500 with `{"error": "available tools read failed"}`. The
- * driver detail goes to the log only. A toolkit with no tools gives 200
- * and an empty array.
- * @summary List the tools that one toolkit instance has
+ * Main reads the saved toolkit with the authenticated actor's access.
+ * Main freezes configuration references and operator guardrails before admission.
+ * The worker discovers tools from those immutable inputs.
+ * The response contains the accepted immutable result artifact.
+ * Discovery is unavailable until the runtime activation flag is enabled.
+ * @summary Discover tools and argument schemas from one saved toolkit
  */
 export const listToolkitAvailableTools = async (
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<listToolkitAvailableToolsResponse> => {
   return eliteaFetch<listToolkitAvailableToolsResponse>(
@@ -1875,7 +2450,7 @@ export const listToolkitAvailableTools = async (
 
 export const getListToolkitAvailableToolsQueryKey = (
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
 ) => {
   return [
     `/elitea_core/toolkit_available_tools/prompt_lib/${projectId}/${toolkitId}`,
@@ -1884,10 +2459,16 @@ export const getListToolkitAvailableToolsQueryKey = (
 
 export const getListToolkitAvailableToolsQueryOptions = <
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -1933,14 +2514,25 @@ export type ListToolkitAvailableToolsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listToolkitAvailableTools>>
 >;
 export type ListToolkitAvailableToolsQueryError =
-  N401Response | N403Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | void
+  | N500Response;
 
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -1965,10 +2557,16 @@ export function useListToolkitAvailableTools<
 };
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -1993,10 +2591,16 @@ export function useListToolkitAvailableTools<
 };
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2012,15 +2616,21 @@ export function useListToolkitAvailableTools<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary List the tools that one toolkit instance has
+ * @summary Discover tools and argument schemas from one saved toolkit
  */
 
 export function useListToolkitAvailableTools<
   TData = Awaited<ReturnType<typeof listToolkitAvailableTools>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | void
+    | N500Response,
 >(
   projectId: string,
-  toolkitId: string,
+  toolkitId: number,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2303,6 +2913,314 @@ export function useDiscoverToolkitTools<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type getToolkitToolResultResponse200 = {
+  data: ToolkitToolRunResult;
+  status: 200;
+};
+
+export type getToolkitToolResultResponse202 = {
+  data: GetToolkitToolResult202;
+  status: 202;
+};
+
+export type getToolkitToolResultResponse400 = {
+  data: void;
+  status: 400;
+};
+
+export type getToolkitToolResultResponse401 = {
+  data: void;
+  status: 401;
+};
+
+export type getToolkitToolResultResponse403 = {
+  data: void;
+  status: 403;
+};
+
+export type getToolkitToolResultResponse404 = {
+  data: void;
+  status: 404;
+};
+
+export type getToolkitToolResultResponse409 = {
+  data: void;
+  status: 409;
+};
+
+export type getToolkitToolResultResponse422 = {
+  data: void;
+  status: 422;
+};
+
+export type getToolkitToolResultResponse500 = {
+  data: void;
+  status: 500;
+};
+
+export type getToolkitToolResultResponse503 = {
+  data: void;
+  status: 503;
+};
+
+export type getToolkitToolResultResponseSuccess = (
+  getToolkitToolResultResponse200 | getToolkitToolResultResponse202
+) & {
+  headers: Headers;
+};
+export type getToolkitToolResultResponseError = (
+  | getToolkitToolResultResponse400
+  | getToolkitToolResultResponse401
+  | getToolkitToolResultResponse403
+  | getToolkitToolResultResponse404
+  | getToolkitToolResultResponse409
+  | getToolkitToolResultResponse422
+  | getToolkitToolResultResponse500
+  | getToolkitToolResultResponse503
+) & {
+  headers: Headers;
+};
+
+export type getToolkitToolResultResponse =
+  getToolkitToolResultResponseSuccess | getToolkitToolResultResponseError;
+
+export const getGetToolkitToolResultUrl = (
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/test_tool/prompt_lib/${projectId}/${toolId}/${executionId}?${stringifiedParams}`
+    : `/elitea_core/test_tool/prompt_lib/${projectId}/${toolId}/${executionId}`;
+};
+
+/**
+ * Requires toolkit test permission and the initiating user's identity.
+ * Reads frozen execution state without submitting another tool call.
+ * Another project, user, toolkit, or unknown execution receives 404.
+ * With lookup=request, execution_id contains the original Idempotency-Key.
+ * A missing request does not prove that a concurrent admission cannot complete.
+ * @summary Read the original toolkit test execution result
+ */
+export const getToolkitToolResult = async (
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getToolkitToolResultResponse> => {
+  return eliteaFetch<getToolkitToolResultResponse>(
+    getGetToolkitToolResultUrl(projectId, toolId, executionId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetToolkitToolResultQueryKey = (
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+) => {
+  return [
+    `/elitea_core/test_tool/prompt_lib/${projectId}/${toolId}/${executionId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetToolkitToolResultQueryOptions = <
+  TData = Awaited<ReturnType<typeof getToolkitToolResult>>,
+  TError = void,
+>(
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getToolkitToolResult>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetToolkitToolResultQueryKey(projectId, toolId, executionId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getToolkitToolResult>>
+  > = ({ signal }) =>
+    getToolkitToolResult(projectId, toolId, executionId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolId !== null &&
+      toolId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getToolkitToolResult>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetToolkitToolResultQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getToolkitToolResult>>
+>;
+export type GetToolkitToolResultQueryError = void;
+
+export function useGetToolkitToolResult<
+  TData = Awaited<ReturnType<typeof getToolkitToolResult>>,
+  TError = void,
+>(
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params: undefined | GetToolkitToolResultParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getToolkitToolResult>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getToolkitToolResult>>,
+          TError,
+          Awaited<ReturnType<typeof getToolkitToolResult>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetToolkitToolResult<
+  TData = Awaited<ReturnType<typeof getToolkitToolResult>>,
+  TError = void,
+>(
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getToolkitToolResult>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getToolkitToolResult>>,
+          TError,
+          Awaited<ReturnType<typeof getToolkitToolResult>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetToolkitToolResult<
+  TData = Awaited<ReturnType<typeof getToolkitToolResult>>,
+  TError = void,
+>(
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getToolkitToolResult>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the original toolkit test execution result
+ */
+
+export function useGetToolkitToolResult<
+  TData = Awaited<ReturnType<typeof getToolkitToolResult>>,
+  TError = void,
+>(
+  projectId: string,
+  toolId: number,
+  executionId: string,
+  params?: GetToolkitToolResultParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getToolkitToolResult>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetToolkitToolResultQueryOptions(
+    projectId,
+    toolId,
+    executionId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type testToolkitToolResponse200 = {
   data: ToolkitToolRunResult;
   status: 200;
@@ -2326,6 +3244,11 @@ export type testToolkitToolResponse403 = {
 export type testToolkitToolResponse404 = {
   data: ToolkitToolRunResult;
   status: 404;
+};
+
+export type testToolkitToolResponse409 = {
+  data: ToolkitToolRunResult;
+  status: 409;
 };
 
 export type testToolkitToolResponse422 = {
@@ -2356,6 +3279,7 @@ export type testToolkitToolResponseError = (
   | testToolkitToolResponse401
   | testToolkitToolResponse403
   | testToolkitToolResponse404
+  | testToolkitToolResponse409
   | testToolkitToolResponse422
   | testToolkitToolResponse500
   | testToolkitToolResponse503

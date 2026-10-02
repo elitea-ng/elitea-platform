@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
@@ -34,7 +35,7 @@ func runnableToolkitTool() Tool {
 	return Tool{
 		Name:            "github_get_issue",
 		Description:     "seeded",
-		InputSchema:     toolkitToolSchema(),
+		InputSchema:     unknownToolkitToolSchema(),
 		toolkitID:       19,
 		toolkitToolName: "get_issue",
 	}
@@ -74,6 +75,19 @@ func TestToolkitCallWithoutAUseCaseKeepsTheRefusal(t *testing.T) {
 	}
 	if got := textOf(t, result); got != ToolkitExecutionUnavailableReason {
 		t.Fatalf("text = %q,\nwant %q", got, ToolkitExecutionUnavailableReason)
+	}
+}
+
+func TestReadOnlyRefusalNeverFallsThroughToPythonToolkitRun(t *testing.T) {
+	reads := &recordingToolkitExecute{err: toolkitexecutionapp.ErrInvalidToolkitExecuteReadAdmission}
+	runs := &recordingToolkitRun{}
+	router := newRunnableRouter(t, staticSource(runnableToolkitTool()), nil,
+		WithToolkitExecuteRead(reads),
+		func(handler *Handler) { handler.toolRuns = runs },
+	)
+	result := callGetIssue(t, router, "{}")
+	if result["isError"] != true || reads.calls != 1 || runs.calls != 0 {
+		t.Fatalf("read refusal escaped its route: reads=%d runs=%d result=%v", reads.calls, runs.calls, result)
 	}
 }
 

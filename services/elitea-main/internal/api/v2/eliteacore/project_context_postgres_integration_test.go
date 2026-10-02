@@ -188,9 +188,13 @@ func TestProjectContextIsScopedToItsOwnProject(t *testing.T) {
 		projectContextBody{Content: "only project A", Enabled: true})
 
 	other := getProjectContext(t, router, projectContextProjectB)
-	if other.Content != "" || other.Enabled {
+	if other.Content != "" || !other.Enabled {
 		t.Errorf("project %d read back %+v, want the empty default",
 			projectContextProjectB, other)
+	}
+	if rows := countProjectContextRows(t, pool, projectContextProjectB); rows != 0 {
+		t.Errorf("project %d has %d context rows after project %d saved, want none",
+			projectContextProjectB, rows, projectContextProjectA)
 	}
 
 	putProjectContext(t, router, projectContextProjectB,
@@ -203,7 +207,7 @@ func TestProjectContextIsScopedToItsOwnProject(t *testing.T) {
 
 // TestProjectContextRefusesAWriteItCannotPersist is the anti-swallow guard:
 // against a project whose tenant schema does not exist the handler must answer
-// a typed 500, not the 200-with-an-echo that hid #888 for the whole of its
+// a safe 500, not the 200-with-an-echo that hid #888 for the whole of its
 // life.
 func TestProjectContextRefusesAWriteItCannotPersist(t *testing.T) {
 	pool := newImportCorpusPool(t)
@@ -224,8 +228,8 @@ func TestProjectContextRefusesAWriteItCannotPersist(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &failure); err != nil {
 		t.Fatalf("decode refusal body %q: %v", recorder.Body.String(), err)
 	}
-	if failure["code"] != "project_context_write_failed" {
-		t.Errorf("refusal code = %v, want project_context_write_failed", failure["code"])
+	if failure["error"] != "failed to update project context" {
+		t.Errorf("refusal error = %v, want failed to update project context", failure["error"])
 	}
 	// The refusal names no table and carries no SQLSTATE.
 	if text := recorder.Body.String(); strings.Contains(text, "configuration") ||

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -31,7 +32,7 @@ type PrebuiltStore struct {
 func NewPrebuiltStore(pool *pgxpool.Pool) *PrebuiltStore { return &PrebuiltStore{pool: pool} }
 
 const prebuiltColumns = `catalogue_key, display_name, server_url, base_url, client_id,
-	client_secret_ref, timeout_seconds, headers, enabled`
+	client_secret_ref, timeout_seconds, headers, config_schema, enabled`
 
 // List returns every catalogue entry, ordered by display name.
 //
@@ -63,6 +64,74 @@ func (s *PrebuiltStore) List(ctx context.Context) ([]PrebuiltServer, error) {
 		return nil, err
 	}
 	return entries, nil
+}
+
+// ListToolkitTypeSchemas returns enabled pre-built definitions for the toolkit form.
+func (s *PrebuiltStore) ListToolkitTypeSchemas(ctx context.Context) (map[string]map[string]any, error) {
+	entries, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]map[string]any)
+	for _, entry := range entries {
+		if !entry.Enabled {
+			continue
+		}
+		toolkitType, schema, err := prebuiltToolkitTypeSchema(entry)
+		if err != nil {
+			return nil, err
+		}
+		result[toolkitType] = schema
+	}
+	return result, nil
+}
+
+func prebuiltToolkitTypeSchema(entry PrebuiltServer) (string, map[string]any, error) {
+	properties, err := PrebuiltConfigProperties(entry.ConfigSchema)
+	if err != nil {
+		return "", nil, err
+	}
+	properties["selected_tools"] = map[string]any{
+		"type":         "array",
+		"title":        "Selected Tools",
+		"description":  "Optional remote tool names to enable. An empty list enables all tools.",
+		"default":      []any{},
+		"items":        map[string]any{"type": "string"},
+		"args_schemas": map[string]any{},
+	}
+	required := make([]any, 0)
+	for name, raw := range properties {
+		property, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		// The current static MCP contract marks sensitive fields with
+		// `secret: true`. Main's project-vault writer follows JSON Schema and
+		// recognizes `format: password`. Keep the source annotation for the
+		// web client and add the standard format for the persistence boundary.
+		if secret, _ := property["secret"].(bool); secret {
+			property["format"] = "password"
+		}
+		if value, _ := property["required"].(bool); value {
+			required = append(required, name)
+		}
+	}
+	sort.Slice(required, func(i, j int) bool {
+		return required[i].(string) < required[j].(string)
+	})
+	return PrebuiltToolkitTypePrefix + entry.Key, map[string]any{
+		"type":          "object",
+		"title":         entry.DisplayName,
+		"name_required": true,
+		"required":      required,
+		"properties":    properties,
+		"metadata": map[string]any{
+			"label":       entry.DisplayName,
+			"categories":  []any{"mcp"},
+			"server_name": entry.Key,
+			"server_type": "http",
+		},
+	}, nil
 }
 
 // Lookup resolves one toolkit type or catalogue name to its entry.
@@ -128,6 +197,9 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 	if entry.TimeoutSeconds < 0 {
 		return PrebuiltServer{}, fmt.Errorf("mcpregistry: timeout is negative")
 	}
+	if err := ValidatePrebuiltServer(entry); err != nil {
+		return PrebuiltServer{}, err
+	}
 
 	headers := entry.Headers
 	if headers == nil {
@@ -137,12 +209,20 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 	if err != nil {
 		return PrebuiltServer{}, fmt.Errorf("mcpregistry: encode headers: %w", err)
 	}
+	configSchema := entry.ConfigSchema
+	if configSchema == nil {
+		configSchema = map[string]any{"properties": map[string]any{}}
+	}
+	encodedConfigSchema, err := json.Marshal(configSchema)
+	if err != nil {
+		return PrebuiltServer{}, fmt.Errorf("mcpregistry: encode config schema: %w", err)
+	}
 
 	row := s.pool.QueryRow(ctx,
 		`INSERT INTO elitea_mcp.prebuilt_servers
 		     (catalogue_key, display_name, server_url, base_url, client_id,
-		      client_secret_ref, timeout_seconds, headers, enabled)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		      client_secret_ref, timeout_seconds, headers, config_schema, enabled)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT (catalogue_key) DO UPDATE SET
 		     display_name      = EXCLUDED.display_name,
 		     server_url        = EXCLUDED.server_url,
@@ -151,12 +231,13 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 		     client_secret_ref = EXCLUDED.client_secret_ref,
 		     timeout_seconds   = EXCLUDED.timeout_seconds,
 		     headers           = EXCLUDED.headers,
+		     config_schema     = EXCLUDED.config_schema,
 		     enabled           = EXCLUDED.enabled,
 		     updated_at        = now()
 		 RETURNING `+prebuiltColumns,
 		key, display, strings.TrimSpace(entry.ServerURL), strings.TrimSpace(entry.BaseURL),
 		strings.TrimSpace(entry.ClientID), strings.TrimSpace(entry.ClientSecretRef),
-		entry.TimeoutSeconds, encodedHeaders, entry.Enabled)
+		entry.TimeoutSeconds, encodedHeaders, encodedConfigSchema, entry.Enabled)
 
 	return scanPrebuilt(row)
 }
@@ -198,10 +279,11 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 	var (
 		entry          PrebuiltServer
 		encodedHeaders []byte
+		encodedSchema  []byte
 	)
 	if err := row.Scan(
 		&entry.Key, &entry.DisplayName, &entry.ServerURL, &entry.BaseURL, &entry.ClientID,
-		&entry.ClientSecretRef, &entry.TimeoutSeconds, &encodedHeaders, &entry.Enabled,
+		&entry.ClientSecretRef, &entry.TimeoutSeconds, &encodedHeaders, &encodedSchema, &entry.Enabled,
 	); err != nil {
 		return PrebuiltServer{}, err
 	}
@@ -213,6 +295,17 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 			return PrebuiltServer{}, fmt.Errorf(
 				"mcpregistry: catalogue entry %q has undecodable headers: %w", entry.Key, err)
 		}
+	}
+	if len(encodedSchema) > 0 {
+		decoder := json.NewDecoder(strings.NewReader(string(encodedSchema)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&entry.ConfigSchema); err != nil {
+			return PrebuiltServer{}, fmt.Errorf(
+				"mcpregistry: catalogue entry %q has undecodable config schema: %w", entry.Key, err)
+		}
+	}
+	if err := ValidatePrebuiltServer(entry); err != nil {
+		return PrebuiltServer{}, err
 	}
 	return entry, nil
 }

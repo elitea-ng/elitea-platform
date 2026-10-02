@@ -146,6 +146,7 @@ export interface MessageGroupMetaWire {
   readonly references?: unknown;
   readonly is_error?: boolean;
   readonly error?: unknown;
+  readonly error_code?: string;
   readonly thinking_steps?: readonly ThinkingStepWire[];
   readonly tool_calls?: Readonly<Record<string, ToolCallStepWire>> | readonly ToolCallStepWire[];
   readonly first_tool_timestamp_start?: string;
@@ -155,6 +156,7 @@ export interface MessageGroupMetaWire {
   readonly thread_id?: string;
   readonly output_limit_reached?: boolean;
   readonly output_limit_sequence?: number | string;
+  readonly authorization_requests?: readonly Record<string, unknown>[];
   /**
    * How many of the caller's persistent, cross-conversation memories (#870)
    * this turn's recall injected into the prompt. Stamped by
@@ -188,6 +190,7 @@ export interface MessageGroupMetaWire {
  * through `isMessageRow` in lib/normalise.ts rather than `===`.
  */
 export interface MessageGroupWire {
+  readonly persisted_trace?: unknown;
   readonly id: string | number;
   readonly uuid: string;
   /**

@@ -34,11 +34,22 @@ func (noopCurrentAgentTextProjector) projectAgentTextDelta(
 type postgresCurrentAgentTextProjector struct{}
 
 type currentAgentTextDelta struct {
+	resetProvisional    bool
 	streamID            string
 	messageID           string
 	executionGeneration string
 	sioEvent            string
 	content             string
+	resultChunk         json.RawMessage
+}
+
+type currentAgentTextOwner struct {
+	ParentAgentName string            `json:"parent_agent_name"`
+	ParentAgentPath []json.RawMessage `json:"parent_agent_path"`
+}
+
+func (owner currentAgentTextOwner) isChild() bool {
+	return strings.TrimSpace(owner.ParentAgentName) != "" || len(owner.ParentAgentPath) > 0
 }
 
 func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
@@ -48,7 +59,7 @@ func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
 	frame outputapp.NodeEventFrame,
 ) error {
 	delta, recognized, err := decodeCurrentAgentTextDelta(frame.BrowserData)
-	if err != nil || !recognized || delta.content == "" {
+	if err != nil || !recognized || (delta.content == "" && !delta.resetProvisional) {
 		return err
 	}
 	projectDatabaseID, ok := currentAgentDatabaseID(projectID)
@@ -87,6 +98,12 @@ func (postgresCurrentAgentTextProjector) projectAgentTextDelta(
 	if err != nil {
 		return err
 	}
+	if delta.resetProvisional {
+		return resetCurrentAgentProvisionalText(ctx, tx, schema, messageGroupID, frame.Fence.ExecutionID, frame.Fence.Generation)
+	}
+	if len(delta.resultChunk) != 0 {
+		return appendCurrentAgentResultChunk(ctx, tx, schema, messageGroupID, frame.Fence.ExecutionID, frame.Fence.Generation, delta.content, delta.resultChunk)
+	}
 	return appendCurrentAgentProvisionalText(
 		ctx,
 		tx,
@@ -106,11 +123,32 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		ExecutionGeneration string          `json:"execution_generation"`
 		SIOEvent            string          `json:"sio_event"`
 		Content             json.RawMessage `json:"content"`
+		ResponseMetadata    struct {
+			currentAgentTextOwner
+			ShouldContinue *bool                 `json:"should_continue"`
+			ResultChunk    json.RawMessage       `json:"result_chunk_v1"`
+			Metadata       currentAgentTextOwner `json:"metadata"`
+			ToolMeta       struct {
+				Metadata currentAgentTextOwner `json:"metadata"`
+			} `json:"tool_meta"`
+		} `json:"response_metadata"`
 	}
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return currentAgentTextDelta{}, false, errors.New("decode current agent text event")
 	}
-	if event.Type != "agent_llm_chunk" {
+	reset := event.Type == "agent_start" && event.ResponseMetadata.ShouldContinue != nil && !*event.ResponseMetadata.ShouldContinue
+	if !reset && event.Type != "agent_llm_chunk" && event.Type != "agent_result_chunk" {
+		return currentAgentTextDelta{}, false, nil
+	}
+	if event.Type == "agent_result_chunk" && len(event.ResponseMetadata.ResultChunk) == 0 {
+		return currentAgentTextDelta{}, false, errors.New("result chunk metadata is required")
+	}
+	if event.Type != "agent_result_chunk" && len(event.ResponseMetadata.ResultChunk) != 0 {
+		return currentAgentTextDelta{}, false, errors.New("result chunk metadata requires a result event")
+	}
+	owner := event.ResponseMetadata
+	if owner.isChild() || owner.Metadata.isChild() || owner.ToolMeta.Metadata.isChild() {
+		// The trace projector stores child output. Do not copy it into the parent answer.
 		return currentAgentTextDelta{}, false, nil
 	}
 	if !validCurrentAgentCorrelation(event.StreamID) ||
@@ -119,7 +157,17 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		(event.SIOEvent != "chat_predict" && event.SIOEvent != "chat_continue_predict") {
 		return currentAgentTextDelta{}, false, errors.New("current agent text correlation is invalid")
 	}
+	if reset {
+		return currentAgentTextDelta{
+			streamID: event.StreamID, messageID: event.MessageID,
+			executionGeneration: event.ExecutionGeneration, sioEvent: event.SIOEvent,
+			resetProvisional: true,
+		}, true, nil
+	}
 	if string(event.Content) == "null" {
+		if event.Type == "agent_result_chunk" {
+			return currentAgentTextDelta{}, false, errors.New("result chunk content is required")
+		}
 		return currentAgentTextDelta{
 			streamID:            event.StreamID,
 			messageID:           event.MessageID,
@@ -130,7 +178,8 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 	var content string
 	if err := json.Unmarshal(event.Content, &content); err != nil ||
 		!utf8.ValidString(content) || strings.ContainsRune(content, '\x00') ||
-		len(content) > outputapp.MaxNodeEventOutputBytes {
+		len(content) > outputapp.MaxNodeEventOutputBytes ||
+		(event.Type == "agent_result_chunk" && content == "") {
 		return currentAgentTextDelta{}, false, errors.New("current agent text content is invalid")
 	}
 	return currentAgentTextDelta{
@@ -139,7 +188,32 @@ func decodeCurrentAgentTextDelta(raw json.RawMessage) (currentAgentTextDelta, bo
 		executionGeneration: event.ExecutionGeneration,
 		sioEvent:            event.SIOEvent,
 		content:             content,
+		resultChunk:         event.ResponseMetadata.ResultChunk,
 	}, true, nil
+}
+
+// The worker replays the complete accepted prefix after checkpoint recovery.
+// Match the live browser's replacement start inside the fenced event transaction.
+func resetCurrentAgentProvisionalText(
+	ctx context.Context, tx sqlExecutor, schema string, messageGroupID int64,
+	executionID string, generation uint64,
+) error {
+	_, err := tx.Exec(ctx, fmt.Sprintf(`
+UPDATE %s AS text_item
+SET content = ''
+FROM %s AS item
+WHERE text_item.id = item.id
+  AND item.message_group_id = $1
+  AND item.item_type = 'text_message'
+  AND item.meta ->> 'runtime_stream_execution_id' = $2
+  AND item.meta ->> 'runtime_stream_generation' = $3
+  AND item.meta ->> 'runtime_stream_provisional' = 'true'`,
+		schema+".chat_messages_text", schema+".chat_message_items"),
+		messageGroupID, executionID, fmt.Sprint(generation))
+	if err != nil {
+		return fmt.Errorf("reset current agent provisional text: %w", err)
+	}
+	return nil
 }
 
 func appendCurrentAgentProvisionalText(

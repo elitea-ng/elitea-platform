@@ -474,6 +474,11 @@ func (h *Handler) storeSectionValues(
 // configuration form that says only "failed to save" leaves the operator to
 // guess which of forty fields the server disliked.
 func validateSectionValues(section configSection, values map[string]any) string {
+	if section.id == "default_secrets" {
+		if reason := validateDefaultSecrets(values); reason != "" {
+			return reason
+		}
+	}
 	byKey := make(map[string]map[string]any, len(section.fields))
 	for _, field := range section.fields {
 		if key, _ := field["key"].(string); key != "" {

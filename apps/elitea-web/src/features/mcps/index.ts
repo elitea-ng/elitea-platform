@@ -27,7 +27,6 @@ export type { McpAuthStatusBadgeProps } from './ui/McpAuthStatusBadge';
 export { McpLogInButton } from './ui/McpLogInButton';
 export type { McpLogInButtonProps } from './ui/McpLogInButton';
 export { McpLogInLink } from './ui/McpLogInLink';
-export type { McpLogInLinkProps } from './ui/McpLogInLink';
 export { McpLogoutButton } from './ui/McpLogoutButton';
 export type { McpLogoutButtonProps } from './ui/McpLogoutButton';
 
@@ -67,5 +66,9 @@ export { useGetRemoteMcpTools } from './model/useGetRemoteMcpTools';
 // lib — the storage/flow primitives a non-UI caller (e.g. a chat tool-action
 // handler reacting to `mcp_authorization_required`, per manifest JRNY-018)
 // needs without pulling in React.
-export { getAccessToken, isPrebuildMcpType } from './lib/storage';
+export { getAccessToken } from './lib/storage';
+export { getAllTokens } from './lib/tokenRefresh';
+export { getExecutionTokens } from './lib/executionTokens';
 export { startMcpAuthFlow } from './lib/oauthFlow';
+
+export { getAuthorizationReference } from './lib/authorizationReference';

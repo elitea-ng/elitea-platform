@@ -224,6 +224,9 @@ func (d *Discoverer) post(
 // readRPCResult extracts the result of the request with the given id from a
 // response that may be a JSON body or an event stream.
 func readRPCResult(response *http.Response, id int) (json.RawMessage, error) {
+	if response.StatusCode == http.StatusUnauthorized {
+		return nil, authorizationRequired(response.Header.Values("WWW-Authenticate"))
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, fmt.Errorf("mcpregistry: MCP server answered %d", response.StatusCode)
 	}

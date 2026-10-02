@@ -31,7 +31,7 @@ const TEST_LOCALE = 'zz-memory-ctx';
 const OVERRIDES: Record<string, string> = {
   'settings.memory.contextManagement.title': 'TITLE-XX',
   'settings.memory.contextManagement.cardDescription': 'ENABLE-XX',
-  'settings.memory.contextManagement.maxContextTokens': 'MAXTOKENS-XX',
+  'contextBudget.mode.title': 'MAXTOKENS-XX',
   'settings.memory.contextManagement.preserveRecentMessages': 'PRESERVE-XX',
   'settings.memory.contextEditing.description': 'EDITING-XX',
   'settings.memory.contextManagement.enableAriaLabel': 'ARIA-XX',
@@ -61,7 +61,7 @@ describe('MemoryContextManagement', () => {
     renderSection({ context_enabled: false });
 
     expect(screen.getByLabelText('Enable context management')).toBeInTheDocument();
-    expect(screen.queryByTestId('max-context-tokens-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('context-budget-mode-control')).not.toBeInTheDocument();
     expect(screen.queryByText('Context Editing')).not.toBeInTheDocument();
     expect(screen.queryByText('Automatic Summarization')).not.toBeInTheDocument();
   });
@@ -69,7 +69,7 @@ describe('MemoryContextManagement', () => {
   it('reveals the fields, the context-editing card and the summarization block when on', () => {
     renderSection({ context_enabled: true });
 
-    expect(screen.getByTestId('max-context-tokens-input')).toBeInTheDocument();
+    expect(screen.getByTestId('context-budget-mode-control')).toBeInTheDocument();
     expect(screen.getByTestId('preserve-recent-messages-input')).toBeInTheDocument();
     expect(screen.getByText('Context Editing')).toBeInTheDocument();
     expect(screen.getByText('Automatic Summarization')).toBeInTheDocument();
@@ -83,7 +83,7 @@ describe('MemoryContextManagement', () => {
 
     expect(screen.getByText('TITLE-XX')).toBeInTheDocument();
     expect(screen.getByText('ENABLE-XX')).toBeInTheDocument();
-    expect(screen.getByText('MAXTOKENS-XX')).toBeInTheDocument();
+    expect(screen.getAllByText('MAXTOKENS-XX')[0]).toBeInTheDocument();
     expect(screen.getByText('PRESERVE-XX')).toBeInTheDocument();
     expect(screen.getByText('EDITING-XX')).toBeInTheDocument();
     expect(screen.getByLabelText('ARIA-XX')).toBeInTheDocument();

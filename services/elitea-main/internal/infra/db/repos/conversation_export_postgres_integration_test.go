@@ -32,6 +32,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // newConversationExportRouter mounts the export route on the same pattern
@@ -107,8 +108,14 @@ SELECT item.id, $3 FROM item`, numericID, i, content, participantID); err != nil
 
 func callExport(t *testing.T, router http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
+	return callExportAs(t, router, path, "42")
+}
+func callExportAs(t *testing.T, router http.Handler, path, actorID string) *httptest.ResponseRecorder {
+	t.Helper()
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: actorID}))
+	router.ServeHTTP(recorder, request)
 	return recorder
 }
 

@@ -54,6 +54,8 @@ type CurrentApplicationSkill struct {
 	// key, and adding one would break the byte parity the rest of this type
 	// exists to hold.
 	CreatedAt time.Time `json:"-"`
+	// Instructions serve internal MCP without changing the public list body.
+	Instructions string `json:"-"`
 }
 
 type CurrentApplicationSkillsReader interface {
@@ -111,7 +113,8 @@ SELECT
         WHEN version.id IS NULL THEN 'null'::jsonb
         ELSE COALESCE(version.meta -> 'icon_meta', 'null'::jsonb)
     END,
-    skill.created_at
+    skill.created_at,
+    COALESCE(version.instructions, '')
 FROM entity_skill_mapping AS mapping
 JOIN skills AS skill
   ON skill.id = mapping.skill_id
@@ -138,6 +141,7 @@ WHERE mapping.entity_version_id = $1
 					&skill.VersionMissing,
 					&iconMeta,
 					&skill.CreatedAt,
+					&skill.Instructions,
 				); err != nil {
 					return fmt.Errorf("scan current application skill: %w", err)
 				}

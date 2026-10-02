@@ -26,7 +26,9 @@ import type { MessageItemWire } from '@/entities/message/lib/wire';
 /** Every `type` the chat stream can carry. Ported verbatim from the baseline. */
 export const SocketMessageType = {
   AgentStart: 'agent_start',
+  AgentContextStatus: 'agent_context_status',
   AgentResponse: 'agent_response',
+  AgentResultChunk: 'agent_result_chunk',
   AgentException: 'agent_exception',
   AgentToolStart: 'agent_tool_start',
   AgentToolEnd: 'agent_tool_end',
@@ -83,12 +85,14 @@ export const SocketMessageType = {
 export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.StartTask,
   SocketMessageType.AgentStart,
+  SocketMessageType.AgentContextStatus,
   SocketMessageType.AgentLlmStart,
   SocketMessageType.AgentLlmChunk,
   SocketMessageType.Chunk,
   SocketMessageType.AIMessageChunk,
   SocketMessageType.AgentLlmEnd,
   SocketMessageType.AgentResponse,
+  SocketMessageType.AgentResultChunk,
   SocketMessageType.References,
   SocketMessageType.PipelineFinish,
   SocketMessageType.Error,
@@ -123,6 +127,7 @@ interface StreamResponseMetadata {
   readonly tool_inputs?: unknown;
   readonly tool_outputs?: unknown;
   readonly tool_output?: unknown;
+  readonly tool_output_chunk_v1?: unknown;
   /** One chunk's position, on an `agent_tool_output_chunk` frame (#956). */
   readonly tool_output_chunk?: unknown;
   /** `{total, tool_output_sha256}` on a completed call whose output was chunked. */

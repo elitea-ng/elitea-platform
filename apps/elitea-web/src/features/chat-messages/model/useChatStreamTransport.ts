@@ -32,8 +32,7 @@
  * IT NEVER RE-STARTS A RUN. Once the POST has succeeded the execution exists
  * server-side, so a transport failure after that point must not fall back to
  * the socket — that would run the agent twice and bill it twice. The stream is
- * REOPENED instead and, once the retry budget is spent, the spinner stops and
- * the failure is surfaced.
+ * REOPENED instead. Extended outages use slower retries without ending the run.
  *
  * STREAM OWNERSHIP (issue #328). A stream belongs to the conversation that
  * started it, and to nothing else. The hook stays mounted across a
@@ -48,21 +47,25 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
+  conversationDetails,
+  type ContinueAgentExecutionParams,
   type AgentExecutionStart,
   type StopChatTaskParams,
   stopChatTask,
 } from "@/entities/conversation/api/conversationApi";
 import type { ExecutionEventData } from "@/shared/api/sse";
+import { EliteaApiError } from "@/shared/api/generated/mutator";
+import { t } from "@/shared/i18n";
 
 import {
   recordStreamFailure,
   runtimeFailureReason,
-  settleInFlight,
 } from "../lib/chatStreamSettle";
 import {
   applyChatStreamFrame,
   type ChatStreamContext,
 } from "../lib/chatStreamReducer";
+import { isRootContextFrame } from "../lib/chatStreamContextFrames";
 import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isTurnTerminalFrame } from "../lib/chatStreamTurnEnd";
@@ -71,66 +74,13 @@ import { useChatStreamConnection } from "./useChatStreamConnection";
 import {
   nonEmptyString,
   useChatStreamRunStarters,
-  type ChatStreamRunStarters,
 } from "./useChatStreamRunStarters";
 
-import type { ChatMessage } from "../lib/convertMessagesToChatHistory";
+import { convertMessagesToChatHistory } from "../lib/convertMessagesToChatHistory";
+import type { MessageGroupWire, MessageParticipantWire } from "@/entities/message/lib/wire";
 
-type SetChatHistory = (
-  updater: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
-) => void;
-
-/** @public Params for `useChatStreamTransport`. */
-export interface UseChatStreamTransportParams {
-  readonly setChatHistory: SetChatHistory;
-  /**
-   * The conversation currently on screen. A stream whose owner (the
-   * `conversationUuid` its `start` was called with) stops matching this is
-   * closed, and its frames are dropped rather than folded into the
-   * conversation that is now mounted — issue #328. Leaving it undefined
-   * disables the guard, which is only right for a caller that has exactly one
-   * conversation for its whole lifetime.
-   */
-  readonly conversationUuid?: string | undefined;
-  /** Identity for messages the reducer has to create, plus the participant roster. */
-  readonly context?: ChatStreamContext | undefined;
-  /**
-   * Graph frames, for a surface that renders a run timeline (the pipeline
-   * flow editor). Chat itself ignores them; forwarding is the caller's half of
-   * the baseline's `onRcvAgentEvent`, see `agentGraphEvents.ts`.
-   */
-  readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
-  /** The run itself failed server-side, or its stream dropped. */
-  readonly onStreamError?: ((reason: string) => void) | undefined;
-}
-
-/**
- * @public
- *
- * `startDetailed`, `start`, `resume` and `regenerate` come from
- * `ChatStreamRunStarters`, which documents each one — including the boolean
- * every caller reads to decide whether a socket fallback is still safe.
- */
-export interface UseChatStreamTransportResult extends ChatStreamRunStarters {
-  /** Whether a stream is currently subscribed — drives the composer's Stop affordance. */
-  readonly isStreaming: boolean;
-  /**
-   * Detach from the current stream WITHOUT cancelling the run: close the
-   * connection, cancel any pending reconnect, and leave the history alone.
-   *
-   * This is the conversation-switch / teardown path. It does not settle the
-   * spinner because the history it would settle is the one now on screen,
-   * which belongs to a different conversation.
-   */
-  readonly close: () => void;
-  /**
-   * The user pressed Stop. Cancels the run SERVER-SIDE (`DELETE
-   * /elitea_core/task/prompt_lib/{projectId}/{responseMessageId}` — the id the
-   * start endpoint returned), settles the message, and closes the stream
-   * without reconnecting.
-   */
-  readonly stop: () => void;
-}
+import type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
+export type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
 
 export function useChatStreamTransport(
   params: UseChatStreamTransportParams,
@@ -147,6 +97,12 @@ export function useChatStreamTransport(
   // `useExecutionEventStream` keys its connection on the URL and the handler
   // identities, and a reconnect mid-answer would replay the run from the
   // cursor and duplicate what is already on screen.
+  const onContextChangedRef = useRef(params.onContextChanged);
+  onContextChangedRef.current = params.onContextChanged;
+  const contextProjectRef = useRef<string | number | undefined>(undefined);
+  const refreshContext = useCallback(() => {
+    if (contextProjectRef.current !== undefined) onContextChangedRef.current?.(contextProjectRef.current);
+  }, []);
   const contextRef = useRef<ChatStreamContext | undefined>(context);
   contextRef.current = context;
   const onAgentEventRef = useRef(onAgentEvent);
@@ -162,6 +118,7 @@ export function useChatStreamTransport(
 
   /** What Stop has to cancel server-side, from the start endpoint's answer. */
   const cancelRef = useRef<StopChatTaskParams | null>(null);
+  const stopRequestRef = useRef<StopChatTaskParams | null>(null);
   /**
    * The user-message identity from the request that started this run.
    *
@@ -209,10 +166,14 @@ export function useChatStreamTransport(
       // same array, but the forward below would still fire on it.
       if (!isChatStreamFrame(frame)) return;
       const frameQuestionId = nonEmptyString(frame.question_id);
-      const identifiedFrame =
-        frameQuestionId === undefined && questionIdRef.current !== undefined
-          ? { ...frame, question_id: questionIdRef.current }
-          : frame;
+      // Authorization/output-limit resumes identify the existing answer and
+      // need not repeat its question. Normalize null/empty wire values to
+      // absence even without a request hint: they must not erase that answer's
+      // persisted question link and send the next Regenerate to the legacy API.
+      const identifiedFrame = {
+        ...frame,
+        question_id: frameQuestionId ?? questionIdRef.current,
+      };
       setChatHistory((prev) =>
         applyChatStreamFrame(prev, identifiedFrame, contextRef.current ?? {}),
       );
@@ -228,11 +189,12 @@ export function useChatStreamTransport(
       //
       // detach() never touches chat history, and it must not here: the
       // terminal frame has already settled the message through the reducer.
+      if (isRootContextFrame(identifiedFrame) || isTurnTerminalFrame(identifiedFrame)) refreshContext();
       if (isTurnTerminalFrame(identifiedFrame)) detach();
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach],
+    [setChatHistory, detach, refreshContext],
   );
 
   /**
@@ -243,12 +205,13 @@ export function useChatStreamTransport(
    * the question it answers.
    */
   const failWith = useCallback(
-    (reason: string) => {
+    (reason: string, failureCode?: string) => {
       const streamContext = contextRef.current;
       const questionId = questionIdRef.current;
+      const responseMessageId = cancelRef.current?.messageGroupUuid;
       detach();
       setChatHistory((prev) =>
-        recordStreamFailure(prev, reason, streamContext, questionId),
+        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId, failureCode),
       );
       onStreamErrorRef.current?.(reason);
     },
@@ -261,17 +224,18 @@ export function useChatStreamTransport(
       // dropping. A refusal can be the run's FIRST frame, so this must not
       // assume a message exists to carry it; `recordStreamFailure` appends one
       // when nothing is in flight.
-      failWith(runtimeFailureReason(frame));
+      refreshContext();
+      failWith(runtimeFailureReason(frame), typeof frame['code'] === 'string' ? frame['code'] : undefined);
     },
-    [failWith],
+    [failWith, refreshContext],
   );
 
   const connection = useChatStreamConnection({
     onNodeEvent,
     onFailed,
-    // A spent retry budget ends the turn exactly like a runtime failure: the
-    // reason goes on the message, not only to the caller's toast.
-    onConnectionLost: failWith,
+    // A disconnected observer cannot declare the durable execution failed.
+    // Retain ownership and Stop while the connection keeps retrying.
+    onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;
@@ -314,6 +278,8 @@ export function useChatStreamTransport(
       const active = activeConversationRef.current;
       if (active !== undefined && active !== runConversationUuid) return true;
       ownerRef.current = runConversationUuid;
+      contextProjectRef.current = projectId;
+      refreshContext();
       questionIdRef.current = questionId;
       // `response_message_id` is what the cancel route addresses
       // (`DELETE .../task/prompt_lib/{projectID}/{responseMessageID}`). Without
@@ -326,28 +292,68 @@ export function useChatStreamTransport(
       openStream(accepted.events_url);
       return true;
     },
-    [openStream],
+    [openStream, refreshContext],
   );
 
-  const starters = useChatStreamRunStarters(subscribeToRun);
+  const reconcileResume = useCallback(async (
+    accepted: AgentExecutionStart, params: ContinueAgentExecutionParams,
+  ): Promise<string | undefined> => {
+    const previousId = nonEmptyString(params.body['message_id']);
+    const responseId = nonEmptyString(accepted.response_message_id);
+    if (!previousId || !responseId || previousId === responseId) return undefined;
+    if (activeConversationRef.current !== undefined && activeConversationRef.current !== params.conversationUuid) return undefined;
+    setChatHistory((previous) => previous.map((message) => message.id === previousId
+      ? { ...message, isStreaming: false, isLoading: false, hitlInterrupt: undefined, hitlInterrupts: undefined }
+      : message));
+    try {
+      const snapshot = await conversationDetails({
+        projectId: params.projectId, id: params.conversationUuid,
+        messages_limit: 50, sort_order: 'desc',
+      }, AbortSignal.timeout(10_000));
+      if (activeConversationRef.current !== undefined && activeConversationRef.current !== params.conversationUuid) return undefined;
+      const groups = snapshot['message_groups'];
+      if (!Array.isArray(groups)) throw new Error('Missing continuation history');
+      const messages = convertMessagesToChatHistory(groups as MessageGroupWire[], snapshot.participants as readonly MessageParticipantWire[] | undefined);
+      const response = messages.find((message) => message.id === responseId);
+      const review = messages.find((message) => message.id === previousId);
+      const decision = messages.find((message) => message.id === response?.questionId && message.role === 'user');
+      if (!review || !decision) throw new Error('Missing continuation segments');
+      setChatHistory((previous) => {
+        const settled = previous.map((message) => message.id === previousId
+          ? { ...message, ...review, questionId: message.questionId, toolActions: review.toolActions?.length ? review.toolActions : message.toolActions }
+          : message);
+        return settled.some((message) => message.id === decision.id) ? settled : [...settled, decision];
+      });
+      // Replay starts from the beginning. Do not seed partially generated response text here.
+      return decision.id;
+    } catch {
+      if (activeConversationRef.current === undefined || activeConversationRef.current === params.conversationUuid) {
+        onStreamErrorRef.current?.('The decision was saved, but its chat history could not be refreshed. Reload the chat to view it.');
+      }
+      // Admission succeeded. A history-read failure must never send the decision again.
+      return undefined;
+    }
+  }, [setChatHistory]);
+  const starters = useChatStreamRunStarters(subscribeToRun, reconcileResume);
 
   const stop = useCallback(() => {
-    // Nothing of this hook's is running — the run was already stopped, already
-    // finished, or belonged to a conversation the user has left (which
-    // detached it). Settling here would clear the spinner on somebody else's
-    // in-flight message.
     if (!ownsRun()) return;
     const target = cancelRef.current;
-    detach();
-    setChatHistory((prev) => settleInFlight(prev));
-    // Closing the client stream does not stop the agent: the execution exists
-    // server-side and would keep burning tokens against the user's budget
-    // while nobody watches. The DELETE is what actually ends it; its failure
-    // is not surfaced because the run is already off this user's screen and a
-    // 409 ("not active or cannot be stopped") is the expected answer when the
-    // turn finished between the click and the request.
-    if (target) void stopChatTask(target).catch(() => undefined);
-  }, [detach, setChatHistory, ownsRun]);
+    if (!target || stopRequestRef.current === target) return;
+    stopRequestRef.current = target;
+    // Stop admission is not termination. Keep the durable observer and its
+    // reconnect path alive until the worker confirms the terminal outcome.
+    void stopChatTask(target).catch((error: unknown) => {
+      if (cancelRef.current !== target) return;
+      // Completion can win the race with Stop; its terminal event still owns
+      // the outcome. Other request failures remain visible and retryable.
+      if (error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 409) return;
+      onStreamErrorRef.current?.(t('chatMessages.stream.stopFailed', 'The stop request could not be confirmed. The run may still be active. Try Stop again.'));
+    }).finally(() => {
+      if (stopRequestRef.current === target) stopRequestRef.current = null;
+      onContextChangedRef.current?.(target.projectId);
+    });
+  }, [ownsRun]);
 
   return useMemo(
     () => ({

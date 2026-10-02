@@ -1,0 +1,204 @@
+package toolkitexecution
+
+import (
+	"context"
+	"errors"
+	"strconv"
+
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+)
+
+var ErrToolkitExecuteReadResultMismatch = errors.New("direct toolkit result does not match admitted invocation")
+
+// ExecuteCurrentReadToolRequest is the authorized application-level request
+// for one externally exposed toolkit operation. The identity is repeated in
+// its typed numeric form so this boundary can prove that authorization,
+// tenant routing, and durable admission all name the same actor and project.
+type ExecuteCurrentReadToolRequest struct {
+	Identity       executionapp.AdmissionIdentity
+	IdempotencyKey string
+	ProjectID      int32
+	ActorID        int32
+	ToolkitID      int32
+	ToolName       string
+	Arguments      map[string]any
+}
+
+type CurrentReadToolExecutionOutcome struct {
+	ExecutionID string
+	Completion  Completion
+}
+
+// AdmittedCurrentReadTool binds result observation to an already admitted invocation.
+// Only Admit constructs this value. It contains no arguments or credentials.
+// Copying it permits another observer, not another invocation.
+type AdmittedCurrentReadTool struct {
+	executionID string
+	toolkitType string
+	toolkitName string
+	toolName    string
+}
+
+func (a AdmittedCurrentReadTool) ExecutionID() string { return a.executionID }
+
+// ReadToolResultReference identifies a durable result, not permission to read it.
+// Transports must authenticate its provenance and caller before observation.
+type ReadToolResultReference struct {
+	ExecutionID string `json:"execution_id"`
+	ToolkitType string `json:"toolkit_type"`
+	ToolkitName string `json:"toolkit_name"`
+	ToolName    string `json:"tool_name"`
+}
+
+func (r ReadToolResultReference) Valid() bool {
+	return validIdentity(r.ExecutionID) && validIdentity(r.ToolkitType) && validIdentity(r.ToolkitName) && validIdentity(r.ToolName)
+}
+
+func (a AdmittedCurrentReadTool) Reference() ReadToolResultReference {
+	return ReadToolResultReference{ExecutionID: a.executionID, ToolkitType: a.toolkitType, ToolkitName: a.toolkitName, ToolName: a.toolName}
+}
+
+// WaitForResult reads an authenticated durable reference without another admission.
+func (s *CurrentReadToolExecutionService) WaitForResult(ctx context.Context, reference ReadToolResultReference) (CurrentReadToolExecutionOutcome, error) {
+	if !reference.Valid() {
+		return CurrentReadToolExecutionOutcome{}, ErrInvalidCurrentReadTool
+	}
+	return s.Wait(ctx, AdmittedCurrentReadTool{executionID: reference.ExecutionID, toolkitType: reference.ToolkitType, toolkitName: reference.ToolkitName, toolName: reference.ToolName})
+}
+
+type currentReadToolFreezer interface {
+	Freeze(context.Context, FreezeCurrentReadToolRequest) (FrozenCurrentReadTool, error)
+}
+
+type currentReadToolSubmitter interface {
+	Submit(context.Context, SubmitRequest) (executionapp.AdmissionOutcome, error)
+}
+
+type currentReadToolWaiter interface {
+	Wait(context.Context, string, uint64) (Completion, error)
+}
+
+// CurrentReadToolExecutionService composes the durable direct-tool lifecycle:
+// re-read and freeze the exact current row, atomically admit its immutable
+// input, then wait for the fenced terminal result. It deliberately contains no
+// SQL and no transport concerns.
+type CurrentReadToolExecutionService struct {
+	freezer    currentReadToolFreezer
+	admissions currentReadToolSubmitter
+	results    currentReadToolWaiter
+}
+
+func NewCurrentReadToolExecutionService(
+	freezer currentReadToolFreezer,
+	admissions currentReadToolSubmitter,
+	results currentReadToolWaiter,
+) (*CurrentReadToolExecutionService, error) {
+	if freezer == nil || admissions == nil || results == nil {
+		return nil, errors.New("direct toolkit execution dependencies are required")
+	}
+	return &CurrentReadToolExecutionService{
+		freezer: freezer, admissions: admissions, results: results,
+	}, nil
+}
+
+func (s *CurrentReadToolExecutionService) Execute(
+	ctx context.Context,
+	request ExecuteCurrentReadToolRequest,
+) (CurrentReadToolExecutionOutcome, error) {
+	admitted, err := s.Admit(ctx, request)
+	if err != nil {
+		return CurrentReadToolExecutionOutcome{}, err
+	}
+	return s.Wait(ctx, admitted)
+}
+
+// Admit freezes and durably submits the invocation without waiting for its result.
+// Transport code can publish its resume identity before starting observation.
+func (s *CurrentReadToolExecutionService) Admit(
+	ctx context.Context,
+	request ExecuteCurrentReadToolRequest,
+) (AdmittedCurrentReadTool, error) {
+	if s == nil || ctx == nil || !validExecutionRequest(request) {
+		return AdmittedCurrentReadTool{}, currentReadToolAdmissionError(
+			CurrentReadToolAdmissionInput, ErrInvalidCurrentReadTool,
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return AdmittedCurrentReadTool{}, err
+	}
+
+	frozen, err := s.freezer.Freeze(ctx, FreezeCurrentReadToolRequest{
+		ProjectID: request.ProjectID,
+		ActorID:   request.ActorID,
+		ToolkitID: request.ToolkitID,
+		ToolName:  request.ToolName,
+		Arguments: cloneArguments(request.Arguments),
+	})
+	if err != nil {
+		return AdmittedCurrentReadTool{}, err
+	}
+	admitted, err := s.admissions.Submit(ctx, SubmitRequest{
+		Identity:       request.Identity,
+		IdempotencyKey: request.IdempotencyKey,
+		Frozen:         frozen,
+	})
+	if err != nil {
+		return AdmittedCurrentReadTool{}, currentReadToolAdmissionError(
+			CurrentReadToolAdmissionDurableWrite, err,
+		)
+	}
+	return AdmittedCurrentReadTool{
+		executionID: admitted.ExecutionID,
+		toolkitType: frozen.ToolkitType,
+		toolkitName: frozen.ToolkitName,
+		toolName:    frozen.ToolName,
+	}, nil
+}
+
+// Wait observes an admitted invocation. Cancellation stops this observer only.
+// Repeated calls never freeze, submit, or execute another toolkit invocation.
+func (s *CurrentReadToolExecutionService) Wait(
+	ctx context.Context,
+	admitted AdmittedCurrentReadTool,
+) (CurrentReadToolExecutionOutcome, error) {
+	outcome := CurrentReadToolExecutionOutcome{ExecutionID: admitted.executionID}
+	if s == nil || ctx == nil || admitted.executionID == "" {
+		return outcome, ErrInvalidCurrentReadTool
+	}
+	if err := ctx.Err(); err != nil {
+		return outcome, err
+	}
+	completion, err := s.results.Wait(ctx, admitted.executionID, 1)
+	if err != nil {
+		return outcome, err
+	}
+	if completion.ToolkitType != admitted.toolkitType ||
+		completion.ToolkitName != admitted.toolkitName ||
+		completion.ToolName != admitted.toolName {
+		return outcome, ErrToolkitExecuteReadResultMismatch
+	}
+	outcome.Completion = completion.Clone()
+	return outcome, nil
+}
+
+func validExecutionRequest(request ExecuteCurrentReadToolRequest) bool {
+	if request.ProjectID <= 0 || request.ActorID <= 0 || request.ToolkitID <= 0 ||
+		!validIdentity(request.ToolName) || request.Arguments == nil ||
+		request.IdempotencyKey == "" {
+		return false
+	}
+	projectID := strconv.FormatInt(int64(request.ProjectID), 10)
+	actorID := strconv.FormatInt(int64(request.ActorID), 10)
+	return request.Identity.TenantID == projectID &&
+		request.Identity.ResourceProjectID == projectID &&
+		request.Identity.ProjectionProjectID == projectID &&
+		request.Identity.ActorID == actorID
+}
+
+func cloneArguments(arguments map[string]any) map[string]any {
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return cloned
+}

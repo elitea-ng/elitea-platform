@@ -17,11 +17,15 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func TestUpdatePublishesAConversationAndTheReadAnswersIt(t *testing.T) {
+	for _, key := range []string{"ELITEA_AI_PROJECT_ID", "AI_PROJECT_ID", "PUBLIC_PROJECT_ID", "SHARED_PROJECT_ID"} {
+		t.Setenv(key, "2")
+	}
 	pool := newFreshInstallPool(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "1"}), 30*time.Second)
 	defer cancel()
 	repo := NewConversationsRepo(pool)
 

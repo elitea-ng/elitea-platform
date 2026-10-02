@@ -13,9 +13,6 @@
  * `continuation`/`pagination`) to stay under the §3.5 component-props
  * budget, mirroring the same grouping pattern used by sibling
  * `ApplicationAnswer.tsx`.
- *
- * Port of `apps/elitea-ui/src/[fsd]/features/chat/ui/chat-box/
- * ChatMessageList.jsx`.
  */
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -125,11 +122,11 @@ export function ChatMessageList({
   tts: { autoSpeak = false, onAutoSpeak, speakingMessageId, speakingSegments, spokenRange } = {},
   continuation: {
     onContinueMcpExecution,
+    renderAuthModal,
     onContinueTokenLimitExecution,
     onHitlResume,
     hideContinueButton = false,
     hideHitlActions = false,
-    renderAuthModal,
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
@@ -318,8 +315,8 @@ export function ChatMessageList({
                   continuation={{
                     hideContinueButton,
                     onContinueMcpExecution: isLastMessage ? onContinueMcpExecution : undefined,
-                    onContinueTokenLimitExecution: isLastMessage ? onContinueTokenLimitExecution : undefined,
                     renderAuthModal,
+                    onContinueTokenLimitExecution: isLastMessage ? onContinueTokenLimitExecution : undefined,
                   }}
                   hitl={{
                     hitlInterrupt: hideHitlActions ? undefined : message.hitlInterrupt,

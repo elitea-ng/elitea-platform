@@ -85,7 +85,7 @@
  * or refusal reaches `useToolkitChat.hooks.ts`, which owns the chat
  * transcript and the Snackbar `onError` channel.
  */
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { useSocketClient, type SocketClient } from '@/shared/api/socket/client';
 import { t } from '@/shared/i18n';
@@ -113,6 +113,7 @@ export interface UseToolkitRunDispatchParams {
   readonly onError?: ((message: string) => void) | undefined;
   /** Every settled or refused REST test-tool run (any tool but `index_data` — see this file's "fifth case"). `useToolkitChat.hooks.ts` owns turning it into a transcript message or a Snackbar. */
   readonly onTestToolOutcome: (outcome: TestToolkitToolOutcome) => void;
+  readonly onMcpAuthRequired?: ((message: Readonly<Record<string, unknown>>) => void) | undefined;
 }
 
 export interface UseToolkitRunDispatchResult {
@@ -176,6 +177,10 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
 
   /** Same latest-ref pattern as `onErrorRef` above, and for the same reason: keeping `onTestToolOutcome` out of `startToolRun`'s already-capped dependency array. */
   const onTestToolOutcomeRef = useRef(onTestToolOutcome);
+  const authorizationHandlerRef = useRef(params.onMcpAuthRequired);
+  authorizationHandlerRef.current = params.onMcpAuthRequired;
+  const testRunRef = useRef(0);
+  useEffect(() => { testRunRef.current += 1; return () => { testRunRef.current += 1; }; }, [projectId, toolkitId]);
   onTestToolOutcomeRef.current = onTestToolOutcome;
 
   const runSocketFallback = useCallback(() => {
@@ -186,6 +191,30 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
     emit();
   }, [setExecutionId]);
 
+  const runNamedTool = useCallback(async (tool: string, relevantInputVariables: Readonly<Record<string, unknown>>) => {
+        const attempt = ++testRunRef.current;
+        const savedParams = structuredClone(relevantInputVariables);
+        const modelConfig = { ...(selectedModel?.name !== undefined ? { llmModel: selectedModel.name } : {}), llmSettings: { temperature: llmSettings.temperature, max_tokens: llmSettings.max_tokens, ...(llmSettings.reasoning_effort !== undefined ? { reasoning_effort: llmSettings.reasoning_effort } : {}) } };
+        const outcome = await testToolkitTool({ projectId, toolkitId, toolName: tool, toolParams: savedParams, ...modelConfig });
+        if (attempt !== testRunRef.current) return;
+        if (outcome.kind === 'authorizationRequired' && authorizationHandlerRef.current) {
+          authorizationHandlerRef.current({ response_metadata: outcome.challenge, task_id: outcome.taskId,
+            onAuthorized: async (reference: string) => {
+              if (attempt !== testRunRef.current || !/^[A-Za-z0-9_-]{43}$/.test(reference)) return;
+              const retry = ++testRunRef.current;
+              const resumed = await testToolkitTool({ projectId, toolkitId, toolName: tool, toolParams: savedParams, ...modelConfig, authorizationReference: reference });
+              if (retry === testRunRef.current) onTestToolOutcomeRef.current(resumed);
+            },
+            onSkip: () => { if (attempt === testRunRef.current) { testRunRef.current += 1; onTestToolOutcomeRef.current({ kind: 'skipped' }); } },
+          });
+          return;
+        }
+        onTestToolOutcomeRef.current(outcome);
+  }, [projectId, toolkitId, selectedModel, llmSettings]);
+
+  const runNamedToolRef = useRef(runNamedTool);
+  runNamedToolRef.current = runNamedTool;
+
   const startToolRun = useCallback(
     async (currentConversation: CreatedConversation | null, tool: string, relevantInputVariables: Readonly<Record<string, unknown>>) => {
       pendingFallbackRef.current = null;
@@ -195,8 +224,7 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
       // no stream and no socket fallback to park.
       if (tool !== IndexesToolsEnum.indexData) {
         setExecutionId(undefined);
-        const outcome = await testToolkitTool({ projectId, toolkitId, toolName: tool, toolParams: relevantInputVariables });
-        onTestToolOutcomeRef.current(outcome);
+        await runNamedToolRef.current(tool, relevantInputVariables);
         return;
       }
 

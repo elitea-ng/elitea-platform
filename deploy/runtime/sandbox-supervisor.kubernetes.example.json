@@ -1,0 +1,34 @@
+{
+  "revision": 1,
+  "listen_address": "0.0.0.0:9446",
+  "owner": "sandbox-replica-unique-id",
+  "audience": "dns:elitea-sandbox",
+  "ca_path": "/run/elitea-sandbox/client-ca.pem",
+  "certificate_path": "/run/elitea-sandbox/server.pem",
+  "private_key_path": "/run/elitea-sandbox/server.key",
+  "verification_keyring_path": "/run/elitea-sandbox/command-signing-keyring.json",
+  "database_url_path": "/run/elitea-sandbox/database-url",
+  "database_ca_path": "/run/elitea-sandbox/database-ca.pem",
+  "database_connections": 4,
+  "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "policy_revision": "python-js-v1",
+  "languages": [
+    "python",
+    "javascript",
+    "typescript"
+  ],
+  "concurrency": 4,
+  "memory_bytes": 536870912,
+  "cpu_limit": 1.0,
+  "timeout_seconds": 60,
+  "backend": {
+    "kind": "kubernetes",
+    "cluster": "sandbox-cluster",
+    "namespace": "elitea-code-execution",
+    "image": "registry.example/elitea-code@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime_class": "sandbox",
+    "node_selector": {
+      "elitea.ai/sandbox": "true"
+    }
+  }
+}

@@ -26,6 +26,7 @@ describe('useMcpAuthModal', () => {
     expect(result.current.mcpAuthMetadata?.authServers).toEqual(['https://as.example.com']);
     expect(result.current.getModalProps().open).toBe(true);
     expect(result.current.getModalProps().serverUrl).toBe('https://mcp.example.com');
+    expect(result.current.getModalProps().tokenStorageKey).toBeUndefined();
   });
 
   it('derives a credential-scoped tokenStorageKey when configurationUuid + an auth endpoint are both present', () => {
@@ -77,12 +78,14 @@ describe('useMcpAuthModal', () => {
     expect(result.current.mcpAuthMetadata?.authServers).toEqual(['https://as.example.com']);
   });
 
-  it('marks toolkitType in modal props only for a pre-built MCP', () => {
+  it('marks remote and pre-built MCP grants for resource audience binding', () => {
     const prebuild = renderHook(() => useMcpAuthModal({ values: { type: 'mcp_github' } }));
     expect(prebuild.result.current.getModalProps().toolkitType).toBe('mcp_github');
 
     const remote = renderHook(() => useMcpAuthModal({ values: { type: 'mcp' } }));
-    expect(remote.result.current.getModalProps().toolkitType).toBeUndefined();
+    expect(remote.result.current.getModalProps().toolkitType).toBe('mcp');
+    const openapi = renderHook(() => useMcpAuthModal({ values: { type: 'openapi' } }));
+    expect(openapi.result.current.getModalProps().toolkitType).toBeUndefined();
   });
 });
 

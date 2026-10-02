@@ -5,15 +5,16 @@ use serde_json::{Map, Value};
 
 use super::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
-    NextInputSuggestionPolicy, UserInput,
+    MAX_AGENT_INSTRUCTION_BYTES, MAX_AGENT_USER_INPUT_BYTES, NextInputSuggestionPolicy, UserInput,
 };
 use crate::protocol::{
-    ProtocolError as AgentProtocolError, elitea::runtime::v1::AgentExecutionInputV1,
+    InputLimitField, ProtocolError as AgentProtocolError,
+    elitea::runtime::v1::AgentExecutionInputV1,
 };
 use crate::toolkits::{ToolAdmissionPolicy, ToolAdmissionPolicyErrorCode};
 
 pub const AGENT_INPUT_SCHEMA_REVISION: &str = "elitea.runtime.agent-execution-input.v1";
-const MAX_AGENT_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_AGENT_INPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_JSON_VALUE_BYTES: usize = 256 * 1024;
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_JSON_STRING_BYTES: usize = 64 * 1024;
@@ -68,11 +69,18 @@ pub fn request_from(
     validate_binding(&binding)?;
 
     let llm = json_object(&message.llm, "the agent llm must be an object")?;
-    let chat_history = json_list(
-        &message.chat_history,
-        "the agent chat history must be a list",
-    )?;
-    let user_input = match parse_json_value(&message.user_input)? {
+    // History is data-plane content. Let the model context policy compact it
+    // after admission; do not apply the smaller control-field budget here.
+    let Value::Array(chat_history) = parse_history(&message.chat_history)
+        .map_err(|error| error.in_input_field(InputLimitField::ChatHistory))?
+    else {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent chat history must be a list",
+        ));
+    };
+    let user_input = match parse_user_input(&message.user_input)
+        .map_err(|error| error.in_input_field(InputLimitField::UserMessage))?
+    {
         Value::String(value) => UserInput::Text(value),
         Value::Array(value) => UserInput::ContentBlocks(value),
         _ => {
@@ -81,11 +89,10 @@ pub fn request_from(
             ));
         }
     };
-    let tools = json_list(&message.tools, "the agent tools must be a list")?;
-    let application = json_object(
-        &message.application,
-        "the agent application must be an object",
-    )?;
+    let tools = json_list(&message.tools, "the agent tools must be a list")
+        .map_err(|error| error.in_input_field(InputLimitField::ToolConfiguration))?;
+    let application = application_object(&message.application)
+        .map_err(|error| error.in_input_field(InputLimitField::AgentSettings))?;
     let internal_tools = string_list(
         &message.internal_tools,
         "the agent internal tools must contain only strings",
@@ -137,7 +144,7 @@ pub fn request_from(
     )?;
     let next_input_suggestion = next_input_suggestion_policy(&message.next_input_suggestion)?;
     let toolkit_guardrails = toolkit_guardrails_policy(&message.toolkit_guardrails)?;
-    let truncated_content = optional_json_string(
+    let truncated_content = optional_continuation_text(
         &message.truncated_content,
         "the truncated agent content must be text",
     )?;
@@ -212,8 +219,48 @@ pub fn request_from(
             next_input_suggestion,
             toolkit_guardrails,
             truncated_content,
+            model_context_limits: message.model_context_limits.map(model_context_limits),
+            summary_model: message
+                .summary_model
+                .map(|summary| {
+                    Ok(super::request::SummaryModelSnapshot {
+                        llm_settings: json_object(
+                            &summary.llm_settings,
+                            "the summary model settings must be an object",
+                        )?,
+                        model_context_limits: model_context_limits(
+                            summary.model_context_limits.ok_or(
+                                AgentProtocolError::InvalidInput(
+                                    "the summary model limits are required",
+                                ),
+                            )?,
+                        ),
+                    })
+                })
+                .transpose()?,
+            project_context: message.project_context.map(|context| {
+                super::request::ProjectContextSnapshot {
+                    id: context.id,
+                    revision: context.revision,
+                    scope: context.scope,
+                    content: context.content,
+                    activation_description: context.activation_description,
+                }
+            }),
         },
     })
+}
+
+fn model_context_limits(
+    limits: crate::protocol::elitea::runtime::v1::ModelContextLimitsV1,
+) -> super::request::ModelContextLimits {
+    super::request::ModelContextLimits {
+        context_window_tokens: limits.context_window_tokens,
+        max_output_tokens: limits.max_output_tokens,
+        context_window_fallback: limits.context_window_fallback,
+        max_output_fallback: limits.max_output_fallback,
+        max_input_tokens: limits.max_input_tokens,
+    }
 }
 
 fn validate_binding(binding: &AgentInputBinding) -> Result<(), AgentProtocolError> {
@@ -230,8 +277,44 @@ fn validate_binding(binding: &AgentInputBinding) -> Result<(), AgentProtocolErro
     Ok(())
 }
 
-fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> {
-    if raw.is_empty() || raw.len() > MAX_JSON_VALUE_BYTES {
+pub(crate) fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> {
+    parse_bounded_json_value(raw, MAX_JSON_VALUE_BYTES)
+}
+
+// User text is data-plane content. Escaped JSON may exceed the decoded
+// text limit, but the complete encoded execution input stays bounded.
+fn parse_user_input(raw: &[u8]) -> Result<Value, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the agent user input exceeds the input limit",
+        ));
+    }
+    let value = serde_json::from_slice(raw).map_err(|_| malformed_json())?;
+    JsonLimits::new(raw).validate_scope(JsonTextScope::UserText)?;
+    Ok(value)
+}
+
+fn parse_history(raw: &[u8]) -> Result<Value, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the agent history exceeds the input limit",
+        ));
+    }
+    let value = serde_json::from_slice(raw).map_err(|_| malformed_json())?;
+    JsonLimits {
+        raw,
+        cursor: 0,
+        max_string_bytes: MAX_AGENT_INPUT_BYTES,
+    }
+    .validate()?;
+    Ok(value)
+}
+
+pub(crate) fn parse_bounded_json_value(
+    raw: &[u8],
+    maximum: usize,
+) -> Result<Value, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > maximum {
         return Err(AgentProtocolError::ResourceExhausted(
             "the agent JSON input exceeds the approved limit",
         ));
@@ -240,6 +323,43 @@ fn parse_json_value(raw: &[u8]) -> Result<Value, AgentProtocolError> {
         .map_err(|_| AgentProtocolError::InvalidInput("the agent JSON input is malformed"))?;
     JsonLimits::new(raw).validate()?;
     Ok(value)
+}
+
+// Only instruction values use the content budget. Identifiers, keys, and
+// arbitrary metadata retain the control-string limit.
+fn application_object(raw: &[u8]) -> Result<Map<String, Value>, AgentProtocolError> {
+    if raw.is_empty() || raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the agent application snapshot exceeds the input limit",
+        ));
+    }
+    let value = serde_json::from_slice(raw).map_err(|_| malformed_json())?;
+    JsonLimits::new(raw).validate_scope(JsonTextScope::Application)?;
+    match value {
+        Value::Object(value) => Ok(value),
+        _ => Err(AgentProtocolError::InvalidInput(
+            "the agent application must be an object",
+        )),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum JsonTextScope {
+    Control,
+    Application,
+    Version,
+    Instruction,
+    UserText,
+}
+
+impl JsonTextScope {
+    fn member(self, key: &str) -> Self {
+        match (self, key) {
+            (Self::Application, "version_details") => Self::Version,
+            (Self::Application | Self::Version, "instructions") => Self::Instruction,
+            _ => Self::Control,
+        }
+    }
 }
 
 fn json_object(
@@ -263,17 +383,27 @@ fn optional_json_object(
     }
 }
 
-fn optional_json_string(
+fn optional_continuation_text(
     raw: &[u8],
     shape_error: &'static str,
 ) -> Result<Option<String>, AgentProtocolError> {
     if raw.is_empty() {
         return Ok(None);
     }
-    match parse_json_value(raw)? {
-        Value::String(value) => Ok(Some(value)),
-        _ => Err(AgentProtocolError::InvalidInput(shape_error)),
+    if raw.len() > MAX_AGENT_INPUT_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the continuation input exceeds the approved limit",
+        ));
     }
+    // Decode a scalar directly, without allocating arbitrary nested JSON values.
+    let value: String =
+        serde_json::from_slice(raw).map_err(|_| AgentProtocolError::InvalidInput(shape_error))?;
+    if value.len() > super::request::MAX_OUTPUT_CONTINUATION_BYTES {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the continuation text exceeds the approved limit",
+        ));
+    }
+    Ok(Some(value))
 }
 
 fn json_list(raw: &[u8], shape_error: &'static str) -> Result<Vec<Value>, AgentProtocolError> {
@@ -419,16 +549,25 @@ const fn toolkit_guardrails_error() -> AgentProtocolError {
 struct JsonLimits<'a> {
     raw: &'a [u8],
     cursor: usize,
+    max_string_bytes: usize,
 }
 
 impl<'a> JsonLimits<'a> {
     const fn new(raw: &'a [u8]) -> Self {
-        Self { raw, cursor: 0 }
+        Self {
+            raw,
+            cursor: 0,
+            max_string_bytes: MAX_JSON_STRING_BYTES,
+        }
     }
 
-    fn validate(mut self) -> Result<(), AgentProtocolError> {
+    fn validate(self) -> Result<(), AgentProtocolError> {
+        self.validate_scope(JsonTextScope::Control)
+    }
+
+    fn validate_scope(mut self, scope: JsonTextScope) -> Result<(), AgentProtocolError> {
         self.skip_whitespace();
-        self.value(0)?;
+        self.value(0, scope)?;
         self.skip_whitespace();
         if self.cursor != self.raw.len() {
             return Err(malformed_json());
@@ -436,7 +575,7 @@ impl<'a> JsonLimits<'a> {
         Ok(())
     }
 
-    fn value(&mut self, depth: usize) -> Result<(), AgentProtocolError> {
+    fn value(&mut self, depth: usize, scope: JsonTextScope) -> Result<(), AgentProtocolError> {
         if depth > MAX_JSON_DEPTH {
             return Err(AgentProtocolError::ResourceExhausted(
                 "the agent JSON input exceeds the nesting limit",
@@ -444,9 +583,15 @@ impl<'a> JsonLimits<'a> {
         }
         self.skip_whitespace();
         match self.peek() {
-            Some(b'{') => self.object(depth),
+            Some(b'{') => self.object(depth, scope),
             Some(b'[') => self.array(depth),
-            Some(b'\"') => self.string().map(|_| ()),
+            Some(b'\"') => self
+                .string(match scope {
+                    JsonTextScope::Instruction => MAX_AGENT_INSTRUCTION_BYTES,
+                    JsonTextScope::UserText => MAX_AGENT_USER_INPUT_BYTES,
+                    _ => self.max_string_bytes,
+                })
+                .map(|_| ()),
             Some(b't') => self.literal(b"true"),
             Some(b'f') => self.literal(b"false"),
             Some(b'n') => self.literal(b"null"),
@@ -455,7 +600,7 @@ impl<'a> JsonLimits<'a> {
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<(), AgentProtocolError> {
+    fn object(&mut self, depth: usize, scope: JsonTextScope) -> Result<(), AgentProtocolError> {
         self.cursor += 1;
         self.skip_whitespace();
         if self.take(b'}') {
@@ -463,7 +608,8 @@ impl<'a> JsonLimits<'a> {
         }
         let mut keys = HashSet::new();
         loop {
-            let key = self.string()?;
+            let key = self.string(self.max_string_bytes)?;
+            let member_scope = scope.member(&key);
             if !keys.insert(key) {
                 return Err(AgentProtocolError::InvalidInput(
                     "the agent JSON input contains a duplicate member",
@@ -473,7 +619,7 @@ impl<'a> JsonLimits<'a> {
             if !self.take(b':') {
                 return Err(malformed_json());
             }
-            self.value(depth + 1)?;
+            self.value(depth + 1, member_scope)?;
             self.skip_whitespace();
             if self.take(b'}') {
                 return Ok(());
@@ -492,7 +638,7 @@ impl<'a> JsonLimits<'a> {
             return Ok(());
         }
         loop {
-            self.value(depth + 1)?;
+            self.value(depth + 1, JsonTextScope::Control)?;
             self.skip_whitespace();
             if self.take(b']') {
                 return Ok(());
@@ -504,7 +650,7 @@ impl<'a> JsonLimits<'a> {
         }
     }
 
-    fn string(&mut self) -> Result<String, AgentProtocolError> {
+    fn string(&mut self, maximum: usize) -> Result<String, AgentProtocolError> {
         let start = self.cursor;
         if !self.take(b'\"') {
             return Err(malformed_json());
@@ -519,7 +665,7 @@ impl<'a> JsonLimits<'a> {
             } else if byte == b'\"' {
                 let value: String = serde_json::from_slice(&self.raw[start..self.cursor])
                     .map_err(|_| malformed_json())?;
-                if value.len() > MAX_JSON_STRING_BYTES {
+                if value.len() > maximum {
                     return Err(AgentProtocolError::ResourceExhausted(
                         "an agent JSON string exceeds the approved limit",
                     ));

@@ -1,4 +1,5 @@
 import * as yup from 'yup';
+import { resolveContextBudgetMode, type ContextBudgetMode } from '@/shared/lib/contextBudget';
 
 import { DEFAULT_CONTEXT_STRATEGY, SEPARATOR, VALIDATION_LIMITS } from './context-budget/constants';
 
@@ -6,7 +7,7 @@ export const PROFILE_INITIAL_VALUES = {
   persona: 'generic',
   default_instructions: '',
   context_enabled: DEFAULT_CONTEXT_STRATEGY.ENABLED,
-  max_context_tokens: DEFAULT_CONTEXT_STRATEGY.MAX_CONTEXT_TOKENS,
+  budget_mode: 'balanced' as ContextBudgetMode,
   preserve_recent_messages: DEFAULT_CONTEXT_STRATEGY.PRESERVE_RECENT_MESSAGES,
   enable_summarization: DEFAULT_CONTEXT_STRATEGY.ENABLE_SUMMARIZATION,
   summary_llm_settings: {
@@ -66,7 +67,7 @@ function serializePersonalization(p: SocialAuthorPersonalization): Record<string
 function serializeContextManagement(cm: Record<string, unknown>): Record<string, unknown> {
   return {
     context_enabled: cm.enabled ?? DEFAULT_CONTEXT_STRATEGY.ENABLED,
-    max_context_tokens: cm.max_context_tokens ?? DEFAULT_CONTEXT_STRATEGY.MAX_CONTEXT_TOKENS,
+    budget_mode: resolveContextBudgetMode(cm.budget_mode),
     preserve_recent_messages: cm.preserve_recent_messages ?? DEFAULT_CONTEXT_STRATEGY.PRESERVE_RECENT_MESSAGES,
   };
 }
@@ -145,7 +146,7 @@ export function deserializeProfileFormData(formValues: Record<string, unknown>):
       default_instructions: formValues.default_instructions,
       default_context_management: {
         enabled: formValues.context_enabled,
-        max_context_tokens: formValues.max_context_tokens,
+        budget_mode: formValues.budget_mode,
         preserve_recent_messages: formValues.preserve_recent_messages,
       },
       default_summarization: {
@@ -171,14 +172,14 @@ export function deserializeProfileFormData(formValues: Record<string, unknown>):
  */
 export function createContextStrategyFormData(formikValues: ProfileFormValues): {
   enabled: boolean;
-  max_context_tokens: number;
+  budget_mode: ContextBudgetMode;
   preserve_recent_messages: number;
   enable_summarization: boolean;
   summary_llm_settings: ProfileFormValues['summary_llm_settings'];
 } {
   return {
     enabled: formikValues.context_enabled,
-    max_context_tokens: formikValues.max_context_tokens,
+    budget_mode: formikValues.budget_mode,
     preserve_recent_messages: formikValues.preserve_recent_messages,
     enable_summarization: formikValues.enable_summarization,
     summary_llm_settings: formikValues.summary_llm_settings,
@@ -202,26 +203,7 @@ export const ProfileValidationSchema: yup.ObjectSchema<ProfileFormValues> =
     persona: yup.string().required('Please select a personality'),
     default_instructions: yup.string().notRequired(),
     context_enabled: yup.boolean().notRequired(),
-    max_context_tokens: yup
-      .number()
-      .typeError('Please enter a valid number')
-      .integer('Must be a whole number')
-      .when('context_enabled', {
-        is: true,
-        // oxlint-disable-next-line unicorn/no-thenable -- yup's ConditionOptions `then` key, not a Promise thenable.
-        then: (schema) =>
-          schema
-            .required('This field is required')
-            .min(
-              VALIDATION_LIMITS.MAX_CONTEXT_TOKENS.MIN,
-              `Max tokens must be at least ${VALIDATION_LIMITS.MAX_CONTEXT_TOKENS.MIN.toLocaleString()}`,
-            )
-            .max(
-              VALIDATION_LIMITS.MAX_CONTEXT_TOKENS.MAX,
-              `Max tokens cannot exceed ${VALIDATION_LIMITS.MAX_CONTEXT_TOKENS.MAX.toLocaleString()}`,
-            ),
-        otherwise: (schema) => schema.nullable(),
-      }),
+    budget_mode: yup.string().oneOf(['balanced', 'full']).required(),
     preserve_recent_messages: yup
       .number()
       .typeError('Please enter a valid number')

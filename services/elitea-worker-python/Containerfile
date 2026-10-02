@@ -37,6 +37,8 @@ ARG ELITEA_SDK_TOOL_GROUPS_PATCH=4e631ed9e9523b33410a31bd2242c93fa9ec0b4b
 # Drop this patch (and fold its content into ELITEA_SDK_REVISION) once #607
 # merges and the pin moves to a released SDK version that includes it.
 ARG ELITEA_SDK_IMAGEGEN_PATCH=afff234904b6d5de551436b53c078722f13ff4de
+# Preserve distinct identical sensitive calls when the saved graph resumes.
+ARG ELITEA_SDK_SENSITIVE_RESUME_PATCH=9a0614571a693a86b497b0502456cf32745d530e
 ARG ELITEA_SDK_VERSION=0.9.8
 
 RUN apt-get update \
@@ -62,10 +64,12 @@ RUN git clone \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}^{commit}" \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_TOOL_GROUPS_PATCH}^{commit}" \
     && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_IMAGEGEN_PATCH}^{commit}" \
+    && git -C ./elitea-sdk cat-file -e "${ELITEA_SDK_SENSITIVE_RESUME_PATCH}^{commit}" \
     && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_PREFLIGHT_PATCH}" \
     && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_MCP_HARD_TIMEOUT_PATCH}" \
     && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_TOOL_GROUPS_PATCH}" \
-    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_IMAGEGEN_PATCH}"
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_IMAGEGEN_PATCH}" \
+    && git -C ./elitea-sdk cherry-pick --no-commit "${ELITEA_SDK_SENSITIVE_RESUME_PATCH}"
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip download \
       --dest /sources \
@@ -87,10 +91,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --no-deps \
     ./elitea-sdk \
     && test -f "/wheels/elitea_sdk-${ELITEA_SDK_VERSION}-py3-none-any.whl" \
+    && python ./services/elitea-worker-python/scripts/verify_locked_artifacts.py \
+      ./services/elitea-worker-python/elitea-sdk.lock.json \
+      /build/artifact-constraints.txt \
+      constraints \
     && python -m pip wheel \
     --wheel-dir /wheels \
     --find-links /wheels \
     --prefer-binary \
+    --constraint /build/artifact-constraints.txt \
     "elitea-sdk @ file:///wheels/elitea_sdk-${ELITEA_SDK_VERSION}-py3-none-any.whl" \
     ./libs/proto \
     "./services/elitea-worker-python[agent-current,indexing-current]" \

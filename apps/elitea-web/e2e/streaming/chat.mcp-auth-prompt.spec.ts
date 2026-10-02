@@ -76,10 +76,9 @@
  *     that names nothing, which reads exactly like the gap this case is about.
  *     The `[[mock:call_tool …]]` marker scripts the call.
  *
- * With both corrected the turn reaches the placeholder, ADK raises the tool
- * confirmation that `require_tool_confirmation` asked for, `session.rs` stamps
- * the requirement onto it, and the projector renders an authorization prompt
- * that NAMES the challenging connection and not the other one.
+ * The current native runtime hides protected operations during discovery.
+ * It declares one authorization proxy for each toolkit that needs authorization.
+ * This fixture calls the declared proxy and checks the exact stored toolkit card.
  *
  * RUST leg: `toolkits/mcp.rs` is the native runtime's family. The gate inside
  * the test says why the python leg is still skipped, and — since the trust
@@ -90,13 +89,16 @@ import { expect, test, type Page } from '@playwright/test';
 import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
+  clearMockLlmJournal,
   createAgentThroughForm,
   callToolWithArgumentsPrompt,
   createMcpConnection,
   deleteAgent,
   deleteToolkit,
+  expectStoredAssistantAnswer,
   fillComposer,
   MOCK_CALL_TOOL_SENTINEL,
+  readMockLlmJournal,
   readStoredTranscript,
 } from '../fixtures/api';
 
@@ -152,7 +154,8 @@ async function openAgentChat(page: Page, agentId: string): Promise<string> {
  */
 async function turnText(page: Page, projectId: string, conversationId: string): Promise<string> {
   const rows = await readStoredTranscript(page, projectId, conversationId);
-  return rows.map((row) => `${row.content}\n${JSON.stringify(row.metadata)}`).join('\n---\n');
+  const assistant = rows.filter((row) => row.role === 'assistant').at(-1);
+  return `${assistant?.content ?? ''}\n${JSON.stringify(assistant?.metadata ?? {})}`;
 }
 
 /*
@@ -269,15 +272,34 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
     ).toEqual(expect.arrayContaining([challengingName, openName]));
 
     const conversationId = await openAgentChat(page, agentId);
-    // THE MODEL MUST ACTUALLY CALL THE TOOL. Asking in prose does not do it:
-    // the mock answers prose with prose, the challenged tool is never reached,
-    // and the turn then ends with an ordinary answer that names nothing —
-    // which reads exactly like the gap this case is about. The marker scripts
-    // the call, and `echo` is the CHALLENGING connection's selection, so the
-    // call lands on its authorization placeholder.
+    let operation = MOCK_MCP_TOOL;
+    let argumentsForCall: Record<string, unknown> = { text: 'mcp auth probe' };
+    if (IS_NATIVE_RUNTIME) {
+      // Protected operations stay hidden. A plain catalogue turn records the
+      // model-visible proxy without calling it or pausing discovery.
+      await clearMockLlmJournal(page);
+      const cataloguePrompt = `mcp catalogue probe ${stamp}`;
+      const probe = await fillComposer(page, cataloguePrompt);
+      const admitted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+        timeout: 60_000,
+      });
+      await probe.click();
+      expect((await admitted).status(), 'the catalogue turn must be admitted').toBe(200);
+      await expectStoredAssistantAnswer(page, projectId, conversationId, { contains: cataloguePrompt });
+      const offered = [...new Set((await readMockLlmJournal(page, projectId))
+        .filter((entry) => entry.history.some((message) => message.role === 'user' && message.text === cataloguePrompt))
+        .flatMap((entry) => entry.tools))];
+      expect(offered, 'the protected operation must remain hidden').not.toContain(MOCK_MCP_TOOL);
+      expect(offered, 'the open connection must remain callable').toContain(MOCK_MCP_OTHER_TOOL);
+      const proxies = offered.filter((name) => /^mcp_authorize_[0-9a-f]{32}$/.test(name));
+      expect(proxies, 'only the challenged connection may declare an authorization proxy').toHaveLength(1);
+      operation = proxies[0] ?? '';
+      argumentsForCall = {};
+    }
+
     const sendButton = await fillComposer(
       page,
-      callToolWithArgumentsPrompt(MOCK_MCP_TOOL, { text: 'mcp auth probe' }, MOCK_CALL_TOOL_SENTINEL),
+      callToolWithArgumentsPrompt(operation, argumentsForCall, MOCK_CALL_TOOL_SENTINEL),
     );
     const started = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
       timeout: 60_000,
@@ -285,23 +307,26 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
     await sendButton.click();
     expect((await started).status(), 'the turn must be admitted — the refusal comes from the runtime').toBe(200);
 
-    // SETTLED, not merely non-empty. The first draft polled the transcript's
-    // total length, which the USER row satisfies the instant the turn starts —
-    // so it read the answer 3 seconds in and reported a gap that might only
-    // have been a race. `is_error` is written ONLY by a terminal projection, so
-    // its PRESENCE is the marker that the run has landed; an absent key means
-    // "still running" and must not be read as "finished with nothing".
+    // Require the exact stored authorization card. Ordinary prose naming a
+    // toolkit cannot satisfy this pause and authority assertion.
     await expect
       .poll(
         async () => {
           const rows = await readStoredTranscript(page, projectId, conversationId);
-          const assistant = rows.find((row) => row.role === 'assistant');
-          if (assistant === undefined) return 'no assistant row';
-          return 'is_error' in assistant.metadata ? 'settled' : 'running';
+          const assistant = rows.filter((row) => row.role === 'assistant').at(-1);
+          expect(assistant?.metadata['is_error'], 'the authorization call must not fail').not.toBe(true);
+          return assistant?.metadata['authorization_requests'];
         },
-        { timeout: 240_000, message: 'the turn never settled' },
+        { timeout: 240_000, message: 'the turn never stored its exact MCP authorization card' },
       )
-      .toBe('settled');
+      .toEqual([expect.objectContaining({
+        guardrail_type: 'mcp_auth',
+        toolkit_name: challengingName,
+        toolkit_type: 'mcp',
+        tool_name: operation,
+        server_url: AUTH_MCP_URL,
+      })]);
+    await expect(page.getByRole('button', { name: 'Skip Auth', exact: true })).toBeVisible();
 
     const said = await turnText(page, projectId, conversationId);
     expect(

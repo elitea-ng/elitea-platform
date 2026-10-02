@@ -80,6 +80,18 @@ function readConversationStarters(settings: ChatSlotProps['settings']): readonly
   return starters.filter((entry): entry is string => typeof entry === 'string');
 }
 
+/** Route model changes through the editor so unsaved settings cannot silently change a test run. */
+function readLlmSettings(settings: ChatSlotProps['settings']) {
+  const values = settings['llmSettings'];
+  const update = settings['onSetLLMSettings'];
+  return {
+    ...(values && typeof values === 'object' && !Array.isArray(values)
+      ? { settings: values as Readonly<Record<string, unknown>> } : {}),
+    ...(typeof update === 'function'
+      ? { onSetSettings: update as (values: Readonly<Record<string, unknown>>) => void } : {}),
+  };
+}
+
 export function PipelineTestChat({ settings, disableChat, slotRef, identity, user }: PipelineTestChatProps): ReactNode {
   const userId = user?.id;
   const chatIdentity = useMemo<PipelineTestChatIdentity>(
@@ -179,6 +191,7 @@ export function PipelineTestChat({ settings, disableChat, slotRef, identity, use
         {...(user ? { user } : {})}
         participant={{ active: testConversation.activeParticipant }}
         conversationStarters={conversationStarters}
+        llm={readLlmSettings(settings)}
         // The editor's pane IS the agent/pipeline test surface the baseline
         // means by this flag: it suppresses the ad-hoc `dummy` model
         // participant, because the turn is addressed to the pipeline.

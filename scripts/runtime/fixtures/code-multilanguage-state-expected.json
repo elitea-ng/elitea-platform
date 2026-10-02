@@ -1,0 +1,22 @@
+{
+  "count": 5,
+  "sorted_ids": [
+    "e",
+    "b",
+    "d",
+    "a",
+    "c"
+  ],
+  "status": "PASS",
+  "steps": [
+    "python_sort",
+    "javascript_group",
+    "typescript_check",
+    "rust_verify"
+  ],
+  "total": 31,
+  "totals": {
+    "fruit": 24,
+    "veg": 7
+  }
+}

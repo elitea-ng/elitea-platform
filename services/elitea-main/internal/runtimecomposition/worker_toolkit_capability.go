@@ -38,8 +38,8 @@ var ErrWorkerToolkitCapabilityInvalid = errors.New(
 //     services/elitea-worker-python/tests/unit/test_toolkit_capability_snapshot.py,
 //     which runs in the job that installs exactly those extras.
 //   - the Rust file records the toolkit families services/elitea-worker-rust/
-//     src/toolkits/materialize.rs actually materializes. Its gate is
-//     worker_toolkit_capability_rust_source_test.go, which re-reads that file.
+//     src/toolkits/materialize.rs and direct_runtime.rs materialize. Its gate is
+//     TestRustCapabilitySnapshotMatchesTheRustSource, which reads both files.
 //
 //go:embed current_python_worker_toolkit_capability_snapshot.json
 var pinnedPythonWorkerToolkitCapabilityJSON []byte

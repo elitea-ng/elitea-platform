@@ -240,9 +240,41 @@ fn render_template(
         .map_err(|_| StateModifierExecutionError::Template)?;
     let mut writer = BoundedWriter::new(MAX_RENDERED_BYTES);
     template
-        .render_captured_to(input, &mut writer)
+        .render_captured_to(
+            input
+                .iter()
+                .map(|(key, value)| (key.as_str(), template_value(value)))
+                .collect::<BTreeMap<_, _>>(),
+            &mut writer,
+        )
         .map_err(|_| StateModifierExecutionError::Template)?;
     String::from_utf8(writer.into_inner()).map_err(|_| StateModifierExecutionError::Template)
+}
+
+// serde_json arbitrary-precision numbers serialize as private maps. Convert
+// numeric primitives explicitly so templates receive numbers instead of maps.
+fn template_value(value: &Value) -> JinjaValue {
+    match value {
+        Value::Null => JinjaValue::from(()),
+        Value::Bool(value) => JinjaValue::from(*value),
+        Value::String(value) => JinjaValue::from(value.as_str()),
+        Value::Number(value) => {
+            if let Some(number) = value.as_i64() {
+                JinjaValue::from(number)
+            } else if let Some(number) = value.as_u64() {
+                JinjaValue::from(number)
+            } else if let Some(number) = value.as_f64().filter(|number| number.is_finite()) {
+                JinjaValue::from(number)
+            } else {
+                JinjaValue::from(value.to_string())
+            }
+        }
+        Value::Array(values) => values.iter().map(template_value).collect(),
+        Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| (JinjaValue::from(key.as_str()), template_value(value)))
+            .collect(),
+    }
 }
 
 fn from_json_filter(value: JinjaValue) -> JinjaValue {
@@ -250,7 +282,7 @@ fn from_json_filter(value: JinjaValue) -> JinjaValue {
         return value;
     };
     serde_json::from_str::<Value>(text)
-        .map(JinjaValue::from_serialize)
+        .map(|value| template_value(&value))
         .unwrap_or(value)
 }
 

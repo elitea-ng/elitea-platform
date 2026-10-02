@@ -1,5 +1,7 @@
 //! Process-wide diagnostic safety boundaries.
 
+pub(crate) mod failure;
+
 use std::fmt;
 use std::io::{self, Write};
 use std::sync::Once;
@@ -8,7 +10,7 @@ use std::time::Duration;
 use opentelemetry::global;
 use opentelemetry::propagation::{Extractor, TextMapPropagator as _};
 use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
-use opentelemetry_otlp::{Protocol, WithExportConfig as _};
+use opentelemetry_otlp::{Protocol, WithExportConfig as _, WithHttpConfig as _};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime;
@@ -34,8 +36,10 @@ const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Process-level tracing setup failures with no environment contents exposed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticInitError {
+    CryptoProviderUnavailable,
     InvalidLogLevel,
     InvalidTraceLevel,
+    InvalidFailureDiagnostics,
     ExporterUnavailable,
     SubscriberUnavailable,
 }
@@ -43,10 +47,16 @@ pub enum DiagnosticInitError {
 impl fmt::Display for DiagnosticInitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CryptoProviderUnavailable => {
+                formatter.write_str("the process TLS crypto provider could not be installed")
+            }
             Self::InvalidLogLevel => formatter
                 .write_str("ELITEA_RUST_LOG must be off, error, warn, info, debug, or trace"),
             Self::InvalidTraceLevel => formatter
                 .write_str("ELITEA_RUST_TRACE must be off, error, warn, info, debug, or trace"),
+            Self::InvalidFailureDiagnostics => {
+                formatter.write_str("ELITEA_RUST_FAILURE_DIAGNOSTICS must be off or on")
+            }
             Self::ExporterUnavailable => {
                 formatter.write_str("the OpenTelemetry trace exporter could not be configured")
             }
@@ -58,6 +68,32 @@ impl fmt::Display for DiagnosticInitError {
 }
 
 impl std::error::Error for DiagnosticInitError {}
+
+/// Select the process-wide rustls crypto provider before any HTTP client is
+/// constructed.
+///
+/// The worker deliberately uses ring for its direct TLS clients. Some
+/// dependencies also enable the AWS-LC rustls feature, so leaving provider
+/// selection implicit makes `reqwest::Client::new` panic when OTLP is enabled.
+/// Calling this function before diagnostics construction keeps startup
+/// deterministic. A provider installed earlier by the embedding process is
+/// retained.
+///
+/// # Errors
+///
+/// Returns [`DiagnosticInitError::CryptoProviderUnavailable`] only when no
+/// provider is available after the installation attempt.
+pub fn install_tls_crypto_provider() -> Result<(), DiagnosticInitError> {
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        return Ok(());
+    }
+    let _installation = rustls::crypto::ring::default_provider().install_default();
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        Ok(())
+    } else {
+        Err(DiagnosticInitError::CryptoProviderUnavailable)
+    }
+}
 
 /// Process-owned exporter lifetime. The provider must outlive every worker
 /// span and receive an explicit bounded shutdown before process exit.
@@ -113,12 +149,15 @@ impl std::error::Error for DiagnosticShutdownError {}
 /// level and [`DiagnosticInitError::SubscriberUnavailable`] if another global
 /// subscriber is already installed or process-level installation fails.
 pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitError> {
+    let failure_setting = std::env::var("ELITEA_RUST_FAILURE_DIAGNOSTICS").ok();
+    let capture_failures = failure::configured(failure_setting.as_deref())?;
     let configured = std::env::var(LOG_LEVEL_ENVIRONMENT).ok();
     let directive = tracing_directive(configured.as_deref())?;
     let log_filter =
         EnvFilter::try_new(directive).map_err(|_| DiagnosticInitError::InvalidLogLevel)?;
     let format = tracing_subscriber::fmt::layer()
         .compact()
+        .with_ansi(false)
         .with_target(true)
         .with_thread_ids(true)
         .with_span_events(FmtSpan::CLOSE)
@@ -146,6 +185,7 @@ pub fn install_tracing_subscriber() -> Result<DiagnosticGuard, DiagnosticInitErr
             .try_init()
             .map_err(|_| DiagnosticInitError::SubscriberUnavailable)?,
     }
+    failure::enable(capture_failures);
     Ok(DiagnosticGuard { provider })
 }
 
@@ -182,8 +222,16 @@ fn build_trace_provider() -> Result<Option<SdkTracerProvider>, DiagnosticInitErr
     ) {
         return Ok(None);
     }
+    // Do not let the exporter construct its implicit reqwest client. Its
+    // fallback path calls `Client::new()` after a builder error, which panics
+    // when the process trust-store path is temporarily unavailable. The
+    // worker owns startup failure classification and must keep it fallible.
+    let http_client = reqwest_mcp::Client::builder()
+        .build()
+        .map_err(|_| DiagnosticInitError::ExporterUnavailable)?;
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
+        .with_http_client(http_client)
         .with_protocol(Protocol::HttpBinary)
         .build()
         .map_err(|_| DiagnosticInitError::ExporterUnavailable)?;
@@ -296,9 +344,18 @@ fn panic_source_label(file: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticInitError, panic_source_label, trace_directive, trace_export_enabled,
-        tracing_directive,
+        DiagnosticInitError, install_tls_crypto_provider, panic_source_label, trace_directive,
+        trace_export_enabled, tracing_directive,
     };
+
+    #[test]
+    fn explicit_tls_provider_supports_reqwest_after_feature_unification() {
+        install_tls_crypto_provider().expect("install TLS crypto provider");
+
+        reqwest_mcp::Client::builder()
+            .build()
+            .expect("build reqwest client with the selected provider");
+    }
 
     #[test]
     fn tracing_level_is_crate_scoped_and_rejects_directives() {

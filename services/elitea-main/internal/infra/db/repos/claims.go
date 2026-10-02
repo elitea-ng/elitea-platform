@@ -184,6 +184,10 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 			return nil
 		}
 
+		if err := completeToolkitInboxProjection(ctx, tx, request); err != nil {
+			return err
+		}
+
 		existing, observedAt, live, err := loadActiveClaimForUpdate(ctx, tx, request.ExecutionID, request.Generation, commandID, desired)
 		switch {
 		case err == nil && live:
@@ -432,12 +436,29 @@ WHERE execution_id = $1 AND generation = $2`, request.ExecutionID, int64(request
 				// A terminal result exists but its predecessor claim is not eligible
 				// for this authenticated handoff. Never re-execute business logic.
 				decision.Disposition = executionapp.ClaimRetryLaterNoACK
-			} else if executiondomain.NodeEventCapability(request.CapabilityID) &&
+			} else if (executiondomain.NodeEventCapability(request.CapabilityID) ||
+				request.CapabilityID == executiondomain.ToolkitExecuteReadCapability ||
+				request.CapabilityID == executiondomain.ToolkitCallToolCapability ||
+				request.CapabilityID == executiondomain.ToolkitAvailableToolsCapability) &&
 				state == executiondomain.JobRunning &&
 				invocationState != "PREPARING" {
 				// A replacement fence over RUNNING may reconcile durable output,
 				// but it must never receive business inputs or invoke the SDK.
 				decision.Disposition = executionapp.ClaimRecoverAmbiguousInvocationNoACK
+				if request.AgentModelCheckpointRecovery &&
+					(request.CapabilityID == executiondomain.AgentApplicationCapability || request.CapabilityID == executiondomain.AgentAdhocCapability) &&
+					invocationState == "MAY_HAVE_STARTED" {
+					tag, err := tx.Exec(ctx, `UPDATE elitea_runtime.execution_claims
+SET recovery_mode = 'AGENT_MODEL_CHECKPOINT'
+WHERE claim_id = $1 AND released_at IS NULL`, lease.ClaimID)
+					if err != nil {
+						return fmt.Errorf("mark model checkpoint inspection claim: %w", err)
+					}
+					if tag.RowsAffected() != 1 {
+						return runtimedomain.ErrStaleFence
+					}
+					decision.Disposition = executionapp.ClaimRecoverAgentModelCheckpoint
+				}
 			}
 		}
 		return nil

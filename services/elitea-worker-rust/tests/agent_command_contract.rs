@@ -348,7 +348,7 @@ fn capability_type_version_and_oneof_must_select_one_agent_entrypoint() {
     assert_unsupported(&command);
 }
 
-// A toolkit tool run belongs to the Python worker. This worker must REFUSE the
+// ToolkitCallTool is not yet implemented by Rust. This worker must REFUSE the
 // command with a typed error, and it must never treat an unrecognized
 // capability as work it silently declined: an unacknowledged command is
 // redelivered forever, and a skipped one settles nothing at all. The refusal

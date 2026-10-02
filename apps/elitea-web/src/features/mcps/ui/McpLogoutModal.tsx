@@ -17,12 +17,14 @@ import { isPrebuildMcpType, logout } from '../lib/storage';
 export interface McpLogoutModalProps {
   serverUrl?: string | undefined;
   toolkitType?: string | undefined;
+  /** Human-readable credential name; never render a composite storage key as a URL. */
+  authorizationLabel?: string | undefined;
   open: boolean;
   onClose?: ((success?: boolean) => void) | undefined;
   onConfirm?: (() => void) | undefined;
 }
 
-export function McpLogoutModal({ serverUrl, toolkitType, open, onClose, onConfirm }: McpLogoutModalProps): ReactNode {
+export function McpLogoutModal({ serverUrl, toolkitType, authorizationLabel, open, onClose, onConfirm }: McpLogoutModalProps): ReactNode {
   const isPrebuildMcp = useMemo(() => isPrebuildMcpType(toolkitType), [toolkitType]);
   const displayName = isPrebuildMcp ? toolkitType : serverUrl;
 
@@ -44,7 +46,7 @@ export function McpLogoutModal({ serverUrl, toolkitType, open, onClose, onConfir
     <BaseModal
       open={open}
       onClose={handleCancel}
-      title={t('mcps.logoutModal.title', 'MCP Authorization')}
+      title={authorizationLabel ? t('mcps.logoutModal.credentialTitle', 'Toolkit authorization') : t('mcps.logoutModal.title', 'MCP Authorization')}
       data-testid="mcp-logout-modal"
       content={
         <>
@@ -53,20 +55,20 @@ export function McpLogoutModal({ serverUrl, toolkitType, open, onClose, onConfir
             component="div"
             sx={{ marginBottom: '1rem' }}
           >
-            {t('mcps.logoutModal.description', 'This MCP server requires OAuth authorization to access its tools. It supports automatic client registration.')}
+            {t('mcps.logoutModal.clearGrant', 'Remove the saved authorization from this browser and its other tabs. Other credentials stay authorized.')}
           </Typography>
           <Typography
             variant="headingSmall"
             component="div"
             sx={{ color: 'text.secondary' }}
           >
-            {isPrebuildMcp ? t('mcps.logoutModal.toolkitLabel', 'Toolkit: ') : t('mcps.logoutModal.serverLabel', 'Server: ')}
+            {authorizationLabel ? t('mcps.logoutModal.credentialLabel', 'Credential: ') : isPrebuildMcp ? t('mcps.logoutModal.toolkitLabel', 'Toolkit: ') : t('mcps.logoutModal.serverLabel', 'Server: ')}
             <Typography
               variant="bodyMedium"
               component="span"
             >
-              {isPrebuildMcp ? (
-                displayName
+              {authorizationLabel || isPrebuildMcp ? (
+                authorizationLabel ?? displayName
               ) : (
                 <Link
                   href={serverUrl}

@@ -64,7 +64,7 @@ export interface ChatMessageListTts {
 /** MCP-auth / token-limit continue-execution and HITL props, grouped to stay under the component-props budget. */
 export interface ChatMessageListContinuation {
   /** Called when the user continues a paused MCP-auth-required execution — only offered on the last message. */
-  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean) => void) | undefined;
+  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
   /** Called when the user continues a token-limit-paused execution — only offered on the last message. */
   readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
   /** Called when a HITL interrupt is resumed — only offered on the last message. */

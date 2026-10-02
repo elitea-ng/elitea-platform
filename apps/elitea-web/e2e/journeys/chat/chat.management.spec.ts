@@ -166,6 +166,11 @@ async function readParticipants(
   return body.participants ?? [];
 }
 
+function expectDefaultParticipants(participants: readonly ParticipantRow[], authorId: string): void {
+  expect(participants.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'user']);
+  expect(String(participants.find((participant) => participant.entity_name === 'user')?.entity_meta?.id)).toBe(authorId);
+}
+
 /**
  * Opens the rail's date group that holds today's conversations.
  *
@@ -305,6 +310,9 @@ test('M2: an agent participant renders in the rail and the rail control removes 
   const conversationId = await createConversation(page.request, uniqueName('m2'));
   const agentName = uniqueName('m2ag');
   const agent = await createAgent(page.request, agentName);
+  const reader = await readAuthor(page.request);
+  const baseline = await readParticipants(page.request, conversationId);
+  expectDefaultParticipants(baseline, reader.id);
 
   const attached = await attachParticipants(page.request, conversationId, [
     {
@@ -315,9 +323,12 @@ test('M2: an agent participant renders in the rail and the rail control removes 
       entity_settings: { version_id: agent.versionId },
     },
   ]);
-  expect(attached.map((p) => p.entity_name)).toEqual(['application']);
-  expect(String(attached[0]?.entity_settings?.version_id)).toBe(String(agent.versionId));
-  const participantId = String(attached[0]?.id);
+  const applications = attached.filter((participant) => participant.entity_name === 'application');
+  expect(applications).toHaveLength(1);
+  expect(String(applications[0]?.entity_meta?.id)).toBe(agent.id);
+  expect(String(applications[0]?.entity_settings?.version_id)).toBe(String(agent.versionId));
+  expect(attached.filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
+  const participantId = String(applications[0]?.id);
 
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
   await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
@@ -327,10 +338,9 @@ test('M2: an agent participant renders in the rail and the rail control removes 
   await expect(agents, 'the attached agent must reach the rail').toBeVisible({ timeout: 15_000 });
   await expect(agents).toContainText('Agents (1)');
   await expect(agents).toContainText(agentName);
-  // No user participant was attached, so the users row must not appear — the
-  // Users-row fix renders that section only for real user participants, never
-  // an empty one (module header, note 3).
-  await expect(page.getByTestId('users-section')).toHaveCount(0);
+  // Creation attaches the author. The rail must retain that user beside the agent.
+  await expect(page.getByTestId('users-section')).toContainText(reader.name);
+  await expect(page.getByTestId(`participant-item-${reader.id}`)).toBeVisible();
   await checkA11y(page);
 
   // The per-participant action bar renders only while the card is hovered.
@@ -357,13 +367,14 @@ test('M2: an agent participant renders in the rail and the rail control removes 
   // The server-side list is what "removed" means. Polled, because the page
   // refetches the conversation after the mutation settles.
   await expect
-    .poll(async () => (await readParticipants(page.request, conversationId)).length, {
+    .poll(() => readParticipants(page.request, conversationId), {
       timeout: 15_000,
       message: 'the confirmed removal left the participant mapping in place',
     })
-    .toBe(0);
+    .toEqual(baseline);
 
   await expect(page.getByTestId('participants-section-Agents')).toHaveCount(0);
+  await expect(page.getByTestId(`participant-item-${reader.id}`)).toBeVisible();
 
   await deleteConversation(page.request, conversationId);
   await deleteAgent(page.request, agent.id);
@@ -400,6 +411,8 @@ test('M3: a cold deep link resolves a foreign participant server-side and captio
   expect(foreign.name, 'the foreign author must be distinguishable from the reader').not.toBe(reader.name);
 
   const conversationId = await createConversation(page.request, uniqueName('m3'));
+  const baseline = await readParticipants(page.request, conversationId);
+  expectDefaultParticipants(baseline, reader.id);
   const agentName = uniqueName('m3ag');
   const agent = await createAgent(page.request, agentName);
 
@@ -413,7 +426,14 @@ test('M3: a cold deep link resolves a foreign participant server-side and captio
       entity_settings: { version_id: agent.versionId },
     },
   ]);
-  const storedUser = attached.find((p) => p.entity_name === 'user');
+  expect(attached.map((participant) => participant.entity_name).sort()).toEqual(['application', 'dummy', 'user', 'user']);
+  const applications = attached.filter((participant) => participant.entity_name === 'application');
+  expect(String(applications[0]?.entity_meta?.id)).toBe(agent.id);
+  expect(String(applications[0]?.entity_settings?.version_id)).toBe(String(agent.versionId));
+  expect(attached.filter((participant) => participant.entity_name !== 'application' && String(participant.entity_meta?.id) !== foreign.id)).toEqual(baseline);
+  const foreignUsers = attached.filter((participant) => participant.entity_name === 'user' && String(participant.entity_meta?.id) === foreign.id);
+  expect(foreignUsers).toHaveLength(1);
+  const storedUser = foreignUsers[0];
   expect(storedUser?.meta?.user_name, 'the server resolves a user participant’s display name').toBe(foreign.name);
 
   // Cold: armed before the navigation, so what is asserted is the payload the
@@ -425,7 +445,9 @@ test('M3: a cold deep link resolves a foreign participant server-side and captio
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
 
   const payload = (await (await detail).json()) as { participants?: readonly ParticipantRow[] };
-  const pageUser = (payload.participants ?? []).find((p) => p.entity_name === 'user');
+  const pageUsers = (payload.participants ?? []).filter((participant) => participant.entity_name === 'user' && String(participant.entity_meta?.id) === foreign.id);
+  expect(pageUsers).toHaveLength(1);
+  const pageUser = pageUsers[0];
   expect(pageUser, 'the page’s own read must carry the user participant').toBeDefined();
   expect(pageUser?.meta?.user_name, 'the identity the PAGE received names the participant').toBe(foreign.name);
   expect(pageUser?.meta?.user_name, 'and never the reader — that substitution is the defect').not.toBe(reader.name);
@@ -582,9 +604,10 @@ test('M2b: the composer’s picker finds an agent by name and attaches it to the
   const agentName = uniqueName('m2bag');
   const agent = await createAgent(page.request, agentName);
 
-  // Nothing is attached yet, so what the picker does below is the only thing
-  // that could have attached anything.
-  expect(await readParticipants(page.request, conversationId)).toEqual([]);
+  // The author and dummy exist. The picker must add the first application.
+  const reader = await readAuthor(page.request);
+  const baseline = await readParticipants(page.request, conversationId);
+  expectDefaultParticipants(baseline, reader.id);
 
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
   await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
@@ -625,18 +648,21 @@ test('M2b: the composer’s picker finds an agent by name and attaches it to the
   // `applyParticipantSelection` resolves without attaching on several paths),
   // which no screen assertion can tell apart from a working one.
   await expect
-    .poll(async () => (await readParticipants(page.request, conversationId)).map((p) => p.entity_name), {
+    .poll(async () => (await readParticipants(page.request, conversationId)).filter((participant) => participant.entity_name === 'application').map((participant) => String(participant.entity_meta?.id)), {
       timeout: 20_000,
       message: 'selecting an agent in the "+" picker must attach it to the conversation',
     })
-    .toEqual(['application']);
+    .toEqual([agent.id]);
 
   const attached = await readParticipants(page.request, conversationId);
   // The agent that was picked, and the version the agent resolver joins on —
   // a participant row without `entity_settings.version_id` is one the product
   // never produces (see M2).
-  expect(String(attached[0]?.entity_meta?.id)).toBe(String(agent.id));
-  expect(attached[0]?.entity_settings?.version_id).toBeDefined();
+  const applications = attached.filter((participant) => participant.entity_name === 'application');
+  expect(applications).toHaveLength(1);
+  expect(String(applications[0]?.entity_meta?.id)).toBe(String(agent.id));
+  expect(String(applications[0]?.entity_settings?.version_id)).toBe(String(agent.versionId));
+  expect(attached.filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
 
   // …and it reaches the rail the user reads it from.
   await openParticipantsRail(page);
@@ -685,9 +711,9 @@ test('M2c: the participants panel adds a person by name and removes them again, 
   const teammate = await readOtherUser(page.request, reader.id);
 
   const conversationId = await createConversation(page.request, uniqueName('m2c'));
-  // Nothing is attached yet, so the picker below is the only thing that could
-  // have attached anything.
-  expect(await readParticipants(page.request, conversationId)).toEqual([]);
+  // The author and dummy exist. The picker must add the selected teammate.
+  const baseline = await readParticipants(page.request, conversationId);
+  expectDefaultParticipants(baseline, reader.id);
 
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
   await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
@@ -727,19 +753,24 @@ test('M2c: the participants panel adds a person by name and removes them again, 
 
   // The server-side list is what "added" means.
   await expect
-    .poll(async () => (await readParticipants(page.request, conversationId)).map((p) => p.entity_name), {
+    .poll(async () => (await readParticipants(page.request, conversationId)).filter((participant) => participant.entity_name === 'user' && String(participant.entity_meta?.id) === teammate.id).map((participant) => String(participant.entity_meta?.id)), {
       timeout: 20_000,
       message: 'the picker closed without attaching anybody',
     })
-    .toEqual(['user']);
+    .toEqual([teammate.id]);
 
   const attached = await readParticipants(page.request, conversationId);
-  expect(String(attached[0]?.entity_meta?.id), 'the participant is the person who was picked').toBe(teammate.id);
+  expect(attached.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'user', 'user']);
+  const teammates = attached.filter((participant) => participant.entity_name === 'user' && String(participant.entity_meta?.id) === teammate.id);
+  expect(teammates).toHaveLength(1);
+  const addedUser = teammates[0];
+  expect(String(addedUser?.entity_meta?.id), 'the participant is the person who was picked').toBe(teammate.id);
   // The display name is the SERVER's, resolved from the directory into
   // `meta.user_name`. The client posts an id alone, so a name here can only
   // have come from the resolver.
-  expect(attached[0]?.meta?.user_name).toBe(teammate.name);
-  const participantId = String(attached[0]?.id);
+  expect(addedUser?.meta?.user_name).toBe(teammate.name);
+  expect(attached.filter((participant) => String(participant.id) !== String(addedUser?.id))).toEqual(baseline);
+  const participantId = String(addedUser?.id);
 
   // …and the person reaches the rail the conversation is read from.
   const usersSection = page.getByTestId('users-section');
@@ -767,14 +798,15 @@ test('M2c: the participants panel adds a person by name and removes them again, 
   expect((await removed).status()).toBe(204);
 
   await expect
-    .poll(async () => (await readParticipants(page.request, conversationId)).length, {
+    .poll(() => readParticipants(page.request, conversationId), {
       timeout: 20_000,
       message: 'the confirmed removal left the participant mapping in place',
     })
-    .toBe(0);
-  // The Users row must go with its last member — it renders only for real
-  // user participants, never as an empty section (module header, note 3).
-  await expect(page.getByTestId('users-section')).toHaveCount(0);
+    .toEqual(baseline);
+  // Removing the teammate preserves the author and the author's rail row.
+  await expect(page.getByTestId(`participant-item-${teammate.id}`)).toHaveCount(0);
+  await expect(page.getByTestId('users-section')).toContainText(reader.name);
+  await expect(page.getByTestId(`participant-item-${reader.id}`)).toBeVisible();
 
   await deleteConversation(page.request, conversationId);
 });

@@ -30,7 +30,7 @@
  * defect (#132): every field reads back `undefined` on a 200. `fetchBody`
  * below is the single unwrap point.
  */
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
@@ -55,6 +55,8 @@ interface ToolkitTool {
 
 /** The body both handlers write. `total` is `len(tools)`, carried for parity; the pickers read `tools`. */
 export interface ToolkitToolsPayload {
+  readonly authorization_required?: unknown;
+  readonly args_schemas?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly tools?: readonly ToolkitTool[];
   readonly total?: number;
 }
@@ -73,6 +75,7 @@ function readTools(payload: ToolkitToolsPayload | undefined): readonly ToolkitTo
 }
 
 export interface AvailableToolsParams {
+  readonly authorizationReference?: string | undefined;
   readonly projectId: string;
   readonly toolkitId: string;
 }
@@ -80,7 +83,7 @@ export interface AvailableToolsParams {
 export async function fetchAvailableTools(params: AvailableToolsParams, signal?: AbortSignal): Promise<ToolkitToolsPayload> {
   return fetchBody<ToolkitToolsPayload>(
     `/elitea_core/toolkit_available_tools/prompt_lib/${params.projectId}/${params.toolkitId}`,
-    signal ? { signal } : {},
+    { ...(signal ? { signal } : {}), ...(params.authorizationReference ? { headers: { "X-MCP-Authorization-Reference": params.authorizationReference } } : {}) },
   );
 }
 
@@ -97,6 +100,7 @@ export async function discoverToolkitTools(params: DiscoverToolsParams, signal?:
 }
 
 export interface UseToolkitToolsParams {
+  readonly getAuthorizationReference?: (() => string | undefined) | undefined;
   /** The project that owns the toolkit. An empty value disables both queries. */
   readonly projectId: string | undefined;
   /** A saved toolkit instance. Present: read its own attached tools. */
@@ -108,6 +112,8 @@ export interface UseToolkitToolsParams {
 }
 
 export interface UseToolkitToolsResult {
+  readonly authorizationRequired?: unknown;
+  readonly authorize: (reference: string) => Promise<void>;
   readonly tools: readonly ToolkitTool[];
   readonly toolNames: readonly string[];
   readonly isFetching: boolean;
@@ -125,19 +131,35 @@ export interface UseToolkitToolsResult {
  * attached to a saved toolkit are the exact set the user may run. The type
  * route is the fallback for a toolkit that has no id yet.
  */
+function referenceFor(identity: string, value: { key: string; reference: string } | undefined, fallback?: () => string | undefined): string | undefined {
+  return value?.key === identity ? value.reference : fallback?.();
+}
+function discoveryAuthorization(payload: ToolkitToolsPayload | undefined): unknown {
+  return payload?.authorization_required;
+}
+function discoveryIsEmpty(success: boolean, tools: readonly ToolkitTool[], payload: ToolkitToolsPayload | undefined): boolean {
+  return success && tools.length === 0 && payload?.authorization_required === undefined;
+}
+function authorizedRemount(reference?: () => string | undefined): true | 'always' {
+  return reference?.() ? 'always' : true;
+}
+
 export function useToolkitTools(params: UseToolkitToolsParams): UseToolkitToolsResult {
   const { projectId, toolkitId, toolkitType, enabled = true } = params;
   const byInstance = toolkitId !== undefined && toolkitId !== '';
   const key = byInstance ? `id:${toolkitId}` : `type:${toolkitType ?? ''}`;
   const isAddressable = projectId !== undefined && projectId !== '' && (byInstance || (toolkitType !== undefined && toolkitType !== ''));
 
+  const authorization = useRef<{ key: string; reference: string } | undefined>(undefined);
+  const identity = `${projectId ?? ""}/${key}`;
   const query = useQuery({
     queryKey: [...TOOLKIT_TOOLS_QUERY_ROOT, projectId ?? '', key],
     queryFn: ({ signal }) =>
       byInstance
-        ? fetchAvailableTools({ projectId: projectId ?? '', toolkitId: toolkitId ?? '' }, signal)
+        ? fetchAvailableTools({ projectId: projectId ?? '', toolkitId: toolkitId ?? '', authorizationReference: referenceFor(identity, authorization.current, params.getAuthorizationReference) }, signal)
         : discoverToolkitTools({ projectId: projectId ?? '', toolkitType: toolkitType ?? '' }, signal),
     enabled: enabled && isAddressable,
+    refetchOnMount: authorizedRemount(params.getAuthorizationReference),
     retry: false,
   });
 
@@ -151,12 +173,20 @@ export function useToolkitTools(params: UseToolkitToolsParams): UseToolkitToolsR
     void refetchQuery();
   }, [refetchQuery]);
 
+  const authorize = useCallback(async (reference: string) => {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(reference)) return;
+    authorization.current = { key: identity, reference };
+    await refetchQuery();
+  }, [identity, refetchQuery]);
+
   return {
+    authorizationRequired: discoveryAuthorization(query.data),
+    authorize,
     tools,
     toolNames,
     isFetching: query.isFetching,
     isError: query.isError,
-    isEmpty: query.isSuccess && tools.length === 0,
+    isEmpty: discoveryIsEmpty(query.isSuccess, tools, query.data),
     refetch,
   };
 }

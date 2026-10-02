@@ -8,6 +8,16 @@ mod agent;
 mod application;
 #[cfg(test)]
 mod application_tests;
+mod code;
+mod code_remote;
+mod code_result;
+mod code_runtime;
+pub(crate) use code_remote::CodeRuntimeFactory;
+mod code_state;
+#[cfg(test)]
+mod code_state_tests;
+#[cfg(test)]
+mod code_tests;
 pub(crate) mod compiler;
 #[cfg(test)]
 mod compiler_tests;
@@ -35,11 +45,13 @@ mod routing_tests;
 mod state_modifier;
 #[cfg(test)]
 mod state_modifier_tests;
+pub(crate) mod turn_checkpointer;
 mod yaml;
 
 pub(crate) use agent::{
     EliteaGraphAgent, PIPELINE_COMPLETED_CONTENT, PIPELINE_COMPLETED_METADATA_KEY,
-    PIPELINE_COMPLETED_METADATA_VALUE, pipeline_completed_event, pipeline_result_event,
+    PIPELINE_COMPLETED_METADATA_VALUE, PIPELINE_REUSED_RESULT_METADATA_KEY,
+    pipeline_completed_event, pipeline_result_event,
 };
 pub(crate) use application::{
     ApplicationExecutionError, PIPELINE_APPLICATION_HITL_SCHEMA, PipelineApplicationResolver,
@@ -50,8 +62,9 @@ pub(crate) use direct_tool::{
     ResolvedDirectTool,
 };
 pub(crate) use llm::{
-    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, PipelineLlmAgentFactory,
-    PipelineLlmReplayEnvelope, prepare_pipeline_llm_replay,
+    LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, LlmToolkitSelection,
+    PipelineLlmAgentBinding, PipelineLlmAgentFactory, PipelineLlmReplayEnvelope,
+    PipelineModelScope, PipelineToolGuard, prepare_pipeline_llm_replay,
 };
 pub(crate) use node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PIPELINE_NODE_METADATA_KEY, PipelineNodeEventReceiver,
@@ -68,3 +81,5 @@ pub(crate) use parallel::{
     ParallelActivation, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
+
+pub(super) use code_runtime::CodeSandboxRuntime;

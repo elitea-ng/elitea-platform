@@ -232,7 +232,7 @@ impl HitlNodeDefinition {
         }
     }
 
-    fn route(&self, action: HitlAction) -> Option<&str> {
+    pub(super) fn route(&self, action: HitlAction) -> Option<&str> {
         self.action_is_available(action)
             .then(|| self.routes.get(action))
             .flatten()

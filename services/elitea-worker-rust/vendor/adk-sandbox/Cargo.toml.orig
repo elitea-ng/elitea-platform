@@ -1,0 +1,68 @@
+[package]
+name = "adk-sandbox"
+description = "Isolated code execution runtime for ADK agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-sandbox"
+readme = "README.md"
+keywords = ["adk", "sandbox", "code-execution", "wasm", "isolation"]
+categories = ["development-tools", "asynchronous"]
+
+[dependencies]
+adk-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["process", "time", "io-util", "fs", "rt"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tempfile = "3.10"
+
+# Optional dependencies for wasm feature
+wasmtime = { version = "46", optional = true }
+wasmtime-wasi = { version = "46", optional = true }
+
+# Optional dependencies for workspace feature
+tar = { version = "0.4", optional = true }
+bollard = { version = "0.18", optional = true }
+uuid = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Optional: Windows AppContainer API
+[target.'cfg(windows)'.dependencies]
+find-msvc-tools = "0.1.9"
+windows-sys = { version = "0.59", optional = true, features = [
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
+
+[features]
+default = ["process"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
+process = []  # no extra deps, uses tokio
+
+# Workspace lifecycle (sandbox-agent harness)
+workspace = ["dep:tar", "dep:uuid"]
+workspace-docker = ["workspace", "dep:bollard", "dep:futures"]
+
+# OS-level sandbox enforcers
+sandbox-macos = []       # Seatbelt via sandbox-exec (no extra deps)
+sandbox-linux = []       # Bubblewrap via bwrap binary (no extra deps)
+sandbox-windows = ["dep:windows-sys"]  # AppContainer via Win32 API
+
+# Convenience: enables all platform enforcers — only the target platform's code
+# compiles due to #[cfg(target_os = "...")] gates inside each module.
+sandbox-native = ["sandbox-macos", "sandbox-linux", "sandbox-windows"]
+
+[dev-dependencies]
+proptest = "1.4"
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

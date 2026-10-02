@@ -208,8 +208,17 @@ fn load_redis_password(config: &RuntimeDeployConfig) -> Result<String, RuntimeTr
 fn load_ed25519_keyring(
     config: &RuntimeDeployConfig,
 ) -> Result<ExactEd25519PublicKeyResolver, RuntimeTrustError> {
+    load_ed25519_keyring_file(&config.ed25519_keyring_path)
+}
+
+/// Load the shared public verification keyring for a dedicated runtime process.
+/// # Errors
+/// Returns a redacted error for unsafe files or invalid key material.
+pub fn load_ed25519_keyring_file(
+    path: &std::path::Path,
+) -> Result<ExactEd25519PublicKeyResolver, RuntimeTrustError> {
     let raw = read_regular_file(
-        &config.ed25519_keyring_path,
+        path,
         MAX_KEYRING_BYTES,
         false,
         "Ed25519 verification keyring",
@@ -256,7 +265,7 @@ fn parse_ed25519_keyring(raw: &[u8]) -> Result<ExactEd25519PublicKeyResolver, Ru
     })
 }
 
-fn validate_tls_identity(
+pub(crate) fn validate_tls_identity(
     ca_pem: &[u8],
     certificate_pem: &[u8],
     private_key_pem: &[u8],

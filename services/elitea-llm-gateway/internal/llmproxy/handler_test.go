@@ -113,7 +113,8 @@ func (f *fakeRouter) ResponsesRequest(_ *schemas.BifrostContext, req *schemas.Bi
 	return f.respResp, f.respErr
 }
 
-func (f *fakeRouter) ResponsesStreamRequest(ctx *schemas.BifrostContext, _ *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+func (f *fakeRouter) ResponsesStreamRequest(ctx *schemas.BifrostContext, req *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	f.lastResponsesReq = req
 	f.captureVK(ctx)
 	return f.streamChan, f.streamErr
 }

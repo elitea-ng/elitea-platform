@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
-import type { MarkedToken } from 'marked';
+import type { MarkedToken, Tokens } from 'marked';
 
 import { DefaultMarkdown } from '../DefaultMarkdown';
 import type { SpokenRange } from '../lib/spokenRange';
@@ -168,6 +168,10 @@ function renderSimpleToken(token: SimpleStructuralToken, renderHtml: boolean): R
   }
 }
 
+function listStart(token: Tokens.List): number | undefined {
+  return token.ordered && typeof token.start === 'number' ? token.start : undefined;
+}
+
 /** heading/blockquote/list/list_item/table/paragraph/text — the cases that recurse into child tokens. */
 function renderContainerToken(
   token: ContainerToken,
@@ -220,6 +224,7 @@ function renderContainerToken(
       return (
         <Box
           component={token.ordered ? 'ol' : 'ul'}
+          start={listStart(token)}
           sx={{ margin: '0.5em 0', paddingLeft: '1.5em' }}
         >
           {token.items.map((item, index) => (

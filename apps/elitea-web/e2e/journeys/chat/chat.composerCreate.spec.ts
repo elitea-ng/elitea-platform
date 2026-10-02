@@ -17,7 +17,7 @@ import { expect, test } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
-import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createConversation, deleteAgent, deleteConversation } from '../../fixtures/api';
+import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createConversation, deleteAgent, deleteConversation, readCallerIdentity } from '../../fixtures/api';
 
 function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}`;
@@ -59,9 +59,11 @@ test('creating an agent from the "+" menu attaches it to the conversation the cl
   let createdAgentId: string | undefined;
 
   try {
-    // Nothing is attached yet, so what the create flow below does is the
-    // only thing that could attach anything.
-    expect(await readParticipants(page.request, conversationId)).toEqual([]);
+    // The author and dummy exist. The create flow must add the first application.
+    const baseline = await readParticipants(page.request, conversationId);
+    const caller = await readCallerIdentity(page.request);
+    expect(baseline.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'user']);
+    expect(String(baseline.find((participant) => participant.entity_name === 'user')?.entity_meta?.id)).toBe(caller.id);
 
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
@@ -95,7 +97,7 @@ test('creating an agent from the "+" menu attaches it to the conversation the cl
     // working one on screen alone, which is why this polls the API rather
     // than asserting only that the editor closed.
     await expect
-      .poll(async () => (await readParticipants(page.request, conversationId)).map((p) => p.entity_name), {
+      .poll(async () => (await readParticipants(page.request, conversationId)).filter((participant) => participant.entity_name === 'application').map((participant) => participant.entity_name), {
         timeout: 20_000,
         message: 'creating an agent from the "+" menu must attach it to the conversation it was created in',
       })
@@ -105,7 +107,10 @@ test('creating an agent from the "+" menu attaches it to the conversation the cl
     expect(createdAgentId, 'the created agent must be findable server-side by name').toBeDefined();
 
     const attached = await readParticipants(page.request, conversationId);
-    expect(String(attached[0]?.entity_meta?.id)).toBe(String(createdAgentId));
+    const applications = attached.filter((participant) => participant.entity_name === 'application');
+    expect(applications).toHaveLength(1);
+    expect(String(applications[0]?.entity_meta?.id)).toBe(String(createdAgentId));
+    expect(attached.filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
   } finally {
     await deleteConversation(page.request, conversationId);
     if (createdAgentId !== undefined) await deleteAgent(page.request, createdAgentId);

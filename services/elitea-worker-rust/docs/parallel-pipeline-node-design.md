@@ -258,6 +258,13 @@ different branch output keys.
 
 ## Durable branch outcomes
 
+Each Agent branch can execute model calls directly or through its selected saved pipeline.
+Inherit the parent context policy and keep each model conversation's occupancy and summaries inside its durable child lineage.
+Apply the same boundary to future direct LLM branches when their compiler contract becomes available.
+Keep branch result collection exact; a later LLM join has a separate request budget.
+Do not add branch context capacities together or compact one branch using another branch's history.
+See [pipeline context ownership](context-continuation-design.md#fan-out-and-model-backed-reduction).
+
 Represent one branch with a typed internal outcome.
 
 | Outcome | Parent behavior |

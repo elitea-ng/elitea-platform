@@ -345,3 +345,36 @@ LIMIT 1`, executionID, int64(generation)).Scan(&payloadType, &settlementOutcome,
 
 var _ toolkitcalltoolapp.PendingDispatchStore = (*ToolkitCallToolJobsRepository)(nil)
 var _ toolkitcalltoolapp.SettlementReader = (*ToolkitCallToolJobsRepository)(nil)
+
+// ListPreparedToolkitCallToolRecovery selects unpublished, durable commands.
+// LoadPreparedToolkitCallTool rechecks authority and deadlines before each append.
+func (r *ToolkitCallToolJobsRepository) ListPreparedToolkitCallToolRecovery(ctx context.Context, limit int) ([]string, error) {
+	if limit < 1 || limit > 128 {
+		return nil, toolkitcalltoolapp.ErrInvalidToolRunDispatch
+	}
+	rows, err := r.pool.Query(ctx, `
+SELECT o.outbox_id
+FROM elitea_runtime.command_outbox o
+JOIN elitea_runtime.execution_jobs j
+ ON j.execution_id=o.execution_id AND j.generation=o.generation
+WHERE o.stream_name=$1 AND j.capability_id='toolkit.call_tool.v1'
+ AND j.generation=1 AND j.desired_state='RUNNING'
+ AND j.state IN ('PENDING','DISPATCHED')
+ AND o.prepared_signed_envelope_bytes IS NOT NULL
+ AND o.published_at IS NULL AND o.retired_at IS NULL
+ AND o.authority_granted_at IS NULL AND o.deadline>clock_timestamp()
+ORDER BY o.created_at,o.outbox_id LIMIT $2`, r.policy.StreamName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

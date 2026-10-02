@@ -221,6 +221,18 @@ WHERE execution_id = $1 AND generation = $2`, frame.Fence.ExecutionID, int64(fra
 // real PostgreSQL state owner: PREPARING is recoverable, while a durably
 // authorized invocation is recovery-only and cannot receive SDK inputs again.
 func TestPostgresServiceBackedInvocationFence(t *testing.T) {
+	for _, capability := range []string{
+		executiondomain.IndexIngestCapability,
+		executiondomain.ToolkitExecuteReadCapability,
+		executiondomain.ToolkitCallToolCapability,
+		executiondomain.ToolkitAvailableToolsCapability,
+	} {
+		t.Run(capability, func(t *testing.T) { testPostgresInvocationFence(t, capability) })
+	}
+}
+
+func testPostgresInvocationFence(t *testing.T, capability string) {
+	t.Helper()
 	pool := newMigratedPostgresIntegrationPool(t)
 	frame := postgresValidationFrame(t, "invocation-fence")
 	seed := seedPostgresValidationExecution(t, pool, frame, runtimedomain.DesiredRunning)
@@ -228,7 +240,7 @@ func TestPostgresServiceBackedInvocationFence(t *testing.T) {
 	defer cancel()
 	if _, err := pool.Exec(ctx, `
 UPDATE elitea_runtime.execution_jobs
-SET capability_id = 'index.ingest.v1',
+SET capability_id = $3,
     capability_version = '1',
     configuration_revision_id = NULL,
     configuration_type = NULL,
@@ -240,7 +252,7 @@ SET capability_id = 'index.ingest.v1',
     settings_entry_id = NULL
 WHERE execution_id = $1 AND generation = $2`,
 		frame.Fence.ExecutionID,
-		int64(frame.Fence.Generation),
+		int64(frame.Fence.Generation), capability,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +273,7 @@ WHERE execution_id = $1 AND generation = $2`,
 		OutboxID:             seed.outboxID,
 		ExecutionID:          frame.Fence.ExecutionID,
 		Generation:           frame.Fence.Generation,
-		CapabilityID:         executiondomain.IndexIngestCapability,
+		CapabilityID:         capability,
 		SignedEnvelopeDigest: seed.envelopeDigest,
 		WorkloadIdentity:     "spiffe://elitea.test/workload/replacement-preparing",
 		WorkloadSessionID:    "replacement-preparing-session",

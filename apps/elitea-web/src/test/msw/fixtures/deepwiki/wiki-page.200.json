@@ -1,6 +1,6 @@
 {
-  "recordedAt": "2026-09-01",
+  "recordedAt": "2026-10-01",
   "synthetic": true,
-  "note": "One wiki page's markdown, as GET /api/v2/artifacts/objects/{projectID}/{bucket}/{key} returns it: a raw body, not a JSON envelope. The mermaid block is deliberate and load-bearing — DWIKI-007 and DWIKI-008 are the quick-fix items, and a page fixture with no diagram cannot exercise them.",
+  "note": "One wiki page's markdown, as GET /api/v2/artifacts/objects/{projectID}/{bucket}/{key} returns it: a raw body, not a JSON envelope. The mermaid block is deliberate and load-bearing — DWIKI-007 and DWIKI-008 are the quick-fix items, and a page fixture with no diagram cannot exercise them. Revalidated on 2026-10-01 with the DeepWiki fixture and page-rendering suites; recordedAt identifies this synthetic fixture review, not a live HTTP capture.",
   "body": "# Getting started\n\nThe notes service stores notes in SQLite and exposes a small HTTP API.\n\n```mermaid\ngraph TD\n  A[Client] --> B[API]\n  B --> C[(SQLite)]\n```\n\n## Storing a note\n\nPOST a note body to `/notes`. The service assigns an id and returns it.\n"
 }

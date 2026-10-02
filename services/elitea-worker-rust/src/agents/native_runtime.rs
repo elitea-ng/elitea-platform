@@ -91,6 +91,15 @@ impl<D, P> NativeRuntimeAssembler<D, P> {
 }
 
 impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAssembler> {
+    pub(crate) fn with_sandbox(
+        mut self,
+        sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
+    ) -> Self {
+        self.direct = self.direct.with_sandbox(sandbox.clone());
+        self.pipeline = self.pipeline.with_sandbox(sandbox);
+        self
+    }
+
     /// Compose both native modes over the same authorized `agentstate` pool.
     ///
     /// Direct agents consume only the session writer. Pipelines consume a
@@ -131,6 +140,56 @@ where
     P: NativeAgentAssembler,
 {
     type Completion = NativeRuntimeCompletion<D::Completion, P::Completion>;
+
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        self.direct
+            .sandbox_stop_delivery()
+            .or_else(|| self.pipeline.sandbox_stop_delivery())
+    }
+
+    async fn inspect_checkpoint(
+        &self,
+        request: &super::request::AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        state_writer_lease: std::sync::Arc<dyn crate::state::StateWriterLease>,
+    ) -> Result<super::session::ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        match NativeRuntimeKind::from_request(request)? {
+            NativeRuntimeKind::Direct => {
+                self.direct
+                    .inspect_checkpoint(request, command, session, state_writer_lease)
+                    .await
+            }
+            NativeRuntimeKind::Pipeline => {
+                self.pipeline
+                    .inspect_checkpoint(request, command, session, state_writer_lease)
+                    .await
+            }
+        }
+    }
+
+    async fn assemble_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        match NativeRuntimeKind::from_request(assembly.request())? {
+            NativeRuntimeKind::Direct => self
+                .direct
+                .assemble_checkpoint(assembly)
+                .await
+                .map(|pending| pending.map_completion(NativeRuntimeCompletion::Direct)),
+            NativeRuntimeKind::Pipeline => self
+                .pipeline
+                .assemble_checkpoint(assembly)
+                .await
+                .map(|pending| pending.map_completion(NativeRuntimeCompletion::Pipeline)),
+        }
+    }
 
     async fn assemble(
         &self,

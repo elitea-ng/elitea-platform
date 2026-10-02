@@ -305,7 +305,7 @@ describe('AgentPipelineVersionSelector', () => {
 
   it('marks the default version and refuses to re-pin it — entities/version isSetDefaultDisabled', async () => {
     const user = userEvent.setup();
-    const { getByTestId } = renderWithTheme(
+    const { getByTestId, getByRole } = renderWithTheme(
       <AgentPipelineVersionSelector
         applicationVersionId={2}
         versions={versions}
@@ -317,6 +317,7 @@ describe('AgentPipelineVersionSelector', () => {
     await user.click(getByTestId('version-selector-trigger'));
 
     expect(getByTestId('agent-version-default-marker')).toBeInTheDocument();
+    expect(getByRole('menuitem', { name: `v1 – ${formatDate('2026-02-01T12:00:00Z')}` })).toBeInTheDocument();
     expect(getByTestId('agent-version-set-default')).toHaveAttribute('aria-disabled', 'true');
   });
 

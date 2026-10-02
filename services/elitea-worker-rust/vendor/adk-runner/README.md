@@ -1,0 +1,207 @@
+# adk-runner
+
+Agent execution runtime for ADK-Rust.
+
+[![Crates.io](https://img.shields.io/crates/v/adk-runner.svg)](https://crates.io/crates/adk-runner)
+[![Documentation](https://docs.rs/adk-runner/badge.svg)](https://docs.rs/adk-runner)
+[![License](https://img.shields.io/crates/l/adk-runner.svg)](LICENSE)
+
+## Overview
+
+`adk-runner` provides the execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-rust):
+
+- **Runner** - Manages agent execution with full context
+- **RunnerConfigBuilder** - Typestate builder for Runner construction (compile-time required field enforcement)
+- **run_str()** - String convenience method for user_id/session_id
+- **Session Integration** - Automatic session creation and state management
+- **Memory Injection** - Retrieves and injects relevant memories
+- **Artifact Handling** - Manages binary artifacts during execution
+- **Event Streaming** - Streams agent events with state propagation
+- **Agent Transfer** - Automatic handling of agent-to-agent transfers
+- **Context Compaction** - Automatic summarization of older events to reduce LLM context size
+
+## Installation
+
+```toml
+[dependencies]
+adk-runner = "2.2.0"
+```
+
+Or use the meta-crate:
+
+```toml
+[dependencies]
+adk-rust = { version = "2.2.0", features = ["runner"] }
+```
+
+## Quick Start
+
+```rust
+use adk_runner::Runner;
+use adk_session::InMemorySessionService;
+use adk_core::Content;
+use std::sync::Arc;
+
+// Build runner with the typestate builder (recommended)
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(my_agent)
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .build()?;
+
+// Run with string convenience method
+let mut stream = runner.run_str(
+    "user_123",
+    "session_456",
+    Content::new("user").with_text("Hello!"),
+).await?;
+
+// Process events
+use futures::StreamExt;
+while let Some(event) = stream.next().await {
+    match event {
+        Ok(e) => println!("Event: {:?}", e.llm_response.content),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+```
+
+The builder enforces required fields (`app_name`, `agent`, `session_service`) at compile time. Optional fields default to sensible values. The old `Runner::new(RunnerConfig { ... })` constructor remains available for backward compatibility.
+
+## RunnerConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `app_name` | `String` | Application identifier |
+| `agent` | `Arc<dyn Agent>` | Root agent to execute |
+| `session_service` | `Arc<dyn SessionService>` | Session storage backend |
+| `artifact_service` | `Option<Arc<dyn ArtifactService>>` | Optional artifact storage |
+| `memory_service` | `Option<Arc<dyn Memory>>` | Optional memory/RAG service |
+| `plugin_manager` | `Option<Arc<PluginManager>>` | Optional plugin lifecycle hooks |
+| `run_config` | `Option<RunConfig>` | Streaming mode config |
+| `compaction_config` | `Option<EventsCompactionConfig>` | Context compaction settings |
+| `context_cache_config` | `Option<ContextCacheConfig>` | Prompt caching lifecycle |
+| `cache_capable` | `Option<Arc<dyn CacheCapable>>` | Cache-capable model reference |
+| `request_context` | `Option<RequestContext>` | Auth middleware context |
+| `cancellation_token` | `Option<CancellationToken>` | Cooperative cancellation |
+
+## Runner vs Direct Agent Execution
+
+| Feature | Direct `agent.run()` | `Runner` |
+|---------|---------------------|----------|
+| Session management | Manual | Automatic |
+| Memory injection | Manual | Automatic |
+| Artifact storage | Manual | Automatic |
+| State persistence | Manual | Automatic |
+| Agent transfers | Manual | Automatic |
+| Event history | Manual | Automatic |
+
+Use `Runner` for production; direct execution for testing.
+
+## Agent Transfers
+
+Runner automatically handles agent-to-agent transfers:
+
+```rust
+// When an agent sets transfer_to_agent in EventActions,
+// Runner automatically:
+// 1. Finds the target agent in the agent tree
+// 2. Creates a new invocation context
+// 3. Preserves session state across the transfer
+// 4. Continues streaming events from the new agent
+```
+
+Validated composite roots can provide an exact per-member transfer allowlist
+through the `Agent` policy hooks. Runner validates every handoff against that
+list and reports undeclared targets or depth overflow as errors. Ordinary agent
+trees return no explicit policy and retain legacy parent/peer discovery.
+After allowlist and depth validation, Runner awaits `Agent::govern_transfer`
+before executing the target. The default allows the transfer, preserving
+existing behavior; portable teams and other composite roots can deny it with an
+auditable reason. Denials surface as `agent.transfer.denied`.
+
+## State Propagation
+
+Runner applies state changes immediately:
+
+```rust
+// When an agent emits an event with state_delta,
+// Runner applies it to the mutable session so
+// downstream agents can read the updated state.
+```
+
+## Context Compaction
+
+Runner supports automatic context compaction to keep LLM context manageable in long conversations:
+
+```rust
+use adk_agent::LlmEventSummarizer;
+use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
+use std::sync::Arc;
+
+let summarizer = Arc::new(LlmEventSummarizer::new(summarizer_model));
+
+let config = RunnerConfig {
+    // ... other fields ...
+    compaction_config: Some(EventsCompactionConfig {
+        compaction_interval: 3,  // Compact every 3 invocations
+        overlap_size: 1,         // Keep 1 event overlap for continuity
+        summarizer,
+    }),
+};
+```
+
+Compaction runs after each invocation completes. When the user-event count reaches the interval, older events are summarized into a single compacted event. The `BaseEventsSummarizer` and `EventsCompactionConfig` types are re-exported from `adk-core` for convenience.
+
+See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for the full guide.
+
+## Context Compaction
+
+Runner supports automatic sliding-window context compaction to keep LLM context size manageable in long-running sessions. When enabled, the runner periodically summarizes older events into a single compacted event.
+
+```rust
+use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
+use adk_agent::LlmEventSummarizer;
+use std::sync::Arc;
+
+let summarizer = LlmEventSummarizer::new(model.clone());
+
+let config = RunnerConfig {
+    app_name: "my_app".to_string(),
+    agent: my_agent,
+    session_service: sessions,
+    artifact_service: Some(artifacts),
+    memory_service: None,
+    plugin_manager: None,
+    run_config: None,
+    compaction_config: Some(EventsCompactionConfig {
+        compaction_interval: 3,  // Compact every 3 invocations
+        overlap_size: 1,         // Keep 1 event overlap for continuity
+        summarizer: Arc::new(summarizer),
+    }),
+};
+
+let runner = Runner::new(config)?;
+```
+
+When compaction triggers, `MutableSession::conversation_history()` automatically uses the most recent compaction summary instead of the original events, keeping the context window bounded.
+
+Re-exported for convenience: `adk_runner::{BaseEventsSummarizer, EventsCompactionConfig}`.
+
+See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for full documentation.
+
+## Related Crates
+
+- [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
+- [adk-core](https://crates.io/crates/adk-core) - Core traits
+- [adk-session](https://crates.io/crates/adk-session) - Session storage
+- [adk-artifact](https://crates.io/crates/adk-artifact) - Artifact storage
+- [adk-cli](https://crates.io/crates/adk-cli) - CLI using runner
+
+## License
+
+Apache-2.0
+
+## Part of ADK-Rust
+
+This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

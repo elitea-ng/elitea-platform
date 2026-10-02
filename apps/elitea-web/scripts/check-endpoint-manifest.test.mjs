@@ -664,7 +664,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
  * the browser. The create/rotate operation grew a request body in the same
  * change without changing this count.
  */
-const GENERATED_OPERATION_COUNT = 269;
+// 266 -> 269: exchangeMcpOAuthGrant, registerMcpOAuthClient, and
+// deleteProjectContext. Existing handwritten callers keep the manifest count unchanged.
+// Combined main and Rust branch contract surface after the September integration.
+const GENERATED_OPERATION_COUNT = 274;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

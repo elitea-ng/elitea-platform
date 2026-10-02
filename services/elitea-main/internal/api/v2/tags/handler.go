@@ -3,19 +3,18 @@ package tags
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/entitydiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-type Tag struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Data any    `json:"data"`
-}
+type Tag = entitydiscovery.Tag
 
 // EntityCoverage narrows a tag list to the tags one KIND of entity carries.
 //
@@ -27,10 +26,7 @@ type Tag struct {
 type EntityCoverage string
 
 const (
-	// CoverageAll is every tag row the project holds, attached or not. It is
-	// what an absent (or `all`) `entity_coverage` asks for, and it is the
-	// only value that answers a tag nothing carries yet — the row a tag
-	// CREATE has just made.
+	// CoverageAll merges tags attached to applications, pipelines, and skills.
 	CoverageAll EntityCoverage = "all"
 	// CoverageApplication is the tags carried by agents: applications with no
 	// pipeline version. Legacy draws the line at the APPLICATION and not at
@@ -99,6 +95,27 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filters, err := entitydiscovery.Parse(r.URL.Query())
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if reader, ok := h.repo.(interface {
+		ListFiltered(context.Context, string, entitydiscovery.Filters) (entitydiscovery.Page[Tag], error)
+	}); ok {
+		page, err := reader.ListFiltered(r.Context(), projectID, filters)
+		if err != nil {
+			var typed *apierr.APIError
+			if !errors.As(err, &typed) || typed.Status >= 500 {
+				slog.ErrorContext(r.Context(), "tag discovery read failed", "error", err)
+			}
+			apierr.Write(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(page)
+		return
+	}
 	tags, err := h.repo.List(r.Context(), projectID, coverage)
 	if err != nil {
 		apierr.Write(w, err)

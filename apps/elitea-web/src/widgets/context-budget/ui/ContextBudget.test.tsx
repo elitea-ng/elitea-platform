@@ -102,7 +102,7 @@ describe('ContextBudget — editing the budget', () => {
   it('opens the editor seeded with the reader\'s own stored budget', async () => {
     server.use(
       http.get(STATUS_URL, () => HttpResponse.json(STATUS_BODY)),
-      ...authorHandlers({ default_context_management: { max_context_tokens: 10_000 } }),
+      ...authorHandlers({ default_context_management: { budget_mode: 'full' } }),
     );
     const user = userEvent.setup();
     renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
@@ -111,7 +111,7 @@ describe('ContextBudget — editing the budget', () => {
 
     expect(await screen.findByTestId('context-budget-edit-dialog')).toBeInTheDocument();
     // The reader's OWN default, not the resolved 128 000 the panel shows.
-    await waitFor(() => expect(screen.getByTestId('context-budget-max-tokens-input')).toHaveValue('10000'));
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^Full/ })).toBeChecked());
   });
 
   it('falls back to the budget the server resolved when the reader has never saved one', async () => {
@@ -121,7 +121,7 @@ describe('ContextBudget — editing the budget', () => {
 
     await user.click(await screen.findByTestId('context-budget-edit-button'));
 
-    await waitFor(() => expect(screen.getByTestId('context-budget-max-tokens-input')).toHaveValue('128000'));
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^Balanced/ })).toBeChecked());
   });
 
   it('saves the new budget to the same profile field Settings › Memory writes', async () => {
@@ -134,15 +134,13 @@ describe('ContextBudget — editing the budget', () => {
     renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
 
     await user.click(await screen.findByTestId('context-budget-edit-button'));
-    const input = await screen.findByTestId('context-budget-max-tokens-input');
-    await user.clear(input);
-    await user.type(input, '32000');
+    await user.click(screen.getByRole('radio', { name: /^Full/ }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({
       name: 'Ada',
-      default_context_management: { max_context_tokens: 32_000, preserve_recent_messages: 7, enabled: true },
+      default_context_management: { budget_mode: 'full', preserve_recent_messages: 7 },
     });
     await waitFor(() => expect(screen.queryByTestId('context-budget-edit-dialog')).not.toBeInTheDocument());
   });
@@ -160,56 +158,38 @@ describe('ContextBudget — editing the budget', () => {
    * new number exists only in a SECOND GET.
    */
   it('refetches the status it reads, so the panel shows the budget the save just wrote', async () => {
-    const NBSP = '\u00a0';
-    let budget = 10_000;
+    let budget = 'balanced';
     const statusRequests: string[] = [];
     server.use(
       http.get(STATUS_URL, ({ request }) => {
         statusRequests.push(request.url);
-        return HttpResponse.json({ ...STATUS_BODY, current_tokens: 0, max_tokens: budget });
+        return HttpResponse.json({ ...STATUS_BODY, current_tokens: 0, max_tokens: 0, budget_mode: budget });
       }),
       http.get(`${BASE}/social/author`, () =>
-        HttpResponse.json({ default_context_management: { max_context_tokens: budget } }),
+        HttpResponse.json({ default_context_management: { budget_mode: budget } }),
       ),
       http.put(`${BASE}/social/author`, async ({ request }) => {
-        const body = (await request.json()) as { default_context_management?: { max_context_tokens?: number } };
-        budget = body.default_context_management?.max_context_tokens ?? budget;
+        const body = (await request.json()) as { default_context_management?: { budget_mode?: string } };
+        budget = body.default_context_management?.budget_mode ?? budget;
         return HttpResponse.json({ ok: true });
       }),
     );
     const user = userEvent.setup();
     renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
 
-    expect((await screen.findByTestId('context-budget-tokens')).textContent).toBe(`0 / 10${NBSP}000 tokens`);
+    expect((await screen.findByTestId('context-budget-stat-mode')).textContent).toContain('Balanced');
     await waitFor(() => expect(statusRequests).toHaveLength(1));
 
     await user.click(screen.getByTestId('context-budget-edit-button'));
-    const input = await screen.findByTestId('context-budget-max-tokens-input');
-    await user.clear(input);
-    await user.type(input, '32000');
+    await user.click(screen.getByRole('radio', { name: /^Full/ }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.queryByTestId('context-budget-edit-dialog')).not.toBeInTheDocument());
     // The second GET is the invalidation; the number is what it answered with.
     await waitFor(() => expect(statusRequests.length).toBeGreaterThan(1));
     await waitFor(() =>
-      expect(screen.getByTestId('context-budget-tokens').textContent).toBe(`0 / 32${NBSP}000 tokens`),
+      expect(screen.getByTestId('context-budget-stat-mode').textContent).toContain('Full'),
     );
-  });
-
-  it('refuses a budget the server would refuse, before sending it', async () => {
-    const sent: unknown[] = [];
-    server.use(http.get(STATUS_URL, () => HttpResponse.json(STATUS_BODY)), ...authorHandlers({}, sent));
-    const user = userEvent.setup();
-    renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
-
-    await user.click(await screen.findByTestId('context-budget-edit-button'));
-    const input = await screen.findByTestId('context-budget-max-tokens-input');
-    await user.clear(input);
-    await user.type(input, '10');
-
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    expect(sent).toHaveLength(0);
   });
 
   it('reports a refused save inside the dialog and keeps what was typed', async () => {
@@ -222,14 +202,12 @@ describe('ContextBudget — editing the budget', () => {
     renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
 
     await user.click(await screen.findByTestId('context-budget-edit-button'));
-    const input = await screen.findByTestId('context-budget-max-tokens-input');
-    await user.clear(input);
-    await user.type(input, '32000');
+    await user.click(screen.getByRole('radio', { name: /^Full/ }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByTestId('context-budget-edit-error')).toBeInTheDocument();
     expect(screen.getByTestId('context-budget-edit-dialog')).toBeInTheDocument();
-    expect(screen.getByTestId('context-budget-max-tokens-input')).toHaveValue('32000');
+    expect(screen.getByRole('radio', { name: /^Full/ })).toBeChecked();
   });
 
   it('offers no pencil in the collapsed rail, which has no room for it', async () => {

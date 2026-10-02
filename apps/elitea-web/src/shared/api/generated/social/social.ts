@@ -56,11 +56,13 @@ import type {
   AuthorUpdateRequest,
   CreateFeedbackResponse,
   CurrentAvatarResponse,
+  ErrorResponse,
   FeedbackCreateRequest,
   FeedbackListResponse,
   N400Response,
   N401Response,
   N403Response,
+  N404Response,
   N500Response,
   OkResponse,
   SocialActionErrorResponse,
@@ -2325,6 +2327,11 @@ export type pinEntityResponse200 = {
   status: 200;
 };
 
+export type pinEntityResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type pinEntityResponse401 = {
   data: N401Response;
   status: 401;
@@ -2335,16 +2342,31 @@ export type pinEntityResponse403 = {
   status: 403;
 };
 
+export type pinEntityResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
 export type pinEntityResponse500 = {
-  data: SocialActionErrorResponse;
+  data: ErrorResponse;
   status: 500;
+};
+
+export type pinEntityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
 };
 
 export type pinEntityResponseSuccess = pinEntityResponse200 & {
   headers: Headers;
 };
 export type pinEntityResponseError = (
-  pinEntityResponse401 | pinEntityResponse403 | pinEntityResponse500
+  | pinEntityResponse400
+  | pinEntityResponse401
+  | pinEntityResponse403
+  | pinEntityResponse404
+  | pinEntityResponse500
+  | pinEntityResponse503
 ) & {
   headers: Headers;
 };
@@ -2361,13 +2383,12 @@ export const getPinEntityUrl = (
 };
 
 /**
- * NOTE(W2): internal/api/v2/social/handler.go:307-325 (Pin). INSERTs
- * into p_{project_id}.social_pins (entity_name, entity_id, user_id) —
- * matches the social_pins table in
- * internal/infra/db/migrations/001_initial.sql:326-334 exactly, UNLIKE
- * Like/Unlike above (see likeApplication's NOTE(W2)) — the
- * centry.social_likes mismatch does NOT apply to Pin/Unpin.
- * @summary Pin an entity for the authenticated user
+ * Store one shared pin per project, entity type, and entity identifier.
+ * Repeated requests update the last pinner and timestamp.
+ * Conversation pins require the caller's existing chat detail access.
+ * NOTE(W2): internal/infra/db/repos/social_pins.go:66 implements the shared
+ * centry.social_pins key defined by migrations/shared/0064_centry_social_pins.sql.
+ * @summary Pin an entity for the project
  */
 export const pinEntity = async (
   projectId: string,
@@ -2397,7 +2418,8 @@ export const getPinEntityQueryKey = (
 
 export const getPinEntityQueryOptions = <
   TData = Awaited<ReturnType<typeof pinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2440,11 +2462,12 @@ export type PinEntityQueryResult = NonNullable<
   Awaited<ReturnType<typeof pinEntity>>
 >;
 export type PinEntityQueryError =
-  N401Response | N403Response | SocialActionErrorResponse;
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
 
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2469,7 +2492,8 @@ export function usePinEntity<
 };
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2494,7 +2518,8 @@ export function usePinEntity<
 };
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2510,12 +2535,13 @@ export function usePinEntity<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Pin an entity for the authenticated user
+ * @summary Pin an entity for the project
  */
 
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2550,6 +2576,11 @@ export type unpinEntityResponse200 = {
   status: 200;
 };
 
+export type unpinEntityResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type unpinEntityResponse401 = {
   data: N401Response;
   status: 401;
@@ -2560,16 +2591,31 @@ export type unpinEntityResponse403 = {
   status: 403;
 };
 
+export type unpinEntityResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
 export type unpinEntityResponse500 = {
-  data: SocialActionErrorResponse;
+  data: ErrorResponse;
   status: 500;
+};
+
+export type unpinEntityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
 };
 
 export type unpinEntityResponseSuccess = unpinEntityResponse200 & {
   headers: Headers;
 };
 export type unpinEntityResponseError = (
-  unpinEntityResponse401 | unpinEntityResponse403 | unpinEntityResponse500
+  | unpinEntityResponse400
+  | unpinEntityResponse401
+  | unpinEntityResponse403
+  | unpinEntityResponse404
+  | unpinEntityResponse500
+  | unpinEntityResponse503
 ) & {
   headers: Headers;
 };
@@ -2586,10 +2632,10 @@ export const getUnpinEntityUrl = (
 };
 
 /**
- * NOTE(W2): internal/api/v2/social/handler.go:327-345 (Unpin). Same
- * table/column shape as Pin — matches the migration (see pinEntity's
- * NOTE(W2)).
- * @summary Remove a pin for the authenticated user
+ * Remove the project pin regardless of which member last pinned it.
+ * Repeated requests succeed. Conversation access is required before removal.
+ * NOTE(W2): internal/infra/db/repos/social_pins.go:108 uses the canonical shared key.
+ * @summary Remove a shared project pin
  */
 export const unpinEntity = async (
   projectId: string,
@@ -2619,7 +2665,8 @@ export const getUnpinEntityQueryKey = (
 
 export const getUnpinEntityQueryOptions = <
   TData = Awaited<ReturnType<typeof unpinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2664,11 +2711,12 @@ export type UnpinEntityQueryResult = NonNullable<
   Awaited<ReturnType<typeof unpinEntity>>
 >;
 export type UnpinEntityQueryError =
-  N401Response | N403Response | SocialActionErrorResponse;
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
 
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2693,7 +2741,8 @@ export function useUnpinEntity<
 };
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2718,7 +2767,8 @@ export function useUnpinEntity<
 };
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2734,12 +2784,13 @@ export function useUnpinEntity<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Remove a pin for the authenticated user
+ * @summary Remove a shared project pin
  */
 
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
-  TError = N401Response | N403Response | SocialActionErrorResponse,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
 >(
   projectId: string,
   entityType: string,

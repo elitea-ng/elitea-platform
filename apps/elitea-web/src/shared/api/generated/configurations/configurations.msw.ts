@@ -231,6 +231,10 @@ export const getListConfigurationModelsResponseMock = (
       faker.helpers.arrayElement([faker.number.int(), null]),
       undefined,
     ]),
+    max_input_tokens: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int({ min: 1 }), null]),
+      undefined,
+    ]),
     supports_reasoning: faker.helpers.arrayElement([
       faker.datatype.boolean(),
       undefined,

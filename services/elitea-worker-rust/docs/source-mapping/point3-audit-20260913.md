@@ -1,0 +1,89 @@
+# Point 3 evidence audit
+
+Status: accepted for progression on 2026-09-14. This audit distinguishes implementation, deployed proof, and remaining requirements.
+The broad `internal-elitea-mcp.md` closed-category descriptions predate the focused chat and discovery implementations.
+Use the focused source ledgers below for current ownership and evidence.
+Do not infer closure from an older pending statement or a later successful smoke test.
+
+## Requirements and evidence
+
+| Requirement | Current evidence | Remaining boundary |
+| --- | --- | --- |
+| 3a skill and project-context drafts | `internal-mcp-draft-default-model.md`: deployed omitted-model drafts, selected-version content, foreign-version refusal, and unchanged stored instructions. | Viewer draft refusal and selected-version checks pass on 2026-09-14. Folder-hidden source refusal retains real PostgreSQL evidence. |
+| 3b agent creation, separate instructions/settings updates, skill attachment | `chat-internal-mcp-acceptance.md` and `chat-credential-toolkit-creation.md`: persisted changes and saved-agent `load_skill` invocation. | `internal-mcp-copied-skill-acceptance.md`: chat-created version copies the pinned skill, Rust loads that exact version, and browser reload retains the answer. |
+| 3b credential and toolkit lifecycle | `chat-credential-toolkit-creation.md`: chat creation, updates, saved reference, and GitHub invocation. | `credential-browser-acceptance-20260914.md`: synthetic creation and rotation pass through internal MCP, browser Toolkit Test, and Rust. |
+| 3b entity discovery | `internal-mcp-entity-discovery.md`: shared actor-aware Main service, counts and filter tests. Live chat proof appears below. | Nonzero tag counts and restricted visibility have database evidence, not this browser proof. |
+| 3b actor-scoped chat operations | `internal-mcp-chat-authority.md`: eleven data descriptors. `internal-mcp-chat-runtime-contract.md`: deployed message sending and repeated-question proof. | `internal-mcp-no-content-result.md`: all eleven ordinary operations pass deployed checks after the HTTP 204 fix. `internal-mcp-restricted-chat-acceptance.md`: listing succeeds after project admission and eleven ungranted operations are refused. External interrupt-decision publication is intentionally excluded. |
+| 3c Toolkit Test | `toolkit-test-reference-binding.md`, `toolkit-cancellation-acceptance.md`, `toolkit-test-result-recovery.md`: invocation, authorization references, administrative cancellation, result/reload observation. | `toolkit-discovery-authorization.md`: deployed MCP discovery, OAuth, argument loading, and Rust invocation pass headed Chrome acceptance. Pending-call OAuth reload also passes with one control and original arguments. `toolkit-request-recovery.md`: loss before execution-ID receipt now passes deployed reload verification with one provider call. |
+| 3c active worker crash | `toolkit-test-result-recovery.md`: one provider request, replacement claim 2, durable failure, one browser POST and two GETs. | This proves ambiguous-call reconciliation, not successful continuation or cross-replica spool independence. |
+| 3d external MCP | `external-mcp-fresh-browser-20260913.md`: independent PAT calls, saved-agent/pipeline success and failure, pause refusal, mixed guards, exact cursor replay, Main restart cases. | Autonomous success, failure, pause refusal, and transport replay have independent-client evidence. Platform-wide sensitive-tool behavior and browser HITL decisions are separate gates. |
+
+Pipeline creation through chat remains excluded by user scope.
+Direct pipeline HITL history and participant/Test chat belong to point 5.
+No new toolkit Cancel control is required.
+Production activation and wider recovery gates remain distinct from point 3 progression.
+
+## Fresh chat entity discovery
+
+A fresh headed Playwright browser opens existing MCP-enabled chat 545.
+The user message requests read-only application tags and all five entity option kinds.
+Rust calls `get_prompt_lib_tags` and `get_prompt_lib_search_options` through the internal MCP adapter.
+Message group 5910 stores successful traces 7424 and 7425 respectively.
+
+The tag result contains zero rows. It does not prove nonzero relation counts.
+Search Options returns `application`, `pipeline`, `toolkit`, `credential`, `skill`, `collection`, and `tag` sections.
+The rendered tool result contains nine credential rows with only `id` and `name` fields.
+The toolkit page contains ten rows and reports a total of 25.
+The final answer includes `RUST_GATE3_ENTITY_DISCOVERY_20260913_DONE`.
+No entity mutation is requested or performed by these two discovery tools.
+
+Evidence is `elitea-point3-discovery-chat.log`; its script is `elitea-point3-discovery-chat.py`.
+The Main service and current-platform mappings are in `internal-mcp-entity-discovery.md`.
+Rust retains transport and invocation ownership; Main retains project data and actor visibility.
+
+## Next implementation boundary
+
+Continue with point 4 context management and runtime drift.
+The message-send, ordinary operation, and restricted operation checks now have deployed evidence.
+Main retains product authorization; Rust retains execution and checkpoint ownership.
+The broader production and graph gates remain open as listed in `remaining-gates.md`.
+
+## Restricted viewer acceptance, 2026-09-14
+
+A fresh headed Chrome session creates a temporary PAT for the dedicated restricted test user.
+The user has temporary viewer membership in project 2.
+An independent Python MCP client successfully calls `get_elitea_core_conversations` with HTTP 200.
+Both draft calls return HTTP 200 with `isError: true` and their exact missing permission.
+The skill draft requires `models.applications.skills.create`.
+The project-context draft requires `models.project_context.edit`.
+Both responses state that nothing executes.
+This proves operation refusal after project admission, rather than nonmember rejection.
+
+The PAT revocation returns HTTP 204.
+Membership deletion through the admin API returns HTTP 403; an empty role update returns HTTP 400.
+A scoped database cleanup removes only the temporary project-2 membership for user 6.
+The final membership count is zero, matching the pre-test baseline.
+These cleanup failures do not invalidate the permission responses, but the complete script exits unsuccessfully.
+The admin cleanup API behavior needs separate investigation.
+Evidence is `elitea-viewer-operation-check.log` and the read-only baseline and cleanup counts.
+No product schema changes occur.
+
+## Scope confirmation, 2026-09-14
+
+The user confirms that external MCP executes autonomous agents, pipelines, and toolkit tools.
+Platform-wide sensitive-tool behavior is a later, separate gap.
+HITL nodes, direct pipeline history, and graph behavior remain in point 5.
+External callers do not receive approval or interrupt-resume controls.
+OAuth consent in the Toolkit Test browser remains part of point 3 credential authorization.
+A later browser HITL decision is not an additional external-MCP progression requirement.
+
+The user defers external MCP elicitation on 2026-09-14.
+`external-mcp-elicitation-deferred.md` records client capability requirements and the distinction between client permission and Elitea approval.
+This option is not a point 3 completion requirement.
+
+## Delivery reconciliation, 2026-09-14
+
+The [delivery reconciliation](point3-delivery-reconciliation.md) records the remaining model-default, API-contract, and verification changes.
+It also corrects stale history statements about committed runtime repairs.
+The [restricted chat-operation matrix](internal-mcp-restricted-chat-acceptance.md) passes after explicit user approval of its two-grant temporary role.
+All temporary access is removed. This is the final point 3 progression check.

@@ -178,6 +178,7 @@ func admitPostgresAgentExecution(
 	conversationID,
 	responseID,
 	clientGeneration string,
+	configure ...func(*agentexecutionapp.SubmitRequest),
 ) executionapp.AdmissionOutcome {
 	t.Helper()
 	policy := AgentExecutionDispatchPolicy{
@@ -247,7 +248,7 @@ func admitPostgresAgentExecution(
 		ExceptionHandlingEnabled: proto.Bool(false),
 		DebugMode:                proto.Bool(true),
 	}
-	outcome, err := service.Submit(t.Context(), agentexecutionapp.SubmitRequest{
+	request := agentexecutionapp.SubmitRequest{
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: "tenant-agent", ResourceProjectID: "1",
 			ProjectionProjectID: "1", ActorID: "7",
@@ -258,7 +259,11 @@ func admitPostgresAgentExecution(
 		ClientMessageID: responseID,
 		SIOEvent:        "chat_predict",
 		Input:           input,
-	})
+	}
+	for _, customize := range configure {
+		customize(&request)
+	}
+	outcome, err := service.Submit(t.Context(), request)
 	if err != nil || !outcome.Created {
 		t.Fatalf("admit agent execution: outcome=%+v err=%v", outcome, err)
 	}

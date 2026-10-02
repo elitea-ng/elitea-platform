@@ -35,8 +35,10 @@ use crate::transport::runtime_context::{
 use crate::transport::{
     ControlGrpcConfig, ControlGrpcError, InputContentClient, InputContentError, TonicControlRpc,
 };
-use crate::transport::{model_facade::ModelFacade, model_gateway::ModelGatewayConfig};
-use crate::transport::{model_gateway::ModelGatewayError, platform_client::PlatformClient};
+use crate::transport::{model_facade::ModelFacade, openai_compatible_facade::ModelGatewayConfig};
+use crate::transport::{
+    openai_compatible_facade::ModelFacadeError, platform_client::PlatformClient,
+};
 
 const MAX_AGENTSTATE_CONNECTION_BYTES: usize = 16 * 1024;
 const MAX_RUNTIME_CONTEXT_BYTES: usize = 32 * 1024;
@@ -48,7 +50,7 @@ const MAX_ATTACHMENT_OBJECT_BYTES: usize = 1024 * 1024;
 // file content and caps the envelope at 2 MiB, because a control-character-
 // dense file escapes to six characters per byte inside a JSON string.
 const MAX_ARTIFACT_OBJECT_BYTES: usize = 2 * 1024 * 1024;
-const MAX_MODEL_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MODEL_SSE_EVENT_BYTES: usize = 256 * 1024;
 const MAX_MODEL_STREAM_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MODEL_SSE_EVENTS: usize = 4_096;
@@ -106,6 +108,7 @@ pub(crate) struct ProductionTransportBundle {
     pub(crate) platform: Arc<PlatformClient>,
     pub(crate) model_facade: Arc<ModelFacade>,
     pub(crate) agentstate: PgPool,
+    pub(crate) sandbox: Option<Arc<crate::agents::graph::CodeRuntimeFactory>>,
 }
 
 impl ProductionTransportBundle {
@@ -171,6 +174,31 @@ impl ProductionTransportBundle {
 
         let control = AgentControlClient::from_channel(control, profiles.control)
             .map_err(|error| map_agent_control_error(&error))?;
+        let control = Arc::new(control);
+        let mut sandbox_profiles = Vec::with_capacity(deployment.sandbox_runtimes.len());
+        for profile in &deployment.sandbox_runtimes {
+            let channel = connect_private_grpc(
+                &profile.target,
+                profiles.grpc_connect_timeout,
+                trust.private_ca(),
+                trust.client_identity(),
+            )
+            .await?;
+            let client = crate::sandbox::client::SandboxClient::from_channel(
+                channel,
+                profile.audience.clone(),
+                Duration::from_secs(u64::from(profile.timeout_seconds) + 60),
+            )
+            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+            sandbox_profiles.push((profile.clone(), client));
+        }
+        let sandbox = (!sandbox_profiles.is_empty()).then(|| {
+            Arc::new(crate::agents::graph::CodeRuntimeFactory::new(
+                control.clone(),
+                sandbox_profiles,
+                agentstate.clone(),
+            ))
+        });
         let platform = Arc::new(PlatformClient::new(Arc::new(runtime_context)));
         Ok(Self {
             command_authenticator: trust.command_authenticator(),
@@ -178,7 +206,8 @@ impl ProductionTransportBundle {
             deployment,
             spool_root,
             redis,
-            control: Arc::new(control),
+            control,
+            sandbox,
             output,
             input: Arc::new(input),
             platform,
@@ -223,8 +252,10 @@ impl ProductionProfiles {
             model: ModelGatewayConfig {
                 origin: deployment.platform_origin.clone(),
                 connect_timeout: grpc_connect_timeout,
-                response_header_timeout: Duration::from_millis(limits.content_timeout_millis),
-                stream_idle_timeout: Duration::from_millis(limits.content_timeout_millis),
+                response_header_timeout: Duration::from_millis(
+                    limits.model_response_header_timeout_millis,
+                ),
+                stream_idle_timeout: Duration::from_millis(limits.model_stream_idle_timeout_millis),
                 max_request_bytes: MAX_MODEL_REQUEST_BYTES,
                 max_sse_event_bytes: MAX_MODEL_SSE_EVENT_BYTES,
                 max_stream_bytes: MAX_MODEL_STREAM_BYTES,
@@ -394,13 +425,13 @@ fn map_runtime_context_error(error: &RuntimeContextError) -> ProductionBootstrap
     }
 }
 
-fn map_model_error(error: ModelGatewayError) -> ProductionBootstrapError {
+fn map_model_error(error: ModelFacadeError) -> ProductionBootstrapError {
     match error {
-        ModelGatewayError::InvalidConfiguration | ModelGatewayError::InvalidInvocation => {
+        ModelFacadeError::InvalidConfiguration | ModelFacadeError::InvalidInvocation => {
             ProductionBootstrapError::InvalidConfiguration
         }
-        ModelGatewayError::ResourceExhausted => ProductionBootstrapError::ResourceExhausted,
-        ModelGatewayError::DependencyUnavailable => ProductionBootstrapError::DependencyUnavailable,
+        ModelFacadeError::ResourceExhausted => ProductionBootstrapError::ResourceExhausted,
+        ModelFacadeError::DependencyUnavailable => ProductionBootstrapError::DependencyUnavailable,
     }
 }
 

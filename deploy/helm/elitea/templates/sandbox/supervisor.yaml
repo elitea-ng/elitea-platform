@@ -1,0 +1,119 @@
+{{- $s := .Values.sandboxKubernetes }}
+{{- if $s.supervisor.enabled }}
+{{- if not $s.enabled }}{{ fail "Kubernetes supervisor requires sandboxKubernetes.enabled" }}{{ end }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" $s.supervisor.image) }}
+{{- fail "Kubernetes supervisor image must use a registry SHA-256 digest" }}{{ end }}
+{{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $s.supervisor.materialSecret) }}
+{{- fail "Kubernetes supervisor requires a named materialSecret" }}{{ end }}
+{{- if or (lt (len $s.supervisor.profiles) 1) (gt (len $s.supervisor.profiles) 4) }}
+{{- fail "Kubernetes supervisor requires one to four profiles" }}{{ end }}
+{{- $ports := dict }}{{- $files := dict }}
+{{- range $s.supervisor.profiles }}
+{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" (default "" .file)) }}{{ fail "Kubernetes profile file must be a flat filename" }}{{ end }}
+{{- if or (not (regexMatch "^[0-9]+$" (toString .port))) (lt (int .port) 1024) (gt (int .port) 65535) }}{{ fail "Kubernetes profile port must be between 1024 and 65535" }}{{ end }}
+{{- if or (hasKey $ports (toString .port)) (hasKey $files .file) }}{{ fail "Kubernetes profiles require unique files and ports" }}{{ end }}
+{{- $_ := set $ports (toString .port) true }}{{- $_ := set $files .file true }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elitea-sandbox-supervisor
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: sandbox-supervisor
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: sandbox-supervisor
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $s.supervisorServiceAccount }}
+      {{- include "elitea.imagePullSecrets" (dict "local" (list) "global" .Values.image.pullSecrets) | nindent 6 }}
+      terminationGracePeriodSeconds: 25
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: prepare-material
+          image: {{ $s.supervisor.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--prepare-material", "/run/projected-material", "/run/elitea-sandbox"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - name: projected-material
+              mountPath: /run/projected-material
+              readOnly: true
+            - name: private-material
+              mountPath: /run/elitea-sandbox
+      containers:
+        - name: supervisor
+          image: {{ $s.supervisor.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            {{- range $s.supervisor.profiles }}
+            - --config
+            - {{ printf "/run/elitea-sandbox/%s" .file | quote }}
+            {{- end }}
+          ports:
+            {{- range $index, $profile := $s.supervisor.profiles }}
+            - name: profile-{{ $index }}
+              containerPort: {{ $profile.port }}
+            {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: profile-0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml $s.supervisor.resources | nindent 12 }}
+          volumeMounts:
+            - name: private-material
+              mountPath: /run/elitea-sandbox
+              readOnly: true
+      volumes:
+        - name: projected-material
+          secret:
+            secretName: {{ $s.supervisor.materialSecret }}
+            defaultMode: 0440
+        - name: private-material
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elitea-sandbox-supervisor
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: sandbox-supervisor
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    {{- range $index, $profile := $s.supervisor.profiles }}
+    - name: profile-{{ $index }}
+      port: {{ $profile.port }}
+      targetPort: profile-{{ $index }}
+    {{- end }}
+{{- end }}

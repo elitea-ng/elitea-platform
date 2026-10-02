@@ -242,3 +242,28 @@ func TestCurrentLocalConfigurationCreateNormalizerLeavesOtherTypesForNextNormali
 		t.Fatalf("NormalizeCreate() result = %#v, want incomplete zero result", result)
 	}
 }
+
+func TestCurrentLocalModelPreservesOptionalInputCeiling(t *testing.T) {
+	for _, value := range []any{nil, "272000", 0, -1, "invalid"} {
+		result, err := (CurrentLocalConfigurationCreateNormalizer{}).NormalizeCreate("llm_model", map[string]any{
+			"name": "model", "max_input_tokens": value,
+			"ai_credentials": map[string]any{"elitea_title": "public", "private": false},
+		})
+		if value != nil && value != "272000" {
+			if err == nil {
+				t.Fatal("invalid input ceiling accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value == nil {
+			if _, exists := result.Data["max_input_tokens"]; exists {
+				t.Fatal("invented input ceiling")
+			}
+		} else if result.Data["max_input_tokens"] != int64(272000) {
+			t.Fatal("lost explicit input ceiling")
+		}
+	}
+}

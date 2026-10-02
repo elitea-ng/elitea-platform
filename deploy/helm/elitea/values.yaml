@@ -237,7 +237,7 @@ pgbouncer:
   nodeSelector: {}
   tolerations: []
   affinity: {}
- 
+
 # ── NATS ────────────────────────────────────────────────────────────────────
 #
 # The gateway's budget counters and the scheduler both dial it, and they MUST
@@ -1534,6 +1534,10 @@ main:
       consumerGroup: ""
       streamMaxEntries: 1024
 
+    # Saved toolkit discovery requires an active worker dispatch.
+    toolkitDiscovery:
+      enabled: false
+
     # The index schedule write and delete routes. NEEDS indexIngestDispatch.
     indexScheduling:
       enabled: false
@@ -1555,6 +1559,9 @@ main:
     # Must equal the key id inside command-signing-keyring.json. The composition
     # cross-checks the two and refuses to start on a mismatch.
     signingKeyId: ""
+
+    # Exact supervisor grant audiences. Empty disables sandbox grant issuance.
+    sandboxAudiences: []
 
     # Three listeners, three DISTINCT addresses. The agent worker dials all three
     # on this Service, so the server certificates must carry the Service name.
@@ -3312,6 +3319,13 @@ worker:
     platformOrigin: "https://elitea-platform-edge"
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
+    # Rust-only. Enable checkpoint recovery after verifying the deployment contract.
+    agentModelCheckpointRecovery: false
+    # Rust-only deployment-selected Code backends. These are never YAML node inputs.
+    # Entries use SandboxRuntimeConfig fields: language, target, audience,
+    # image_digest, policy_revision, and timeout_seconds.
+    # The target hostname must match the supervisor certificate SAN.
+    sandboxRuntimes: []
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval.
     sensitiveTools: '{"*":["delete_file"]}'
@@ -3570,3 +3584,40 @@ otelCollector:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# Optional image preparation only; this does not enable Code-node execution.
+# Images must provide /bin/sleep and be pinned by registry digest.
+# Use the same nodeSelector for the future sandbox Jobs and this warmer.
+sandboxImageWarmup:
+  enabled: false
+  images: []
+  # Example: [{name: python, image: "registry/runtime@sha256:<64 hex digits>"}]
+  nodeSelector: {}
+  tolerations: []
+  imagePullSecrets: []
+
+# Kubernetes execution boundary only. The supervisor API adapter is not enabled here.
+# Use a dedicated namespace with a NetworkPolicy-capable CNI.
+sandboxKubernetes:
+  enabled: false
+  executionNamespace: ""
+  supervisorServiceAccount: elitea-sandbox-supervisor
+  # This cap includes running Pods and completed Pods awaiting receipt cleanup.
+  maxPods: 128
+  supervisor:
+    enabled: false
+    image: ""
+    # Existing Secret: flat configuration, certificate, keyring, and database files.
+    materialSecret: ""
+    profiles:
+      - file: deno.json
+        port: 9446
+      - file: rust.json
+        port: 9447
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi

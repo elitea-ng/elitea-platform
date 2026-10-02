@@ -44,9 +44,9 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
-import { AUTOTEST_PREFIX, createAgentWithVersion, createTag, deleteAgent, deleteAutotestTags, readVersion } from '../../fixtures/api';
+import { AUTOTEST_PREFIX, createAgentWithVersion, createTag, deleteAgent, deleteTag, readVersion } from '../../fixtures/api';
 
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 /**
  * A run-unique stem — every tag/agent name below is built from one of these,
@@ -115,6 +115,14 @@ async function saveAndWaitForVersionPut(page: Page): Promise<void> {
   expect(response.status(), `the version PUT carrying tags must succeed`).toBeLessThan(400);
 }
 
+/** Remove only this fixture's tags, addressed by their stored version IDs. */
+async function deleteOwnedAgentTags(request: APIRequestContext, agent: { id: string; versionId: string }, names: readonly string[]): Promise<void> {
+  const stored = await readVersion(request, agent.id, agent.versionId);
+  for (const tag of stored.tags) {
+    if (names.includes(tag.name)) await deleteTag(request, tag.id);
+  }
+}
+
 /*
  * ELITEA-0037 — an agent that already carries ONE saved tag gets two more
  * brand-new tags added in the SAME save, and all three survive a reload.
@@ -147,8 +155,8 @@ test('J14c-tags: an agent with one saved tag keeps it when two new tags are adde
     ).toEqual([savedTagName, newTag1, newTag2].sort());
     await expect(tagChips(page)).toHaveCount(3, { timeout: 20_000 });
   } finally {
+    await deleteOwnedAgentTags(request, agent, [savedTagName, newTag1, newTag2]);
     await deleteAgent(request, agent.id);
-    await deleteAutotestTags(request, [savedTagName, newTag1, newTag2]);
   }
 });
 
@@ -158,6 +166,7 @@ test('J14c-tags: an agent with one saved tag keeps it when two new tags are adde
  */
 /* onetest: ELITEA-0038 — an agent with no tags persists three brand-new tags added in one save */
 test('J14c-tags: an agent with no tags persists three brand-new tags added in one save', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const tag1 = uniqueStem('alpha');
   const tag2 = uniqueStem('beta');
   const tag3 = uniqueStem('gamma');
@@ -180,8 +189,8 @@ test('J14c-tags: an agent with no tags persists three brand-new tags added in on
     expect(stored.tags.map((tag) => tag.name).sort()).toEqual([tag1, tag2, tag3].sort());
     await expect(tagChips(page)).toHaveCount(3, { timeout: 20_000 });
   } finally {
+    await deleteOwnedAgentTags(request, agent, [tag1, tag2, tag3]);
     await deleteAgent(request, agent.id);
-    await deleteAutotestTags(request, [tag1, tag2, tag3]);
   }
 });
 
@@ -198,13 +207,18 @@ test('J14c-tags: mixing system-existing and system-new tags in one save persists
   page,
   request,
 }) => {
+  test.setTimeout(60_000);
   const existing1 = await createTag(request, uniqueStem('existing1'));
   const existing2 = await createTag(request, uniqueStem('existing2'));
   const newTag1 = uniqueStem('mix1');
   const newTag2 = uniqueStem('mix2');
+  const source = await createAgentWithVersion(request, uniqueStem('tag_source'), {
+    tags: [{ name: existing1.name }, { name: existing2.name }],
+  });
   const agent = await createAgentWithVersion(request, uniqueStem('agent'), {});
   try {
     await openAgentEditor(page, agent.id);
+    await expect(tagChips(page)).toHaveCount(0);
 
     // SYSTEM-EXISTING: type enough to match the seeded tag and pick the real
     // OPTION from the dropdown — not freeSolo text, so this exercises the
@@ -234,7 +248,10 @@ test('J14c-tags: mixing system-existing and system-new tags in one save persists
     expect(stored.tags.find((tag) => tag.name === existing2.name)?.id).toBe(existing2.id);
     await expect(tagChips(page)).toHaveCount(4, { timeout: 20_000 });
   } finally {
+    await deleteOwnedAgentTags(request, agent, [newTag1, newTag2]);
+    await deleteTag(request, existing1.id);
+    await deleteTag(request, existing2.id);
     await deleteAgent(request, agent.id);
-    await deleteAutotestTags(request, [existing1.name, existing2.name, newTag1, newTag2]);
+    await deleteAgent(request, source.id);
   }
 });

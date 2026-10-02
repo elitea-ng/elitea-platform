@@ -20,7 +20,7 @@ import (
 const (
 	maxCurrentHITLValueBytes          = 256 * 1024
 	maxCurrentHITLDecisions           = 16
-	maxCurrentOutputContinuationBytes = 64 * 1024
+	maxCurrentOutputContinuationBytes = 4 * 1024 * 1024
 )
 
 var (
@@ -89,9 +89,31 @@ type CurrentContinuationTarget struct {
 	ToolCallID            string
 	AvailableActions      []string
 	HITLInterrupts        []CurrentHITLInterrupt
+	PipelineHITLReview    *CurrentPipelineHITLReview
 	AuthorizationRequests []CurrentAuthorizationRequest
 	TruncatedContent      string
 	OutputLimitSequence   int64
+}
+
+// CurrentPipelineHITLReview identifies a direct pipeline review from persisted state.
+// Nested interrupts must not create separate chat turns.
+type CurrentPipelineHITLReview struct {
+	InterruptID string
+	NodeName    string
+	Message     string
+}
+
+func (review *CurrentPipelineHITLReview) valid() bool {
+	return review != nil && validCurrentAgentText(review.InterruptID, 512) &&
+		validCurrentAgentText(review.NodeName, 256) && validCurrentAgentText(review.Message, 4*1024*1024)
+}
+
+func (review *CurrentPipelineHITLReview) clone() *CurrentPipelineHITLReview {
+	if review == nil {
+		return nil
+	}
+	copy := *review
+	return &copy
 }
 
 type CurrentHITLInterrupt struct {
@@ -126,6 +148,13 @@ func (target CurrentContinuationTarget) Validate() error {
 		(kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
 			kind != CurrentContinuationOutputLimit) {
 		return ErrUnsupportedCurrentAgentStart
+	}
+	if review := target.PipelineHITLReview; review != nil {
+		if kind != CurrentContinuationHITL || target.Kind != CurrentRegenerationApplication ||
+			!review.valid() || len(target.HITLInterrupts) != 1 ||
+			review.InterruptID != target.HITLInterrupts[0].InterruptID {
+			return ErrUnsupportedCurrentAgentStart
+		}
 	}
 	if kind == CurrentContinuationOutputLimit {
 		if len(target.TruncatedContent) > maxCurrentOutputContinuationBytes ||
@@ -406,7 +435,24 @@ type CurrentContinueTurn struct {
 	Action               string
 	ContinuationKind     CurrentContinuationKind
 	HITLDecisions        json.RawMessage
+	PipelineHITLReview   *CurrentPipelineHITLReview
 	OutputLimitSequence  int64
+}
+
+// PipelineDecisionID is stable for retries of one direct review occurrence.
+func (turn CurrentContinueTurn) PipelineDecisionID() string {
+	if turn.PipelineHITLReview == nil {
+		return ""
+	}
+	return currentTurnUUID(turn.ResponseMessageID, "pipeline-hitl-decision:"+turn.PipelineHITLReview.InterruptID)
+}
+
+// ProjectionResponseID keeps nested resumes in their existing response.
+func (turn CurrentContinueTurn) ProjectionResponseID() string {
+	if turn.PipelineHITLReview == nil {
+		return turn.ResponseMessageID
+	}
+	return currentTurnUUID(turn.PipelineDecisionID(), "response-message")
 }
 
 func (turn CurrentContinueTurn) Validate() error {
@@ -423,6 +469,17 @@ func (turn CurrentContinueTurn) Validate() error {
 	if kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
 		kind != CurrentContinuationOutputLimit {
 		return ErrInvalidCurrentAgentStart
+	}
+	if review := turn.PipelineHITLReview; review != nil {
+		var decisions []CurrentHITLDecision
+		if kind != CurrentContinuationHITL || turn.Kind != CurrentRegenerationApplication ||
+			!review.valid() || review.InterruptID != turn.InterruptID ||
+			json.Unmarshal(turn.HITLDecisions, &decisions) != nil || len(decisions) != 1 ||
+			decisions[0].InterruptID != review.InterruptID || decisions[0].ToolCallID != "" ||
+			decisions[0].Action != turn.Action ||
+			(turn.Action != "approve" && turn.Action != "reject" && turn.Action != "edit") {
+			return ErrInvalidCurrentAgentStart
+		}
 	}
 	if kind == CurrentContinuationOutputLimit {
 		if len(turn.HITLDecisions) != 0 || turn.InterruptID != "" || turn.Action != "" ||
@@ -499,6 +556,7 @@ func (turn *CurrentContinueTurn) Clone() *CurrentContinueTurn {
 	}
 	clone := *turn
 	clone.HITLDecisions = bytes.Clone(turn.HITLDecisions)
+	clone.PipelineHITLReview = turn.PipelineHITLReview.clone()
 	return &clone
 }
 
@@ -570,7 +628,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		},
 		IdempotencyKey: idempotencyKey,
 		CapabilityID:   capabilityID, ClientStreamID: request.ConversationUUID,
-		ClientMessageID: request.ResponseMessageID, SIOEvent: "chat_continue_predict",
+		ClientMessageID: turn.ProjectionResponseID(), SIOEvent: "chat_continue_predict",
 		Input: input, CurrentContinueTurn: turn,
 	})
 	if err != nil {
@@ -578,7 +636,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 	}
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
-		ResponseMessageID: request.ResponseMessageID, Created: outcome.Created,
+		ResponseMessageID: turn.ProjectionResponseID(), Created: outcome.Created,
 	}, nil
 }
 
@@ -593,6 +651,10 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 	if !projectIDValid || !actorUserIDValid {
 		return nil, nil, "", ErrUnsupportedCurrentAgentStart
 	}
+	policy, err := service.loadContinuationContext(ctx, request, target)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	turn := &CurrentContinueTurn{
 		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 		ConversationUUID:    request.ConversationUUID,
@@ -601,6 +663,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		ExecutionGeneration: target.ExecutionGeneration, ThreadID: target.ThreadID,
 		ContinuationKind:    request.normalizedKind(),
 		OutputLimitSequence: target.OutputLimitSequence,
+		PipelineHITLReview:  target.PipelineHITLReview.clone(),
 	}
 	var input *runtimev1.AgentExecutionInputV1
 	var capabilityID string
@@ -635,6 +698,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID, ActorUserID: actorUserID,
 				VersionDetails: resolved.VersionDetails,
+				InternalTools:  resolved.InternalTools,
 			},
 		)
 		if err != nil {
@@ -663,16 +727,23 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
 		capabilityID = executiondomain.AgentApplicationCapability
 	case CurrentRegenerationAdhoc:
+		settings, settingsErr := continuationAdhocSettings(policy)
+		if settingsErr != nil {
+			return nil, nil, "", settingsErr
+		}
 		start := CurrentAdhocStartRequest{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:    request.ConversationUUID,
 			TargetParticipantID: target.TargetParticipantID,
 			QuestionID:          target.QuestionID, UserInput: target.UserInput,
-			LLMSettings: json.RawMessage(`{}`),
+			LLMSettings: settings,
 		}
 		resolved, err := service.adhocResolver.ResolveCurrentAdhoc(ctx, start)
 		if err != nil {
 			return nil, nil, "", err
+		}
+		if policy != nil {
+			resolved.LLMSettings = json.RawMessage(`{}`)
 		}
 		snapshot, err := currentAdhocSnapshot(start.LLMSettings, resolved)
 		if err != nil {
@@ -687,6 +758,11 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		)
 		if err != nil {
 			return nil, nil, "", err
+		}
+		if policy != nil {
+			if err := validateContinuationModelSelection(settings, frozen); err != nil {
+				return nil, nil, "", err
+			}
 		}
 		input, err = currentAdhocInput(start, resolved, frozen, suggestionPolicy, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's continuation call site
 			// #946: project context is NOT a per-turn recall like memories —
@@ -703,6 +779,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		return nil, nil, "", ErrUnsupportedCurrentAgentStart
 	}
 
+	restoreContinuationContext(policy, input)
 	input.ThreadId = stringPointer(target.ThreadID)
 	input.ExecutionGeneration = stringPointer(target.ExecutionGeneration)
 	input.ShouldContinue = true

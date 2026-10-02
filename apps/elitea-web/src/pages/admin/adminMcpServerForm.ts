@@ -6,6 +6,8 @@
  * tri-state that decides whether a credential survives a save, and the
  * client-side checks. `./AdminMcpServerDialog.tsx` is the controls.
  */
+import { dump, load } from 'js-yaml';
+
 import { t } from '@/shared/i18n';
 
 import type { AdminMcpServer } from './api/adminMcpServersApi';
@@ -40,6 +42,8 @@ export interface McpServerForm {
   readonly clientSecret: string;
   readonly clearSecret: boolean;
   readonly timeout: string;
+  readonly headersYaml: string;
+  readonly configSchemaYaml: string;
   readonly enabled: boolean;
 }
 
@@ -52,8 +56,15 @@ const EMPTY_FORM: McpServerForm = {
   clientSecret: '',
   clearSecret: false,
   timeout: '',
+  headersYaml: '{}\n',
+  configSchemaYaml: 'properties: {}\n',
   enabled: true,
 };
+
+function dumpYamlMapping(value: Readonly<Record<string, unknown>> | undefined): string {
+  const mapping = value == null || Object.keys(value).length === 0 ? {} : value;
+  return dump(mapping, { lineWidth: -1, noRefs: true });
+}
 
 /**
  * What the dialog shows when it opens on an entry, or on nothing.
@@ -76,8 +87,29 @@ export function initialForm(editing: AdminMcpServer | undefined): McpServerForm 
     clientSecret: '',
     clearSecret: false,
     timeout: editing.timeout > 0 ? String(editing.timeout) : '',
+    headersYaml: dumpYamlMapping(editing.headers),
+    configSchemaYaml: dumpYamlMapping(editing.config_schema ?? { properties: {} }),
     enabled: editing.enabled,
   };
+}
+
+/** Parse one operator-authored YAML mapping without accepting arrays or scalars. */
+export function parseMcpYamlMapping(source: string): Record<string, unknown> {
+  const parsed: unknown = load(source.trim() === '' ? '{}' : source);
+  if (parsed == null) return {};
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('the YAML document must be a mapping');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Parse the header mapping and reject values that the Main wire type cannot accept. */
+export function parseMcpHeadersYaml(source: string): Record<string, string> {
+  const mapping = parseMcpYamlMapping(source);
+  if (Object.values(mapping).some((value) => typeof value !== 'string')) {
+    throw new Error('header values must be strings');
+  }
+  return mapping as Record<string, string>;
 }
 
 /**
@@ -110,6 +142,8 @@ export function resolveSecretForSave(typed: string, clear: boolean): string | un
 export function validateDraft(
   displayName: string,
   timeout: string,
+  headersYaml: string,
+  configSchemaYaml: string,
   isEdit: boolean,
   existingKeys: ReadonlySet<string>,
 ): string | undefined {
@@ -135,6 +169,19 @@ export function validateDraft(
     return t(
       'pages.admin.mcpServers.dialog.error.timeout',
       'Timeout must be a whole number of seconds, or empty for the default.',
+    );
+  }
+  try {
+    parseMcpHeadersYaml(headersYaml);
+  } catch {
+    return t('pages.admin.mcpServers.dialog.error.headersYaml', 'Headers must be a valid YAML mapping.');
+  }
+  try {
+    parseMcpYamlMapping(configSchemaYaml);
+  } catch {
+    return t(
+      'pages.admin.mcpServers.dialog.error.configSchemaYaml',
+      'Project parameter schema must be a valid YAML mapping.',
     );
   }
   return undefined;

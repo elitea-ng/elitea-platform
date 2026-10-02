@@ -17,7 +17,8 @@ describe('constants barrel (unit A2c symbols)', () => {
 
   it('re-exports RuntimeContractConstants as a namespace with the compiler allow-list', () => {
     expect(RuntimeContractConstants.isCompilerAdmittedNodeType('agent')).toBe(true);
-    expect(RuntimeContractConstants.isCompilerAdmittedNodeType('code')).toBe(false);
+    expect(RuntimeContractConstants.isCompilerAdmittedNodeType('code')).toBe(true);
+    expect(RuntimeContractConstants.isCompilerAdmittedNodeType('custom')).toBe(false);
   });
 
   it('re-exports NodeDefaultsConstants as a namespace with real seed data', () => {

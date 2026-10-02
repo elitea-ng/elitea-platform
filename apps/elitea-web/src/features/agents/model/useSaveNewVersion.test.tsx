@@ -39,6 +39,25 @@ function baseInput(overrides: Partial<SaveNewVersionInput> = {}): SaveNewVersion
 }
 
 describe('useSaveNewVersion', () => {
+  it.each([undefined, 12])('sends the optional skill source version %s', async (sourceVersionId) => {
+    let body: unknown;
+    server.use(
+      http.post('*/elitea_core/versions/prompt_lib/:projectId/:applicationId', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(newVersionWire, { status: 201 });
+      }),
+    );
+    const { result } = renderHookWithProviders(() => useSaveNewVersion());
+    await act(async () => {
+      await result.current.onCreateNewVersion(baseInput(sourceVersionId === undefined ? {} : { sourceVersionId }));
+    });
+    expect(body).toEqual({
+      instructions: 'Be helpful',
+      name: 'v2',
+      ...(sourceVersionId === undefined ? {} : { copy_skills_from_version_id: sourceVersionId }),
+    });
+  });
+
   it('POSTs the new version and returns the generated (snake_case) response verbatim', async () => {
     server.use(getSaveApplicationNewVersionMockHandler(newVersionWire));
     let onSuccessArg: unknown;

@@ -1,0 +1,80 @@
+state:
+  input:
+    type: str
+  messages:
+    type: list
+  sorted_data:
+    type: dict
+  grouped_data:
+    type: dict
+  checked_data:
+    type: dict
+entry_point: python_sort
+nodes:
+  - id: python_sort
+    type: code
+    language: python
+    input: [input]
+    code:
+      type: fixed
+      value: |
+        import json
+        records = json.loads(elitea_state['input'])
+        assert len(records) == 5
+        ordered = sorted(records, key=lambda row: (row['amount'], row['id']))
+        {'records': ordered, 'count': len(ordered), 'steps': ['python_sort']}
+    output: [sorted_data]
+    transition: javascript_group
+  - id: javascript_group
+    type: code
+    language: javascript
+    input: [sorted_data]
+    code:
+      type: fixed
+      value: |
+        export default (state) => {
+          const data = state.sorted_data;
+          const totals = data.records.reduce((acc, row) => {
+            acc[row.category] = (acc[row.category] ?? 0) + row.amount;
+            return acc;
+          }, {});
+          return {...data, totals, steps: [...data.steps, 'javascript_group']};
+        };
+    output: [grouped_data]
+    transition: typescript_check
+  - id: typescript_check
+    type: code
+    language: typescript
+    input: [grouped_data]
+    code:
+      type: fixed
+      value: |
+        type Row = {id: string; category: string; amount: number};
+        export default (state: {grouped_data: {records: Row[]; count: number; totals: Record<string, number>; steps: string[]}}) => {
+          const data = state.grouped_data;
+          const total = data.records.reduce((sum, row) => sum + row.amount, 0);
+          if (total !== Object.values(data.totals).reduce((a, b) => a + b, 0)) throw new Error('Totals disagree');
+          if (data.records.some((row, i) => i > 0 && row.amount < data.records[i - 1].amount)) throw new Error('Sort order lost');
+          return {...data, total, steps: [...data.steps, 'typescript_check']};
+        };
+    output: [checked_data]
+    transition: rust_verify
+  - id: rust_verify
+    type: code
+    language: rust
+    input: [checked_data]
+    code:
+      type: fixed
+      value: |
+        pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let data = &state["checked_data"];
+            let records = data["records"].as_array().ok_or("Missing records")?;
+            let ids: Vec<&str> = records.iter().map(|r| r["id"].as_str().ok_or("Invalid id")).collect::<Result<_, _>>()?;
+            if ids != vec!["e", "b", "d", "a", "c"] || data["total"] != 31 { return Err("State verification failed".into()); }
+            let mut steps = data["steps"].as_array().ok_or("Missing steps")?.clone();
+            steps.push(serde_json::json!("rust_verify"));
+            Ok(serde_json::json!({"status":"PASS", "sorted_ids":ids, "totals":data["totals"], "total":data["total"], "count":records.len(), "steps":steps}))
+        }
+    output: [messages]
+    transition: END
+

@@ -41,6 +41,28 @@ function dumpAllStorage(): string {
 }
 
 describe('client_secret never reaches browser storage', () => {
+  it('retains a Main reference across refresh without retaining a document secret', () => {
+    setAccessToken(SERVER, 'old', 3600, undefined, undefined, 'refresh', { client_id: 'legacy', client_secret: SECRET });
+    setAccessToken(SERVER, 'new', 3600, undefined, undefined, 'refresh', { client_id: 'registered', used_dcr: true, client_reference: 'main-reference' });
+    setAccessToken(SERVER, 'refreshed', 3600, undefined, undefined, 'rotated-refresh');
+
+    expect(getTokenInfo(SERVER)).toMatchObject({ client_id: 'registered', client_reference: 'main-reference', used_dcr: true });
+    expect(getTokenInfo(SERVER)?.client_secret).toBeUndefined();
+    expect(dumpAllStorage()).not.toContain(SECRET);
+  });
+
+  it.each([
+    { client_id: 'different-public-client', used_dcr: true },
+    { client_id: 'registered', used_dcr: false },
+  ])('does not inherit a reference when grant ownership changes: %j', (metadata) => {
+    setAccessToken(SERVER, 'old', 3600, undefined, undefined, 'refresh', { client_id: 'registered', used_dcr: true, client_reference: 'old-reference' });
+    setAccessToken(SERVER, 'new', 3600, undefined, undefined, 'new-refresh', metadata);
+
+    expect(getTokenInfo(SERVER)?.client_reference).toBeUndefined();
+    expect(getTokenInfo(SERVER)?.client_secret).toBeUndefined();
+    expect(dumpAllStorage()).not.toContain('old-reference');
+  });
+
   it('setSavedCredentials writes the client_id and nothing else about the secret', () => {
     setSavedCredentials({ serverUrl: SERVER, clientId: 'public-client-id', clientSecret: SECRET });
 

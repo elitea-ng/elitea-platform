@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1.7
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+WORKDIR /src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install cargo-auditable --locked --version 0.7.5
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/target \
+    CARGO_TARGET_DIR=/target cargo auditable build --locked --release -j 2 && \
+    cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner && \
+    cp /target/release/elitea-code-execute /usr/local/bin/elitea-code-execute && \
+    cp /target/release/elitea-code-rust /usr/local/bin/elitea-code-rust
+
+# Minimal runner verification target. The Deno language target extends it below.
+FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verification
+COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
+WORKDIR /workspace
+USER 10001:10001
+CMD ["/usr/local/bin/elitea-code-runner"]
+
+
+FROM denoland/deno:bin-2.5.4@sha256:1245e9856180be858aebeefdff2c3b98dc01e8ea667b48f4fb64647dc56bb61d AS deno
+FROM verification AS deno-runtime
+USER root
+COPY --from=deno /deno /usr/local/bin/deno
+COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-code-execute
+COPY adapters /opt/elitea-code
+ENV DENO_DIR=/opt/deno-cache
+RUN mkdir -p /opt/elitea-wheels && \
+    deno cache --frozen --lock=/opt/elitea-code/deno.lock /opt/elitea-code/python.mjs /opt/elitea-code/javascript.mjs && \
+    deno run --no-config --no-prompt --deny-net \
+      --allow-read=/opt/elitea-code --allow-write=/opt/elitea-code \
+      /opt/elitea-code/prepare_javascript.mjs /opt/elitea-code/javascript-packages.json \
+      /opt/elitea-code/javascript-dependencies.mjs && \
+    deno cache --no-config --node-modules-dir=none --frozen=false \
+      --lock=/opt/elitea-code/deno.lock /opt/elitea-code/javascript-dependencies.mjs && \
+    deno run --frozen --lock=/opt/elitea-code/deno.lock --no-prompt \
+      --allow-read=/opt/deno-cache,/opt/elitea-wheels,/opt/elitea-code \
+      --allow-write=/opt/elitea-wheels --allow-env=NODE_DEBUG \
+      --allow-net=cdn.jsdelivr.net,pypi.org,files.pythonhosted.org \
+      /opt/elitea-code/preload.mjs /opt/elitea-wheels /opt/elitea-code/python-packages.json && \
+    chmod -R a+rX /opt/deno-cache /opt/elitea-wheels /opt/elitea-code
+USER 10001:10001
+
+
+FROM builder AS rust-dependencies
+COPY adapters/rust /opt/elitea-rust
+RUN mkdir -p /opt/elitea-rust/.cargo && \
+    cargo vendor --locked --manifest-path /opt/elitea-rust/Cargo.toml /opt/rust-vendor > /opt/elitea-rust/.cargo/config.toml
+
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS rust-runtime
+COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
+COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-code-execute
+COPY --from=builder /usr/local/bin/elitea-code-rust /usr/local/bin/elitea-code-rust
+COPY --from=rust-dependencies /opt/elitea-rust /opt/elitea-rust
+COPY --from=rust-dependencies /opt/rust-vendor /opt/rust-vendor
+WORKDIR /workspace
+USER 10001:10001
+CMD ["/usr/local/bin/elitea-code-runner"]
+
+# Preserve the default build as the Python/JavaScript/TypeScript runtime.
+FROM deno-runtime AS default

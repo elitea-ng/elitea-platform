@@ -382,7 +382,11 @@ async fn sensitive_toolkit_node_pauses_then_approval_returns_the_normal_tool_res
 
 #[tokio::test]
 async fn direct_nodes_share_one_delegated_authorization_interrupt_and_safe_resume() {
-    for (node_type, toolkit_type) in [("mcp", "mcp"), ("toolkit", "sharepoint")] {
+    for (node_type, toolkit_type) in [
+        ("mcp", "mcp"),
+        ("toolkit", "sharepoint"),
+        ("toolkit", "openapi"),
+    ] {
         assert_direct_delegated_authorization(node_type, toolkit_type).await;
     }
 }
@@ -616,7 +620,12 @@ async fn effect_or_wrong_structured_shape_fails_without_checkpoint_corruption() 
             0,
         ))
         .await;
-    assert!(effect.is_err());
+    let effect_error = effect
+        .err()
+        .expect("unsafe direct tool must fail")
+        .to_string();
+    assert!(effect_error.contains("tool_binding"));
+    assert!(effect_error.contains("does not permit direct pipeline execution"));
     assert_eq!(effect_capture.lock().expect("capture lock").calls, 0);
 
     let (wrong_resolver, _) = fixture_runtime(json!({"report": []}), true);
@@ -630,7 +639,9 @@ async fn effect_or_wrong_structured_shape_fails_without_checkpoint_corruption() 
             0,
         ))
         .await;
-    assert!(wrong.is_err());
+    let projection_error = wrong.err().expect("invalid result must fail").to_string();
+    assert!(projection_error.contains("state_projection"));
+    assert!(projection_error.contains("result is invalid"));
 }
 
 #[tokio::test]
@@ -928,6 +939,7 @@ async fn direct_delegated_authorization_skip_reaches_end_with_sdk_terminal_state
             "sharepoint",
             "sharepoint-authorization-skip-thread",
         ),
+        ("toolkit", "openapi", "openapi-authorization-skip-thread"),
     ] {
         let definition = PipelineDefinition::from_yaml(
             &sensitive_pipeline_definition_yaml()
@@ -1129,6 +1141,9 @@ fn tool_resume_payload(
         next_input_suggestion: NextInputSuggestionPolicy::default(),
         toolkit_guardrails: None,
         truncated_content: None,
+        project_context: None,
+        model_context_limits: None,
+        summary_model: None,
     }
 }
 
@@ -1149,4 +1164,167 @@ fn mcp_resume_payload(server_url: &str, action: &str, thread: &str) -> AgentExec
             .push(json!({"server_url": server_url}));
     }
     payload
+}
+
+#[tokio::test]
+async fn direct_tool_argument_limit_reports_input_stage_without_invoking_tool() {
+    let definition = DirectToolNodeDefinition::from_yaml(TOOLKIT_NODE).expect("node");
+    let (resolver, capture) = fixture_runtime(json!({"report": {}}), true);
+    let result = DirectToolNode::new(definition, state_types(), resolver)
+        .execute(&NodeContext::new(
+            HashMap::from([
+                ("ticket_id".to_owned(), json!(42)),
+                (
+                    "filters".to_owned(),
+                    json!({"private": "x".repeat(513 * 1024)}),
+                ),
+            ]),
+            ExecutionConfig::new("argument-limit"),
+            0,
+        ))
+        .await;
+    let error = result
+        .err()
+        .expect("oversized arguments must fail")
+        .to_string();
+    assert!(error.contains("input_mapping"));
+    assert!(error.contains("resource bound"));
+    assert!(!error.contains("private"));
+    assert_eq!(capture.lock().expect("capture").calls, 0);
+}
+
+#[tokio::test]
+async fn invalid_direct_result_reaches_runner_as_typed_pipeline_failure() {
+    use super::node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
+    let definition = PipelineDefinition::from_yaml(
+        r"
+state:
+  report: {type: dict, value: {}}
+entry_point: lookup
+nodes:
+  - id: lookup
+    type: toolkit
+    toolkit_name: Customer Support
+    tool: search_records
+    output: [report]
+    structured_output: true
+    transition: END
+",
+    )
+    .expect("pipeline");
+    let (resolver, capture) =
+        fixture_runtime(json!({"private_provider_body": "do-not-publish"}), true);
+    let (sender, receiver) = pipeline_node_event_channel();
+    let graph = definition
+        .compile_with_runtime(
+            "typed-tool-failure",
+            Arc::new(MemoryCheckpointer::new()),
+            None,
+            &PipelineNodeRuntimes::new(None, Some(resolver), None).with_events(sender),
+        )
+        .expect("graph");
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some("typed-tool-failure-thread".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("session");
+    let agent =
+        PipelineNodeEventStreamingAgent::new(Arc::new(EliteaGraphAgent::new(graph)), receiver);
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .build()
+        .expect("runner");
+    let mut running = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new("typed-tool-failure-thread").unwrap(),
+        Content::new("user").with_text("lookup"),
+    )
+    .start()
+    .expect("invocation");
+    let error = loop {
+        match running.next_event().await {
+            Err(error) => break error,
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("invalid result cannot complete the pipeline"),
+        }
+    };
+    assert_eq!(error.upstream_code(), Some("pipeline.result_invalid"));
+    let kind = crate::protocol::output::model_failure(error.upstream_code());
+    assert_eq!(
+        kind,
+        crate::protocol::output::RuntimeFailureKind::PipelineResultInvalid
+    );
+    assert!(!kind.safe_message().contains("do-not-publish"));
+    assert_eq!(capture.lock().expect("capture").calls, 1);
+}
+
+#[tokio::test]
+async fn confirmation_capacity_does_not_restrict_ordinary_tool_input() {
+    let definition = DirectToolNodeDefinition::from_yaml(TOOLKIT_NODE).expect("node");
+    let state = HashMap::from([
+        ("ticket_id".to_owned(), json!(42)),
+        (
+            "filters".to_owned(),
+            json!({"document": "x".repeat(48 * 1024)}),
+        ),
+    ]);
+    let response = json!({"report": {}, "messages": [{"role":"assistant", "content":"ok"}]});
+    let (resolver, capture) = fixture_runtime(response.clone(), true);
+    DirectToolNode::new(definition.clone(), state_types(), resolver)
+        .execute(&NodeContext::new(
+            state.clone(),
+            ExecutionConfig::new("large-input"),
+            0,
+        ))
+        .await
+        .expect("ordinary admitted input must run");
+    assert_eq!(capture.lock().expect("capture").calls, 1);
+
+    let (resolver, capture) = sensitive_fixture_runtime(response);
+    let failure = DirectToolNode::new(definition, state_types(), resolver)
+        .execute(&NodeContext::new(
+            state,
+            ExecutionConfig::new("large-confirmation"),
+            0,
+        ))
+        .await
+        .err()
+        .expect("oversized confirmation must fail before invocation");
+    assert!(failure.to_string().contains("tool_confirmation"));
+    assert_eq!(capture.lock().expect("capture").calls, 0);
+}
+
+#[tokio::test]
+async fn explicit_empty_direct_tool_mapping_sends_no_arguments() {
+    for kind in ["toolkit", "mcp"] {
+        let yaml = format!(
+            "id: lookup\ntype: {kind}\ntoolkit_name: Customer Support\ntool: search_records\ninput_mapping: {{}}\noutput: [messages]\ntransition: END\n"
+        );
+        let definition = DirectToolNodeDefinition::from_yaml(&yaml).unwrap();
+        let legacy =
+            DirectToolNodeDefinition::from_yaml(&yaml.replace("input_mapping: {}\n", "")).unwrap();
+        assert!(definition.input_mapping().is_empty());
+        assert_ne!(definition.config_digest(), legacy.config_digest());
+        let (resolver, capture) = fixture_runtime(json!("zero-argument-result"), true);
+        let node = DirectToolNode::new(definition, state_types(), resolver);
+        let state = HashMap::from([("messages".to_owned(), json!(["must not become arguments"]))]);
+        node.execute(&NodeContext::new(
+            state,
+            ExecutionConfig::new("zero-arguments"),
+            1,
+        ))
+        .await
+        .expect("explicit empty mapping executes");
+        let capture = capture.lock().unwrap();
+        assert_eq!(capture.calls, 1);
+        assert_eq!(capture.arguments, json!({}));
+    }
 }

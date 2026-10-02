@@ -37,7 +37,7 @@ use crate::agents::runtime::{
 use crate::protocol::control::AgentControlClient;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
 use crate::protocol::node_event::encode_current_node_event_json;
-use crate::protocol::output::RuntimeFailureKind;
+use crate::protocol::output::{RuntimeFailureKind, model_failure};
 use crate::transport::ControlRpc;
 use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementClient};
 
@@ -83,6 +83,29 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        request: &'a crate::agents::AgentExecutionRequest,
+        command: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(
+            self.native_factory
+                .inspect_checkpoint(request, command, session, lease),
+        )
+    }
+
     fn run(&self, run: AuthorizedAgentRun) -> OwnedFuture<AgentAuthorizedLifecycleCompletion> {
         let execution_kind = run.execution_kind();
         let native_factory = Arc::clone(&self.native_factory);
@@ -160,7 +183,7 @@ where
     K: UnixMillisClock,
 {
     tracing::info!(event = "agent_native_lifecycle_started");
-    let run = match run.bind_progress_publisher(connector, max_output_sessions) {
+    let mut run = match run.bind_progress_publisher(connector, max_output_sessions) {
         Ok(run) => {
             tracing::info!(event = "agent_progress_publisher_bound");
             run
@@ -170,6 +193,13 @@ where
             return Box::pin(run.close_no_ack(error.code(), error.retryable())).await;
         }
     };
+
+    if run
+        .bind_sandbox_stop(native_factory.sandbox_stop_delivery())
+        .is_err()
+    {
+        return Box::pin(run.close_no_ack("sandbox.stop_authority_invalid", false)).await;
+    }
 
     match pre_start_boundary(&run, clock.as_ref()) {
         LifecycleBoundary::Continue => {}
@@ -198,10 +228,6 @@ where
         AgentNativeAssemblyOutcome::Failed { run, error } => {
             let mut run = *run;
             let failure = assembly_failure(&error);
-            tracing::warn!(
-                error_code = error.code().as_str(),
-                "native agent assembly failed after invocation authorization"
-            );
             // #982: a remote MCP server that answers the assembly dial with a
             // `401` is not an anonymous runtime failure. The sanitized
             // requirement names the connection, so the turn ANSWERS with that
@@ -219,6 +245,11 @@ where
                 .await
                 .unwrap_or(false)
             {
+                tracing::info!(
+                    event = "agent_native_assembly_authorization_required",
+                    error_code = error.code().as_str(),
+                    "native agent requires connection authorization; user notice published"
+                );
                 return Box::pin(finish_after_stream(
                     run,
                     None,
@@ -230,6 +261,12 @@ where
                 ))
                 .await;
             }
+            tracing::error!(
+                event = "agent_native_assembly_failed",
+                error_code = error.code().as_str(),
+                failure_reason = %error,
+                "native agent assembly failed; execution cannot start"
+            );
             return Box::pin(finalize(
                 run,
                 failure,
@@ -353,13 +390,19 @@ where
         }
         Err(failure) => {
             let (run, error) = (*failure).into_parts();
-            tracing::warn!(
+            tracing::error!(
+                execution_id = %run.trace_execution_id(),
+                generation = run.trace_generation(),
+                cause_message = error.failure_message(),
                 error_code = error.code().as_str(),
+                upstream_error_code = error.upstream_code(),
+                failure_reason = model_failure(error.upstream_code()).safe_message(),
+                failure_diagnostic = %error.diagnostic_detail(),
                 "native agent runtime failed to start"
             );
             return Box::pin(finalize(
                 run,
-                RuntimeFailureKind::Internal,
+                model_failure(error.upstream_code()),
                 control,
                 retirer,
                 clock,
@@ -441,7 +484,35 @@ where
                 }
             }
         }
-        NativeStreamOutcome::Failure(failure) => Some(failure),
+        NativeStreamOutcome::Failure(failure) => {
+            if failure == RuntimeFailureKind::OutputContinuationExhausted {
+                let Some(occurred_at) =
+                    chrono::DateTime::from_timestamp_millis(clock.now_unix_millis())
+                else {
+                    return Box::pin(run.close_no_ack("agent_lifecycle.invalid_clock", false))
+                        .await;
+                };
+                let batch = match projector.preserve_incomplete_output(occurred_at) {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        return Box::pin(run.close_no_ack(error.code().as_str(), false)).await;
+                    }
+                };
+                match Box::pin(publish_batch(&mut run, batch, &mut pauses, clock.as_ref())).await {
+                    BatchPublication::Acknowledged => {}
+                    BatchPublication::Rejected => {
+                        return Box::pin(
+                            run.close_no_ack("agent_lifecycle.partial_rejected", false),
+                        )
+                        .await;
+                    }
+                    BatchPublication::RecoveryRequired { code, retryable } => {
+                        return Box::pin(run.close_no_ack(code, retryable)).await;
+                    }
+                }
+            }
+            Some(failure)
+        }
         NativeStreamOutcome::RecoveryRequired { code, retryable } => {
             return Box::pin(run.close_no_ack(code, retryable)).await;
         }
@@ -492,7 +563,7 @@ where
         tracing::info!(event = "agent_completion_selected");
         let finish_time = match sampled_time(clock.as_ref()) {
             Ok((_, time)) => time,
-            Err(code) => return run.close_no_ack(code, false).await,
+            Err(code) => return Box::pin(run.close_no_ack(code, false)).await,
         };
         let batch = match projector.finish_after_eos(completion, finish_time) {
             Ok(batch) => batch,
@@ -598,11 +669,6 @@ where
                         };
                     }
                     Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            error_code = error.code().as_str(),
-                            "native agent event stream failed"
-                        );
                         // #982: a remote MCP server that answers the dial with
                         // a `401` is not an anonymous runtime failure. The MCP
                         // toolset is dialled LAZILY, so the challenge arrives
@@ -621,8 +687,19 @@ where
                         {
                             return NativeStreamOutcome::Eos;
                         }
+                        tracing::error!(
+                            execution_id = %run.trace_execution_id(),
+                            generation = run.trace_generation(),
+                            cause_message = error.failure_message(),
+                            error = %error,
+                            error_code = error.code().as_str(),
+                            upstream_error_code = error.upstream_code(),
+                            failure_reason = model_failure(error.upstream_code()).safe_message(),
+                            failure_diagnostic = %error.diagnostic_detail(),
+                            "native agent event stream failed"
+                        );
                         return NativeStreamOutcome::Failure(
-                            failure.unwrap_or(RuntimeFailureKind::Internal),
+                            failure.unwrap_or_else(|| model_failure(error.upstream_code())),
                         );
                     }
                 };
@@ -632,9 +709,10 @@ where
                 let batch = match projector.project(&event) {
                     Ok(batch) => batch,
                     Err(error) => {
-                        tracing::warn!(
+                        tracing::error!(
                             error = %error,
                             error_code = error.code().as_str(),
+                            failure_reason = projection_failure(&error).safe_message(),
                             "native agent event projection failed"
                         );
                         failure = Some(projection_failure(&error));
@@ -750,7 +828,6 @@ const MAX_PENDING_PAUSE_CARDS: usize = 16;
 pub(super) enum AgentPauseAggregationError {
     InvalidState,
     ResourceExhausted,
-    MixedGuardrails,
     InvalidOutput,
 }
 
@@ -759,7 +836,6 @@ impl AgentPauseAggregationError {
         match self {
             Self::InvalidState => "agent_pause.invalid_state",
             Self::ResourceExhausted => "agent_pause.resource_exhausted",
-            Self::MixedGuardrails => "agent_pause.mixed_guardrails_unsupported",
             Self::InvalidOutput => "agent_pause.invalid_output",
         }
     }
@@ -865,10 +941,28 @@ impl AgentPauseAccumulator {
             self.authorization_requests.is_empty(),
         ) {
             (true, true) => Err(AgentPauseAggregationError::InvalidState),
-            (false, false) => Err(AgentPauseAggregationError::MixedGuardrails),
+            (false, false) => self.finish_mixed(),
             (false, true) => self.finish_hitl(),
             (true, false) => self.finish_authorization(),
         }
+    }
+
+    fn finish_mixed(&mut self) -> Result<AggregatedAgentPause, AgentPauseAggregationError> {
+        let mut hitl = self.finish_hitl()?;
+        let authorization = self.finish_authorization()?;
+        let hitl_metadata = pause_metadata(&hitl.event)?;
+        let mut metadata = pause_metadata(&authorization.event)?;
+        for key in ["hitl_interrupt", "hitl_interrupts"] {
+            metadata.insert(
+                key.to_owned(),
+                hitl_metadata
+                    .get(key)
+                    .cloned()
+                    .ok_or(AgentPauseAggregationError::InvalidState)?,
+            );
+        }
+        bind_pause_metadata(&mut hitl.event, metadata)?;
+        Ok(hitl)
     }
 
     fn finish_hitl(&mut self) -> Result<AggregatedAgentPause, AgentPauseAggregationError> {
@@ -1085,7 +1179,7 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
-    finish_after_stream(
+    Box::pin(finish_after_stream(
         run,
         Some(failure),
         FreshAgentTerminalSelection::Completed,
@@ -1093,7 +1187,7 @@ where
         retirer,
         clock,
         terminal_recovery,
-    )
+    ))
     .await
 }
 
@@ -1258,7 +1352,7 @@ where
     }
 }
 
-fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
+pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
@@ -1281,7 +1375,9 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
         AgentEventProjectionErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
         }
-        AgentEventProjectionErrorCode::ResourceExhausted => RuntimeFailureKind::ResourceExhausted,
+        AgentEventProjectionErrorCode::ResourceExhausted => {
+            RuntimeFailureKind::OutputProjectionLimit
+        }
         AgentEventProjectionErrorCode::ProviderFailure
         | AgentEventProjectionErrorCode::InvalidState
         | AgentEventProjectionErrorCode::InvalidOutput => RuntimeFailureKind::Internal,
@@ -1293,6 +1389,94 @@ mod taxonomy_tests {
     use super::assembly_failure;
     use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
     use crate::protocol::output::RuntimeFailureKind;
+
+    #[test]
+    fn model_failures_preserve_actionable_reasons() {
+        for (code, expected) in [
+            (
+                "model_gateway.rate_limited",
+                RuntimeFailureKind::ModelRateLimited,
+            ),
+            (
+                "model_gateway.unauthorized",
+                RuntimeFailureKind::ModelAccessDenied,
+            ),
+            (
+                "model_gateway.forbidden",
+                RuntimeFailureKind::ModelAccessDenied,
+            ),
+            (
+                "model_gateway.budget_exhausted",
+                RuntimeFailureKind::ModelBudgetExhausted,
+            ),
+            (
+                "model_gateway.rejected",
+                RuntimeFailureKind::ModelRequestRejected,
+            ),
+            (
+                "anthropic_gateway.sampling_unsupported",
+                RuntimeFailureKind::ModelRequestRejected,
+            ),
+            (
+                "model_gateway.transport",
+                RuntimeFailureKind::ModelUnavailable,
+            ),
+            (
+                "model_gateway.invalid_sse",
+                RuntimeFailureKind::ModelResponseInvalid,
+            ),
+            (
+                "anthropic_gateway.incomplete_stream",
+                RuntimeFailureKind::ModelResponseInvalid,
+            ),
+            (
+                "anthropic_gateway.provider_error",
+                RuntimeFailureKind::ModelProviderFailure,
+            ),
+        ] {
+            assert_eq!(super::model_failure(Some(code)), expected, "{code}");
+        }
+    }
+
+    #[test]
+    fn model_wait_timeouts_are_distinct_from_execution_deadlines() {
+        for code in [
+            "model_gateway.response_header_timeout",
+            "model_gateway.stream_idle_timeout",
+            "model_gateway.upstream_timeout",
+            "anthropic_gateway.response_header_timeout",
+        ] {
+            assert_eq!(
+                super::model_failure(Some(code)),
+                RuntimeFailureKind::ModelTimeout
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_continuation_has_a_specific_terminal_failure() {
+        assert_eq!(
+            super::model_failure(Some("model.output_continuation_failed")),
+            RuntimeFailureKind::OutputContinuationExhausted
+        );
+    }
+
+    #[test]
+    fn context_budget_failure_is_a_resource_limit_without_exposing_provider_text() {
+        assert_eq!(
+            super::model_failure(Some("context_budget_exceeded")),
+            RuntimeFailureKind::ContextBudgetExceeded
+        );
+        assert_eq!(
+            super::model_failure(Some("model_request_bytes_exceeded")),
+            RuntimeFailureKind::ModelRequestTooLarge
+        );
+        assert_eq!(
+            super::model_failure(Some("unknown_provider_error")),
+            RuntimeFailureKind::Internal
+        );
+        assert_eq!(super::model_failure(None), RuntimeFailureKind::Internal);
+    }
 
     #[test]
     fn assembly_failures_keep_the_canonical_terminal_kind() {

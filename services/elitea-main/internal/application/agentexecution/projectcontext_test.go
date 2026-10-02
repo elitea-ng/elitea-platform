@@ -171,7 +171,7 @@ func TestAppendCurrentInstructionsProjectContext(t *testing.T) {
 func projectContextStartService(
 	t *testing.T,
 	resolver *currentApplicationResolverStub,
-	projectContext CurrentProjectContextResolver,
+	projectContext CurrentProjectContextTextResolver,
 ) (*CurrentApplicationStartService, *currentApplicationAdmissionStub) {
 	t.Helper()
 	admissions := newCurrentAttachmentAdmissionStub()

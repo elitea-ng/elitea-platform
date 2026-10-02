@@ -12,12 +12,12 @@
  * — some authorization servers (e.g. Aha!) issue a `client_secret` in the
  * DCR response even for a `token_endpoint_auth_method: none` request, and
  * the subsequent token exchange is rejected as "unknown client" unless that
- * secret is echoed back. `registerDynamicClient` below now returns both
- * fields, matching that fixed baseline's `{clientId, clientSecret}` shape.
+ * secret is echoed back. Main now stores that secret and returns an opaque
+ * reference. Code and refresh grants retain the registered client identity.
  *
  * `oauthFlow.ts`'s `resolveClientCredentials`/`resolveEffectiveClientSecret`
- * now thread this DCR-issued secret through the actual token exchange and
- * persisted-token metadata (whenever DCR was used — never falling back to a
+ * thread this reference through token exchange and token metadata. Legacy
+ * responses retain secrets in document memory only, never falling back to a
  * caller-supplied pre-configured developer-app secret there, since that
  * belongs to a different OAuth client and would itself cause "unknown
  * client"), mirroring `mcpAuthFlow.helpers.js`'s own `dcrClientSecret`/
@@ -80,23 +80,25 @@ export function extractOAuthErrorDetail(cause: unknown): string | undefined {
 
 /** The credentials a successful DCR registration yields — `clientSecret` is `undefined` for a true public client, defined when the server issues one anyway (baseline, post-`6ebe8ff7`: `mcpDiscovery.helpers.js`'s `{clientId, clientSecret}` shape). */
 export interface RegisterDynamicClientResult {
+  clientReference?: string | undefined;
   clientId: string;
   clientSecret: string | undefined;
 }
 
 /**
  * Registers a dynamic OAuth client via the backend's DCR proxy (avoids CORS
- * against the external OAuth server). Returns the issued `client_id` and,
- * when the server issued one, its `client_secret` — see this file's header
- * comment for why both must survive, and what the (currently unwired, needs
- * a follow-up) caller still needs to do with the secret.
+ * against the external OAuth server). Returns the issued client ID and
+ * Main's reference for confidential clients. A legacy raw secret remains
+ * supported in document memory, but it must never reach browser storage.
  */
-export async function registerDynamicClient(registrationEndpoint: string, redirectUri: string, projectId: string | number | undefined): Promise<RegisterDynamicClientResult> {
+export async function registerDynamicClient(registrationEndpoint: string, redirectUri: string, projectId: string | number | undefined, binding?: { tokenEndpoint: string | undefined; resource: string | undefined }): Promise<RegisterDynamicClientResult> {
   let registration: Awaited<ReturnType<typeof registerMcpDynamicClient>>;
   try {
     registration = await registerMcpDynamicClient({
       projectId: projectId ?? 1,
       registration_endpoint: registrationEndpoint,
+      token_endpoint: binding?.tokenEndpoint,
+      resource: binding?.resource,
       redirect_uris: [redirectUri],
       client_name: DCR_REQUEST_DEFAULTS.client_name,
       grant_types: DCR_REQUEST_DEFAULTS.grant_types,
@@ -119,5 +121,9 @@ export async function registerDynamicClient(registrationEndpoint: string, redire
     throw new Error('Registration response missing client_id');
   }
 
-  return { clientId: registration.client_id, clientSecret: registration.client_secret };
+  return {
+    clientId: registration.client_id,
+    clientSecret: registration.client_reference ? undefined : registration.client_secret,
+    clientReference: registration.client_reference,
+  };
 }

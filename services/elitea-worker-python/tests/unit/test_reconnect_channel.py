@@ -26,6 +26,17 @@ _CONTROL_TARGET = "control.internal:8443"
 _OUTPUT_TARGET = "output.internal:8444"
 
 
+def _rpc_error(
+    code: grpc.StatusCode, *, details: str | None = None
+) -> grpc.aio.AioRpcError:
+    return grpc.aio.AioRpcError(
+        code,
+        initial_metadata=grpc.aio.Metadata(),
+        trailing_metadata=grpc.aio.Metadata(),
+        details=details,
+    )
+
+
 class _FailingStub:
     def __init__(self, code: grpc.StatusCode) -> None:
         self.calls = 0
@@ -40,7 +51,7 @@ class _FailingStub:
     def _rpc(self, request, *, timeout, metadata):
         async def fail() -> None:
             self.calls += 1
-            raise grpc.aio.AioRpcError(self._code, details="transport failure")
+            raise _rpc_error(self._code, details="transport failure")
 
         return fail()
 
@@ -225,7 +236,7 @@ def test_control_plane_re_resolves_channel_on_unavailable(
             monkeypatch,
             [
                 _ControlBehavior(
-                    error=grpc.aio.AioRpcError(
+                    error=_rpc_error(
                         grpc.StatusCode.UNAVAILABLE,
                         details="main replica moved",
                     )
@@ -258,7 +269,7 @@ def test_control_plane_retries_once_and_gives_up_when_still_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
-        unavailable = lambda: grpc.aio.AioRpcError(
+        unavailable = lambda: _rpc_error(
             grpc.StatusCode.UNAVAILABLE,
             details="main replica moved",
         )
@@ -286,7 +297,7 @@ def test_control_plane_does_not_re_resolve_on_denial(
 ) -> None:
     async def run() -> None:
         denied = _ControlBehavior(
-            error=grpc.aio.AioRpcError(
+            error=_rpc_error(
                 grpc.StatusCode.PERMISSION_DENIED,
                 details="fence rejected",
             )
@@ -331,7 +342,7 @@ def test_control_plane_re_resolve_adopts_concurrent_generation(
             monkeypatch,
             [
                 _ControlBehavior(
-                    error=grpc.aio.AioRpcError(
+                    error=_rpc_error(
                         grpc.StatusCode.UNAVAILABLE,
                         details="main replica moved",
                     )
@@ -516,7 +527,7 @@ def test_output_stub_re_publishes_after_unavailable(
             monkeypatch,
             [
                 _OutputBehavior(
-                    [grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE)]
+                    [_rpc_error(grpc.StatusCode.UNAVAILABLE)]
                 ),
                 _OutputBehavior([None]),
             ],
@@ -537,7 +548,7 @@ def test_output_stub_still_unavailable_surfaces_reconnectable_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
-        unavailable = lambda: grpc.aio.AioRpcError(
+        unavailable = lambda: _rpc_error(
             grpc.StatusCode.UNAVAILABLE
         )
         stub, factory = _output_stub(
@@ -568,7 +579,7 @@ def test_output_stub_does_not_re_publish_an_established_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
-        unavailable = lambda: grpc.aio.AioRpcError(
+        unavailable = lambda: _rpc_error(
             grpc.StatusCode.UNAVAILABLE
         )
         stub, factory = _output_stub(
@@ -595,7 +606,7 @@ def test_output_stub_adopts_concurrent_re_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
-        unavailable = lambda: grpc.aio.AioRpcError(
+        unavailable = lambda: _rpc_error(
             grpc.StatusCode.UNAVAILABLE
         )
         stub, factory = _output_stub(
@@ -716,7 +727,7 @@ def test_output_stub_re_publishes_ack_stream_after_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
-        unavailable = grpc.aio.AioRpcError(
+        unavailable = _rpc_error(
             grpc.StatusCode.UNAVAILABLE,
             details="main replica moved",
         )

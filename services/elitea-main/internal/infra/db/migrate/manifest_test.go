@@ -562,7 +562,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// BEFORE INSERT guard trigger recomputes the live cap and raises typed
 	// codes E9650, E9651 and E9652. A background reaper reclaims a slot a
 	// start leaks between the two commits.
-	require.EqualValues(t, 126, Head(shared))
+	//
+	// Feature migrations 127 through 133 retain their SQL bytes.
+	// Reconcile existing rehearsal ledgers before deployment.
+	require.EqualValues(t, 133, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -707,5 +710,5 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// database, so its ledger advances independently of the tenant one.
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, Head(agentState))
+	require.EqualValues(t, 9, Head(agentState))
 }

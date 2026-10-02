@@ -96,6 +96,27 @@ func TestStartEgressAllowlistPlaneIsSafeWithoutAnAccount(t *testing.T) {
 	startEgressAllowlistPlane(ctx, egressPlane{account: newPlaneAccount(t), logger: quietLogger()})
 }
 
+func TestStartEgressAllowlistPlaneSynchronizesExistingProviderDialers(t *testing.T) {
+	for _, floor := range []string{"api.openai.com", "192.168.29.0/24"} {
+		t.Run(floor, func(t *testing.T) {
+			acct := newPlaneAccount(t, floor)
+			src := &fakeEgressSource{}
+			src.set("192.168.29.60:8000")
+			refresher := &countingRefresher{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			startEgressAllowlistPlane(ctx, egressPlane{account: acct, source: src, core: refresher, logger: quietLogger()})
+			want := 0
+			if floor == "api.openai.com" {
+				want = len(privateNetworkProviders)
+			}
+			if got := refresher.count(); got != want {
+				t.Fatalf("provider dialers rebuilt before startup returns: got %d, want %d", got, want)
+			}
+		})
+	}
+}
+
 // TestWatchEgressPrivateNetworkRebuildsOnChange is the gap that would otherwise
 // ship silently: bifrost latches AllowPrivateNetwork when it CREATES a provider
 // worker, so an authored row that unlocks the private network changes nothing

@@ -12,6 +12,7 @@ import * as entity from './index';
  * this slice ahead of its Wave-2 consumers.
  */
 const PUBLIC_SURFACE = [
+  'buildAuthorizationActions',
   'canDeleteMessage',
   'convertTime',
   'isMessageStreaming',

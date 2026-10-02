@@ -109,6 +109,7 @@ type CurrentApplicationStartRequest struct {
 	QuestionID          string
 	UserInput           string
 	InteractionUUID     string
+	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -131,7 +132,8 @@ func (request CurrentApplicationStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID <= 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
-		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) {
+		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
+		!validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -156,12 +158,13 @@ type CurrentApplicationStartService struct {
 	// memories is optional — attached after construction via WithMemories
 	// (#870, memories.go). A service nobody attaches it to injects no
 	// long-term memory, exactly its pre-#870 behavior.
-	memories CurrentMemoryRecallResolver
+	contextPolicy CurrentContextPolicySource
+	memories      CurrentMemoryRecallResolver
 	// projectContext is optional — attached after construction via
 	// WithProjectContext (#946, projectcontext.go). A service nobody attaches
 	// it to injects no project context, which is what every test that
 	// predates that file expects.
-	projectContext CurrentProjectContextResolver
+	projectContext CurrentProjectContextTextResolver
 	// mentions is optional — attached after construction via
 	// WithMentionNotifications (#977, mentions.go). A service nobody attaches
 	// it to writes no mention rows, which is the behaviour every test that
@@ -229,13 +232,15 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		(len(target.InternalTools) != 0 && !validJSONArray(target.InternalTools)) {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
 	}
-	frozenVersion, err := service.freezer.FreezeCurrentApplicationVersion(
+	frozenVersion, contextSettings, err := service.freezeVersionWithContext(
 		ctx,
 		CurrentApplicationVersionFreezeRequest{
 			ProjectID:      int32(request.ProjectID),
 			ActorUserID:    int32(request.ActorUserID),
 			VersionDetails: target.VersionDetails,
+			InternalTools:  target.InternalTools,
 		},
+		request.ConversationUUID,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -289,6 +294,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	input.ContextSettings = contextSettings
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
@@ -393,18 +399,33 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, err
 	}
+	projectContext, err := currentFrozenProjectContext(version)
+	if err != nil {
+		return nil, err
+	}
+	modelContextLimits, err := currentFrozenModelContextLimits(version)
+	if err != nil {
+		return nil, err
+	}
+	summaryModel, err := currentFrozenSummaryModel(version)
+	if err != nil {
+		return nil, err
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
 	input := &runtimev1.AgentExecutionInputV1{
-		SchemaRevision: "elitea.runtime.agent-execution-input.v1",
+		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
+		ProjectContext:     projectContext,
+		ModelContextLimits: modelContextLimits,
+		SummaryModel:       summaryModel,
 		// Current chat history remains authoritative for ordinary turns. The
 		// shared LangGraph checkpoint stores resumable graph state for this stable
 		// thread; it does not replace the current chat-history projection.
 		Llm: llm, ChatHistory: bytes.Clone(target.ChatHistory),
 		UserInput: userInput, ThreadId: &threadID, Tools: []byte(`[]`),
 		Application: application, InternalTools: internalTools,
-		McpTokens: []byte(`{}`), IgnoredMcpServers: []byte(`[]`),
+		McpTokens: currentMCPTokens(request.MCPTokens), IgnoredMcpServers: []byte(`[]`),
 		UserDeclinedMcpServers: []byte(`[]`), HitlDecisions: []byte(`[]`),
 		ExecutionGeneration: &executionGeneration, Meta: []byte(`{}`),
 		ConversationId: &conversationID, ContextSettings: []byte(`{}`),
@@ -507,7 +528,7 @@ func currentRuntimeInternalTools(raw json.RawMessage) ([]byte, error) {
 	seen := make(map[string]bool, len(configured))
 	for _, name := range configured {
 		switch {
-		case name == "internal_mcp":
+		case currentBuilderFlag(name):
 			// Internal MCP is materialized through the frozen tools projection.
 		case currentPlatformInternalTools[name]:
 			if !seen[name] {

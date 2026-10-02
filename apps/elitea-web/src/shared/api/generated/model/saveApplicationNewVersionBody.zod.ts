@@ -42,8 +42,17 @@
 import * as zod from "zod";
 import { VersionWriteRequest } from "./versionWriteRequest.zod";
 
+export const saveApplicationNewVersionBodyTwoCopySkillsFromVersionIdMax = 2147483647;
+
 export const SaveApplicationNewVersionBody = VersionWriteRequest.and(
-  zod.looseObject({}),
+  zod.object({
+    copy_skills_from_version_id: zod
+      .int()
+      .min(1)
+      .max(saveApplicationNewVersionBodyTwoCopySkillsFromVersionIdMax)
+      .optional()
+      .describe("Optional source version in the same application and project."),
+  }),
 );
 
 export type SaveApplicationNewVersionBody = zod.input<

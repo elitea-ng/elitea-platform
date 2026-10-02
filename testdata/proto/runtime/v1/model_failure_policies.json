@@ -1,0 +1,112 @@
+[
+  {
+    "code": "MODEL_TIMEOUT",
+    "message": "The model did not respond in time. Try again; if this continues, ask an administrator to check the model connection.",
+    "retryable": true
+  },
+  {
+    "code": "MODEL_RATE_LIMITED",
+    "message": "The model service reached its request limit. Wait briefly and try again, or select another model.",
+    "retryable": true
+  },
+  {
+    "code": "MODEL_ACCESS_DENIED",
+    "message": "The model service denied access. Ask an administrator to check the model credentials and project permissions.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_BUDGET_EXHAUSTED",
+    "message": "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_REQUEST_REJECTED",
+    "message": "The model service rejected this request. Check the selected model and its settings, or ask an administrator to inspect the execution logs.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_RESPONSE_INVALID",
+    "message": "The model returned an incomplete or invalid response. Try again or select another model. Report repeated failures to an administrator.",
+    "retryable": true
+  },
+  {
+    "code": "CONTEXT_BUDGET_EXCEEDED",
+    "message": "The model input exceeds the available context budget. Enable compaction, reduce attached content, or select a model with a larger context window.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_REQUEST_TOO_LARGE",
+    "message": "The model request exceeds the transport size limit. Reduce attached content or tool results. A larger token window alone may not resolve this.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_UNAVAILABLE",
+    "message": "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.",
+    "retryable": true
+  },
+  {
+    "code": "MODEL_PROVIDER_FAILURE",
+    "message": "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.",
+    "retryable": true
+  },
+  {
+    "code": "OUTPUT_DELIVERY_LIMIT",
+    "message": "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_INPUT_INVALID",
+    "message": "The pipeline stopped because a tool node has invalid input or a stale approval decision. Check its input mapping and restart only after reviewing completed actions.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_INPUT_LIMIT",
+    "message": "The pipeline stopped because a tool node input exceeds its size limit. Reduce the mapped input or use smaller batches. This is not a model context limit.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_TOOL_UNAVAILABLE",
+    "message": "The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_TOOL_FAILED",
+    "message": "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_RESULT_INVALID",
+    "message": "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run.",
+    "retryable": false
+  },
+  {
+    "code": "PIPELINE_RESULT_LIMIT",
+    "message": "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the user message exceeds a platform size limit. Shorten the message or attach the content as a file. This is not a model token limit.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the conversation history exceeds a platform input limit before compaction can run. Start a new chat with the required context. Share the support reference if this repeats.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the agent instructions or settings exceed a platform input limit. Reduce the saved content or ask an administrator to inspect the support reference. This is not a model token limit.",
+    "retryable": false
+  },
+  {
+    "code": "EXECUTION_INPUT_LIMIT",
+    "message": "The request cannot start because the attached tool configuration exceeds a platform input limit. Reduce the attached tools or ask an administrator to inspect their schemas using the support reference.",
+    "retryable": false
+  }
+]

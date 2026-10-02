@@ -3,6 +3,7 @@ import { useMemo, type ComponentProps } from 'react';
 import type { ConfigurationTab } from '@/features/toolkits';
 import { RunHistoryPanel } from '@/entities/run-history';
 
+import { ToolkitTestAuthorization } from './ToolkitTestAuthorization';
 import { SHAREPOINT_AUTH_MODALS } from './sharepointAuthModals';
 import type { McpLoadToolsSlot } from './useMcpLoadTools';
 
@@ -33,8 +34,9 @@ export function useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools,
       // The one place in the app that can legally hand SharePoint's
       // delegated-login UI a REAL `McpAuthModal` — see `./sharepointAuthModals.tsx`.
       sharepointAuth: SHAREPOINT_AUTH_MODALS,
+      renderTestAuthorization: (props) => <ToolkitTestAuthorization {...props} />,
       renderCredentialPicker,
-      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools }),
+      ...(mcpLoadTools !== undefined && { toolActionsExtra: mcpLoadTools, mcpAuthStatus: mcpLoadTools.mcpAuthStatus }),
       // `renderTestPane` is NOT supplied, and that is the fix rather than an
       // omission. It used to be supplied as an empty `<Box>` — the disclosed
       // composition gap that left the right-hand half of the toolkit editor

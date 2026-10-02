@@ -7,8 +7,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -391,6 +394,65 @@ func TestMaterializingRuntimeContentServerRequiresBothServices(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, runtime.materializer)
 	require.Same(t, runtimeToken, runtime.runtimeToken)
+}
+
+func TestMaterializingContentFailureLogsStatusWithoutPrivateValues(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		cause  error
+		status int
+		stage  string
+	}{
+		{"rejected", ErrContentRejected, http.StatusUnprocessableEntity, "unknown"},
+		{"unavailable", runtimeContextUnavailable(runtimeContextStageActorPATIssuance), http.StatusServiceUnavailable, runtimeContextStageActorPATIssuance},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const privateValue = "private-input-and-credential-canary"
+			source := []byte(privateValue)
+			server, err := NewMaterializingContentServerWithLimits(
+				contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
+					return ContentAuthorization{
+						ResourceProjectID: "42",
+						ActorID:           "17",
+						InputBundleID:     "bundle-1",
+						CapabilityID:      executiondomain.AgentApplicationCapability,
+						SemanticRole:      executiondomain.AgentExecutionRequestRole,
+						ExpectedMediaType: executiondomain.AgentExecutionInputMediaType,
+						ExpectedDigest:    sha256.Sum256(source),
+						ExpectedLength:    int64(len(source)),
+					}, nil
+				}),
+				contentStoreFunc(func(context.Context, string, string, string, string) (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(source)), nil
+				}),
+				contentMaterializerFunc(func(context.Context, ContentAuthorization, []byte, int64) ([]byte, error) {
+					return nil, fmt.Errorf("%s: %w", privateValue, test.cause)
+				}),
+				1024, 1,
+			)
+			require.NoError(t, err)
+			var logs bytes.Buffer
+			server.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+			request := validContentRequest(t)
+			request.Header.Set("Authorization", "Bearer "+privateValue)
+			response := httptest.NewRecorder()
+			server.Routes().ServeHTTP(response, request)
+
+			require.Equal(t, test.status, response.Code)
+			require.Equal(t, http.StatusText(test.status)+"\n", response.Body.String())
+			require.NotContains(t, logs.String(), privateValue)
+			var record map[string]any
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &record))
+			require.Equal(t, "ERROR", record["level"])
+			require.Equal(t, "execution-1", record["execution_id"])
+			require.Equal(t, float64(1), record["generation"])
+			require.Equal(t, "materialization", record["boundary"])
+			require.Equal(t, float64(test.status), record["status"])
+			require.Equal(t, test.stage, record["stage"])
+		})
+	}
 }
 
 func TestPrivateContentListenerDoesNotExposePublicLLMFacade(t *testing.T) {

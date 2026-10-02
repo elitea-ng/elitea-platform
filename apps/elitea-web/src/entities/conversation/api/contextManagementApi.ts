@@ -17,7 +17,8 @@
  *    under `/elitea_core` — matching `chat.api.js:341-432`'s own
  *    `/context_manager/...` URLs, which never prepend `apiSlicePath`.
  */
-import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
+import { useCallback } from 'react';
+import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 
@@ -61,10 +62,25 @@ export function contextStatusQueryKey(params?: ConversationScopedParams): readon
   return params === undefined ? root : [...root, params.projectId, params.conversationId];
 }
 
+/** Both numeric and UUID conversation readers share this project-scoped refresh. */
+export function useRefreshContextStatus() {
+  const client = useQueryClient();
+  return useCallback((projectId: string | number) => {
+    void client.invalidateQueries({ queryKey: contextStatusQueryKey(),
+      predicate: (query) => String(query.queryKey[2]) === String(projectId) });
+  }, [client]);
+}
+
 export function useGetContextStatusQuery(params: ConversationScopedParams, options: { enabled?: boolean } = {}): UseQueryResult<ContextStatusWire> {
   return useQuery({
     queryKey: contextStatusQueryKey(params),
     queryFn: ({ signal }) => getContextStatus(params, signal),
+    // Reconcile active runs after refresh or an SSE outage; a closed response
+    // stops polling. Ordinary idle conversations do not poll.
+    refetchInterval: (query) => {
+      const runtime = query.state.data?.runtime_context as { active?: boolean } | undefined;
+      return runtime?.active === true ? 5000 : false;
+    },
     enabled: options.enabled ?? true,
   });
 }

@@ -21,11 +21,12 @@ import { McpLogoutModal } from './McpLogoutModal';
 export interface McpLogoutButtonProps {
   serverUrl?: string | undefined;
   toolkitType?: string | undefined;
+  authorizationLabel?: string | undefined;
   onSuccess?: (() => void) | undefined;
   sx?: SxProps<Theme> | undefined;
 }
 
-export function McpLogoutButton({ serverUrl, toolkitType, onSuccess, sx }: McpLogoutButtonProps): ReactNode {
+export function McpLogoutButton({ serverUrl, toolkitType, authorizationLabel, onSuccess, sx }: McpLogoutButtonProps): ReactNode {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showLogoutSuccess, setShowLogoutSuccess] = useState(false);
 
@@ -73,6 +74,7 @@ export function McpLogoutButton({ serverUrl, toolkitType, onSuccess, sx }: McpLo
       <McpLogoutModal
         serverUrl={serverUrl}
         toolkitType={toolkitType}
+        authorizationLabel={authorizationLabel}
         open={showLogoutModal}
         onClose={onCloseLogout}
         onConfirm={onConfirmLogout}

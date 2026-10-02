@@ -2,12 +2,13 @@ import { ChatParticipantType } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
+import { buildAuthorizationActions } from './authorizationActions';
+import { resolveAssistantFailureFields } from './normaliseAssistantFailure';
 import { buildToolActions, resolveAssistantToolInputs } from './toolActions';
 import type {
   HitlInterruptRawWire,
   MessageAuthorWire,
   MessageGroupWire,
-  MessageItemWire,
   MessageParticipantWire,
 } from './wire';
 import type { PersistedTraceSteps } from './traceSteps';
@@ -319,17 +320,6 @@ function resolveAssistantSummaryFields(meta: MessageGroupWire['meta']) {
   };
 }
 
-/** `exception` (line 299). */
-function resolveException(
-  messageGroup: MessageGroupWire,
-  meta: MessageGroupWire['meta'],
-  isError: boolean,
-  messageItems: readonly MessageItemWire[],
-): unknown {
-  if (!isError) return undefined;
-  return meta?.error || messageGroup.content || messageItems[0]?.item_details?.content;
-}
-
 /**
  * apps/elitea-ui/src/common/convertChatConversationMessages.js:111-313
  * `convertToAIAnswer`, ported. `createdAt`/`updatedAt` are kept as TWO
@@ -364,28 +354,25 @@ export function normaliseAssistantMessage(
     isParticipant(participant.id, messageGroup.author_participant_id),
   );
 
-  const toolActions = buildToolActions(
-    thinkingSteps,
-    toolCalls,
-    convertTime(messageGroup.created_at),
-    firstToolTimestampStart,
-    foundParticipant,
-  );
-  const exception = resolveException(messageGroup, meta, isError, messageItems);
+  const createdAt = convertTime(messageGroup.created_at);
+  const toolActions = [
+    ...buildToolActions(thinkingSteps, toolCalls, createdAt, firstToolTimestampStart, foundParticipant),
+    ...buildAuthorizationActions((meta ?? {}) as Record<string, unknown>, messageGroup.content, createdAt),
+  ];
 
   return {
     id: messageGroup.uuid,
     role: ROLES.Assistant,
     content: messageGroup.is_streaming ? '...' : messageGroup.content,
     messageItems: [...messageItems].sort((a, b) => a.id - b.id),
-    createdAt: convertTime(messageGroup.created_at),
+    createdAt,
     isSummarized,
     references,
     toolActions,
     ...assistantLinkageFields(messageGroup, messageGroups),
     ...(messageGroup.updated_at !== undefined ? { updatedAt: convertTime(messageGroup.updated_at) } : {}),
     ...assistantStreamingFields(messageGroup),
-    ...(exception !== undefined ? { exception } : {}),
+    ...resolveAssistantFailureFields(messageGroup, meta, isError, messageItems),
     ...(messageGroup.likes !== undefined ? { likes: messageGroup.likes } : {}),
     ...assistantHitlFields(meta),
     ...assistantContinuationFields(meta),

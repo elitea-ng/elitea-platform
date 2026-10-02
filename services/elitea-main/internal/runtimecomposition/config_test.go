@@ -505,3 +505,30 @@ func validEnvironment() map[string]string {
 	}
 	return values
 }
+
+func TestSandboxGrantAudiencesAreOptionalExactAndBounded(t *testing.T) {
+	baseline, err := ConfigFromEnv(mapLookup(validEnvironment()))
+	if err != nil || len(baseline.SandboxAudiences) != 0 {
+		t.Fatalf("sandbox grants must remain disabled by default: %v", err)
+	}
+	for _, raw := range []string{
+		"dns:sandbox.test", "dns:sandbox.test,spiffe://elitea.test/sandbox/rust",
+	} {
+		env := validEnvironment()
+		env["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = raw
+		config, err := ConfigFromEnv(mapLookup(env))
+		if err != nil || strings.Join(config.SandboxAudiences, ",") != raw {
+			t.Fatalf("exact audiences were not preserved: %v", err)
+		}
+	}
+	for _, raw := range []string{
+		"*", "dns:sandbox.test,", " dns:sandbox.test", "dns:sandbox.test,dns:sandbox.test",
+		"dns:sandbox.test\n", strings.Repeat("x", 257), strings.Repeat("x,", 16) + "y",
+	} {
+		env := validEnvironment()
+		env["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = raw
+		if _, err := ConfigFromEnv(mapLookup(env)); err == nil {
+			t.Fatalf("invalid sandbox audiences accepted: %q", raw)
+		}
+	}
+}

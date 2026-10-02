@@ -55,7 +55,7 @@ export interface ApplicationAnswerTts {
 
 /** MCP-auth / token-limit continue-execution props, grouped to stay under the component-props budget. */
 export interface ApplicationAnswerContinuation {
-  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean) => void) | undefined;
+  readonly onContinueMcpExecution?: ((messageId: string, addToIgnoreList?: boolean, authorizationRequestId?: string) => void) | undefined;
   readonly onContinueTokenLimitExecution?: ((messageId: string) => void) | undefined;
   readonly hideContinueButton?: boolean;
   /**

@@ -745,6 +745,66 @@ func TestHandlerPostgres_UpdateVersionPersistsPipelineSettings(t *testing.T) {
 	}
 }
 
+func TestHandlerPostgres_CreatePathsPersistPipelineSettingsAndTags(t *testing.T) {
+	pool := newHandlerTestPool(t)
+	seedHandlerUser(t, pool, 15, "fifteen@elitea.ai")
+	router := newHandlerTestServer(t, pool, auth.User{ID: "15", UserID: "15", Email: "fifteen@elitea.ai"})
+
+	createBody := j14CreateBody("created-pipeline")
+	initial := createBody["versions"].([]any)[0].(map[string]any)
+	initial["agent_type"] = "pipeline"
+	initial["pipeline_settings"] = map[string]any{"trigger": "manual", "nodes": []any{}}
+	initial["tags"] = []any{map[string]any{"name": "created-tag", "data": map[string]any{"color": "blue"}}}
+	recorder, created := do(t, router, http.MethodPost, "/applications/prompt_lib/1", createBody)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create application status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	applicationID := created["id"].(string)
+	initialVersion := created["version_details"].(map[string]any)
+	initialVersionID := initialVersion["id"].(string)
+	if names := responseTagNames(t, initialVersion); !sameNames(names, []string{"created-tag"}) {
+		t.Fatalf("initial response tags = %v", names)
+	}
+
+	versionBody := map[string]any{
+		"name":              "second",
+		"agent_type":        "pipeline",
+		"instructions":      "nodes: []",
+		"pipeline_settings": map[string]any{"trigger": "scheduled", "nodes": []any{}},
+		"tags":              []any{map[string]any{"name": "second-tag"}},
+	}
+	recorder, second := do(t, router, http.MethodPost,
+		fmt.Sprintf("/versions/prompt_lib/1/%s", applicationID), versionBody)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create version status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	secondVersionID := second["id"].(string)
+
+	for versionID, wantTrigger := range map[string]string{
+		initialVersionID: "manual",
+		secondVersionID:  "scheduled",
+	} {
+		var settingsText string
+		if err := pool.QueryRow(context.Background(), `
+			SELECT pipeline_settings::text FROM p_1.application_versions WHERE id = $1`, versionID).Scan(&settingsText); err != nil {
+			t.Fatalf("read pipeline settings for %s: %v", versionID, err)
+		}
+		var settings map[string]any
+		if err := json.Unmarshal([]byte(settingsText), &settings); err != nil {
+			t.Fatalf("decode pipeline settings for %s: %v", versionID, err)
+		}
+		if settings["trigger"] != wantTrigger {
+			t.Fatalf("version %s trigger = %v, want %q", versionID, settings["trigger"], wantTrigger)
+		}
+	}
+	if names := storedVersionTagNames(t, pool, initialVersionID); !sameNames(names, []string{"created-tag"}) {
+		t.Fatalf("initial stored tags = %v", names)
+	}
+	if names := storedVersionTagNames(t, pool, secondVersionID); !sameNames(names, []string{"second-tag"}) {
+		t.Fatalf("second stored tags = %v", names)
+	}
+}
+
 // storedVersionTagNames reads the tag names the version's association rows
 // point at — the database assertion issue #345 asks for, not the response
 // body. A 201 proved nothing here: the handler answered one on every save

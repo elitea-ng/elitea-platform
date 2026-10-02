@@ -48,6 +48,27 @@ fail_result() {
   printf "${RED}FAIL${NC} %-50s (%s)\n" "$1" "$2" >&2
 }
 
+has_typed_discovery_result() {
+  local file="$1"
+  local func_body="$2"
+  local contract_file="${HANDLER_DIR}/../../application/toolkitdiscovery/service.go"
+  local result_type use_case
+
+  [ -f "$contract_file" ] || return 1
+  grep -qF 'discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"' "$file" || return 1
+  grep -qE '^[[:space:]]*discovery[[:space:]]+discovery\.UseCase[[:space:]]*$' "$file" || return 1
+  grep -qF 'result, err := h.discovery.AvailableTools(r.Context(), request)' <<<"$func_body" || return 1
+  [ "$(grep -cE '(^|[^[:alnum:]_])result[[:space:]]*(,|:?=)' <<<"$func_body")" -eq 1 ] || return 1
+  grep -qE '^[[:space:]]*writeJSON\(w, http\.StatusOK, result\)[[:space:]]*$' <<<"$func_body" || return 1
+
+  # Follow the declared result. Missing types or changed tags remain failures.
+  result_type=$(awk '/^type Result struct \{/{p=1} p{print} p && /^\}/{p=0}' "$contract_file")
+  use_case=$(awk '/^type UseCase interface \{/{p=1} p{print} p && /^\}/{p=0}' "$contract_file")
+  grep -qE '^[[:space:]]*AvailableTools\(context\.Context, Request\) \(Result, error\)[[:space:]]*$' <<<"$use_case" || return 1
+  grep -qE '^[[:space:]]*Tools[[:space:]]+\[\]Tool[[:space:]]+`json:"tools"`[[:space:]]*$' <<<"$result_type" || return 1
+  grep -qE '^[[:space:]]*ArgsSchemas[[:space:]]+map\[string\]json\.RawMessage[[:space:]]+`json:"args_schemas"`[[:space:]]*$' <<<"$result_type"
+}
+
 check_handler_returns_key() {
   local file="$1"
   local func_name="$2"
@@ -61,7 +82,7 @@ check_handler_returns_key() {
 
   # Extract function body (from func declaration to closing brace at column 0)
   local func_body
-  func_body=$(awk "BEGIN{p=0} /^func.*$func_name\(/{p=1} p{print} p && /^\}/{p=0}" "$file" 2>/dev/null | head -80)
+  func_body=$(awk "BEGIN{p=0} /^func.*[[:space:]]$func_name\(/{p=1} p{print} p && /^\}/{p=0}" "$file" 2>/dev/null | head -80)
 
   if [ -z "$func_body" ]; then
     fail_result "$label" "func ${func_name} not found in ${file##*/} — it was renamed or removed, so this contract is unmeasured"
@@ -90,6 +111,8 @@ check_handler_returns_key() {
     *)
       if echo "$func_body" | grep -q "\"$expected_key\":"; then
         pass_result "$label" "has key \"${expected_key}\""
+      elif [ "$func_name" = "AvailableTools" ] && [ "$expected_key" = "tools" ] && has_typed_discovery_result "$file" "$func_body"; then
+        pass_result "$label" "typed result has keys \"tools\" and \"args_schemas\""
       elif [ "$has_plain_array" -gt 0 ]; then
         fail_result "$label" "returns plain array, expected key \"${expected_key}\""
       else
@@ -123,7 +146,7 @@ CHECKS=(
   "social/handler.go|TrendingAuthors|ARRAY|social.TrendingAuthors → []"
   "toolkits/handler.go|ListTypes|rows|toolkits.ListTypes → {rows}"
   "toolkits/handler.go|IndexMeta|ARRAY|toolkits.IndexMeta → []"
-  "toolkits/handler.go|AvailableTools|tools|toolkits.AvailableTools → {tools}"
+  "toolkits/handler.go|AvailableTools|tools|toolkits.AvailableTools → {tools, args_schemas}"
   "tags/handler.go|List|rows|tags.List → {rows}"
 )
 EXPECTED_ASSERTIONS=${#CHECKS[@]}

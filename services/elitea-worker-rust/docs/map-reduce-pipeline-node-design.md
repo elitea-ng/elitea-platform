@@ -218,6 +218,21 @@ summarization outside the mechanical state reducer.
 
 ## Durability and HITL
 
+### Model context ownership
+
+An item worker can invoke an LLM, saved agent, or saved pipeline containing model nodes.
+Each model conversation inherits the parent context policy and owns independent occupancy, summary coverage, and recovery state.
+Use the item lineage below; do not key compaction by the reusable worker node name alone.
+Retain exact declared item outputs during collection, regardless of whether the worker compacts its private history.
+
+A downstream LLM reducer has its own model context and input-capacity check.
+The combined item output can exceed that capacity even when every item request fits individually.
+Use an explicit chunk/reduce graph or artifact references for that case.
+Do not summarize, omit, or truncate item outputs inside the mechanical collector.
+See [pipeline context ownership](context-continuation-design.md#fan-out-and-model-backed-reduction).
+
+### Child lineage and decisions
+
 Derive one child lineage from the map activation, source digest, item ordinal,
 item digest, and owned worker digest.
 

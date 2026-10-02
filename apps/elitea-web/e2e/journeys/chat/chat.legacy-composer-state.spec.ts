@@ -176,10 +176,13 @@ test('L3: the selected agent participant survives a page reload', async ({ page 
   try {
     await addConversationParticipant(page.request, conversationId, {
       entity_name: 'application',
-      entity_meta: { id: agent.id },
+      entity_meta: { id: agent.id, project_id: DEFAULT_PROJECT_ID, name: agentName },
+      entity_settings: { version_id: agent.versionId },
     });
     const { participants } = await readConversationDetails(page.request, conversationId);
-    const participantId = participants[0]?.id;
+    const participantId = participants.find((row) => row.entity_name === 'application' &&
+      String(row.entity_meta?.['id']) === agent.id &&
+      String(row.entity_meta?.['project_id']) === DEFAULT_PROJECT_ID)?.id;
     expect(participantId, 'the participant must have attached before selection can be tested').toBeDefined();
 
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
@@ -188,9 +191,7 @@ test('L3: the selected agent participant survives a page reload', async ({ page 
 
     const section = page.getByTestId('participants-section-Agents');
     await expect(section).toBeVisible({ timeout: 20_000 });
-    // The avatar initial is the only stable, name-resolution-independent
-    // target for the single participant row this test sets up.
-    await section.getByText('E', { exact: true }).click();
+    await section.getByText(agentName, { exact: true }).click();
 
     async function isRecordedActive(): Promise<boolean> {
       return page.evaluate(

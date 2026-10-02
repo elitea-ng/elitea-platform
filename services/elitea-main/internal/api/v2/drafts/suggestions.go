@@ -227,14 +227,14 @@ func (h *Handler) suggestToolkits(ctx context.Context, projectID, query string) 
 }
 
 // suggestApplications reads the project's agents or pipelines — the same
-// `applications` table, distinguished only by AgentsType ("" for agents,
+// `applications` table, distinguished only by AgentsType ("classic" for agents,
 // "pipeline" for pipelines, matching internal/api/v2/applications/
 // handler.go's own ?agents_type= filter).
 func (h *Handler) suggestApplications(ctx context.Context, projectID, query string, pipelines bool) []SuggestedResource {
 	if h.apps == nil {
 		return []SuggestedResource{}
 	}
-	agentsType := ""
+	agentsType := "classic"
 	if pipelines {
 		agentsType = "pipeline"
 	}

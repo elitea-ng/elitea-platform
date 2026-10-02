@@ -71,6 +71,7 @@ function harness(initial: readonly ChatMessage[] = [pendingAssistant()]): {
   readonly history: { current: readonly ChatMessage[] };
   readonly agentEvents: unknown[];
   readonly errors: string[];
+  readonly contextRefreshes: (string | number)[];
   readonly Probe: () => null;
 } {
   const api: { current: UseChatStreamTransportResult | undefined } = {
@@ -79,6 +80,7 @@ function harness(initial: readonly ChatMessage[] = [pendingAssistant()]): {
   const history: { current: readonly ChatMessage[] } = { current: initial };
   const agentEvents: unknown[] = [];
   const errors: string[] = [];
+  const contextRefreshes: (string | number)[] = [];
 
   function Probe(): null {
     api.current = useChatStreamTransport({
@@ -88,11 +90,12 @@ function harness(initial: readonly ChatMessage[] = [pendingAssistant()]): {
       context: { name: "Agent", now: () => "2026-08-13T00:00:00.000Z" },
       onAgentEvent: (frame) => agentEvents.push(frame),
       onStreamError: (reason) => errors.push(reason),
+      onContextChanged: (projectId) => contextRefreshes.push(projectId),
     });
     return null;
   }
 
-  return { api, history, agentEvents, errors, Probe };
+  return { api, history, agentEvents, errors, contextRefreshes, Probe };
 }
 
 function nodeEvent(payload: Record<string, unknown>): string {
@@ -153,6 +156,82 @@ const START = {
 };
 
 describe("useChatStreamTransport", () => {
+  it('reconciles direct review and decision before replaying the new response', async () => {
+    const decisionId = 'decision-1';
+    server.use(
+      http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () =>
+        HttpResponse.json({ events_url: EVENTS_URL, response_message_id: RESPONSE_MESSAGE_ID })),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/7/uuid-1`, () => HttpResponse.json({
+        id: 1, name: 'Review', participants: [], message_groups: [
+          { id: 2, uuid: MESSAGE_ID, role: 'assistant', content: 'Static review', reply_to_id: 1, created_at: '2026-08-13T00:00:01Z', is_streaming: false },
+          { id: 3, uuid: decisionId, role: 'user', content: '  Change the joke.  ', created_at: '2026-08-13T00:00:02Z' },
+          { id: 4, uuid: RESPONSE_MESSAGE_ID, role: 'assistant', reply_to_id: 3, content: 'Partial server output', created_at: '2026-08-13T00:00:03Z', is_streaming: true },
+        ],
+      })),
+    );
+    const { api, history, Probe } = harness([userQuestion(), { ...pendingAssistant(), questionId: QUESTION_ID }]);
+    render(<Probe />);
+    await act(async () => {
+      expect(await api.current?.resume({ projectId: 7, conversationUuid: 'uuid-1', contract: 'agent.continue.hitl.v1', body: { message_id: MESSAGE_ID } })).toBe(true);
+    });
+    expect(history.current.map((message) => message.content)).toEqual(['hi', 'Static review', '  Change the joke.  ']);
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => {
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', message_id: RESPONSE_MESSAGE_ID, content: 'New joke' }));
+    });
+    expect(history.current.find((message) => message.id === RESPONSE_MESSAGE_ID)?.questionId).toBe(decisionId);
+    expect(history.current.filter((message) => message.id === decisionId)).toHaveLength(1);
+  });
+
+  it('keeps an accepted resume live when history refresh fails', async () => {
+    let admissions = 0;
+    server.use(
+      http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () => {
+        admissions += 1;
+        return HttpResponse.json({ events_url: EVENTS_URL, response_message_id: RESPONSE_MESSAGE_ID });
+      }),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/7/uuid-1`, () => new HttpResponse(null, { status: 503 })),
+    );
+    const { api, history, errors, Probe } = harness();
+    render(<Probe />);
+    await act(async () => {
+      expect(await api.current?.resume({ projectId: 7, conversationUuid: 'uuid-1', contract: 'agent.continue.hitl.v1', body: { message_id: MESSAGE_ID } })).toBe(true);
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    expect(admissions).toBe(1);
+    expect(history.current[0]?.isStreaming).toBe(false);
+    expect(errors[0]).toContain('decision was saved');
+  });
+
+  it.each([null, "", undefined])("preserves the original question after a resume with an absent frame link: %s", async (questionId) => {
+    server.use(http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/7/uuid-1`, () =>
+      HttpResponse.json({ task_id: "exec-1", events_url: EVENTS_URL, response_message_id: MESSAGE_ID }),
+    ));
+    const { api, history, Probe } = harness([
+      userQuestion(), { ...pendingAssistant(), questionId: QUESTION_ID },
+    ]);
+    render(<Probe />);
+    await act(async () => {
+      await expect(api.current?.resume({
+        projectId: 7, conversationUuid: "uuid-1",
+        contract: "agent.continue.authorization.v1",
+        body: { message_id: MESSAGE_ID, authorization_request_id: "auth-1", authorization_action: "skip" },
+      })).resolves.toBe(true);
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => {
+      for (const type of ["agent_start", "chat_predict_summary_started", "agent_llm_chunk", "pipeline_finish"]) {
+        registry.emit("execution.node_event", nodeEvent({ type, question_id: questionId, content: "Completed after Skip" }));
+      }
+    });
+    expect(history.current).toHaveLength(2);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[0]?.content).toBe("hi");
+  });
+
   it("renders a real recorded turn end to end, from POST through SSE to chat history", async () => {
     okStart();
     const { api, history, Probe } = harness();
@@ -603,6 +682,7 @@ describe("useChatStreamTransport", () => {
     // Captured before `detach` clears it, so regenerate can still find the
     // question this refused turn answered.
     expect(failure?.questionId).toBe(QUESTION_ID);
+    expect(failure?.id).toBe(RESPONSE_MESSAGE_ID);
   });
 
   it("keeps the user's question when the turn is refused", async () => {
@@ -888,7 +968,7 @@ describe("stream ownership (#328)", () => {
 /* ------------------------------------------------------------------ */
 
 describe("stop (#328)", () => {
-  it("cancels the run server-side, closes the stream, and applies nothing further", async () => {
+  it("observes the run until server-side cancellation is confirmed", async () => {
     okStart();
     const cancelled: string[] = [];
     server.use(
@@ -912,10 +992,15 @@ describe("stop (#328)", () => {
       api.current?.stop();
     });
 
-    await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
-    // Closing the client stream would leave the agent running and billing;
-    // the DELETE addresses the response message the start endpoint named.
     await waitFor(() => expect(cancelled).toEqual([RESPONSE_MESSAGE_ID]));
+    expect(registry.getOpen()).toHaveLength(1);
+    expect(history.current[0]?.isStreaming).toBe(true);
+    act(() => {
+      registry.emit("execution.failed", JSON.stringify({
+        code: "CANCELLED", safe_message: "Execution was cancelled.",
+      }));
+    });
+    expect(registry.getOpen()).toHaveLength(0);
     expect(history.current[0]?.isStreaming).toBe(false);
     expect(history.current[0]?.isLoading).toBe(false);
 
@@ -930,7 +1015,30 @@ describe("stop (#328)", () => {
     expect(history.current[0]?.content).toBe("half an ans");
   });
 
-  it("does not reconnect after a stop", async () => {
+  it("reports a failed Stop request, retains observation, and allows retry", async () => {
+    okStart();
+    let requests = 0;
+    server.use(http.delete(`${BASE}/elitea_core/task/prompt_lib/7/:id`, () => {
+      requests += 1;
+      return new HttpResponse(null, { status: 503 });
+    }));
+    const { api, history, errors, Probe } = harness();
+    render(<Probe />);
+    await started(api);
+    act(() => {
+      api.current?.stop();
+      api.current?.stop();
+    });
+    await waitFor(() => expect(errors).toHaveLength(1));
+    expect(requests).toBe(1);
+    expect(errors[0]).toContain("run may still be active");
+    expect(registry.getOpen()).toHaveLength(1);
+    expect(history.current[0]?.isStreaming).toBe(true);
+    act(() => api.current?.stop());
+    await waitFor(() => expect(requests).toBe(2));
+  });
+
+  it("reconnects while Stop awaits terminal confirmation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       okStart();
@@ -947,10 +1055,10 @@ describe("stop (#328)", () => {
       act(() => {
         api.current?.stop();
         registry.fail();
-        vi.advanceTimersByTime(60_000);
       });
+      act(() => { vi.advanceTimersByTime(1_000); });
 
-      expect(registry.getSources()).toHaveLength(1);
+      await waitFor(() => expect(registry.getSources().length).toBeGreaterThan(1));
     } finally {
       vi.useRealTimers();
     }
@@ -1064,76 +1172,42 @@ describe("resume after a drop (#329)", () => {
     expect(registry.getOpen()[0]?.url).not.toContain("cursor");
   });
 
-  it("bounds the retries at four, then settles the message and says the connection was lost", async () => {
+  it("keeps the run attached across an extended outage and delivers recovery", async () => {
     okStart();
     const { api, history, errors, Probe } = harness();
     render(<Probe />);
     await started(api);
-
-    // 1s, 2s, 4s, 8s — `streamReconnectDelayMs`. Each step is asserted for
-    // BOTH halves: nothing reopens a millisecond early, and it does reopen.
-    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
-      const opened = registry.getSources().length;
-      act(() => {
-        registry.fail();
-        vi.advanceTimersByTime(delay - 1);
-      });
-      expect(registry.getSources()).toHaveLength(opened);
-      act(() => {
-        vi.advanceTimersByTime(1);
-      });
-      // eslint-disable-next-line no-await-in-loop -- sequential by construction: each backoff step must be observed before the next drop.
-      await waitFor(() =>
-        expect(registry.getSources()).toHaveLength(opened + 1),
-      );
-    }
-
-    // The fifth failure is where the budget runs out.
     act(() => {
-      registry.fail();
-      vi.advanceTimersByTime(600_000);
+      registry.emit("execution.node_event", nodeEvent({ type: "agent_llm_chunk", content: "before" }), "41");
     });
-
-    expect(registry.getSources()).toHaveLength(5);
-    expect(registry.getOpen()).toHaveLength(0);
-    expect(history.current[0]?.isStreaming).toBe(false);
-    expect(history.current[0]?.isLoading).toBe(false);
-    // The reason goes ON the message, not only to `onStreamError`: the
-    // callback drives a toast that is gone in seconds, while the transcript is
-    // what the user still has when they come back to the tab.
-    expect(history.current[0]?.exception).toBe(
-      "The connection to the agent run was lost.",
-    );
-    expect(errors).toEqual(["The connection to the agent run was lost."]);
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 30_000, 30_000]) {
+      act(() => { registry.fail(); });
+      act(() => { vi.advanceTimersByTime(delay); });
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    }
+    expect(api.current?.isStreaming).toBe(true);
+    expect(registry.getOpen()[0]?.url).toContain("cursor=41");
+    expect(history.current[0]?.exception).toBeUndefined();
+    expect(errors).toEqual(["Connection interrupted. Reconnecting to the existing run."]);
+    act(() => {
+      registry.emit("execution.node_event", nodeEvent({ type: "agent_llm_chunk", content: " recovered" }), "42");
+    });
+    expect(history.current[0]?.content).toContain("recovered");
   });
 
-  it("still says the connection was lost when the stream never delivered a frame", async () => {
-    // The same hole as the early refusal, on the other path: a stream that
-    // dies before its first frame leaves nothing in flight for
-    // `settleInFlight` to mark, so the turn ended with an untouched
-    // transcript and a silently re-enabled composer.
+  it("does not invent a failure when an outage precedes the first frame", async () => {
     okStart();
     const { api, history, Probe } = harness([userQuestion()]);
     render(<Probe />);
     await started(api);
-
-    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
-      act(() => {
-        registry.fail();
-        vi.advanceTimersByTime(delay);
-      });
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 30_000]) {
+      act(() => { registry.fail(); });
+      act(() => { vi.advanceTimersByTime(delay); });
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
     }
-    act(() => {
-      registry.fail();
-      vi.advanceTimersByTime(600_000);
-    });
-
-    expect(history.current).toHaveLength(2);
-    expect(history.current[0]).toEqual(userQuestion());
-    expect(history.current[1]?.role).toBe("assistant");
-    expect(history.current[1]?.exception).toBe(
-      "The connection to the agent run was lost.",
-    );
+    expect(api.current?.isStreaming).toBe(true);
+    expect(history.current).toEqual([userQuestion()]);
+    expect(registry.getOpen()[0]?.url).not.toContain("cursor");
   });
 
   it("spends a fresh budget after a delivered frame, not the one the last outage exhausted", async () => {
@@ -1377,4 +1451,18 @@ describe("the regeneration path owns its replacement stream", () => {
       ).resolves.toEqual({ started: false, reason: "no-transport" });
     });
   });
+});
+
+it('refreshes root occupancy on admission, root measurement and terminal failure', async () => {
+  okStart();
+  const { api, Probe, contextRefreshes } = harness();
+  render(<Probe />);
+  await started(api);
+  expect(contextRefreshes).toEqual([7]);
+  await act(() => registry.emit('execution.node_event', nodeEvent({type:'agent_context_status', response_metadata:{model_scope:'agent', parent_agent_call_id:'child', context_status:{version:1,phase:'compacting'}}})));
+  expect(contextRefreshes).toEqual([7]);
+  await act(() => registry.emit('execution.node_event', nodeEvent({type:'agent_context_status', response_metadata:{model_scope:'agent', context_status:{version:1,phase:'measured'}}})));
+  expect(contextRefreshes).toEqual([7,7]);
+  await act(() => registry.emit('execution.failed', JSON.stringify({safe_message:'The runtime operation failed.'})));
+  expect(contextRefreshes).toEqual([7,7,7]);
 });

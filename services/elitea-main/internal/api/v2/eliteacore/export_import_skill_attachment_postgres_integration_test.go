@@ -653,7 +653,10 @@ func TestImportedSkillIsReadableThroughTheSkillsRoute(t *testing.T) {
 		t.Fatalf("import status = %d, want %d, body = %s", recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(
+		auth.ContextWithUser(context.Background(), auth.User{UserID: strconv.Itoa(importLinkPrincipal)}),
+		10*time.Second,
+	)
 	defer cancel()
 	var agentVersionID int
 	if err := pool.QueryRow(ctx, `SELECT id FROM p_1.application_versions`).Scan(&agentVersionID); err != nil {
@@ -715,14 +718,17 @@ WHERE skill.name = 'pinned skill'`)
 	}})
 }
 
-/* elitea_issues: #5478 — an agent import document carrying two skills that
+/*
+	elitea_issues: #5478 — an agent import document carrying two skills that
+
 share one NAME (different import_uuid, different instructions) writes both
 as independent skills and keeps both attachments, rather than collapsing
 them onto a single imported row and answering "Some fields have missing or
 invalid data!". importSkill's upsert is keyed on `import_uuid`
 (export_import_skill_attachment... see importSkill above), never on name, so
 this was never reachable through that code path — this test is the
-regression pin. */
+regression pin.
+*/
 func TestImportKeepsBothSkillsWithIdenticalNames(t *testing.T) {
 	pool := newImportLinkPool(t)
 	router := importLinkRouter(eliteacore.NewHandler(pool))

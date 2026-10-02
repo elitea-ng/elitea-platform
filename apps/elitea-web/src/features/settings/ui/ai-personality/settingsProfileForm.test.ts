@@ -66,7 +66,7 @@ describe('serializeSettingsProfile', () => {
     });
 
     expect(values.context_enabled).toBe(false);
-    expect(values.max_context_tokens).toBe(12_345);
+    expect(values.budget_mode).toBe('balanced');
     expect(values.preserve_recent_messages).toBe(9);
     expect(values.enable_context_editing).toBe(true);
     expect(values.enable_summarization).toBe(false);
@@ -97,7 +97,7 @@ describe('deserializeSettingsProfile', () => {
   });
 
   it('carries only the personality fields — the memory blocks travel at the top level', () => {
-    const values = { ...serializeSettingsProfile(undefined), context_enabled: true, max_context_tokens: 1000 };
+    const values = { ...serializeSettingsProfile(undefined), context_enabled: true, budget_mode: 'full' as const };
 
     const payload = deserializeSettingsProfile(values);
 
@@ -111,7 +111,7 @@ describe('deserializeMemoryBlocks', () => {
     const values = {
       ...serializeSettingsProfile(undefined),
       context_enabled: true,
-      max_context_tokens: 1000,
+      budget_mode: 'full' as const,
       preserve_recent_messages: 3,
       enable_context_editing: true,
       enable_summarization: true,
@@ -121,7 +121,7 @@ describe('deserializeMemoryBlocks', () => {
     expect(deserializeMemoryBlocks(values)).toEqual({
       default_context_management: {
         enabled: true,
-        max_context_tokens: 1000,
+        budget_mode: 'full' as const,
         preserve_recent_messages: 3,
         enable_context_editing: true,
       },
@@ -158,7 +158,6 @@ describe('deserializeMemoryBlocks', () => {
   it('omits a cleared numeric field instead of sending an empty string', () => {
     const values = {
       ...serializeSettingsProfile(undefined),
-      max_context_tokens: '' as const,
       preserve_recent_messages: '' as const,
       summary_llm_settings: { instructions: '', model_name: '', model_project_id: null, max_tokens: '' as const },
     };
@@ -177,10 +176,10 @@ describe('buildAuthorUpdate', () => {
   it('sends both memory blocks at the top level', () => {
     const payload = buildAuthorUpdate(undefined, {
       ...serializeSettingsProfile(undefined),
-      max_context_tokens: 4242,
+      budget_mode: 'full',
     });
 
-    expect(payload.default_context_management).toMatchObject({ max_context_tokens: 4242 });
+    expect(payload.default_context_management).toMatchObject({ budget_mode: 'full' });
     expect(payload.default_summarization).toBeDefined();
   });
 
@@ -198,12 +197,12 @@ describe('buildAuthorUpdate', () => {
     };
     const values = serializeSettingsProfile(author);
 
-    expect(values.max_context_tokens).toBe(17_000);
+    expect(values.budget_mode).toBe('balanced');
     expect(values.enable_summarization).toBe(false);
 
     const payload = buildAuthorUpdate(author, values);
 
-    expect(payload.default_context_management).toMatchObject({ max_context_tokens: 17_000 });
+    expect(payload.default_context_management).toMatchObject({ budget_mode: 'balanced' });
     expect('default_context_management' in payload.personalization).toBe(false);
     expect('default_summarization' in payload.personalization).toBe(false);
   });
@@ -211,11 +210,11 @@ describe('buildAuthorUpdate', () => {
   // The top-level column wins over a stale nested copy of the same setting.
   it('prefers the top-level block over the personalization-nested one', () => {
     const values = serializeSettingsProfile({
-      default_context_management: { max_context_tokens: 30_000 },
+      default_context_management: { budget_mode: 'full' },
       personalization: { default_context_management: { max_context_tokens: 17_000 } },
     });
 
-    expect(values.max_context_tokens).toBe(30_000);
+    expect(values.budget_mode).toBe('full');
   });
 
   it('keeps personalization keys neither page edits, and the profile fields the upsert would blank', () => {
@@ -250,4 +249,12 @@ describe('buildAuthorUpdate', () => {
     expect('name' in payload).toBe(false);
     expect('avatar' in payload).toBe(false);
   });
+});
+
+it('keeps a numeric summary model owner and omits the owner when using the chat model', () => {
+  const selected = serializeSettingsProfile({ default_summarization: { summary_model_name: 'summary', summary_model_project_id: 7 } }, '2');
+  expect(selected.summary_llm_settings.model_project_id).toBe('7');
+  expect(deserializeMemoryBlocks(selected).default_summarization.summary_model_project_id).toBe(7);
+  const inherited = serializeSettingsProfile(undefined, '2');
+  expect(deserializeMemoryBlocks(inherited).default_summarization).not.toHaveProperty('summary_model_project_id');
 });

@@ -2,7 +2,9 @@ use std::fmt;
 
 use async_trait::async_trait;
 
-use crate::protocol::command::VerifiedAgentCommand;
+use crate::protocol::command::{
+    VerifiedAgentCommand, VerifiedExecutionCommand, VerifiedToolkitExecuteReadCommand,
+};
 use crate::protocol::control::AgentCommandRetirementAuthority;
 
 const SIGNED_ENVELOPE_FIELD: &[u8] = b"signed_envelope";
@@ -322,6 +324,24 @@ impl<C: RedisRetirementClient> RedisCommandRetirer<C> {
         &self,
         delivery: RedisCommandDelivery,
         verified: &VerifiedAgentCommand,
+        authority: AgentCommandRetirementAuthority,
+    ) -> Result<(), RedisCommandError> {
+        self.retire_command(delivery, verified, authority).await
+    }
+
+    pub(crate) async fn retire_toolkit_execute_read_command(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        authority: AgentCommandRetirementAuthority,
+    ) -> Result<(), RedisCommandError> {
+        self.retire_command(delivery, verified, authority).await
+    }
+
+    async fn retire_command(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: &impl VerifiedExecutionCommand,
         authority: AgentCommandRetirementAuthority,
     ) -> Result<(), RedisCommandError> {
         let (authority_identity, authority_delivery_id, authority_signed_envelope) =

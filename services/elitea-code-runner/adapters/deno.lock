@@ -1,0 +1,21 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:pyodide@0.29.0": "0.29.0"
+  },
+  "npm": {
+    "@types/emscripten@1.41.6": {
+      "integrity": "sha512-uN+9i8bFT5CUcZfyIEYDrSueACEyKGbUs5kC/72DGlZZoinh84sJfVV0i8UOJD1asdzkvLPBRrKs41kZ8MdEXg=="
+    },
+    "pyodide@0.29.0": {
+      "integrity": "sha512-ObIvsTmcrxAWKg+FT1GjfSdDmQc5CabnYe/nn5BCuhr9BVVITeQ24DBdZuG5B2tIiAZ9YonBpnDB7cmHZyd2Rw==",
+      "dependencies": [
+        "@types/emscripten",
+        "ws"
+      ]
+    },
+    "ws@8.22.0": {
+      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="
+    }
+  }
+}

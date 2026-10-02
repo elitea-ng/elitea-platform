@@ -1,80 +1,11 @@
 /**
- * The chat rail's Context Budget panel reports the budget the READER configured,
- * not a constant.
+ * Context presets are saved on the profile and copied into new conversations.
+ * Existing conversation strategies keep their saved settings.
+ * Capacity stays unavailable before the runtime measures an admitted model.
  *
- * Ported by use case from the legacy public suite
- * (`qa/elitea-testing-public/automation/tests/ui/chat/test_context_management.py`):
- *
- *  - `TestContextManagementSettings::test_context_budget_reflects_profile_max_tokens[10k_tokens]`
- *  - `TestContextManagementSettings::test_context_budget_reflects_profile_max_tokens[32k_tokens]`
- *  - `chat/test_chat_interface.py::test_edit_context_settings` — the second
- *    test below. The panel was read-only by a documented decision, so the
- *    legacy test's own `pytest.skip("Edit context settings button not
- *    visible")` was the only branch it could take here. The pencil is real
- *    now: it edits the reader's DEFAULT budget through the same
- *    `PUT /social/author` this file already writes by hand.
- *
- * The two legacy cases are one journey here. They are not two use cases — the
- * legacy suite parameterised them, and its own docstring says why the second
- * value exists: "Updated value propagates (not cached)". A second value only
- * means anything if the FIRST one was on screen first, so this journey sets
- * both, in order, against one conversation, and the "not cached" property is
- * then a real assertion rather than a second run of the first one.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * WHY THE PROFILE IS WRITTEN OVER THE API AND NOT THROUGH SETTINGS › MEMORY
- * ─────────────────────────────────────────────────────────────────────────────
- * This is a CHAT journey: the property under test is the resolution chain
- * `conversation strategy > the user's defaults > the constants`
- * (`contextsettings.Resolve`), read by
- * `GET /elitea_core/context_analytics/prompt_lib/{p}/{c}` and rendered by
- * `widgets/context-budget`. The Settings › Memory form that writes those
- * defaults is a different surface with its own owner, and driving it here would
- * have added a branch this journey cannot make deterministic — the context
- * toggle's state on arrival is whatever the last run left, and a test that
- * says "turn it on if it is off" has two bodies and proves neither.
- * `PUT /social/author` is the endpoint that form itself submits, so the write
- * below is the same write, without the branch.
- *
- * THE WRITE IS ACCOUNT-WIDE, AND IS RESTORED. `default_context_management` hangs
- * off the persona, not off a conversation, so while this journey runs, other
- * workers signed in as the same persona resolve the same budget. Nothing else
- * in the suite reads it (no other journey mentions `context_analytics`,
- * `context-budget-*` or `default_context_management`), and the original value —
- * including "the user had never saved one" — is put back in a `finally`.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * ONE ACCOUNT, ONE WRITER — why this file runs in one worker, in order
- * ─────────────────────────────────────────────────────────────────────────────
- * "Nothing else in the suite" was true of every OTHER file and false of this
- * one: both tests below write the same account-wide field, and
- * `fullyParallel: true` puts them on two workers. The second test opens by
- * setting the budget to FIRST_BUDGET, which is exactly the value the first
- * test has just replaced with SECOND_BUDGET — so a second worker landing
- * there while the first is reloading makes the panel report "0 / 10 000
- * tokens" and the first test blames the product for a value the suite itself
- * wrote back.
- *
- * That is the failure this file kept reporting as "a changed profile budget
- * must reach the panel", intermittently and in BOTH engines, which is what
- * ruled out the browser cache it was first read as: the panel's own read is
- * `no-store`, and the server had already resolved SECOND_BUDGET one line
- * above (that poll passed every time). The stale number came from a
- * concurrent writer, not from a stale reader.
- *
- * Serial is the narrow fix, not a broad one: it costs this one file its
- * parallelism, and it is the only file in the suite that writes a field
- * scoped to the whole account rather than to an `autotest_*` entity it
- * created. Giving the second test its own persona would keep both workers,
- * but the personas are shared fixtures too — the next file to write a
- * profile field would collide with them instead.
- *
- * THE CARRY-FORWARD IS NOT OPTIONAL. `UpdateAuthor` upserts `title`,
- * `description`, `avatar` and `personalization` from the body outright, and only
- * the two memory blocks are COALESCEd against the stored row. A body carrying
- * just the context block would therefore blank this persona's display name and
- * avatar for every other journey. Everything is read back and re-sent, exactly
- * as `settingsProfileForm.ts`'s own `buildAuthorUpdate` does.
+ * ONE ACCOUNT, ONE WRITER: both tests change the same account-wide profile.
+ * Run this file in one worker and restore the profile after each test.
+ * Carry forward the author fields that the profile route replaces.
  */
 import { test, expect } from '@playwright/test';
 import type { APIRequestContext, Page } from '@playwright/test';
@@ -89,18 +20,10 @@ import {
   deleteConversation,
 } from '../../fixtures/api';
 
-/* See "ONE ACCOUNT, ONE WRITER" above. Both tests write the same
-   `default_context_management` field of the same persona. */
 test.describe.configure({ mode: 'serial' });
 
-/** Every entity this file creates carries this suffix (concurrent-agent hygiene). */
-const SUFFIX = '-ctx';
+type BudgetMode = 'balanced' | 'full';
 
-/** The two budgets the legacy suite parameterised over. Both are above `MinMaxContextTokens` (1000). */
-const FIRST_BUDGET = 10_000;
-const SECOND_BUDGET = 32_000;
-
-/** The author record, in the subset `UpdateAuthor` replaces outright plus the block under test. */
 interface AuthorRecord {
   readonly name?: string;
   readonly description?: string;
@@ -111,23 +34,10 @@ interface AuthorRecord {
 
 async function readAuthor(request: APIRequestContext): Promise<AuthorRecord> {
   const response = await request.get(`${API_BASE}/social/author`);
-  expect(response.status(), 'the persona must be readable, or nothing below means anything').toBe(200);
+  expect(response.status(), 'the profile must be readable').toBe(200);
   return (await response.json()) as AuthorRecord;
 }
 
-/**
- * Writes `contextManagement` onto the author record, carrying every
- * replace-outright field forward.
- *
- * `undefined` restores the "never saved" state by sending an EMPTY block, not by
- * omitting one. Omitting it would keep whatever this journey last wrote: the
- * handler COALESCEs an absent block against the STORED row, which is what lets
- * Settings › AI Personality save without carrying Memory's fields — and what
- * would make an omission here a permanent 32 000-token leak on the shared
- * persona. `{}` survives `withoutClearedFields` (no null/empty members to
- * strip), decodes to a block with every field unset, and therefore resolves to
- * the contract's own constants, which is exactly what "never saved" resolves to.
- */
 async function writeContextDefaults(
   request: APIRequestContext,
   author: AuthorRecord,
@@ -142,199 +52,135 @@ async function writeContextDefaults(
       default_context_management: contextManagement ?? {},
     },
   });
-  expect(response.status(), `the profile write must be accepted: ${(await response.text()).slice(0, 200)}`).toBe(200);
+  expect(response.status(), `the profile write must succeed: ${(await response.text()).slice(0, 200)}`).toBe(200);
 }
 
-/** `formatNumberWithSpaces` groups thousands; the separator itself is normalised away below. */
-function grouped(value: number): string {
-  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+function preset(original: Record<string, unknown> | undefined, mode: BudgetMode) {
+  const { max_context_tokens: _legacyLimit, ...rest } = original ?? {};
+  return { ...rest, enabled: true, budget_mode: mode };
 }
 
-/**
- * The panel's token line, with every run of whitespace collapsed to one space.
- *
- * The product groups digits with a NON-BREAKING space, and this reads the
- * rendered text rather than reproducing that character: an assertion that
- * hardcoded U+00A0 would fail the day the separator changed for a reason that
- * has nothing to do with the budget being reported.
- */
-async function tokensLine(page: Page): Promise<string> {
-  const text = await page.getByTestId('context-budget-tokens').textContent();
-  return (text ?? '').replace(/\s+/g, ' ').trim();
+async function readFrozenStrategy(request: APIRequestContext, conversationId: string) {
+  const response = await request.get(
+    `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
+  );
+  expect(response.status()).toBe(200);
+  const body = (await response.json()) as { meta?: { context_strategy?: Record<string, unknown> } };
+  expect(body.meta?.context_strategy, 'creation must save the resolved conversation strategy').toBeDefined();
+  return body.meta?.context_strategy ?? {};
 }
 
-test('the Context Budget panel reports the budget the profile sets, and follows it when it changes', async ({ page }) => {
-  /*
-   * THE BUDGET IS THE SUM OF THE WAITS BELOW. This test loads the chat page
-   * TWICE (20 s each), runs an accessibility sweep, and holds four polls of
-   * 20 s. The default 30 s cannot contain that, so the second poll was cut
-   * short by the test clock rather than by its own timeout: the report read
-   * "a changed profile budget must reach the panel" — a product claim — for
-   * what was a budget that had already run out (webkit).
-   */
+async function expectUnmeasuredStatus(request: APIRequestContext, conversationId: string, mode: BudgetMode) {
+  const response = await request.get(
+    `${API_BASE}/elitea_core/context_analytics/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
+  );
+  expect(response.status()).toBe(200);
+  const status = (await response.json()) as Record<string, unknown>;
+  expect(status).toMatchObject({ budget_mode: mode, max_tokens: 0, context_analytics_available: false });
+  expect(status['unavailable'], 'the response must identify unknown capacity').toContain('max_tokens');
+  expect(status['runtime_context'], 'an empty conversation must not invent a runtime measurement').toBeUndefined();
+}
+
+async function openBudgetPanel(page: Page, conversationId: string, mode: BudgetMode) {
+  await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+  await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Expand participants' }).click();
+  const panel = page.getByTestId('context-budget-panel');
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  await expect(panel.getByTestId('context-budget-stat-mode')).toContainText(mode === 'full' ? 'Full' : 'Balanced');
+  await expect(panel.getByTestId('context-budget-tokens')).toHaveText('Usage not yet measured');
+  await expect(panel.getByTestId('context-budget-utilization')).toHaveText('—');
+  await expect(panel.getByTestId('context-budget-progress')).toHaveCount(0);
+}
+
+function conversationName(tag: string) {
+  return `${AUTOTEST_PREFIX}${tag}-ctx-${Date.now()}`;
+}
+
+test('profile presets apply to new conversations while existing snapshots and unknown usage stay intact', async ({ page }) => {
   test.setTimeout(180_000);
   const author = await readAuthor(page.request);
   const original = author.default_context_management;
-
-  const conversationId = await createConversation(
-    page.request,
-    `${AUTOTEST_PREFIX}budget${SUFFIX}-${Date.now()}`,
-  );
-
+  const conversations: string[] = [];
   try {
-    await writeContextDefaults(page.request, author, {
-      ...original,
-      enabled: true,
-      max_context_tokens: FIRST_BUDGET,
-    });
-
-    // The server resolves the budget from those defaults for a conversation
-    // that has never been configured — asserted before the browser is involved,
-    // so a failure here says "the resolution chain" and not "the panel".
-    const status = await page.request.get(
-      `${API_BASE}/elitea_core/context_analytics/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
-    );
-    expect(status.status()).toBe(200);
-    expect((await status.json()) as { max_tokens?: number }).toMatchObject({ max_tokens: FIRST_BUDGET });
-
-    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
-    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
-
-    // The panel lives at the foot of the participants rail, which `ChatPage`
-    // mounts collapsed — collapsed it renders only a percentage, never the
-    // budget (`ContextBudgetCollapsed`).
-    const expand = page.getByRole('button', { name: 'Expand participants' });
-    await expect(expand).toBeVisible({ timeout: 20_000 });
-    await expand.click();
-    await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
-
-    const panel = page.getByTestId('context-budget-panel');
-    await expect(panel).toBeVisible({ timeout: 20_000 });
-    await expect
-      .poll(async () => tokensLine(page), {
-        timeout: 20_000,
-        message: 'the panel must report the profile budget, not a constant',
-      })
-      .toContain(`/ ${grouped(FIRST_BUDGET)} tokens`);
-
-    // `-` is what `formatTokensDisplay` prints for a budget of zero, i.e. for a
-    // panel that resolved no strategy at all. It must not be what is on screen.
-    expect(await tokensLine(page)).not.toContain('/ - tokens');
-
+    await writeContextDefaults(page.request, author, preset(original, 'balanced'));
+    expect((await readAuthor(page.request)).default_context_management?.['budget_mode']).toBe('balanced');
+    const balancedId = await createConversation(page.request, conversationName('balanced'));
+    conversations.push(balancedId);
+    const balancedSnapshot = await readFrozenStrategy(page.request, balancedId);
+    expect(balancedSnapshot).toMatchObject({ enabled: true, budget_mode: 'balanced', max_context_tokens: 0 });
+    await expectUnmeasuredStatus(page.request, balancedId, 'balanced');
+    await openBudgetPanel(page, balancedId, 'balanced');
     await checkA11y(page);
 
-    // ── the second value: the panel follows a change, it does not cache one ──
-    await writeContextDefaults(page.request, author, {
-      ...original,
-      enabled: true,
-      max_context_tokens: SECOND_BUDGET,
-    });
+    await writeContextDefaults(page.request, author, preset(original, 'full'));
+    expect((await readAuthor(page.request)).default_context_management?.['budget_mode']).toBe('full');
+    expect(await readFrozenStrategy(page.request, balancedId), 'a profile update must keep the existing snapshot').toEqual(balancedSnapshot);
+    await expectUnmeasuredStatus(page.request, balancedId, 'balanced');
 
-    // THE SERVER FIRST, exactly as the first half does — and polled, because a
-    // profile write and the resolution that reads it are two requests. Without
-    // this the assertion below reports "the panel cached the old budget" for
-    // two unrelated findings, the other being "the server had not resolved the
-    // new one yet", and the report keeps neither. This is where the webkit
-    // flake landed.
-    await expect
-      .poll(
-        async () => {
-          const resolved = await page.request.get(
-            `${API_BASE}/elitea_core/context_analytics/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,
-          );
-          if (!resolved.ok()) return 0;
-          return ((await resolved.json()) as { max_tokens?: number }).max_tokens ?? 0;
-        },
-        { timeout: 20_000, message: 'the changed profile budget never reached the server’s own resolution' },
-      )
-      .toBe(SECOND_BUDGET);
-
+    const fullId = await createConversation(page.request, conversationName('full'));
+    conversations.push(fullId);
+    const fullSnapshot = await readFrozenStrategy(page.request, fullId);
+    expect(fullSnapshot).toMatchObject({ enabled: true, budget_mode: 'full', max_context_tokens: 0 });
+    await expectUnmeasuredStatus(page.request, fullId, 'full');
+    await openBudgetPanel(page, fullId, 'full');
     await page.reload();
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
     await page.getByRole('button', { name: 'Expand participants' }).click();
-    await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
-
-    await expect
-      .poll(async () => tokensLine(page), {
-        timeout: 20_000,
-        message: 'a changed profile budget must reach the panel — this is the legacy suite’s "not cached" case',
-      })
-      .toContain(`/ ${grouped(SECOND_BUDGET)} tokens`);
-    expect(await tokensLine(page)).not.toContain(`/ ${grouped(FIRST_BUDGET)} tokens`);
+    await expect(page.getByTestId('context-budget-stat-mode')).toContainText('Full');
+    await openBudgetPanel(page, balancedId, 'balanced');
+    expect(await readFrozenStrategy(page.request, fullId)).toEqual(fullSnapshot);
   } finally {
-    // Restored whatever happened above, including back to "never saved".
     await writeContextDefaults(page.request, author, original);
-    await deleteConversation(page.request, conversationId);
+    for (const id of conversations) await deleteConversation(page.request, id);
   }
 });
 
-/*
- * Legacy: `chat/test_chat_interface.py::TestChatInterface::
- * test_edit_context_settings` — "the Edit context settings button opens the
- * settings dialog".
- *
- * The legacy test stops at "a dialog opened", which a dialog wired to nothing
- * would satisfy. This drives the edit to the end and reads the result back off
- * the SERVER, then off the panel: an editor that changed only what is on screen
- * would pass the first half and fail the second.
- *
- * The write is account-wide and is restored in a `finally`, for the reason the
- * file header states in full.
- */
-test('the Context Budget pencil edits the budget, and the new value reaches the profile and the panel', async ({
-  page,
-}) => {
+/* Legacy context editor coverage now uses the saved Balanced and Full presets. */
+test('the Context Budget editor saves the default preset and preserves existing conversation settings', async ({ page }) => {
+  test.setTimeout(180_000);
   const author = await readAuthor(page.request);
   const original = author.default_context_management;
-  const conversationId = await createConversation(
-    page.request,
-    `${AUTOTEST_PREFIX}budgetedit${SUFFIX}-${Date.now()}`,
-  );
-
+  const conversations: string[] = [];
   try {
-    await writeContextDefaults(page.request, author, { ...original, enabled: true, max_context_tokens: FIRST_BUDGET });
-
-    await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
-    await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
-    await page.getByRole('button', { name: 'Expand participants' }).click();
-    await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('context-budget-panel')).toBeVisible({ timeout: 20_000 });
-
+    await writeContextDefaults(page.request, author, preset(original, 'balanced'));
+    const existingId = await createConversation(page.request, conversationName('budgetedit'));
+    conversations.push(existingId);
+    const existingSnapshot = await readFrozenStrategy(page.request, existingId);
+    await openBudgetPanel(page, existingId, 'balanced');
     await page.getByTestId('context-budget-edit-button').click();
     const dialog = page.getByTestId('context-budget-edit-dialog');
-    await expect(dialog, 'the pencil must open the context-settings editor').toBeVisible({ timeout: 10_000 });
-
-    // It opens on the budget in force, not on an empty field.
-    await expect(page.getByTestId('context-budget-max-tokens-input')).toHaveValue(String(FIRST_BUDGET));
-
-    await page.getByTestId('context-budget-max-tokens-input').fill(String(SECOND_BUDGET));
-    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.getByRole('radio', { name: /^Balanced/ })).toBeChecked();
+    await checkA11y(page);
+    await dialog.getByRole('radio', { name: /^Full/ }).check();
+    const saved = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/v2/social/author' && response.request().method() === 'PUT',
+    { timeout: 20_000 });
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    const response = await saved;
+    expect(response.status(), 'the editor must save through the profile route').toBe(200);
+    const sent = response.request().postDataJSON() as { default_context_management?: Record<string, unknown> };
+    expect(sent.default_context_management).toMatchObject({ budget_mode: 'full', enabled: true });
+    expect(sent.default_context_management?.['max_context_tokens'], 'preset saves must remove the old numeric limit').toBeUndefined();
     await expect(dialog).toHaveCount(0, { timeout: 20_000 });
+    await expect.poll(async () => (await readAuthor(page.request)).default_context_management?.['budget_mode'],
+      { timeout: 20_000, message: 'the saved preset must reach the profile' }).toBe('full');
+    expect(await readFrozenStrategy(page.request, existingId)).toEqual(existingSnapshot);
+    await expectUnmeasuredStatus(page.request, existingId, 'balanced');
+    await expect(page.getByTestId('context-budget-stat-mode')).toContainText('Balanced');
 
-    // The SERVER first. The profile is where the value has to land — the same
-    // field Settings › Memory writes — and a panel that only re-rendered would
-    // otherwise look identical.
-    await expect
-      .poll(
-        async () => {
-          const record = await readAuthor(page.request);
-          const block = record.default_context_management ?? {};
-          return (block as { max_context_tokens?: number }).max_context_tokens;
-        },
-        { timeout: 20_000, message: 'the edited budget never reached the profile' },
-      )
-      .toBe(SECOND_BUDGET);
-
-    // Then the panel, without a reload: the save invalidates the status query,
-    // so the number the reader just set is the number on screen.
-    await expect
-      .poll(async () => tokensLine(page), {
-        timeout: 20_000,
-        message: 'the panel must follow the budget its own editor just wrote',
-      })
-      .toContain(`/ ${grouped(SECOND_BUDGET)} tokens`);
+    await page.getByTestId('context-budget-edit-button').click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('radio', { name: /^Full/ })).toBeChecked();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    const newId = await createConversation(page.request, conversationName('edited-full'));
+    conversations.push(newId);
+    expect(await readFrozenStrategy(page.request, newId)).toMatchObject({ budget_mode: 'full', max_context_tokens: 0 });
+    await expectUnmeasuredStatus(page.request, newId, 'full');
+    await openBudgetPanel(page, newId, 'full');
   } finally {
     await writeContextDefaults(page.request, author, original);
-    await deleteConversation(page.request, conversationId);
+    for (const id of conversations) await deleteConversation(page.request, id);
   }
 });

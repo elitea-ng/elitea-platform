@@ -158,7 +158,7 @@ func (s *AdmissionService) Submit(
 	if request.CurrentContinueTurn != nil {
 		turn := request.CurrentContinueTurn
 		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
-			turn.Validate() != nil || turn.ResponseMessageID != request.ClientMessageID ||
+			turn.Validate() != nil || turn.ProjectionResponseID() != request.ClientMessageID ||
 			turn.ConversationUUID != request.ClientStreamID ||
 			turn.ExecutionGeneration != binding.ClientExecutionGeneration ||
 			request.SIOEvent != "chat_continue_predict" ||

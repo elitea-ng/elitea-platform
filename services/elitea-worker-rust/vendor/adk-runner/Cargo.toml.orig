@@ -1,0 +1,47 @@
+[package]
+name = "adk-runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent execution runtime for Rust Agent Development Kit (ADK-Rust) agents"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-runner"
+keywords = ["ai", "agent", "adk", "runtime", "executor"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-core.workspace = true
+adk-artifact = { workspace = true, optional = true }
+adk-sandbox = { workspace = true, optional = true }
+adk-session.workspace = true
+adk-plugin = { workspace = true, optional = true }
+adk-skill = { workspace = true, optional = true }
+async-trait.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+futures.workspace = true
+async-stream.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[features]
+default = ["artifacts", "plugins", "skills"]
+artifacts = ["dep:adk-artifact"]
+plugins = ["dep:adk-plugin"]
+skills = ["dep:adk-skill"]
+sandbox-runner = ["dep:adk-sandbox", "adk-sandbox/workspace"]
+context-compaction = []
+
+[dev-dependencies]
+chrono = "0.4"
+proptest = "1.5"
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio-test = "0.4"
+tokio-util = { version = "0.7", features = ["rt"] }

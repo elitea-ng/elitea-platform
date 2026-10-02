@@ -13,9 +13,8 @@ export type { ContextBudgetStats } from './lib/contextStatus';
 export {
   buildContextBudgetUpdate,
   readContextBlock,
-  selectMaxContextTokens,
-  validateMaxContextTokens,
-  MAX_MAX_CONTEXT_TOKENS,
-  MIN_MAX_CONTEXT_TOKENS,
+  selectBudgetMode,
 } from './lib/authorContextUpdate';
 export type { AuthorContextProfile } from './lib/authorContextUpdate';
+
+export { ContextBudgetIndicator } from './ui/ContextBudgetIndicator';

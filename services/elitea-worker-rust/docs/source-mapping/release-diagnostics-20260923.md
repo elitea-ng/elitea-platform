@@ -1,0 +1,197 @@
+# Release diagnostic information
+
+## Scope
+
+This change supplies release symbols and source lines for OBS-RUST-01.
+It does not implement diagnostic capture or complete Gate 4.
+
+## Behavioral reference
+
+Current SDK revision: `966526e8334354366dd161b606d73fe8e204b850`.
+
+`elitea_sdk/runtime/middleware/strategies.py::ExceptionContext.error_traceback` formats exception stack information.
+`elitea_sdk/runtime/utils/EliteACallback.py::on_tool_error` displays exception information through its callback state.
+These paths establish the need to identify a failure location.
+The Rust implementation must not copy unrestricted exception text into browser responses.
+
+## Rust implementation
+
+`Cargo.toml` retains optimized release code with `debug = "line-tables-only"` and `strip = "none"`.
+Function symbols and source lines remain in the shipped binary.
+Line tables do not add local-variable debug information.
+Thin LTO, optimization level, and panic policy remain unchanged.
+No application schema or wire contract changes.
+
+`Containerfile` checks the actual release binary for `.debug_line` and `.symtab` sections.
+The runtime image receives that same binary without a later stripping step.
+This keeps diagnostic information with its matching executable.
+
+`src/diagnostics.rs` still controls crate-scoped logging and the redacted panic hook.
+`src/agents/runtime.rs::NativeAgentRuntimeError` retains the upstream ADK error privately.
+`src/execution/native_agent_lifecycle.rs` reports static upstream codes under the execution span.
+These existing paths do not yet capture full stack or async span diagnostics.
+
+## Remaining acceptance
+
+- Verify symbolized stack capture in the optimized Linux worker.
+- Preserve async span ancestry separately from synchronous stack frames.
+- Bound capture size, frequency, and overhead.
+- Keep payloads and credentials out of diagnostic fields.
+- Verify useful public errors and operator correlation through the browser.
+
+Release section checks prove packaging only.
+They do not prove capture, redaction, or browser acceptance.
+
+## Packaging verification
+
+The Linux release image builds successfully with `cargo auditable build --locked --release`.
+Both ELF section checks pass.
+Image: `elitea-worker-rust:release-diagnostics-20260923`.
+Image digest: `sha256:7ade52477d97f8bc117474ae51adf31dab362583973caa47943b8508740ab68c`.
+
+`nm` finds worker-owned function symbols in the copied runtime binary.
+`addr2line` resolves `postgres_session::record_session_result` to `src/state/postgres_session.rs:1142`.
+The binary grows from 24,017,688 bytes to 139,242,512 bytes.
+These are executable file sizes, not resident-memory measurements.
+
+The reference image is `elitea-worker-rust:pipeline-recovery-20260923`.
+The build context uses its source plus the two release-packaging changes.
+Local evidence: `/private/tmp/elitea-release-symbol-proof/proof.json`.
+Build log: `/private/tmp/elitea-release-diagnostics-build.log`.
+
+The rehearsal deployment remains unchanged.
+No browser test runs for this packaging-only slice.
+Stack capture and browser error acceptance remain required before OBS-RUST-01 closes.
+
+## Opt-in runner failure capture
+
+`src/diagnostics/failure.rs` captures diagnostics when `ELITEA_RUST_FAILURE_DIAGNOSTICS=on`.
+The default is `off`; other values fail startup validation.
+Capture admits at most one failure per monotonic second across the process.
+The diagnostic text contains at most 8,192 UTF-8 bytes and 32 async span names.
+
+The implementation uses the existing tracing registry for active async ancestry.
+It reads static worker span names only, never recorded field values.
+`std::backtrace::Backtrace::force_capture` supplies the synchronous stack.
+No new tracing framework, dependency, database table, or wire field is introduced.
+
+`src/agents/runtime.rs::NativeAgentRuntimeError` captures at runner start and event failure conversion.
+The owning lifecycle emits this detail with its existing execution span and upstream error code.
+`Debug`, `Display`, and the public error projection do not expose the captured diagnostic.
+The implementation never formats the upstream error message, details, or source chain.
+Existing public errors and browser behavior remain unchanged.
+
+The current-platform traceback references above provide the behavioral mapping for this slice.
+The Rust implementation uses separate operator diagnostics instead of forwarding traceback text to users.
+
+### Focused verification
+
+Four capture tests pass: configuration, frequency limiting, UTF-8 bounds, and async ancestry after a task yield.
+The async test includes secret sentinel values in span fields and confirms their exclusion.
+Strict all-target Clippy passes.
+The complete diagnostics tests and runner ownership tests also pass.
+
+### Limits and next verification
+
+Capture occurs at the runner boundary, not every original dependency failure location.
+Async ancestry includes active, instrumented worker spans only.
+The process frequency limit can suppress additional failures during a burst.
+The retained error code and execution correlation still accompany suppressed captures.
+The byte limit bounds rendered text; it does not bound native stack capture or symbolization time.
+Capture remains disabled by default until release overhead and deployed behavior are measured.
+
+Release capture, nested correlation, provider-specific causes, and browser error acceptance remain open.
+This slice does not complete OBS-RUST-01.
+
+### Local release timing and concurrent capture (2026-09-28)
+
+`src/diagnostics/failure.rs` adds a 16-thread barrier test for the shared capture allowance.
+Exactly one caller receives permission within the same second.
+The next second admits another capture.
+All five focused tests pass; the manual timing test stays ignored during ordinary tests.
+
+Run the timing test with:
+
+```sh
+cargo test --locked --release diagnostics::failure::tests::measure_failure_capture_cost -- --ignored --exact --nocapture
+```
+
+Three fresh processes use the same optimized macOS ARM64 test binary.
+Each process measures one first capture and 200 warmed captures.
+
+| Process | First capture | Warm median | Warm p95 | Warm maximum | Maximum text |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 106.83 ms | 42.38 us | 48.92 us | 97.33 us | 5,478 bytes |
+| 2 | 127.31 ms | 42.17 us | 52.54 us | 150.83 us | 5,478 bytes |
+| 3 | 91.70 ms | 41.46 us | 45.25 us | 170.79 us | 5,478 bytes |
+
+Each capture checks the 8 KiB bound and excludes a synthetic secret span field.
+The rejected-call timing reports integer nanoseconds and rounds to zero in these samples.
+This does not establish zero cost or a portable latency guarantee.
+These measurements exclude deployed Linux behavior, service concurrency, and end-to-end failure handling.
+First-capture latency remains material; capture stays disabled by default.
+No production capture behavior changes in this test addition.
+
+## Deployed capture verification
+
+The rehearsal worker runs source `49e8ab2e` with capture enabled.
+Image ID: `sha256:8850e0c34e5b4a97b8421b2b839afb36b4ab6bf8cecbd3d6f86e042fc07502e5`.
+The deployment retains all five mounts, networks, credentials, and resource limits.
+No active execution claim exists before replacement.
+
+Fresh headed Playwright chat 654 exercises a 256-token pipeline response with four continuation calls.
+Execution: `b1b5fd112e4417db9d840332174ad601`.
+The browser displays `OUTPUT_CONTINUATION_EXHAUSTED`, preserves the partial response after reload, and reports no page errors.
+The screenshot confirms the visible error below the partial answer.
+
+The worker emits one diagnostic with exactly 8,192 bytes.
+It includes the lifecycle span, execution identity, and `model.output_continuation_failed` code.
+The optimized stack resolves `capture_detail`, `event_failed`, and the runner boundary to Rust source lines.
+The diagnostic does not contain the fixture's model output text.
+This is a controlled payload check, not exhaustive redaction acceptance.
+
+Local evidence:
+
+- `/private/tmp/elitea-diagnostic-failure-result.json`
+- `/private/tmp/elitea-diagnostic-failure-complete.png`
+- `/private/tmp/elitea-capture-diagnostics-proof.json`
+
+The first log scan misses the diagnostic because ANSI sequences interrupt the field name.
+Normalized inspection confirms successful capture; there is no missing event capture in this test.
+The follow-up removes ANSI formatting and renders diagnostic stack text with actual line breaks.
+That formatting change requires the next image deployment.
+
+## User and operator explanation requirements
+
+The user requires understandable failure reasons, corrective actions, and operator context without source-code investigation.
+`native_agent_lifecycle.rs::model_failure` still maps many distinct model errors to `Internal`.
+Main's `runtimeFailurePolicy` enforces canonical messages for the current protocol categories.
+A UI-only wording change cannot restore distinctions already lost upstream.
+The next contract slice must preserve safe reasons across worker, Main, persistence, replay, and UI.
+Raw provider text remains excluded from public messages.
+
+## Async source locations
+
+`src/diagnostics/failure.rs::capture_detail` now includes the target, file, and line for each active worker span.
+The implementation uses static tracing metadata. It never records span field values.
+The existing 8,192-byte, 32-span, and one-capture-per-second limits remain unchanged.
+Missing source metadata omits that location instead of inventing one.
+
+The async regression yields between parent and child spans, then verifies leaf-first ordering and both source locations.
+Secret sentinel fields remain absent. All four diagnostics tests, formatting, and strict library-and-test Clippy checks pass.
+This extends the current-platform traceback mapping above without exposing operator details to the browser.
+It does not reconstruct uninstrumented futures or relocate capture to the original dependency failure.
+Release-image verification of this metadata addition passes below.
+
+### Deployed async source verification, 2026-09-24
+
+Worker revision `9e8ec04d` runs as image `sha256:f6489a00cc96d976e2f50d62a21e47b390dc1641f42df327974fccbacf4789a8`.
+Deployment preserves the environment, networks, resource limits, and all five mounts.
+A fresh headed browser executes the nested pipeline in conversation 665.
+The run stops with `OUTPUT_CONTINUATION_EXHAUSTED`, suppresses downstream output, and retains the error after reload.
+The worker records the failure at ERROR level with the four-call exhaustion reason.
+The async scope identifies `agent.native_lifecycle` and its `native_agent_lifecycle.rs` source line.
+The native stack resolves `diagnostics/failure.rs` to its source line.
+The test detects one diagnostic capture and prints only the verification flags.
+Evidence: `elitea-diagnostic-locations-proof.json` and `elitea-pipeline-nested-failure-live.json` in the local test evidence directory.
+The instrumented-span and capture-boundary limits above still apply.

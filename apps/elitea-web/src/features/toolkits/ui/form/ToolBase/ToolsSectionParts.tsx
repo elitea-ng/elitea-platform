@@ -105,4 +105,3 @@ export function resolveToolGroups(schema: ToolSchema): { readonly groups?: Reado
     ...(Array.isArray(order) && order.length > 0 ? { order } : {}),
   };
 }
-

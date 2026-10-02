@@ -22,6 +22,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"gopkg.in/yaml.v3"
 
+	generated "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/generated"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 )
@@ -187,6 +188,55 @@ func TestListProjectsDocumentsTheStructTheHandlerMarshals(t *testing.T) {
 	if strings.Join(required, ",") != strings.Join(wanted, ",") {
 		t.Fatalf("schema %q requires %v, but the handler always marshals %v",
 			name, required, wanted)
+	}
+}
+
+func TestProjectContextDocumentsTheCurrentFiveFieldBuilderContract(t *testing.T) {
+	document := loadShapeSpec(t)
+	target, ok := document.Components.Schemas["ProjectContext"].(map[string]any)
+	if !ok {
+		t.Fatal("v2.yaml has no ProjectContext schema")
+	}
+
+	wire, err := json.Marshal(generated.ProjectContext{})
+	if err != nil {
+		t.Fatalf("marshal generated ProjectContext: %v", err)
+	}
+	var generatedFields map[string]any
+	if err := json.Unmarshal(wire, &generatedFields); err != nil {
+		t.Fatalf("decode generated ProjectContext: %v", err)
+	}
+	wantFields := []string{"activation_description", "content", "enabled", "id", "updated_at"}
+	gotFields := make([]string, 0, len(generatedFields))
+	for name := range generatedFields {
+		gotFields = append(gotFields, name)
+	}
+	sort.Strings(gotFields)
+	if strings.Join(gotFields, ",") != strings.Join(wantFields, ",") {
+		t.Fatalf("generated ProjectContext fields = %v, want %v", gotFields, wantFields)
+	}
+
+	requiredValues, ok := target["required"].([]any)
+	if !ok {
+		t.Fatalf("ProjectContext required fields = %#v", target["required"])
+	}
+	required := make([]string, 0, len(requiredValues))
+	for _, value := range requiredValues {
+		required = append(required, value.(string))
+	}
+	sort.Strings(required)
+	if strings.Join(required, ",") != strings.Join(wantFields, ",") {
+		t.Fatalf("ProjectContext required fields = %v, want %v", required, wantFields)
+	}
+
+	properties := target["properties"].(map[string]any)
+	if properties["content"].(map[string]any)["maxLength"] != 2500 ||
+		properties["activation_description"].(map[string]any)["maxLength"] != 300 {
+		t.Fatalf("ProjectContext bounds = %#v", properties)
+	}
+	deleted := findOperation(t, document, "deleteProjectContext")
+	if _, ok := responsesOf(deleted)["204"]; !ok {
+		t.Fatalf("deleteProjectContext responses = %#v", responsesOf(deleted))
 	}
 }
 

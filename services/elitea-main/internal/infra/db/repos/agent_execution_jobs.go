@@ -7,7 +7,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -187,7 +186,7 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 			turn.TargetParticipantID > math.MaxInt32 ||
 			turn.ApplicationID > math.MaxInt32 || turn.ApplicationVersionID > math.MaxInt32 ||
 			turn.ProjectID != resourceProjectIDUnchecked(admission.Record.Job.ResourceProjectID) ||
-			turn.ResponseMessageID != admission.Binding.ClientMessageID ||
+			turn.ProjectionResponseID() != admission.Binding.ClientMessageID ||
 			turn.ConversationUUID != admission.Binding.ClientStreamID ||
 			turn.ExecutionGeneration != admission.Binding.ClientExecutionGeneration ||
 			admission.Binding.SIOEvent != "chat_continue_predict" ||
@@ -499,15 +498,15 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("reload agent idempotency binding: %w", err)
 	}
 
-	// The admission timing is a pure clock read (admitted_at = now, deadline
-	// = admitted_at + TTL). Computing it here instead of issuing a dedicated
-	// SELECT removes one round trip from the durable materialize transaction
-	// (issue 965). The invariant decodeAdmissionTiming enforces
-	// (deadline - admitted_at == TTL) holds by construction.
-	admittedAt := time.Now().UTC().Truncate(time.Millisecond)
-	timing := admissionTiming{
-		AdmittedAt: admittedAt,
-		Deadline:   admittedAt.Add(r.policy.DeadlineTTL),
+	// Publication and expiry use the database clock. Keep admission timing
+	// on that clock so host clock drift cannot change the durable deadline.
+	timingRow, err := txQueries.LoadRuntimeAdmissionTiming(ctx, r.policy.DeadlineTTL.Milliseconds())
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, fmt.Errorf("load agent admission timing: %w", err)
+	}
+	timing, err := decodeAdmissionTiming(timingRow, r.policy.DeadlineTTL)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, err
 	}
 	if err := insertRuntimeInputBundle(
 		ctx,
@@ -853,7 +852,7 @@ func resumeCurrentAgentHITL(
 	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != responseMessageID {
 		return errors.New("current agent continuation returned an invalid response binding")
 	}
-	return nil
+	return segmentCurrentPipelineHITL(ctx, queries, executionID, turn, row)
 }
 
 func resumeCurrentAgentOutputLimit(

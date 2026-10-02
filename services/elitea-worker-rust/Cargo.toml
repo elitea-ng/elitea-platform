@@ -4,9 +4,20 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
+default-run = "elitea-worker-rust"
+
+[[bin]]
+name = "elitea-sandbox-supervisor"
+path = "src/sandbox_main.rs"
+required-features = ["sandbox-supervisor"]
+
+[features]
+# Container access belongs to the dedicated supervisor, never the default worker.
+sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util"]
 
 [dependencies]
 adk-anthropic = "=2.2.0"
+adk-sandbox = { version = "=2.2.0", optional = true, default-features = false, features = ["workspace-docker"] }
 adk-runner = { version = "=2.2.0", default-features = false, features = ["context-compaction"] }
 adk-rust = { version = "=2.2.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
 async-stream = "=0.3.6"
@@ -14,12 +25,15 @@ async-trait = "=0.1.92"
 base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
+futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 hmac = "=0.13.0"
 hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1", "http2"] }
 hyper-rustls = { version = "=0.27.9", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
+kube = { version = "=4.2.0", optional = true, default-features = false, features = ["client", "rustls-tls", "ring", "ws"] }
+k8s-openapi = { version = "=0.28.0", optional = true, features = ["v1_32"] }
 md-5 = "=0.11.0"
 minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
 opentelemetry = { version = "=0.32.0", default-features = false, features = ["trace"] }
@@ -32,6 +46,7 @@ regex = "=1.13.1"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
+rmcp = { version = "=3.1.2", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
 rustls-native-certs = "=0.8.4"
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
@@ -44,13 +59,14 @@ tempfile = "=3.27.0"
 thiserror = "=2.0.20"
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "=0.26.5", default-features = false, features = ["ring"] }
-tokio-stream = "=0.1.19"
+tokio-stream = { version = "=0.1.19", features = ["net"] }
 tonic = { version = "=0.14.6", features = ["tls-ring"] }
 tonic-prost = "=0.14.6"
 tower = { version = "=0.5.3", features = ["util"] }
 tracing = "=0.1.44"
 tracing-opentelemetry = { version = "=0.33.0", default-features = false }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "registry", "smallvec", "std", "tracing-log"] }
+x509-parser = { version = "=0.18.1", optional = true, default-features = false }
 zeroize = "=1.9.0"
 
 [build-dependencies]
@@ -70,9 +86,17 @@ pedantic = "deny"
 
 [profile.release]
 opt-level = 3
-debug = 0
-strip = "symbols"
+# Keep optimized frame names and source lines for operator diagnostics.
+# Line tables omit local-variable debug data.
+debug = "line-tables-only"
+strip = "none"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
 incremental = false
+
+# Pinned ADK 2.2.0 history-retention extensions. See vendor/README.md.
+[patch.crates-io]
+adk-agent = { path = "vendor/adk-agent" }
+adk-runner = { path = "vendor/adk-runner" }
+adk-sandbox = { path = "vendor/adk-sandbox" }

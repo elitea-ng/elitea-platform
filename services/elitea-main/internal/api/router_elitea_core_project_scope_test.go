@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -210,6 +211,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/roles/prompt_lib/7", "/api/v2/elitea_core/roles/prompt_lib/8", "configuration.roles.roles.view"},
 	{http.MethodGet, "/api/v2/elitea_core/project_info/prompt_lib/7/project-info", "/api/v2/elitea_core/project_info/prompt_lib/8/project-info", "models.project_context.view"},
 	{http.MethodPut, "/api/v2/elitea_core/project_info/prompt_lib/7/project-info", "/api/v2/elitea_core/project_info/prompt_lib/8/project-info", "models.project_context.edit"},
+	{http.MethodGet, "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", "/api/v2/elitea_core/project_context/prompt_lib/8/project-context", "models.project_context.view"},
+	{http.MethodPut, "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", "/api/v2/elitea_core/project_context/prompt_lib/8/project-context", "models.project_context.edit"},
+	{http.MethodDelete, "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", "/api/v2/elitea_core/project_context/prompt_lib/8/project-context", "models.project_context.edit"},
 	{http.MethodPatch, "/api/v2/elitea_core/application_relation/prompt_lib/7/1/2", "/api/v2/elitea_core/application_relation/prompt_lib/8/1/2", "models.applications.application_relation.patch"},
 	{http.MethodGet, "/api/v2/elitea_core/trending_authors/prompt_lib/7", "/api/v2/elitea_core/trending_authors/prompt_lib/8", "models.applications.trending_authors.list"},
 	{http.MethodGet, "/api/v2/elitea_core/search_options/prompt_lib/7", "/api/v2/elitea_core/search_options/prompt_lib/8", "models.promptlib_shared.search"},
@@ -335,7 +339,7 @@ func permissionsExcept(withheld string) []string {
 func newEliteaCoreProjectScopeRouter(
 	querier *memberOfProject,
 	resolver fakePermissionResolver,
-) http.Handler {
+) chi.Router {
 	return NewRouter(RouterConfig{
 		AuthValidator:             testTokenValidator{user: authenticatedTestUser()},
 		PrincipalValidator:        testPrincipalValidator{},
@@ -444,7 +448,21 @@ func TestEliteaCoreRoutesAdmitAnEntitledMember(t *testing.T) {
 					"its own permission entitles, which breaks the route rather than securing it; body=%s",
 					route.permission, recorder.Body.String())
 			}
-			if recorder.Code == http.StatusNotFound || recorder.Code == http.StatusMethodNotAllowed {
+			// The project-context DELETE handler correctly returns 404 when its
+			// empty test store has no row. Prove that route structurally instead
+			// of mistaking the handler's domain response for an absent route.
+			projectContextDeleteNotFound := route.method == http.MethodDelete &&
+				route.ownPath == "/api/v2/elitea_core/project_context/prompt_lib/7/project-context" &&
+				recorder.Code == http.StatusNotFound
+			if projectContextDeleteNotFound && !hasRoute(
+				routePatterns(t, router),
+				http.MethodDelete,
+				"/api/v2/elitea_core/project_context/prompt_lib/{projectID}/project-context",
+			) {
+				t.Fatal("project-context DELETE returned its domain 404 but is not registered")
+			}
+			if (recorder.Code == http.StatusNotFound && !projectContextDeleteNotFound) ||
+				recorder.Code == http.StatusMethodNotAllowed {
 				t.Fatalf("status = %d — the route is not registered, so the 403 assertions in the two "+
 					"tests above would prove nothing", recorder.Code)
 			}

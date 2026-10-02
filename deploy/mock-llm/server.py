@@ -57,6 +57,19 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:ask_user]]   answer with a CALL to the runtime's `ask_user` internal
                       tool instead of with text, then — once the tool result
                       comes back — with a normal answer quoting it.
+  [[mock:continuation_exhaust]] emit five bounded partial segments, each ending at its output limit.
+  [[mock:continuation_repair]]
+                      truncate one answer, reject one boundary, then repair it.
+                      Continuation fragments preserve exact whitespace.
+                      Add [[mock:repair_slow]] to delay repair chunks for crash tests.
+  [[mock:large_tool_input]] emit a fixed 48 KB lookup_record argument for delivery-limit tests.
+  [[mock:http_400]], [[mock:http_401]], [[mock:http_402]], [[mock:http_429]],
+#                      [[mock:http_503]] return synthetic provider errors.
+  [[mock:incomplete_stream]] end after partial text without a terminal model event.
+  [[mock:stream_error]] emit partial text followed by a provider error event.
+  [[mock:wrong_model]] emit a Responses start event with the wrong model identity.
+  [[mock:request_growth]] emit a bounded 512 KiB output-limited continuation prefix.
+  [[mock:cached_usage]] report fixed cache and reasoning usage for accounting tests.
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
@@ -461,8 +474,8 @@ def _tool_result_text_this_turn(messages: list[dict]) -> str | None:
     return None
 
 
-def _tool_results_this_turn(messages: list[dict]) -> list[str]:
-    """Every tool result belonging to the CURRENT turn, oldest first.
+def _tool_results_this_turn(messages: list[dict], calls: list[dict]) -> list[str]:
+    """Results for the scripted calls in the current turn, oldest first.
 
     The plural of `_tool_result_text_this_turn`, for the same reason
     `_call_tool_markers` is the plural of `_call_tool_marker`: a turn that
@@ -471,12 +484,42 @@ def _tool_results_this_turn(messages: list[dict]) -> list[str]:
     had never happened — which is exactly the difference a "the blocked call
     did not stop the one beside it" assertion is made of.
     """
-    results: list[str] = []
+    # A role-tool notice can precede the first model call. It is not a result
+    # for the requested call. Match modern results by call ID: the one this
+    # mock emitted, or one an assistant message of this turn carries for a
+    # scripted function. A runtime that replays a paused turn (the SDK's HITL
+    # resume) re-mints the call ID, and a pair with a fresh ID still answers
+    # the call. Legacy function results carry only the requested function name.
+    call_ids = {call["id"] for call in calls}
+    function_names = {call["function"]["name"] for call in calls}
+    current_turn: list[dict] = []
     for message in reversed(messages or []):
-        role = message.get("role")
-        if role == "user":
+        if message.get("role") == "user":
             break
-        if role in ("tool", "function"):
+        current_turn.append(message)
+    for message in current_turn:
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") if isinstance(tool_call, dict) else None
+            if (
+                isinstance(function, dict)
+                and function.get("name") in function_names
+                and isinstance(tool_call.get("id"), str)
+            ):
+                call_ids.add(tool_call["id"])
+    results: list[str] = []
+    for message in current_turn:
+        role = message.get("role")
+        call_id = message.get("tool_call_id")
+        matching_call = isinstance(call_id, str) and call_id in call_ids
+        legacy_function = (
+            role == "function"
+            and call_id is None
+            and isinstance(message.get("name"), str)
+            and message["name"] in function_names
+        )
+        if role in ("tool", "function") and (matching_call or legacy_function):
             results.append(_message_text(message))
     results.reverse()
     return results
@@ -494,6 +537,7 @@ class _ChatScript(NamedTuple):
     # spec whose marker is silently dropped (a composer that trims it, a prompt
     # rewritten upstream) would otherwise read as "the feature did not happen".
     mode: str
+    finish_reason: str = "stop"
 
 
 def _slow_reply(user_text: str) -> str:
@@ -886,6 +930,44 @@ def _script_for(messages: list[dict]) -> _ChatScript:
     user_text = _last_user_text(messages)
     prompt = user_text or ""
 
+    if "[[mock:request_growth]]" in prompt:
+        prefix = "BYTE_GROWTH_PARTIAL\n"
+        return _ChatScript(prefix + "X" * (512 * 1024 - len(prefix)), None, 0, "request_growth", "length")
+    if "[[mock:stream_error]]" in prompt:
+        return _ChatScript("", None, 0, "stream_error")
+    if "[[mock:incomplete_stream]]" in prompt:
+        return _ChatScript("", None, 0, "incomplete_stream")
+
+    if "[[mock:large_tool_input]]" in prompt:
+        calls = _call_tool_calls("lookup_record", json.dumps({"probe": "X" * 48000}), prompt)
+        return _ChatScript("", calls, 0, "large_tool_input")
+
+    if any("[[mock:continuation_exhaust]]" in _message_text(message) for message in messages):
+        # Count accepted segments, not requests. Replaying a pending request must
+        # return the same bytes without consuming a process-global counter.
+        accepted = "".join(_message_text(message) for message in messages if message.get("role") == "assistant")
+        number = accepted.count("EXHAUST_SEGMENT_") + 1
+        anchor = ""
+        if prompt.startswith("The previous answer reached its output allowance."):
+            anchor, _ = json.JSONDecoder().raw_decode(prompt.split("Exact anchor: ", 1)[1])
+        segment = f"EXHAUST_SEGMENT_{number}\n" + "".join(
+            f"RECORD {number}.{index:04d}: accepted incomplete fixture text.\n" for index in range(1, 401)
+        )
+        return _ChatScript(anchor + segment, None, 0, "continuation_exhaust", "length")
+
+    # This mode is opt-in per transcript. It never changes unmarked requests.
+    if any("[[mock:continuation_repair]]" in _message_text(message) for message in messages):
+        if prompt.startswith("The previous answer reached its output allowance."):
+            if "The previous continuation was rejected" not in prompt:
+                return _ChatScript("REJECTED_BOUNDARY_MUST_NOT_APPEAR", None, 0, "continuation_bad_boundary")
+            encoded = prompt.split("Exact anchor: ", 1)[1]
+            anchor, _ = json.JSONDecoder().raw_decode(encoded)
+            delay = 1 if any("[[mock:repair_slow]]" in _message_text(message) for message in messages) else 0
+            return _ChatScript(anchor + "\nREPAIR_COMPLETE", None, delay, "continuation_repaired")
+        prefix = "\n".join(f"RECORD {index:03d}: accepted fixture output." for index in range(1, 13))
+        return _ChatScript(prefix, None, 0, "continuation_prefix", "length")
+
+
     if ASK_USER_MARKER in prompt:
         answered = _tool_result_text(messages)
         if answered is None:
@@ -903,12 +985,13 @@ def _script_for(messages: list[dict]) -> _ChatScript:
 
     markers = _call_tool_markers(prompt)
     if markers:
-        answered = _tool_results_this_turn(messages)
+        calls = _call_tool_calls_for(markers, prompt)
+        answered = _tool_results_this_turn(messages, calls)
         if not answered:
             # First pass: invoke every tool the prompt's markers name.
             return _ChatScript(
                 "",
-                _call_tool_calls_for(markers, prompt),
+                calls,
                 CHUNK_DELAY_SECONDS,
                 "call_tool",
             )
@@ -1033,6 +1116,14 @@ def _encode_embedding(values: list[float], encoding_format: str) -> object:
 
 def _usage_for(reply: str) -> dict:
     """Deterministic, non-zero token counts. The gateway bills against these."""
+    if "[[mock:cached_usage]]" in reply:
+        return {
+            "prompt_tokens": 10000,
+            "completion_tokens": 23,
+            "total_tokens": 10023,
+            "prompt_tokens_details": {"cached_tokens": 8000},
+            "completion_tokens_details": {"reasoning_tokens": 7},
+        }
     completion = max(1, len(reply.split()))
     return {
         "prompt_tokens": 1,
@@ -1137,7 +1228,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/v1/images/generations", "/openai/v1/images/generations"):
             self._images_generations()
             return
-        if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings"):
+        if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/responses"):
             self._send(404, {"error": {"message": "not found", "type": "invalid_request_error"}})
             return
 
@@ -1149,6 +1240,37 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             self._send(400, {"error": {"message": "invalid JSON", "type": "invalid_request_error"}})
+            return
+
+        if path == "/v1/responses":
+            # Bifrost uses Responses upstream for the native Anthropic dialect.
+            # This route supports only the explicit error fixture, not inference.
+            _record({"path": path, "model": request.get("model"), "mode": "responses_error_fixture", "at": time.time()})
+            fixture_input = json.dumps(request.get("input"))
+            if not request.get("stream") or not any(marker in fixture_input for marker in ("[[mock:stream_error]]", "[[mock:wrong_model]]")):
+                self._send(400, {"error": {"message": "unsupported fixture", "type": "invalid_request_error"}})
+                return
+            payload = {"type": "response.failed", "sequence_number": 0, "response": {
+                "id": "fixture-response", "object": "response", "created_at": 1,
+                "model": request.get("model"), "status": "failed",
+                "error": {"code": "engine_error", "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"},
+            }}
+            started = {"type": "response.created", "sequence_number": 0, "response": {
+                "id": "fixture-response", "object": "response", "created_at": 1,
+                "model": "vllm/" + str(request.get("model", "")).removeprefix("vllm/"),
+                "status": "in_progress", "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+            }}
+            if "[[mock:wrong_model]]" in fixture_input:
+                started["response"]["model"] = "unexpected-fixture-model"
+            payload["sequence_number"] = 1
+            raw = f"data: {json.dumps(started)}\n\ndata: {json.dumps(payload)}\n\n".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            self.wfile.flush()
             return
 
         # Recorded BEFORE the request is served, and recorded for every POST,
@@ -1197,6 +1319,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/embeddings":
             self._embeddings(request)
             return
+
+        # Opt in only from the latest user message; never echo request data.
+        prompt = _last_user_text(request.get("messages") or []) or ""
+        for status, error_type in ((400, "invalid_request_error"),
+                                   (401, "authentication_error"),
+                                   (402, "insufficient_quota"),
+                                   (429, "rate_limit_error"),
+                                   (503, "server_error")):
+            if f"[[mock:http_{status}]]" in prompt:
+                self._send(status, {"error": {
+                    "type": error_type,
+                    "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI",
+                    "code": f"fixture_{status}",
+                }})
+                return
 
         # The model echoed back is whatever was asked for, minus any
         # `provider/` prefix bifrost may not have stripped, so a client
@@ -1355,7 +1492,7 @@ class Handler(BaseHTTPRequestHandler):
         # `tool_calls`. Sending both would be a shape no provider produces, and
         # a client that reads content first would never dispatch the call.
         message: dict = {"role": "assistant", "content": reply or None}
-        finish_reason = "stop"
+        finish_reason = script.finish_reason
         if script.tool_calls is not None:
             message = {"role": "assistant", "content": None, "tool_calls": script.tool_calls}
             finish_reason = "tool_calls"
@@ -1402,6 +1539,13 @@ class Handler(BaseHTTPRequestHandler):
         # nothing downstream can act on it because the reader is already gone.
         try:
             event({**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+            if script.mode in ("incomplete_stream", "stream_error"):
+                event({**base, "choices": [{"index": 0, "delta": {"content": "VALID_PARTIAL_OUTPUT"}, "finish_reason": None}]})
+                if script.mode == "stream_error":
+                    event({"error": {"type": "server_error", "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI"}})
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+                return
             if script.tool_calls is not None:
                 # The whole call in ONE delta. OpenAI may split `arguments`
                 # across chunks and a client must reassemble either way, but a
@@ -1418,11 +1562,17 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 # One word per chunk: a consumer that only ever sees a single
                 # chunk is not actually exercising incremental streaming.
-                for word in script.reply.split(" "):
-                    event({**base, "choices": [{"index": 0, "delta": {"content": word + " "}, "finish_reason": None}]})
+                if script.mode in ("continuation_exhaust", "request_growth"):
+                    chunks = (script.reply[index:index + 1024] for index in range(0, len(script.reply), 1024))
+                elif script.mode.startswith("continuation_"):
+                    chunks = (script.reply[index:index + 17] for index in range(0, len(script.reply), 17))
+                else:
+                    chunks = (word + " " for word in script.reply.split(" "))
+                for chunk in chunks:
+                    event({**base, "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}]})
                     if script.delay:
                         time.sleep(script.delay)
-                event({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                event({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": script.finish_reason}],
                        "usage": _usage_for(script.reply)})
             done = b"data: [DONE]\n\n"
             self.wfile.write(f"{len(done):X}\r\n".encode() + done + b"\r\n")

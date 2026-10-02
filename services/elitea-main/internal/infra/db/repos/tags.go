@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/entitydiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -21,79 +22,13 @@ func NewTagsRepo(pool *pgxpool.Pool) *TagsRepo {
 	return &TagsRepo{pool: pool}
 }
 
-// coverageFilter is the WHERE clause that narrows the project's tags to the
-// ones one kind of entity carries. It is a correlated EXISTS over the
-// association tables rather than a join, so a tag two agents share is still
-// one row.
-//
-// The application/pipeline split is drawn at the APPLICATION, matching the
-// legacy rule (`Entity.versions.any(agent_type == 'pipeline')`): an
-// application with one pipeline version is a pipeline, and its tags belong to
-// the pipeline coverage even if the tagged version is a classic one.
-func coverageFilter(s string, coverage tags.EntityCoverage) string {
-	const applicationJoin = `
-		SELECT 1
-		FROM %[1]s.application_version_tag_association a
-		JOIN %[1]s.application_versions v ON v.id = a.version_id
-		WHERE a.tag_id = t.id`
-	switch coverage {
-	case tags.CoverageApplication:
-		return fmt.Sprintf(` WHERE EXISTS (`+applicationJoin+`
-		  AND NOT EXISTS (
-			SELECT 1 FROM %[1]s.application_versions pv
-			WHERE pv.application_id = v.application_id AND pv.agent_type = 'pipeline'))`, s)
-	case tags.CoveragePipeline:
-		return fmt.Sprintf(` WHERE EXISTS (`+applicationJoin+`
-		  AND EXISTS (
-			SELECT 1 FROM %[1]s.application_versions pv
-			WHERE pv.application_id = v.application_id AND pv.agent_type = 'pipeline'))`, s)
-	case tags.CoverageSkill:
-		return fmt.Sprintf(` WHERE EXISTS (
-			SELECT 1 FROM %[1]s.skill_version_tag_association sa
-			WHERE sa.tag_id = t.id)`, s)
-	default:
-		// CoverageAll: every tag row the project holds, including one that
-		// nothing carries yet. A tag created through the write API and not
-		// yet attached to anything is only ever visible here.
-		return ""
-	}
-}
-
-// List answers the project's tags, optionally narrowed to one entity kind.
-//
-// A query failure answers an EMPTY list rather than an error, which is the
-// behaviour this read has always had: the tag rail is drawn beside a list
-// that must still render for a project whose tenant schema is not there yet.
-// It is stated here because it also means a broken filter looks like an empty
-// project — which is why the coverage filters are pinned by a PostgreSQL
-// integration test rather than by a unit test over a fake.
+// List uses the same actor-scoped read as REST and internal MCP discovery.
 func (r *TagsRepo) List(ctx context.Context, projectID string, coverage tags.EntityCoverage) ([]tags.Tag, error) {
-	s := schema(projectID)
-	q := fmt.Sprintf(`SELECT t.id, t.name, COALESCE(t.data::text, 'null') FROM %s.tags t`, s) +
-		coverageFilter(s, coverage) + ` ORDER BY t.name`
-
-	rows, err := r.pool.Query(ctx, q)
-	if err != nil {
-		return []tags.Tag{}, nil
-	}
-	defer rows.Close()
-
-	var items []tags.Tag
-	for rows.Next() {
-		var t tags.Tag
-		var dataStr string
-		if err := rows.Scan(&t.ID, &t.Name, &dataStr); err != nil {
-			continue
-		}
-		if dataStr != "" && dataStr != "null" {
-			_ = json.Unmarshal([]byte(dataStr), &t.Data) // best-effort: DB column is trusted JSON
-		}
-		items = append(items, t)
-	}
-	if items == nil {
-		items = []tags.Tag{}
-	}
-	return items, nil
+	page, err := r.ListFiltered(ctx, projectID, entitydiscovery.Filters{Coverage: string(coverage), Limit: 1000})
+	return page.Rows, err
+}
+func (r *TagsRepo) ListFiltered(ctx context.Context, projectID string, filters entitydiscovery.Filters) (entitydiscovery.Page[tags.Tag], error) {
+	return entitydiscovery.New(r.pool).Tags(ctx, projectID, filters)
 }
 
 // Create stores one tag and answers the stored row.

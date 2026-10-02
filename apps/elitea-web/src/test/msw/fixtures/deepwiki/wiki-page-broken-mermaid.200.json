@@ -1,6 +1,6 @@
 {
-  "recordedAt": "2026-09-01",
+  "recordedAt": "2026-10-01",
   "synthetic": true,
-  "note": "A page whose mermaid block does NOT parse, so the quick-fix path (DWIKI-007) has an input that actually fails. `graph TD` followed by an arrow with no target is the shape the legacy quick fix was written against. A fixture that renders cleanly would let a broken quick-fix implementation pass.",
+  "note": "A page whose mermaid block does NOT parse, so the quick-fix path (DWIKI-007) has an input that actually fails. `graph TD` followed by an arrow with no target is the shape the legacy quick fix was written against. A fixture that renders cleanly would let a broken quick-fix implementation pass. Revalidated on 2026-10-01 with the DeepWiki fixture and page-rendering suites; recordedAt identifies this synthetic fixture review, not a live HTTP capture.",
   "body": "# Architecture and data flow\n\n```mermaid\ngraph TD\n  A[Client] -->\n  B[API] --> \n```\n\nThe diagram above is malformed on purpose.\n"
 }

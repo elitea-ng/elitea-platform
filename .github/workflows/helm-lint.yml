@@ -222,6 +222,7 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-worker.sh
+          bash deploy/helm/tests/render-worker-sandbox.sh
 
       # The BF0.2b render assertions (#485). This file was `deploy/test_bf0_2b.sh`
       # and no workflow, Taskfile task or script called it. Wiring it found two

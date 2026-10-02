@@ -73,13 +73,19 @@ export function describeTestToolRefusal(toolName: string, outcome: TestToolkitTo
         message: outcome.message,
       });
     case 'timeout':
+      if (outcome.lookup === 'request') return outcome.message;
       return outcome.taskId === undefined
         ? t('features.toolkits.toolkitChat.testTool.timeoutNoTask', 'The tool did not finish in time. It may still be running.')
         : t('features.toolkits.toolkitChat.testTool.timeout', 'The tool is still running (task {{taskId}}). Its result is not ready yet.', {
             taskId: outcome.taskId,
           });
+    case 'unconfirmed':
+      return outcome.message;
     case 'failure':
       return t('features.toolkits.toolkitChat.testTool.failure', 'The tool could not be run: {{message}}', { message: outcome.message });
+    case 'authorizationRequired':
+      return t('features.toolkits.testToolPane.authorizationRequired', 'Authorize this toolkit to run the selected tool.');
+    case 'skipped':
     case 'ok':
     case 'toolError':
       return undefined;

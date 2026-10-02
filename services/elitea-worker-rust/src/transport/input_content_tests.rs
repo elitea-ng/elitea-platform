@@ -19,6 +19,7 @@ use tonic::body::Body;
 use crate::protocol::control::{ClaimBoundInputAuthority, test_lease_monitored_input_execution};
 
 const MEDIA_TYPE: &str = "application/vnd.elitea.agent-execution-input.v1+protobuf";
+const TOOLKIT_MEDIA_TYPE: &str = "application/vnd.elitea.toolkit-execute-read-input.v1+protobuf";
 const SOURCE: &[u8] = b"source {{secret}}";
 static SOURCE_SHA256: LazyLock<[u8; 32]> = LazyLock::new(|| sha256(SOURCE));
 
@@ -243,6 +244,37 @@ async fn source_identity_and_response_digest_are_both_required() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn admitted_long_history_materializes_without_the_old_256_kib_ceiling() {
+    for length in [256 * 1024 + 1, 1024 * 1024] {
+        let body = vec![b'x'; length];
+        let digest = sha256(&body);
+        let mut response = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
+        response.headers_mut().insert(
+            "x-elitea-source-content-length",
+            HeaderValue::from_str(&length.to_string()).unwrap(),
+        );
+        response.headers_mut().insert(
+            "x-elitea-source-content-digest",
+            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(digest))).unwrap(),
+        );
+        let authority = ClaimBoundInputAuthority {
+            expected_source_length: length as u64,
+            expected_source_sha256: &digest,
+            ..reference()
+        };
+        let (client, _) = fake_client(Ok(response), Duration::from_secs(1), 1024 * 1024);
+        assert_eq!(
+            client
+                .fetch_materialized(authority)
+                .await
+                .unwrap()
+                .as_bytes(),
+            body
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn protocol_status_metadata_and_body_bounds_fail_closed() {
     let body = materialized();
     for candidate in [
@@ -446,6 +478,39 @@ async fn exact_body_limit_is_accepted_and_transport_failures_are_typed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn direct_toolkit_input_media_type_is_exactly_admitted() {
+    let body = materialized();
+    let mut toolkit_response = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
+    toolkit_response
+        .headers_mut()
+        .insert("content-type", HeaderValue::from_static(TOOLKIT_MEDIA_TYPE));
+    let (client, captured) = fake_client(Ok(toolkit_response), Duration::from_secs(1), 1024);
+    let mut toolkit_reference = reference();
+    toolkit_reference.media_type = TOOLKIT_MEDIA_TYPE;
+
+    let materialized = client
+        .fetch_materialized(toolkit_reference)
+        .await
+        .expect("direct toolkit materialized input");
+
+    assert_eq!(materialized.as_bytes(), body);
+    assert_eq!(captured.lock().expect("captured requests").len(), 1);
+
+    let (client, captured) = fake_client(
+        Ok(response(&body, StatusCode::OK, Version::HTTP_2, "v/1")),
+        Duration::from_secs(1),
+        1024,
+    );
+    let mut lookalike = reference();
+    lookalike.media_type = "application/vnd.elitea.toolkit-execute-read-input.v2+protobuf";
+    assert!(matches!(
+        client.fetch_materialized(lookalike).await,
+        Err(InputContentError::InvalidInput(_))
+    ));
+    assert!(captured.lock().expect("captured requests").is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn oversized_admitted_source_fails_before_request_emission() {
     let body = materialized();
     let (client, captured) = fake_client(
@@ -586,6 +651,52 @@ async fn configuration_and_reference_bounds_reject_unsafe_authority() {
                 }
             )
             .is_ok()
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn checkpoint_request_preserves_claim_binding_and_rejects_changed_source() {
+    for changed_source in [false, true] {
+        let inspection = crate::protocol::control::test_model_checkpoint_inspection(i64::MAX);
+        let (pending, _lease) = inspection.into_lease_supervision();
+        let live = pending.into_live();
+        let body = materialized();
+        let mut reply = response(&body, StatusCode::OK, Version::HTTP_2, "v/1");
+        reply.headers_mut().insert(
+            "x-elitea-source-content-length",
+            HeaderValue::from_static("1"),
+        );
+        let source_digest = if changed_source {
+            [0x62; 32]
+        } else {
+            [0x61; 32]
+        };
+        reply.headers_mut().insert(
+            "x-elitea-source-content-digest",
+            HeaderValue::from_str(&format!("sha-256=:{}:", STANDARD.encode(source_digest)))
+                .expect("source digest"),
+        );
+        let (client, captured) = fake_client(Ok(reply), Duration::from_secs(1), 1024);
+        let result = client.0.fetch_checkpoint_request(&live).await;
+        if changed_source {
+            assert!(matches!(
+                result,
+                Err(InputContentError::AuthorizationFailed(_))
+            ));
+        } else {
+            assert_eq!(result.expect("frozen request").as_bytes(), body);
+        }
+        assert_eq!(
+            *captured.lock().expect("captured requests"),
+            [CapturedRequest {
+                method: "GET".to_owned(),
+                path:
+                    "/executions/execution%2Fone/generations/2/inputs/settings%20id/versions/v%2F1"
+                        .to_owned(),
+                claim: "claim-1".to_owned(),
+                fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
+            }]
         );
     }
 }

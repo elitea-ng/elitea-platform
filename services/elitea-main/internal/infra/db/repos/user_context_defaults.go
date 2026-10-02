@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -64,4 +65,27 @@ func (r *UserContextDefaultsRepo) ContextDefaults(ctx context.Context, userID in
 		ContextManagement: decodedContext,
 		Summarization:     decodedSummary,
 	}, nil
+}
+
+// Personalization reads only the authenticated actor's defaults for new chats.
+func (r *UserContextDefaultsRepo) Personalization(ctx context.Context, userID int64) (map[string]any, error) {
+	if r == nil || r.pool == nil || userID <= 0 {
+		return nil, nil
+	}
+	var raw []byte
+	err := r.pool.QueryRow(ctx, `SELECT personalization FROM centry.social_users WHERE user_id=$1`, userID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var value map[string]any
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if err = json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }

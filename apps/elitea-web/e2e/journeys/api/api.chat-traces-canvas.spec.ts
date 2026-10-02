@@ -33,10 +33,9 @@
  * parameters the route accepts and refuses, the status a missing step gets, and
  * the fact that all of it is reachable with the session a browser holds.
  *
- * The canvas cases are split the same way: the two refusals below are decided
- * BEFORE the route looks at any message, so they hold on a stack that can store
- * none. Carving a real canvas out of a real answer needs a stored assistant
- * message, so it lives in `e2e/streaming/chat.canvasExtraction.spec.ts`.
+ * Canvas authorization precedes range validation. Unknown groups answer 404
+ * for valid and inverted ranges. The streaming canvas journey checks the
+ * inverted-range 400 against a real message owned by its caller.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE PARTICIPANT'S TOOL LIST IS RESOLVED ON THE READ
@@ -99,6 +98,22 @@ async function readConversation(
     `the conversation read failed: ${(await response.text()).slice(0, 200)}`,
   ).toBe(200);
   return (await response.json()) as Record<string, unknown>;
+}
+
+interface ApplicationParticipantRow {
+  readonly id?: unknown;
+  readonly entity_name?: string;
+  readonly entity_meta?: Readonly<Record<string, unknown>>;
+  readonly entity_settings?: Readonly<Record<string, unknown>>;
+  readonly meta?: Readonly<Record<string, unknown>>;
+}
+
+function applicationParticipant(rows: readonly ApplicationParticipantRow[], agentId: string) {
+  const row = rows.find((candidate) => candidate.entity_name === 'application' &&
+    String(candidate.entity_meta?.['id']) === agentId &&
+    String(candidate.entity_meta?.['project_id']) === DEFAULT_PROJECT_ID);
+  expect(row, 'the application participant must match its entity and project').toBeDefined();
+  return row;
 }
 
 /* ── the trace list ───────────────────────────────────────────────────────── */
@@ -220,16 +235,10 @@ test('a trace step that does not exist is a clean not-found, and the owning grou
 /* ── the canvas route's refusals ──────────────────────────────────────────── */
 
 /**
- * A selection whose end is before its start is refused, and so is one that
- * names no message.
- *
- * Both are decided before the route reads anything, which is why they belong to
- * the plain journeys stack: the range check runs first, and the message lookup
- * that follows answers a refusal of its own rather than an error page. The
- * order matters — an inverted range that reached the slice would take the
- * request down instead of refusing it.
+ * Unknown message groups answer the same 404 for both range shapes.
+ * This preserves the resource boundary before range validation.
  */
-test('the canvas route refuses an inverted selection and a message it cannot find', async ({
+test('the canvas route hides unknown and missing message groups before range validation', async ({
   request,
 }) => {
   const inverted = await request.post(CANVASES_PATH, {
@@ -245,10 +254,8 @@ test('the canvas route refuses an inverted selection and a message it cannot fin
   expect(
     inverted.status(),
     `an inverted range answered ${inverted.status()}: ${(await inverted.text()).slice(0, 200)}`,
-  ).toBe(400);
-  expect(String(((await inverted.json()) as { error?: unknown }).error ?? '')).toContain(
-    'canvas_content_starts_at',
-  );
+  ).toBe(404);
+  expect(await inverted.json()).toEqual({ error: 'chat resource not found' });
 
   const unknownMessage = await request.post(CANVASES_PATH, {
     data: {
@@ -263,10 +270,19 @@ test('the canvas route refuses an inverted selection and a message it cannot fin
   expect(
     unknownMessage.status(),
     `a canvas over a message that does not exist answered ${unknownMessage.status()}`,
-  ).toBe(400);
-  expect(String(((await unknownMessage.json()) as { error?: unknown }).error ?? '')).toContain(
-    'No such message',
-  );
+  ).toBe(404);
+  expect(await unknownMessage.json()).toEqual({ error: 'chat resource not found' });
+
+  const missingGroup = await request.post(CANVASES_PATH, {
+    data: {
+      message_item_id: 999_999_999,
+      name: autotestName('canvas'),
+      canvas_content_starts_at: 0,
+      canvas_content_ends_at: 5,
+    },
+  });
+  expect(missingGroup.status(), 'an item cannot authorize a canvas without its group').toBe(404);
+  expect(await missingGroup.json()).toEqual({ error: 'chat resource not found' });
 });
 
 /* ── the participant a conversation must survive ──────────────────────────── */
@@ -312,13 +328,15 @@ test('a participant whose settings lost their version still loads with the conve
       ],
     });
     expect(attached.status(), `the attach was refused: ${(await attached.text()).slice(0, 200)}`).toBe(200);
-    const participantId = String(((await attached.json()) as readonly { id?: unknown }[])[0]?.id ?? '');
+    const attachedRows = (await attached.json()) as readonly ApplicationParticipantRow[];
+    const participantId = String(applicationParticipant(attachedRows, agent.id)?.id ?? '');
     expect(participantId).not.toBe('');
 
     // A healthy participant first, so the degraded read below is a comparison
     // and not an isolated observation.
     const healthy = await readConversation(request, conversationId);
-    const healthyRow = ((healthy['participants'] as readonly Record<string, unknown>[]) ?? [])[0];
+    const healthyRows = (healthy['participants'] as readonly ApplicationParticipantRow[]) ?? [];
+    const healthyRow = applicationParticipant(healthyRows, agent.id);
     expect(String((healthyRow?.['entity_settings'] as Record<string, unknown>)?.['version_id'] ?? '')).toBe(
       agent.versionId,
     );
@@ -343,12 +361,17 @@ test('a participant whose settings lost their version still loads with the conve
     expect(stripped.status(), `the settings write was refused: ${(await stripped.text()).slice(0, 200)}`).toBe(200);
 
     const degraded = await readConversation(request, conversationId);
-    const rows = (degraded['participants'] as readonly Record<string, unknown>[]) ?? [];
+    const rows = (degraded['participants'] as readonly ApplicationParticipantRow[]) ?? [];
     expect(
       rows,
       'the conversation dropped the participant it could not resolve, instead of degrading it',
-    ).toHaveLength(1);
-    const settings = rows[0]?.['entity_settings'] as Record<string, unknown>;
+    ).toHaveLength(healthyRows.length);
+    expect(rows.map((row) => row.id), 'the read must preserve every participant identity').toEqual(
+      expect.arrayContaining(healthyRows.map((row) => row.id)),
+    );
+    const degradedRow = applicationParticipant(rows, agent.id);
+    expect(String(degradedRow?.id)).toBe(participantId);
+    const settings = degradedRow?.entity_settings;
     expect(
       settings?.['version_id'],
       'the write was meant to REPLACE the document; a merge would have put the version back',
@@ -357,8 +380,8 @@ test('a participant whose settings lost their version still loads with the conve
     // The participant that lost its version carries NO tool list. There is
     // nothing to resolve, and inventing an empty one would tell the rail this
     // agent has no toolkits when the truth is that nobody could tell.
-    expect((rows[0]?.['meta'] as Record<string, unknown>)?.['tools']).toBeUndefined();
-    expect((rows[0]?.['meta'] as Record<string, unknown>)?.['name']).toBe(agentName);
+    expect(degradedRow?.meta?.['tools']).toBeUndefined();
+    expect(degradedRow?.meta?.['name']).toBe(agentName);
     // …and the rest of the conversation is intact.
     expect(String(degraded['id'] ?? '')).toBe(conversationId);
     expect(String(degraded['uuid'] ?? '')).not.toBe('');

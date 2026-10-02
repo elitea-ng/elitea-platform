@@ -304,15 +304,7 @@ export type UseToolkitEditMutation = (
  * callers that already thread `deps.createToolkit` keep working unchanged;
  * they can now simply stop injecting and take this default instead.
  *
- * CORRECTION (issue 940/A7): `meta` IS sent now, and the sentence that stood
- * here — "NOT sent … passing `meta` through would be contract fiction" — was
- * measured against the wrong line. `pgRepo.CreateToolkit` marshals a `meta`
- * key straight into the column and always has
- * (`internal/api/v2/toolkits/handler.go`'s `metaJSON`); what was missing was
- * the CONTRACT, so orval generated a body type without the field and the
- * Tools section's MCP access toggle (`meta.mcp_options.available_by_mcp`) was
- * dropped on the way out. A toolkit created with it on was stored with it off
- * — ELITEA-2541, filed as a product gap because nothing pointed here.
+ * Metadata includes the saved MCP sharing option. Main persists it in the existing toolkit row.
  */
 export function useToolkitCreate(): UseToolkitCreateMutation {
   return useCallback(async ({ projectId, type, name, description, settings, meta }) => {

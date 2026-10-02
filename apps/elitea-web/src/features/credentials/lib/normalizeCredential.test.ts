@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { normalizeCredential, normalizeCredentialPage } from './normalizeCredential';
 
 describe('normalizeCredential', () => {
+  it('preserves the authorization UUID separately from the row id', () => {
+    expect(normalizeCredential({ id: 27, uuid: 'credential-uuid', type: 'openapi' }))
+      .toEqual({ id: '27', uuid: 'credential-uuid', type: 'openapi' });
+  });
   it('maps every wire field to its camelCase entity counterpart', () => {
     const result = normalizeCredential({
       uid: 'u1',

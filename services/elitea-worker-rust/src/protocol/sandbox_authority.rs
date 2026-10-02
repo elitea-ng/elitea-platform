@@ -1,0 +1,363 @@
+//! Exact post-authorization claim binding for sandbox grants.
+use super::{
+    AcceptedAgentClaim, AgentControlClient, ClaimBoundRuntimeContextAuthority, ConstantTimeEq,
+    ControlRpc, ExecutionFenceV1, ExecutionIdentityV1, ProtocolError, VerifiedAgentCommand,
+    hex_lower, identity_from_command, verified_command_binding,
+};
+use crate::protocol::elitea::runtime::v1::{
+    AuthorizeSandboxJobRequestV1, SignedWorkerCommandEnvelopeV1,
+};
+use zeroize::Zeroize;
+
+/// No Clone/Debug: identity and fence cannot be reconstructed by graph code.
+pub(super) struct SandboxClaimBinding {
+    identity: ExecutionIdentityV1,
+    fence: ExecutionFenceV1,
+    command_binding: [u8; 32],
+}
+
+impl SandboxClaimBinding {
+    pub(super) fn from_claim(claim: &AcceptedAgentClaim) -> Self {
+        Self {
+            identity: claim.identity.clone(),
+            fence: claim.fence.clone(),
+            command_binding: claim.command_binding,
+        }
+    }
+}
+
+impl Drop for SandboxClaimBinding {
+    fn drop(&mut self) {
+        self.fence.fence_token.zeroize();
+    }
+}
+
+/// Share through Arc only within one invocation. Main still verifies the live
+/// claim and desired state for each request; this value is not a signed grant.
+pub(crate) struct ClaimBoundSandboxAuthority {
+    claim: Box<SandboxClaimBinding>,
+    signed_command: SignedWorkerCommandEnvelopeV1,
+}
+
+/// Stop-only authority never enables graph assembly or sandbox submission.
+pub(crate) struct SandboxStopAuthority {
+    identity: ExecutionIdentityV1,
+    fence: ExecutionFenceV1,
+    signed_command: SignedWorkerCommandEnvelopeV1,
+}
+impl Drop for SandboxStopAuthority {
+    fn drop(&mut self) {
+        self.fence.fence_token.zeroize();
+    }
+}
+impl SandboxStopAuthority {
+    pub(crate) fn scope(
+        &self,
+    ) -> Result<crate::sandbox::dispatch::DispatchScope, crate::sandbox::dispatch::DispatchError>
+    {
+        crate::sandbox::dispatch::DispatchScope::from_identity(&self.identity)
+    }
+}
+impl super::AgentOutputRecovery {
+    pub(crate) fn sandbox_stop_authority(
+        &self,
+        verified: &VerifiedAgentCommand,
+    ) -> Result<SandboxStopAuthority, ProtocolError> {
+        if self.binding.identity != identity_from_command(verified)
+            || self.binding.desired_state != super::DesiredExecutionState::Cancelled
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "sandbox stop recovery does not match cancelled execution",
+            ));
+        }
+        Ok(SandboxStopAuthority {
+            identity: self.binding.identity.clone(),
+            fence: self.binding.fence.clone(),
+            signed_command: verified.signed().clone(),
+        })
+    }
+}
+
+impl ClaimBoundRuntimeContextAuthority {
+    pub(crate) fn sandbox_stop_authority(
+        &self,
+        verified: &VerifiedAgentCommand,
+    ) -> Result<SandboxStopAuthority, ProtocolError> {
+        let claim = self
+            .sandbox
+            .as_ref()
+            .ok_or(ProtocolError::AuthorizationFailed(
+                "sandbox stop authority is unavailable",
+            ))?;
+        if claim.identity != identity_from_command(verified)
+            || !bool::from(
+                claim
+                    .command_binding
+                    .ct_eq(&verified_command_binding(verified)),
+            )
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "sandbox stop authority does not match command",
+            ));
+        }
+        Ok(SandboxStopAuthority {
+            identity: claim.identity.clone(),
+            fence: claim.fence.clone(),
+            signed_command: verified.signed().clone(),
+        })
+    }
+
+    /// Extract sandbox request authority without consuming context redemption.
+    /// Available only once and only for the exact authenticated command bytes.
+    pub(crate) fn take_sandbox_authority(
+        &mut self,
+        verified: &VerifiedAgentCommand,
+    ) -> Result<ClaimBoundSandboxAuthority, ProtocolError> {
+        let claim = self
+            .sandbox
+            .as_ref()
+            .ok_or(ProtocolError::AuthorizationFailed(
+                "sandbox authority is unavailable for this invocation",
+            ))?;
+        if claim.identity != identity_from_command(verified)
+            || !bool::from(
+                claim
+                    .command_binding
+                    .ct_eq(&verified_command_binding(verified)),
+            )
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "sandbox authority does not match its command",
+            ));
+        }
+        let claim = self
+            .sandbox
+            .take()
+            .ok_or(ProtocolError::AuthorizationFailed(
+                "sandbox authority was already consumed",
+            ))?;
+        Ok(ClaimBoundSandboxAuthority {
+            claim,
+            signed_command: verified.signed().clone(),
+        })
+    }
+}
+
+impl ClaimBoundSandboxAuthority {
+    pub(crate) fn dispatch_scope(
+        &self,
+    ) -> Result<crate::sandbox::dispatch::DispatchScope, crate::sandbox::dispatch::DispatchError>
+    {
+        crate::sandbox::dispatch::DispatchScope::from_identity(&self.claim.identity)
+    }
+
+    /// Actual content digest and supervisor audience are filled by `SandboxClient`.
+    pub(crate) fn request(&self, activation: &[u8; 32]) -> AuthorizeSandboxJobRequestV1 {
+        AuthorizeSandboxJobRequestV1 {
+            identity: Some(self.claim.identity.clone()),
+            fence: Some(self.claim.fence.clone()),
+            activation_id: hex_lower(activation),
+            signed_command: Some(self.signed_command.clone()),
+            request_digest: Vec::new(),
+            audience: String::new(),
+            cancel_only: false,
+            dependency_bundle_sha256: Vec::new(),
+        }
+    }
+}
+
+impl<R: ControlRpc> AgentControlClient<R> {
+    pub(crate) async fn stop_sandbox_job(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &SandboxStopAuthority,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::SandboxJobStatusV1,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        if authority.fence.workload_session_id != self.workload_session_id
+            || authority.fence.producer_id != self.producer_id
+        {
+            return Err(crate::sandbox::client::SandboxCallError::Rejected);
+        }
+        sandbox
+            .cancel_digest(
+                &self.control,
+                AuthorizeSandboxJobRequestV1 {
+                    identity: Some(authority.identity.clone()),
+                    fence: Some(authority.fence.clone()),
+                    activation_id: hex_lower(activation),
+                    signed_command: Some(authority.signed_command.clone()),
+                    cancel_only: true,
+                    ..Default::default()
+                },
+                digest,
+            )
+            .await
+    }
+
+    /// Request a fresh Main grant and submit only under the sealed invocation.
+    pub(crate) async fn submit_sandbox_job(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+    ) -> Result<crate::sandbox::client::SandboxOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        if authority.claim.fence.workload_session_id != self.workload_session_id
+            || authority.claim.fence.producer_id != self.producer_id
+        {
+            return Err(crate::sandbox::client::SandboxCallError::Rejected);
+        }
+        sandbox
+            .submit(&self.control, authority.request(activation), job)
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{ClaimCommandResponseV1, parse_accepted_agent_claim};
+    use super::*;
+    use crate::protocol::command::{
+        TestOnlyConformanceHmacAuthenticator, parse_and_verify_agent_command,
+    };
+    use prost::Message;
+
+    fn vector(name: &str) -> Vec<u8> {
+        let (_, hex) = include_str!("../../tests/fixtures/agent_control_vectors.txt")
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .find(|(key, _)| *key == name)
+            .unwrap();
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    }
+    fn verified() -> VerifiedAgentCommand {
+        parse_and_verify_agent_command(
+            &vector("signed_command"),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .unwrap()
+    }
+    fn authority() -> ClaimBoundRuntimeContextAuthority {
+        let verified = verified();
+        let response = ClaimCommandResponseV1::decode(vector("accepted_claim").as_slice()).unwrap();
+        let claim = parse_accepted_agent_claim(
+            &verified,
+            response,
+            "workload-1",
+            "worker-1",
+            1_700_000_000_000,
+        )
+        .unwrap();
+        ClaimBoundRuntimeContextAuthority::from_claim(&claim)
+    }
+    #[test]
+    fn sandbox_authority_preserves_exact_command_and_fence_and_is_taken_once() {
+        let mut owner = authority();
+        let redemption_execution = owner.redemption_binding().execution_id.to_owned();
+        let command = verified();
+        let sandbox = owner.take_sandbox_authority(&command).unwrap();
+        let request = sandbox.request(&[7; 32]);
+        assert_eq!(
+            request.identity.as_ref().unwrap().execution_id,
+            redemption_execution
+        );
+        assert_eq!(request.signed_command.as_ref(), Some(command.signed()));
+        assert_eq!(
+            request.fence.as_ref().unwrap().workload_session_id,
+            "workload-1"
+        );
+        assert_eq!(request.activation_id, "07".repeat(32));
+        assert!(request.request_digest.is_empty());
+        assert!(request.audience.is_empty());
+        assert!(owner.take_sandbox_authority(&command).is_err());
+        assert_eq!(
+            owner.redemption_binding().execution_id,
+            redemption_execution
+        );
+    }
+    #[test]
+    fn changed_claim_identity_or_exact_command_binding_cannot_mint_authority() {
+        let mut owner = authority();
+        owner.sandbox.as_mut().unwrap().command_binding[0] ^= 1;
+        assert!(owner.sandbox_stop_authority(&verified()).is_err());
+        assert!(owner.take_sandbox_authority(&verified()).is_err());
+        assert!(owner.sandbox.is_some());
+        let mut owner = authority();
+        owner.sandbox.as_mut().unwrap().identity.generation += 1;
+        assert!(owner.sandbox_stop_authority(&verified()).is_err());
+        assert!(owner.take_sandbox_authority(&verified()).is_err());
+    }
+
+    #[test]
+    fn recovery_stop_requires_cancelled_exact_execution() {
+        let owner = authority();
+        let claim = owner.sandbox.as_ref().unwrap();
+        let mut recovery = super::super::AgentOutputRecovery {
+            kind: super::super::AgentOutputRecoveryKind::Running,
+            binding: super::super::RecoveryClaimBinding {
+                identity: claim.identity.clone(),
+                fence: claim.fence.clone(),
+                lease_expires_at_unix_millis: 1_700_000_060_000,
+                claim_id: "recovery".into(),
+                claim_handoff_watermark: 0,
+                desired_state: super::super::DesiredExecutionState::Running,
+            },
+        };
+        assert!(recovery.sandbox_stop_authority(&verified()).is_err());
+        recovery.binding.desired_state = super::super::DesiredExecutionState::Cancelled;
+        assert!(recovery.sandbox_stop_authority(&verified()).is_ok());
+        recovery.binding.identity.generation += 1;
+        assert!(recovery.sandbox_stop_authority(&verified()).is_err());
+    }
+
+    #[tokio::test]
+    async fn another_worker_cannot_submit_the_sealed_claim() {
+        let stop_authority = authority().sandbox_stop_authority(&verified()).unwrap();
+        let authority = authority().take_sandbox_authority(&verified()).unwrap();
+        let channel = tonic::transport::Endpoint::from_static("https://127.0.0.1:1").connect_lazy();
+        let control = AgentControlClient::from_channel(
+            channel.clone(),
+            crate::transport::control_grpc::ControlGrpcConfig {
+                deadline: std::time::Duration::from_secs(1),
+                workload_session_id: "different-workload".into(),
+                producer_id: "worker-1".into(),
+            },
+        )
+        .unwrap();
+        let sandbox = crate::sandbox::client::SandboxClient::from_channel(
+            channel,
+            "dns:sandbox.test".into(),
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(matches!(
+            control
+                .stop_sandbox_job(&sandbox, &stop_authority, &[7; 32], &[8; 32])
+                .await,
+            Err(crate::sandbox::client::SandboxCallError::Rejected)
+        ));
+        let job = crate::sandbox::request::PreparedJob::new(
+            crate::sandbox::request::Language::Python,
+            "7".into(),
+            std::collections::BTreeMap::new(),
+            format!("sha256:{}", "a".repeat(64)),
+            "test-v1".into(),
+            10,
+        )
+        .unwrap();
+        assert!(matches!(
+            control
+                .submit_sandbox_job(&sandbox, &authority, &[7; 32], &job)
+                .await,
+            Err(crate::sandbox::client::SandboxCallError::Rejected)
+        ));
+    }
+}

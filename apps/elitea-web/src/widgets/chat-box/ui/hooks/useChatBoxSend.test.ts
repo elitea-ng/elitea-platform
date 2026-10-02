@@ -22,13 +22,26 @@ import { describe, expect, it } from 'vitest';
 
 import { conversationApi } from '@/entities/conversation';
 
-import { buildRegenerateBody, buildStartBody, resolveStartContract, resolveTargetParticipant } from './useChatBoxSend.helpers';
+import { buildRegenerateBody, buildStartBody, resolveSendModelName, resolveStartContract, resolveTargetParticipant } from './useChatBoxSend.helpers';
 
 const agent = { id: 42, entity_name: 'application' };
 const pipeline = { id: 43, entity_name: 'pipeline' };
 const model = { id: 7, entity_name: 'llm' };
 const dummy = { id: 2, entity_name: 'dummy' };
 const toolkit = { id: 25, entity_name: 'toolkit' };
+
+describe('resolveSendModelName', () => {
+  it('uses picker settings before the saved default', () => {
+    expect(resolveSendModelName({ model_name: 'eu.anthropic.claude-haiku' }, 'default-model'))
+      .toBe('eu.anthropic.claude-haiku');
+  });
+
+  it('retains the saved default before an explicit model is selected', () => {
+    expect(resolveSendModelName(undefined, 'default-model')).toBe('default-model');
+    expect(resolveSendModelName({ model_name: '' }, 'default-model')).toBe('default-model');
+    expect(resolveSendModelName({ model_name: 7 }, 'default-model')).toBe('default-model');
+  });
+});
 
 describe('resolveStartContract', () => {
   it('sends an agent turn under the application contract', () => {

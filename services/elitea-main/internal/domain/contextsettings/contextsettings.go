@@ -13,33 +13,11 @@
 // twice are defaults that drift, so every constant, range and mapping rule
 // lives here once.
 //
-// WHAT THE RUNTIME ACTUALLY HONOURS. This package persists and serves the
-// contract; it does not execute it, and the two are not the same surface. The
-// Rust runtime honours `max_context_tokens` as the budget,
-// `preserve_recent_messages` as an untouchable tail, `preserve_system_messages`
-// and `enable_summarization`. It fails CLOSED on the rest, so nothing here
-// should be presented to a user as working:
-//
-//   - `enable_context_editing: true` has no ADK-Rust 2.0.0 equivalent and is
-//     refused outright.
-//   - a non-null `summary_llm_settings` names a second model whose credential
-//     the execution claim does not carry, and is refused rather than quietly
-//     falling back to the main model — which is why an empty block must
-//     serialize as `null`; see normalizeSummaryLLMSettings.
-//   - pipeline-graph executions are not covered at all: one model per node
-//     means there is no transcript-wide summarizer to configure.
-//
-// Separately, elitea-main does not SEND any of this to the worker yet — every
-// execution payload still carries `context_settings: {}`, pinned by
-// internal/application/agentexecution's TestContextSettingsStayEmptyForTheWorker.
-//
-// PARITY. Field names, defaults and ranges are pylon's, verbatim:
-//   - legacy/plugins/elitea_core/models/pd/context.py  (ContextStrategy,
-//     ContextStrategyUpdate and its cross-field summary-token validator)
-//   - legacy/plugins/social/models/pd/users.py         (ContextManagementModel,
-//     SummarizationModel)
-//   - legacy/plugins/elitea_core/utils/context_analytics.py
-//     (set_context_strategy — the defaults-to-strategy mapping)
+// Legacy numeric context settings do not define the new combined window.
+// New compaction uses Balanced or Full. Stored legacy records stay unchanged.
+// Model catalogue limits remain authoritative at execution admission.
+// Runtime projection removes UI-only fields and separates summary-model selection.
+// Main activation and deployed browser acceptance remain separate gates.
 package contextsettings
 
 import (
@@ -49,13 +27,13 @@ import (
 	"math"
 )
 
-// The frozen contract's defaults. pylon: ContextStrategy's field defaults.
+// Shared strategy defaults. Zero legacy capacity means no numeric override.
 const (
 	DefaultStrategyName           = "default"
 	DefaultEnabled                = true
 	DefaultEnableSummarization    = true
 	DefaultEnableContextEditing   = false
-	DefaultMaxContextTokens       = 64000
+	DefaultMaxContextTokens       = 0 // Presets resolve against the execution model.
 	DefaultPreserveRecentMessages = 5
 	DefaultPreserveSystemMessages = true
 	DefaultSummaryInstructions    = "Generate a concise summary of the following conversation messages"
@@ -98,6 +76,7 @@ type Strategy struct {
 	EnableSummarization    bool           `json:"enable_summarization"`
 	EnableContextEditing   bool           `json:"enable_context_editing"`
 	MaxContextTokens       int            `json:"max_context_tokens"`
+	BudgetMode             BudgetMode     `json:"budget_mode,omitempty"`
 	PreserveRecentMessages int            `json:"preserve_recent_messages"`
 	PreserveSystemMessages bool           `json:"preserve_system_messages"`
 	SummaryInstructions    string         `json:"summary_instructions"`
@@ -114,6 +93,7 @@ func DefaultStrategy() Strategy {
 		EnableSummarization:    DefaultEnableSummarization,
 		EnableContextEditing:   DefaultEnableContextEditing,
 		MaxContextTokens:       DefaultMaxContextTokens,
+		BudgetMode:             BudgetBalanced,
 		PreserveRecentMessages: DefaultPreserveRecentMessages,
 		PreserveSystemMessages: DefaultPreserveSystemMessages,
 		SummaryInstructions:    DefaultSummaryInstructions,
@@ -121,21 +101,8 @@ func DefaultStrategy() Strategy {
 	}
 }
 
-// normalizeSummaryLLMSettings collapses an EMPTY summary-model block to nil,
-// so it serializes as `null` and never as `{}`.
-//
-// THIS IS LOAD-BEARING, NOT TIDINESS. The contract says
-// `summary_llm_settings: object | null`, and the Rust runtime reads that
-// literally: a non-null value names a SECOND model, which needs a credential
-// resolution the execution claim does not carry, so the runtime refuses it
-// with UnsupportedCapability rather than quietly falling back to the main
-// model. `{}` is an object. An empty map — which is exactly what
-// `encoding/json` produces from `"summary_llm_settings": {}` in a request
-// body, and what a non-nil empty map field marshals back to — would therefore
-// fail EVERY context-managed turn once both halves are enabled, for a value
-// that says nothing at all.
-//
-// "No summary model" has one representation here, and it is nil.
+// normalizeSummaryLLMSettings gives an absent selection one representation.
+// Main resolves a nonempty selection through the authorized catalogue.
 func (s *Strategy) normalizeSummaryLLMSettings() {
 	if len(s.SummaryLLMSettings) == 0 {
 		s.SummaryLLMSettings = nil
@@ -146,7 +113,10 @@ func (s *Strategy) normalizeSummaryLLMSettings() {
 // path runs, applied to the merged result, so a stored document that predates
 // a range can never be served as if it were valid.
 func (s Strategy) Validate() *FieldError {
-	if s.MaxContextTokens < MinMaxContextTokens {
+	if err := validateBudgetMode(s.BudgetMode); err != nil {
+		return err
+	}
+	if s.MaxContextTokens != 0 && s.MaxContextTokens < MinMaxContextTokens {
 		return fieldErrorf("max_context_tokens", "max_context_tokens must be at least %d", MinMaxContextTokens)
 	}
 	if s.PreserveRecentMessages < MinPreserveRecentMessages || s.PreserveRecentMessages > MaxPreserveRecentMessages {
@@ -154,14 +124,12 @@ func (s Strategy) Validate() *FieldError {
 			"preserve_recent_messages must be between %d and %d",
 			MinPreserveRecentMessages, MaxPreserveRecentMessages)
 	}
-	return validateSummaryMaxTokens(s.SummaryLLMSettings, s.MaxContextTokens)
+	return validateSummaryMaxTokens(s.SummaryLLMSettings)
 }
 
-// validateSummaryMaxTokens is pylon's `validate_summary_max_tokens` model
-// validator: the summary model's own budget has to be a usable size AND has to
-// fit inside the context it is summarizing. A summary allowed to be as large
-// as the window it frees cannot free anything.
-func validateSummaryMaxTokens(settings map[string]any, maxContextTokens int) *FieldError {
+// validateSummaryMaxTokens checks the output-cap type and minimum.
+// Catalogue admission supplies the actual model limits.
+func validateSummaryMaxTokens(settings map[string]any) *FieldError {
 	if settings == nil {
 		return nil
 	}
@@ -177,10 +145,7 @@ func validateSummaryMaxTokens(settings map[string]any, maxContextTokens int) *Fi
 		return fieldErrorf("summary_llm_settings.max_tokens",
 			"summary max tokens (%d) must be at least %d", maxTokens, MinSummaryMaxTokens)
 	}
-	if maxTokens >= maxContextTokens {
-		return fieldErrorf("summary_llm_settings.max_tokens",
-			"summary max tokens (%d) must be less than max context tokens (%d)", maxTokens, maxContextTokens)
-	}
+
 	return nil
 }
 
@@ -214,6 +179,7 @@ type StrategyUpdate struct {
 	EnableSummarization    *bool          `json:"enable_summarization,omitempty"`
 	EnableContextEditing   *bool          `json:"enable_context_editing,omitempty"`
 	MaxContextTokens       *int           `json:"max_context_tokens,omitempty"`
+	BudgetMode             *BudgetMode    `json:"budget_mode,omitempty"`
 	PreserveRecentMessages *int           `json:"preserve_recent_messages,omitempty"`
 	PreserveSystemMessages *bool          `json:"preserve_system_messages,omitempty"`
 	SummaryInstructions    *string        `json:"summary_instructions,omitempty"`
@@ -239,11 +205,7 @@ func decodeFieldError(err error) *FieldError {
 }
 
 // Apply lays the update over a resolved strategy and validates the result.
-//
-// It validates the MERGED value, not the submitted fields: the cross-field
-// rule (summary max_tokens < max_context_tokens) has to see both sides, and a
-// request that moves only one of the two would otherwise be checked against a
-// number it did not send.
+// Model-specific limits are resolved at execution admission.
 func (s Strategy) Apply(update StrategyUpdate) (Strategy, *FieldError) {
 	merged := s
 	if update.Name != nil {
@@ -261,6 +223,12 @@ func (s Strategy) Apply(update StrategyUpdate) (Strategy, *FieldError) {
 	if update.MaxContextTokens != nil {
 		merged.MaxContextTokens = *update.MaxContextTokens
 	}
+	if update.BudgetMode != nil {
+		merged.BudgetMode = *update.BudgetMode
+		if merged.BudgetMode != "" {
+			merged.MaxContextTokens = 0
+		}
+	}
 	if update.PreserveRecentMessages != nil {
 		merged.PreserveRecentMessages = *update.PreserveRecentMessages
 	}
@@ -272,6 +240,9 @@ func (s Strategy) Apply(update StrategyUpdate) (Strategy, *FieldError) {
 	}
 	if update.SummaryLLMSettings != nil {
 		merged.SummaryLLMSettings = update.SummaryLLMSettings
+	}
+	if merged.BudgetMode == "" {
+		merged.BudgetMode = BudgetBalanced
 	}
 	merged.normalizeSummaryLLMSettings()
 	if fieldErr := merged.Validate(); fieldErr != nil {

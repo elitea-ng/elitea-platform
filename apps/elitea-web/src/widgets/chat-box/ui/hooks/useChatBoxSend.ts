@@ -1,22 +1,12 @@
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
-import { conversationApi } from "@/entities/conversation";
-import { useAddParticipantMutation } from "@/entities/participant";
-// Deep, still-legal import: `UploadedAttachment` is deliberately not on the
-// entities barrel (its 20 slots are exactly spent — see that file's own note
-// naming this exact path).
+import { conversationApi, contextManagementApi } from "@/entities/conversation";
+import { getExecutionTokens } from "@/features/mcps";
 import type { useUploadAttachments } from "@/entities/conversation";
 
-// Derived from the barrel-exported hook rather than deep-imported from its
-// source file. `entities/conversation/index.ts` documents a 20-slot export cap
-// and deliberately leaves the ~15 narrow param/result types out of it, telling
-// consumers to import them from the concrete file — but that advice only holds
-// WITHIN the slice. This widget is a different slice, so the deep path is a
-// no-deep-slice-import-cross-slice violation (dependency-cruiser, "Layer +
-// cycle gate"). Deriving keeps the single public entry point without spending
-// two of the cap's remaining slots on types only this call site needs.
+// Derive these types through the public entity API; avoid a cross-slice deep import.
 type UploadAttachments = ReturnType<typeof useUploadAttachments>["uploadAttachments"];
 type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
 type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
@@ -35,8 +25,10 @@ import {
   buildChatStreamContext,
   buildRegenerateBody,
   buildStartBody,
-  executionStepsLimit,
+  creationMeta,
+  internalToolsSaveFailure,
   positiveParticipantId,
+  resolveSendModelName,
   resolveStartContract,
   resolveTargetParticipant,
 } from "./useChatBoxSend.helpers";
@@ -46,6 +38,7 @@ interface SendDeps {
   readonly createConversation: (input: {
     name: string;
     isPrivate: boolean;
+    participants?: readonly unknown[];
     meta?: Readonly<Record<string, unknown>>;
   }) => Promise<
     { readonly id?: string | number; readonly uuid?: string } | undefined
@@ -58,6 +51,7 @@ interface SendDeps {
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
   readonly deps: SendDeps;
+  readonly getInternalToolsForSend?: () => Promise<readonly string[]>;
   /** Model settings the composer resolved; forwarded as the turn's `llm_settings`. */
   readonly llmSettings?: Readonly<Record<string, unknown>> | undefined;
   /**
@@ -147,8 +141,15 @@ export interface UseChatBoxSendResult {
 export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
-  const { setChatHistory, projectId, projectIdString, isAgentsPage } = params;
+  const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
+  const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
+  const target = useMemo(
+    () => resolveTargetParticipant(params.activeParticipant, params.participants),
+    [params.activeParticipant, params.participants],
+  );
+  const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
+    onContextChanged,
     setChatHistory,
     ...(params.conversationUuid !== undefined
       ? { conversationUuid: params.conversationUuid }
@@ -166,19 +167,15 @@ export function useChatBoxSend(
       readonly conversationUuid: string;
       readonly payload: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
-      // No project ⇒ no route to POST to. Reporting no-transport keeps the
-      // socket fallback rather than silently sending nothing.
       if (projectId === undefined) return NO_STREAM_TRANSPORT;
+      const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
+      if (toolsFailure) return toolsFailure;
       // The contract comes from the PARTICIPANT this turn addresses, never
       // from a page flag. The sole `<ChatBox>` call site passes no
       // `isAgentsPage`. Deriving it from that flag therefore sent every turn
       // — including one addressed to an agent — as `agent.execute.adhoc.v1`.
       // That resolver joins on `entity_name='dummy'` and answers 422 for an
       // agent participant.
-      const target = resolveTargetParticipant(
-        params.activeParticipant,
-        params.participants,
-      );
       const isApplicationTurn =
         resolveStartContract(target) === conversationApi.contracts.application;
       if (
@@ -190,11 +187,12 @@ export function useChatBoxSend(
         (target as { readonly id?: unknown } | null | undefined)?.id,
       );
       const body = buildStartBody({
+        mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid,
         projectId: projectIdString,
         payload,
         llmSettings: params.llmSettings,
-        modelName: params.model?.name,
+        modelName,
         isApplicationTurn,
         participantId:
           (isApplicationTurn
@@ -217,9 +215,9 @@ export function useChatBoxSend(
       projectId,
       projectIdString,
       params.llmSettings,
-      params.model,
-      params.activeParticipant,
-      params.participants,
+      getInternalToolsForSend,
+      modelName,
+      target,
     ],
   );
 
@@ -233,8 +231,6 @@ export function useChatBoxSend(
       readonly contract: string;
       readonly body: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
-      // No project ⇒ no route to POST to. Reporting no-transport keeps the
-      // socket fallback rather than silently sending nothing.
       if (projectId === undefined) return NO_STREAM_TRANSPORT;
       const resumed = await resume({
         projectId,
@@ -256,20 +252,19 @@ export function useChatBoxSend(
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined || params.conversationUuid === undefined)
         return NO_STREAM_TRANSPORT;
-      const target = resolveTargetParticipant(
-        params.activeParticipant,
-        params.participants,
-      );
+      const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
+      if (toolsFailure) return toolsFailure;
       const isApplicationTurn =
         resolveStartContract(target) === conversationApi.contracts.application;
       const body = buildRegenerateBody({
+        mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid: params.conversationUuid,
         projectId: projectIdString,
         responseMessageId: input.messageId,
         questionId: input.questionId,
         question: input.question,
         llmSettings: params.llmSettings,
-        modelName: params.model?.name,
+        modelName,
         isApplicationTurn,
         participantId: positiveParticipantId(
           (target as { readonly id?: unknown } | null | undefined)?.id,
@@ -293,81 +288,45 @@ export function useChatBoxSend(
       projectId,
       projectIdString,
       params.conversationUuid,
-      params.activeParticipant,
-      params.participants,
+      target,
       params.llmSettings,
-      params.model,
+      getInternalToolsForSend,
+      modelName,
     ],
   );
 
   const { deps } = params;
-  const { mutateAsync: addParticipants } = useAddParticipantMutation();
   const createConversationForSend = useCallback(
     async (question: string) => {
+      const internalTools = await getInternalToolsForSend?.();
       const created = await deps.createConversation({
         name:
           question.slice(0, 50) ||
           t("widgets.chatBox.defaultConversationName", "New Chat"),
         isPrivate: true,
-        ...(executionStepsLimit(params.llmSettings) !== undefined
-          ? { meta: { steps_limit: executionStepsLimit(params.llmSettings) } }
-          : {}),
+        meta: creationMeta(params.llmSettings, internalTools),
+        ...(!isAgentsPage && modelName ? {
+          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings: params.llmSettings }),
+        } : {}),
       });
       if (!created) return undefined;
 
-      // A plain model chat has to carry its own participants; an agent
-      // conversation already has the agent as one, so this is scoped to the
-      // ad-hoc path and to a chat that actually has a model to name.
-      const modelName = params.model?.name;
       if (!isAgentsPage && !modelName) {
-        // NOT silent, and not a refusal either. With no model there is nothing
-        // to put in the `dummy` participant. Every REST turn this
-        // conversation ever receives therefore resolves to no rows. The route
-        // answers `422 unsupported_agent_execution`. The conversation is still
-        // created because the socket path does not need that participant, so
-        // refusing here would break a deployment whose socket works.
-        //
-        // `model` is null exactly when the project has no model catalogue or
-        // the catalogue call failed. The user has to be told about that state.
+        // The conversation still exists when no model is available. Its blank
+        // responder cannot supply model settings for a REST turn.
         console.warn(
-          "[useChatBoxSend] no model is selected: created an ad-hoc conversation with no `dummy` participant, so its REST turns cannot resolve",
+          "[useChatBoxSend] no model is selected: created an ad-hoc conversation with no model settings, so its REST turns cannot resolve",
         );
-      }
-      if (
-        !isAgentsPage &&
-        modelName &&
-        created.id !== undefined &&
-        projectId !== undefined
-      ) {
-        try {
-          await addParticipants({
-            projectId,
-            conversationId: String(created.id),
-            participants: adhocParticipants({
-              userId: params.userId,
-              modelName,
-              llmSettings: params.llmSettings,
-            }),
-          });
-        } catch (error) {
-          // Not fatal to the send: the turn will fail its own admission with a
-          // message, which is more useful than swallowing the question here.
-          console.warn(
-            "[useChatBoxSend] could not add ad-hoc participants:",
-            error,
-          );
-        }
       }
       return pickIdAndUuid(created);
     },
     [
       deps,
       isAgentsPage,
-      projectId,
-      params.model,
+      modelName,
       params.userId,
       params.llmSettings,
-      addParticipants,
+      getInternalToolsForSend,
     ],
   );
 

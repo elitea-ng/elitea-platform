@@ -141,6 +141,113 @@ func TestToolkitArgumentSchemasAreWiredFromTheCompositionRoot(t *testing.T) {
 	}
 }
 
+// Internal MCP must not construct a reduced toolkit handler of its own. The
+// shared instance is what keeps MCP create/update behind the same dynamic MCP
+// schemas, secret sealing, credential-reference validation and guardrail
+// policy as the REST/UI entry point.
+func TestInternalMCPToolkitBuilderReusesTheComposedRESTHandler(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"single composed handler":    `toolkitHandler := newToolkitHandler\(cfg, prebuiltMCPStore\)`,
+		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
+		"MCP handler option":         `v2mcp\.WithInternalToolkitHandler\(toolkitHandler\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP and REST toolkit mutations can diverge", description)
+		}
+	}
+}
+
+// Internal MCP must also reuse the configuration handler assembled for REST.
+// That single instance owns the dynamic catalogue, shared-project composition,
+// secret sealing and tracing-configuration containment.
+func TestInternalMCPConfigurationsReuseTheComposedRESTHandler(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"single composed handler":    `configurationsHandler := v2configs\.NewHandler\(`,
+		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
+		"MCP handler option":         `v2mcp\.WithInternalConfigurationHandler\(configurationsHandler, typedConfigurations\)`,
+		"typed services reach MCP":   `cfg\.ToolkitArgumentSchemas, cfg\.MCPToolkitRun, personalProjects,\s*cfg\.InternalConfigurationTools`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP and REST configuration behavior can diverge", description)
+		}
+	}
+}
+
+// Internal MCP project-context builder operations and the REST/UI route must
+// share one handler. That keeps defaults, activation-description semantics,
+// validation and storage behavior identical across both entry points.
+func TestInternalMCPProjectContextReusesTheComposedRESTHandler(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"single composed handler":    `coreHandler := v2core\.NewHandler\(`,
+		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
+		"MCP handler option":         `v2mcp\.WithInternalProjectContextHandler\(coreHandler\)`,
+		"REST delete route":          `Delete\([\s\S]*coreHandler\.DeleteProjectContext\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP and REST project-context behavior can diverge", description)
+		}
+	}
+}
+
+// Internal MCP notifications use the same actor-scoped repository as the
+// current REST/UI route. This source-level gate catches the invisible wiring
+// failure where the tools list correctly but every call has a nil executor.
+func TestInternalMCPNotificationsReuseTheComposedRESTStore(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"MCP mount receives store": `toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
+		"MCP handler option":       `v2mcp\.WithInternalNotificationStore\(notificationStore\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP notification calls cannot share REST behavior", description)
+		}
+	}
+
+	main, err := os.ReadFile(filepath.Join("..", "..", "cmd", "elitea-main", "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	for description, pattern := range map[string]string{
+		"shared repository assignment": `currentNotificationStore\s*=\s*notificationRepository`,
+		"production router assignment": `CurrentNotificationStore:\s*currentNotificationStore`,
+	} {
+		if !regexp.MustCompile(pattern).Match(main) {
+			t.Errorf("cmd/elitea-main/main.go is missing %s", description)
+		}
+	}
+}
+
+// The project secret builder, REST secret routes, and prebuilt-MCP credential
+// materializer must all use one Handler. That instance owns the encryption
+// mode and the unreadable-vault write guards; constructing a reduced MCP
+// handler would create a second security contract.
+func TestInternalMCPSecretsReuseTheComposedRESTVault(t *testing.T) {
+	t.Parallel()
+
+	source := readRouterSource(t)
+	for description, pattern := range map[string]string{
+		"single composed vault":    `prebuiltMCPVault := v2secrets\.NewHandler\([\s\S]*v2secrets\.WithPermissionResolver\(permissionResolver\)`,
+		"MCP mount receives vault": `toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
+		"MCP handler option":       `v2mcp\.WithInternalSecretHandler\(secretsHandler\)`,
+		"REST mount reuses vault":  `r\.Mount\("/secrets", prebuiltMCPVault\.Routes\(\)\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("router.go is missing %s; Internal MCP and REST secret behavior can diverge", description)
+		}
+	}
+}
+
 // The instance list keeps its own route. Moving ListTypeSchemas onto /toolkits/
 // must not be "fixed" by moving List off /tools/ as well: the web client calls
 // both (toolkits.ts:562 and :764).

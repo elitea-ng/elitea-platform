@@ -28,7 +28,7 @@
 import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { API_BASE, deleteConversation, readStoredMessageGroups } from '../fixtures/api';
+import { API_BASE, deleteConversation, expectStoredAssistantAnswer, readStoredMessageGroups } from '../fixtures/api';
 
 /** The model the standalone stack seeds; overridable for the real-model lane. */
 const MODEL_NAME = process.env['E2E_CHAT_MODEL'] || 'E2E-MOCK-MODEL';
@@ -102,18 +102,12 @@ test('rating a real assistant message persists, upserts, and reads back through 
     const startResponse = await started;
     expect(startResponse.status(), `the turn was refused: ${(await startResponse.text()).slice(0, 300)}`).toBe(200);
 
-    // Waited on the STORE, and on this run's own token: readStoredMessageGroups
-    // below is what actually names the answer's uuid — this just proves the
-    // turn settled before that read runs.
-    await expect
-      .poll(
-        async () => {
-          const groups = await readStoredMessageGroups(page, projectId, conversationId);
-          return groups.length;
-        },
-        { timeout: 120_000, message: 'the turn never stored a question + answer pair' },
-      )
-      .toBe(2);
+    // Admission creates the answer placeholder before generation finishes.
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 120_000,
+      contains: token,
+      message: 'the turn must store its successful terminal answer before feedback',
+    });
 
     await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 60_000 });
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });

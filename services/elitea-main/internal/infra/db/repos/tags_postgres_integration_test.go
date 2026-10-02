@@ -9,11 +9,7 @@ package repos
 // measured on a running stack, the leftover row had to be deleted with SQL
 // because the API could not.
 //
-// The reads are here too, because the coverage filters are the half a unit
-// test over a fake cannot state: `List` answers an EMPTY list on a query
-// failure (the tag rail must still draw beside a project whose schema is not
-// there), so a filter with broken SQL looks exactly like a project with no
-// tags. Only a real database tells the two apart.
+// The reads use real PostgreSQL to verify coverage and exclude unattached tags.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -24,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
@@ -53,7 +50,7 @@ func contains(names []string, want string) bool {
 // The create must produce a ROW, with the id the database chose.
 func TestTagsRepoPostgres_CreateStoresARowWithARealID(t *testing.T) {
 	repo, _, pool := newTagsTestRepo(t)
-	ctx := testContext(t)
+	ctx := auth.ContextWithUser(testContext(t), auth.User{ID: "1", UserID: "1"})
 
 	stored, err := repo.Create(ctx, testProjectID,
 		tags.Tag{Name: "autotest_tag_created", Data: map[string]any{"color": "blue"}})
@@ -77,13 +74,13 @@ func TestTagsRepoPostgres_CreateStoresARowWithARealID(t *testing.T) {
 		t.Errorf("stored data = %s, want the object the caller sent", data)
 	}
 
-	// …and the list the tag rail reads finds it, unattached to anything.
+	// Discovery excludes a stored tag until an entity carries it.
 	listed, err := repo.List(ctx, testProjectID, tags.CoverageAll)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !contains(tagNames(listed), "autotest_tag_created") {
-		t.Errorf("the created tag is not in the project's list: %v", tagNames(listed))
+	if contains(tagNames(listed), "autotest_tag_created") {
+		t.Errorf("unattached tag appeared in discovery: %v", tagNames(listed))
 	}
 }
 
@@ -92,7 +89,7 @@ func TestTagsRepoPostgres_CreateStoresARowWithARealID(t *testing.T) {
 // than a conflict the client can do nothing with.
 func TestTagsRepoPostgres_CreateIsIdempotentOnTheName(t *testing.T) {
 	repo, _, pool := newTagsTestRepo(t)
-	ctx := testContext(t)
+	ctx := auth.ContextWithUser(testContext(t), auth.User{ID: "1", UserID: "1"})
 
 	first, err := repo.Create(ctx, testProjectID, tags.Tag{Name: "autotest_tag_twice"})
 	if err != nil {
@@ -120,7 +117,7 @@ func TestTagsRepoPostgres_CreateIsIdempotentOnTheName(t *testing.T) {
 // so when there is nothing to remove.
 func TestTagsRepoPostgres_DeleteRemovesTheRowAndItsVersionLinks(t *testing.T) {
 	repo, appsRepo, pool := newTagsTestRepo(t)
-	ctx := testContext(t)
+	ctx := auth.ContextWithUser(testContext(t), auth.User{ID: "1", UserID: "1"})
 	seedUser(t, pool, 1, "one@elitea.ai")
 
 	app := createTestApplication(t, appsRepo, "autotest_tagged_agent", 1,
@@ -168,7 +165,7 @@ func TestTagsRepoPostgres_DeleteRemovesTheRowAndItsVersionLinks(t *testing.T) {
 // and one tag that belongs to neither.
 func TestTagsRepoPostgres_EntityCoverageNarrowsTheList(t *testing.T) {
 	repo, appsRepo, pool := newTagsTestRepo(t)
-	ctx := testContext(t)
+	ctx := auth.ContextWithUser(testContext(t), auth.User{ID: "1", UserID: "1"})
 	seedUser(t, pool, 1, "one@elitea.ai")
 
 	agent := createTestApplication(t, appsRepo, "autotest_coverage_agent", 1,
@@ -208,7 +205,7 @@ func TestTagsRepoPostgres_EntityCoverageNarrowsTheList(t *testing.T) {
 			"autotest_tag_on_agent": false, "autotest_tag_on_pipeline": false, "autotest_tag_on_nothing": false,
 		}},
 		{tags.CoverageAll, map[string]bool{
-			"autotest_tag_on_agent": true, "autotest_tag_on_pipeline": true, "autotest_tag_on_nothing": true,
+			"autotest_tag_on_agent": true, "autotest_tag_on_pipeline": true, "autotest_tag_on_nothing": false,
 		}},
 	} {
 		listed, err := repo.List(ctx, testProjectID, testCase.coverage)

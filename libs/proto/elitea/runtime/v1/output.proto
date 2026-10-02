@@ -21,6 +21,7 @@ enum ExecutionOutputEventTypeV1 {
   EXECUTION_OUTPUT_EVENT_TYPE_V1_NODE_EVENT = 5;
   EXECUTION_OUTPUT_EVENT_TYPE_V1_AGENT_EXECUTION_RESULT = 6;
   EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_CALL_TOOL_RESULT = 7;
+  EXECUTION_OUTPUT_EVENT_TYPE_V1_TOOLKIT_EXECUTE_READ_RESULT = 8;
 }
 
 message SettlementProposalV1 {
@@ -59,6 +60,7 @@ message ExecutionOutputFrameV1 {
     IndexIngestResultV1 index_ingest = 23;
     AgentExecutionResultV1 agent_execution = 24;
     ToolkitCallToolResultV1 toolkit_call_tool = 25;
+    ToolkitExecuteReadResultV1 toolkit_execute_read = 33;
     // Non-terminal current NodeEvent progress. terminal is false,
     // settlement_proposal is absent, and payload_digest binds the deterministic
     // NodeEventV1 bytes. The exact UI JSON is projected by elitea-main and

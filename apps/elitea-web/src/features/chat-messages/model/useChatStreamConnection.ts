@@ -1,30 +1,7 @@
 /**
- * model/useChatStreamConnection.ts — one run's SSE connection (issue #329).
- *
- * Split out of `model/useChatStreamTransport.ts` to keep that file inside the
- * §3.5 file-length budget of 400 lines — the same move `lib/chatStreamSettle.ts`
- * records in its own header. The seam is the CONNECTION lifecycle and nothing
- * else: opening a stream, remembering the cursor, reopening a dropped one,
- * giving up, detaching. Who owns the run (which conversation started it, what
- * Stop cancels) and what the frames MEAN stay with the transport, which is why
- * this module never touches chat history.
- *
- * RESUME (issue #329). `EventSource` retries only after a CLEAN end and only
- * via a `Last-Event-ID` header, neither of which survives this backend (see
- * `shared/api/sse/resume.ts`), so the reconnect is this module's job: on a drop
- * it reopens the SAME execution's stream with `?cursor=<last id seen>`, which
- * `events.go` treats exactly as `Last-Event-ID`. The server then replays only
- * what follows that cursor, which is what makes the resume free of duplicates
- * — the reducer's `agent_response` "already rendered" guard is a backstop for
- * one frame type, NOT a general de-duplicator (a replayed `agent_llm_chunk`
- * appends unconditionally). Nothing is reconnected once `close` has run, which
- * is how "the turn is over" and "the user pressed Stop" both stop the retries.
- *
- * IT NEVER RE-STARTS THE RUN. Once the start POST has succeeded the execution
- * exists server-side, so a transport failure after that point must not fall
- * back to the socket — that would run the agent twice and bill it twice. This
- * module only REOPENS the stream, and once the retry budget is spent it reports
- * the loss through `onConnectionLost` so the transport can end the turn.
+ * Observe one durable execution. Reconnect with its last delivered cursor.
+ * After the short retry burst, retry every 30 seconds until close or unmount.
+ * A connection outage does not establish that the execution failed.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -58,11 +35,9 @@ export interface ChatStreamConnectionHandlers {
   /** The server reporting the EXECUTION failed — distinct from the stream dropping. */
   readonly onFailed: (frame: ExecutionEventData) => void;
   /**
-   * The retry budget is spent and the stream is gone for good, with a reason
-   * the user can read. The turn ends here: the frames that would have ended it
-   * are exactly the ones that stopped arriving.
+   * Report an extended outage once. Keep observing the same execution.
    */
-  readonly onConnectionLost: (reason: string) => void;
+  readonly onConnectionInterrupted: (reason: string) => void;
 }
 
 /** @public The connection half of the chat transport. */
@@ -96,6 +71,7 @@ export function useChatStreamConnection(
   const doneRef = useRef(false);
   /** Consecutive failed reopen attempts; reset by any delivered frame. */
   const attemptRef = useRef(0);
+  const outageReportedRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -117,6 +93,7 @@ export function useChatStreamConnection(
       clearRetry();
       cursorRef.current = null;
       attemptRef.current = 0;
+      outageReportedRef.current = false;
       doneRef.current = false;
       setConnection({ baseUrl, url: baseUrl });
     },
@@ -128,6 +105,7 @@ export function useChatStreamConnection(
     // A delivered frame is proof the connection works, so the next drop starts
     // its backoff from the top instead of inheriting a spent budget.
     attemptRef.current = 0;
+    outageReportedRef.current = false;
   }, []);
 
   const onNodeEvent = useCallback((frame: ExecutionEventData) => {
@@ -148,22 +126,20 @@ export function useChatStreamConnection(
     if (baseUrl === undefined) return;
 
     const attempt = attemptRef.current + 1;
-    const delay = streamReconnectDelayMs(attempt);
-    if (delay === undefined) {
-      // The retry budget is spent. The message would spin forever otherwise:
-      // the frames that would have ended the turn are exactly the ones that
-      // stopped arriving. It carries the reason for the same reason a runtime
-      // failure does — a stream that never delivered a frame has no message to
-      // stop, and settling silently is indistinguishable from a lost question.
-      handlersRef.current.onConnectionLost(
+    const shortDelay = streamReconnectDelayMs(attempt);
+    if (shortDelay === undefined && !outageReportedRef.current) {
+      outageReportedRef.current = true;
+      handlersRef.current.onConnectionInterrupted(
         t(
-          "chatMessages.stream.connectionLost",
-          "The connection to the agent run was lost.",
+          "chatMessages.stream.reconnecting",
+          "Connection interrupted. Reconnecting to the existing run.",
         ),
       );
-      return;
     }
-    attemptRef.current = attempt;
+    // Bound the request rate, not the lifetime of the durable execution.
+    // Keep the counter bounded during long outages.
+    if (shortDelay !== undefined) attemptRef.current = attempt;
+    const delay = shortDelay ?? 30_000;
     clearRetry();
     // Drop the failed connection NOW rather than at reopen time: it is dead
     // either way, and clearing the URL first is what makes the reopen re-run

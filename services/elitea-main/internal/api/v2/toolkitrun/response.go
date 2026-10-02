@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
@@ -66,9 +67,15 @@ const MaxRequestBodyBytes = int64(1 << 20)
 // The cost, stated: testing UNSAVED settings is not possible through this
 // route. A caller must save the toolkit first.
 type Body struct {
-	ToolkitConfig json.RawMessage `json:"toolkit_config"`
-	ToolName      string          `json:"tool_name"`
-	ToolParams    json.RawMessage `json:"tool_params"`
+	RequestID                 string          `json:"request_id"`
+	LLMSettings               json.RawMessage `json:"llm_settings"`
+	ToolkitConfig             json.RawMessage `json:"toolkit_config"`
+	ToolName                  string          `json:"tool_name"`
+	ToolParams                json.RawMessage `json:"tool_params"`
+	LLMModel                  string          `json:"llm_model"`
+	MCPAuthorizationReference string          `json:"mcp_authorization_reference"`
+	LLMConfiguration          json.RawMessage `json:"llm_configuration"`
+	MCPTokens                 json.RawMessage `json:"mcp_tokens"`
 }
 
 var errInvalidBody = errors.New("invalid tool-run request body")
@@ -87,6 +94,10 @@ func DecodeRequest(
 	if err := decoder.Decode(&body); err != nil {
 		return toolkitcalltoolapp.RunRequest{}, errInvalidBody
 	}
+	// Inline configuration and tokens need a claim-native reference contract.
+	if len(body.LLMConfiguration) > 0 || len(body.MCPTokens) > 0 {
+		return toolkitcalltoolapp.RunRequest{}, errInvalidBody
+	}
 	toolkitID := routeToolkitID
 	if toolkitID <= 0 {
 		var err error
@@ -99,11 +110,16 @@ func DecodeRequest(
 		arguments = json.RawMessage(`{}`)
 	}
 	request := toolkitcalltoolapp.RunRequest{
-		ProjectID:   projectID,
-		ActorUserID: actorUserID,
-		ToolkitID:   toolkitID,
-		ToolName:    strings.TrimSpace(body.ToolName),
-		Arguments:   arguments,
+		RequestID:                 body.RequestID,
+		IdempotencyKey:            r.Header.Get("Idempotency-Key"),
+		ProjectID:                 projectID,
+		ActorUserID:               actorUserID,
+		ToolkitID:                 toolkitID,
+		ToolName:                  strings.TrimSpace(body.ToolName),
+		Arguments:                 arguments,
+		LLMModel:                  body.LLMModel,
+		LLMSettings:               body.LLMSettings,
+		MCPAuthorizationReference: body.MCPAuthorizationReference,
 	}
 	if err := request.Validate(); err != nil {
 		return toolkitcalltoolapp.RunRequest{}, errInvalidBody
@@ -181,6 +197,14 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 		// against my saved settings".
 		body["error"] = outcome.ErrorMessage
 		writeJSON(w, http.StatusOK, body)
+	case toolkitcalltoolapp.RunStatusAuthorizationRequired:
+		body["reason"] = "authorization_required"
+		body["error"] = outcome.ErrorMessage
+		body["authorization_required"] = outcome.AuthorizationRequired
+		if outcome.AuthorizationRetry != nil {
+			body["authorization_retry"] = outcome.AuthorizationRetry
+		}
+		writeJSON(w, http.StatusConflict, body)
 	case toolkitcalltoolapp.RunStatusUnsupportedToolkit:
 		body["reason"] = "unsupported_toolkit"
 		body["error"] = outcome.ErrorMessage
@@ -215,6 +239,10 @@ func WriteError(w http.ResponseWriter, err error) {
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitNotVisible):
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"ok": false, "error": "toolkit not found",
+		})
+	case errors.Is(err, executionapp.ErrIdempotencyConflict):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"ok": false, "reason": "idempotency_conflict", "error": "This request key already belongs to a different tool input.",
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrUnsupportedToolkitType):
 		// Refused BEFORE admission, so there is no task id to report: nothing

@@ -36,6 +36,10 @@ apps/elitea-web/tools/lint-rules/fixtures/knip/bad/package.json  knip lint-rule 
 apps/elitea-web/tools/lint-rules/fixtures/knip/good/package.json knip lint-rule fixture, same reason
 conformance/provider/pyproject.toml              test harness: a pytest runner and an HTTP client, shipping in no image, run in CI against a container someone else built
 services/elitea-worker-python/pyproject.toml    frozen runtime capability profile (elitea-sdk.lock.json verifies 80 + 6 distributions at build and at start); pins move by regenerating the profile, never by a scanner — see .github/dependabot.yml
+services/elitea-worker-rust/vendor/adk-agent/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
+services/elitea-worker-rust/vendor/adk-runner/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
+services/elitea-worker-rust/vendor/adk-sandbox/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
+scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixture: package versions are test inputs; runner and worker scan shipping dependencies
 EXEMPTIONS
 )
 

@@ -26,7 +26,9 @@ const MAX_TARGET_BYTES: usize = 512;
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const RUNTIME_REDIS_ENTRY_BYTES: usize = 64 * 1024;
 const RUNTIME_REDIS_FIELD_BYTES: usize = 48 * 1024;
-const RUNTIME_INPUT_CONTENT_BYTES: usize = 256 * 1024;
+// Match Main's admitted agent bundle and the claim-bound content contract.
+// A smaller fetch limit rejects saved history before compaction can run.
+const RUNTIME_INPUT_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 const RUNTIME_OUTPUT_FRAME_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_REQUEST_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_RESPONSE_BYTES: usize = 80 * 1024;
@@ -87,7 +89,23 @@ pub struct RuntimeDeployConfig {
     pub spool_root: PathBuf,
     pub spool_key_path: PathBuf,
     pub agent_checkpoint_connection_path: Option<PathBuf>,
+    #[serde(default)]
+    pub agent_model_checkpoint_recovery: bool,
+    #[serde(default)]
+    pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
     pub limits: RuntimeLimits,
+}
+
+/// Deployment-selected Code backend; never supplied by YAML or model output.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxRuntimeConfig {
+    pub language: crate::sandbox::request::Language,
+    pub target: String,
+    pub audience: String,
+    pub image_digest: String,
+    pub policy_revision: String,
+    pub timeout_seconds: u32,
 }
 
 impl RuntimeDeployConfig {
@@ -109,6 +127,34 @@ impl RuntimeDeployConfig {
         validate_redis_url(&self.redis_url)?;
         validate_grpc_target(&self.control_target)?;
         validate_grpc_target(&self.output_target)?;
+        if self.sandbox_runtimes.len() > 4 {
+            return Err(invalid_config());
+        }
+        for (index, profile) in self.sandbox_runtimes.iter().enumerate() {
+            validate_grpc_target(&profile.target)?;
+            if profile.audience.is_empty()
+                || profile.audience.len() > 256
+                || profile
+                    .audience
+                    .chars()
+                    .any(|c| c.is_control() || c.is_whitespace())
+                || self.sandbox_runtimes[..index]
+                    .iter()
+                    .any(|other| other.language == profile.language)
+            {
+                return Err(invalid_config());
+            }
+            crate::sandbox::request::PreparedJob::new(
+                profile.language,
+                "validate".into(),
+                std::collections::BTreeMap::new(),
+                profile.image_digest.clone(),
+                profile.policy_revision.clone(),
+                profile.timeout_seconds,
+            )
+            .map_err(|_| invalid_config())?;
+        }
+
         self.content_origin = canonical_https_origin(&self.content_origin)?;
         self.platform_origin = canonical_https_origin(&self.platform_origin)?;
         for path in [
@@ -124,6 +170,9 @@ impl RuntimeDeployConfig {
         }
         if let Some(path) = &self.agent_checkpoint_connection_path {
             require_absolute_path(path)?;
+        }
+        if self.agent_model_checkpoint_recovery && self.agent_checkpoint_connection_path.is_none() {
+            return Err(invalid_config());
         }
         self.limits.validate()?;
         Ok(self)
@@ -146,6 +195,10 @@ pub struct RuntimeLimits {
     pub admission_timeout_millis: u64,
     pub grpc_deadline_millis: u64,
     pub content_timeout_millis: u64,
+    #[serde(default = "default_model_timeout_millis")]
+    pub model_response_header_timeout_millis: u64,
+    #[serde(default = "default_model_timeout_millis")]
+    pub model_stream_idle_timeout_millis: u64,
     pub http_max_connections: usize,
     pub http_max_keepalive_connections: usize,
     pub output_max_queued_frames: usize,
@@ -155,6 +208,10 @@ pub struct RuntimeLimits {
     pub output_stream_deadline_millis: u64,
     pub lease_poll_interval_millis: u64,
     pub shutdown_timeout_millis: u64,
+}
+
+fn default_model_timeout_millis() -> u64 {
+    120_000
 }
 
 impl RuntimeLimits {
@@ -174,6 +231,8 @@ impl RuntimeLimits {
             && (1..=60_000).contains(&self.admission_timeout_millis)
             && (1..=300_000).contains(&self.grpc_deadline_millis)
             && (1..=300_000).contains(&self.content_timeout_millis)
+            && (1..=300_000).contains(&self.model_response_header_timeout_millis)
+            && (1..=300_000).contains(&self.model_stream_idle_timeout_millis)
             && (1..=512).contains(&self.http_max_connections)
             && self.http_max_keepalive_connections <= 512
             && self.http_max_keepalive_connections <= self.http_max_connections
@@ -454,6 +513,28 @@ mod tests {
     };
     use crate::protocol::command::LIMITS_REVISION;
 
+    #[test]
+    fn model_timeouts_default_independently_and_reject_unbounded_values() {
+        let mut value = config(Path::new("/runtime"))["limits"].clone();
+        let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(limits.content_timeout_millis, 15_000);
+        assert_eq!(limits.model_response_header_timeout_millis, 120_000);
+        assert_eq!(limits.model_stream_idle_timeout_millis, 120_000);
+        for field in [
+            "model_response_header_timeout_millis",
+            "model_stream_idle_timeout_millis",
+        ] {
+            for invalid in [0, 300_001] {
+                value[field] = json!(invalid);
+                let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+                assert!(limits.validate().is_err());
+            }
+            value[field] = json!(240_000);
+            let limits: super::RuntimeLimits = serde_json::from_value(value.clone()).unwrap();
+            assert!(limits.validate().is_ok());
+        }
+    }
+
     fn config(root: &Path) -> Value {
         let limits = json!({
             "redis_read_batch": 8,
@@ -511,6 +592,62 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_recovery_requires_explicit_opt_in_and_durable_storage() {
+        let root = tempdir().expect("root");
+        let mut value = config(root.path());
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("config");
+        assert!(!loaded.agent_model_checkpoint_recovery);
+        value["agent_model_checkpoint_recovery"] = json!(true);
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("opt-in");
+        assert!(loaded.validate().is_ok());
+        value["agent_checkpoint_connection_path"] = Value::Null;
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
+        assert!(loaded.validate().is_err());
+    }
+
+    #[test]
+    fn sandbox_profiles_are_optional_and_require_bounded_unique_runtime_identity() {
+        let base = config(Path::new("/runtime"));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(base.clone()).unwrap();
+        assert!(loaded.sandbox_runtimes.is_empty());
+        assert!(loaded.validate().is_ok());
+        let profile = json!({
+            "language": "python",
+            "target": "sandbox.internal:9446",
+            "audience": "sandbox-code",
+            "image_digest": format!("sha256:{}", "a".repeat(64)),
+            "policy_revision": "code-v1",
+            "timeout_seconds": 60
+        });
+        let mut valid = base.clone();
+        valid["sandbox_runtimes"] = json!([profile.clone()]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(valid.clone()).unwrap();
+        assert!(loaded.validate().is_ok());
+        for (field, value) in [
+            ("target", json!("http://sandbox.internal:9446")),
+            ("audience", json!("")),
+            ("audience", json!("sandbox other")),
+            ("image_digest", json!("runner:latest")),
+            ("policy_revision", json!("")),
+            ("timeout_seconds", json!(0)),
+            ("timeout_seconds", json!(3601)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["sandbox_runtimes"][0][field] = value;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(invalid).unwrap();
+            assert!(loaded.validate().is_err(), "accepted invalid {field}");
+        }
+        valid["sandbox_runtimes"] = json!([profile.clone(), profile]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(valid).unwrap();
+        assert!(
+            loaded.validate().is_err(),
+            "duplicate language must not select an arbitrary backend"
+        );
+    }
+
+    #[test]
     fn strict_file_config_normalizes_origins_and_retains_fixed_limits() {
         let root = tempdir().expect("temporary directory");
         let root_path = root
@@ -525,7 +662,7 @@ mod tests {
         assert_eq!(loaded.content_origin, "https://content.internal:9445");
         assert_eq!(loaded.limits.redis_max_entry_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.redis_max_field_bytes(), 48 * 1024);
-        assert_eq!(loaded.limits.content_max_body_bytes(), 256 * 1024);
+        assert_eq!(loaded.limits.content_max_body_bytes(), 8 * 1024 * 1024);
         assert_eq!(loaded.limits.grpc_max_request_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.grpc_max_response_bytes(), 80 * 1024);
         assert_eq!(loaded.limits.output_max_frame_bytes(), 64 * 1024);

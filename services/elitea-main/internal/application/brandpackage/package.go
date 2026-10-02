@@ -277,7 +277,11 @@ func (s *Service) Export(ctx context.Context, pack *v2branding.Pack) (data []byt
 		notes = append(notes, "no e-mail previews on this deployment")
 	}
 	if len(s.previews.App) > 0 {
-		if err := add("preview/app.html", InlinePack(s.previews.App, packJSON)); err != nil {
+		preview := InlinePack(s.previews.App, packJSON)
+		if len(preview) > maxAppPreviewBytes {
+			return nil, "", fmt.Errorf("app preview is %d KiB; the limit is %d KiB", len(preview)/1024, maxAppPreviewBytes/1024)
+		}
+		if err := add("preview/app.html", preview); err != nil {
 			return nil, "", err
 		}
 	} else {
@@ -389,9 +393,10 @@ type Imported struct {
 }
 
 const (
-	maxEntryBytes    = 1024 * 1024 // README, schema, previews, manifest, pack
-	maxEntries       = 64
-	maxPackJSONBytes = 512 * 1024
+	maxEntryBytes      = 1024 * 1024     // README, schema, other previews, manifest, pack
+	maxAppPreviewBytes = 2 * 1024 * 1024 // Compiled app plus the inlined pack.
+	maxEntries         = 64
+	maxPackJSONBytes   = 512 * 1024
 )
 
 var allowedEntry = regexp.MustCompile(`^(manifest\.json|brand-pack\.json|README\.md|schema/[a-z0-9.-]+\.json|preview/[a-z0-9-]+\.html|assets/[a-z0-9-]+\.[a-z0-9]{1,8}|assets/fonts/[A-Za-z0-9._-]+\.woff2)$`)
@@ -449,7 +454,9 @@ func (s *Service) Parse(data []byte) (*Imported, []Problem) {
 			continue
 		}
 		cap := int64(maxEntryBytes)
-		if strings.HasPrefix(name, "assets/") {
+		if name == "preview/app.html" {
+			cap = maxAppPreviewBytes
+		} else if strings.HasPrefix(name, "assets/") {
 			cap = v2branding.MaxPackageBytes
 		}
 		if int64(entry.UncompressedSize64) > cap {

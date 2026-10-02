@@ -15,6 +15,10 @@ use std::process::ExitCode;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
     elitea_worker_rust::diagnostics::install_redacted_panic_hook();
+    if let Err(error) = elitea_worker_rust::diagnostics::install_tls_crypto_provider() {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
     let mut diagnostics = match elitea_worker_rust::diagnostics::install_tracing_subscriber() {
         Ok(diagnostics) => diagnostics,
         Err(error) => {

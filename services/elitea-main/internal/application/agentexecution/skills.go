@@ -58,11 +58,12 @@ func projectCurrentApplicationSkills(
 	}
 	applied := make([]map[string]any, 0, len(invoked))
 	for _, skill := range invoked {
-		applied = append(applied, map[string]any{
-			"skill_id":  skill["skill_id"],
-			"name":      skill["name"],
-			"icon_meta": skill["icon_meta"],
-		})
+		applied = append(applied, currentSkillAuthorityProjection(map[string]any{
+			"skill_id":         skill["skill_id"],
+			"skill_version_id": skill["skill_version_id"],
+			"name":             skill["name"],
+			"icon_meta":        skill["icon_meta"],
+		}, skill))
 	}
 
 	disclosable := make([]map[string]any, 0, len(attached))
@@ -89,13 +90,14 @@ func projectCurrentApplicationSkills(
 			if _, ok := referenced[currentSkillIdentity(skill["skill_id"])]; ok {
 				description = strings.TrimSpace(strings.TrimSpace(description) + " " + currentInstructionReferencedSkillHint)
 			}
-			disclosable = append(disclosable, map[string]any{
-				"skill_id":     skill["skill_id"],
-				"name":         name,
-				"description":  nullableCurrentSkillDescription(skill["description"], description),
-				"icon_meta":    skill["icon_meta"],
-				"instructions": instructions,
-			})
+			disclosable = append(disclosable, currentSkillAuthorityProjection(map[string]any{
+				"skill_id":         skill["skill_id"],
+				"skill_version_id": skill["skill_version_id"],
+				"name":             name,
+				"description":      nullableCurrentSkillDescription(skill["description"], description),
+				"icon_meta":        skill["icon_meta"],
+				"instructions":     instructions,
+			}, skill))
 		}
 	}
 
@@ -225,14 +227,14 @@ func consumeCurrentInvokedSkills(
 		if !ok || strings.TrimSpace(instructions) == "" {
 			continue
 		}
-		invoked = append(invoked, map[string]any{
+		invoked = append(invoked, currentSkillAuthorityProjection(map[string]any{
 			"skill_id":         skill["skill_id"],
 			"skill_version_id": skill["skill_version_id"],
 			"name":             skill["name"],
 			"version_name":     skill["version_name"],
 			"icon_meta":        skill["icon_meta"],
 			"instructions":     instructions,
-		})
+		}, skill))
 		if len(invoked) == currentMaxInvokedSkills {
 			break
 		}
@@ -258,4 +260,13 @@ func nullableCurrentSkillDescription(original any, resolved string) any {
 		return nil
 	}
 	return resolved
+}
+
+func currentSkillAuthorityProjection(projected, source map[string]any) map[string]any {
+	for _, key := range []string{"id", "revision", "scope"} {
+		if value, ok := source[key]; ok {
+			projected[key] = value
+		}
+	}
+	return projected
 }

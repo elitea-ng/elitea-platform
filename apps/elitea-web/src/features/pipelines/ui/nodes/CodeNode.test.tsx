@@ -59,6 +59,35 @@ function renderCodeNodeBare(flowEditorOverrides: Partial<FlowEditorContextValue>
 }
 
 describe('CodeNode', () => {
+  it('shows Python for legacy YAML without adding a language field', async () => {
+    const setYamlJsonObject = vi.fn();
+    const { findByRole } = renderCodeNodeBare({
+      expandAll: true,
+      yamlJsonObject: { nodes: [{ id: 'Node1', code: { type: 'fixed', value: 'result = 1' } }] },
+      setYamlJsonObject,
+    });
+    expect(await findByRole('combobox', { name: 'Language' })).toHaveTextContent('Python');
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
+  });
+
+  it.each(['JavaScript', 'TypeScript', 'Rust'])('changes language to %s without rewriting the node', async language => {
+    const user = userEvent.setup();
+    const setYamlJsonObject = vi.fn();
+    const node = {
+      id: 'Node1', code: { type: 'variable', value: 'source' }, input: ['payload'],
+      output: ['answer'], structured_output: true, debug: true, transition: 'END',
+    };
+    const { getByRole, findByRole } = renderCodeNodeBare({
+      expandAll: true,
+      yamlJsonObject: { nodes: [node, { id: 'Other' }] }, setYamlJsonObject,
+    });
+    await user.click(await findByRole('combobox', { name: 'Language' }));
+    await user.click(getByRole('option', { name: language }));
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith({
+      nodes: [{ ...node, language: language.toLowerCase() }, { id: 'Other' }],
+    });
+  });
+
   it('renders the node id and both handles (target + source)', async () => {
     const { findByText, container } = renderCodeNode();
     await findByText('Node1');

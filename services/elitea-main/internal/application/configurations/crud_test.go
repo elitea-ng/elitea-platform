@@ -21,6 +21,7 @@ func TestCurrentCRUDListPreservesCurrentAndPublicSharedSemantics(t *testing.T) {
 	}
 
 	result, err := service.List(context.Background(), CurrentConfigurationListRequest{
+		IDs:             []int32{1, 2, 1},
 		ProjectID:       7,
 		PublicProjectID: 1,
 		Types:           []string{"github", "pgvector"},
@@ -44,6 +45,11 @@ func TestCurrentCRUDListPreservesCurrentAndPublicSharedSemantics(t *testing.T) {
 		t.Fatalf("repository calls: count=%d list=%d", len(repository.countFilters), len(repository.listFilters))
 	}
 
+	for _, filter := range append(repository.countFilters, repository.listFilters...) {
+		if !reflect.DeepEqual(filter.IDs, []int32{1, 2}) {
+			t.Fatalf("IDs not forwarded: %v", filter.IDs)
+		}
+	}
 	current := repository.listFilters[0]
 	if current.ProjectID != 7 || current.SharedOnly || current.LabelQuery != "team" || current.Offset != 0 {
 		t.Fatalf("current filter = %#v", current)

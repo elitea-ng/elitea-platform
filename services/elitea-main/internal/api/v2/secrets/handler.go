@@ -54,7 +54,8 @@ type Handler struct {
 	// mode, keyed on the `{projectID}` in the path). nil for the two
 	// programmatic constructors that never serve HTTP, which is safe: both
 	// gates fail closed on a nil resolver.
-	permissionResolver auth.PermissionResolver
+	permissionResolver  auth.PermissionResolver
+	defaultSecretPolicy func(context.Context) (defaultSecretPolicy, error)
 }
 
 // Option configures a Handler. Same shape as the other v2 packages'.
@@ -374,6 +375,10 @@ func dbKey(projectID string) string {
 // page "no secrets" for a project whose secrets were all still there, and
 // invited the create that would then have replaced them.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	policy, policyOK := h.readDefaultSecretPolicy(w, r)
+	if !policyOK {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	vault, err := h.readVaultCtx(r.Context(), projectID)
 	if errors.Is(err, ErrVaultAbsent) {
@@ -386,8 +391,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]SecretListItem, 0, len(vault.Secrets))
 	for name := range vault.Secrets {
+		if policy.isDefault(name) && policy.suppressed(vault, r) {
+			continue
+		}
 		items = append(items, SecretListItem{
 			Name:       name,
+			IsDefault:  policy.isDefault(name),
 			SecretName: fmt.Sprintf("{{secret.%s}}", name),
 		})
 	}
@@ -427,6 +436,10 @@ func acceptableSecretName(name string) bool {
 // Create adds a new secret.  Body: {"name": "...", "value": "..."}.
 // Response: SecretListItem (201).
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	policy, policyOK := h.readDefaultSecretPolicy(w, r)
+	if !policyOK {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	var body struct {
 		Name  string `json:"name"`
@@ -453,6 +466,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// one create against a vault that would not decrypt replaced every secret
 	// in it and answered 201.
 	err := h.mutateVaultCtx(r.Context(), projectID, true, func(vault *vaultData) (bool, error) {
+		if policy.refuse(w, r, *vault, body.Name) {
+			return false, errMutationRefused
+		}
 		// The hidden map is checked too. A name that lives in hidden_secrets is
 		// taken: writing it into `secrets` as well puts one name in both maps,
 		// and Get then returns the visible value and shadows the hidden one.
@@ -475,12 +491,17 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, SecretListItem{
 		Name:       body.Name,
+		IsDefault:  policy.isDefault(body.Name),
 		SecretName: fmt.Sprintf("{{secret.%s}}", body.Name),
 	})
 }
 
 // Get returns a single secret including its plaintext value.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	policy, policyOK := h.readDefaultSecretPolicy(w, r)
+	if !policyOK {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	name := chi.URLParam(r, "name")
 
@@ -494,9 +515,17 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if policy.refuse(w, r, vault, name) {
+		return
+	}
+	if policy.suppressed(vault, r) {
+		writeJSON(w, http.StatusOK, SecretDetail{Name: name, SecretName: fmt.Sprintf("{{secret.%s}}", name)})
+		return
+	}
 	if val, ok := vault.Secrets[name]; ok {
 		writeJSON(w, http.StatusOK, SecretDetail{
 			Name:       name,
+			IsDefault:  policy.isDefault(name),
 			SecretName: fmt.Sprintf("{{secret.%s}}", name),
 			Value:      val,
 		})
@@ -505,6 +534,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if val, ok := vault.HiddenSecrets[name]; ok {
 		writeJSON(w, http.StatusOK, SecretDetail{
 			Name:       name,
+			IsDefault:  policy.isDefault(name),
 			SecretName: fmt.Sprintf("{{secret.%s}}", name),
 			Value:      val,
 			IsHidden:   true,
@@ -517,6 +547,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 // Update renames and/or changes the value of an existing secret.
 // Body: {"name": "<new_name>", "value": "<new_value>"}.
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	policy, policyOK := h.readDefaultSecretPolicy(w, r)
+	if !policyOK {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	oldName := chi.URLParam(r, "name")
 
@@ -541,6 +575,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := h.mutateVaultCtx(r.Context(), projectID, false, func(vault *vaultData) (bool, error) {
+		if policy.refuse(w, r, *vault, oldName, body.Name) {
+			return false, errMutationRefused
+		}
 		if _, ok := vault.Secrets[oldName]; !ok {
 			apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("secret %q not found", oldName))
 			return false, errMutationRefused
@@ -573,6 +610,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, SecretListItem{
 		Name:       body.Name,
+		IsDefault:  policy.isDefault(body.Name),
 		SecretName: fmt.Sprintf("{{secret.%s}}", body.Name),
 	})
 }
@@ -580,15 +618,24 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 // Delete removes a secret by name (from either secrets or hidden_secrets).
 // Deleting from a project that has no vault is a no-op success, as in pylon.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	policy, policyOK := h.readDefaultSecretPolicy(w, r)
+	if !policyOK {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	name := chi.URLParam(r, "name")
 
 	err := h.mutateVaultCtx(r.Context(), projectID, false, func(vault *vaultData) (bool, error) {
+		if policy.refuse(w, r, *vault, name) {
+			return false, errMutationRefused
+		}
 		delete(vault.Secrets, name)
 		delete(vault.HiddenSecrets, name)
 		return true, nil
 	})
 	switch {
+	case errors.Is(err, errMutationRefused):
+		return
 	case errors.Is(err, ErrVaultAbsent):
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -711,7 +758,7 @@ func newFernetKey() ([]byte, error) {
 // not open this" for "there is nothing here" and write over it.  pgx.ErrNoRows
 // is never returned unwrapped, so a transport failure during the lookup cannot
 // be read as an absent vault either.
-func (h *Handler) openVault(ctx context.Context, q vaultQuerier, vaultID string, lock bool) (vaultData, []byte, error) {
+func (h *Handler) openVaultContents(ctx context.Context, q vaultQuerier, vaultID string, lock bool) ([]byte, []byte, error) {
 	query := `SELECT k.data, d.data
 FROM centry.secrets_key AS k
 JOIN centry.secrets_data AS d ON d.id = k.id
@@ -732,24 +779,32 @@ FOR UPDATE OF k, d`
 		var orphanKey []byte
 		switch err := q.QueryRow(ctx, keyOnly, vaultID).Scan(&orphanKey); {
 		case errors.Is(err, pgx.ErrNoRows):
-			return vaultData{}, nil, ErrVaultAbsent
+			return nil, nil, ErrVaultAbsent
 		case err != nil:
-			return vaultData{}, nil, fmt.Errorf("read %s secrets_key: %w", vaultID, err)
+			return nil, nil, fmt.Errorf("read %s secrets_key: %w", vaultID, err)
 		default:
-			return vaultData{}, nil, fmt.Errorf("vault %s has a key row but no data row", vaultID)
+			return nil, nil, fmt.Errorf("vault %s has a key row but no data row", vaultID)
 		}
 	}
 	if err != nil {
-		return vaultData{}, nil, fmt.Errorf("read %s vault rows: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("read %s vault rows: %w", vaultID, err)
 	}
 
 	fernetKey, err := h.decryptKey(keyBytes)
 	if err != nil {
-		return vaultData{}, nil, fmt.Errorf("decrypt %s vault key: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("decrypt %s vault key: %w", vaultID, err)
 	}
 	plaintext, err := fernetDecrypt(fernetKey, dataBytes)
 	if err != nil {
-		return vaultData{}, nil, fmt.Errorf("decrypt %s vault data: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("decrypt %s vault data: %w", vaultID, err)
+	}
+	return plaintext, fernetKey, nil
+}
+
+func (h *Handler) openVault(ctx context.Context, q vaultQuerier, vaultID string, lock bool) (vaultData, []byte, error) {
+	plaintext, fernetKey, err := h.openVaultContents(ctx, q, vaultID, lock)
+	if err != nil {
+		return vaultData{}, nil, err
 	}
 	var v vaultData
 	if err := json.Unmarshal(plaintext, &v); err != nil {
@@ -1357,15 +1412,29 @@ var ErrSecretNotFound = errors.New("secrets: secret not found")
 // ResolveSecretValue resolves a {{secret.name}} reference to its plaintext value.
 func (h *Handler) ResolveSecretValue(ctx context.Context, projectID, secretRef string) (string, error) {
 	name := strings.TrimSuffix(strings.TrimPrefix(secretRef, "{{secret."), "}}")
-	vault, err := h.readVaultCtx(ctx, projectID)
+	plaintext, key, err := h.openVaultContents(ctx, h.pool, dbKey(projectID), false)
 	if err != nil {
 		return "", err
 	}
-	if val, ok := vault.Secrets[name]; ok {
-		return val, nil
+	defer clear(plaintext)
+	defer clear(key)
+	// Current vaults also contain numeric model IDs. Decode only the selected
+	// secret as a string; unrelated values must not break an exact lookup.
+	var vault struct {
+		Secrets       map[string]json.RawMessage `json:"secrets"`
+		HiddenSecrets map[string]json.RawMessage `json:"hidden_secrets"`
 	}
-	if val, ok := vault.HiddenSecrets[name]; ok {
-		return val, nil
+	if err := json.Unmarshal(plaintext, &vault); err != nil {
+		return "", fmt.Errorf("decode vault: %w", err)
+	}
+	for _, collection := range []map[string]json.RawMessage{vault.Secrets, vault.HiddenSecrets} {
+		if raw, ok := collection[name]; ok {
+			var value string
+			if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &value) != nil {
+				return "", errors.New("selected secret is not a string")
+			}
+			return value, nil
+		}
 	}
 	return "", fmt.Errorf("%w: %q", ErrSecretNotFound, name)
 }

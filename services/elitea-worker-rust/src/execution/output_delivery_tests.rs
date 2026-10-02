@@ -35,9 +35,7 @@ use super::agent_preparation::{
 };
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
 use super::invocation_supervisor::InvocationSupervisor;
-use super::native_agent_lifecycle::{
-    AgentPauseAccumulator, AgentPauseAggregationError, NativeAuthorizedAgentLifecycle,
-};
+use super::native_agent_lifecycle::{AgentPauseAccumulator, NativeAuthorizedAgentLifecycle};
 use super::output_delivery::{
     AcceptedTerminalOutputRecovery, AgentOutputPreflight, AgentOutputPreflightError,
     AgentOutputPreflightKind, AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind,
@@ -305,12 +303,54 @@ struct RecoveryControl {
 impl ControlRpc for RecoveryControl {
     async fn claim_command(
         &self,
-        _request: Request<ClaimCommandRequestV1>,
+        request: Request<ClaimCommandRequestV1>,
     ) -> Result<Response<ClaimCommandResponseV1>, Status> {
         self.trace.lock().expect("trace").push("claim");
+        if self.claim_fixture == "checkpoint" {
+            assert!(request.get_ref().agent_model_checkpoint_recovery);
+            let mut response = claim_response();
+            response.receipt.as_mut().expect("receipt").disposition =
+                crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RecoverAgentModelCheckpoint as i32;
+            return Ok(Response::new(response));
+        }
         Ok(Response::new(
             ClaimCommandResponseV1::decode(bytes(self.claim_fixture).as_slice())
                 .expect("claim fixture"),
+        ))
+    }
+
+    async fn authorize_agent_model_checkpoint(
+        &self,
+        request: Request<
+            crate::protocol::elitea::runtime::v1::AuthorizeAgentModelCheckpointRequestV1,
+        >,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::AuthorizeAgentModelCheckpointResponseV1>,
+        Status,
+    > {
+        self.trace
+            .lock()
+            .expect("trace")
+            .push("checkpoint_authorize");
+        assert_eq!(
+            request
+                .get_ref()
+                .checkpoint_digest
+                .as_ref()
+                .expect("digest")
+                .value,
+            vec![42; 32]
+        );
+        if self.authorize_unavailable {
+            return Err(Status::unavailable("lost authorization response"));
+        }
+        Ok(Response::new(
+            crate::protocol::elitea::runtime::v1::AuthorizeAgentModelCheckpointResponseV1 {
+                disposition: self
+                    .authorize_disposition
+                    .expect("authorization disposition") as i32,
+                rejection: None,
+            },
         ))
     }
 
@@ -415,6 +455,15 @@ struct KindAgentInput {
 
 #[async_trait]
 impl AgentInputMaterializer for ValidAgentInput {
+    async fn materialize_checkpoint(
+        &self,
+        _: &crate::protocol::control::LiveModelCheckpointInspection,
+    ) -> Result<MaterializedInput, InputContentError> {
+        self.trace.lock().expect("trace").push("checkpoint_input");
+        Ok(MaterializedInput::for_test(decode_hex(include_str!(
+            "../../tests/fixtures/agent_application_input.hex"
+        ))))
+    }
     async fn materialize(
         &self,
         _execution: &crate::protocol::control::LeaseMonitoredAgentExecution,
@@ -627,6 +676,38 @@ struct GatedAuthorizedLifecycle {
 }
 
 impl AuthorizedAgentLifecycle for GatedAuthorizedLifecycle {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        _: &'a crate::agents::AgentExecutionRequest,
+        _: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        _: crate::protocol::control::ClaimBoundSessionAuthority,
+        _: Arc<dyn crate::state::StateWriterLease>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        crate::agents::runtime::NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.trace.lock().expect("trace").push("checkpoint_inspect");
+            let identity = claim_response()
+                .receipt
+                .expect("receipt")
+                .identity
+                .expect("identity");
+            Ok(
+                crate::agents::session::ValidatedModelCheckpoint::test_evidence(
+                    identity.execution_id,
+                    identity.generation,
+                ),
+            )
+        })
+    }
     fn run(
         &self,
         run: super::agent_preparation::AuthorizedAgentRun,
@@ -1698,7 +1779,7 @@ fn parallel_authorization_cards_aggregate_exact_ids_calls_and_hierarchy_in_order
 }
 
 #[test]
-fn mixed_guardrail_cards_fail_before_terminal_authority_is_selected() {
+fn mixed_guardrail_cards_preserve_both_sets_under_hitl_terminal_authority() {
     let sensitive = decode_current_node_event_json(
         &serde_json::to_vec(&json!({
             "type": "agent_hitl_interrupt",
@@ -1718,10 +1799,27 @@ fn mixed_guardrail_cards_fail_before_terminal_authority_is_selected() {
     assert!(pauses.observe(&sensitive).expect("sensitive card"));
     assert!(pauses.observe(&authorization).expect("authorization card"));
 
+    let aggregate = pauses.finish().expect("mixed guards aggregate");
     assert!(matches!(
-        pauses.finish(),
-        Err(AgentPauseAggregationError::MixedGuardrails)
+        aggregate.selection,
+        super::output_delivery::FreshAgentTerminalSelection::PausedHitl
     ));
+    assert_eq!(aggregate.event.r#type, "agent_hitl_interrupt");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&aggregate.event.response_metadata).unwrap();
+    assert_eq!(
+        metadata["hitl_interrupts"][0]["interrupt_id"],
+        "sensitive-1"
+    );
+    assert_eq!(
+        metadata["authorization_requests"][0]["interrupt_id"],
+        "auth-1"
+    );
+    assert_eq!(
+        metadata["authorization_requests"][0]["parent_agent_call_id"],
+        "parent-1"
+    );
+    assert_eq!(metadata["interrupt_id"], "auth-1");
 }
 
 #[tokio::test]
@@ -1799,6 +1897,79 @@ async fn uncertain_live_progress_reopens_and_replays_the_exact_durable_frame() {
     let frames = state.frames.lock().expect("progress frames");
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].sequence, 5);
+}
+
+#[tokio::test]
+async fn incomplete_output_chunks_survive_each_uncertain_ack_without_completion_authority() {
+    let text = "é".repeat(10_000);
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+    let timestamp = Utc.timestamp_millis_opt(NOW).single().unwrap();
+    projector.start(timestamp).unwrap();
+    let mut partial = Event::with_id("partial-output", "invocation-1");
+    partial.timestamp = timestamp;
+    partial.author = "root-agent".to_owned();
+    partial.llm_response.partial = true;
+    partial.set_content(Content::new("model").with_text(&text));
+    projector.project(&partial).unwrap();
+    let batch: Vec<_> = projector
+        .preserve_incomplete_output(timestamp)
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert!(batch.len() > 2, "fixture must cross chunk boundaries");
+
+    for interrupted in 0..batch.len() {
+        let actions = (0..batch.len()).map(|index| {
+            if index == interrupted {
+                LiveProgressAction::PersistThenUnavailable
+            } else {
+                LiveProgressAction::Acknowledge
+            }
+        });
+        let state = FakeProgressState::new(actions, [ReplayProgressAction::Acknowledge]);
+        let (_temporary, verified, mut publisher) =
+            fresh_progress_publisher(Arc::clone(&state), batch.len() + 1).await;
+        for (index, event) in batch.iter().enumerate() {
+            let outcome = publisher
+                .publish(&verified, event.clone(), NOW)
+                .await
+                .unwrap();
+            assert_eq!(
+                outcome,
+                AgentProgressPublishOutcome::Acknowledged {
+                    sequence: 5 + u64::try_from(index).unwrap(),
+                }
+            );
+        }
+        assert_eq!(state.replays.load(Ordering::SeqCst), 1);
+        let frames = state.frames.lock().unwrap();
+        assert_eq!(frames.len(), batch.len());
+        let mut restored = String::new();
+        for (frame, expected) in frames.iter().zip(&batch) {
+            let Some(execution_output_frame_v1::Payload::NodeEvent(actual)) =
+                frame.payload.as_ref()
+            else {
+                panic!("partial output must remain a node event");
+            };
+            assert_eq!(
+                actual, expected,
+                "replay changes neither identity nor bytes"
+            );
+            assert!(!matches!(
+                actual.r#type.as_str(),
+                "full_message" | "agent_response" | "pipeline_finish"
+            ));
+            if actual.r#type == "partial_message" {
+                let metadata: serde_json::Value =
+                    serde_json::from_slice(&actual.response_metadata).unwrap();
+                restored.push_str(metadata["thinking_steps"][0]["text"].as_str().unwrap());
+            }
+        }
+        assert_eq!(restored, text);
+        drop(frames);
+        assert!(publisher.into_test_acked_full_message().is_none());
+    }
 }
 
 #[tokio::test]
@@ -3200,8 +3371,7 @@ async fn stopped_native_coordinator_returns_an_explicitly_closeable_unstarted_jo
     };
     assert_eq!(rejected.error().code(), "invocation_supervision.closed");
     assert!(
-        rejected
-            .close()
+        Box::pin(rejected.close())
             .await
             .expect("close rejected invocation")
             .is_none()
@@ -3217,9 +3387,26 @@ async fn stopped_native_coordinator_returns_an_explicitly_closeable_unstarted_jo
     drop(temporary);
 }
 
-#[tokio::test]
+#[test]
+fn sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_completion() {
+    // Match the CI thread budget without changing runtime or global stack settings.
+    std::thread::Builder::new()
+        .name("sensitive-hitl-2mib-stack".to_owned())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("bounded HITL test runtime")
+                .block_on(sensitive_interrupt_lifecycle_case());
+        })
+        .expect("bounded HITL test thread")
+        .join()
+        .expect("HITL lifecycle fits the bounded thread stack");
+}
+
 #[allow(clippy::too_many_lines)] // One end-to-end pause proof keeps authority ordering explicit.
-async fn sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_completion() {
+async fn sensitive_interrupt_lifecycle_case() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let outcome = preflight(output_root, "worker-1")
@@ -3358,13 +3545,55 @@ async fn sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_complet
     drop(temporary);
 }
 
+struct SandboxStopFixture {
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    complete: bool,
+}
+#[async_trait]
+impl crate::sandbox::dispatch::SandboxStopDelivery for SandboxStopFixture {
+    async fn stop(
+        &self,
+        _: &crate::protocol::control::SandboxStopAuthority,
+    ) -> Result<bool, crate::sandbox::dispatch::DispatchError> {
+        self.trace.lock().unwrap().push("sandbox_stop");
+        Ok(self.complete)
+    }
+}
+struct StopAwareAssembler {
+    inner: TestNativeAssembler,
+    stop: Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>>,
+}
+#[async_trait]
+impl NativeAgentAssembler for StopAwareAssembler {
+    type Completion = FixedCompletion;
+    fn sandbox_stop_delivery(
+        &self,
+    ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
+        self.stop.clone()
+    }
+    async fn assemble(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        Box::pin(self.inner.assemble(assembly)).await
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn durable_stop_waits_for_confirmed_sandbox_termination() {
+    Box::pin(run_durable_stop_case(Some(true))).await;
+}
+#[tokio::test(start_paused = true)]
+async fn durable_stop_retains_delivery_when_sandbox_stop_is_pending() {
+    Box::pin(run_durable_stop_case(Some(false))).await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn durable_stop_interrupts_only_the_owned_run_then_settles_cancelled() {
-    Box::pin(run_durable_stop_case()).await;
+    Box::pin(run_durable_stop_case(None)).await;
 }
 
 #[allow(clippy::too_many_lines)] // Keep the Stop ownership trace in one fixture.
-async fn run_durable_stop_case() {
+async fn run_durable_stop_case(sandbox_complete: Option<bool>) {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let outcome = preflight(output_root, "worker-1")
@@ -3415,13 +3644,21 @@ async fn run_durable_stop_case() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Semaphore::new(0));
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
-        Arc::new(TestNativeAssembler {
-            trace: Arc::clone(&trace),
-            agent: Arc::new(GatedTextAgent {
-                started: Arc::clone(&started),
-                release: Arc::clone(&release),
+        Arc::new(StopAwareAssembler {
+            inner: TestNativeAssembler {
+                trace: Arc::clone(&trace),
+                agent: Arc::new(GatedTextAgent {
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                }),
+                sensitive: false,
+            },
+            stop: sandbox_complete.map(|complete| {
+                Arc::new(SandboxStopFixture {
+                    trace: trace.clone(),
+                    complete,
+                }) as Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>
             }),
-            sensitive: false,
         }),
         connector.clone(),
         Arc::clone(&control),
@@ -3453,6 +3690,34 @@ async fn run_durable_stop_case() {
     };
     supervisor.close().await.expect("Stop lifecycle drain");
 
+    if sandbox_complete == Some(false) {
+        assert!(matches!(
+            completion.disposition(),
+            AgentAuthorizedLifecycleDisposition::RecoveryRequiredNoAck {
+                code: "sandbox.stop_delivery_pending",
+                retryable: true
+            }
+        ));
+        let observed = trace.lock().unwrap();
+        assert!(observed.contains(&"sandbox_stop"));
+        assert!(!observed.contains(&"settlement"));
+        assert!(!observed.contains(&"redis"));
+        assert_eq!(progress_state.frames.lock().unwrap().len(), 1);
+        return;
+    }
+    if sandbox_complete == Some(true) {
+        let observed = trace.lock().unwrap();
+        assert!(
+            observed
+                .iter()
+                .position(|event| *event == "sandbox_stop")
+                .unwrap()
+                < observed
+                    .iter()
+                    .position(|event| *event == "settlement")
+                    .unwrap()
+        );
+    }
     assert!(matches!(
         completion.disposition(),
         AgentAuthorizedLifecycleDisposition::ExecutedSettledAcked { sequence: 6, .. }
@@ -3791,7 +4056,7 @@ async fn supervisor_stop_race_returns_unpolled_authorization_for_noack_cleanup()
     let (error, reservation, job) = rejected.into_parts();
     assert_eq!(error.code(), "invocation_supervision.closed");
     assert!(
-        job.close_unstarted()
+        Box::pin(job.close_unstarted())
             .await
             .expect("unstarted cleanup")
             .is_none()
@@ -4334,5 +4599,396 @@ fn terminal_recovery_session_policy_matches_the_deployed_v1_bounds() {
             error,
             AgentTerminalRecoveryError::InvalidConfiguration(_)
         ));
+    }
+}
+
+fn checkpoint_delivery() -> super::agent_delivery::CheckpointAgentDelivery {
+    let raw = bytes("signed_command");
+    let verified =
+        parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+            .expect("command");
+    let mut response = claim_response();
+    response.receipt.as_mut().expect("receipt").disposition =
+        crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RecoverAgentModelCheckpoint
+            as i32;
+    let inspection = crate::protocol::control::ModelCheckpointInspection::parse(
+        &verified,
+        response,
+        "workload-1",
+        "worker-1",
+        NOW,
+    )
+    .expect("inspection");
+    super::agent_delivery::test_checkpoint_delivery(redis_delivery(raw), verified, inspection)
+}
+
+#[tokio::test]
+async fn checkpoint_output_reconciles_only_accepted_progress() {
+    for case in 0..4 {
+        let (_temporary, root) = root();
+        let preflight = preflight(root, "worker-1");
+        let AgentOutputPreflightOutcome::Empty(empty) =
+            preflight.prepare(fresh()).await.expect("initial spool")
+        else {
+            panic!("empty spool")
+        };
+        let (accepted, output) = empty.into_parts();
+        let mut spool = output.into_test_spool();
+        if case != 0 {
+            let mut fence = claim_response()
+                .receipt
+                .expect("receipt")
+                .fence
+                .expect("fence");
+            fence.fence_token[0] ^= 1;
+            let watermark = accepted.claim_handoff_watermark();
+            let frame = match case {
+                1 => progress_frame(&accepted, fence, watermark, watermark - 1),
+                2 => progress_frame(&accepted, fence, watermark + 1, watermark),
+                3 => terminal_frame(&accepted),
+                _ => unreachable!(),
+            };
+            spool.persist(frame).expect("persisted output");
+        }
+        drop(spool);
+        let result = preflight
+            .prepare_checkpoint(&checkpoint_delivery())
+            .await
+            .expect("checkpoint preflight");
+        if case <= 1 {
+            let output = result.expect("ready checkpoint output");
+            let mut spool = output.into_test_spool();
+            assert_eq!(spool.pending_frame_count(), 0);
+            let watermark = accepted.claim_handoff_watermark();
+            let fence = claim_response()
+                .receipt
+                .expect("receipt")
+                .fence
+                .expect("fence");
+            spool
+                .persist(progress_frame(&accepted, fence, watermark + 1, watermark))
+                .expect("reopened spool accepts the next output");
+        } else {
+            assert!(
+                result.is_none(),
+                "unacknowledged output must remain for replay"
+            );
+            assert!(
+                preflight
+                    .prepare_checkpoint(&checkpoint_delivery())
+                    .await
+                    .expect("reinspect")
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_output_rejects_transport_identity_mismatch() {
+    let (_temporary, root) = root();
+    let preflight = preflight(root, "another-producer");
+    assert!(matches!(
+        preflight.prepare_checkpoint(&checkpoint_delivery()).await,
+        Err(AgentOutputPreflightError::InvalidConfiguration(_))
+    ));
+}
+
+#[tokio::test]
+async fn checkpoint_supervisor_owns_authorization_after_waiter_drop_and_rejects_unstarted_work() {
+    for stopped in [false, true] {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let (_temporary, root) = root();
+        let delivery = checkpoint_delivery();
+        let output = preflight(root, "worker-1")
+            .prepare_checkpoint(&delivery)
+            .await
+            .expect("preflight")
+            .expect("empty output");
+        let admission = InvocationAdmission::new(
+            InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+        );
+        let control = authorized_control(trace.clone());
+        let retirer = Arc::new(recovery_retirer(
+            trace.clone(),
+            Ok(RedisRetirementResponse {
+                acknowledged: 1,
+                deleted: 1,
+                unmapped: 1,
+            }),
+        ));
+        let replay = Arc::new(FakeReplay::new([], trace.clone()));
+        let (started_tx, started_rx) = oneshot::channel();
+        let release = Arc::new(Semaphore::new(0));
+        let lifecycle = Arc::new(GatedAuthorizedLifecycle {
+            trace: trace.clone(),
+            started: Mutex::new(Some(started_tx)),
+            release: release.clone(),
+        });
+        let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+            admission.clone(),
+            control,
+            retirer,
+            replay,
+            Arc::new(|| NOW),
+            recovery_config(1),
+            lifecycle,
+        );
+        let reservation = admission.reserve().await.expect("capacity");
+        if stopped {
+            coordinator.stop().expect("stop");
+        }
+        let result = coordinator.submit_checkpoint(
+            delivery,
+            output,
+            reservation,
+            Arc::new(ValidAgentInput {
+                trace: trace.clone(),
+            }),
+            super::agent_lease::ClaimLeaseMonitorConfig::new(Duration::from_secs(10))
+                .expect("lease config"),
+        );
+        if stopped {
+            assert!(result.is_err());
+            assert!(trace.lock().expect("trace").is_empty());
+        } else {
+            let waiter = result.expect("supervised recovery");
+            started_rx.await.expect("authorized lifecycle started");
+            drop(waiter);
+            assert_eq!(admission.available_capacity(), 0);
+            release.add_permits(1);
+        }
+        coordinator.close().await.expect("supervisor drain");
+        assert_eq!(admission.available_capacity(), 1);
+        assert_eq!(coordinator.active_count(), 0);
+        if !stopped {
+            let trace = trace.lock().expect("trace");
+            assert!(!trace.contains(&"begin") && !trace.contains(&"authorize"));
+            assert_eq!(
+                trace
+                    .iter()
+                    .filter(|event| **event == "checkpoint_authorize")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                trace.iter().filter(|event| **event == "authorized").count(),
+                1
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_progress_replay_preserves_exact_bytes_and_closes_on_error() {
+    for authorized in [true, false] {
+        let (_temporary, root) = root();
+        let preflight = preflight(root, "worker-1");
+        let AgentOutputPreflightOutcome::Empty(empty) =
+            preflight.prepare(fresh()).await.expect("initial spool")
+        else {
+            panic!("empty spool")
+        };
+        let (accepted, output) = empty.into_parts();
+        let mut spool = output.into_test_spool();
+        let fence = claim_response()
+            .receipt
+            .expect("receipt")
+            .fence
+            .expect("fence");
+        let watermark = accepted.claim_handoff_watermark();
+        let frame = progress_frame(&accepted, fence, watermark + 1, watermark);
+        spool.persist(frame.clone()).expect("pending output");
+        drop(spool);
+        let state = FakeProgressState::new(
+            [],
+            [if authorized {
+                ReplayProgressAction::Acknowledge
+            } else {
+                ReplayProgressAction::AuthorizationFailed
+            }],
+        );
+        let connector = FakeProgressConnector {
+            state: state.clone(),
+        };
+        let result = preflight
+            .replay_checkpoint_progress(checkpoint_delivery(), &connector)
+            .await;
+        assert_eq!(result.is_ok(), authorized);
+        assert_eq!(state.replays.load(Ordering::SeqCst), 1);
+        assert_eq!(state.replay_closes.load(Ordering::SeqCst), 1);
+        assert_eq!(state.connects.load(Ordering::SeqCst), 0);
+        assert_eq!(state.sends.load(Ordering::SeqCst), 0);
+        // ACK makes the spool empty; errors preserve the uncovered frame.
+        let ready = preflight
+            .prepare_checkpoint(&checkpoint_delivery())
+            .await
+            .expect("reinspect after replay");
+        assert_eq!(ready.is_some(), authorized);
+        if !authorized {
+            state
+                .replay_actions
+                .lock()
+                .expect("actions")
+                .push_back(ReplayProgressAction::Acknowledge);
+            preflight
+                .replay_checkpoint_progress(checkpoint_delivery(), &connector)
+                .await
+                .expect("retry exact retained frame");
+            assert_eq!(state.replays.load(Ordering::SeqCst), 2);
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep the two whole-delivery cases and their ownership assertions together.
+async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_reclaim() {
+    for case in 0..4 {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let (_temporary, output_root) = root();
+        let output = preflight(output_root, "worker-1");
+        if case != 0 {
+            let AgentOutputPreflightOutcome::Empty(empty) =
+                output.prepare(fresh()).await.expect("spool")
+            else {
+                panic!("empty")
+            };
+            let (accepted, prepared) = empty.into_parts();
+            let watermark = accepted.claim_handoff_watermark();
+            let fence = claim_response()
+                .receipt
+                .expect("receipt")
+                .fence
+                .expect("fence");
+            let mut frame = if case == 1 {
+                progress_frame(&accepted, fence, watermark + 1, watermark)
+            } else {
+                terminal_frame(&accepted)
+            };
+            if case >= 2 {
+                frame.sequence = watermark + 1;
+                frame.event_id = format!(
+                    "{}:{}",
+                    frame.identity.as_ref().expect("identity").command_id,
+                    frame.sequence
+                );
+                let proposal = frame.settlement_proposal.as_mut().expect("settlement");
+                proposal.terminal_sequence = frame.sequence;
+                proposal.terminal_event_id = frame.event_id.clone();
+            }
+            if case == 3 {
+                let prior = frame.fence.as_mut().expect("prior fence");
+                prior.claim_attempt -= 1;
+                prior.lease_epoch -= 1;
+                prior.fence_token[0] ^= 1;
+            }
+            prepared.into_test_spool().persist(frame).expect("pending");
+        }
+        let control = Arc::new(
+            AgentControlClient::new(
+                RecoveryControl {
+                    trace: trace.clone(),
+                    claim_fixture: "checkpoint",
+                    settlement_fails: false,
+                    authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                    authorize_unavailable: false,
+                    renew_fail_after: None,
+                    renew_attempts: AtomicUsize::new(0),
+                    observe_states: Mutex::new(VecDeque::new()),
+                },
+                ControlGrpcConfig {
+                    deadline: Duration::from_secs(1),
+                    workload_session_id: "workload-1".to_owned(),
+                    producer_id: "worker-1".to_owned(),
+                },
+            )
+            .expect("control"),
+        );
+        let admission = InvocationAdmission::new(
+            InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+        );
+        let retirer = Arc::new(recovery_retirer(
+            trace.clone(),
+            Ok(RedisRetirementResponse {
+                acknowledged: 1,
+                deleted: 1,
+                unmapped: 1,
+            }),
+        ));
+        let state = FakeProgressState::new([], [ReplayProgressAction::Acknowledge]);
+        let replay = Arc::new(FakeProgressConnector {
+            state: state.clone(),
+        });
+        let lifecycle = Arc::new(GatedAuthorizedLifecycle {
+            trace: trace.clone(),
+            started: Mutex::new(None),
+            release: Arc::new(Semaphore::new(1)),
+        });
+        let clock = Arc::new(|| NOW);
+        let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+            admission.clone(),
+            control.clone(),
+            retirer.clone(),
+            replay.clone(),
+            clock.clone(),
+            recovery_config(1),
+            lifecycle,
+        );
+        let processor = super::agent_delivery_processor::AgentDeliveryProcessor::new(
+            Arc::new(TestOnlyConformanceHmacAuthenticator),
+            output,
+            control,
+            retirer,
+            replay,
+            Arc::new(ValidAgentInput {
+                trace: trace.clone(),
+            }),
+            clock.clone(),
+            admission.clone(),
+            AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation"),
+            recovery_config(1),
+            coordinator,
+        )
+        .with_checkpoint_recovery(true);
+        let raw = bytes("signed_command");
+        let verified =
+            parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+                .expect("verified");
+        processor
+            .process_verified_delivery(redis_delivery(raw), verified)
+            .await;
+        processor.close().await.expect("drain");
+        let events = trace.lock().expect("trace");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|x| **x == "checkpoint_authorize")
+                .count(),
+            usize::from(case == 0)
+        );
+        assert_eq!(
+            events.iter().filter(|x| **x == "authorized").count(),
+            usize::from(case == 0)
+        );
+        assert!(!events.contains(&"begin") && !events.contains(&"authorize"));
+        assert_eq!(events.contains(&"redis"), case >= 2);
+        assert_eq!(events.contains(&"settlement"), case >= 2);
+        assert_eq!(state.replays.load(Ordering::SeqCst), usize::from(case == 1));
+        if case >= 2 {
+            let frames = state.frames.lock().expect("terminal frames");
+            assert_eq!(frames.len(), 1);
+            let mut expected = terminal_frame(&fresh());
+            expected.sequence = fresh().claim_handoff_watermark() + 1;
+            expected.event_id = format!(
+                "{}:{}",
+                expected.identity.as_ref().expect("identity").command_id,
+                expected.sequence
+            );
+            let proposal = expected.settlement_proposal.as_mut().expect("settlement");
+            proposal.terminal_sequence = expected.sequence;
+            proposal.terminal_event_id = expected.event_id.clone();
+            assert_eq!(frames[0], expected);
+        }
+        assert_eq!(admission.available_capacity(), 1);
     }
 }

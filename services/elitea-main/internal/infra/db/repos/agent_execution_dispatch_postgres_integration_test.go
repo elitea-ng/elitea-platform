@@ -202,6 +202,7 @@ func newPostgresAgentProducer(
 			EnvelopeSchemaRevision:       "signed-worker-command-v1",
 			ApplicationCapabilityVersion: policy.CapabilityVersion,
 			AdhocCapabilityVersion:       policy.CapabilityVersion,
+			ToolkitReadCapabilityVersion: policy.CapabilityVersion,
 			Limits: redisdispatch.Limits{
 				Revision:               policy.LimitsRevision,
 				MaxWorkerCommandBytes:  8 * 1024,

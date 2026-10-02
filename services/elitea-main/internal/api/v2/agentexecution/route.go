@@ -258,7 +258,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 	}
 	if body.ProjectID != projectID || body.ConversationUUID != conversationID ||
 		body.Payload.UserInput == "" || !emptyJSONArray(body.AttachmentsInfo) ||
-		!emptyJSONObject(body.MCPTokens) {
+		(!absentJSON(body.MCPTokens) && !currentJSONObject(body.MCPTokens)) {
 		writeUnsupported(writer)
 		return
 	}
@@ -294,6 +294,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		outcome, err = handler.useCase.StartCurrentApplication(
 			request.Context(),
 			agentexecutionapp.CurrentApplicationStartRequest{
+				MCPTokens: bytes.Clone(body.MCPTokens),
 				ProjectID: projectID, ActorUserID: actorUserID,
 				ConversationUUID: conversationID, TargetParticipantID: body.ParticipantID,
 				QuestionID: body.QuestionID, UserInput: body.Payload.UserInput,
@@ -311,6 +312,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		outcome, err = handler.useCase.StartCurrentAdhoc(
 			request.Context(),
 			agentexecutionapp.CurrentAdhocStartRequest{
+				MCPTokens: bytes.Clone(body.MCPTokens),
 				ProjectID: projectID, ActorUserID: actorUserID,
 				ConversationUUID: conversationID, TargetParticipantID: body.ParticipantID,
 				QuestionID: body.QuestionID, UserInput: body.Payload.UserInput,
@@ -388,7 +390,7 @@ func (handler *currentApplicationStartHandler) Regenerate(writer http.ResponseWr
 		body.MessageID != responseMessageID || body.StreamID != responseMessageID ||
 		body.Payload.UserInput == "" ||
 		!emptyJSONArray(body.Payload.AttachmentsInfo) ||
-		!emptyJSONObject(body.Payload.MCPTokens) || !absentJSON(body.Payload.UserIDs) ||
+		(!absentJSON(body.Payload.MCPTokens) && !currentJSONObject(body.Payload.MCPTokens)) || !absentJSON(body.Payload.UserIDs) ||
 		(!absentJSON(body.Payload.LLMSettings) && !currentJSONObject(body.Payload.LLMSettings)) {
 		writeUnsupported(writer)
 		return
@@ -400,6 +402,7 @@ func (handler *currentApplicationStartHandler) Regenerate(writer http.ResponseWr
 	outcome, err := handler.useCase.RegenerateCurrentAgent(
 		request.Context(),
 		agentexecutionapp.CurrentRegenerationRequest{
+			MCPTokens: bytes.Clone(body.Payload.MCPTokens),
 			ProjectID: projectID, ActorUserID: actorUserID,
 			ConversationUUID: body.ConversationUUID, QuestionID: body.QuestionID,
 			ResponseMessageID: responseMessageID, RegenerationID: body.RegenerationID,

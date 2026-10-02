@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -79,7 +80,7 @@ func TestCurrentApplicationToolSnapshotFreezesGenericToolkitReferences(t *testin
 	}}
 	names := &currentAgentNameResolverStub{result: "team_docs"}
 	models := currentAgentModelCatalogForTest(true)
-	service, err := NewCurrentApplicationToolSnapshotService(settings, names, models, &currentAgentGuardrailStub{}, 1)
+	service, err := NewCurrentApplicationToolSnapshotService(settings, names, models, &currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestCurrentApplicationToolSnapshotFreezesSavedMCPReferenceWithoutSpecialCas
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -196,7 +197,7 @@ func TestCurrentApplicationToolSnapshotOmitsOnlySchemaUnavailableToolkit(t *test
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -237,7 +238,7 @@ func TestCurrentApplicationToolSnapshotDoesNotHideToolkitDependencyFailure(t *te
 		settings,
 		&currentAgentNameResolverStub{},
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -266,7 +267,7 @@ func TestCurrentApplicationToolSnapshotPreservesSameProjectLeafApplicationRefere
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -331,7 +332,7 @@ func TestCurrentApplicationToolSnapshotPreservesSameProjectPipelineReference(t *
 		&currentAgentSettingsResolverStub{},
 		&currentAgentNameResolverStub{},
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -385,7 +386,7 @@ func TestCurrentApplicationToolSnapshotPreservesStoredApplicationReference(t *te
 		settings,
 		names,
 		currentAgentModelCatalogForTest(false),
-		&currentAgentGuardrailStub{},
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{},
 		1,
 	)
 	if err != nil {
@@ -539,7 +540,7 @@ func TestCurrentApplicationToolSnapshotRejectsUnsupportedApplicationReferences(t
 			}
 			service, err := NewCurrentApplicationToolSnapshotService(
 				&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{},
-				currentAgentModelCatalogForTest(false), &currentAgentGuardrailStub{}, 1,
+				currentAgentModelCatalogForTest(false), &currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -560,22 +561,22 @@ func TestCurrentApplicationToolSnapshotRejectsUnsupportedApplicationReferences(t
 func TestCurrentApplicationToolSnapshotValidatesConstruction(t *testing.T) {
 	models := currentAgentModelCatalogForTest(false)
 	rails := &currentAgentGuardrailStub{}
-	if service, err := NewCurrentApplicationToolSnapshotService(nil, &currentAgentNameResolverStub{}, models, rails, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(nil, &currentAgentNameResolverStub{}, models, rails, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, nil, models, rails, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, nil, models, rails, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, nil, rails, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, nil, rails, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
 	// The guardrail resolver is required, not optional. A service built without
 	// one would enforce nothing and be indistinguishable from one whose operator
 	// had configured nothing — see CurrentAgentGuardrailResolver.
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, nil, 1); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, nil, &currentProjectContextStub{}, 1); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
-	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, rails, 0); err == nil || service != nil {
+	if service, err := NewCurrentApplicationToolSnapshotService(&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models, rails, &currentProjectContextStub{}, 0); err == nil || service != nil {
 		t.Fatalf("service=%#v error=%v", service, err)
 	}
 }
@@ -583,25 +584,27 @@ func TestCurrentApplicationToolSnapshotValidatesConstruction(t *testing.T) {
 func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing.T) {
 	tests := []struct {
 		name              string
+		modelName         string
 		compatible        bool
 		supportsReasoning bool
 		wantMaxTokens     int64
 	}{
-		{name: "OpenAI-compatible model", compatible: true, wantMaxTokens: -1},
-		{name: "native Anthropic model", supportsReasoning: true, wantMaxTokens: 32_000},
+		{name: "OpenAI-compatible model", modelName: "claude-compatible", compatible: true, wantMaxTokens: -1},
+		{name: "OpenAI inferred dialect", modelName: "global.openai.gpt-5.6-luna", wantMaxTokens: -1},
+		{name: "native Anthropic model", modelName: "eu.anthropic.claude-haiku", supportsReasoning: true, wantMaxTokens: 32_000},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			maxOutputTokens := 32_000
 			models := &currentAgentModelCatalogStub{response: configurationapp.CurrentModelCatalogResponse{
 				Items: []configurationapp.CurrentModelCatalogItem{{
-					Name: "model", ProjectID: 7, OpenAICompatible: &test.compatible,
+					Name: test.modelName, ProjectID: 7, OpenAICompatible: &test.compatible,
 					SupportsReasoning: &test.supportsReasoning, MaxOutputTokens: &maxOutputTokens,
 				}},
 			}}
 			service, err := NewCurrentApplicationToolSnapshotService(
 				&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models,
-				&currentAgentGuardrailStub{}, 1,
+				&currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -609,7 +612,7 @@ func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing
 			result, err := service.FreezeCurrentApplicationVersion(
 				context.Background(), CurrentApplicationVersionFreezeRequest{
 					ProjectID: 7, ActorUserID: 11,
-					VersionDetails: json.RawMessage(`{"llm_settings":{"model_name":"model","max_tokens":-1},"tools":[]}`),
+					VersionDetails: json.RawMessage(fmt.Sprintf(`{"llm_settings":{"model_name":%q,"max_tokens":-1},"tools":[]}`, test.modelName)),
 				},
 			)
 			if err != nil {
@@ -623,6 +626,16 @@ func TestCurrentApplicationToolSnapshotPreservesProviderAutoMaxTokens(t *testing
 			maxTokens, valid := currentAgentJSONInteger(settings["max_tokens"])
 			if !valid || maxTokens != test.wantMaxTokens {
 				t.Fatalf("max_tokens=%v, want %d", settings["max_tokens"], test.wantMaxTokens)
+			}
+			if (settings["max_tokens_auto"] == true) != (test.wantMaxTokens > 0) {
+				t.Fatalf("Auto identity differs from the native normalization: %v", settings["max_tokens_auto"])
+			}
+			adhoc, err := currentAdhocRuntimeLLM(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(adhoc, []byte(`"max_tokens_auto":true`)) != (test.wantMaxTokens > 0) {
+				t.Fatal("ad-hoc input loses Auto identity")
 			}
 		})
 	}
@@ -685,7 +698,7 @@ func TestCurrentApplicationToolSnapshotAlwaysCarriesATemperature(t *testing.T) {
 			}}
 			service, err := NewCurrentApplicationToolSnapshotService(
 				&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models,
-				&currentAgentGuardrailStub{}, 1,
+				&currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
 			)
 			if err != nil {
 				t.Fatal(err)

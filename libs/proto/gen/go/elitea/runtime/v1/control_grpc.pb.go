@@ -19,21 +19,25 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RuntimeControlService_ClaimCommand_FullMethodName        = "/elitea.runtime.v1.RuntimeControlService/ClaimCommand"
-	RuntimeControlService_BeginExecution_FullMethodName      = "/elitea.runtime.v1.RuntimeControlService/BeginExecution"
-	RuntimeControlService_AuthorizeInvocation_FullMethodName = "/elitea.runtime.v1.RuntimeControlService/AuthorizeInvocation"
-	RuntimeControlService_RenewLease_FullMethodName          = "/elitea.runtime.v1.RuntimeControlService/RenewLease"
-	RuntimeControlService_ObserveDesiredState_FullMethodName = "/elitea.runtime.v1.RuntimeControlService/ObserveDesiredState"
-	RuntimeControlService_PrepareSettlement_FullMethodName   = "/elitea.runtime.v1.RuntimeControlService/PrepareSettlement"
+	RuntimeControlService_AuthorizeSandboxJob_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob"
+	RuntimeControlService_ClaimCommand_FullMethodName                  = "/elitea.runtime.v1.RuntimeControlService/ClaimCommand"
+	RuntimeControlService_BeginExecution_FullMethodName                = "/elitea.runtime.v1.RuntimeControlService/BeginExecution"
+	RuntimeControlService_AuthorizeInvocation_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/AuthorizeInvocation"
+	RuntimeControlService_AuthorizeAgentModelCheckpoint_FullMethodName = "/elitea.runtime.v1.RuntimeControlService/AuthorizeAgentModelCheckpoint"
+	RuntimeControlService_RenewLease_FullMethodName                    = "/elitea.runtime.v1.RuntimeControlService/RenewLease"
+	RuntimeControlService_ObserveDesiredState_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/ObserveDesiredState"
+	RuntimeControlService_PrepareSettlement_FullMethodName             = "/elitea.runtime.v1.RuntimeControlService/PrepareSettlement"
 )
 
 // RuntimeControlServiceClient is the client API for RuntimeControlService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RuntimeControlServiceClient interface {
+	AuthorizeSandboxJob(ctx context.Context, in *AuthorizeSandboxJobRequestV1, opts ...grpc.CallOption) (*AuthorizeSandboxJobResponseV1, error)
 	ClaimCommand(ctx context.Context, in *ClaimCommandRequestV1, opts ...grpc.CallOption) (*ClaimCommandResponseV1, error)
 	BeginExecution(ctx context.Context, in *BeginExecutionRequestV1, opts ...grpc.CallOption) (*BeginExecutionResponseV1, error)
 	AuthorizeInvocation(ctx context.Context, in *AuthorizeInvocationRequestV1, opts ...grpc.CallOption) (*AuthorizeInvocationResponseV1, error)
+	AuthorizeAgentModelCheckpoint(ctx context.Context, in *AuthorizeAgentModelCheckpointRequestV1, opts ...grpc.CallOption) (*AuthorizeAgentModelCheckpointResponseV1, error)
 	RenewLease(ctx context.Context, in *RenewLeaseRequestV1, opts ...grpc.CallOption) (*RenewLeaseResponseV1, error)
 	ObserveDesiredState(ctx context.Context, in *ObserveDesiredStateRequestV1, opts ...grpc.CallOption) (*ObserveDesiredStateResponseV1, error)
 	PrepareSettlement(ctx context.Context, in *PrepareSettlementRequestV1, opts ...grpc.CallOption) (*PrepareSettlementResponseV1, error)
@@ -45,6 +49,16 @@ type runtimeControlServiceClient struct {
 
 func NewRuntimeControlServiceClient(cc grpc.ClientConnInterface) RuntimeControlServiceClient {
 	return &runtimeControlServiceClient{cc}
+}
+
+func (c *runtimeControlServiceClient) AuthorizeSandboxJob(ctx context.Context, in *AuthorizeSandboxJobRequestV1, opts ...grpc.CallOption) (*AuthorizeSandboxJobResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthorizeSandboxJobResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_AuthorizeSandboxJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *runtimeControlServiceClient) ClaimCommand(ctx context.Context, in *ClaimCommandRequestV1, opts ...grpc.CallOption) (*ClaimCommandResponseV1, error) {
@@ -71,6 +85,16 @@ func (c *runtimeControlServiceClient) AuthorizeInvocation(ctx context.Context, i
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthorizeInvocationResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeControlService_AuthorizeInvocation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeControlServiceClient) AuthorizeAgentModelCheckpoint(ctx context.Context, in *AuthorizeAgentModelCheckpointRequestV1, opts ...grpc.CallOption) (*AuthorizeAgentModelCheckpointResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthorizeAgentModelCheckpointResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_AuthorizeAgentModelCheckpoint_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +135,11 @@ func (c *runtimeControlServiceClient) PrepareSettlement(ctx context.Context, in 
 // All implementations must embed UnimplementedRuntimeControlServiceServer
 // for forward compatibility.
 type RuntimeControlServiceServer interface {
+	AuthorizeSandboxJob(context.Context, *AuthorizeSandboxJobRequestV1) (*AuthorizeSandboxJobResponseV1, error)
 	ClaimCommand(context.Context, *ClaimCommandRequestV1) (*ClaimCommandResponseV1, error)
 	BeginExecution(context.Context, *BeginExecutionRequestV1) (*BeginExecutionResponseV1, error)
 	AuthorizeInvocation(context.Context, *AuthorizeInvocationRequestV1) (*AuthorizeInvocationResponseV1, error)
+	AuthorizeAgentModelCheckpoint(context.Context, *AuthorizeAgentModelCheckpointRequestV1) (*AuthorizeAgentModelCheckpointResponseV1, error)
 	RenewLease(context.Context, *RenewLeaseRequestV1) (*RenewLeaseResponseV1, error)
 	ObserveDesiredState(context.Context, *ObserveDesiredStateRequestV1) (*ObserveDesiredStateResponseV1, error)
 	PrepareSettlement(context.Context, *PrepareSettlementRequestV1) (*PrepareSettlementResponseV1, error)
@@ -127,6 +153,9 @@ type RuntimeControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedRuntimeControlServiceServer struct{}
 
+func (UnimplementedRuntimeControlServiceServer) AuthorizeSandboxJob(context.Context, *AuthorizeSandboxJobRequestV1) (*AuthorizeSandboxJobResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AuthorizeSandboxJob not implemented")
+}
 func (UnimplementedRuntimeControlServiceServer) ClaimCommand(context.Context, *ClaimCommandRequestV1) (*ClaimCommandResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClaimCommand not implemented")
 }
@@ -135,6 +164,9 @@ func (UnimplementedRuntimeControlServiceServer) BeginExecution(context.Context, 
 }
 func (UnimplementedRuntimeControlServiceServer) AuthorizeInvocation(context.Context, *AuthorizeInvocationRequestV1) (*AuthorizeInvocationResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AuthorizeInvocation not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) AuthorizeAgentModelCheckpoint(context.Context, *AuthorizeAgentModelCheckpointRequestV1) (*AuthorizeAgentModelCheckpointResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AuthorizeAgentModelCheckpoint not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) RenewLease(context.Context, *RenewLeaseRequestV1) (*RenewLeaseResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RenewLease not implemented")
@@ -164,6 +196,24 @@ func RegisterRuntimeControlServiceServer(s grpc.ServiceRegistrar, srv RuntimeCon
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&RuntimeControlService_ServiceDesc, srv)
+}
+
+func _RuntimeControlService_AuthorizeSandboxJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthorizeSandboxJobRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).AuthorizeSandboxJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_AuthorizeSandboxJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).AuthorizeSandboxJob(ctx, req.(*AuthorizeSandboxJobRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _RuntimeControlService_ClaimCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -216,6 +266,24 @@ func _RuntimeControlService_AuthorizeInvocation_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeControlServiceServer).AuthorizeInvocation(ctx, req.(*AuthorizeInvocationRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeControlService_AuthorizeAgentModelCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthorizeAgentModelCheckpointRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).AuthorizeAgentModelCheckpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_AuthorizeAgentModelCheckpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).AuthorizeAgentModelCheckpoint(ctx, req.(*AuthorizeAgentModelCheckpointRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -282,6 +350,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*RuntimeControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "AuthorizeSandboxJob",
+			Handler:    _RuntimeControlService_AuthorizeSandboxJob_Handler,
+		},
+		{
 			MethodName: "ClaimCommand",
 			Handler:    _RuntimeControlService_ClaimCommand_Handler,
 		},
@@ -292,6 +364,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AuthorizeInvocation",
 			Handler:    _RuntimeControlService_AuthorizeInvocation_Handler,
+		},
+		{
+			MethodName: "AuthorizeAgentModelCheckpoint",
+			Handler:    _RuntimeControlService_AuthorizeAgentModelCheckpoint_Handler,
 		},
 		{
 			MethodName: "RenewLease",

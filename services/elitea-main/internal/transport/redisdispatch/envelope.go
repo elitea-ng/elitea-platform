@@ -8,6 +8,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
@@ -113,6 +114,53 @@ func agentExecutionWorkerCommand(protocolRevision string, dispatch agentexecutio
 				ClientStreamId:  dispatch.ClientStreamID,
 				ClientMessageId: dispatch.ClientMessageID,
 				SioEvent:        dispatch.SIOEvent,
+			},
+		},
+	}, nil
+}
+
+func toolkitExecuteReadWorkerCommand(
+	protocolRevision string,
+	dispatch toolkitexecutionapp.ToolkitExecuteReadDispatch,
+) (*runtimev1.WorkerCommandV1, error) {
+	if protocolRevision == "" || len(protocolRevision) > 128 {
+		return nil, errors.New("invalid protocol revision")
+	}
+	if err := dispatch.Validate(); err != nil {
+		return nil, err
+	}
+	return &runtimev1.WorkerCommandV1{
+		ProtocolRevision:    protocolRevision,
+		CommandId:           dispatch.CommandID,
+		IdempotencyKey:      dispatch.OutboxID,
+		CommandType:         runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ,
+		ExecutionId:         dispatch.ExecutionID,
+		Generation:          dispatch.Generation,
+		DispatchOrdinal:     dispatch.DispatchOrdinal,
+		RootExecutionId:     dispatch.ExecutionID,
+		TenantId:            dispatch.TenantID,
+		ResourceProjectId:   dispatch.ResourceProjectID,
+		ProjectionProjectId: dispatch.ProjectionProjectID,
+		PrincipalRef:        dispatch.PrincipalRef,
+		InputBundleRef: &runtimev1.ExecutionInputBundleReferenceV1{
+			InputBundleId:    dispatch.InputBundleID,
+			ImmutableVersion: dispatch.InputBundleVersion,
+			Digest:           digestProto(dispatch.InputBundleDigest),
+			ByteLength:       dispatch.InputBundleByteLength,
+			MediaType:        dispatch.InputBundleMediaType,
+		},
+		CapabilityId:       dispatch.CapabilityID,
+		CapabilityVersion:  dispatch.CapabilityVersion,
+		ResourceClass:      dispatch.ResourceClass,
+		IsolationClass:     dispatch.IsolationClass,
+		Priority:           dispatch.Priority,
+		DeadlineUnixMillis: dispatch.Deadline.UTC().UnixMilli(),
+		Traceparent:        dispatch.Traceparent,
+		Tracestate:         dispatch.Tracestate,
+		LimitsRevision:     dispatch.LimitsRevision,
+		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitExecuteRead{
+			ToolkitExecuteRead: &runtimev1.ToolkitExecuteReadCommandV1{
+				RequestEntryId: dispatch.RequestEntryID,
 			},
 		},
 	}, nil

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
 
 import FormControl from '@mui/material/FormControl';
 import FormHelperText from '@mui/material/FormHelperText';
@@ -43,7 +43,7 @@ export interface ModelSelectFieldProps {
   readonly projectId: string | undefined;
   readonly label: string;
   readonly value: unknown;
-  readonly onChange: (value: string) => void;
+  readonly onChange: (value: string, options?: { isAutoSelect: boolean }) => void;
   readonly required?: boolean | undefined;
   readonly disabled?: boolean | undefined;
   readonly error?: boolean | undefined;
@@ -80,6 +80,11 @@ export function ModelSelectField({
    * `CredentialsSelect` keeps a `CredentialNotFoundValue` row.
    */
   const selected = typeof value === 'string' ? value : '';
+  useEffect(() => {
+    if (!disabled && selected === '' && data?.defaultModel) {
+      onChange(data.defaultModel.name, { isAutoSelect: true });
+    }
+  }, [data?.defaultModel, disabled, onChange, selected]);
   const hasSelected = selected !== '' && !options.some((option) => option.name === selected);
 
   const handleChange = useCallback((event: SelectChangeEvent<string>) => onChange(event.target.value), [onChange]);
@@ -103,7 +108,7 @@ export function ModelSelectField({
         onChange={handleChange}
         // Named for assistive tech AND for tests: the field is otherwise only
         // identifiable by its schema-derived label, which varies per toolkit.
-        inputProps={{ 'data-testid': `model-select-${section}` }}
+        inputProps={{ 'data-testid': `model-select-${section}`, 'aria-label': label }}
         endAdornment={
           <Tooltip
             title={t('features.toolkits.modelSelect.refresh', 'Refresh the models')}

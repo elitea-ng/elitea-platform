@@ -85,10 +85,19 @@ func newPinnedListingPool(t *testing.T) *pgxpool.Pool {
 		adminPool.Close()
 	})
 
-	// Columns transcribed from migrations/tenant/001_initial.sql's
-	// `create_tenant_schema` (chat_conversations, social_pins).
+	// Use the shared pin key from migrations/shared/0064_centry_social_pins.sql.
+	// The tenant tables are the subset needed by chat authority and listing.
 	if _, err := pool.Exec(ctx, `
 CREATE SCHEMA p_1;
+CREATE SCHEMA centry;
+CREATE TABLE centry.project(id integer PRIMARY KEY);
+INSERT INTO centry.project VALUES (1),(2);
+CREATE TABLE public.auth_core__project_role(id integer PRIMARY KEY,project_id integer,name text);
+CREATE TABLE public.auth_core__project_user_role(project_id integer,user_id integer,role_id integer);
+CREATE TABLE public.auth_core__role(id integer PRIMARY KEY,name text,mode text);
+CREATE TABLE public.auth_core__user_role(user_id integer,role_id integer);
+INSERT INTO public.auth_core__project_role VALUES (1,1,'member'),(2,2,'member');
+INSERT INTO public.auth_core__project_user_role VALUES (1,7,1),(1,8,1),(2,9,2);
 CREATE TABLE p_1.chat_conversations (
     id serial PRIMARY KEY,
     uuid uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
@@ -100,13 +109,18 @@ CREATE TABLE p_1.chat_conversations (
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp
 );
-CREATE TABLE p_1.social_pins (
+CREATE TABLE p_1.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
+INSERT INTO p_1.chat_participants VALUES (7,'user','{"id":7}'),(8,'user','{"id":8}');
+CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
+CREATE TABLE centry.social_pins (
     id serial PRIMARY KEY,
-    entity_name varchar NOT NULL,
+    entity varchar NOT NULL,
+    project_id integer,
     entity_id integer NOT NULL,
     user_id integer NOT NULL,
     created_at timestamp NOT NULL DEFAULT now(),
-    CONSTRAINT _pin_unique UNIQUE (entity_name, entity_id, user_id)
+    updated_at timestamp NOT NULL DEFAULT now(),
+    CONSTRAINT _pin_unique UNIQUE (entity, project_id, entity_id)
 );`); err != nil {
 		t.Fatalf("create the pinned-listing fixture schema: %v", err)
 	}
@@ -120,6 +134,10 @@ func seedPinnedListingConversation(t *testing.T, pool *pgxpool.Pool, name string
 		`INSERT INTO p_1.chat_conversations (name, author_id, is_private) VALUES ($1, 1, $2) RETURNING id`,
 		name, isPrivate).Scan(&id); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
+	}
+	// Both readers participate; these tests isolate pin and ordering behavior.
+	if _, err := pool.Exec(context.Background(), `INSERT INTO p_1.chat_participant_mapping VALUES ($1,7),($1,8)`, id); err != nil {
+		t.Fatal(err)
 	}
 	return id
 }
@@ -177,7 +195,7 @@ func TestGroupedListingReadsThePinnedSetFromSocialPins(t *testing.T) {
 
 	// The pin, written the way the pin routes write it.
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO p_1.social_pins (entity_name, entity_id, user_id) VALUES ('conversation', $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id) VALUES ('conversation', 1, $1, 7)`,
 		pinned); err != nil {
 		t.Fatalf("pin the conversation: %v", err)
 	}
@@ -197,20 +215,20 @@ func TestGroupedListingReadsThePinnedSetFromSocialPins(t *testing.T) {
 	}
 }
 
-// The pin is PER READER. `social_pins` is keyed by (entity_name, entity_id,
-// user_id), so a listing that ignored the caller would show one member the
-// rows another member pinned.
-func TestGroupedListingPinsAreScopedToTheReader(t *testing.T) {
+// Authorized readers share the project pin, regardless of its last pinner.
+func TestGroupedListingPinsAreSharedByVisibleReaders(t *testing.T) {
 	pool := newPinnedListingPool(t)
 	pinned := seedPinnedListingConversation(t, pool, "autotest_pinned_by_7", true)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO p_1.social_pins (entity_name, entity_id, user_id) VALUES ('conversation', $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id) VALUES ('conversation', 1, $1, 7)`,
 		pinned); err != nil {
 		t.Fatalf("pin the conversation: %v", err)
 	}
-
-	if got := readGroupedListing(t, pool, "8").Pinned.Conversations; len(got) != 0 {
-		t.Errorf("reader 8 sees %d pinned rows, want 0 — the pin belongs to reader 7", len(got))
+	for _, reader := range []string{"7", "8"} {
+		got := readGroupedListing(t, pool, reader).Pinned.Conversations
+		if len(got) != 1 || got[0].ID != pinned {
+			t.Fatalf("reader %s sees %v, want shared pin %d", reader, got, pinned)
+		}
 	}
 }
 
@@ -221,7 +239,7 @@ func TestGroupedListingIgnoresPinsOnOtherEntities(t *testing.T) {
 	pool := newPinnedListingPool(t)
 	conversation := seedPinnedListingConversation(t, pool, "autotest_not_pinned", true)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO p_1.social_pins (entity_name, entity_id, user_id) VALUES ('configuration', $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id) VALUES ('configuration', 1, $1, 7)`,
 		conversation); err != nil {
 		t.Fatalf("pin a configuration: %v", err)
 	}
@@ -267,6 +285,10 @@ func seedPinnedListingConversationAt(t *testing.T, pool *pgxpool.Pool, name stri
 		 VALUES ($1, 1, TRUE, $2, $3) RETURNING id`,
 		name, createdAt, updatedAt).Scan(&id); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
+	}
+	// Both readers participate; these tests isolate pin and ordering behavior.
+	if _, err := pool.Exec(context.Background(), `INSERT INTO p_1.chat_participant_mapping VALUES ($1,7),($1,8)`, id); err != nil {
+		t.Fatal(err)
 	}
 	return id
 }

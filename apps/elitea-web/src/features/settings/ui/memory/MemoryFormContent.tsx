@@ -26,6 +26,7 @@ import Box from '@mui/material/Box';
 
 import { useFormikAutoSaveOnBlur } from '@/shared/lib/hooks/useFormikAutoSaveOnBlur';
 
+import { useDefaultModel } from '../../lib/profile/useDefaultModel';
 import { MemoryContextManagement } from './MemoryContextManagement';
 import { LongTermMemoryManagement } from './LongTermMemoryManagement';
 
@@ -34,12 +35,13 @@ export interface MemoryFormContentProps {
 }
 
 export function MemoryFormContent({ projectId }: MemoryFormContentProps) {
+  const { modelList } = useDefaultModel({ projectId: projectId ?? '', skip: !projectId });
   const { onBlur, requestSubmit } = useFormikAutoSaveOnBlur();
 
   return (
     <Box sx={styles.wrapper} onBlur={onBlur}>
       <Box sx={styles.container} data-testid="memory-form-content">
-        <MemoryContextManagement onAutoSaveRequested={requestSubmit} />
+        <MemoryContextManagement onAutoSaveRequested={requestSubmit} models={modelList} />
         <LongTermMemoryManagement projectId={projectId} />
       </Box>
     </Box>

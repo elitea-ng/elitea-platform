@@ -37,12 +37,14 @@ func newAgentExecutionResultsRepository(projects projectStore) (*AgentExecutionR
 }
 
 type currentAgentFullMessage struct {
-	Content            string
-	ThreadID           string
-	References         json.RawMessage
-	InvokedSkills      json.RawMessage
-	ResponseMetadata   json.RawMessage
-	OutputLimitReached bool
+	ReplacePipelineProvisional bool
+	Content                    string
+	ResultReference            bool
+	ThreadID                   string
+	References                 json.RawMessage
+	InvokedSkills              json.RawMessage
+	ResponseMetadata           json.RawMessage
+	OutputLimitReached         bool
 }
 
 type currentAgentHITLPause struct {
@@ -103,6 +105,7 @@ type currentAgentTerminalWriter interface {
 		context.Context,
 		sqlcgen.FinalizeCurrentAgentHITLPauseParams,
 	) (int64, error)
+	FinalizeCurrentAgentMixedPause(context.Context, sqlcgen.FinalizeCurrentAgentMixedPauseParams) (int64, error)
 	FinalizeCurrentAgentAuthorizationPause(
 		context.Context,
 		sqlcgen.FinalizeCurrentAgentAuthorizationPauseParams,
@@ -284,6 +287,28 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 			return currentAgentTerminal{}, err
 		}
 		terminal.HITLPause = &pause
+		var metadata map[string]json.RawMessage
+		if json.Unmarshal(event.ResponseMetadata, &metadata) != nil {
+			return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+		if _, mixed := metadata["authorization_requests"]; mixed {
+			authorization, err := decodeCurrentAgentAuthorizationPause(event.Content, event.ResponseMetadata)
+			if err != nil {
+				return currentAgentTerminal{}, err
+			}
+			var hitl, requests []map[string]any
+			if json.Unmarshal(pause.Interrupts, &hitl) != nil || json.Unmarshal(authorization.Requests, &requests) != nil || len(hitl)+len(requests) > 16 {
+				return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+			}
+			for _, request := range requests {
+				for _, interrupt := range hitl {
+					if currentAgentAuthorizationIdentity(request) == interrupt["interrupt_id"] {
+						return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+					}
+				}
+			}
+			terminal.AuthorizationPause = &authorization
+		}
 	case outputapp.AgentExecutionTerminalPausedAuthorization:
 		if artifact.ArtifactID != "node-event:"+frame.Fence.ExecutionID+":mcp-authorization-required" ||
 			event.Type != "mcp_authorization_required" {
@@ -302,15 +327,23 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 
 func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata json.RawMessage) (currentAgentFullMessage, error) {
 	var content string
-	if json.Unmarshal(contentJSON, &content) != nil {
+	resultReference := string(contentJSON) == "null"
+	if !resultReference && json.Unmarshal(contentJSON, &content) != nil {
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
 	var metadata struct {
+		ResultRef          json.RawMessage `json:"result_ref_v1"`
 		ThreadID           string          `json:"thread_id"`
 		InvokedSkills      json.RawMessage `json:"invoked_skills"`
 		OutputLimitReached bool            `json:"output_limit_reached"`
+		ApplicationDetails struct {
+			AgentType      string `json:"agent_type"`
+			VersionDetails struct {
+				AgentType string `json:"agent_type"`
+			} `json:"version_details"`
+		} `json:"application_details"`
 	}
-	if json.Unmarshal(responseMetadata, &metadata) != nil || metadata.ThreadID == "" ||
+	if json.Unmarshal(responseMetadata, &metadata) != nil || resultReference != (len(metadata.ResultRef) != 0) || metadata.ThreadID == "" ||
 		len(content) > 4*1024*1024 || strings.ContainsRune(content, '\x00') {
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
@@ -319,12 +352,14 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
 	return currentAgentFullMessage{
-		Content:            content,
-		ThreadID:           metadata.ThreadID,
-		References:         cloneJSONOrDefault(references, []byte("[]")),
-		InvokedSkills:      invokedSkills,
-		ResponseMetadata:   append(json.RawMessage(nil), responseMetadata...),
-		OutputLimitReached: metadata.OutputLimitReached,
+		ReplacePipelineProvisional: metadata.ApplicationDetails.AgentType == "pipeline" || metadata.ApplicationDetails.VersionDetails.AgentType == "pipeline",
+		Content:                    content,
+		ResultReference:            resultReference,
+		ThreadID:                   metadata.ThreadID,
+		References:                 cloneJSONOrDefault(references, []byte("[]")),
+		InvokedSkills:              invokedSkills,
+		ResponseMetadata:           append(json.RawMessage(nil), responseMetadata...),
+		OutputLimitReached:         metadata.OutputLimitReached,
 	}, nil
 }
 
@@ -545,6 +580,13 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 	}
 	if terminal.FullMessage != nil && terminal.HITLPause == nil && terminal.AuthorizationPause == nil {
 		message := terminal.FullMessage
+		if message.ResultReference {
+			content, err := resolveCurrentAgentResultContent(ctx, tx, expected, message.ResponseMetadata)
+			if err != nil {
+				return err
+			}
+			message.Content = content
+		}
 		invokedSkills, err := mergeCurrentAgentInvokedSkills([]byte(existingSkills), message.InvokedSkills)
 		if err != nil {
 			return outputapp.ErrAgentExecutionResultMismatch
@@ -552,9 +594,10 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		if err := writer.DeleteCurrentAgentProvisionalText(
 			ctx,
 			sqlcgen.DeleteCurrentAgentProvisionalTextParams{
-				MessageGroupID: int64(messageGroupID),
-				ExecutionID:    expected.ExecutionID,
-				Generation:     int64(expected.Generation),
+				ReplacePipelineProvisional: message.ReplacePipelineProvisional,
+				MessageGroupID:             int64(messageGroupID),
+				ExecutionID:                expected.ExecutionID,
+				Generation:                 int64(expected.Generation),
 			},
 		); err != nil {
 			return fmt.Errorf("delete current agent provisional text: %w", err)
@@ -581,6 +624,28 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		)
 		if err != nil || rows != 1 {
 			return fmt.Errorf("finalize current agent response message group: %w", terminalWriteError(err))
+		}
+		return nil
+	}
+	if terminal.HITLPause != nil && terminal.AuthorizationPause != nil && terminal.FullMessage == nil {
+		pause, authorization := terminal.HITLPause, terminal.AuthorizationPause
+		if pause.ThreadID != authorization.ThreadID {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		skills, err := mergeCurrentAgentInvokedSkills([]byte(existingSkills), pause.InvokedSkills)
+		if err != nil {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		skills, err = mergeCurrentAgentInvokedSkills(skills, authorization.InvokedSkills)
+		if err != nil {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		rows, err := writer.FinalizeCurrentAgentMixedPause(ctx, sqlcgen.FinalizeCurrentAgentMixedPauseParams{
+			ThreadID: pause.ThreadID, HitlInterrupt: []byte(pause.Interrupt), HitlInterrupts: []byte(pause.Interrupts),
+			AuthorizationRequests: []byte(authorization.Requests), InvokedSkills: []byte(skills), MessageGroupID: int64(messageGroupID),
+		})
+		if err != nil || rows != 1 {
+			return fmt.Errorf("persist current agent mixed pause: %w", terminalWriteError(err))
 		}
 		return nil
 	}

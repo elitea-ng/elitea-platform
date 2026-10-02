@@ -60,4 +60,5 @@ PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" \
   -I . \
   --grpc_python_out=gen/python \
   elitea/runtime/v1/control.proto \
-  elitea/runtime/v1/output.proto
+  elitea/runtime/v1/output.proto \
+  elitea/runtime/v1/sandbox.proto

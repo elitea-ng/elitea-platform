@@ -155,15 +155,15 @@ describe('getAccessToken / logout / setConnectionVerified (sessionStorage round-
     window.removeEventListener(MCP_TOKEN_CHANGE_EVENT, listener);
   });
 
-  it('logout dispatches MCP_TOKEN_CHANGE_EVENT with "logout" type only when a token existed', () => {
+  it('logout publishes invalidation even without a local token because other tabs can hold it', () => {
     const listener = vi.fn();
     window.addEventListener(MCP_TOKEN_CHANGE_EVENT, listener);
     logout(serverUrl);
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledTimes(1);
     setConnectionVerified(serverUrl);
     logout(serverUrl);
-    expect(listener).toHaveBeenCalledTimes(2);
-    const secondCall = listener.mock.calls[1];
+    expect(listener).toHaveBeenCalledTimes(3);
+    const secondCall = listener.mock.calls[2];
     if (secondCall === undefined) throw new Error('expected a second call');
     const secondEvent = secondCall[0] as CustomEvent<{ type: string }>;
     expect(secondEvent.detail.type).toBe('logout');

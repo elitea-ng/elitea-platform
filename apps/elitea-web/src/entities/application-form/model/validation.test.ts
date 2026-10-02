@@ -4,12 +4,18 @@ import { applicationCreationSchema } from './validation';
 
 describe('applicationCreationSchema', () => {
   it('accepts a minimal valid draft', () => {
-    const result = applicationCreationSchema.safeParse({ name: 'Agent', description: 'Does things' });
+    const result = applicationCreationSchema.safeParse({
+      name: 'Agent',
+      description: 'Does things',
+    });
     expect(result.success).toBe(true);
   });
 
   it('rejects a blank name', () => {
-    const result = applicationCreationSchema.safeParse({ name: '', description: 'Does things' });
+    const result = applicationCreationSchema.safeParse({
+      name: '',
+      description: 'Does things',
+    });
     expect(result.success).toBe(false);
   });
 
@@ -34,6 +40,17 @@ describe('applicationCreationSchema', () => {
       version_details: { conversation_starters: ['Hello there'] },
     });
     expect(result.success).toBe(true);
+  });
+
+  it('preserves version tags for the submit callback', () => {
+    const result = applicationCreationSchema.safeParse({
+      name: 'Pipeline',
+      description: 'Does things',
+      version_details: { conversation_starters: [], tags: ['mcp'] },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.version_details?.tags).toEqual(['mcp']);
   });
 
   it('rejects a whitespace-only conversation starter', () => {

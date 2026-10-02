@@ -20,6 +20,7 @@ pub mod diagnostics;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod execution;
 pub mod protocol;
+pub mod sandbox;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod security;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

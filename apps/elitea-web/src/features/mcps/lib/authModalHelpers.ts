@@ -114,7 +114,7 @@ export interface BuildStartFlowOptionsParams {
   authWindow: Window;
   credentials: { clientId: string; clientSecret: string };
   scope: string;
-  flowContext: { toolkitId: string | undefined; toolkitType: string | undefined; projectId: string | number | undefined };
+  flowContext: { authorizationReferenceOnly?: boolean | undefined; toolkitId: string | undefined; toolkitType: string | undefined; projectId: string | number | undefined; serverUrl?: string | undefined };
   isPrebuildMcp: boolean;
 }
 
@@ -123,6 +123,8 @@ export function buildStartFlowOptions(params: BuildStartFlowOptionsParams): Star
   const asForFlow = validated.oauthAuthorizationServer;
   return {
     serverUrl: params.storageKey,
+    authorizationReferenceOnly: flowContext.authorizationReferenceOnly,
+    resourceUrl: flowContext.toolkitType === 'mcp' || isPrebuildMcp ? flowContext.serverUrl : undefined,
     resourceMetadata: { authorization_servers: validated.authServers, oauth_authorization_server: asForFlow },
     oauthMetadata: validated.oauthMetadata ?? { token_endpoint: asForFlow?.token_endpoint, grant_types_supported: asForFlow?.grant_types_supported },
     clientId: params.credentials.clientId,

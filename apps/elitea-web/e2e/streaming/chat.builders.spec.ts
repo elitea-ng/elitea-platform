@@ -69,9 +69,10 @@
  */
 import { expect, test } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
+import { createHash } from 'node:crypto';
 
 import { BASE_URL } from '../../playwright.config';
-import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgentThroughForm } from '../fixtures/api';
+import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgentThroughForm, readMockLlmJournal } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -89,9 +90,9 @@ function callTool(toolName: string, args: Record<string, unknown>): string {
   return `[[mock:call_tool ${toolName} ${JSON.stringify(args)}]]`;
 }
 
-/** The tool names the native runtime binds for the two modules (`internal_tools.rs`). */
+/** Skills use the native builder. Project Context uses Main's internal MCP catalogue. */
 const SKILL_TOOL = 'create_or_update_skill';
-const PROJECT_CONTEXT_TOOL = 'write_project_context';
+const PROJECT_CONTEXT_TOOL = 'put_prompt_lib_project-context';
 
 /** The module names the version stores (`INTERNAL_TOOLS_LIST`). */
 const SKILLS_BUILDER = 'skills_builder';
@@ -128,6 +129,10 @@ interface PreparedAgent {
   readonly projectId: string;
   readonly agentId: string;
   readonly conversationId: string;
+  readonly conversationUuid: string;
+  readonly participantId: string;
+  readonly versionId: string;
+  readonly toolName: string;
 }
 
 /**
@@ -175,8 +180,9 @@ async function prepareAgentWithModule(
     `${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`,
   );
   const detail = (await readback.json()) as {
-    version_details?: { meta?: { internal_tools?: readonly string[] } };
+    version_details?: { id?: string | number; meta?: { internal_tools?: readonly string[] } };
   };
+  expect(String(detail.version_details?.id ?? ''), 'the saved builder version must remain selected').toBe(versionId);
   expect(
     detail.version_details?.meta?.internal_tools ?? [],
     `${moduleName} must survive the save, or the agent has no builder tool to call`,
@@ -189,16 +195,52 @@ async function prepareAgentWithModule(
     { timeout: 45_000 },
   );
   await page.getByTestId('chat-with-agent-button').click();
-  const conversation = (await (await conversationCreated).json()) as { id?: string | number };
+  const createdResponse = await conversationCreated;
+  expect(new URL(createdResponse.url()).pathname, 'the builder chat must use the agent project').toBe(
+    `/api/v2/elitea_core/conversations/prompt_lib/${projectId}`,
+  );
+  const conversation = (await createdResponse.json()) as { id?: string | number; uuid?: string };
   const conversationId = String(conversation.id ?? '');
   expect(conversationId, 'the Chat button must create a conversation').not.toBe('');
+  const conversationUuid = conversation.uuid ?? '';
+  expect(conversationUuid, 'the builder chat must have a runtime conversation identity').not.toBe('');
   await page.waitForURL(new RegExp(`/app/chat/${conversationId}(?:[/?#]|$)`), { timeout: 45_000 });
 
-  return { projectId, agentId, conversationId };
+  const attached = await page.request.get(
+    `${BASE_URL}/api/v2/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`,
+  );
+  expect(attached.ok(), 'the builder conversation must be readable').toBe(true);
+  const participants = ((await attached.json()) as {
+    participants?: readonly {
+      id?: string | number;
+      entity_name?: string;
+      entity_meta?: { id?: string | number; project_id?: string | number };
+      entity_settings?: { version_id?: string | number };
+    }[];
+  }).participants ?? [];
+  const applications = participants.filter((row) => row.entity_name === 'application');
+  expect(applications, 'the builder chat must attach exactly the agent this test created').toHaveLength(1);
+  const application = applications[0];
+  expect(String(application?.entity_meta?.id ?? ''), 'the attached application must be the builder agent').toBe(agentId);
+  expect(String(application?.entity_meta?.project_id ?? ''), 'the attached application must use the builder project').toBe(projectId);
+  expect(String(application?.entity_settings?.version_id ?? ''), 'the attachment must pin the saved builder version').toBe(versionId);
+  const participantId = String(application?.id ?? '');
+  expect(participantId, 'the builder application must have an addressable participant').toMatch(/^\d+$/);
+
+  return {
+    projectId, agentId, conversationId, conversationUuid, participantId, versionId,
+    toolName: moduleName === SKILLS_BUILDER ? SKILL_TOOL : PROJECT_CONTEXT_TOOL,
+  };
+}
+
+interface BuilderTurn {
+  readonly responseMessageId: string;
+  readonly scriptedCallId: string;
+  readonly text: string;
 }
 
 /** Sends one message and asserts the START was accepted — a 422 here is the admission failure this journey is largely about. */
-async function sendTurn(page: import('@playwright/test').Page, text: string): Promise<void> {
+async function sendTurn(page: import('@playwright/test').Page, prepared: PreparedAgent, text: string): Promise<BuilderTurn> {
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
@@ -213,6 +255,86 @@ async function sendTurn(page: import('@playwright/test').Page, text: string): Pr
     startResponse.status(),
     `the builder turn was refused: ${(await startResponse.text()).slice(0, 300)}`,
   ).toBe(200);
+  const startUrl = new URL(startResponse.url());
+  expect(startUrl.pathname, 'the admitted builder turn must address its conversation and project').toBe(
+    `/api/v2/elitea_core/messages/prompt_lib/${prepared.projectId}/${prepared.conversationUuid}`,
+  );
+  expect(startUrl.searchParams.get('execution_contract'), 'the builder turn must execute the saved application').toBe(
+    'agent.execute.application.v1',
+  );
+  const startBody = startResponse.request().postDataJSON() as { participant_id?: number; project_id?: number };
+  expect(String(startBody.participant_id ?? ''), 'the admitted target must be the exact builder application participant').toBe(
+    prepared.participantId,
+  );
+  expect(String(startBody.project_id ?? ''), 'the admitted project must be the builder project').toBe(prepared.projectId);
+  const outcome = (await startResponse.json()) as { response_message_id?: string };
+  const responseMessageId = outcome.response_message_id ?? '';
+  expect(responseMessageId, 'the admitted turn must identify its stored response').not.toBe('');
+  // The mock derives this identity from the operation, exact prompt, and ordinal.
+  const digest = createHash('sha256').update(`${prepared.toolName}\0${text}\0${0}`).digest('hex').slice(0, 16);
+  const turn = { responseMessageId, scriptedCallId: `call_mock_tool_${digest}`, text };
+  await assertBuilderResult(page, prepared, turn);
+  return turn;
+}
+
+/** Read only this admitted response. Report fixed categories instead of tool payloads. */
+async function assertBuilderResult(
+  page: import('@playwright/test').Page,
+  prepared: PreparedAgent,
+  turn: BuilderTurn,
+): Promise<void> {
+  const stored = await page.request.get(
+    `${BASE_URL}/api/v2/elitea_core/messages/prompt_lib/${prepared.projectId}/${prepared.conversationId}`,
+    { timeout: 10_000 },
+  );
+  expect(stored.ok(), `builder diagnostic response_read_status=${stored.status()}`).toBe(true);
+  const rows = ((await stored.json()) as {
+    items?: readonly { uid?: string; role?: string; content?: string; metadata?: { is_error?: boolean; hitl_interrupts?: readonly unknown[] } }[];
+  }).items ?? [];
+  const response = rows.find((row) => row.role === 'assistant' && row.uid === turn.responseMessageId);
+  if (!response || response.metadata?.is_error === undefined) return;
+  const content = (response.content ?? '').slice(0, 8192);
+  const category = builderResultCategory(content, prepared.toolName, response.metadata);
+  const identity = `tool=${prepared.toolName} call=${turn.scriptedCallId} response=${turn.responseMessageId}`;
+  expect(category, `builder diagnostic ${identity} category=${category}`).toBe('saved');
+
+  const journal = await readMockLlmJournal(page, prepared.projectId);
+  const offered = journal.find((entry) => entry.mode === 'call_tool' && entry.history.some(
+    (message) => message.role === 'user' && message.text === turn.text,
+  ));
+  expect(
+    offered?.tools.includes(prepared.toolName) ?? false,
+    `builder diagnostic ${identity} category=expected_tool_not_offered`,
+  ).toBe(true);
+}
+
+function builderResultCategory(
+  content: string,
+  toolName: string,
+  metadata: { is_error?: boolean; hitl_interrupts?: readonly unknown[] },
+): string {
+  if (metadata.hitl_interrupts?.length || content.includes('requires confirmation')) return 'confirmation_required';
+  if (metadata.is_error === true) return 'execution_failed';
+  if (content.includes('not found')) return 'tool_not_found';
+  if (content.includes('execution denied') || content.includes('not authorized')) return 'authorization_failed';
+  if (content.includes('platform could not be reached')) return 'platform_unavailable';
+  if (content.includes('was not saved')) return 'write_rejected';
+  const resultPrefix = `tool ${toolName} said `;
+  if (!content.includes(resultPrefix) || !content.includes('MOCKCALLTOOLEND')) return 'tool_result_missing';
+  if (toolName === PROJECT_CONTEXT_TOOL) {
+    // ADK preserves Main's JSON detail inside the MCP text-output envelope.
+    try {
+      const result = JSON.parse(content.slice(
+        content.indexOf(resultPrefix) + resultPrefix.length, content.lastIndexOf('MOCKCALLTOOLEND'),
+      ).trim()) as { output?: string };
+      const detail = JSON.parse(result.output ?? '') as { id?: number; content?: string; enabled?: boolean };
+      return typeof detail.id === 'number' && detail.id > 0 && typeof detail.content === 'string' &&
+        typeof detail.enabled === 'boolean' ? 'saved' : 'unexpected_tool_result';
+    } catch {
+      return 'unexpected_tool_result';
+    }
+  }
+  return /(?:Created|Updated) (?:Skill|Project Context):/.test(content) ? 'saved' : 'unexpected_tool_result';
 }
 
 interface SkillRow {
@@ -261,10 +383,12 @@ test('a chat turn with Skills Builder enabled creates the Skill it names, and do
   const skillName = `${AUTOTEST_PREFIX}skill-${stamp}`;
   const instructions = 'Extract blockers, decisions and action items as a bulleted list.';
 
-  const { projectId, conversationId } = await prepareAgentWithModule(page, agentName, SKILLS_BUILDER);
+  const prepared = await prepareAgentWithModule(page, agentName, SKILLS_BUILDER);
+  const { projectId, conversationId } = prepared;
 
-  await sendTurn(
+  const turn = await sendTurn(
     page,
+    prepared,
     `${callTool(SKILL_TOOL, {
       name: skillName,
       description: 'Summarizes daily standup notes into action items',
@@ -275,7 +399,10 @@ test('a chat turn with Skills Builder enabled creates the Skill it names, and do
   // THE assertion, taken server-side. A turn whose tool was never bound
   // answers in the same shape and looks identical on screen.
   await expect
-    .poll(async () => (await findSkillByName(page.request, projectId, skillName))?.name, {
+    .poll(async () => {
+      await assertBuilderResult(page, prepared, turn);
+      return (await findSkillByName(page.request, projectId, skillName))?.name;
+    }, {
       timeout: 180_000,
       message: 'the Skills Builder tool ran but no skill row exists in the conversation’s project',
     })
@@ -376,7 +503,8 @@ test('a chat turn with Project Context Builder enabled writes the project contex
   const agentName = `${AUTOTEST_PREFIX}pcb-${stamp}`;
   const first = `${AUTOTEST_PREFIX}This project is a Python REST API for order management.`;
 
-  const { projectId } = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  const prepared = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  const { projectId } = prepared;
   // The pre-state this case describes, stated rather than inherited: a project
   // carrying no context of its own. `WriteProjectContext` keeps whatever
   // toggle the project already had (see `clearProjectContext`), so a leftover
@@ -385,9 +513,14 @@ test('a chat turn with Project Context Builder enabled writes the project contex
   await clearProjectContext(page, projectId);
 
   try {
-    await sendTurn(page, `${callTool(PROJECT_CONTEXT_TOOL, { content: first })} write that down`);
+    const turn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content: first,
+    })} write that down`);
     await expect
-      .poll(async () => (await readProjectContext(page, projectId)).content, {
+      .poll(async () => {
+        await assertBuilderResult(page, prepared, turn);
+        return (await readProjectContext(page, projectId)).content;
+      }, {
         timeout: 180_000,
         message: 'the Project Context Builder tool ran but the project context was not written',
       })
@@ -440,7 +573,8 @@ test('a second Project Context Builder turn updates the context in place', async
   const first = `${AUTOTEST_PREFIX}This project is a Python REST API for order management.`;
   const second = `${first} It now supports GraphQL in addition to REST.`;
 
-  const { projectId } = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  const prepared = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  const { projectId } = prepared;
   // The pre-state this case describes, stated rather than inherited: a project
   // carrying no context of its own. `WriteProjectContext` keeps whatever
   // toggle the project already had (see `clearProjectContext`), so a leftover
@@ -449,9 +583,14 @@ test('a second Project Context Builder turn updates the context in place', async
   await clearProjectContext(page, projectId);
 
   try {
-    await sendTurn(page, `${callTool(PROJECT_CONTEXT_TOOL, { content: first })} write that down`);
+    const firstTurn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content: first,
+    })} write that down`);
     await expect
-      .poll(async () => (await readProjectContext(page, projectId)).content, {
+      .poll(async () => {
+        await assertBuilderResult(page, prepared, firstTurn);
+        return (await readProjectContext(page, projectId)).content;
+      }, {
         timeout: 180_000,
         message: 'the Project Context Builder tool ran but the project context was not written',
       })
@@ -459,9 +598,14 @@ test('a second Project Context Builder turn updates the context in place', async
 
     // THE assertion this test exists for. The start below was the 422 until
     // #946; a regression of that gate fails here first.
-    await sendTurn(page, `${callTool(PROJECT_CONTEXT_TOOL, { content: second })} extend it`);
+    const secondTurn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content: second,
+    })} extend it`);
     await expect
-      .poll(async () => (await readProjectContext(page, projectId)).content, {
+      .poll(async () => {
+        await assertBuilderResult(page, prepared, secondTurn);
+        return (await readProjectContext(page, projectId)).content;
+      }, {
         timeout: 180_000,
         message: 'the second turn did not update the existing project context',
       })
@@ -532,12 +676,9 @@ test('the deployment reports whether the builder modules are served by its worke
  * write into. THAT MECHANISM DOES NOT EXIST HERE, and the cases' own
  * pass criteria are what survive the difference:
  *
- *   - "created without asking for project_id or user_id" — the tools' own
- *     `parameters_schema` (`services/elitea-worker-rust/src/agents/
- *     internal_tools.rs`) carries neither field, so the model CANNOT name a
- *     project even if it tried. The project comes from
- *     `ClaimBoundRuntimeContextAuthority` and is re-resolved by main on the
- *     claim-bound listener (`internal/infra/storage/content_server.go`);
+ *   - Skills take the project from the durable claim. Project Context uses
+ *     Main's internal MCP endpoint. Its declared schema requires `project_id`.
+ *     Main verifies that value against the endpoint project and the trusted actor's edit permission.
  *   - "the context appears only in the current project" and "other projects are
  *     unaffected" — that is a claim about two projects, and it is what the two
  *     tests below measure. The tests above prove the write LANDS in the
@@ -581,7 +722,8 @@ test('Skills Builder writes into the conversation’s own project and nowhere el
   const agentName = `${AUTOTEST_PREFIX}sbiso-${stamp}`;
   const skillName = `${AUTOTEST_PREFIX}skiso-${stamp}`;
 
-  const { projectId } = await prepareAgentWithModule(page, agentName, SKILLS_BUILDER);
+  const prepared = await prepareAgentWithModule(page, agentName, SKILLS_BUILDER);
+  const { projectId } = prepared;
   expect(
     projectId,
     'this assertion needs two DIFFERENT projects — the chat persona must own a personal project (#290)',
@@ -591,8 +733,9 @@ test('Skills Builder writes into the conversation’s own project and nowhere el
   // The request names NO project and NO user. It cannot: the tool's schema has
   // no such argument, which is the platform's answer to "was the user asked to
   // specify project_id?" — they were never able to be.
-  await sendTurn(
+  const turn = await sendTurn(
     page,
+    prepared,
     `${callTool(SKILL_TOOL, {
       name: skillName,
       instructions: 'Summarize the thread in three bullets.',
@@ -600,7 +743,10 @@ test('Skills Builder writes into the conversation’s own project and nowhere el
   );
 
   await expect
-    .poll(async () => (await findSkillByName(page.request, projectId, skillName))?.name, {
+    .poll(async () => {
+      await assertBuilderResult(page, prepared, turn);
+      return (await findSkillByName(page.request, projectId, skillName))?.name;
+    }, {
       timeout: 180_000,
       message: 'the Skills Builder tool ran but no skill row exists in the conversation’s project',
     })
@@ -632,7 +778,8 @@ test('Project Context Builder writes the conversation’s own project context an
   const agentName = `${AUTOTEST_PREFIX}pcbiso-${stamp}`;
   const content = `${AUTOTEST_PREFIX}Isolation probe ${stamp}: this text belongs to one project only.`;
 
-  const { projectId } = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  const prepared = await prepareAgentWithModule(page, agentName, PROJECT_CONTEXT_BUILDER);
+  const { projectId } = prepared;
   expect(projectId, 'this assertion needs two DIFFERENT projects').not.toBe(OTHER_PROJECT_ID);
   await clearProjectContext(page, projectId);
   // Snapshot rather than expect-empty: other specs write to project 1 too, and
@@ -640,9 +787,14 @@ test('Project Context Builder writes the conversation’s own project context an
   const otherBefore = await readProjectContext(page, OTHER_PROJECT_ID);
 
   try {
-    await sendTurn(page, `${callTool(PROJECT_CONTEXT_TOOL, { content })} write that down`);
+    const turn = await sendTurn(page, prepared, `${callTool(prepared.toolName, {
+      project_id: Number(projectId), content,
+    })} write that down`);
     await expect
-      .poll(async () => (await readProjectContext(page, projectId)).content, {
+      .poll(async () => {
+        await assertBuilderResult(page, prepared, turn);
+        return (await readProjectContext(page, projectId)).content;
+      }, {
         timeout: 180_000,
         message: 'the Project Context Builder tool ran but the project context was not written',
       })

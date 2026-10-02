@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify build artifacts against the indexing capability lock."""
+"""Verify build artifacts and export the indexing capability lock pins."""
 
 from __future__ import annotations
 
@@ -30,7 +30,10 @@ def _verified_requirement_names(profile: dict) -> set[str]:
                 "artifact_verified_requirements must use exact == pins"
             )
         distribution, version = requirement.split("==", 1)
-        if not distribution or not version:
+        if (
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", distribution) is None
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.!+_-]*", version) is None
+        ):
             raise SystemExit(
                 "artifact_verified_requirements contains an invalid pin"
             )
@@ -67,15 +70,21 @@ def _validate_artifact_closure(profile: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("lock", type=Path)
-    parser.add_argument("artifact_directory", type=Path)
+    parser.add_argument("destination", type=Path)
     parser.add_argument(
         "section",
-        choices=("verified_wheels", "verified_source_archives"),
+        choices=("verified_wheels", "verified_source_archives", "constraints"),
     )
     args = parser.parse_args()
 
     profile = json.loads(args.lock.read_bytes())["indexing_capability_profile"]
     _validate_artifact_closure(profile)
+    if args.section == "constraints":
+        requirements = profile["artifact_verified_requirements"]
+        args.destination.write_text("\n".join(requirements) + "\n")
+        print(f"exported-constraints={len(requirements)}")
+        return 0
+
     records = profile[args.section]
     if not isinstance(records, dict) or not records:
         raise SystemExit(f"{args.section} is empty")
@@ -100,7 +109,7 @@ def main() -> int:
             record = matching[0]
         filename = record["filename"]
         expected = record["sha256"]
-        artifact = args.artifact_directory / filename
+        artifact = args.destination / filename
         if not artifact.is_file():
             raise SystemExit(f"{distribution}: locked artifact is missing")
         actual = hashlib.sha256(artifact.read_bytes()).hexdigest()

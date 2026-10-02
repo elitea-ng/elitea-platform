@@ -8,6 +8,7 @@ import (
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
+	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
@@ -15,6 +16,7 @@ var errInvalidCurrentToolkitAdapterRow = errors.New("current toolkit adapter row
 
 type currentToolkitStore interface {
 	Get(context.Context, int32, int32) (repos.CurrentToolkit, error)
+	GetMCPVisible(context.Context, int32, int32, int32) (repos.CurrentToolkit, error)
 }
 
 // CurrentToolkitReaderAdapter projects the provider-neutral current toolkit
@@ -76,6 +78,60 @@ func (r *CurrentToolkitReaderAdapter) GetCurrentToolkit(
 		Name:     name,
 		Settings: settings,
 	}, true, nil
+}
+
+// GetCurrentMCPToolkit projects the same generated-query row into the direct
+// toolkit admission contract. Keeping it on this adapter ensures index and MCP
+// execution share project transaction routing and schema-aware name derivation
+// instead of growing a second SQL path in the HTTP layer.
+func (r *CurrentToolkitReaderAdapter) GetCurrentMCPToolkit(
+	ctx context.Context,
+	projectID int32,
+	userID int32,
+	toolkitID int32,
+) (toolkitexecutionapp.CurrentMCPToolkitSnapshot, bool, error) {
+	toolkit, found, err := readCurrentMCPToolkit(
+		ctx, r.repository, projectID, userID, toolkitID,
+	)
+	if err != nil || !found {
+		return toolkitexecutionapp.CurrentMCPToolkitSnapshot{}, found, err
+	}
+	settings, settingsOK := toolkit.Settings.(map[string]any)
+	meta, metaOK := toolkit.Meta.(map[string]any)
+	if !settingsOK || settings == nil || !metaOK || meta == nil {
+		return toolkitexecutionapp.CurrentMCPToolkitSnapshot{}, false, errInvalidCurrentToolkitAdapterRow
+	}
+
+	name, err := r.names.DeriveCurrentToolkitName(ctx, CurrentToolkitNameInput{
+		ProjectID:   projectID,
+		UserID:      userID,
+		ToolkitType: toolkit.Type,
+		StoredName:  toolkit.Name,
+		Settings:    settings,
+	})
+	if err != nil {
+		return toolkitexecutionapp.CurrentMCPToolkitSnapshot{}, false, fmt.Errorf("derive current toolkit name: %w", err)
+	}
+	return toolkitexecutionapp.CurrentMCPToolkitSnapshot{
+		ID: toolkit.ID, Type: toolkit.Type, Name: name, Settings: settings, Meta: meta,
+	}, true, nil
+}
+
+func readCurrentMCPToolkit(
+	ctx context.Context,
+	repository currentToolkitStore,
+	projectID int32,
+	userID int32,
+	toolkitID int32,
+) (repos.CurrentToolkit, bool, error) {
+	toolkit, err := repository.GetMCPVisible(ctx, projectID, userID, toolkitID)
+	if errors.Is(err, repos.ErrCurrentToolkitNotFound) {
+		return repos.CurrentToolkit{}, false, nil
+	}
+	if err != nil {
+		return repos.CurrentToolkit{}, false, fmt.Errorf("read current MCP toolkit: %w", err)
+	}
+	return toolkit, true, nil
 }
 
 func readCurrentToolkit(

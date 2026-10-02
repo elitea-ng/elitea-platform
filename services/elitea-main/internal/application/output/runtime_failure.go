@@ -117,6 +117,14 @@ func (e ExpectedRuntimeFailure) Validate() error {
 		if e.LogicalOutputID != "agent-execution:"+e.ExecutionID {
 			return ErrInvalidValidationOutput
 		}
+	case executiondomain.ToolkitExecuteReadCapability:
+		if e.LogicalOutputID != "toolkit-execute-read:"+e.ExecutionID {
+			return ErrInvalidValidationOutput
+		}
+	case executiondomain.ToolkitAvailableToolsCapability:
+		if e.LogicalOutputID != "toolkit-available-tools:"+e.ExecutionID {
+			return ErrInvalidValidationOutput
+		}
 	case executiondomain.ToolkitCallToolCapability:
 		// A tool run CAN fail as a runtime failure rather than as a tool result:
 		// a lost claim, a passed deadline or an exhausted SDK budget never
@@ -205,6 +213,10 @@ func (s *RuntimeFailureService) IngestFailure(ctx context.Context, frame Runtime
 	}
 	if expected.TenantID != frame.TenantID || expected.ResourceProjectID != frame.ResourceProjectID || expected.ProjectionProjectID != frame.ProjectionProjectID || expected.CommandID != frame.Fence.CommandID || expected.ExecutionID != frame.Fence.ExecutionID || expected.Generation != frame.Fence.Generation || expected.LogicalOutputID != frame.LogicalOutputID {
 		return ProjectionOutcome{}, ErrValidationOutputConflict
+	}
+	// Keep signed worker bytes unchanged. This message belongs to product presentation.
+	if frame.Failure.Code == "RESOURCE_EXHAUSTED" {
+		frame.Failure.SafeMessage = "The run stopped because it reached a platform processing limit. The task may be incomplete. Share the support reference with your administrator to identify the limit before repeating actions."
 	}
 	browserData, err := json.Marshal(struct {
 		Code        string `json:"code"`

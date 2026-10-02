@@ -131,12 +131,15 @@ func TestSaveConfigurationRefusesAnUnusableIdentity(t *testing.T) {
 
 	valid := ConfigurationRequest{ProjectID: 7, ActorUserID: 11, ToolkitID: 19, IndexName: "docs", Configuration: json.RawMessage(`{}`)}
 	cases := map[string]func(ConfigurationRequest) ConfigurationRequest{
-		"no project":        func(r ConfigurationRequest) ConfigurationRequest { r.ProjectID = 0; return r },
-		"no actor":          func(r ConfigurationRequest) ConfigurationRequest { r.ActorUserID = 0; return r },
-		"no toolkit":        func(r ConfigurationRequest) ConfigurationRequest { r.ToolkitID = -1; return r },
-		"no index name":     func(r ConfigurationRequest) ConfigurationRequest { r.IndexName = ""; return r },
-		"newline in name":   func(r ConfigurationRequest) ConfigurationRequest { r.IndexName = "docs\nmore"; return r },
-		"oversized name":    func(r ConfigurationRequest) ConfigurationRequest { r.IndexName = strings.Repeat("d", MaxCurrentIndexMetaCollectionBytes+1); return r },
+		"no project":      func(r ConfigurationRequest) ConfigurationRequest { r.ProjectID = 0; return r },
+		"no actor":        func(r ConfigurationRequest) ConfigurationRequest { r.ActorUserID = 0; return r },
+		"no toolkit":      func(r ConfigurationRequest) ConfigurationRequest { r.ToolkitID = -1; return r },
+		"no index name":   func(r ConfigurationRequest) ConfigurationRequest { r.IndexName = ""; return r },
+		"newline in name": func(r ConfigurationRequest) ConfigurationRequest { r.IndexName = "docs\nmore"; return r },
+		"oversized name": func(r ConfigurationRequest) ConfigurationRequest {
+			r.IndexName = strings.Repeat("d", MaxCurrentIndexMetaCollectionBytes+1)
+			return r
+		},
 		"project overflows": func(r ConfigurationRequest) ConfigurationRequest { r.ProjectID = 1 << 40; return r },
 	}
 	for name, mutate := range cases {

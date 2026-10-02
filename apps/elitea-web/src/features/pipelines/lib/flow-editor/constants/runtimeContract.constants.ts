@@ -67,12 +67,11 @@ export const NODE_ID_WORD_SEPARATOR = '_';
  * A node type added to the editor is invisible to the Add-node menu until
  * somebody adds it here, having checked the runtime actually admits it.
  *
- * `code` and `custom` are absent on purpose — the compiler has no arm for
- * either. Their *renderers* are still registered (`useFlowEditorNodeTypes`)
- * so already-stored documents containing them keep displaying; they are
- * only withheld from the authoring menu.
+ * Code nodes require a configured sandbox runtime at execution time.
+ * `custom` remains unsupported by the compiler.
  */
 export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
+  PipelineNodeTypes.Code, // compiler.rs:1531 "code"; admitted sandbox runtime required
   PipelineNodeTypes.Decision, // compiler.rs:1243 "decision"
   PipelineNodeTypes.Agent, // compiler.rs:1246 "agent"
   PipelineNodeTypes.Toolkit, // compiler.rs:1249 "toolkit"
@@ -148,4 +147,4 @@ export const ReservedStateKeys: readonly ReservedStateKey[] = [
 const reservedStateKeySet: ReadonlySet<string> = new Set(ReservedStateKeys.map(entry => entry.key));
 
 /** Mirrors `compiler.rs:1456`'s `reserved_user_state_key` — true when the compiler refuses `key` in a user `state:` block. */
-export const isReservedStateKey = (key: string): boolean => reservedStateKeySet.has(key);
+export const isReservedStateKey = (key: string): boolean => reservedStateKeySet.has(key) || key.startsWith('__elitea_application_variable_');

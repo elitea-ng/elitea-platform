@@ -38,6 +38,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { CredentialsSelect, useCredentialValidation } from '@/features/credentials';
 
 import { useCredentialRows, type CredentialPickerRow } from './useCredentialRows';
+import { DelegatedCredentialStatus, delegatedCredentialKey } from './DelegatedCredentialStatus';
 
 /** The section every credential-kind property carries; `vectorstorage` is the other value the catalogue serves. */
 const CREDENTIALS_SECTION = 'credentials';
@@ -144,6 +145,9 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
   const validation = useCredentialValidation();
 
   const credentialType = configurationTypes[0] ?? '';
+  const selected = toSelectValue(value);
+  const matches = rows.filter((row) => row.eliteaTitle === selected?.eliteaTitle && row.isPrivate === selected.isPrivate);
+  const selectedCredential = hasFetchedData && matches.length === 1 ? matches[0] : undefined;
   useBatchValidation({ rows, hasFetchedData, section, projectId, validation });
   useReportRefusal({ value, validation, onRefusalChange });
 
@@ -180,30 +184,20 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
   );
 
   return (
-    <CredentialsSelect
-      value={toSelectValue(value)}
-      state={state}
-      handlers={handlers}
-      field={toSelectField(field)}
-      type={credentialType}
-      // The baseline's own gate: a vector-storage reference is picked, never created here.
-      isCreationAllowed={section !== 'vectorstorage'}
-      // #953/ELITEA-2494, CREATE page only — see this prop's own doc comment
-      // for why EDIT (elitea_issues#4138) must stay excluded. Scoped to the
-      // `credentials` section per `autoSelectFirstShared`'s own disclosed
-      // limit (vectorstorage's auto-select-project-default is a different,
-      // out-of-scope behaviour).
-      autoSelectFirstShared={isCreating && section === CREDENTIALS_SECTION}
-      // #927/ELITEA-1088,1090,1091,1093,1097: a literal `false` here made the
-      // styled `CredentialWarningBanner` unreachable from the toolkit
-      // editor's own picker for EVERY mismatch — missing, wrong-type, or
-      // genuinely private — because `CredentialsSelect`'s only other branch
-      // is the old plain `FormHelperText`. This is the one caller of this
-      // slot, and a mismatch here always means "this toolkit's credential
-      // reference cannot be resolved", so the styled banner is always the
-      // right one, whatever the reference's own `private` flag says.
-      mismatch={{ mismatchedPrivateCredential: true, createHref: `/credentials/create-credential/${credentialType}` }}
-    />
+    <>
+      <CredentialsSelect
+        value={toSelectValue(value)}
+        state={state}
+        handlers={handlers}
+        field={toSelectField(field)}
+        type={credentialType}
+        // The baseline's own gate: a vector-storage reference is picked, never created here.
+        isCreationAllowed={section !== 'vectorstorage'}
+        autoSelectFirstShared={isCreating && section === CREDENTIALS_SECTION}
+        mismatch={{ mismatchedPrivateCredential: true, createHref: `/credentials/create-credential/${credentialType}` }}
+      />
+      {section === CREDENTIALS_SECTION && selectedCredential && <DelegatedCredentialStatus key={delegatedCredentialKey(selectedCredential)} credential={selectedCredential} />}
+    </>
   );
 }
 

@@ -1,3 +1,9 @@
+export type { HTTPStatusCode1xx } from "./toolkits/toolkits";
+export type { HTTPStatusCode2xx } from "./toolkits/toolkits";
+export type { HTTPStatusCode3xx } from "./toolkits/toolkits";
+export type { HTTPStatusCode4xx } from "./toolkits/toolkits";
+export type { HTTPStatusCode5xx } from "./toolkits/toolkits";
+export type { HTTPStatusCodes } from "./toolkits/toolkits";
 export * from "./admin/admin";
 export * from "./analytics/analytics";
 export * from "./applications/applications";
@@ -10,6 +16,7 @@ export * from "./deepwiki/deepwiki";
 export * from "./default/default";
 export * from "./inventory/inventory";
 export * from "./resources/resources";
+export * from "./search/search";
 export * from "./secrets/secrets";
 export * from "./settings/settings";
 export * from "./skills/skills";

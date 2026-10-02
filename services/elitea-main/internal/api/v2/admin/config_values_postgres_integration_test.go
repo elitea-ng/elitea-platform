@@ -721,12 +721,15 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	                    file layer and served as window.elitea_brand to the
 	//	                    web app, the admin console and the login page
 	//	                    (ADR-0024 WP1)
+	//	default_secrets   → secrets.WithPlatformDefaultSecretPolicy, wired by
+	//	                    api/router.go. Shared REST and MCP vault handlers hide
+	//	                    default names and refuse changes without X-SECRET.
 	want := map[string]bool{
 		"resources": true, "mcp_configuration": true, "branding": true,
 		"agent_publishing": true, "skill_publishing": true,
 		"voice_features": true, "support_assistant": true,
 		"guardrails": true, "dedicated_banner": true,
-		"maintenance": true, "analytics": true,
+		"maintenance": true, "analytics": true, "default_secrets": true,
 	}
 	for id := range want {
 		if !available[id] {

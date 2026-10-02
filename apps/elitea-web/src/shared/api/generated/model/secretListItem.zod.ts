@@ -52,7 +52,7 @@ export const SecretListItem = zod
     is_default: zod
       .boolean()
       .describe(
-        "BUG-FOR-BUG: always false from the Go handler. pylon sets it from elitea_core's `default_secret_keys` config (legacy/plugins/secrets/api/v2/secrets.py), which elitea-main does not read.\n",
+        "True when the configured default-secret policy includes this name.\n",
       ),
   })
   .describe(

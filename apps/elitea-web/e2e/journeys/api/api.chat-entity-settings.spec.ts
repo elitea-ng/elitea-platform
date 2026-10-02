@@ -66,6 +66,7 @@ import {
   deleteAgent,
   deleteConversation,
   readCallerPersonalProjectId,
+  readVersion,
 } from '../../fixtures/api';
 import { STORAGE_STATE } from '../../../playwright.config';
 
@@ -112,6 +113,19 @@ interface AgentParticipantFixture {
   readonly participantId: string;
 }
 
+interface ApplicationParticipantRow {
+  readonly id?: unknown;
+  readonly entity_name?: string;
+  readonly entity_meta?: { readonly id?: unknown; readonly project_id?: unknown };
+}
+
+function applicationParticipant(rows: readonly ApplicationParticipantRow[], agentId: string, projectId: string) {
+  const matches = rows.filter((candidate) => candidate.entity_name === 'application' &&
+    String(candidate.entity_meta?.id) === agentId && String(candidate.entity_meta?.project_id) === projectId);
+  expect(matches, 'one attached application must match its exact entity and project').toHaveLength(1);
+  return matches[0];
+}
+
 /**
  * Build the fixture every case starts from: an agent, a conversation, and the
  * agent attached to it as the participant whose settings are then written.
@@ -146,8 +160,8 @@ async function seedAgentParticipant(
     attached.status(),
     `the agent could not be attached in project ${projectId}: ${(await attached.text()).slice(0, 200)}`,
   ).toBe(200);
-  const participants = (await attached.json()) as readonly { id?: unknown }[];
-  const participantId = String(participants[0]?.id ?? '');
+  const participants = (await attached.json()) as readonly ApplicationParticipantRow[];
+  const participantId = String(applicationParticipant(participants, agent.id, projectId)?.id ?? '');
   expect(participantId, 'the attach answered no participant id').not.toBe('');
 
   return {
@@ -309,7 +323,7 @@ test('a second override fully replaces the first, and omitting the key clears it
     expect(
       replaced['max_tokens'],
       'a field from the PREVIOUS override survived the one that replaced it',
-    ).toBeUndefined();
+    ).toBeNull();
 
     // #3 names no llm_settings at all: the agent goes back to its version's
     // own settings, which is what the "reset" control does.
@@ -379,11 +393,10 @@ test('an override stays applied through later writes to another participant', as
       },
     );
     expect(attached.status()).toBe(200);
-    const rows = (await attached.json()) as readonly { id?: unknown }[];
-    const otherParticipantId = rows
-      .map((row) => String(row.id ?? ''))
-      .find((id) => id !== fixture.participantId);
-    expect(otherParticipantId, 'the second agent did not become its own participant').toBeDefined();
+    const rows = (await attached.json()) as readonly ApplicationParticipantRow[];
+    const otherParticipantId = String(applicationParticipant(rows, second.id, DEFAULT_PROJECT_ID)?.id ?? '');
+    expect(otherParticipantId, 'the second agent did not become its own participant').not.toBe('');
+    expect(otherParticipantId, 'the second agent must have a distinct participant').not.toBe(fixture.participantId);
 
     const otherWrite = await request.put(
       entitySettingsURL(
@@ -489,6 +502,20 @@ test('switching version resends the version’s own settings and is not refused'
     expect(created.status(), `the second version was refused: ${(await created.text()).slice(0, 300)}`).toBe(201);
     const secondVersionId = String(((await created.json()) as { id?: unknown }).id ?? '');
     expect(secondVersionId, 'the version create answered no id').not.toBe('');
+    const secondVersion = await readVersion(request, fixture.agentId, secondVersionId, projectId);
+    expect(secondVersion.id).toBe(secondVersionId);
+    expect(secondVersion.applicationId).toBe(fixture.agentId);
+    expect(secondVersion.llmSettings).toMatchObject({
+      model_name: 'autotest-model-c', temperature: 0.7, max_tokens: 256,
+    });
+    const baseVersion = await readVersion(request, fixture.agentId, fixture.versionId, projectId);
+    expect(baseVersion.id).toBe(fixture.versionId);
+    expect(baseVersion.applicationId).toBe(fixture.agentId);
+    expect(baseVersion.llmSettings).toMatchObject({
+      model_name: BASELINE_MODEL.modelName,
+      temperature: BASELINE_MODEL.temperature,
+      max_tokens: BASELINE_MODEL.maxTokens,
+    });
 
     const url = entitySettingsURL(fixture.projectId, fixture.conversationId, fixture.participantId);
 
@@ -496,12 +523,7 @@ test('switching version resends the version’s own settings and is not refused'
     const switched = await request.put(url, {
       data: {
         version_id: secondVersionId,
-        llm_settings: {
-          model_name: 'autotest-model-c',
-          model_project_id: projectId,
-          temperature: 0.7,
-          max_tokens: 256,
-        },
+        llm_settings: secondVersion.llmSettings,
       },
     });
     expect(
@@ -526,12 +548,7 @@ test('switching version resends the version’s own settings and is not refused'
     const back = await request.put(url, {
       data: {
         version_id: fixture.versionId,
-        llm_settings: {
-          model_name: BASELINE_MODEL.modelName,
-          model_project_id: projectId,
-          temperature: BASELINE_MODEL.temperature,
-          max_tokens: BASELINE_MODEL.maxTokens,
-        },
+        llm_settings: baseVersion.llmSettings,
       },
     });
     expect(back.status(), `switching back was refused: ${(await back.text()).slice(0, 300)}`).toBe(200);
@@ -640,16 +657,9 @@ test('a conversation elsewhere may write settings for a catalogue participant, n
       ).slice(0, 300)}`,
     ).toBe(200);
 
-    const rows = (await attached.json()) as readonly {
-      id?: unknown;
-      entity_meta?: Record<string, unknown>;
-    }[];
-    const idFor = (agentId: string): string =>
-      String(
-        rows.find((row) => String(row.entity_meta?.['id'] ?? '') === agentId)?.id ?? '',
-      );
-    const catalogueParticipantId = idFor(catalogueAgent.id);
-    const strangerParticipantId = idFor(strangerAgent.id);
+    const rows = (await attached.json()) as readonly ApplicationParticipantRow[];
+    const catalogueParticipantId = String(applicationParticipant(rows, catalogueAgent.id, DEFAULT_PROJECT_ID)?.id ?? '');
+    const strangerParticipantId = String(applicationParticipant(rows, strangerAgent.id, ownProject)?.id ?? '');
     expect(
       catalogueParticipantId,
       'the catalogue agent did not become a participant of a conversation in another project',
