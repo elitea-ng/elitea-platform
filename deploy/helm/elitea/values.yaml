@@ -1007,6 +1007,22 @@ main:
     # own is 24 hours.
     ELITEA_SESSION_REJECT_LEGACY_COOKIES: ""
 
+    # --- SCIM 2.0 provisioning (shared migration 0134) -------------------------
+    # BREAKING CHANGE: SCIM no longer accepts personal access tokens. Create a
+    # SCIM client under Admin > Configuration > Authentication > SCIM
+    # provisioning, and configure the identity provider with it:
+    #   Tenant URL      https://<host>/api/v2/scim/v2
+    #   Token endpoint  https://<host>/api/v2/scim/oauth/token  (OAuth2 only)
+    # A "Secret token (Bearer)" client gives one secret for the identity
+    # provider's "Secret token" field. An "OAuth2 client credentials" client
+    # gives a client identifier and a client secret. See
+    # apps/elitea-web/src/entries/docs/content/admin/authentication.mdx.
+    #
+    # ELITEA_SCIM_ACCESS_TOKEN_TTL is the lifetime of an access token the token
+    # endpoint issues to an OAuth2 client. A Go duration between 5m and 24h.
+    # Empty means 1h. A value outside the range stops the boot.
+    ELITEA_SCIM_ACCESS_TOKEN_TTL: ""
+
     # --- The first administrator, on a single-sign-on-only deployment -----------
     # Comma-separated provider references that are granted the administration
     # super_admin role the first time they sign in

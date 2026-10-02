@@ -350,3 +350,36 @@ func TestAuditedSurfacesIsACopy(t *testing.T) {
 		t.Fatal("AuditedSurfaces hands out the package's own slice")
 	}
 }
+
+/* ── non-user actors (shared migration 0134) ────────────────────────────── */
+
+// A SCIM client has no user id. Its change must still name an actor, or the
+// trail shows a provisioning change made by nobody.
+func TestAuditRecordsANonUserActorWhenNoUserIsPresent(t *testing.T) {
+	recorder := &captureRecorder{}
+	router := auditTestRouter(recorder, "/*", http.StatusCreated, func(r *http.Request) {
+		audit.Annotate(r.Context(), audit.Annotation{Actor: "scim:Entra ID"})
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v2/scim/v2/Users", nil))
+
+	events := recorder.all()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(events))
+	}
+	if events[0].UserID != nil || events[0].UserEmail != "scim:Entra ID" {
+		t.Fatalf("event actor = (%v, %q), want (nil, scim:Entra ID)", events[0].UserID, events[0].UserEmail)
+	}
+}
+
+func TestAuditNeverReplacesAUserWithANonUserActor(t *testing.T) {
+	recorder := &captureRecorder{}
+	router := auditTestRouter(recorder, "/*", http.StatusOK, func(r *http.Request) {
+		audit.Annotate(r.Context(), audit.Annotation{Actor: "scim:Entra ID"})
+	})
+	router.ServeHTTP(httptest.NewRecorder(), authenticatedRequest(http.MethodPost, "/api/v2/scim/v2/Users"))
+
+	events := recorder.all()
+	if len(events) != 1 || events[0].UserEmail != "admin@test.local" {
+		t.Fatalf("events = %+v, want the user's own address", events)
+	}
+}

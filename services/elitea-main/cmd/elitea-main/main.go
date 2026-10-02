@@ -9,6 +9,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/brandpackage"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"log/slog"
 	"net/http"
 	"os"
@@ -414,6 +415,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	mailSettings, err := mailerConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("load outbound e-mail settings: %w", err)
+	}
+	// The SCIM access token lifetime (shared migration 0134). A value that is
+	// not a duration, or is outside 5m..24h, stops the boot and names the
+	// variable, rather than running with a lifetime nobody chose.
+	scimAccessTokenTTL, err := scimclient.AccessTokenTTLFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("load SCIM settings: %w", err)
 	}
 	// ONE store and ONE resolver, shared by the composer that sends and the
 	// admin surface that writes (wired through api.Config.EmailSettings).
@@ -2209,6 +2217,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitDiscovery:           toolkitDiscovery,
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
+		SCIMAccessTokenTTL:         scimAccessTokenTTL,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
