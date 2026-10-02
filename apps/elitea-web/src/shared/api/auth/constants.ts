@@ -57,30 +57,28 @@ export function authWindowName(state: string): string {
 export const LOGOUT_PATH = '/forward-auth/logout'; // old UserButton.jsx:32
 
 /**
- * OIDC login entry point, and the `target_to` query parameter it honours.
+ * Single sign-on login entry point: the sign-in page, and the `target_to`
+ * query parameter it honours.
+ *
+ * `/forward-auth/login` is the SSO plane's sign-in page
+ * (`internal/api/browserauth/chooser.go`). With one usable provider it
+ * redirects at once to that provider's login route (`/forward-auth/auth_oidc/login`
+ * or `/forward-auth/auth_saml/login`) and KEEPS `target_to`. With OIDC and SAML
+ * both usable it shows a button per provider and a work email field, and
+ * every hop carries `target_to`. A fixed `/forward-auth/auth_oidc/login` could
+ * not reach a SAML provider at all.
  *
  * The re-auth popup opens THIS, not the callback page directly. Measured on
  * the E2E stack (issue #136 B): nothing gates `/app/*` at the edge — an
  * unauthenticated browser is served the SPA shell at any deep link — so a
  * popup pointed straight at `/app/auth-callback` is answered with the app
- * itself and no OIDC round trip ever happens. Its session probe then reports
- * "no session", the flight rejects, and the popup could never restore
- * anything. `/forward-auth/auth_oidc/login?target_to=<callback>` is the one
- * path that does re-authenticate: elitea-main encodes the target into the
- * OIDC `state` (`state=<nonce>|<target_to>`,
- * `internal/api/v2/auth/oidc.go`'s `Login`) and its callback redirects the
+ * itself and no login round trip ever happens. Here, the provider login route
+ * keeps `target_to` in its signed state (`state=<nonce>|<target_to>` for OIDC,
+ * the signed request cookie for SAML) and the callback redirects the
  * freshly-authenticated browser back to it verbatim — query string included,
- * which is what carries `auth_state` through (`safeRedirectTarget` returns
- * the value unchanged, `internal/api/v2/auth/util.go`).
- *
- * `/forward-auth/login` is not used BY THE POPUP: on the OIDC plane it
- * redirects to the path below while dropping `target_to`
- * (`internal/api/api/router.go`), which would land the popup on `/` instead of
- * the callback page and strand the flight. It is the right entry point on the
- * FORM plane, where it is the only path that opens a login transaction — see
- * `FORM_LOGIN_PATH` below and `login-redirect.ts` for which plane is which.
+ * which is what carries `auth_state` through.
  */
-export const OIDC_LOGIN_PATH = '/forward-auth/auth_oidc/login';
+export const SSO_LOGIN_PATH = '/forward-auth/login';
 
 /**
  * Form login entry point.

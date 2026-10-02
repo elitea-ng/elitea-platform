@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { FORM_LOGIN_PATH, OIDC_LOGIN_PATH } from './constants';
+import { FORM_LOGIN_PATH, SSO_LOGIN_PATH } from './constants';
 import { authPlaneFromProbeStatus, buildLoginUrl, loginPathForPlane } from './login-redirect';
 
 describe('authPlaneFromProbeStatus', () => {
@@ -30,8 +30,11 @@ describe('loginPathForPlane', () => {
     expect(FORM_LOGIN_PATH).toBe('/forward-auth/login');
   });
 
-  it('keeps the OIDC entry point the popup already uses', () => {
-    expect(loginPathForPlane('oidc')).toBe(OIDC_LOGIN_PATH);
+  it('sends the SSO plane to the sign-in page, not straight to OIDC', () => {
+    // A fixed /forward-auth/auth_oidc/login could never reach a SAML provider.
+    // The sign-in page redirects to the one usable provider, or offers both.
+    expect(loginPathForPlane('oidc')).toBe(SSO_LOGIN_PATH);
+    expect(SSO_LOGIN_PATH).toBe('/forward-auth/login');
   });
 });
 
@@ -55,7 +58,7 @@ describe('buildLoginUrl', () => {
     expect(buildLoginUrl('form', 'app/chat')).toBe('/forward-auth/login?target_to=%2Fapp%2Fchat');
   });
 
-  it('uses the OIDC entry point for the OIDC plane', () => {
-    expect(buildLoginUrl('oidc', '/app/')).toBe('/forward-auth/auth_oidc/login?target_to=%2Fapp%2F');
+  it('uses the sign-in page for the SSO plane and keeps the return target', () => {
+    expect(buildLoginUrl('oidc', '/app/')).toBe('/forward-auth/login?target_to=%2Fapp%2F');
   });
 });

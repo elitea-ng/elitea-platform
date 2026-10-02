@@ -34,8 +34,10 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
   // builds opened the callback route DIRECTLY, which cannot re-authenticate on
   // a stack that does not gate the SPA at the edge (the popup is simply served
   // the app, its session probe reports "no session", and the flight rejects).
-  // The popup now opens `/forward-auth/auth_oidc/login` with the callback
-  // route as `target_to`, which is the flow the assertions below drive.
+  // The popup now opens `/forward-auth/login` (the SSO sign-in page) with the
+  // callback route as `target_to`. With the stack's one OIDC provider it
+  // redirects to `/forward-auth/auth_oidc/login` and keeps the target, which
+  // is the flow the assertions below drive.
 
   await page.goto(BASE_URL + '/app/');
   await page.waitForURL('**/chat**', { timeout: 15_000 });

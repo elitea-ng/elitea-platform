@@ -4458,5 +4458,6 @@
   "settings.memory.summarization.guidancePlaceholder": "Optional: emphasize decision reasons, deliverables, and unresolved risks.",
   "pages.admin.identityProviders.dialog.error.loginDomain": "“{{domain}}” is not a domain name such as example.com.",
   "pages.admin.identityProviders.dialog.loginDomains": "Login domains",
-  "pages.admin.identityProviders.dialog.loginDomainsHelp": "Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider."
+  "pages.admin.identityProviders.dialog.loginDomainsHelp": "Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider.",
+  "pages.admin.identityProviders.dialog.loginDomainsPlaceholder": "example.com, example.org"
 }

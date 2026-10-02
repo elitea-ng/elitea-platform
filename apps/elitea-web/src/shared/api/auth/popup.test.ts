@@ -81,7 +81,7 @@ function harness(overrides: Partial<AuthPopupOptions> = {}): Harness {
     /**
      * The popup opens the OIDC login endpoint, so the correlated
      * `auth_state` lives one level in — inside the `target_to` that names
-     * this app's callback route. See `constants.ts`'s `OIDC_LOGIN_PATH` for
+     * this app's callback route. See `constants.ts`'s `SSO_LOGIN_PATH` for
      * why the popup cannot open the callback route directly.
      */
     stateOf(index = 0) {
@@ -150,7 +150,7 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
    * never re-authenticate on a stack that does not gate the SPA at the edge —
    * the popup is simply served the app, its session probe reports "no
    * session", and the flight rejects. Measured on the E2E stack; see
-   * `constants.ts`'s `OIDC_LOGIN_PATH`.
+   * `constants.ts`'s `SSO_LOGIN_PATH`.
    *
    * Asserted as an exact URL, and the `target_to` is decoded and compared in
    * full: a percent-encoding slip here (or a `/app//auth-callback` double
@@ -158,13 +158,13 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
    * elitea-main accepts and redirects to but that matches no route, which
    * would strand every flight in `popup_closed` with nothing to point at.
    */
-  it('opens the OIDC login endpoint with the callback URL as target_to (ROUTE-001)', async () => {
+  it('opens the sign-in page with the callback URL as target_to (ROUTE-001)', async () => {
     const h = harness({ baseOrigin: 'https://backend.example', basePath: '/elitea_ui' });
     const flight = h.controller.reauthenticate();
     const url = h.openedUrls[0] ?? '';
     const target = `/elitea_ui/auth-callback?auth_state=${h.stateOf()}`;
     expect(url).toBe(
-      `https://backend.example/forward-auth/auth_oidc/login?target_to=${encodeURIComponent(target)}`,
+      `https://backend.example/forward-auth/login?target_to=${encodeURIComponent(target)}`,
     );
     expect(new URL(url).searchParams.get('target_to')).toBe(target);
     expect(h.openedFeatures[0]).toContain('width=500,height=600'); // clamped minimums

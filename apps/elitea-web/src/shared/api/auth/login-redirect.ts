@@ -1,4 +1,4 @@
-import { FORM_LOGIN_PATH, OIDC_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
+import { FORM_LOGIN_PATH, SSO_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
 
 /**
  * Where to send a browser that is not logged in.
@@ -8,7 +8,7 @@ import { FORM_LOGIN_PATH, OIDC_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
  * the other, never both). They expose different entry points, and this module
  * exists because the app previously knew only one of them:
  *
- *   OIDC plane  `/forward-auth/info`, `/forward-auth/auth_oidc/login`
+ *   OIDC plane  `/forward-auth/info`, `/forward-auth/login` (the SSO sign-in page)
  *   Form plane  `/forward-auth/login` -> `/forward-auth/auth_form/login`
  *
  * The Form plane serves no `/forward-auth/info` at all, so on a Form
@@ -36,7 +36,10 @@ export function authPlaneFromProbeStatus(status: number | undefined): AuthPlane 
 }
 
 export function loginPathForPlane(plane: AuthPlane): string {
-  return plane === 'form' ? FORM_LOGIN_PATH : OIDC_LOGIN_PATH;
+  // Both planes now start at `/forward-auth/login`. The SSO plane serves the
+  // sign-in page there (OIDC, SAML or both); the Form plane opens its login
+  // transaction there. The plane is still inferred, for the popup and tests.
+  return plane === 'form' ? FORM_LOGIN_PATH : SSO_LOGIN_PATH;
 }
 
 /**

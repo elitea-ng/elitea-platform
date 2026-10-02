@@ -25,7 +25,7 @@ import {
   AUTH_FLIGHT_STARTED_KEY,
   AUTH_STATE_PARAM,
   AUTH_STATE_STORAGE_KEY,
-  OIDC_LOGIN_PATH,
+  SSO_LOGIN_PATH,
   TARGET_TO_PARAM,
   authResultStorageKey,
   authWindowName,
@@ -129,9 +129,9 @@ export interface AuthPopupOptions {
   loginPath?: string | (() => string);
 }
 
-/** Reads the per-flight login path; the OIDC entry point is the default. */
+/** Reads the per-flight login path; the SSO sign-in page is the default. */
 function resolveLoginPath(loginPath: AuthPopupOptions['loginPath']): string {
-  return typeof loginPath === 'function' ? loginPath() : (loginPath ?? OIDC_LOGIN_PATH);
+  return typeof loginPath === 'function' ? loginPath() : (loginPath ?? SSO_LOGIN_PATH);
 }
 
 export interface AuthPopupController {
@@ -301,7 +301,7 @@ export function createAuthPopupController(options: AuthPopupOptions = {}): AuthP
 
       // The popup's landing page: this app's own callback route, correlated
       // by `auth_state`. It is the login endpoint's `target_to`, NOT the popup's
-      // opening URL. See OIDC_LOGIN_PATH's doc comment. It tells you why opening
+      // opening URL. See SSO_LOGIN_PATH's doc comment. It tells you why opening
       // it directly can never re-authenticate on a stack that does not gate the
       // SPA at the edge.
       // The login path resolves HERE, per flight: see `loginPath`.

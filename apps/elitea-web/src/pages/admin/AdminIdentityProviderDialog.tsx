@@ -309,7 +309,10 @@ export function AdminIdentityProviderDialog({
             update('loginDomains', event.target.value);
           }}
           fullWidth
-          placeholder="example.com, example.org"
+          placeholder={t(
+            'pages.admin.identityProviders.dialog.loginDomainsPlaceholder',
+            'example.com, example.org',
+          )}
           helperText={t(
             'pages.admin.identityProviders.dialog.loginDomainsHelp',
             'Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider.',
