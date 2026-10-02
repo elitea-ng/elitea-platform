@@ -2376,6 +2376,12 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		// login attempt carrying the assertion in the URL.
 		{method: http.MethodGet, path: "/forward-auth/auth_saml/acs", want: http.StatusMethodNotAllowed},
 		{method: http.MethodPost, path: "/forward-auth/auth_saml/login", want: http.StatusMethodNotAllowed},
+		// The sign-in page's continue route. With no usable provider it
+		// sends the browser to the fallback login route; a POST that is not
+		// a form is refused before anything else.
+		{method: http.MethodGet, path: "/forward-auth/login/continue?provider=oidc", want: http.StatusSeeOther},
+		{method: http.MethodPost, path: "/forward-auth/login/continue", want: http.StatusUnsupportedMediaType},
+		{method: http.MethodPut, path: "/forward-auth/login/continue", want: http.StatusMethodNotAllowed},
 	}
 
 	for _, route := range routes {

@@ -89,6 +89,10 @@ type OIDCHandler struct {
 	// deployment configured only through the admin page.
 	envRuntime *oidcRuntime
 
+	// envOption is the environment fallback's sign-in page entry
+	// (OIDC_DISPLAY_NAME, OIDC_LOGIN_DOMAINS). Read once, with envRuntime.
+	envOption LoginOption
+
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*oidcRuntime
 }
@@ -116,6 +120,7 @@ func NewOIDCHandler(ctx context.Context, cfg *OIDCConfig, pool *pgxpool.Pool, se
 			return nil, err
 		}
 		handler.envRuntime = environment
+		handler.envOption = oidcEnvironmentOption()
 	}
 	return handler, nil
 }
@@ -220,8 +225,13 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   300,
 	})
 
-	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue,
-		oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier))
+	authOptions := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier)}
+	// The sign-in page passes the address a person typed, so the identity
+	// provider can pre-fill it (OpenID Connect Core 3.1.2.1 `login_hint`).
+	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
+		authOptions = append(authOptions, oauth2.SetAuthURLParam("login_hint", hint))
+	}
+	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue, authOptions...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -365,6 +375,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// Exchange authorization code for tokens
 	code := r.URL.Query().Get("code")
 	if code == "" {
+		if r.URL.Query().Get("error") != "" {
+			// The identity provider ended the login without a code: the person
+			// cancelled, or the provider refused them. The state was verified
+			// above, so this callback belongs to a login this browser started.
+			// Send the browser back to the sign-in page with a generic error
+			// and the same return target. The provider's own error text is
+			// not echoed: it is attacker-influenced input.
+			slog.Warn("OIDC: the identity provider returned an error instead of a code",
+				"error", r.URL.Query().Get("error"))
+			_, _ = h.consumeCodeVerifier(w, r)
+			http.Redirect(w, r, SignInErrorURL(targetTo), http.StatusFound)
+			return
+		}
 		http.Error(w, "missing authorization code", http.StatusBadRequest)
 		return
 	}

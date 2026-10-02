@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/gateway"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -1126,15 +1127,32 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthValidator)
 	r.Get("/auth", forwardAuth.ServeHTTP)
 
+	// The pack is resolved from three layers (ADR-0024): the product default
+	// under the BRAND_PACK_PATH file under the admin-authored `branding`
+	// section, read through cfg.Pool and cached briefly. Built here, before
+	// the browser-auth routes, because the single sign-on sign-in page renders
+	// the brand too. The bootstrap route and the admin routes below share it.
+	brandingResolver := cfg.Branding
+	if brandingResolver == nil {
+		brandingResolver = v2branding.NewResolver(v2branding.ResolverConfig{
+			PackPath: cfg.BrandPackPath,
+			Pool:     cfg.Pool,
+		})
+	}
+
 	// Browser-facing OIDC session lifecycle. Legacy form authentication is not
 	// mounted because auth_core__user has no password credential columns; the
 	// previous prototype queried columns that do not exist in the legacy schema.
 	if cfg.SessionHandler != nil {
 		r.Route("/forward-auth", func(r chi.Router) {
-			if cfg.OIDCHandler != nil {
-				r.Get("/login", func(w http.ResponseWriter, req *http.Request) {
-					http.Redirect(w, req, "/forward-auth/auth_oidc/login", http.StatusFound)
-				})
+			// The sign-in page (browserauth/chooser.go). One usable provider
+			// keeps the old behaviour, a redirect to its login route, now with
+			// `target_to` preserved. Two show the provider buttons and the
+			// work email field.
+			if chooser := newSSOChooser(cfg.OIDCHandler, cfg.SAMLHandler, brandingResolver); chooser != nil {
+				r.Get("/login", chooser.Login)
+				r.Get(browserauth.ChooserContinuePath, chooser.Continue)
+				r.Post(browserauth.ChooserContinuePath, chooser.Continue)
 			}
 			r.Get("/logout", cfg.SessionHandler.Logout)
 			r.Get("/info", cfg.SessionHandler.Info)
@@ -1188,17 +1206,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// The UI loads branding before a browser session exists, so this exact
 	// static bootstrap route must remain public in both current-main and PoV.
 	//
-	// The pack is resolved from three layers (ADR-0024): the product default
-	// under the BRAND_PACK_PATH file under the admin-authored `branding`
-	// section, read through cfg.Pool and cached briefly. The admin routes
-	// below invalidate the same resolver on a save.
-	brandingResolver := cfg.Branding
-	if brandingResolver == nil {
-		brandingResolver = v2branding.NewResolver(v2branding.ResolverConfig{
-			PackPath: cfg.BrandPackPath,
-			Pool:     cfg.Pool,
-		})
-	}
+	// brandingResolver is built above the browser-auth routes. The admin
+	// routes below invalidate the same resolver on a save.
 	brandingHandler := v2branding.NewHandler(v2branding.Config{Resolver: brandingResolver})
 	// A nil *Composer must stay a nil INTERFACE for the With* options to
 	// recognise "no mailer"; a typed nil inside the interface would pass

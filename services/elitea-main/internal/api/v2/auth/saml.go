@@ -68,6 +68,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -289,6 +290,19 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 		slog.Error("SAML: authentication request could not be encoded", "err", err)
 		http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
 		return
+	}
+	// The sign-in page passes the address a person typed. Microsoft Entra ID
+	// reads a `login_hint` query parameter on its SAML endpoint and pre-fills
+	// its sign-in form. The parameter is APPENDED, not merged through
+	// url.Values: re-encoding would reorder the query, and a signed redirect
+	// is verified over the exact SAMLRequest, RelayState and SigAlg bytes.
+	// An identity provider that does not know the parameter ignores it.
+	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
+		separator := "&"
+		if !strings.Contains(authURL, "?") {
+			separator = "?"
+		}
+		authURL += separator + "login_hint=" + url.QueryEscape(hint)
 	}
 	http.Redirect(w, r, authURL, http.StatusFound)
 }

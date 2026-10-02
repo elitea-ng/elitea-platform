@@ -77,3 +77,12 @@ func verifyBrowserValue(secret, cookie string) (string, bool) {
 func normalizeAssertedEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
+
+// SignInPath is the sign-in page every single sign-on plane returns to.
+const SignInPath = "/forward-auth/login"
+
+// SignInErrorURL is the sign-in page with the generic login error banner, and
+// the return target the failed login carried.
+func SignInErrorURL(target string) string {
+	return SignInPath + "?error=sso_failed&target_to=" + url.QueryEscape(safeRedirectTarget(target))
+}
