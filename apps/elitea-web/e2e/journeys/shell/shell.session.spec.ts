@@ -34,9 +34,9 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
   // builds opened the callback route DIRECTLY, which cannot re-authenticate on
   // a stack that does not gate the SPA at the edge (the popup is simply served
   // the app, its session probe reports "no session", and the flight rejects).
-  // The popup now opens `/forward-auth/login` (the SSO sign-in page) with the
+  // The popup now opens `/auth/login` (the SSO sign-in page) with the
   // callback route as `target_to`. With the stack's one OIDC provider it
-  // redirects to `/forward-auth/auth_oidc/login` and keeps the target, which
+  // redirects to `/auth/oidc/login` and keeps the target, which
   // is the flow the assertions below drive.
 
   await page.goto(BASE_URL + '/app/');
@@ -59,7 +59,7 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
   // The provider's own authorize page, not merely "the popup went somewhere":
   // `oidc.localhost:<port>` is the alias elitea-main hands out (see
   // `deploy/docker-compose.e2e-standalone.yml`). A popup that stalled on the
-  // app's own `/forward-auth/auth_oidc/login` hop — or on an error page,
+  // app's own `/auth/oidc/login` hop — or on an error page,
   // which is what happened while the issuer was an unresolvable compose
   // hostname — does not match.
   //

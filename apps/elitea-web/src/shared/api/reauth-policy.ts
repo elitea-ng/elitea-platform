@@ -12,13 +12,16 @@
 /**
  * Old sniff retained as the SECONDARY signal (eliteaApi.js:26-28): the final
  * URL, with `target_to` removed first so its VALUE cannot fake a match,
- * containing both `/forward-auth/` and `/login`.
+ * containing both an auth prefix (`/auth/`, or the deprecated `/forward-auth/`)
+ * and `/login`.
  */
 function isAuthRedirect(finalUrl: string): boolean {
   const url = new URL(finalUrl);
   url.searchParams.delete('target_to');
   const stripped = url.toString();
-  return stripped.includes('/forward-auth/') && stripped.includes('/login');
+  const path = url.pathname;
+  const underAuth = path.startsWith('/auth/') || path.startsWith('/forward-auth/');
+  return underAuth && stripped.includes('/login');
 }
 
 /**

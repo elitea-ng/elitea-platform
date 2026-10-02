@@ -705,7 +705,7 @@ describe('user footer', () => {
   });
 
   it('sweeps the el. namespace on logout', async () => {
-    // The `/forward-auth/logout` handoff itself assigns `window.location.href`,
+    // The `/auth/logout` handoff itself assigns `window.location.href`,
     // which jsdom cannot perform; the observable half here is the storage sweep
     // that `performLogout()` does and the reference's raw `location.href =` did
     // not. The navigation half is covered by the E2E journey.

@@ -54,18 +54,26 @@ const AUTH_WINDOW_NAME_PREFIX = 'elitea-auth-popup-';
 export function authWindowName(state: string): string {
   return AUTH_WINDOW_NAME_PREFIX + state;
 }
-export const LOGOUT_PATH = '/forward-auth/logout'; // old UserButton.jsx:32
+/**
+ * Browser authentication routes live under `/auth/` (elitea-main
+ * `internal/api/auth_paths.go`). The `/forward-auth/` prefix they had before is
+ * still served as a deprecated alias; this app no longer writes it.
+ */
+export const LOGOUT_PATH = '/auth/logout'; // old UserButton.jsx:32 named /forward-auth/logout
+
+/** The session probe (`SessionHandler.Info`). */
+export const SESSION_INFO_PATH = '/auth/info';
 
 /**
  * Single sign-on login entry point: the sign-in page, and the `target_to`
  * query parameter it honours.
  *
- * `/forward-auth/login` is the SSO plane's sign-in page
+ * `/auth/login` is the SSO plane's sign-in page
  * (`internal/api/browserauth/chooser.go`). With one usable provider it
- * redirects at once to that provider's login route (`/forward-auth/auth_oidc/login`
- * or `/forward-auth/auth_saml/login`) and KEEPS `target_to`. With OIDC and SAML
+ * redirects at once to that provider's login route (`/auth/oidc/login`
+ * or `/auth/saml/login`) and KEEPS `target_to`. With OIDC and SAML
  * both usable it shows a button per provider and a work email field, and
- * every hop carries `target_to`. A fixed `/forward-auth/auth_oidc/login` could
+ * every hop carries `target_to`. A fixed OIDC login route could
  * not reach a SAML provider at all.
  *
  * The re-auth popup opens THIS, not the callback page directly. Measured on
@@ -78,16 +86,16 @@ export const LOGOUT_PATH = '/forward-auth/logout'; // old UserButton.jsx:32
  * freshly-authenticated browser back to it verbatim — query string included,
  * which is what carries `auth_state` through.
  */
-export const SSO_LOGIN_PATH = '/forward-auth/login';
+export const SSO_LOGIN_PATH = '/auth/login';
 
 /**
  * Form login entry point.
  *
- * `/forward-auth/auth_form/login` renders the form itself and 400s without a
+ * `/auth/form/login` renders the form itself and 400s without a
  * transaction id; only this path creates one (`beginLogin`,
  * `internal/api/browserauth/handler.go`), so this is what a browser is sent to.
  */
-export const FORM_LOGIN_PATH = '/forward-auth/login';
+export const FORM_LOGIN_PATH = '/auth/login';
 export const TARGET_TO_PARAM = 'target_to';
 
 export interface AuthResultMessage {

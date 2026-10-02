@@ -133,7 +133,7 @@ describe('App', () => {
     expect(openedUrls.length).toBeGreaterThan(0);
     for (const raw of openedUrls) {
       const opened = new URL(raw, 'http://localhost');
-      expect(opened.pathname).toBe('/forward-auth/login');
+      expect(opened.pathname).toBe('/auth/login');
       // `VITE_BASE_URI` is `/app/`; the trailing slash must not survive into
       // the callback target or the route it names cannot match. Under vitest
       // `import.meta.env.DEV` is true, so `getAppBasename()` returns '' and

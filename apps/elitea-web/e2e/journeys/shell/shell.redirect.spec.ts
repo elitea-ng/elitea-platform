@@ -106,13 +106,13 @@ test('J2: OIDC login honours target_to deep link', async ({ browser }) => {
   // unreachable.
   //
   // What IS real, and is what JRNY-002 is actually about: elitea-main's
-  // `/forward-auth/auth_oidc/login?target_to=<path>` encodes the target into
+  // `/auth/oidc/login?target_to=<path>` encodes the target into
   // the OIDC `state` (`state=<nonce>|<target_to>`, verified against this
   // stack) and its callback lands the freshly-authenticated browser on that
   // path. That is the target_to contract; drive it end to end.
   const targetPath = '/app/artifacts';
   const loginResponse = await page.request.get(
-    `${BASE_URL}/forward-auth/auth_oidc/login?target_to=${encodeURIComponent(targetPath)}`,
+    `${BASE_URL}/auth/oidc/login?target_to=${encodeURIComponent(targetPath)}`,
     { maxRedirects: 0 },
   );
   expect(loginResponse.status()).toBe(302);
@@ -176,7 +176,7 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // context below with the shared `page` fixture it used to take.
   //
   // Since shared migration 0117 the `elitea_session` cookie names a ROW and
-  // `/forward-auth/logout` REVOKES it (`internal/api/v2/auth/session.go`).
+  // `/auth/logout` REVOKES it (`internal/api/v2/auth/session.go`).
   // `auth.setup.ts` mints one session per persona and all four workers replay
   // its cookie, so a logout driven on the shared state signs out the whole
   // suite: every later API helper gets `401 missing authorization header` and
@@ -192,12 +192,12 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // ASSERTION CHANGED FROM `waitForURL` TO NAVIGATION REQUESTS — read this
   // before "simplifying" it back. The earlier revision asserted
   //
-  //   await page.waitForURL(/localhost:9400|oidc-mock|\/forward-auth\/logout/)
+  //   await page.waitForURL(/localhost:9400|oidc-mock|\/auth\/logout/)
   //
   // and that matcher cannot express what logout does, for a reason measured
   // directly rather than assumed. `performLogout()` sends the browser to
-  // `/forward-auth/logout?target_to=/forward-auth/login`, which elitea-main
-  // answers 302 → `/forward-auth/login` → 302 `/forward-auth/auth_oidc/login`,
+  // `/auth/logout?target_to=/auth/login`, which elitea-main
+  // answers 302 → `/auth/login` → 302 `/auth/oidc/login`,
   // itself 302 → the provider's `/oauth2/authorize`. All hops were observed as real
   // navigation requests — but a chain of server-side 302s COMMITS exactly one
   // document, so `page.url()` and `framenavigated` only ever report the final
@@ -210,7 +210,7 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // proves the browser left the SPA for the logout endpoint, that the hand-off
   // named the login screen, and that the chain then reached the identity
   // provider's authorize endpoint, IN ORDER — none of which the old glob
-  // distinguished (its third alternative, `/forward-auth/logout`, would also
+  // distinguished (its third alternative, `/auth/logout`, would also
   // have matched a chain that got no further). Step 2 additionally asserts the
   // SERVER session is really gone, which the previous revision never checked
   // at all.
@@ -227,7 +227,7 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // THE DEFAULT 30 s BUDGET CANNOT HOLD THIS TEST — measured, not guessed.
   // Unlike every other journey, this one does not start signed in: it drives
   // the provider round trip itself, and `signInThroughOidc` alone holds two
-  // 15 s `waitForURL`s plus two navigations and a `/forward-auth/info` read.
+  // 15 s `waitForURL`s plus two navigations and a `/auth/info` read.
   // The profile load and the 20 s wait for the logout control come after
   // that, so the waits this test already declares add up to more than the
   // file default and it can only pass while every hop is fast. It timed out
@@ -261,7 +261,7 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   // Precondition: the session this journey is about to destroy really exists.
   // Without this, every assertion below is also satisfied by a browser that
   // was never signed in.
-  const before = await page.request.get(BASE_URL + '/forward-auth/info');
+  const before = await page.request.get(BASE_URL + '/auth/info');
   expect(await before.json()).toMatchObject({ authenticated: true });
 
   // A sentinel in the namespace performLogout() is contracted to sweep, plus
@@ -296,30 +296,30 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
       timeout: 15_000,
     })
     .toBeGreaterThan(0);
-  const logoutHop = navigations.find((url) => url.includes('/forward-auth/logout'));
-  expect(logoutHop, 'the browser must navigate to /forward-auth/logout').toBeTruthy();
+  const logoutHop = navigations.find((url) => url.includes('/auth/logout'));
+  expect(logoutHop, 'the browser must navigate to /auth/logout').toBeTruthy();
   // The hand-off must name the login screen as its target, or the signed-out
   // user is parked on the index route's loading state instead.
   //
-  // The target is `/forward-auth/login`, NOT `/forward-auth/auth_oidc/login`.
-  // Only `/forward-auth/login` is registered on both authentication planes.
+  // The target is `/auth/login`, NOT `/auth/oidc/login`.
+  // Only `/auth/login` is registered on both authentication planes.
   // The OIDC-only path ended a form-plane logout on a bare 404. THIS stack is
-  // the OIDC plane. On it, `/forward-auth/login` answers 302 to
-  // `/forward-auth/auth_oidc/login`. The chain below is therefore one hop
+  // the OIDC plane. On it, `/auth/login` answers 302 to
+  // `/auth/oidc/login`. The chain below is therefore one hop
   // longer. Its end state is the same.
-  expect(new URL(logoutHop!).searchParams.get('target_to')).toBe('/forward-auth/login');
+  expect(new URL(logoutHop!).searchParams.get('target_to')).toBe('/auth/login');
   // ...and the login hops must sit BETWEEN the logout and the provider.
   const order = (predicate: (url: string) => boolean): number => navigations.findIndex(predicate);
-  expect(order((url) => url.includes('/forward-auth/login'))).toBeGreaterThan(
-    order((url) => url.includes('/forward-auth/logout')),
+  expect(order((url) => url.includes('/auth/login'))).toBeGreaterThan(
+    order((url) => url.includes('/auth/logout')),
   );
-  expect(order((url) => url.includes('/forward-auth/auth_oidc/login'))).toBeGreaterThan(
-    order((url) => url.includes('/forward-auth/login')),
+  expect(order((url) => url.includes('/auth/oidc/login'))).toBeGreaterThan(
+    order((url) => url.includes('/auth/login')),
   );
 
   // 2. The SERVER session must be gone — the "user state is cleared" half.
   //    A client-side storage sweep alone would leave the user still signed in.
-  const after = await page.request.get(BASE_URL + '/forward-auth/info');
+  const after = await page.request.get(BASE_URL + '/auth/info');
   expect(await after.json()).toMatchObject({ authenticated: false });
 
   // 3. ...and it must have swept the namespace on the way out.

@@ -166,8 +166,8 @@ describe('behaviour 2 — redirect sniff retained as the SECONDARY signal', () =
   it('a redirect to a forward-auth login URL triggers re-auth (eliteaApi.js:26-28 parity)', async () => {
     const gate: SessionGate = { authed: false };
     server.use(
-      probeRedirectGated(gate, `${ORIGIN}/forward-auth/auth_oidc/login?target_to=abc`),
-      loginPage('/forward-auth/auth_oidc/login'),
+      probeRedirectGated(gate, `${ORIGIN}/auth/oidc/login?target_to=abc`),
+      loginPage('/auth/oidc/login'),
     );
     const { state, reauthenticate } = fakeReauth(gate);
     const result = await client(reauthenticate).get<{ message: string }>(PROBE);

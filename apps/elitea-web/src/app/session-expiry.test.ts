@@ -3,12 +3,12 @@
  *
  * THE DEFECT. A user whose browser session expired while a page was open got
  * no redirect to the identity provider. Every request on the screen failed and
- * the browser stayed where it was. `/forward-auth/info` used to answer
+ * the browser stayed where it was. `/auth/info` used to answer
  * `200 {"authenticated": false}` for a cookie that no longer worked, which is
  * the same answer it gives a browser that was never signed in, so nothing
  * could tell the two apart after boot.
  *
- * THE CONTRACT. `/forward-auth/info` now answers `401` with
+ * THE CONTRACT. `/auth/info` now answers `401` with
  * `error.code = "session_expired"` and a `login_url`. The app shell's own
  * session probe navigates on it.
  *
@@ -27,11 +27,11 @@ import { server } from '../test/setup';
 
 import { createSessionStore } from './session-store';
 
-const INFO = '/forward-auth/info';
+const INFO = '/auth/info';
 const API_BASE = '/api/v2';
 
 /** Exactly what `writeSessionExpired` answers (internal/api/v2/auth/session.go). */
-function sessionExpired(loginUrl = '/forward-auth/login?target_to=%2F') {
+function sessionExpired(loginUrl = '/auth/login?target_to=%2F') {
   return http.get(INFO, () =>
     HttpResponse.json(
       {
@@ -80,7 +80,7 @@ describe('the primary session check redirects on session_expired', () => {
 
     expect(navigate).toHaveBeenCalledTimes(1);
     const target = new URL(navigate.mock.calls[0]?.[0] as string, window.location.origin);
-    expect(target.pathname).toBe('/forward-auth/login');
+    expect(target.pathname).toBe('/auth/login');
     // The server cannot know which page the user was on — the probe is an XHR
     // issued from wherever they happen to be — so the client supplies it.
     expect(target.searchParams.get('target_to')).toBe(
@@ -125,9 +125,9 @@ describe('a peripheral 401 never moves the browser', () => {
         HttpResponse.json(
           {
             error: { code: 'session_expired', message: 'the browser session is no longer valid' },
-            login_url: '/forward-auth/login?target_to=%2F',
+            login_url: '/auth/login?target_to=%2F',
           },
-          { status: 401, headers: { Location: '/forward-auth/login?target_to=%2F' } },
+          { status: 401, headers: { Location: '/auth/login?target_to=%2F' } },
         ),
       ),
     );

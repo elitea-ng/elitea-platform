@@ -164,7 +164,7 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
     const url = h.openedUrls[0] ?? '';
     const target = `/elitea_ui/auth-callback?auth_state=${h.stateOf()}`;
     expect(url).toBe(
-      `https://backend.example/forward-auth/login?target_to=${encodeURIComponent(target)}`,
+      `https://backend.example/auth/login?target_to=${encodeURIComponent(target)}`,
     );
     expect(new URL(url).searchParams.get('target_to')).toBe(target);
     expect(h.openedFeatures[0]).toContain('width=500,height=600'); // clamped minimums
@@ -176,7 +176,7 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
    * DEFECT: the popup URL was built from the module constant
    * `OIDC_LOGIN_PATH` with no plane input at all.
    * `services/elitea-main/internal/api/router.go` registers
-   * `/forward-auth/auth_oidc/login` inside `if cfg.OIDCHandler != nil`, so a
+   * `/auth/oidc/login` inside `if cfg.OIDCHandler != nil`, so a
    * form-auth deployment does not have that route. The popup loaded
    * `404 page not found`. `/app/auth-callback` never ran. No result reached
    * the opener on postMessage, on the BroadcastChannel or in the fallback
@@ -184,7 +184,7 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
    * flight settled only when the user noticed the window and closed it, and
    * then it rejected `popup_closed`. Session recovery was impossible.
    *
-   * `/forward-auth/login` is the form plane's own entry point: it opens a
+   * `/auth/login` is the form plane's own entry point: it opens a
    * login transaction (`browserauth.beginLogin`) and
    * `browserflow.CanonicalReturnTarget` preserves the `?auth_state=` query,
    * so the flight completes there.
@@ -193,20 +193,20 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
     const h = harness({
       baseOrigin: 'https://backend.example',
       basePath: '/app',
-      loginPath: '/forward-auth/login',
+      loginPath: '/auth/login',
     });
     const flight = h.controller.reauthenticate();
     const url = h.openedUrls[0] ?? '';
     const target = `/app/auth-callback?auth_state=${h.stateOf()}`;
     expect(url).toBe(
-      `https://backend.example/forward-auth/login?target_to=${encodeURIComponent(target)}`,
+      `https://backend.example/auth/login?target_to=${encodeURIComponent(target)}`,
     );
     h.channels[0]?.onmessage?.({ data: resultMessage(h.stateOf()) });
     await flight;
   });
 
   /**
-   * The plane is read from the `/forward-auth/info` probe, and the controller
+   * The plane is read from the `/auth/info` probe, and the controller
    * is built before the first probe answers. A login path resolved at
    * construction time is therefore always the OIDC default on both planes,
    * which is the defect above. The getter must run per flight.
@@ -217,19 +217,19 @@ describe('behaviour 4 — crypto.randomUUID state', () => {
       baseOrigin: 'https://backend.example',
       basePath: '/app',
       loginPath: () =>
-        plane === 'form' ? '/forward-auth/login' : '/forward-auth/auth_oidc/login',
+        plane === 'form' ? '/auth/login' : '/auth/oidc/login',
     });
 
     // The probe has not answered yet: the first flight uses the default.
     const first = h.controller.reauthenticate();
-    expect(h.openedUrls[0]).toContain('/forward-auth/auth_oidc/login');
+    expect(h.openedUrls[0]).toContain('/auth/oidc/login');
     h.channels[0]?.onmessage?.({ data: resultMessage(h.stateOf(0)) });
     await first;
 
     // The probe answered 404, so the app now knows it is the form plane.
     plane = 'form';
     const second = h.controller.reauthenticate();
-    expect(h.openedUrls[1]).toContain('/forward-auth/login');
+    expect(h.openedUrls[1]).toContain('/auth/login');
     expect(h.openedUrls[1]).not.toContain('/auth_oidc/');
     h.channels[1]?.onmessage?.({ data: resultMessage(h.stateOf(1)) });
     await second;
@@ -435,7 +435,7 @@ describe('single-flight + lifecycle', () => {
  *
  * Measured on a WebKit Playwright trace of J3
  * (`e2e/journeys/shell/shell.session.spec.ts:23`): the app opened the popup,
- * then 0.8 s later drove a SECOND `/forward-auth/auth_oidc/login` hop, with a
+ * then 0.8 s later drove a SECOND `/auth/oidc/login` hop, with a
  * different `auth_state`, into the SAME popup page. The re-navigation landed
  * between the fill and the click, so the user lost the typed value and the
  * form submitted empty.

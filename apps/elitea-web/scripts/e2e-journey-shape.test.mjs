@@ -188,7 +188,8 @@ export function teardownBody(source) {
  * The `test(...)` blocks that end a session while running on the SHARED
  * persona state.
  *
- * A test ends a session when its body reaches `/forward-auth/logout` or clicks
+ * A test ends a session when its body reaches `/auth/logout` (or the deprecated
+ * `/forward-auth/logout`) or clicks
  * the "Log out" control. It OWNS the session when it takes the `browser`
  * fixture and makes its own context, which is what `e2e/fixtures/session.ts`
  * exists for. A test that takes `page` is running on the file the setup
@@ -216,7 +217,7 @@ export function sessionEndingTestsOnSharedState(source) {
       .filter((line) => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
       .join('\n');
     const endsASession =
-      body.includes('/forward-auth/logout') || /name:\s*'Log out'/.test(body);
+      body.includes('/auth/logout') || body.includes('/forward-auth/logout') || /name:\s*'Log out'/.test(body);
     if (!endsASession) continue;
     const ownsItsSession = fixtures.includes('browser') && body.includes('browser.newContext(');
     if (!ownsItsSession) offenders.push(title);

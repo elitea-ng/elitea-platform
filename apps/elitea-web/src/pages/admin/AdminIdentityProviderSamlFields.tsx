@@ -108,7 +108,7 @@ export function SamlFields({
         // at the identity provider, built from this same row.
         helperText={t(
           'pages.admin.identityProviders.dialog.acsUrlHelp',
-          'This deployment serves it at /forward-auth/auth_saml/acs. Service provider metadata is served at /forward-auth/auth_saml/metadata once this provider is live.',
+          'This deployment serves it at /auth/saml/acs (the older /forward-auth/auth_saml/acs still works). Service provider metadata is served at /auth/saml/metadata once this provider is live.',
         )}
       />
       <TextField

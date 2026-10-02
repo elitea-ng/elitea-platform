@@ -54,7 +54,7 @@ function configureEnv(): void {
 function capturePermissionReads(grantChatTo = 'proj-9'): string[] {
   const seen: string[] = [];
   server.use(
-    http.get('/forward-auth/info', () => HttpResponse.json({ authenticated: true, user_id: 'u-42' })),
+    http.get('/auth/info', () => HttpResponse.json({ authenticated: true, user_id: 'u-42' })),
     http.get('/api/v2/social/author/', () => HttpResponse.json({ id: 'u-42', personal_project_id: 'proj-9' })),
     http.get('/api/v2/auth/permissions/prompt_lib/:projectId', ({ params }) => {
       const projectId = String(params['projectId']);
