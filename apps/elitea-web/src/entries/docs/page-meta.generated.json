@@ -12,7 +12,7 @@
   {
     "slug": "admin/authentication",
     "title": "Authentication",
-    "description": "Configure OIDC or SAML sign-in, and bind SCIM-provisioned groups to a project role."
+    "description": "Configure OIDC or SAML sign-in, connect an identity provider to SCIM with a dedicated client credential, and bind SCIM-provisioned groups to a project role."
   },
   {
     "slug": "admin/branding",

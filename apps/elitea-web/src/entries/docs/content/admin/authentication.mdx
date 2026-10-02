@@ -1,6 +1,6 @@
 ---
 title: "Authentication"
-description: "Configure OIDC or SAML sign-in, and bind SCIM-provisioned groups to a project role."
+description: "Configure OIDC or SAML sign-in, connect an identity provider to SCIM with a dedicated client credential, and bind SCIM-provisioned groups to a project role."
 ---
 
 Authentication lives under **Configuration › Authentication** in the admin console. It covers how people sign in (OIDC or SAML) and how an identity provider's groups map onto project membership (SCIM).
@@ -41,9 +41,55 @@ A stored secret is never shown in the clear — the field renders a mask, and th
 Deleting a provider also deletes its stored secret, which cannot be recovered. To stop using a provider for new logins without losing its configuration, turn off "use this provider for logins" instead of deleting it.
 </Warning>
 
-## Bind SCIM groups to a project role
+## Connect an identity provider with SCIM
 
-SCIM lets an identity provider push its directory — creating and deactivating accounts as people join and leave — rather than only federating logins. The SCIM endpoint is `/api/v2/scim/v2`, authenticated with a personal access token; configuring it in your identity provider is outside Elitea's UI.
+SCIM lets an identity provider push its directory. It creates accounts when people join and deactivates them when they leave. The SCIM endpoint is `/api/v2/scim/v2`.
+
+An identity provider authenticates to SCIM with a **SCIM client**. A SCIM client is a credential that belongs to the integration, not to a person. The audit trail records its changes as `scim:<client name>`.
+
+<Warning>
+**Breaking change.** SCIM no longer accepts personal access tokens or browser sessions. A request with one gets `401` and the detail "SCIM requires a SCIM client credential; personal access tokens are not accepted". If your identity provider used a personal access token, create a SCIM client and replace the token in the identity provider.
+</Warning>
+
+<Steps>
+  <Step title="Open Configuration › Authentication › SCIM provisioning">
+    The panel shows the **Tenant URL** and the **Token endpoint** of this deployment, each with a copy button. You need the `admin.auth.users` permission to manage SCIM clients.
+  </Step>
+  <Step title="Create a SCIM client">
+    Select **New SCIM client**. Type a name for the identity provider, and select a method:
+
+    - **Secret token (Bearer)** — one secret. The identity provider sends it as the bearer token on each request.
+    - **OAuth2 client credentials** — a client identifier and a client secret. The identity provider gets a short-lived access token from the token endpoint (1 hour by default), and sends that access token.
+  </Step>
+  <Step title="Copy the secret">
+    The secret shows **one time only**. Copy it into the identity provider before you close the dialog. Elitea keeps only a hash of the secret, so nobody can show it again.
+  </Step>
+</Steps>
+
+### Microsoft Entra ID settings
+
+In the Entra ID enterprise application, open **Provisioning**, set the mode to **Automatic**, and use these values:
+
+| Entra ID field | Bearer authentication | OAuth2 client credentials grant |
+|---|---|---|
+| Authentication method | Bearer authentication | OAuth2 client credentials grant |
+| Tenant URL | `https://<host>/api/v2/scim/v2` | `https://<host>/api/v2/scim/v2` |
+| Secret token | the `scim_…` secret | — |
+| Token endpoint | — | `https://<host>/api/v2/scim/oauth/token` |
+| Client identifier | — | the `scimc_…` client identifier |
+| Client secret | — | the `scimcs_…` client secret |
+
+Select **Test connection**. Entra ID calls `/Users` with the credential, and a correct credential answers `200`.
+
+The token endpoint accepts `grant_type=client_credentials` with the client identifier and secret in the form body (`client_secret_post`) or in an HTTP Basic header (`client_secret_basic`). The operator sets the access token lifetime with `ELITEA_SCIM_ACCESS_TOKEN_TTL` (between `5m` and `24h`).
+
+### Rotate or revoke a SCIM client
+
+- **Rotate** makes a new secret. The old secret stops working immediately, and every access token issued with it stops working too. Put the new secret in the identity provider at once.
+- **Revoke** stops the client from authenticating. The row stays in the list, so the audit trail can still name it.
+- **Delete** removes the client.
+
+## Bind SCIM groups to a project role
 
 What the admin console does provide is the group-to-role mapping, beneath the identity provider list:
 
