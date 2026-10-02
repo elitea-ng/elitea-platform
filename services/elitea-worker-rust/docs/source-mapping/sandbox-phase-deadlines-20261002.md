@@ -17,7 +17,7 @@ The runner still enforces its separate configured execution timeout and resource
 
 | Behavioral reference | New source | Result |
 | --- | --- | --- |
-| SDK `elitea_sdk/runtime/tools/sandbox.py` interprets remote execution results and failures. | `src/sandbox/docker_supervisor.rs::run_owned` | Readiness and execution use separate durable clocks. |
+| SDK `elitea_sdk/runtime/tools/sandbox.py` interprets remote execution results and failures. | `src/sandbox/docker_supervisor.rs::run_owned` | Docker and Kubernetes share the same durable phase clocks. |
 | SDK `infra/data/sandbox/main.ts::install_imports` resolves packages before code execution. | `src/sandbox/ledger.rs::bind_runtime`, `mark_dispatched` | Time before binding or dispatch does not consume the following phase allowance. |
 | PR 883 `JobLedger::age_seconds` uses `created_at` for both phases. | `readiness_age_seconds`, `execution_age_seconds` | PostgreSQL time preserves each deadline across reconnects and supervisor replacement. |
 | PR 883 fences binding and dispatch by owner, epoch, phase, and live lease. | Existing fenced updates in `ledger.rs` | The first timestamp remains immutable during retries, renewal, and takeover. |
@@ -77,12 +77,77 @@ Rust formatting, strict Clippy across all targets and features, and workflow YAM
 The binary-file policy check passes for all 10,572 tracked files.
 Focused PostgreSQL tests cover phase separation, timestamp preservation, fencing, cancellation, and rolling migration.
 Runtime doubles exercise supervisor behavior; they do not prove Docker, Kubernetes, or browser execution.
-Fresh Chrome history inspection passes for the existing four-language benchmark in persistent chat 771.
-Reload preserves one complete result with its recorded digest.
-This history check uses the previous rehearsal deployment.
-It does not prove the new phase deadline behavior.
-Deployed browser acceptance remains required before release.
-This feature does not close Point 5.
+
+## Deployed Docker and Kubernetes acceptance
+
+Main applies agentstate migrations 9 and 10 to the rehearsal receipt database.
+The migration uses the existing Main migration role and verifies PostgreSQL TLS.
+A private database backup precedes the migration. Existing receipt rows remain unchanged except for the migration backfill.
+Both supervisor deployments use the same migrated database.
+
+The Docker rollout replaces only the supervisor image.
+Runtime profiles, mounts, trust material, network aliases, and resource limits remain unchanged.
+The Kubernetes rollout replaces the supervisor and material-preparation images together.
+The Pod specification otherwise remains unchanged, including its service account, trust material, limits, and security context.
+The replacement Kubernetes supervisor becomes Ready with zero restarts.
+
+The shared `CodeJobRuntime` contract selects Docker or Kubernetes.
+Both adapters use `docker_supervisor.rs::run_owned`; the filename does not indicate Docker-only ownership.
+No separate Kubernetes deadline implementation is required.
+
+| Backend | Rehearsal image identity |
+| --- | --- |
+| Docker local image | `sha256:a8204031512e8e7c5afb395610518521f749e34a55900acbef6a8c2191b37d68` |
+| Kubernetes imported manifest | `docker.io/library/elitea-sandbox-supervisor@sha256:e552d2a52516c409e0838e2844f017e936dacb8bcc781b1c765f053e2fb12606` |
+
+The initial Kubernetes image import records the tag but not the digest reference.
+Kubernetes therefore attempts a registry pull and cannot start the material-preparation container.
+Registering the imported digest reference in the local containerd cache corrects the rollout.
+Both deployment images remain pinned to that digest.
+
+Fresh Playwright browser tabs submit pipeline 141, version 148, through the actual UI.
+The input is `{"rows":20000,"seed":42}`. The pipeline executes fixed Python, JavaScript, TypeScript, and Rust Code nodes.
+It uses prepared runtime packages and makes no model call. No browser routes or API responses are mocked.
+
+| Backend | Chat surface | Result | New receipt evidence |
+| --- | --- | --- | --- |
+| Docker | Persistent chat 771 | PASS; reload preserves the result | Four completed receipts contain both phase timestamps. |
+| Docker | Editor Test chat 779 | PASS | Four completed receipts contain both phase timestamps. |
+| Kubernetes | Persistent chat 771 | PASS; reload preserves the result | Four completed receipts contain both phase timestamps. |
+| Kubernetes | Editor Test chat 780 | PASS; one response for one submission | Four completed receipts contain both phase timestamps. |
+
+Each result has 18,947 accepted records, 1,053 rejected records, and total cents `866440800`.
+Each result retains all four language metrics and SHA-256 `6a3c4d063a5ba0c21949cf7d67d4bda843cb50a0bc76169c19e2c5f7e272326d`.
+The Kubernetes editor execution is `b16e5fd963fc2e649a4c53dbdca1dfb2`.
+All checked execution containers and Pods are removed after durable completion.
+The UI releases the composer and shows no execution alert.
+
+An earlier editor run uses the old Kubernetes supervisor after migration.
+Its four completed receipts retain NULL phase timestamps and the result remains correct.
+This proves old-writer compatibility; it does not prove the new timestamps.
+An additional Docker editor run also completes with the new timestamps.
+
+The Docker application logs a pre-existing `index_types` catalogue HTTP 404 in both chat surfaces.
+The Kubernetes editor has zero console warnings or errors during this check.
+Neither catalogue repair nor general UI rendering changes belong to this feature.
+
+### Acceptance limits
+
+The rehearsal image uses the exact feature source and a private build configuration with LTO disabled and optimization level zero.
+It retains the locked dependency closure, audit metadata, diagnostic sections, non-root runtime, and existing TLS boundaries.
+Two optimized local build attempts are cancelled after they cause Docker VM resource pressure.
+These rehearsal runs prove behavior, not production performance or an optimized supervisor release artifact.
+The tracked production build configuration remains unchanged.
+
+At code head `abadda788`, PR 1014 reports 57 successful checks and two configured skips.
+The skipped checks are the credential-dependent live toolkit/image lane and embedded-document screenshot capture.
+Production worker release, PostgreSQL, image scans, Helm, and browser CI checks pass at that head.
+The final documentation commit requires its own CI read-back.
+
+The successful UI runs do not force delayed reservation or supervisor replacement.
+The separate PostgreSQL/Docker integration proves delayed reservation and recovery through the original runtime.
+Full Kubernetes application acceptance remains deferred; this rehearsal retains external PostgreSQL, provider, identity, and telemetry dependencies.
+This feature does not close Point 5 or implement automatic dependency delivery.
 
 Run the focused phase suite from `services/elitea-worker-rust`:
 

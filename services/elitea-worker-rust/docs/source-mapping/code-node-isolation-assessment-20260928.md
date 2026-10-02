@@ -2659,4 +2659,7 @@ The reservation-based deadline above records the original implementation.
 The [phase deadline mapping](sandbox-phase-deadlines-20261002.md) records the separate readiness and execution clocks.
 The first binding and dispatch timestamps remain durable across supervisor replacement.
 Migration 0010 preserves existing deadlines and nullable-column compatibility with older supervisors.
-Separate feature verification remains required before release.
+The feature passes PostgreSQL and actual Docker recovery checks.
+Deployed persistent-chat and editor Test-chat acceptance also pass on Docker and hybrid Kubernetes.
+Both backends persist the new phase timestamps and remove completed execution workloads.
+The mapping records image identities, migration order, rolling compatibility, and the rehearsal build limitations.

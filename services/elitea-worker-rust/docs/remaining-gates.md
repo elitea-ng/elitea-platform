@@ -10,7 +10,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 
 ## Progression status
 
-- [Saved child variables](source-mapping/child-pipeline-variables-20260930.md) support typed pipeline mappings and per-call Agent instruction variables. Persistent and ephemeral browser checks pass. Worker-replacement verification with Agent variable overrides remains open.
+- [Saved child variables](source-mapping/child-pipeline-variables-20260930.md) support typed pipeline mappings and per-call Agent instruction variables. Persistent and ephemeral browser checks pass. Chat 765 proves sequential AskUser recovery after worker replacement with isolated variable overrides. Simultaneous mixed guards remain open.
 
 - Gate 1 has pipeline turn, regeneration, and nested-resume fixes with regression coverage. Mixed-guard and collaborative proofs remain open.
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
@@ -123,7 +123,9 @@ The test Cargo profile adds locked dependencies. It does not implement user-sele
 Persistent reload preserves one result. All eight browser-run sandbox jobs complete and remove their Pods.
 Local probe runs take 9.5–10.0 seconds. Deployed four-receipt spans take 16.4–16.5 seconds.
 On-demand preparation, user-selected Cargo profiles, and compiled-artifact caching remain open.
-The next feature PR separates durable sandbox readiness and execution deadlines.
+The [phase deadline feature](source-mapping/sandbox-phase-deadlines-20261002.md) separates durable sandbox readiness and execution deadlines.
+PR 1014 passes deployed four-language execution in persistent chat and editor Test chat on Docker and hybrid Kubernetes.
+Both backends persist the new clocks and remove terminal execution workloads. Persistent reload preserves the exact result.
 Python shared delivery follows with offline reuse, replacement recovery, and browser acceptance.
 JavaScript/TypeScript and Rust dependency execution follow as separate features.
 Each feature preserves the existing sandbox authority and resource limits.
@@ -147,6 +149,18 @@ The [trusted preparation adapter](source-mapping/code-python-preparation-runner-
 Automatic supervisor dispatch, backend delivery, recovery integration, and on-demand browser acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
+
+### Point 5 feature status, 2026-10-02
+
+Prepared package profiles and isolated execution are deployed. They do not provide automatic acquisition of user-selected dependencies.
+The preserved checkpoint connects Python preparation, publication, hydration, and recovery; the optional preparation profile is not deployed.
+Its private execution-export correction still requires compilation, runtime verification, and integrated UI acceptance.
+JavaScript/TypeScript and Rust have separate native preparation components. Shared delivery and product execution remain open for both.
+Existing activation recovery retains its recorded bundle root. Later-run lookup from requirements to a prior frozen bundle remains unproven.
+
+Repository workspace authorization, the scoped platform client, debug artifacts, state-variable approval, and compiled-artifact caching remain open.
+Graph acceptance also retains deeper composition, static pauses, concurrent mixed guards, and collaborative decision requirements.
+These requirements need separate feature decisions and acceptance evidence. Point 5 remains open.
 
 ### Deployment acceptance order
 
