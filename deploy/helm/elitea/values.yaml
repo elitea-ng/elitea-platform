@@ -3373,7 +3373,7 @@ worker:
 
   # The worker's platform_origin. A one-route Traefik whose only job is to
   # terminate TLS with a certificate the worker trusts (the runtime CA) and
-  # forward to elitea-main, plus forward-auth on the execution-events stream —
+  # forward to elitea-main, plus edge-auth on the execution-events stream —
   # the one route that accepts no credential a client can present.
   #
   # It is NOT the public edge. It has no route from the Gateway and is reachable

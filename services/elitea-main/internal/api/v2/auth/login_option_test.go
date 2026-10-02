@@ -48,7 +48,7 @@ func envOnlyOIDCHandler() *OIDCHandler {
 		envRuntime: &oidcRuntime{
 			oauth2Cfg: &oauth2.Config{
 				ClientID:    "elitea",
-				RedirectURL: "https://elitea.example.com/forward-auth/auth_oidc/callback",
+				RedirectURL: "https://elitea.example.com/auth/oidc/callback",
 				Endpoint:    oauth2.Endpoint{AuthURL: "https://dex.example.com/auth", TokenURL: "https://dex.example.com/token"},
 				Scopes:      []string{"openid", "email"},
 			},
@@ -158,7 +158,7 @@ func TestOnlyAPlainAddressIsALoginHint(t *testing.T) {
 func TestTheOIDCLoginForwardsTheLoginHint(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	envOnlyOIDCHandler().Login(recorder, httptest.NewRequest(http.MethodGet,
-		"/forward-auth/auth_oidc/login?target_to=%2Fapp%2Fchat&login_hint=alice%40example.com", nil))
+		"/auth/oidc/login?target_to=%2Fapp%2Fchat&login_hint=alice%40example.com", nil))
 
 	if recorder.Code != http.StatusFound {
 		t.Fatalf("status = %d", recorder.Code)
@@ -173,8 +173,7 @@ func TestTheOIDCLoginForwardsTheLoginHint(t *testing.T) {
 	if !strings.HasSuffix(location.Query().Get("state"), "|/app/chat") {
 		t.Fatalf("state = %q, want the return target", location.Query().Get("state"))
 	}
-	// Every login cookie is scoped to "/", so a login begun under /auth can
-	// return through the deprecated /forward-auth callback, and the reverse.
+	// Every login cookie is scoped to "/", so the callback route reads it.
 	for _, cookie := range recorder.Result().Cookies() {
 		if cookie.Path != "/" {
 			t.Fatalf("cookie %s has Path %q, want /", cookie.Name, cookie.Path)
@@ -184,7 +183,7 @@ func TestTheOIDCLoginForwardsTheLoginHint(t *testing.T) {
 	// A value that is not an address is dropped, not forwarded.
 	recorder = httptest.NewRecorder()
 	envOnlyOIDCHandler().Login(recorder, httptest.NewRequest(http.MethodGet,
-		"/forward-auth/auth_oidc/login?login_hint=%3Cscript%3E", nil))
+		"/auth/oidc/login?login_hint=%3Cscript%3E", nil))
 	if strings.Contains(recorder.Header().Get("Location"), "login_hint") {
 		t.Fatalf("an invalid hint was forwarded: %s", recorder.Header().Get("Location"))
 	}
@@ -197,7 +196,7 @@ func TestAnIdentityProviderErrorReturnsToTheSignInPage(t *testing.T) {
 	handler := envOnlyOIDCHandler()
 	state := "nonce-1|/app/chat"
 	request := httptest.NewRequest(http.MethodGet,
-		"/forward-auth/auth_oidc/callback?error=access_denied&state="+url.QueryEscape(state), nil)
+		"/auth/oidc/callback?error=access_denied&state="+url.QueryEscape(state), nil)
 	request.AddCookie(&http.Cookie{Name: oidcStateCookie, Value: signBrowserValue(handler.secretKey, state)})
 	recorder := httptest.NewRecorder()
 
@@ -221,7 +220,7 @@ func TestAnIdentityProviderErrorReturnsToTheSignInPage(t *testing.T) {
 func TestAnIdentityProviderErrorWithoutStateIsStillRefused(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	envOnlyOIDCHandler().Callback(recorder, httptest.NewRequest(http.MethodGet,
-		"/forward-auth/auth_oidc/callback?error=access_denied", nil))
+		"/auth/oidc/callback?error=access_denied", nil))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
@@ -238,14 +237,14 @@ func TestTheSAMLLoginForwardsTheLoginHint(t *testing.T) {
 				IDPSSOURL:       "https://login.microsoftonline.com/tenant/saml2",
 				IDPCertificates: []string{selfSignedCertificate(t)},
 				SPEntityID:      "https://elitea.example.com",
-				ACSURL:          "https://elitea.example.com/forward-auth/auth_saml/acs",
+				ACSURL:          "https://elitea.example.com/auth/saml/acs",
 			},
 		},
 	}}, nil, true)
 
 	recorder := httptest.NewRecorder()
 	handler.Login(recorder, httptest.NewRequest(http.MethodGet,
-		"/forward-auth/auth_saml/login?target_to=%2Fapp&login_hint=Alice%40contoso.com", nil))
+		"/auth/saml/login?target_to=%2Fapp&login_hint=Alice%40contoso.com", nil))
 
 	if recorder.Code != http.StatusFound {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())

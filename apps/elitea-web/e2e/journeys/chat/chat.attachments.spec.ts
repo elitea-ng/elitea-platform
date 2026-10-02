@@ -658,7 +658,7 @@ test.describe('notification stream', () => {
    *
    * `NotificationButton` passes `personal_project_id` (→ useNotificationsSSE),
    * and `app/session-store.ts` used to fill that field with the USER ID, with a
-   * comment saying so: `/forward-auth/info` (internal/api/v2/auth/session.go)
+   * comment saying so: `/auth/info` (internal/api/v2/auth/session.go)
    * returns only `authenticated`/`user_id`/`email`, so there was no project id
    * to send. The stream's authorize() resolves
    * `models.notifications.notifications.list` against whatever project id is in

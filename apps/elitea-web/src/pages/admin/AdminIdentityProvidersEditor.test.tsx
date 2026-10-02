@@ -49,7 +49,7 @@ const PROVIDERS = [
     oidc: {
       issuer: 'https://idp.example.com',
       client_id: 'elitea',
-      redirect_uri: 'https://elitea.example.com/forward-auth/auth_oidc/callback',
+      redirect_uri: 'https://elitea.example.com/auth/oidc/callback',
       scopes: ['openid', 'profile', 'email'],
       require_email_verified: false,
     },
@@ -64,7 +64,7 @@ const PROVIDERS = [
       idp_entity_id: 'https://idp.example.com/metadata',
       idp_sso_url: 'https://idp.example.com/sso',
       sp_entity_id: 'https://elitea.example.com/saml',
-      acs_url: 'https://elitea.example.com/forward-auth/auth_saml/acs',
+      acs_url: 'https://elitea.example.com/auth/saml/acs',
       idp_certificates: [],
     },
   },
@@ -246,7 +246,7 @@ describe('Admin › Authentication › identity providers', () => {
   it('states that a first provider needs a restart, before a save appears to do nothing', async () => {
     renderAdminRoute(<AdminIdentityProvidersEditor />);
 
-    // Which browser-auth plane owns /forward-auth is fixed at boot, so adding
+    // Which browser-auth plane owns /auth is fixed at boot, so adding
     // the first provider to a deployment that federated none cannot mount its
     // routes under the running process. Saying so on the page is the difference
     // between a documented limit and a screen that looks broken.

@@ -78,9 +78,8 @@ func normalizeAssertedEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-// The canonical browser routes of the single sign-on plane. The router also
-// serves each one under the deprecated `/forward-auth` alias
-// (internal/api/auth_paths.go). Every URL this package writes uses these.
+// The browser routes of the single sign-on plane (internal/api/auth_paths.go).
+// Every URL this package writes uses these.
 const (
 	// SignInPath is the sign-in page every single sign-on plane returns to.
 	SignInPath = "/auth/login"

@@ -44,7 +44,7 @@ func TestBrandingBootstrap_UnauthenticatedReachable(t *testing.T) {
 	cfg.BrandPackPath = packPath
 	r := api.NewRouter(cfg)
 
-	// No Authorization header, no session cookie, no forward-auth headers.
+	// No Authorization header, no session cookie, no edge-auth headers.
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/branding/bootstrap.js", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)

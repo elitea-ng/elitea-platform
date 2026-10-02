@@ -293,11 +293,8 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 	browser.Get("/login", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	browser.Post("/auth_form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
 	browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusAccepted)
+		writer.WriteHeader(http.StatusNoContent)
 	})
 	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
@@ -313,20 +310,17 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 		path   string
 		want   int
 	}{
-		// The canonical /auth prefix reaches the same Form router, with the
-		// prefix stripped (auth_paths.go). Only the canonical Form paths are
-		// served there: the legacy `/auth_form/*` names and the core check
-		// are not.
+		// The Form router is served under /auth with the prefix stripped
+		// (auth_paths.go). The stub registers no core check, so /auth/check
+		// reaches it and finds nothing. The old prefix is not mounted.
 		{http.MethodGet, "/auth/login", http.StatusNoContent},
-		{http.MethodPost, "/auth/form/authorize", http.StatusAccepted},
+		{http.MethodPost, "/auth/form/authorize", http.StatusNoContent},
 		{http.MethodPost, "/auth/auth_form/authorize", http.StatusNotFound},
-		{http.MethodGet, "/auth/auth", http.StatusNotFound},
-		{http.MethodGet, "/forward-auth/login", http.StatusNoContent},
-		{http.MethodPost, "/forward-auth/auth_form/authorize", http.StatusNoContent},
-		{http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent},
-		{http.MethodGet, "/forward-auth/auth", http.StatusNotFound},
-		{http.MethodGet, "/forward-auth/info", http.StatusNotFound},
-		{http.MethodPost, "/internal/forward-auth/main", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/forward-" + "auth/login", http.StatusNotFound},
+		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
+		{http.MethodGet, "/auth/check", http.StatusNotFound},
+		{http.MethodGet, "/auth/info", http.StatusNotFound},
+		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
 	} {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -368,9 +362,9 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 		path   string
 		want   int
 	}{
-		{http.MethodGet, "/forward-auth/login", http.StatusNoContent},
-		{http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent},
-		{http.MethodPost, "/internal/forward-auth/main", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/auth/login", http.StatusNoContent},
+		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
+		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/api/v2/elitea_core/messages/prompt_lib/2/conversation", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/regenerate/prompt_lib/2/message", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/continue_predict/prompt_lib/2/conversation", http.StatusAccepted},
@@ -2314,13 +2308,13 @@ func TestProductionAuthCandidatesRejectEveryForgedCredentialShape(t *testing.T) 
 }
 
 func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.T) {
-	// #243: this used to assert every /forward-auth/* path was unmounted
+	// #243: this used to assert every /auth/* path was unmounted
 	// (404) for a "complete" production config. That was only true because
 	// the config exploited RouterConfig's flat SessionHandler/OIDCHandler
 	// fields (as opposed to the Auth.SessionHandler/Auth.OIDCHandler fields
 	// cmd/elitea-main/main.go actually sets) to dodge
 	// prototypeCompatibilityRequested and land on the dead "reviewed
-	// production router" branch, which never wired /forward-auth at all.
+	// production router" branch, which never wired /auth at all.
 	// Real deployments with OIDC session auth configured (main.go's
 	// oidcSessionHandler/oidcOIDCHandler, wired through Auth.SessionHandler)
 	// already served every one of these paths before #243, same as after —
@@ -2333,30 +2327,30 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		path   string
 		want   int
 	}{
-		// Not a registered route at all: "/forward-auth/auth" (the Traefik
-		// ForwardAuth check) is a top-level "/auth" route, distinct from the
-		// "/forward-auth/*" browser session group.
-		{method: http.MethodGet, path: "/forward-auth/auth", want: http.StatusNotFound},
-		{method: http.MethodHead, path: "/forward-auth/auth", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth", want: http.StatusNotFound},
+		// Not a registered route at all: "/auth/check" (the Traefik
+		// EdgeAuth check) is a top-level "/auth" route, distinct from the
+		// "/auth/*" browser session group.
+		{method: http.MethodGet, path: "/auth/check", want: http.StatusNotFound},
+		{method: http.MethodHead, path: "/auth/check", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/check", want: http.StatusNotFound},
 		// GET redirects into the login flow; only GET is registered.
-		{method: http.MethodGet, path: "/forward-auth/login", want: http.StatusFound},
-		{method: http.MethodHead, path: "/forward-auth/login", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/login", want: http.StatusFound},
+		{method: http.MethodHead, path: "/auth/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/login", want: http.StatusMethodNotAllowed},
 		// Legacy form-auth login/authorize are never mounted: SessionHandler
-		// wires the OIDC session flow only (see router.go's "/forward-auth"
+		// wires the OIDC session flow only (see router.go's "/auth"
 		// Route block), not the legacy form-auth handlers.
-		{method: http.MethodGet, path: "/forward-auth/auth_form/login", want: http.StatusNotFound},
-		{method: http.MethodHead, path: "/forward-auth/auth_form/login", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth_form/login", want: http.StatusNotFound},
-		{method: http.MethodPost, path: "/forward-auth/auth_form/authorize", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth_form/authorize", want: http.StatusNotFound},
-		{method: http.MethodGet, path: "/forward-auth/logout", want: http.StatusFound},
-		{method: http.MethodHead, path: "/forward-auth/logout", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/logout", want: http.StatusMethodNotAllowed},
-		{method: http.MethodGet, path: "/forward-auth/auth_form/logout", want: http.StatusFound},
-		{method: http.MethodHead, path: "/forward-auth/auth_form/logout", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/auth_form/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/form/login", want: http.StatusNotFound},
+		{method: http.MethodHead, path: "/auth/form/login", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/form/login", want: http.StatusNotFound},
+		{method: http.MethodPost, path: "/auth/form/authorize", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/form/authorize", want: http.StatusNotFound},
+		{method: http.MethodGet, path: "/auth/logout", want: http.StatusFound},
+		{method: http.MethodHead, path: "/auth/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/form/logout", want: http.StatusFound},
+		{method: http.MethodHead, path: "/auth/form/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/form/logout", want: http.StatusMethodNotAllowed},
 		// GET 503s here because newCompleteProductionRouter's OIDCHandler is a
 		// zero-value test double: it holds neither an environment runtime nor a
 		// provider store, so it resolves no identity provider and says so. A
@@ -2367,32 +2361,32 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		// crash with a refusal that names the condition. Pinned exactly rather
 		// than accepted as "any non-2xx", so a change back to a crash does not
 		// slip past either.
-		{method: http.MethodGet, path: "/forward-auth/auth_oidc/login", want: http.StatusServiceUnavailable},
-		{method: http.MethodHead, path: "/forward-auth/auth_oidc/login", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/auth_oidc/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/oidc/login", want: http.StatusServiceUnavailable},
+		{method: http.MethodHead, path: "/auth/oidc/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/oidc/login", want: http.StatusMethodNotAllowed},
 		// Not a registered route: the OIDC callback path is "auth_oidc/callback",
 		// not "auth_oidc/login_callback".
-		{method: http.MethodGet, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
-		{method: http.MethodHead, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
-		{method: http.MethodPost, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodGet, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodHead, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodPost, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
 		// SAML. All three refuse with 503 here: the handler holds no provider
 		// store, so it federates nothing and says so. None of them can answer a
 		// success without a verified assertion, which is what this test is for.
-		{method: http.MethodGet, path: "/forward-auth/auth_saml/metadata", want: http.StatusServiceUnavailable},
-		{method: http.MethodGet, path: "/forward-auth/auth_saml/login", want: http.StatusServiceUnavailable},
-		{method: http.MethodPost, path: "/forward-auth/auth_saml/acs", want: http.StatusServiceUnavailable},
+		{method: http.MethodGet, path: "/auth/saml/metadata", want: http.StatusServiceUnavailable},
+		{method: http.MethodGet, path: "/auth/saml/login", want: http.StatusServiceUnavailable},
+		{method: http.MethodPost, path: "/auth/saml/acs", want: http.StatusServiceUnavailable},
 		// The assertion consumer service is POST-only: the authentication
 		// request asks for the HTTP-POST binding, and a GET here would be a
 		// login attempt carrying the assertion in the URL.
-		{method: http.MethodGet, path: "/forward-auth/auth_saml/acs", want: http.StatusMethodNotAllowed},
-		{method: http.MethodPost, path: "/forward-auth/auth_saml/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/saml/acs", want: http.StatusMethodNotAllowed},
+		{method: http.MethodPost, path: "/auth/saml/login", want: http.StatusMethodNotAllowed},
 		// The sign-in page's continue route. With no usable provider it
 		// sends the browser to the fallback login route; a POST that is not
 		// a form is refused before anything else.
-		{method: http.MethodGet, path: "/forward-auth/login/continue?provider=oidc", want: http.StatusSeeOther},
-		{method: http.MethodPost, path: "/forward-auth/login/continue", want: http.StatusUnsupportedMediaType},
-		{method: http.MethodPut, path: "/forward-auth/login/continue", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/login/continue?provider=oidc", want: http.StatusSeeOther},
+		{method: http.MethodPost, path: "/auth/login/continue", want: http.StatusUnsupportedMediaType},
+		{method: http.MethodPut, path: "/auth/login/continue", want: http.StatusMethodNotAllowed},
 	}
 
 	for _, route := range routes {

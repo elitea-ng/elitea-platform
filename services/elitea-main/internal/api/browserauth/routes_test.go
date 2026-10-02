@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
@@ -34,10 +34,6 @@ func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
 		FormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
 		FormAuthorizePath: {http.MethodOptions, http.MethodPost},
 		FormLogoutPath:    {http.MethodGet, http.MethodHead, http.MethodOptions},
-		// The deprecated aliases, served under LegacyBasePath.
-		LegacyFormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
-		LegacyFormAuthorizePath: {http.MethodOptions, http.MethodPost},
-		LegacyFormLogoutPath:    {http.MethodGet, http.MethodHead, http.MethodOptions},
 	}
 	if len(observed) != len(expected) {
 		t.Fatalf("routes = %v, want %v", observed, expected)

@@ -49,17 +49,17 @@ which one you are changing.
 
 Every router in `traefik/index-routes.yml` names three middlewares:
 `strip-caller-auth-context`, `normalize-runtime-public-authority` and
-`go-main-forward-auth`. Read `traefik/middlewares.yml` for what each one does
+`go-main-auth`. Read `traefik/middlewares.yml` for what each one does
 and why the order is fixed.
 
 ### Why the foundation stack does not load `traefik/index-routes.yml` (#378)
 
-`go-main-forward-auth` calls
-`http://elitea-main:8080/internal/forward-auth/main`. elitea-main registers
+`go-main-auth` calls
+`http://elitea-main:8080/internal/auth/main`. elitea-main registers
 that path only when it composes production authentication, and it composes
 production authentication only when `ELITEA_AUTH_CONFIG_FILE` is set.
 `docker-compose.yml` does not set that variable for the foundation stack. The
-forward-auth target therefore does not exist there, and Traefik returns the
+edge-auth target therefore does not exist there, and Traefik returns the
 non-2xx answer to the caller.
 
 The full PoV stack sets that variable and defines the same middleware against
@@ -67,8 +67,8 @@ its own `elitea-main-auth` service, so the routers work there.
 
 A directory mount loaded `traefik/index-routes.yml` into the foundation stack
 as a side effect. `docker-compose.yml` now names each file it mounts.
-`services/elitea-main/tests/deployedge/edge_forward_auth_test.go` reads that
-volume list and fails when a loaded router names a forward-auth endpoint that
+`services/elitea-main/tests/deployedge/edge_auth_target_test.go` reads that
+volume list and fails when a loaded router names an edge-auth endpoint that
 the same stack does not register.
 
 Traefik does not fail a stack whose router names a middleware that no loaded

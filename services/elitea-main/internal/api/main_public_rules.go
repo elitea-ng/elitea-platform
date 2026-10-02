@@ -1,6 +1,6 @@
 package api
 
-import forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+import forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 
 // CurrentMainRoutePublicRules is the compatibility catalog of every Main-plane
 // route that answers without a browser session. It holds two groups.
@@ -12,7 +12,7 @@ import forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/inte
 // Each future Go route owner should take over its entry when that route moves.
 //
 // The `go.*` rules belong to routes that router.go itself registers outside
-// every authentication group. A forward-auth edge asks this policy before the
+// every authentication group. A auth edge asks this policy before the
 // request reaches the router. A route that is public in router.go and absent
 // here gets a 302 to the login form. A browser sub-resource
 // (a <script src>, an <img src>) carries no credential, so it must stay public

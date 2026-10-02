@@ -100,7 +100,7 @@ describe('§3.6 — discriminated Result, never a throw for 4xx', () => {
     const result = await client.get<string>(path);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
-    expect(result.data).toContain('forward-auth login page');
+    expect(result.data).toContain('edge-auth login page');
   });
 
   it('returns undefined data for 204 No Content', async () => {

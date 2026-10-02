@@ -36,7 +36,7 @@ type TrustedProxyConfig struct {
 	Development       bool
 }
 
-// ForwardedRequest is the normalized source used by ForwardAuth policy. The
+// ForwardedRequest is the normalized source used by EdgeAuth policy. The
 // presence bits preserve the current distinction between an omitted mapper
 // target and an explicitly empty target.
 type ForwardedRequest struct {
@@ -156,7 +156,7 @@ func (r *TrustedProxyResolver) Resolve(request *http.Request) (ForwardedRequest,
 }
 
 // ResolveClientKey shares the exact trusted-hop interpretation used by the
-// ForwardAuth source. Login attempt limiting therefore cannot be bypassed by a
+// EdgeAuth source. Login attempt limiting therefore cannot be bypassed by a
 // second, weaker X-Forwarded-For parser.
 func (r *TrustedProxyResolver) ResolveClientKey(request *http.Request) (string, error) {
 	clientIP, err := r.resolveClientIP(request)
@@ -167,7 +167,7 @@ func (r *TrustedProxyResolver) ResolveClientKey(request *http.Request) (string, 
 }
 
 // VerifyForwardedIdentityPeer proves only that the immediate socket peer is a
-// configured, header-stripping proxy. ForwardAuth has already produced the
+// configured, header-stripping proxy. EdgeAuth has already produced the
 // identity projection; ordinary product requests do not need to replay its
 // X-Forwarded-* source contract before Auth can consume that projection.
 func (r *TrustedProxyResolver) VerifyForwardedIdentityPeer(request *http.Request) error {

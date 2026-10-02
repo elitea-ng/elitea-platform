@@ -307,7 +307,7 @@ func (p *fakeIdentityProvider) handler(t *testing.T, pool *pgxpool.Pool) *OIDCHa
 	handler, err := NewOIDCHandler(context.Background(), &OIDCConfig{
 		IssuerURL:   p.server.URL,
 		ClientID:    p.clientID,
-		RedirectURI: "http://elitea.test/forward-auth/auth_oidc/callback",
+		RedirectURI: "http://elitea.test/auth/oidc/callback",
 	}, pool, "test-secret-key")
 	require.NoError(t, err)
 	return handler
@@ -323,7 +323,7 @@ func (p *fakeIdentityProvider) handler(t *testing.T, pool *pgxpool.Pool) *OIDCHa
 // not about.
 func (p *fakeIdentityProvider) signIn(handler *OIDCHandler, subject, email string) (int, string) {
 	loginRecorder := httptest.NewRecorder()
-	handler.Login(loginRecorder, httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/login", nil))
+	handler.Login(loginRecorder, httptest.NewRequest(http.MethodGet, "/auth/oidc/login", nil))
 	if loginRecorder.Code != http.StatusFound {
 		return loginRecorder.Code, "login did not redirect: " + loginRecorder.Body.String()
 	}
@@ -341,7 +341,7 @@ func (p *fakeIdentityProvider) signIn(handler *OIDCHandler, subject, email strin
 	p.mu.Unlock()
 
 	callback := httptest.NewRequest(http.MethodGet,
-		"/forward-auth/auth_oidc/callback?code="+url.QueryEscape(code)+"&state="+url.QueryEscape(state), nil)
+		"/auth/oidc/callback?code="+url.QueryEscape(code)+"&state="+url.QueryEscape(state), nil)
 	for _, cookie := range loginRecorder.Result().Cookies() {
 		callback.AddCookie(cookie)
 	}

@@ -1,27 +1,15 @@
 package api
 
-// The browser authentication URLs, and the deprecated aliases.
+// The browser authentication URLs.
 //
-// Every browser-facing authentication route is served under `/auth`
-// (canonical) and under `/forward-auth` (the prefix it had before). The
-// `/forward-auth` routes are a DEPRECATED COMPATIBILITY ALIAS, kept because
-// identity provider registrations (OIDC redirect URIs, SAML ACS URLs and
-// entity metadata), bookmarks and edge configurations in the field name them.
-// Both prefixes mount the SAME handlers. The alias is not a redirect: a SAML
-// assertion arrives as a POST, and an OIDC callback carries a one-time code.
+// Every browser-facing authentication route is under `/auth/`. `/auth`
+// itself, with no further segment, is the edge auth check (router.go). Every
+// route here is below it, so they never collide. Each route is registered by
+// its full path rather than through r.Route("/auth"), because a mount at
+// "/auth" would take over that check.
 //
-// Login state survives a change of prefix in the middle of a login. Every
-// state cookie (OIDC state, nonce and PKCE; the SAML request; the session) has
-// Path "/", and the return target is carried in that state, not in the URL
-// prefix. A login begun at `/auth/oidc/login` can return at
-// `/forward-auth/auth_oidc/callback`, and the reverse.
-//
-// `/auth` itself, with no further segment, is the edge's forward-auth check
-// (router.go). Every route here is below it, so they never collide. Each
-// canonical route is registered by its full path rather than through
-// r.Route("/auth"), because a mount at "/auth" would take over that check.
-//
-// `/internal/forward-auth/main` is not browser-facing and is not renamed.
+// Every login state cookie (OIDC state, nonce and PKCE; the SAML request; the
+// session) has Path "/", and the return target is carried in that state.
 
 import (
 	"context"
@@ -34,14 +22,14 @@ import (
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 )
 
-// ssoBrowserPaths names one prefix's routes of the single sign-on plane.
+// ssoBrowserPaths names the routes of the single sign-on plane.
 type ssoBrowserPaths struct {
 	Login, Continue, Logout, Info, FormLogout    string
 	OIDCLogin, OIDCCallback, OIDCLogout          string
 	SAMLMetadata, SAMLLogin, SAMLACS, SAMLLogout string
 }
 
-var canonicalSSOPaths = ssoBrowserPaths{
+var ssoPaths = ssoBrowserPaths{
 	Login:        v2auth.SignInPath,
 	Continue:     browserauth.BasePath + browserauth.ChooserContinuePath,
 	Logout:       browserauth.BasePath + browserauth.LogoutPath,
@@ -56,24 +44,7 @@ var canonicalSSOPaths = ssoBrowserPaths{
 	SAMLLogout:   browserauth.BasePath + "/saml/logout",
 }
 
-// legacySSOPaths are the deprecated `/forward-auth` aliases.
-var legacySSOPaths = ssoBrowserPaths{
-	Login:        browserauth.LegacyBasePath + browserauth.LoginPath,
-	Continue:     browserauth.LegacyBasePath + browserauth.ChooserContinuePath,
-	Logout:       browserauth.LegacyBasePath + browserauth.LogoutPath,
-	Info:         browserauth.LegacyBasePath + "/info",
-	FormLogout:   browserauth.LegacyBasePath + browserauth.LegacyFormLogoutPath,
-	OIDCLogin:    browserauth.LegacyBasePath + "/auth_oidc/login",
-	OIDCCallback: browserauth.LegacyBasePath + "/auth_oidc/callback",
-	OIDCLogout:   browserauth.LegacyBasePath + "/auth_oidc/logout",
-	SAMLMetadata: browserauth.LegacyBasePath + "/auth_saml/metadata",
-	SAMLLogin:    browserauth.LegacyBasePath + "/auth_saml/login",
-	SAMLACS:      browserauth.LegacyBasePath + "/auth_saml/acs",
-	SAMLLogout:   browserauth.LegacyBasePath + "/auth_saml/logout",
-}
-
-// mountSSOBrowserRoutes registers the single sign-on plane's browser routes
-// under one prefix.
+// mountSSOBrowserRoutes registers the single sign-on plane's browser routes.
 func mountSSOBrowserRoutes(
 	r chi.Router,
 	paths ssoBrowserPaths,
@@ -82,9 +53,9 @@ func mountSSOBrowserRoutes(
 	saml *v2auth.SAMLHandler,
 	chooser *browserauth.SSOChooser,
 ) {
-	// The sign-in page (browserauth/chooser.go). One usable provider keeps
-	// the old behaviour, a redirect to its login route, with `target_to`
-	// preserved. Two show the provider buttons and the work email field.
+	// The sign-in page (browserauth/chooser.go). One usable provider gives a
+	// redirect to its login route, with `target_to` preserved. Two show the
+	// provider buttons and the work email field.
 	if chooser != nil {
 		r.Get(paths.Login, chooser.Login)
 		r.Get(paths.Continue, chooser.Continue)
@@ -117,16 +88,15 @@ func mountSSOBrowserRoutes(
 	}
 }
 
-// mountFormBrowserRoutes serves the Form plane's router under both prefixes.
+// mountFormBrowserRoutes serves the Form plane's router under `/auth`.
 //
-// The router is mounted at the legacy prefix whole, as before. Under the
-// canonical prefix only browserauth.CanonicalFormPaths are served, each by its
-// full path, for the reason the file comment gives about `/auth`.
+// Each of browserauth.FormPaths is registered by its full path and reaches
+// the Form router with the prefix stripped, for the reason the file comment
+// gives about `/auth`.
 func mountFormBrowserRoutes(r chi.Router, browser http.Handler) {
-	r.Mount(browserauth.LegacyBasePath, browser)
-	canonical := stripRoutingPrefix(browserauth.BasePath, browser)
-	for _, path := range browserauth.CanonicalFormPaths() {
-		r.Handle(browserauth.BasePath+path, canonical)
+	stripped := stripRoutingPrefix(browserauth.BasePath, browser)
+	for _, path := range browserauth.FormPaths() {
+		r.Handle(browserauth.BasePath+path, stripped)
 	}
 }
 

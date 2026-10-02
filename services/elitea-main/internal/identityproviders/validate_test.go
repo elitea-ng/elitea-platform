@@ -31,7 +31,7 @@ func validOIDC() Provider {
 		OIDC: &OIDCDocument{
 			Issuer:      "https://idp.example.com",
 			ClientID:    "elitea",
-			RedirectURI: "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			RedirectURI: "https://elitea.example.com/auth/oidc/callback",
 			Scopes:      []string{"profile", "email"},
 		},
 	}
@@ -48,7 +48,7 @@ func validSAML(t *testing.T) Provider {
 			IDPSSOURL:       "https://idp.example.com/sso",
 			IDPCertificates: []string{rsaCertificatePEM(t, 2048)},
 			SPEntityID:      "https://elitea.example.com/saml",
-			ACSURL:          "https://elitea.example.com/forward-auth/auth_saml/acs",
+			ACSURL:          "https://elitea.example.com/auth/saml/acs",
 		},
 	}
 }
@@ -71,7 +71,7 @@ func TestAPlaintextIssuerIsRefused(t *testing.T) {
 func TestAPlaintextLoopbackIssuerIsAccepted(t *testing.T) {
 	provider := validOIDC()
 	provider.OIDC.Issuer = "http://oidc.localhost:8080"
-	provider.OIDC.RedirectURI = "http://localhost:3000/forward-auth/auth_oidc/callback"
+	provider.OIDC.RedirectURI = "http://localhost:3000/auth/oidc/callback"
 
 	if _, err := Validate(provider); err != nil {
 		t.Fatalf("a loopback issuer was refused: %v", err)

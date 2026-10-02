@@ -245,7 +245,7 @@ export default defineConfig(({ mode }): UserConfig => {
  *                   carries `vite_server_url`, `vite_public_project_id` and
  *                   the socket settings; with it missing the app boots with an
  *                   undefined config rather than an error.
- *  - `/forward-auth`, `/auth`  the sign-in redirect chain.
+ *  - `/auth`         the sign-in redirect chain.
  *  - `/socket.io`   upgraded, not just forwarded (`ws: true`).
  *
  * Cookies work across the port change because a cookie's origin is its DOMAIN,
@@ -260,7 +260,6 @@ function devServerProxy(): NonNullable<UserConfig['server']> {
     proxy: {
       '/api/v2': forward,
       '/llm': forward,
-      '/forward-auth': forward,
       '/auth': forward,
       '/socket.io': { ...forward, ws: true },
       // A REGEX, matching `config.js` at ANY depth. `index.html` loads it as

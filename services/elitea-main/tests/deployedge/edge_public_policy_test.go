@@ -1,4 +1,4 @@
-// The cookie-less paths every browser edge forwards, held to the forward-auth
+// The cookie-less paths every browser edge forwards, held to the edge-auth
 // policy (#569).
 //
 // DEFECT. Three lists describe the same fact — "a browser reaches this path
@@ -6,7 +6,7 @@
 //
 //   - the `api` router rule in deploy/traefik/dynamic.yml (and its e2e twin);
 //   - the elitea-main HTTPRoute in deploy/gateway-api/httproute.yaml;
-//   - internal/api/main_public_rules.go, which the cluster's forward-auth
+//   - internal/api/main_public_rules.go, which the cluster's edge-auth
 //     ExtensionRef consults BEFORE it forwards.
 //
 // The edge gates in this directory hold the first two to the Go router. Nothing
@@ -17,11 +17,11 @@
 //	location: https://<host>/auth/login?target_to=%2Fhealthz
 //
 // while every compose test stayed green, because the compose edge runs no
-// forwardAuth at all (deploy/traefik/dynamic.yml, `strip-client-identity`).
+// edgeAuth at all (deploy/traefik/dynamic.yml, `strip-client-identity`).
 //
 // THE GATE. For each path below it drives the real browserauth.MainHandler,
 // composed with the real api.CurrentMainRoutePublicRules(), exactly as the
-// cluster's ExtensionRef calls /internal/forward-auth/main: the forwarded
+// cluster's ExtensionRef calls /internal/auth/main: the forwarded
 // method, proto, host and URI of a cookie-less browser request. The answer
 // must be a public 200, never a 302. It also checks that every browser edge
 // forwards the path, so a path that leaves the edges cannot keep a stale
@@ -44,7 +44,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 // cookielessEdgePaths are request paths a browser or a probe sends with no
@@ -86,11 +86,11 @@ func (p panicSessionAuthorizer) Authorize(context.Context, string) (browserapp.A
 	return browserapp.Authorization{}, nil
 }
 
-// productionForwardAuthHandler composes the handler the way cmd/elitea-main
+// productionEdgeAuthHandler composes the handler the way cmd/elitea-main
 // does: the real public-rule catalog behind the real kernel and the real
 // trusted-proxy resolver. Only the two credential paths are stubbed, and they
 // fail the test when reached.
-func productionForwardAuthHandler(t *testing.T) http.Handler {
+func productionEdgeAuthHandler(t *testing.T) http.Handler {
 	t.Helper()
 	policy, err := forwardapp.NewPublicPolicy(api.CurrentMainRoutePublicRules())
 	if err != nil {
@@ -126,10 +126,10 @@ func productionForwardAuthHandler(t *testing.T) http.Handler {
 	return handler
 }
 
-// forwardAuthRequest is what an edge sends to /internal/forward-auth/main for
+// edgeAuthRequest is what an edge sends to /internal/auth/main for
 // one cookie-less browser request: the X-Forwarded-* tuple, nothing else.
-func forwardAuthRequest(uri string) *http.Request {
-	request := httptest.NewRequest(http.MethodGet, browserauth.MainForwardAuthPath, nil)
+func edgeAuthRequest(uri string) *http.Request {
+	request := httptest.NewRequest(http.MethodGet, browserauth.MainEdgeAuthPath, nil)
 	request.RemoteAddr = "10.1.2.3:43120"
 	request.Header.Set("X-Forwarded-Method", http.MethodGet)
 	request.Header.Set("X-Forwarded-Proto", "https")
@@ -156,10 +156,10 @@ func everyEdgeForwards(t *testing.T, root, requestPath string) map[string]bool {
 	return forwarded
 }
 
-// TestForwardAuthPolicyAdmitsEveryCookielessEdgePath is the gate.
-func TestForwardAuthPolicyAdmitsEveryCookielessEdgePath(t *testing.T) {
+// TestEdgeAuthPolicyAdmitsEveryCookielessEdgePath is the gate.
+func TestEdgeAuthPolicyAdmitsEveryCookielessEdgePath(t *testing.T) {
 	root := repoRoot(t)
-	handler := productionForwardAuthHandler(t)
+	handler := productionEdgeAuthHandler(t)
 
 	for requestPath, why := range cookielessEdgePaths {
 		t.Run(requestPath, func(t *testing.T) {
@@ -175,12 +175,12 @@ func TestForwardAuthPolicyAdmitsEveryCookielessEdgePath(t *testing.T) {
 			}
 
 			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, forwardAuthRequest(requestPath))
+			handler.ServeHTTP(recorder, edgeAuthRequest(requestPath))
 			if recorder.Code != http.StatusOK || recorder.Header().Get("X-Auth-Type") != "public" {
 				t.Fatalf(
-					"the forward-auth policy answers %s with %d (Location %q, X-Auth-Type %q), want a public 200.\n"+
+					"the edge-auth policy answers %s with %d (Location %q, X-Auth-Type %q), want a public 200.\n"+
 						"Reason the path is public: %s.\n"+
-						"Every browser edge forwards it, and the cluster's forward-auth ExtensionRef asks "+
+						"Every browser edge forwards it, and the cluster's edge-auth ExtensionRef asks "+
 						"internal/api/main_public_rules.go first. A path that is public in router.go and absent "+
 						"there gets a 302 to the login form — the #569 shape. Add a `go.*` rule for it.",
 					requestPath, recorder.Code, recorder.Header().Get("Location"),
@@ -191,13 +191,13 @@ func TestForwardAuthPolicyAdmitsEveryCookielessEdgePath(t *testing.T) {
 	}
 }
 
-// TestForwardAuthPolicyKeepsTheProbeSiblingsPrivate is the negative half. The
+// TestEdgeAuthPolicyKeepsTheProbeSiblingsPrivate is the negative half. The
 // readiness and startup bodies name each dependency's state, so they must stay
 // off every edge AND out of the policy: a rule that admitted them would publish
 // that state the day an edge forwarded them.
-func TestForwardAuthPolicyKeepsTheProbeSiblingsPrivate(t *testing.T) {
+func TestEdgeAuthPolicyKeepsTheProbeSiblingsPrivate(t *testing.T) {
 	root := repoRoot(t)
-	handler := productionForwardAuthHandler(t)
+	handler := productionEdgeAuthHandler(t)
 
 	for _, requestPath := range probeOnlyPaths {
 		t.Run(requestPath, func(t *testing.T) {
@@ -208,10 +208,10 @@ func TestForwardAuthPolicyKeepsTheProbeSiblingsPrivate(t *testing.T) {
 			}
 
 			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, forwardAuthRequest(requestPath))
+			handler.ServeHTTP(recorder, edgeAuthRequest(requestPath))
 			if recorder.Code != http.StatusFound || !strings.Contains(recorder.Header().Get("Location"), "/auth/login?") {
 				t.Fatalf(
-					"the forward-auth policy answers %s with %d (Location %q), want the login redirect.\n"+
+					"the edge-auth policy answers %s with %d (Location %q), want the login redirect.\n"+
 						"A public rule now admits a probe sibling. Only /healthz is public (go.health.healthz); "+
 						"narrow the rule.",
 					requestPath, recorder.Code, recorder.Header().Get("Location"),

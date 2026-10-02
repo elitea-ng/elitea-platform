@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	identity "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -18,56 +18,56 @@ var traefikForwardHeaders = [...]string{
 	"X-Forwarded-For",
 }
 
-// ForwardAuthCredentialHeader maps an additional request header to one of the
+// EdgeAuthCredentialHeader maps an additional request header to one of the
 // credential handlers supported by the current baseline: "bearer" or "basic".
 // Order is significant when a request contains more than one configured
 // header, so callers must preserve configuration order.
-type ForwardAuthCredentialHeader struct {
+type EdgeAuthCredentialHeader struct {
 	Name           string
 	CredentialType string
 }
 
-type ForwardAuthOption func(*ForwardAuthHandler)
+type EdgeAuthOption func(*EdgeAuthHandler)
 
-// WithForwardAuthCredentialHeaders configures current-baseline
+// WithEdgeAuthCredentialHeaders configures current-baseline
 // other_auth_headers behavior. No additional credential header is trusted by
 // default.
-func WithForwardAuthCredentialHeaders(headers ...ForwardAuthCredentialHeader) ForwardAuthOption {
-	configured := append([]ForwardAuthCredentialHeader(nil), headers...)
-	return func(handler *ForwardAuthHandler) {
+func WithEdgeAuthCredentialHeaders(headers ...EdgeAuthCredentialHeader) EdgeAuthOption {
+	configured := append([]EdgeAuthCredentialHeader(nil), headers...)
+	return func(handler *EdgeAuthHandler) {
 		handler.credentialHeaders = configured
 	}
 }
 
-// ForwardAuthHandler implements Traefik's forward-auth protocol.
+// EdgeAuthHandler implements Traefik's edge-auth protocol.
 // Traefik sends the original request headers; this handler validates
 // credentials and responds 200 on success or 403 on credential failure.
-type ForwardAuthHandler struct {
+type EdgeAuthHandler struct {
 	credentials       *forwardapp.TokenCredentialAuthenticator
-	credentialHeaders []ForwardAuthCredentialHeader
+	credentialHeaders []EdgeAuthCredentialHeader
 }
 
-// NewForwardAuthHandler takes exactly one token validator. It used to take a
+// NewEdgeAuthHandler takes exactly one token validator. It used to take a
 // pylon Redis-RPC client as a fallback for a nil validator; #383 deleted that
 // client, so a nil validator now means the handler authenticates nothing and
 // refuses every credential.
-func NewForwardAuthHandler(
+func NewEdgeAuthHandler(
 	validator apimw.TokenValidator,
-	opts ...ForwardAuthOption,
-) *ForwardAuthHandler {
+	opts ...EdgeAuthOption,
+) *EdgeAuthHandler {
 	var tokenValidator forwardapp.TokenValidator
 	if validator != nil {
 		tokenValidator = validator
 	}
 	credentials, _ := forwardapp.NewTokenCredentialAuthenticator(tokenValidator)
-	handler := &ForwardAuthHandler{credentials: credentials}
+	handler := &EdgeAuthHandler{credentials: credentials}
 	for _, opt := range opts {
 		opt(handler)
 	}
 	return handler
 }
 
-func (h *ForwardAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *EdgeAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 
@@ -104,7 +104,7 @@ func (h *ForwardAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeAccessDenied(w)
 }
 
-func (h *ForwardAuthHandler) authenticate(
+func (h *EdgeAuthHandler) authenticate(
 	w http.ResponseWriter,
 	r *http.Request,
 	credentialType string,
@@ -146,7 +146,7 @@ func writeSuccess(w http.ResponseWriter, r *http.Request, user identity.User) er
 		target = targetValues[0]
 	}
 	if target != "rpc" {
-		return errors.New("forward-auth success target is not registered")
+		return errors.New("edge-auth success target is not registered")
 	}
 
 	w.Header().Set("X-Auth-Type", "token")

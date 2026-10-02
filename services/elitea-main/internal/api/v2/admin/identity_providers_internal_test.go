@@ -118,7 +118,7 @@ const validOIDCBody = `{
 	"oidc": {
 		"issuer": "https://idp.example.com",
 		"client_id": "elitea",
-		"redirect_uri": "https://elitea.example.com/forward-auth/auth_oidc/callback"
+		"redirect_uri": "https://elitea.example.com/auth/oidc/callback"
 	}
 }`
 
@@ -185,7 +185,7 @@ func TestASaveThatOmitsEnabledAndSecretInheritsBoth(t *testing.T) {
 		Enabled: true, Revision: 4, SecretRef: "identity_provider__corporate_ab12__secret",
 		OIDC: &identityproviders.OIDCDocument{
 			Issuer: "https://idp.example.com", ClientID: "elitea",
-			RedirectURI: "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			RedirectURI: "https://elitea.example.com/auth/oidc/callback",
 		},
 	}
 	vault := newRecordingVault()
@@ -321,7 +321,7 @@ func TestClearingASecretDoesNotTouchTheVaultUntilTheRowIsWritten(t *testing.T) {
 		Enabled: true, Revision: 4, SecretRef: "identity_provider__corporate_ab12__secret",
 		OIDC: &identityproviders.OIDCDocument{
 			Issuer: "https://idp.example.com", ClientID: "elitea",
-			RedirectURI: "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			RedirectURI: "https://elitea.example.com/auth/oidc/callback",
 		},
 	}
 	store.upsertErr = errors.New("connection reset by peer")
@@ -345,7 +345,7 @@ func TestClearingASecretRemovesTheVaultEntryAfterTheRowIsWritten(t *testing.T) {
 		Enabled: true, Revision: 4, SecretRef: "identity_provider__corporate_ab12__secret",
 		OIDC: &identityproviders.OIDCDocument{
 			Issuer: "https://idp.example.com", ClientID: "elitea",
-			RedirectURI: "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			RedirectURI: "https://elitea.example.com/auth/oidc/callback",
 		},
 	}
 	vault := newRecordingVault()
@@ -445,7 +445,7 @@ func TestLoginDomainsRoundTripThroughTheAdminSurface(t *testing.T) {
 		"oidc": {
 			"issuer": "https://dex.example.com",
 			"client_id": "elitea",
-			"redirect_uri": "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			"redirect_uri": "https://elitea.example.com/auth/oidc/callback",
 			"login_domains": ["Example.COM", "@users.noreply.github.com"]
 		}
 	}`))
@@ -465,7 +465,7 @@ func TestLoginDomainsRoundTripThroughTheAdminSurface(t *testing.T) {
 		"oidc": {
 			"issuer": "https://dex.example.com",
 			"client_id": "elitea",
-			"redirect_uri": "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			"redirect_uri": "https://elitea.example.com/auth/oidc/callback",
 			"login_domains": ["not a domain"]
 		}
 	}`))

@@ -10,13 +10,13 @@ import (
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 )
 
-// Exactly one browser-auth plane may own /forward-auth.
+// Exactly one browser-auth plane may own /auth.
 //
 // router.go mounts the OIDC session lifecycle on that prefix when a
 // SessionHandler is configured, and mountReviewedProductionRoutes mounts the
 // production Form browser routes on the same string. Composing both panicked
 // chi during NewRouter — "attempting to Mount() a handler on an existing path,
-// '/forward-auth'" — so the process died at startup rather than serving a
+// '/auth'" — so the process died at startup rather than serving a
 // degraded surface.
 //
 // That combination is reachable in production, not hypothetical:
@@ -24,7 +24,7 @@ import (
 // (cmd/elitea-main/main.go:686-688), so every OIDC deployment that enables the
 // runtime composes both. main.go's comment asserting the two "can coexist"
 // described an intent the router never implemented.
-func TestForwardAuthPrefixHasOneOwner(t *testing.T) {
+func TestEdgeAuthPrefixHasOneOwner(t *testing.T) {
 	// A route the Form browser plane owns and the OIDC plane does not, so the
 	// assertions below can tell WHICH plane holds the prefix. Deliberately not
 	// /login or /logout: those exist on both planes with different meanings,
@@ -32,7 +32,7 @@ func TestForwardAuthPrefixHasOneOwner(t *testing.T) {
 	newAuthRoutes := func(t *testing.T) *ProductionAuthRoutes {
 		t.Helper()
 		browser := chi.NewRouter()
-		browser.Post("/auth_form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
+		browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
 			writer.WriteHeader(http.StatusNoContent)
 		})
 		main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -52,8 +52,8 @@ func TestForwardAuthPrefixHasOneOwner(t *testing.T) {
 	t.Run("production auth alone keeps the prefix", func(t *testing.T) {
 		router := NewRouter(RouterConfig{ProductionAuth: newAuthRoutes(t)})
 
-		assertStatus(t, router, http.MethodPost, "/forward-auth/auth_form/authorize", http.StatusNoContent)
-		assertStatus(t, router, http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent)
+		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNoContent)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
 	})
 
 	t.Run("OIDC session handler takes the prefix", func(t *testing.T) {
@@ -66,15 +66,15 @@ func TestForwardAuthPrefixHasOneOwner(t *testing.T) {
 
 		// The Form browser plane yielded the prefix — proving the two are not
 		// both mounted, which is what chi refused to allow.
-		assertStatus(t, router, http.MethodPost, "/forward-auth/auth_form/authorize", http.StatusNotFound)
+		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
 		// ...and the OIDC plane really does hold it, rather than the prefix
-		// being unowned. /forward-auth/logout exists only on the OIDC plane's
+		// being unowned. /auth/logout exists only on the OIDC plane's
 		// registration in router.go.
-		assertNotStatus(t, router, http.MethodGet, "/forward-auth/logout", http.StatusNotFound)
+		assertNotStatus(t, router, http.MethodGet, "/auth/logout", http.StatusNotFound)
 		// The internal endpoint is NOT collateral damage: it is a distinct path,
-		// the forward-auth edge depends on it, and it is what the runtime's
+		// the auth edge depends on it, and it is what the runtime's
 		// ForwardedIdentityVerifier is paired with.
-		assertStatus(t, router, http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
 	})
 
 	t.Run("top-level SessionHandler is honoured too", func(t *testing.T) {
@@ -86,8 +86,8 @@ func TestForwardAuthPrefixHasOneOwner(t *testing.T) {
 			SessionHandler: sessionHandler,
 		})
 
-		assertStatus(t, router, http.MethodPost, "/forward-auth/auth_form/authorize", http.StatusNotFound)
-		assertStatus(t, router, http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent)
+		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
 	})
 }
 

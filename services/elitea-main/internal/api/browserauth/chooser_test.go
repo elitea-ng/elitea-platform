@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	oidcLogin = "/forward-auth/auth_oidc/login"
-	samlLogin = "/forward-auth/auth_saml/login"
+	oidcLogin = "/auth/oidc/login"
+	samlLogin = "/auth/saml/login"
 )
 
 func gitHubProvider() SSOProvider {
@@ -47,7 +47,7 @@ func newTestChooser(t *testing.T, brand BrandSource, providers ...SSOProvider) *
 }
 
 func getLogin(chooser *SSOChooser, rawQuery string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/login?"+rawQuery, nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/login?"+rawQuery, nil)
 	for _, cookie := range cookies {
 		request.AddCookie(cookie)
 	}

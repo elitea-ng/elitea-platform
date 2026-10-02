@@ -7,21 +7,18 @@
  * decides what to DO about the answer.
  */
 
-/* ── behaviour 2 (secondary): forward-auth redirect sniff ────────────────── */
+/* ── behaviour 2 (secondary): edge-auth redirect sniff ────────────────── */
 
 /**
  * Old sniff retained as the SECONDARY signal (eliteaApi.js:26-28): the final
  * URL, with `target_to` removed first so its VALUE cannot fake a match,
- * containing both an auth prefix (`/auth/`, or the deprecated `/forward-auth/`)
- * and `/login`.
+ * under `/auth/` and containing `/login`.
  */
 function isAuthRedirect(finalUrl: string): boolean {
   const url = new URL(finalUrl);
   url.searchParams.delete('target_to');
   const stripped = url.toString();
-  const path = url.pathname;
-  const underAuth = path.startsWith('/auth/') || path.startsWith('/forward-auth/');
-  return underAuth && stripped.includes('/login');
+  return url.pathname.startsWith('/auth/') && stripped.includes('/login');
 }
 
 /**
@@ -52,7 +49,7 @@ function isAuthRedirect(finalUrl: string): boolean {
  * ordinary `kind: 'http'` path with its status and body intact; every consumer
  * of `HttpFailure` already switches exhaustively over both kinds.
  *
- * The redirect sniff is unchanged and still secondary: a forward-auth login
+ * The redirect sniff is unchanged and still secondary: an edge-auth login
  * redirect is a session failure whatever status it carries.
  */
 export function needsReauth(response: Response): boolean {

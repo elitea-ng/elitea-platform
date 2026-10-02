@@ -182,7 +182,7 @@ func executionIDFromHeader(h http.Header) string {
 // Stripped headers:
 //   - X-Elitea-* (signed identity injected below; strip first to avoid leaking
 //     any client-spoofed value)
-//   - X-Auth-Type / X-Auth-Id / X-Auth-Reference (Traefik forward-auth headers)
+//   - X-Auth-Type / X-Auth-Id / X-Auth-Reference (Traefik edge-auth headers)
 //   - Authorization, X-Api-Key (bearer / API-key credentials)
 //   - Cookie (session cookies; must not reach the downstream gateway)
 //   - X-Project-Id / OpenAI-Organization (the edge project selector; the edge
@@ -207,7 +207,7 @@ func stripIdentityHeaders(h http.Header) {
 		h.Del(name)
 	}
 
-	// Traefik forward-auth headers that the auth middleware reads; remove so the
+	// Traefik edge-auth headers that the auth middleware reads; remove so the
 	// gateway never sees inbound authentication context.
 	h.Del("X-Auth-Type")
 	h.Del("X-Auth-Id")

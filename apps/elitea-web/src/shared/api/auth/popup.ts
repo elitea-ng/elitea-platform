@@ -121,7 +121,7 @@ export interface AuthPopupOptions {
   now?: () => number;
   /**
    * The login entry point the popup opens, per authentication plane. The two planes are mutually exclusive.
-   * `/forward-auth/auth_oidc/login` exists on one of them. A fixed OIDC path makes the popup a 404 on the other.
+   * `/auth/oidc/login` exists on one of them. A fixed OIDC path makes the popup a 404 on the other.
    *
    * PASS THE FUNCTION FORM. The plane comes from the session probe. This controller is built before the probe
    * answers. A value read at construction time is always the OIDC default. See `popup.test.ts`.

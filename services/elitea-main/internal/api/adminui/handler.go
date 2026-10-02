@@ -122,7 +122,7 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 	//
 	//  1. The identity the edge PROJECTED onto this request as X-Auth-*, proven
 	//     to have crossed the header-stripping ingress. The runtime deployment
-	//     logs a browser in at /auth/login (alias /forward-auth/login), which stores an opaque
+	//     logs a browser in at /auth/login, which stores an opaque
 	//     server-side session under `elitea_browser_auth` — a different cookie,
 	//     with a different shape, from a different store. No `elitea_session`
 	//     cookie exists on that browser at all, so source 2 found nothing, the

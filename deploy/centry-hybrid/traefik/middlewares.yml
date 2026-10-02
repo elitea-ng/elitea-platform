@@ -5,7 +5,7 @@
 # failure was silent rather than loud:
 #
 #   * Traefik drops a router that names an unknown middleware. It logs
-#     `middleware "go-main-forward-auth@file" does not exist` and then removes
+#     `middleware "go-main-auth@file" does not exist` and then removes
 #     the router.
 #   * base.yml keeps `current-platform` on `PathPrefix("/")` at priority 1.
 #     That router absorbs every path the dropped routers were to serve.
@@ -24,7 +24,7 @@
 #
 # SCOPE. deploy/centry-hybrid/docker-compose.yml mounts this file and base.yml
 # into the foundation stack. It does NOT mount index-routes.yml there, because
-# the foundation stack registers no forward-auth endpoint (#378). No router in
+# the foundation stack registers no edge-auth endpoint (#378). No router in
 # the foundation stack names these three middlewares today. Traefik accepts a
 # definition that no router names, and it never calls it. The definitions stay
 # loaded so that a future foundation route needs one edit and not two.
@@ -37,10 +37,10 @@
 # PROVENANCE. The private definitions are not readable from this repository.
 # These definitions come from three in-repo sources:
 #   1. deploy/runtime/platform-edge-dynamic.yml, the working standalone edge,
-#      which uses the same strip-then-forward-auth shape.
+#      which uses the same strip-then-edge-auth shape.
 #   2. The assertions in
 #      services/elitea-main/tests/system/index_issue_5681_production_scale_test.go,
-#      which pin the forward-auth address path, `trustForwardHeader: false`,
+#      which pin the edge-auth address path, `trustForwardHeader: false`,
 #      `forwardBody: false`, `preserveRequestMethod: false`, and the
 #      `Host: localhost:18443` value.
 #   3. deploy/traefik/dynamic.yml, which holds the full #326 header list.
@@ -49,7 +49,7 @@ http:
     # INGRESS-ONLY header removal, and an authentication control rather than
     # hygiene (#326).
     #
-    # This middleware MUST run before go-main-forward-auth. elitea-main accepts
+    # This middleware MUST run before go-main-auth. elitea-main accepts
     # X-Auth-Type/X-Auth-ID as a finished identity when the request arrives
     # from a trusted proxy CIDR (internal/api/middleware/auth.go
     # tryTrustedProxyHeaders + isFromTrustedProxy). This edge is on that
@@ -58,7 +58,7 @@ http:
     #
     # Direction matters and is easy to get backwards. `customRequestHeaders`
     # rewrites the REQUEST on its way in, so an empty value deletes what the
-    # CLIENT sent. It does not delete what go-main-forward-auth later ADDS,
+    # CLIENT sent. It does not delete what go-main-auth later ADDS,
     # because forwardAuth applies authResponseHeaders after the middleware
     # chain runs. Stripping a name here and projecting the same name below is
     # therefore correct, not contradictory.
@@ -91,7 +91,7 @@ http:
           X-Elitea-User-Id: ""
           X-Elitea-Tenant-Id: ""
 
-    # This middleware exists because go-main-forward-auth sets
+    # This middleware exists because go-main-auth sets
     # `trustForwardHeader: false`. With that setting Traefik derives
     # X-Forwarded-Host from the request's own Host header, and it ignores any
     # X-Forwarded-Host the caller sent. That is the safe setting, and it makes
@@ -122,7 +122,7 @@ http:
     # middlewares and this file defines three.
     #
     # ORDER MATTERS. This middleware must run after strip-caller-auth-context
-    # and before go-main-forward-auth. index-routes.yml lists the three in that
+    # and before go-main-auth. index-routes.yml lists the three in that
     # order on every router.
     #
     # The value is a literal because the Traefik file provider does not expand
@@ -140,7 +140,7 @@ http:
 
     # The internal address, never a product route. It authenticates the
     # request's own credential (bearer PAT or browser session, through
-    # forwardauth.Kernel) and answers with the identity projection below.
+    # edgeauth.Kernel) and answers with the identity projection below.
     # authResponseHeaders is what copies that projection onto the forwarded
     # request. A name that is absent from that list does not reach the backend,
     # which is what makes strip-caller-auth-context above effective.
@@ -174,9 +174,9 @@ http:
     # and strip-caller-auth-context above deletes the caller's copies, so they
     # reach the backend from no source at all. deploy/runtime/platform-edge-dynamic.yml
     # projects the same four names.
-    go-main-forward-auth:
+    go-main-auth:
       forwardAuth:
-        address: http://elitea-main:8080/internal/forward-auth/main
+        address: http://elitea-main:8080/internal/auth/main
         trustForwardHeader: false
         forwardBody: false
         preserveRequestMethod: false

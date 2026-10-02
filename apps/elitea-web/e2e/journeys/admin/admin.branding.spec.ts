@@ -436,7 +436,7 @@ adminTest(
 
         // ── Surfaces 3 and 4: the login page and the e-mails ──────────────
         // Neither is reachable in a browser on this stack (OIDC owns
-        // /forward-auth, and there is no relay), so they are read the way an
+        // /auth, and there is no relay), so they are read the way an
         // operator reviews them: the branding package renders both through
         // the production renderers (`browserauth.RenderLoginPreview`, the
         // mail composer) under the pack that is live right now.

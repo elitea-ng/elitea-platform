@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
 )

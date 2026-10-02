@@ -56,10 +56,9 @@ export function authWindowName(state: string): string {
 }
 /**
  * Browser authentication routes live under `/auth/` (elitea-main
- * `internal/api/auth_paths.go`). The `/forward-auth/` prefix they had before is
- * still served as a deprecated alias; this app no longer writes it.
+ * `internal/api/auth_paths.go`).
  */
-export const LOGOUT_PATH = '/auth/logout'; // old UserButton.jsx:32 named /forward-auth/logout
+export const LOGOUT_PATH = '/auth/logout';
 
 /** The session probe (`SessionHandler.Info`). */
 export const SESSION_INFO_PATH = '/auth/info';

@@ -141,9 +141,9 @@ main:
         schema_version: elitea.auth.form.v1
 
         # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
-        # forward-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
+        # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
         # equal this origin's scheme and host. Name the edge that makes the
-        # forward-auth call.
+        # edge-auth call.
         public_origin: https://elitea-platform-edge
 
         # The pod network. A non-empty list is mandatory.

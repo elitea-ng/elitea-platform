@@ -12,7 +12,7 @@ import (
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
@@ -50,7 +50,7 @@ func TestCoreHandlerPreservesCredentialPrecedenceAndRPCHeaders(t *testing.T) {
 		panicCoreSession(t),
 		nil,
 	)
-	request := coreRequest("/forward-auth/auth?target=rpc")
+	request := coreRequest("/auth/check?target=rpc")
 	request.Header.Set("Authorization", "bEaReR authorization-token")
 	request.Header.Set("X-API-Key", "configured-token")
 	request.AddCookie(&http.Cookie{Name: "centry_auth_session", Value: CookieValuePrefix + canonicalSessionID(4)})
@@ -98,7 +98,7 @@ func TestCoreHandlerRejectedCredentialNeverTraversesBrowserSession(t *testing.T)
 				panicCoreSession(t),
 				test.public,
 			)
-			request := coreRequest("/forward-auth/auth?target=rpc")
+			request := coreRequest("/auth/check?target=rpc")
 			request.Header.Set("X-Forwarded-Uri", "/api/public")
 			request.Header.Set("Authorization", "malformed")
 			request.Header.Set("X-API-Key", "would-be-valid")
@@ -135,7 +135,7 @@ func TestCoreHandlerAuthorizesServerSideBrowserSessionWithoutForwardingBearerRef
 		}),
 		nil,
 	)
-	request := coreRequest("/forward-auth/auth?target=rpc")
+	request := coreRequest("/auth/check?target=rpc")
 	request.AddCookie(&http.Cookie{Name: "centry_auth_session", Value: CookieValuePrefix + sessionID})
 	recorder := httptest.NewRecorder()
 
@@ -161,7 +161,7 @@ func TestCoreHandlerRPCOutputRoundTripsThroughTrustedForwardedMiddleware(t *test
 		}),
 		nil,
 	)
-	forwardRequest := coreRequest("/forward-auth/auth?target=rpc")
+	forwardRequest := coreRequest("/auth/check?target=rpc")
 	forwardRequest.AddCookie(&http.Cookie{
 		Name:  "centry_auth_session",
 		Value: CookieValuePrefix + canonicalSessionID(5),
@@ -207,7 +207,7 @@ func TestCoreHandlerNoopMapperEmitsNoIdentityHeaders(t *testing.T) {
 		panicCoreSession(t),
 		nil,
 	)
-	request := coreRequest("/forward-auth/auth")
+	request := coreRequest("/auth/check")
 	request.Header.Set("Authorization", "Bearer valid")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -233,7 +233,7 @@ func TestCoreHandlerEmitsTrackedGrafanaProjectionWithoutSessionBearer(t *testing
 		}),
 		mapper,
 	)
-	request := coreRequest("/forward-auth/auth?target=header&scope=grafana")
+	request := coreRequest("/auth/check?target=header&scope=grafana")
 	request.Header.Set("X-WEBAUTH-USER", "spoofed")
 	request.AddCookie(&http.Cookie{Name: "centry_auth_session", Value: CookieValuePrefix + sessionID})
 	recorder := httptest.NewRecorder()
@@ -293,7 +293,7 @@ func TestCoreHandlerHeaderMapperFailsClosedForUnsafeProviderReference(t *testing
 				}),
 				newTrackedSuccessMapper(t),
 			)
-			request := coreRequest("/forward-auth/auth?target=header&scope=grafana")
+			request := coreRequest("/auth/check?target=header&scope=grafana")
 			request.AddCookie(&http.Cookie{
 				Name: "centry_auth_session", Value: CookieValuePrefix + canonicalSessionID(10),
 			})
@@ -332,7 +332,7 @@ func TestCoreHandlerOptionalMappersFailClosedOutsideTrackedHeaderScope(t *testin
 		"target=json&scope=galloper",
 	} {
 		t.Run(query, func(t *testing.T) {
-			request := coreRequest("/forward-auth/auth?" + query)
+			request := coreRequest("/auth/check?" + query)
 			request.AddCookie(&http.Cookie{
 				Name: "centry_auth_session", Value: CookieValuePrefix + canonicalSessionID(9),
 			})
@@ -402,7 +402,7 @@ func TestCoreHandlerJSONTransportRemainsAbsentForEveryAuthenticationType(t *test
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := coreRequest("/forward-auth/auth?target=json&scope=galloper")
+			request := coreRequest("/auth/check?target=json&scope=galloper")
 			test.prepare(request)
 			recorder := httptest.NewRecorder()
 			test.handler.ServeHTTP(recorder, request)
@@ -438,7 +438,7 @@ func TestCoreHandlerMissingOrExpiredSessionUsesSafeLoginRedirect(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			handler := newCoreTestHandler(t, panicCoreCredential(t), test.session, nil)
-			request := coreRequest("/forward-auth/auth")
+			request := coreRequest("/auth/check")
 			if test.cookie {
 				request.AddCookie(&http.Cookie{Name: "centry_auth_session", Value: CookieValuePrefix + canonicalSessionID(6)})
 			}
@@ -472,7 +472,7 @@ func TestCoreHandlerDependencyFailureNeverDowngradesToPublic(t *testing.T) {
 			Conditions: []forwardapp.RuleCondition{{Field: forwardapp.SourceURI, Pattern: `.*`}},
 		}},
 	)
-	request := coreRequest("/forward-auth/auth?target=rpc")
+	request := coreRequest("/auth/check?target=rpc")
 	request.AddCookie(&http.Cookie{Name: "centry_auth_session", Value: CookieValuePrefix + canonicalSessionID(7)})
 	recorder := httptest.NewRecorder()
 
@@ -494,7 +494,7 @@ func TestCoreHandlerRejectsUnknownAndExplicitEmptyMapperTargets(t *testing.T) {
 				panicCoreSession(t),
 				nil,
 			)
-			request := coreRequest("/forward-auth/auth?" + target)
+			request := coreRequest("/auth/check?" + target)
 			request.Header.Set("Authorization", "Bearer valid")
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
@@ -507,7 +507,7 @@ func TestCoreHandlerRejectsUnknownAndExplicitEmptyMapperTargets(t *testing.T) {
 
 func TestCoreHandlerRejectsUntrustedProxyBeforeAuthorization(t *testing.T) {
 	handler := newCoreTestHandler(t, panicCoreCredential(t), panicCoreSession(t), nil)
-	request := coreRequest("/forward-auth/auth")
+	request := coreRequest("/auth/check")
 	request.RemoteAddr = "192.0.2.99:443"
 	recorder := httptest.NewRecorder()
 

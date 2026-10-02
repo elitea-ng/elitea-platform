@@ -15,7 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
@@ -44,7 +44,7 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if graph.Routes() == nil || graph.BrowserRoutes() == nil || graph.MainForwardAuth() == nil ||
+	if graph.Routes() == nil || graph.BrowserRoutes() == nil || graph.MainEdgeAuth() == nil ||
 		graph.ForwardedIdentityVerifier() == nil || !allZero(temporaryPAT) {
 		t.Fatalf("graph=%+v temporary PAT cleared=%v", graph, allZero(temporaryPAT))
 	}
@@ -55,7 +55,7 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 		t.Fatalf("runtime PAT bridge did not reuse the composed issuer: %v", err)
 	}
 
-	for _, uri := range []string{"/forward-auth/login", "/health"} {
+	for _, uri := range []string{"/auth/login", "/health"} {
 		decision, err := graph.AuthorizeMain(context.Background(), publicMainRequest(uri))
 		if err != nil {
 			t.Fatal(err)
@@ -66,21 +66,21 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 		}
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "http://auth-internal/auth", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://auth-internal/check", nil)
 	request.RemoteAddr = "10.1.2.3:1234"
 	request.Header.Set("X-Forwarded-For", "203.0.113.7")
 	request.Header.Set("X-Forwarded-Method", http.MethodGet)
 	request.Header.Set("X-Forwarded-Proto", "https")
 	request.Header.Set("X-Forwarded-Host", "elitea.example")
-	request.Header.Set("X-Forwarded-Uri", "/forward-auth/login")
+	request.Header.Set("X-Forwarded-Uri", "/auth/login")
 	response := httptest.NewRecorder()
 	graph.Routes().ServeHTTP(response, request)
 	if response.Code != http.StatusFound ||
-		response.Header().Get("Location") != "/auth/login?target_to=%2Fforward-auth%2Flogin" {
+		response.Header().Get("Location") != "/auth/login?target_to=%2Fauth%2Flogin" {
 		t.Fatalf("Direct response = %d location=%q body=%q", response.Code, response.Header().Get("Location"), response.Body.String())
 	}
 
-	mainRequest := httptest.NewRequest(http.MethodGet, "http://auth-internal/internal/forward-auth/main", nil)
+	mainRequest := httptest.NewRequest(http.MethodGet, "http://auth-internal/internal/auth/main", nil)
 	mainRequest.RemoteAddr = "10.1.2.3:1234"
 	mainRequest.Header.Set("X-Forwarded-For", "203.0.113.7")
 	mainRequest.Header.Set("X-Forwarded-Method", http.MethodGet)
@@ -88,7 +88,7 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 	mainRequest.Header.Set("X-Forwarded-Host", "elitea.example")
 	mainRequest.Header.Set("X-Forwarded-Uri", "/health")
 	mainResponse := httptest.NewRecorder()
-	graph.MainForwardAuth().ServeHTTP(mainResponse, mainRequest)
+	graph.MainEdgeAuth().ServeHTTP(mainResponse, mainRequest)
 	if mainResponse.Code != http.StatusOK || mainResponse.Header().Get("X-Auth-Type") != "public" ||
 		mainResponse.Header().Get("X-Auth-ID") != "-" || mainResponse.Header().Get("X-Auth-User-ID") != "-" ||
 		mainResponse.Header().Get("X-Auth-Reference") != "-" ||
@@ -150,7 +150,7 @@ func TestNewFormGraphRejectsIncompleteDependenciesAndClosesOnFailure(t *testing.
 	var opened *redis.Client
 	invalidRules := validDependencies
 	invalidRules.MainRoutePublicRules = []forwardapp.PublicRule{{
-		Name:       "config.forward_auth",
+		Name:       "config.edge_auth",
 		Conditions: []forwardapp.RuleCondition{{Field: forwardapp.SourceURI, Pattern: `/duplicate`}},
 	}}
 	_, err := newFormGraph(
@@ -269,7 +269,7 @@ func TestCookiePolicyIsHostOnlySecureAndSeparateFromMainSession(t *testing.T) {
 
 func TestNilFormGraphMethodsFailSafely(t *testing.T) {
 	var graph *FormGraph
-	if graph.Routes() != nil || graph.BrowserRoutes() != nil || graph.MainForwardAuth() != nil || graph.Close() != nil {
+	if graph.Routes() != nil || graph.BrowserRoutes() != nil || graph.MainEdgeAuth() != nil || graph.Close() != nil {
 		t.Fatal("nil graph did not fail safely")
 	}
 	if err := graph.Ping(context.Background()); !errors.Is(err, ErrInvalidGraph) {

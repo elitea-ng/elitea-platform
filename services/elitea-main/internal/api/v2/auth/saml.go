@@ -83,8 +83,7 @@ import (
 )
 
 const (
-	// The canonical SAML routes. The router also serves each one under the
-	// deprecated `/forward-auth/auth_saml/*` alias (internal/api/auth_paths.go).
+	// The SAML routes (internal/api/auth_paths.go).
 	SAMLMetadataPath = "/auth/saml/metadata"
 	SAMLLoginPath    = "/auth/saml/login"
 	SAMLACSPath      = "/auth/saml/acs"

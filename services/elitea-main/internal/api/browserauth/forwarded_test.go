@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func TestTrustedProxyResolverNormalizesForwardAuthSource(t *testing.T) {
+func TestTrustedProxyResolverNormalizesEdgeAuthSource(t *testing.T) {
 	resolver := newTestTrustedProxyResolver(t)
-	request := forwardedTestRequest("/forward-auth/auth?target=rpc&scope=admin")
+	request := forwardedTestRequest("/auth/check?target=rpc&scope=admin")
 	request.RemoteAddr = "10.20.30.40:43120"
 	request.Header.Set("X-Forwarded-For", "198.51.100.8, 10.9.8.7")
 
@@ -41,7 +41,7 @@ func TestTrustedProxyResolverNormalizesForwardAuthSource(t *testing.T) {
 func TestTrustedProxyResolverPreservesAbsentAndEmptyTargetDistinction(t *testing.T) {
 	resolver := newTestTrustedProxyResolver(t)
 
-	absent, err := resolver.Resolve(forwardedTestRequest("/forward-auth/auth"))
+	absent, err := resolver.Resolve(forwardedTestRequest("/auth/check"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestTrustedProxyResolverPreservesAbsentAndEmptyTargetDistinction(t *testing
 		t.Fatalf("absent target = %q present=%v", absent.Target, absent.TargetPresent)
 	}
 
-	empty, err := resolver.Resolve(forwardedTestRequest("/forward-auth/auth?target="))
+	empty, err := resolver.Resolve(forwardedTestRequest("/auth/check?target="))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestTrustedProxyResolverPreservesAbsentAndEmptyTargetDistinction(t *testing
 
 func TestTrustedProxyResolverUsesNearestUntrustedForwardedHop(t *testing.T) {
 	resolver := newTestTrustedProxyResolver(t)
-	request := forwardedTestRequest("/forward-auth/auth")
+	request := forwardedTestRequest("/auth/check")
 	// The left-most value is attacker supplied. Because the next hop is not in
 	// the trusted proxy set, it is the effective client boundary.
 	request.Header.Set("X-Forwarded-For", "203.0.113.99, 198.51.100.44")
@@ -133,7 +133,7 @@ func TestTrustedProxyResolverRejectsUntrustedOrAmbiguousInput(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resolver := newTestTrustedProxyResolver(t)
-			request := forwardedTestRequest("/forward-auth/auth")
+			request := forwardedTestRequest("/auth/check")
 			test.mutate(request)
 			if _, err := resolver.Resolve(request); !errors.Is(err, ErrInvalidForwardedRequest) {
 				t.Fatalf("Resolve() error = %v, want %v", err, ErrInvalidForwardedRequest)

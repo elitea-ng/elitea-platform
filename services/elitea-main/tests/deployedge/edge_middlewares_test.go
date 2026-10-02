@@ -19,7 +19,7 @@
 //   - edge_services_test.go resolves the SERVICE each router names, and
 //     compares the published port in the authority header with the Compose
 //     default (#379);
-//   - edge_forward_auth_test.go follows the forwardAuth ADDRESS each loaded
+//   - edge_auth_target_test.go follows the edgeAuth ADDRESS each loaded
 //     router reaches, and checks that the stack registers it (#378).
 //
 // RUN IT WITH -count=1. The files this gate reads live in deploy/, outside
@@ -80,11 +80,11 @@ type configSet struct {
 	// still fails the gate.
 	externalServices []string
 	// composeFiles names the tracked Compose files that create this set's
-	// stack. edge_forward_auth_test.go reads them to answer one question: does
-	// the process behind a forwardAuth address register that address?
+	// stack. edge_auth_target_test.go reads them to answer one question: does
+	// the process behind an edgeAuth address register that address?
 	//
 	// Leave it empty when the Compose model is not in this repository. A set
-	// with no tracked Compose file and a forwardAuth reference fails, because
+	// with no tracked Compose file and an edgeAuth reference fails, because
 	// nothing can answer that question for it.
 	composeFiles []string
 	// mountedBy is the evidence for the set boundary above.
@@ -97,11 +97,11 @@ func configSets() []configSet {
 			name: "centry-hybrid foundation edge",
 			// This set holds two files and NOT the whole directory.
 			// deploy/centry-hybrid/traefik/index-routes.yml is excluded on
-			// purpose: its routers name a forward-auth endpoint that this
+			// purpose: its routers name an edge-auth endpoint that this
 			// stack does not register (#378). The exclusion is not a claim
 			// this file makes on its own —
 			// TestHybridFoundationEdgeLoadsTheComposeMount in
-			// edge_forward_auth_test.go reads the Compose volume list and
+			// edge_auth_target_test.go reads the Compose volume list and
 			// fails when the two stop agreeing.
 			files: []string{
 				"deploy/centry-hybrid/traefik/base.yml",
@@ -123,7 +123,7 @@ func configSets() []configSet {
 			externalDefinitions: []string{
 				"strip-caller-auth-context",
 				"normalize-runtime-public-authority",
-				"go-main-forward-auth",
+				"go-main-auth",
 			},
 			// The same private base.yml defines the two services these routers
 			// name. It points them at the private stack's own containers. A
@@ -131,7 +131,7 @@ func configSets() []configSet {
 			externalServices: []string{"elitea-main", "current-main"},
 			// The Compose model of this stack is in the private centry
 			// repository, so no tracked file can be read for it. The set also
-			// contributes no forwardAuth address: the definitions above are
+			// contributes no edgeAuth address: the definitions above are
 			// external, so this gate never sees an address to check.
 			mountedBy: "deploy/centry-hybrid/compose.sh ELITEA_INDEX_ROUTE_FILE -> /etc/traefik/dynamic/index.yml",
 		},

@@ -26,7 +26,7 @@ type ssoLoginOptionSource interface {
 // It returns nil when neither plane is mounted, and the caller then mounts no
 // `/auth/login`. The fallback login route is the OIDC one when OIDC is
 // mounted, else the SAML one: with no usable provider, that route states that
-// single sign-on is not available, as `/forward-auth/login` did before.
+// single sign-on is not available, as `/auth/login` did before.
 func newSSOChooser(
 	oidc *v2auth.OIDCHandler,
 	saml *v2auth.SAMLHandler,

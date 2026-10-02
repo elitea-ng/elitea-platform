@@ -21,7 +21,7 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: elitea-main
 
     go-current-notification-events:
@@ -34,7 +34,7 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: elitea-main
 
     go-current-notifications:
@@ -47,7 +47,7 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: elitea-main
 
     runtime-worker-current-tools-list:
@@ -61,7 +61,7 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: current-main
 
     # The Python execution worker resolves the effective low-tier model through
@@ -82,7 +82,7 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: elitea-main
 
     # elitea-main resolves the current project-scoped suggestion policy with
@@ -100,13 +100,13 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: current-main
 
     # SDK 0.9.6 resolves an admitted nested application by reference. Keep the
     # current application/version handlers and RBAC semantics during hybrid
     # operation, while making the worker PAT pass through the same trusted
-    # forward-auth boundary as the already-supported tools-list lookup.
+    # edge-auth boundary as the already-supported tools-list lookup.
     runtime-worker-current-application-reference:
       rule: >-
         Host(`elitea-gateway`) &&
@@ -118,7 +118,7 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: current-main
 
     # ── Artifacts (#337) ──────────────────────────────────────────────────────
@@ -161,5 +161,5 @@ http:
       middlewares:
         - strip-caller-auth-context
         - normalize-runtime-public-authority
-        - go-main-forward-auth
+        - go-main-auth
       service: elitea-main

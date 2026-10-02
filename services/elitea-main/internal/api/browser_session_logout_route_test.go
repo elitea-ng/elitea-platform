@@ -27,7 +27,7 @@ package api
 //
 //   1. `/api/v2` refuses a revoked session with `session_revoked`, which no
 //      other finding writes.
-//   2. `/forward-auth/info` refuses it with `session_expired`, which is the
+//   2. `/auth/info` refuses it with `session_expired`, which is the
 //      one code `apps/elitea-web/src/app/session-probe-client.ts` navigates
 //      the browser on.
 //
@@ -87,7 +87,7 @@ func TestALogoutRefusesEverySecondHolderOfTheSameCookie(t *testing.T) {
 	}
 
 	logout := httptest.NewRequest(http.MethodGet,
-		"/forward-auth/logout?target_to=%2Fforward-auth%2Flogin", nil)
+		"/auth/logout?target_to=%2Fauth%2Flogin", nil)
 	logout.AddCookie(&http.Cookie{Name: browsersession.CookieName, Value: value})
 	logoutRecorder := httptest.NewRecorder()
 	router.ServeHTTP(logoutRecorder, logout)
@@ -123,18 +123,18 @@ func TestALogoutRefusesEverySecondHolderOfTheSameCookie(t *testing.T) {
 
 	// 2. ...and the shell's probe says `session_expired`, which is the code it
 	//    navigates the browser to the identity provider on.
-	probe := httptest.NewRequest(http.MethodGet, "/forward-auth/info", nil)
+	probe := httptest.NewRequest(http.MethodGet, "/auth/info", nil)
 	probe.AddCookie(&http.Cookie{Name: browsersession.CookieName, Value: value})
 	probeRecorder := httptest.NewRecorder()
 	router.ServeHTTP(probeRecorder, probe)
 	if probeRecorder.Code != http.StatusUnauthorized {
-		t.Fatalf("/forward-auth/info status after logout = %d, want 401", probeRecorder.Code)
+		t.Fatalf("/auth/info status after logout = %d, want 401", probeRecorder.Code)
 	}
 	if err := json.Unmarshal(probeRecorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode probe refusal: %v (%s)", err, probeRecorder.Body.String())
 	}
 	if body.Error.Code != v2auth.SessionExpiredCode {
-		t.Fatalf("/forward-auth/info code = %q, want %q — the app shell navigates on this one "+
+		t.Fatalf("/auth/info code = %q, want %q — the app shell navigates on this one "+
 			"string and on nothing else", body.Error.Code, v2auth.SessionExpiredCode)
 	}
 }

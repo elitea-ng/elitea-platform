@@ -1122,9 +1122,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	r.Mount("/", health.RoutesWithDeps(cfg.HealthDeps))
 
-	// Traefik forward-auth endpoint (no auth middleware — this IS the auth check)
-	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthValidator)
-	r.Get("/auth", forwardAuth.ServeHTTP)
+	// Traefik edge-auth endpoint (no auth middleware — this IS the auth check)
+	edgeAuth := v2auth.NewEdgeAuthHandler(cfg.AuthValidator)
+	r.Get("/auth", edgeAuth.ServeHTTP)
 
 	// The pack is resolved from three layers (ADR-0024): the product default
 	// under the BRAND_PACK_PATH file under the admin-authored `branding`
@@ -1143,13 +1143,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// mounted because auth_core__user has no password credential columns; the
 	// previous prototype queried columns that do not exist in the legacy schema.
 	//
-	// The routes are served under `/auth` (canonical) and `/forward-auth`
-	// (deprecated alias); see auth_paths.go.
+	// The routes are under `/auth/`; see auth_paths.go.
 	if cfg.SessionHandler != nil {
 		chooser := newSSOChooser(cfg.OIDCHandler, cfg.SAMLHandler, brandingResolver)
-		for _, paths := range []ssoBrowserPaths{canonicalSSOPaths, legacySSOPaths} {
-			mountSSOBrowserRoutes(r, paths, cfg.SessionHandler, cfg.OIDCHandler, cfg.SAMLHandler, chooser)
-		}
+		mountSSOBrowserRoutes(r, ssoPaths, cfg.SessionHandler, cfg.OIDCHandler, cfg.SAMLHandler, chooser)
 	}
 
 	// Static file serving for application icons (root level like pylon)

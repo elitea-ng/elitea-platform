@@ -1,4 +1,4 @@
-package forwardauth
+package edgeauth
 
 import (
 	"fmt"

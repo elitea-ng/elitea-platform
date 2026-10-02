@@ -1,23 +1,23 @@
-// This file gates the forward-auth target of the edge configuration (#378).
+// This file gates the edge-auth target of the edge configuration (#378).
 //
-// A forwardAuth middleware calls one HTTP address before it admits a request.
+// An edgeAuth middleware calls one HTTP address before it admits a request.
 // Traefik returns the answer of that address to the caller when the answer is
 // not 2xx. An address that nothing registers therefore breaks every router that
 // names the middleware, and it breaks them at the edge.
 //
-// deploy/centry-hybrid/traefik/middlewares.yml points `go-main-forward-auth` at
-// http://elitea-main:8080/internal/forward-auth/main. elitea-main registers
+// deploy/centry-hybrid/traefik/middlewares.yml points `go-main-auth` at
+// http://elitea-main:8080/internal/auth/main. elitea-main registers
 // that path in internal/api/production_router.go, inside the branch that
 // composes production authentication. cmd/elitea-main/main.go enters that
 // branch only when ELITEA_AUTH_CONFIG_FILE is set. So the rule this gate
 // applies is one rule:
 //
-//	a router may name a forwardAuth middleware only when the Compose service
+//	a router may name an edgeAuth middleware only when the Compose service
 //	behind its address sets ELITEA_AUTH_CONFIG_FILE.
 //
 // The foundation stack broke that rule. It mounted a whole directory, so it
 // loaded index-routes.yml as a side effect, and eight routers there name
-// go-main-forward-auth. Three of them carry no Host(`elitea-gateway`) guard and
+// go-main-auth. Three of them carry no Host(`elitea-gateway`) guard and
 // sit at priority 90, so a browser reached them and the notification API failed
 // at the edge.
 //
@@ -46,7 +46,7 @@ import (
 )
 
 // authConfigVariable selects production authentication. main.go reads it, and
-// production_router.go registers the forward-auth path only in that branch.
+// production_router.go registers the edge-auth path only in that branch.
 const authConfigVariable = "ELITEA_AUTH_CONFIG_FILE"
 
 // hybridGatewayService is the Traefik container of the foundation stack.
@@ -61,10 +61,10 @@ const hybridFoundationSetName = "centry-hybrid foundation edge"
 // so a volume string must lose these before it is split on the colon.
 var composeVariablePattern = regexp.MustCompile(`\$\{[^}]*\}`)
 
-// forwardAuthMiddleware is one middleware definition, with the address this
+// edgeAuthMiddleware is one middleware definition, with the address this
 // gate follows and the chain members that reach further definitions.
-type forwardAuthMiddleware struct {
-	ForwardAuth struct {
+type edgeAuthMiddleware struct {
+	EdgeAuth struct {
 		Address string `yaml:"address"`
 	} `yaml:"forwardAuth"`
 	Chain struct {
@@ -72,13 +72,13 @@ type forwardAuthMiddleware struct {
 	} `yaml:"chain"`
 }
 
-// edgeWithForwardAuth re-reads the edge YAML with the fields this gate needs.
-type edgeWithForwardAuth struct {
+// edgeWithEdgeAuth re-reads the edge YAML with the fields this gate needs.
+type edgeWithEdgeAuth struct {
 	HTTP struct {
 		Routers map[string]struct {
 			Middlewares []string `yaml:"middlewares"`
 		} `yaml:"routers"`
-		Middlewares map[string]forwardAuthMiddleware `yaml:"middlewares"`
+		Middlewares map[string]edgeAuthMiddleware `yaml:"middlewares"`
 	} `yaml:"http"`
 }
 
@@ -91,13 +91,13 @@ type composeModel struct {
 	} `yaml:"services"`
 }
 
-func parseEdgeWithForwardAuth(t *testing.T, path string) edgeWithForwardAuth {
+func parseEdgeWithEdgeAuth(t *testing.T, path string) edgeWithEdgeAuth {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	var parsed edgeWithForwardAuth
+	var parsed edgeWithEdgeAuth
 	if err := yaml.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("parse %s as Traefik dynamic configuration: %v", path, err)
 	}
@@ -153,7 +153,7 @@ func environmentValue(node yaml.Node, name string) (string, bool) {
 
 // expandMiddlewares returns every middleware a router reaches, including the
 // members of a chain middleware. A chain fails the same way a router does.
-func expandMiddlewares(named []string, definitions map[string]forwardAuthMiddleware) []string {
+func expandMiddlewares(named []string, definitions map[string]edgeAuthMiddleware) []string {
 	seen := map[string]bool{}
 	var reached []string
 	var walk func(references []string)
@@ -195,8 +195,8 @@ func configSetByName(t *testing.T, name string) configSet {
 	return configSet{}
 }
 
-// TestEveryLoadedForwardAuthTargetIsRegistered is the gate.
-func TestEveryLoadedForwardAuthTargetIsRegistered(t *testing.T) {
+// TestEveryLoadedEdgeAuthTargetIsRegistered is the gate.
+func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
 	root := repoRoot(t)
 
 	checked := 0
@@ -206,11 +206,11 @@ func TestEveryLoadedForwardAuthTargetIsRegistered(t *testing.T) {
 		// Merge the set, because a router in one file names a middleware that
 		// another file in the same set defines. That is how the hybrid edge is
 		// built.
-		definitions := map[string]forwardAuthMiddleware{}
+		definitions := map[string]edgeAuthMiddleware{}
 		routerFile := map[string]string{}
 		routerMiddlewares := map[string][]string{}
 		for _, path := range paths {
-			parsed := parseEdgeWithForwardAuth(t, path)
+			parsed := parseEdgeWithEdgeAuth(t, path)
 			relative, err := filepath.Rel(root, path)
 			if err != nil {
 				relative = path
@@ -232,27 +232,27 @@ func TestEveryLoadedForwardAuthTargetIsRegistered(t *testing.T) {
 
 		for _, router := range routers {
 			for _, name := range expandMiddlewares(routerMiddlewares[router], definitions) {
-				address := definitions[name].ForwardAuth.Address
+				address := definitions[name].EdgeAuth.Address
 				if strings.TrimSpace(address) == "" {
 					continue
 				}
 				checked++
-				assertForwardAuthTarget(t, root, set, router, routerFile[router], name, address)
+				assertEdgeAuthTarget(t, root, set, router, routerFile[router], name, address)
 			}
 		}
 	}
 
 	if checked == 0 {
 		t.Fatal(
-			"no router names a forwardAuth middleware in any configuration " +
+			"no router names an edgeAuth middleware in any configuration " +
 				"set, so this gate proved nothing. The edge changed shape, or " +
 				"a set stopped being declared.",
 		)
 	}
 }
 
-// assertForwardAuthTarget applies the one rule to one reference.
-func assertForwardAuthTarget(
+// assertEdgeAuthTarget applies the one rule to one reference.
+func assertEdgeAuthTarget(
 	t *testing.T,
 	root string,
 	set configSet,
@@ -263,22 +263,22 @@ func assertForwardAuthTarget(
 	parsed, err := url.Parse(address)
 	if err != nil || parsed.Host == "" {
 		t.Errorf(
-			"set %q: middleware %q holds the forwardAuth address %q, which is "+
+			"set %q: middleware %q holds the edgeAuth address %q, which is "+
 				"not a URL with a host: %v",
 			set.name, middleware, address, err,
 		)
 		return
 	}
-	if parsed.Path != browserauth.MainForwardAuthPath {
+	if parsed.Path != browserauth.MainEdgeAuthPath {
 		t.Errorf(
 			"set %q: middleware %q calls %q, and router %q in %s names it.\n"+
-				"elitea-main registers exactly one internal forward-auth "+
+				"elitea-main registers exactly one internal edge-auth "+
 				"path, %q (internal/api/browserauth). Every other path "+
 				"answers 404, and Traefik returns that 404 to the caller.\n"+
 				"Correct the address. Teach this gate the second path only "+
 				"when elitea-main registers one.",
 			set.name, middleware, address, router, routerFile,
-			browserauth.MainForwardAuthPath,
+			browserauth.MainEdgeAuthPath,
 		)
 		return
 	}
@@ -313,7 +313,7 @@ func assertForwardAuthTarget(
 		t.Errorf(
 			"set %q: router %q in %s names %q, which calls %q.\n"+
 				"Service %q in %s does not set %s, so elitea-main composes no "+
-				"production authentication and registers no forward-auth "+
+				"production authentication and registers no edge-auth "+
 				"path. cmd/elitea-main/main.go reads that variable, and "+
 				"internal/api/production_router.go registers %q only inside "+
 				"that branch.\n"+
@@ -324,7 +324,7 @@ func assertForwardAuthTarget(
 				"Set boundary: %s",
 			set.name, router, routerFile, middleware, address,
 			target, relative, authConfigVariable,
-			browserauth.MainForwardAuthPath, authConfigVariable, set.mountedBy,
+			browserauth.MainEdgeAuthPath, authConfigVariable, set.mountedBy,
 		)
 	}
 	if defining == 0 {
@@ -333,7 +333,7 @@ func assertForwardAuthTarget(
 				"declared Compose file defines a service named %q.\n"+
 				"Declared: %s\n"+
 				"The address names a container this stack does not start, so "+
-				"the forward-auth call cannot be answered.",
+				"the edge-auth call cannot be answered.",
 			set.name, router, routerFile, middleware, address, target,
 			strings.Join(set.composeFiles, ", "),
 		)

@@ -5,7 +5,7 @@
 # with no authenticating filter in front of it.
 #
 # The defect this closes: on the cluster, /healthz sat in the HTTPRoute rule
-# that carries the forward-auth ExtensionRef, and the forward-auth policy in
+# that carries the edge-auth ExtensionRef, and the edge-auth policy in
 # internal/api/main_public_rules.go did not name it. Every probe of the public
 # hostname answered a 302 to the login form. The decision on the issue is to
 # publish /healthz at the edge with a public rule and keep the body at the
@@ -19,7 +19,7 @@
 # the one rule that also carries the liveness path is exactly the #569 shape.
 # The Go half of the same contract is
 # services/elitea-main/tests/deployedge/edge_public_policy_test.go, which
-# drives the real forward-auth handler with the real public-rule catalog.
+# drives the real edge-auth handler with the real public-rule catalog.
 #
 # Usage: deploy/helm/tests/render-edge-healthz.sh
 # Needs: helm, yq. No cluster, no network.
@@ -101,7 +101,7 @@ extension_refs="$(yq eval-all 'select(.kind == "HTTPRoute") | [.spec.rules[].fil
 if [ "$extension_refs" = "0" ]; then
   pass "the HTTPRoute carries no ExtensionRef filter in front of /healthz"
 else
-  fail "the HTTPRoute carries $extension_refs ExtensionRef filter(s); a forward-auth filter on the rule that reaches /healthz answers a probe with a 302 to the login form (#569)"
+  fail "the HTTPRoute carries $extension_refs ExtensionRef filter(s); an edge-auth filter on the rule that reaches /healthz answers a probe with a 302 to the login form (#569)"
 fi
 
 backend="$(yq eval-all 'select(.kind == "HTTPRoute") | .spec.rules[0].backendRefs[0].name' "$WORK/httproute.yaml")"
@@ -133,7 +133,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. The policy half exists. The chart publishes the path; the forward-auth
+# 3. The policy half exists. The chart publishes the path; the edge-auth
 #    policy must admit it, or an install that adds an authenticating edge in
 #    front of this chart lands back on #569. The Go gate proves the rule
 #    works; this line proves the chart and the policy speak of the same path.
@@ -141,7 +141,7 @@ fi
 if grep -q '"go.health.healthz"' "$PUBLIC_RULES_GO"; then
   pass "main_public_rules.go carries the go.health.healthz public rule"
 else
-  fail "main_public_rules.go carries no go.health.healthz rule; a forward-auth edge in front of this chart answers /healthz with a login redirect"
+  fail "main_public_rules.go carries no go.health.healthz rule; a auth edge in front of this chart answers /healthz with a login redirect"
 fi
 
 if [ "$failures" -ne 0 ]; then

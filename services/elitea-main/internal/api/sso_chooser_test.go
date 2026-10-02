@@ -60,11 +60,10 @@ func gitHubAndEntra() chooserProviderStore {
 	}
 }
 
-// With both planes usable, /auth/login is the sign-in page, and so is its
-// deprecated alias /forward-auth/login.
+// With both planes usable, /auth/login is the sign-in page.
 func TestTheSSOPlaneServesTheSignInPage(t *testing.T) {
 	router := ssoRouter(t, gitHubAndEntra())
-	for _, path := range []string{"/auth/login", "/forward-auth/login"} {
+	for _, path := range []string{"/auth/login"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path+"?target_to=%2Fapp", nil))
 
@@ -87,67 +86,53 @@ func TestTheSSOPlaneServesTheSignInPage(t *testing.T) {
 	}
 }
 
-// Every canonical single sign-on route has its deprecated alias, with the
-// same methods, and the alias is the same handler rather than a redirect.
-func TestEveryCanonicalAuthRouteKeepsItsForwardAuthAlias(t *testing.T) {
-	routes := map[string]map[string]bool{}
-	if err := chi.Walk(ssoRouter(t, gitHubAndEntra()).(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if routes[route] == nil {
-			routes[route] = map[string]bool{}
-		}
-		routes[route][method] = true
+// The single sign-on routes are all under /auth/, and the old prefix
+// is gone: it answers 404, not a redirect.
+func TestTheSSORoutesAreOnlyUnderAuth(t *testing.T) {
+	routes := map[string]bool{}
+	if err := chi.Walk(ssoRouter(t, gitHubAndEntra()).(chi.Routes), func(_, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		routes[route] = true
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	canonical := reflectPaths(canonicalSSOPaths)
-	legacy := reflectPaths(legacySSOPaths)
-	if len(canonical) != len(legacy) || len(canonical) < 12 {
-		t.Fatalf("canonical %v, legacy %v", canonical, legacy)
-	}
-	for index, path := range canonical {
-		if !strings.HasPrefix(path, "/auth/") || !strings.HasPrefix(legacy[index], "/forward-auth/") {
-			t.Fatalf("path pair %q / %q has the wrong prefixes", path, legacy[index])
-		}
-		if len(routes[path]) == 0 || len(routes[legacy[index]]) == 0 {
-			t.Fatalf("pair %q / %q: canonical %v, alias %v", path, legacy[index], routes[path], routes[legacy[index]])
-		}
-		for method := range routes[path] {
-			if !routes[legacy[index]][method] {
-				t.Errorf("%s %s has no %s alias at %s", method, path, method, legacy[index])
-			}
+	for _, path := range []string{
+		ssoPaths.Login, ssoPaths.Continue, ssoPaths.Logout, ssoPaths.Info, ssoPaths.FormLogout,
+		ssoPaths.OIDCLogin, ssoPaths.OIDCCallback, ssoPaths.OIDCLogout,
+		ssoPaths.SAMLMetadata, ssoPaths.SAMLLogin, ssoPaths.SAMLACS, ssoPaths.SAMLLogout,
+	} {
+		if !strings.HasPrefix(path, "/auth/") || !routes[path] {
+			t.Errorf("route %q is not registered under /auth/", path)
 		}
 	}
-	// The edge's forward-auth check at /auth itself is unchanged.
-	if !routes["/auth"][http.MethodGet] {
-		t.Fatal("GET /auth is no longer the forward-auth check")
+	for route := range routes {
+		if strings.Contains(route, "forward") {
+			t.Errorf("route %q still names the old prefix", route)
+		}
 	}
-}
-
-func reflectPaths(paths ssoBrowserPaths) []string {
-	return []string{
-		paths.Login, paths.Continue, paths.Logout, paths.Info, paths.FormLogout,
-		paths.OIDCLogin, paths.OIDCCallback, paths.OIDCLogout,
-		paths.SAMLMetadata, paths.SAMLLogin, paths.SAMLACS, paths.SAMLLogout,
+	// The edge auth check at /auth itself is unchanged.
+	if !routes["/auth"] {
+		t.Fatal("/auth is no longer registered")
 	}
-}
-
-// An identity provider registered with the old ACS URL still POSTs there.
-// Both URLs reach the same assertion consumer service; without a login
-// request cookie both refuse the same way.
-func TestTheSAMLAssertionConsumerAnswersUnderBothPrefixes(t *testing.T) {
 	router := ssoRouter(t, gitHubAndEntra())
-	codes := map[string]int{}
-	for _, path := range []string{"/auth/saml/acs", "/forward-auth/auth_saml/acs"} {
-		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("SAMLResponse=x"))
-		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, old := range []string{"/forward-" + "auth/login", "/forward-" + "auth/auth_oidc/callback"} {
 		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, request)
-		codes[path] = recorder.Code
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, old, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("%s answered %d, want 404", old, recorder.Code)
+		}
 	}
-	if codes["/auth/saml/acs"] == http.StatusNotFound || codes["/auth/saml/acs"] == http.StatusMethodNotAllowed ||
-		codes["/auth/saml/acs"] != codes["/forward-auth/auth_saml/acs"] {
-		t.Fatalf("codes = %v", codes)
+}
+
+// The assertion consumer service is mounted as a POST route.
+func TestTheSAMLAssertionConsumerIsMounted(t *testing.T) {
+	router := ssoRouter(t, gitHubAndEntra())
+	request := httptest.NewRequest(http.MethodPost, "/auth/saml/acs", strings.NewReader("SAMLResponse=x"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusNotFound || recorder.Code == http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d", recorder.Code)
 	}
 }
 

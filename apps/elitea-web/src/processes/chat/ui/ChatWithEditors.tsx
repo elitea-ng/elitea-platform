@@ -36,7 +36,7 @@ import { useFileCanvas } from './useFileCanvas';
  * throw outside a router.
  *
  * The id is the one the canvas presence roster is keyed by:
- * `/forward-auth/info` answers `user_id` and `/social/author` answers `id`,
+ * `/auth/info` answers `user_id` and `/social/author` answers `id`,
  * and both are the principal id the presence handler writes as
  * `Editor.user_id`.
  */

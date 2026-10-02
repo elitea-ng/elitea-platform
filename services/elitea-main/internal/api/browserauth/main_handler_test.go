@@ -11,7 +11,7 @@ import (
 	"time"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 func TestMainHandlerTraversesRejectedCredentialIntoBrowserSession(t *testing.T) {
@@ -84,10 +84,10 @@ func TestMainHandlerProjectsAcceptedPATAndBoundsDecisionTime(t *testing.T) {
 	})
 }
 
-// A ForwardAuth response is consumed by the EDGE, not by the browser, and an
+// An EdgeAuth response is consumed by the EDGE, not by the browser, and an
 // edge resolves a relative Location against the address it called — this
 // service's internal one. Traefik handed browsers
-// http://elitea-main.elitea.svc.cluster.local:8080/forward-auth/login?... and
+// http://elitea-main.elitea.svc.cluster.local:8080/auth/login?... and
 // they answered ERR_NAME_NOT_RESOLVED, because that name exists only inside
 // the cluster.
 //
@@ -440,7 +440,7 @@ func newMainTestHandler(
 }
 
 func mainRequest(uri string) *http.Request {
-	request := httptest.NewRequest(http.MethodGet, MainForwardAuthPath, nil)
+	request := httptest.NewRequest(http.MethodGet, MainEdgeAuthPath, nil)
 	request.RemoteAddr = "10.1.2.3:43120"
 	request.Header.Set("X-Forwarded-Method", http.MethodGet)
 	request.Header.Set("X-Forwarded-Proto", "https")

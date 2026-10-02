@@ -160,7 +160,7 @@ func TestEveryRouterServiceResolves(t *testing.T) {
 }
 
 // authorityMiddlewareName is the middleware that rewrites the request authority
-// before the forward-auth call. It carries the published port as a literal.
+// before the edge-auth call. It carries the published port as a literal.
 const authorityMiddlewareName = "normalize-runtime-public-authority"
 
 // hybridPortVariable is the Compose variable that selects the published port of
@@ -229,7 +229,7 @@ func TestRuntimeAuthorityPortMatchesTheHybridComposeDefault(t *testing.T) {
 		t.Fatalf(
 			"%s defines %q with no Host request header.\n"+
 				"That middleware exists to rewrite the request authority. "+
-				"Without the header it rewrites nothing, and the forward-auth "+
+				"Without the header it rewrites nothing, and the edge-auth "+
 				"call answers 403 on the worker's own authority.",
 			authoritySource, authorityMiddlewareName,
 		)
@@ -276,7 +276,7 @@ func TestRuntimeAuthorityPortMatchesTheHybridComposeDefault(t *testing.T) {
 					"The Traefik file provider does not expand environment "+
 					"variables, so the authority is a literal and the two "+
 					"drift apart silently. The routers still load. The "+
-					"forward-auth call then answers 403, because "+
+					"edge-auth call then answers 403, because "+
 					"TrustedProxyResolver compares the authority against the "+
 					"configured public origin.\n"+
 					"Change both together.",

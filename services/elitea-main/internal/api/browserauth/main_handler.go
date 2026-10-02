@@ -12,14 +12,14 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
-// MainForwardAuthPath is an internal gateway address, not a browser-facing
+// MainEdgeAuthPath is an internal gateway address, not a browser-facing
 // compatibility alias. The gateway calls it before forwarding every request
 // to the current Main during the incremental cutover.
-const MainForwardAuthPath = "/internal/forward-auth/main"
+const MainEdgeAuthPath = "/internal/auth/main"
 
 const (
 	mainDecisionTimeout = 15 * time.Second
@@ -42,11 +42,11 @@ type MainConfig struct {
 	// PublicOrigin is the origin a BROWSER reaches this deployment on, and it
 	// is what makes this handler's redirects usable.
 	//
-	// The redirects below were relative. A ForwardAuth response is consumed by
+	// The redirects below were relative. An EdgeAuth response is consumed by
 	// the EDGE, not by the browser, and an edge resolves a relative Location
 	// against the address it called — which is this service's INTERNAL
 	// address. Traefik handed browsers
-	//   http://elitea-main.elitea.svc.cluster.local:8080/forward-auth/login?...
+	//   http://elitea-main.elitea.svc.cluster.local:8080/auth/login?...
 	// and the browser answered ERR_NAME_NOT_RESOLVED, because that name exists
 	// only inside the cluster. Every deployment that puts this endpoint behind
 	// a proxy hits this, which is every deployment that uses it at all.
@@ -199,7 +199,7 @@ func writeMainIdentity(writer http.ResponseWriter, decision forwardapp.Decision)
 		return false
 	}
 	// Both headers are emitted for every allow decision. This makes the
-	// ForwardAuth response authoritative over caller-supplied profile headers
+	// EdgeAuth response authoritative over caller-supplied profile headers
 	// and distinguishes an explicit null projection from a missing/mixed-version
 	// contract.
 	writer.Header().Set(MainAvatarStateHeader, avatarState)
@@ -222,7 +222,7 @@ func writeMainIdentity(writer http.ResponseWriter, decision forwardapp.Decision)
 		return false
 	}
 	writer.Header().Set("X-Auth-Reference", "-")
-	writeForwardAuthOK(writer)
+	writeEdgeAuthOK(writer)
 	return true
 }
 

@@ -44,7 +44,7 @@ data:
         # present: production_runtime.go composes it with PrincipalValidator +
         # ForwardedIdentityVerifier only, so the PAT that admitted the turn
         # cannot read the turn's own stream. It is reachable exclusively
-        # through a forward-auth edge that authenticates the caller and
+        # through a auth edge that authenticates the caller and
         # projects verified identity headers.
         #
         # Scoped to this exact path rather than applied to the catch-all: every
@@ -58,7 +58,7 @@ data:
           tls: {}
           middlewares:
             - strip-caller-auth-context
-            - runtime-forward-auth
+            - runtime-auth
           service: elitea-main
         platform:
           rule: PathPrefix(`/`)
@@ -66,7 +66,7 @@ data:
           tls: {}
           service: elitea-main
       middlewares:
-        # MUST run before the forward-auth call, and its absence would be an
+        # MUST run before the edge-auth call, and its absence would be an
         # authentication bypass rather than an inconvenience: elitea-main
         # trusts X-Auth-* from a trusted proxy, so a caller that could set them
         # itself would choose its own identity. Traefik deletes a header whose
@@ -81,9 +81,9 @@ data:
               X-Auth-Avatar: ""
               X-Auth-Avatar-State: ""
         # An internal address, never a product route.
-        runtime-forward-auth:
+        runtime-auth:
           forwardAuth:
-            address: "http://{{ $edge.mainService }}:{{ $edge.mainPort }}/internal/forward-auth/main"
+            address: "http://{{ $edge.mainService }}:{{ $edge.mainPort }}/internal/auth/main"
             authResponseHeaders:
               - X-Auth-Type
               - X-Auth-ID

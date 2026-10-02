@@ -13,7 +13,7 @@ package browserauth
 // # When it does NOT show
 //
 // With exactly one usable provider and no error to report, the page is a
-// redirect to that provider's login route, as `/forward-auth/login` always was
+// redirect to that provider's login route, as the sign-in route always was
 // on this plane. With none, it redirects to the fallback login route, which
 // answers that single sign-on is not available.
 //
@@ -306,8 +306,8 @@ func (c *SSOChooser) render(w http.ResponseWriter, _ *http.Request, page chooser
 
 func (c *SSOChooser) rememberProvider(w http.ResponseWriter, id string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     LastUsedProviderCookie,
-		Value:    id,
+		Name:  LastUsedProviderCookie,
+		Value: id,
 		// Root, so the page reads it under BasePath and LegacyBasePath alike.
 		Path:     "/",
 		MaxAge:   lastUsedProviderMaxAge,

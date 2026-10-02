@@ -67,9 +67,8 @@ import (
 // derives the paths from the router itself.
 var rootMountedGoPaths = map[string]string{
 	"/healthz":                      "router.go: health.RoutesWithDeps mounted at /",
-	"/auth":                         "router.go: forwardAuth.ServeHTTP",
+	"/auth":                         "router.go: edgeAuth.ServeHTTP",
 	"/auth/logout":                  "router.go: SessionHandler routes (auth_paths.go)",
-	"/forward-auth/logout":          "router.go: SessionHandler routes, deprecated alias",
 	"/icons/1/abc.png":              "router.go: v2core.DownloadIcon — public, a browser <img src> carries no Authorization header",
 	"/avatars/1/abc.png":            "router.go: v2social.DownloadAvatar — public for the same reason",
 	"/artifacts/1/bucket/k":         "router.go: the artifacts download family",
@@ -262,7 +261,7 @@ var requiredWalkedFamilies = []string{
 	"/auth",
 	"/auth/",
 	"/avatars/",
-	"/forward-auth/",
+	"/auth/",
 	"/healthz",
 	"/icons/",
 	"/llm/",

@@ -286,7 +286,7 @@ test.describe('J20 artifacts lifecycle', () => {
      * Let the first load FINISH before asking for a second one.
      *
      * `page.goto` resolves on `load`, and this app keeps working after that: it
-     * pulls ~50 lazy route chunks and issues its boot calls (`/forward-auth/
+     * pulls ~50 lazy route chunks and issues its boot calls (`/auth/
      * info`, `/social/author`, the permission list, the project list). Reloading
      * into that traffic made WebKit cancel its own fresh navigation and start it
      * again, which Playwright reports on the FIRST attempt as

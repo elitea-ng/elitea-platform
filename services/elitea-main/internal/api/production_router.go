@@ -77,7 +77,7 @@ func NewRouter(cfg RouterConfig) chi.Router {
 // regression test, not something this cleanup is meant to do.
 func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.ProductionAuth != nil {
-		// Exactly one browser-auth plane may own /forward-auth. router.go mounts
+		// Exactly one browser-auth plane may own /auth. router.go mounts
 		// the OIDC session lifecycle on that prefix when SessionHandler is
 		// configured, and browserauth.BasePath is the same string — so composing
 		// both planes panicked chi at startup ("attempting to Mount() a handler
@@ -93,7 +93,7 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 		//
 		// OIDC wins the browser prefix, because it is the plane a browser in
 		// such a deployment actually authenticates through. The internal
-		// forward-auth endpoint below is NOT skipped: it is a distinct path, the
+		// edge-auth endpoint below is NOT skipped: it is a distinct path, the
 		// edge's identity check depends on it, and it is what the runtime's
 		// ForwardedIdentityVerifier is paired with. Single-plane deployments are
 		// unaffected in either direction.
@@ -105,9 +105,9 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 		if cfg.SessionHandler == nil {
 			mountFormBrowserRoutes(r, cfg.ProductionAuth.browser)
 		}
-		// This address is reached only by the gateway's ForwardAuth middleware;
+		// This address is reached only by the gateway's EdgeAuth middleware;
 		// deployment routing must never expose it as a product route.
-		r.Method(http.MethodGet, browserauth.MainForwardAuthPath, cfg.ProductionAuth.main)
+		r.Method(http.MethodGet, browserauth.MainEdgeAuthPath, cfg.ProductionAuth.main)
 	}
 	if cfg.CurrentProjectList != nil {
 		r.Method(http.MethodGet, v2projects.CurrentProjectListPath, cfg.CurrentProjectList)

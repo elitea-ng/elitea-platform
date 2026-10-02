@@ -36,11 +36,11 @@ func (f forwardedIdentityVerifierFunc) VerifyForwardedIdentityPeer(request *http
 	return f(request)
 }
 
-func TestForwardAuthRequiresCurrentBaselineTraefikHeaders(t *testing.T) {
+func TestEdgeAuthRequiresCurrentBaselineTraefikHeaders(t *testing.T) {
 	for _, missing := range currentBaselineTraefikHeaders() {
 		t.Run(missing.name, func(t *testing.T) {
 			validated := false
-			forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+			forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 				validated = true
 				return validatedTokenUser(), nil
 			}))
@@ -59,8 +59,8 @@ func TestForwardAuthRequiresCurrentBaselineTraefikHeaders(t *testing.T) {
 	}
 }
 
-func TestForwardAuthTraefikHeadersRequirePresenceNotContent(t *testing.T) {
-	forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+func TestEdgeAuthTraefikHeadersRequirePresenceNotContent(t *testing.T) {
+	forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 		return validatedTokenUser(), nil
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/auth", nil)
@@ -75,19 +75,19 @@ func TestForwardAuthTraefikHeadersRequirePresenceNotContent(t *testing.T) {
 	requireOK(t, rec)
 }
 
-func TestForwardAuthAuthorizationPrecedesAdditionalCredentialHeaders(t *testing.T) {
+func TestEdgeAuthAuthorizationPrecedesAdditionalCredentialHeaders(t *testing.T) {
 	var validatedToken string
-	forward := v2auth.NewForwardAuthHandler(
+	forward := v2auth.NewEdgeAuthHandler(
 		tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 			validatedToken = token
 			return validatedTokenUser(), nil
 		}),
-		v2auth.WithForwardAuthCredentialHeaders(v2auth.ForwardAuthCredentialHeader{
+		v2auth.WithEdgeAuthCredentialHeaders(v2auth.EdgeAuthCredentialHeader{
 			Name:           "X-API-Key",
 			CredentialType: "bearer",
 		}),
 	)
-	req := newForwardAuthRequest("/auth")
+	req := newEdgeAuthRequest("/auth")
 	req.Header.Set("Authorization", "bEaReR authorization-token")
 	req.Header.Set("X-API-Key", "additional-header-token")
 	rec := httptest.NewRecorder()
@@ -100,19 +100,19 @@ func TestForwardAuthAuthorizationPrecedesAdditionalCredentialHeaders(t *testing.
 	}
 }
 
-func TestForwardAuthMalformedAuthorizationDoesNotTraverseToAdditionalHeader(t *testing.T) {
+func TestEdgeAuthMalformedAuthorizationDoesNotTraverseToAdditionalHeader(t *testing.T) {
 	validated := false
-	forward := v2auth.NewForwardAuthHandler(
+	forward := v2auth.NewEdgeAuthHandler(
 		tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 			validated = true
 			return validatedTokenUser(), nil
 		}),
-		v2auth.WithForwardAuthCredentialHeaders(v2auth.ForwardAuthCredentialHeader{
+		v2auth.WithEdgeAuthCredentialHeaders(v2auth.EdgeAuthCredentialHeader{
 			Name:           "X-API-Key",
 			CredentialType: "bearer",
 		}),
 	)
-	req := newForwardAuthRequest("/auth")
+	req := newEdgeAuthRequest("/auth")
 	// Header presence, including an empty value, takes precedence in the current
 	// baseline and therefore fails instead of falling through.
 	req.Header.Set("Authorization", "")
@@ -127,7 +127,7 @@ func TestForwardAuthMalformedAuthorizationDoesNotTraverseToAdditionalHeader(t *t
 	}
 }
 
-func TestForwardAuthCredentialHandlers(t *testing.T) {
+func TestEdgeAuthCredentialHandlers(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("basic-token:ignored-password"))
 	invalidUTF8 := base64.StdEncoding.EncodeToString([]byte{0xff, ':', 'x'})
 	tests := []struct {
@@ -148,11 +148,11 @@ func TestForwardAuthCredentialHandlers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var gotToken string
-			forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
+			forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 				gotToken = token
 				return validatedTokenUser(), nil
 			}))
-			req := newForwardAuthRequest("/auth")
+			req := newEdgeAuthRequest("/auth")
 			req.Header.Set("Authorization", test.authorization)
 			rec := httptest.NewRecorder()
 
@@ -170,14 +170,14 @@ func TestForwardAuthCredentialHandlers(t *testing.T) {
 	}
 }
 
-func TestForwardAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.T) {
+func TestEdgeAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.T) {
 	t.Run("not trusted by default", func(t *testing.T) {
 		validated := false
-		forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+		forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 			validated = true
 			return validatedTokenUser(), nil
 		}))
-		req := newForwardAuthRequest("/auth")
+		req := newEdgeAuthRequest("/auth")
 		req.Header.Set("X-API-Key", "api-key-token")
 		rec := httptest.NewRecorder()
 
@@ -191,17 +191,17 @@ func TestForwardAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.
 
 	t.Run("configuration order", func(t *testing.T) {
 		var gotToken string
-		forward := v2auth.NewForwardAuthHandler(
+		forward := v2auth.NewEdgeAuthHandler(
 			tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 				gotToken = token
 				return validatedTokenUser(), nil
 			}),
-			v2auth.WithForwardAuthCredentialHeaders(
-				v2auth.ForwardAuthCredentialHeader{Name: "X-First-Key", CredentialType: "bearer"},
-				v2auth.ForwardAuthCredentialHeader{Name: "X-Second-Key", CredentialType: "bearer"},
+			v2auth.WithEdgeAuthCredentialHeaders(
+				v2auth.EdgeAuthCredentialHeader{Name: "X-First-Key", CredentialType: "bearer"},
+				v2auth.EdgeAuthCredentialHeader{Name: "X-Second-Key", CredentialType: "bearer"},
 			),
 		)
-		req := newForwardAuthRequest("/auth")
+		req := newEdgeAuthRequest("/auth")
 		req.Header.Set("X-First-Key", "first-token")
 		req.Header.Set("X-Second-Key", "second-token")
 		rec := httptest.NewRecorder()
@@ -215,7 +215,7 @@ func TestForwardAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.
 	})
 }
 
-func TestForwardAuthSuccessTargetContract(t *testing.T) {
+func TestEdgeAuthSuccessTargetContract(t *testing.T) {
 	tests := []struct {
 		name       string
 		path       string
@@ -230,10 +230,10 @@ func TestForwardAuthSuccessTargetContract(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+			forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 				return validatedTokenUser(), nil
 			}))
-			req := newForwardAuthRequest(test.path)
+			req := newEdgeAuthRequest(test.path)
 			req.Header.Set("Authorization", "Bearer signed-token")
 			rec := httptest.NewRecorder()
 
@@ -253,8 +253,8 @@ func TestForwardAuthSuccessTargetContract(t *testing.T) {
 	}
 }
 
-func TestForwardAuthPreservesTokenRowAndOwningUserAcrossHeaders(t *testing.T) {
-	forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
+func TestEdgeAuthPreservesTokenRowAndOwningUserAcrossHeaders(t *testing.T) {
+	forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
 		if token != "signed-token" {
 			t.Fatalf("validated token = %q", token)
 		}
@@ -268,7 +268,7 @@ func TestForwardAuthPreservesTokenRowAndOwningUserAcrossHeaders(t *testing.T) {
 			AuthType: "token",
 		}, nil
 	}))
-	forwardReq := newForwardAuthRequest("/auth?target=rpc")
+	forwardReq := newEdgeAuthRequest("/auth?target=rpc")
 	forwardReq.Header.Set("Authorization", "Bearer signed-token")
 	forwardRec := httptest.NewRecorder()
 	forward.ServeHTTP(forwardRec, forwardReq)
@@ -314,15 +314,15 @@ func TestForwardAuthPreservesTokenRowAndOwningUserAcrossHeaders(t *testing.T) {
 	}
 }
 
-func TestForwardAuthFailsClosedWhenValidatorOmitsTypedTokenIdentity(t *testing.T) {
+func TestEdgeAuthFailsClosedWhenValidatorOmitsTypedTokenIdentity(t *testing.T) {
 	for _, user := range []identity.User{
 		{ID: "7", UserID: "7", AuthType: "token"},
 		{ID: "42", TokenID: "42", AuthType: "token"},
 	} {
-		forward := v2auth.NewForwardAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+		forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
 			return user, nil
 		}))
-		req := newForwardAuthRequest("/auth?target=rpc")
+		req := newEdgeAuthRequest("/auth?target=rpc")
 		req.Header.Set("Authorization", "Bearer signed-token")
 		rec := httptest.NewRecorder()
 
@@ -332,7 +332,7 @@ func TestForwardAuthFailsClosedWhenValidatorOmitsTypedTokenIdentity(t *testing.T
 	}
 }
 
-func TestForwardAuthFailsClosedWithoutAWorkingValidator(t *testing.T) {
+func TestEdgeAuthFailsClosedWithoutAWorkingValidator(t *testing.T) {
 	tests := []struct {
 		name      string
 		validator middleware.TokenValidator
@@ -347,8 +347,8 @@ func TestForwardAuthFailsClosedWithoutAWorkingValidator(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		forward := v2auth.NewForwardAuthHandler(test.validator)
-		req := newForwardAuthRequest("/auth?target=rpc")
+		forward := v2auth.NewEdgeAuthHandler(test.validator)
+		req := newEdgeAuthRequest("/auth?target=rpc")
 		req.Header.Set("Authorization", "Bearer signed-token")
 		rec := httptest.NewRecorder()
 
@@ -361,7 +361,7 @@ func TestForwardAuthFailsClosedWithoutAWorkingValidator(t *testing.T) {
 	}
 }
 
-func newForwardAuthRequest(path string) *http.Request {
+func newEdgeAuthRequest(path string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	addCurrentBaselineTraefikHeaders(req, "")
 	return req

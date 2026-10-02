@@ -107,8 +107,8 @@ describe('performLogout', () => {
     // `production_router.go` mounts `browserauth` when `SessionHandler` is
     // nil. That plane registers `/login`, `/auth_form/login`,
     // `/auth_form/authorize`, `/logout` and `/auth_form/logout` under
-    // `/forward-auth`, and nothing under `/auth_oidc/`. A target inside
-    // `/forward-auth/auth_oidc/` therefore ends the sign-out on a 404.
+    // `/auth`, and nothing under `/auth_oidc/`. A target inside
+    // `/auth/oidc/` therefore ends the sign-out on a 404.
     //
     // The existing E2E stack is OIDC-only, so it cannot see this. The check
     // is the assertion below, not a live request.

@@ -1,7 +1,7 @@
-// Package forwardauth decides whether a normalized forwarded request may
+// Package edgeauth decides whether a normalized forwarded request may
 // proceed. HTTP parsing, trusted-proxy validation, success mapping, and
 // redirects remain owned by the API boundary.
-package forwardauth
+package edgeauth
 
 import (
 	"context"
@@ -30,8 +30,8 @@ const (
 )
 
 var (
-	ErrInvalidConfiguration = errors.New("invalid forward-auth configuration")
-	ErrInvalidRequest       = errors.New("invalid forward-auth request")
+	ErrInvalidConfiguration = errors.New("invalid edge-auth configuration")
+	ErrInvalidRequest       = errors.New("invalid edge-auth request")
 )
 
 // Source is normalized only after the API boundary has established a trusted
