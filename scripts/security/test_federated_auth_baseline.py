@@ -42,7 +42,7 @@ class FederatedAuthBaselineTest(unittest.TestCase):
 
     def test_checker_rejects_route_and_effective_method_mutations(self) -> None:
         changed = deepcopy(self.catalog)
-        route = "/forward-auth/auth_saml/acs"
+        route = "/auth/auth_saml/acs"
         changed["method_route_matrix"][route].pop("GET")
         record = next(
             item
@@ -212,11 +212,11 @@ class FederatedAuthBaselineTest(unittest.TestCase):
     def test_yaml_parser_accepts_indentationless_sequences(self) -> None:
         values, sequences = exporter._yaml_paths(
             "initial_global_admins:\n- admin\n"
-            "exposure:\n  handle:\n    prefixes:\n    - /forward-auth\n"
+            "exposure:\n  handle:\n    prefixes:\n    - /auth\n"
         )
         self.assertEqual(values, {})
         self.assertEqual(sequences["initial_global_admins"], ["admin"])
-        self.assertEqual(sequences["exposure.handle.prefixes"], ["/forward-auth"])
+        self.assertEqual(sequences["exposure.handle.prefixes"], ["/auth"])
 
     def test_main_public_rule_selector_pins_uri_without_yaml_dependency(self) -> None:
         selected = exporter._safe_main_auth(
@@ -233,11 +233,11 @@ class FederatedAuthBaselineTest(unittest.TestCase):
 
     def test_runtime_selectors_ignore_unrelated_server_tuning(self) -> None:
         baseline = (
-            "application:\n  APPLICATION_ROOT: /forward-auth/\n"
-            "server:\n  path: /forward-auth/\n  kwargs:\n    spawn: 4\n"
+            "application:\n  APPLICATION_ROOT: /auth/\n"
+            "server:\n  path: /auth/\n  kwargs:\n    spawn: 4\n"
         )
         tuned = baseline.replace("spawn: 4", "spawn: 512")
-        routed = baseline.replace("path: /forward-auth/", "path: /different/")
+        routed = baseline.replace("path: /auth/", "path: /different/")
         self.assertEqual(
             exporter._safe_auth_pylon(baseline), exporter._safe_auth_pylon(tuned)
         )

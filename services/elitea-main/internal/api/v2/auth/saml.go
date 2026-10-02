@@ -274,11 +274,7 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		// Lax, not Strict: the identity provider POSTs the assertion back to
-		// this origin from its own, and a Strict cookie is not sent on that
-		// navigation — the login would fail with a missing request cookie on
-		// every attempt.
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.requestCookieSameSite(),
 		MaxAge:   samlRequestLifetime,
 	})
 
@@ -383,6 +379,26 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
+// requestCookieSameSite picks the SameSite attribute of the request cookie.
+//
+// Identity providers return the assertion with the HTTP-POST binding: a
+// cross-site, top-level POST to the ACS. Browsers send neither Strict nor Lax
+// cookies on that request, so the binding cookie must be SameSite=None, which
+// browsers accept only together with Secure. The cookie is HttpOnly, signed and
+// single use, so None adds no exposure the binding does not already have.
+//
+// Without secureCookies (plain-http development) None would be rejected
+// outright, so Lax is kept: the cookie is stored, but the browser will not
+// return it on the cross-site POST. SAML POST binding therefore needs https.
+// The clearing write must carry the same attributes as the original or the
+// browser keeps the old cookie.
+func (h *SAMLHandler) requestCookieSameSite() http.SameSite {
+	if h.secureCookies {
+		return http.SameSiteNoneMode
+	}
+	return http.SameSiteLaxMode
+}
+
 // consumeRequestCookie clears the request cookie and returns what it held.
 //
 // It is cleared UNCONDITIONALLY and before the assertion is examined, which is
@@ -398,7 +414,7 @@ func (h *SAMLHandler) consumeRequestCookie(
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.requestCookieSameSite(),
 		MaxAge:   -1,
 	})
 	cookie, err := r.Cookie(samlRequestCookie)

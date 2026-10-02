@@ -6,7 +6,7 @@
         "auth_reference": "raw browser session cookie value",
         "auth_type": "user"
       },
-      "id": "browser.forward_auth.get",
+      "id": "browser.auth.get",
       "input": {
         "query": [
           "scope",
@@ -28,7 +28,7 @@
         "public rules in registration order",
         "clear authentication context and redirect to login"
       ],
-      "route": "/forward-auth/auth",
+      "route": "/auth/auth",
       "target_query_semantics": {
         "absent": "Flask returns None; None selects the registered built-in no-op mapper",
         "explicit_empty": "Flask returns an empty string; it is distinct from None and has no mapper in the reviewed composition, so access is denied"
@@ -44,8 +44,8 @@
         }
       },
       "method": "GET",
-      "outcome": "dispatch configured auth_provider; Form redirects to /forward-auth/auth_form/login",
-      "route": "/forward-auth/login",
+      "outcome": "dispatch configured auth_provider; Form redirects to /auth/auth_form/login",
+      "route": "/auth/login",
       "side_effects": [
         "clear authentication context in the current server-side session"
       ]
@@ -61,7 +61,7 @@
       "method": "GET",
       "outcome": {
         "content": "configured login template, default login.html",
-        "form_action": "/forward-auth/auth_form/authorize",
+        "form_action": "/auth/auth_form/authorize",
         "hidden_fields": [
           "target"
         ],
@@ -70,7 +70,7 @@
           "password"
         ]
       },
-      "route": "/forward-auth/auth_form/login"
+      "route": "/auth/auth_form/login"
     },
     {
       "configuration_shape": {
@@ -87,7 +87,7 @@
         "top_level_email_consumed_by_route": false
       },
       "failure": {
-        "location": "/forward-auth/auth_form/login?error=true",
+        "location": "/auth/auth_form/login?error=true",
         "target_preserved": false
       },
       "id": "form.authorize.post",
@@ -101,7 +101,7 @@
       },
       "matching": "iterate configured users in order and accept the first exact Python string equality match on login and password",
       "method": "POST",
-      "route": "/forward-auth/auth_form/authorize",
+      "route": "/auth/auth_form/authorize",
       "success": {
         "authentication_expiration": "naive datetime.now() plus exactly 86400 seconds",
         "processor_order": "registered auth processors execute sequentially before session rotation",
@@ -156,7 +156,7 @@
       "method": "GET",
       "outcome": "dispatch provider logout route or URL",
       "provider_selection": "session provider when registered, otherwise configured default provider",
-      "route": "/forward-auth/logout"
+      "route": "/auth/logout"
     },
     {
       "id": "form.logout.get",
@@ -167,7 +167,7 @@
       },
       "method": "GET",
       "outcome": "redirect to verified target token URL, or configured default_logout_url on any verification error",
-      "route": "/forward-auth/auth_form/logout",
+      "route": "/auth/auth_form/logout",
       "side_effects": [
         "destroy old server-side session",
         "regenerate a session identifier",
@@ -190,7 +190,7 @@
         "target_json": "registered JSON mapper returns raw context plus configured JSONPath projections for scope",
         "target_unknown": "302 redirect to the configured access-denied URL; mapper failure has the same outcome"
       },
-      "route": "/forward-auth/info"
+      "route": "/auth/info"
     },
     {
       "algorithm": "HS256 JWT using the Flask application secret",
@@ -302,7 +302,7 @@
         "public success when no valid session",
         "login redirect or invalid-credential denial"
       ],
-      "http_route_difference": "Auth Core HTTP /forward-auth/auth immediately delegates invalid credentials to access_denied_reply(source): a matching public rule with an accepted target mapper succeeds, otherwise it denies, and it never traverses the browser session",
+      "http_route_difference": "Auth Core HTTP /auth/auth immediately delegates invalid credentials to access_denied_reply(source): a matching public rule with an accepted target mapper succeeds, otherwise it denies, and it never traverses the browser session",
       "id": "browser.main_rpc_authorize",
       "local_public_override": {
         "classification_time": "before cache lookup and auth_authorize RPC",
@@ -311,7 +311,7 @@
         "successful_authentication_wins": true,
         "transport_exception": "becomes a synthetic public principal regardless of whether a local public rule matched"
       },
-      "migration_transport": "after pylon_main and pylon_auth merge, auth_authorize becomes a direct typed in-process call; the internal Redis RPC and its Redis success cache disappear, while HTTP /forward-auth/auth remains the ingress contract",
+      "migration_transport": "after pylon_main and pylon_auth merge, auth_authorize becomes a direct typed in-process call; the internal Redis RPC and its Redis success cache disappear, while HTTP /auth/auth remains the ingress contract",
       "transport": "pylon_main calls auth_authorize over Redis RPC in tracked auth_mode=rpc",
       "transport_failure": "on a cache miss, pylon_main catches any auth_authorize RPC-call exception, installs a synthetic public principal regardless of local public rules, and continues; permission-decorated handlers may still deny that principal, while undecorated/public-principal flows proceed"
     }
@@ -824,7 +824,7 @@
       "main_local": {
         "configured_registration_order": [
           {
-            "id": "config.forward_auth",
+            "id": "config.browser_auth",
             "ordinal": 0,
             "rule": {
               "uri": "/forward\\-auth/.*"
@@ -966,7 +966,7 @@
       }
     },
     "pylon_auth_selected": {
-      "application.APPLICATION_ROOT": "/forward-auth/",
+      "application.APPLICATION_ROOT": "/auth/",
       "application.PERMANENT_SESSION_LIFETIME": "${COOKIES_LIFETIME}",
       "application.PREFERRED_URL_SCHEME": "${APP_PROTO}",
       "application.SECRET_KEY_configured": true,
@@ -980,7 +980,7 @@
       "exposure.event_node.type": "RedisEventNode",
       "exposure.expose": "true",
       "rpc.redis_configured": true,
-      "server.path": "/forward-auth/",
+      "server.path": "/auth/",
       "server.proxy.x_for": "1",
       "server.proxy.x_host": "1",
       "server.proxy.x_proto": "1",
@@ -990,11 +990,11 @@
     "pylon_main": {
       "allow_cors": true,
       "auth_mode": "rpc",
-      "forward_auth_exposure": {
+      "browser_auth_exposure": {
         "exposure.event_node.type": "RedisEventNode",
         "exposure.handle.enabled": "true",
         "exposure.handle.prefixes": [
-          "/forward-auth"
+          "/auth"
         ]
       },
       "public_uri_rules": [
@@ -1025,7 +1025,7 @@
       "declared_methods": [
         "GET"
       ],
-      "effective_route": "/forward-auth/auth",
+      "effective_route": "/auth/auth",
       "inner_flask_methods": [
         "GET",
         "HEAD",
@@ -1038,7 +1038,7 @@
       "declared_methods": [
         "GET"
       ],
-      "effective_route": "/forward-auth/info",
+      "effective_route": "/auth/info",
       "inner_flask_methods": [
         "GET",
         "HEAD",
@@ -1051,7 +1051,7 @@
       "declared_methods": [
         "GET"
       ],
-      "effective_route": "/forward-auth/login",
+      "effective_route": "/auth/login",
       "inner_flask_methods": [
         "GET",
         "HEAD",
@@ -1064,7 +1064,7 @@
       "declared_methods": [
         "GET"
       ],
-      "effective_route": "/forward-auth/logout",
+      "effective_route": "/auth/logout",
       "inner_flask_methods": [
         "GET",
         "HEAD",
@@ -1077,7 +1077,7 @@
       "declared_methods": [
         "POST"
       ],
-      "effective_route": "/forward-auth/auth_form/authorize",
+      "effective_route": "/auth/auth_form/authorize",
       "inner_flask_methods": [
         "OPTIONS",
         "POST"
@@ -1089,7 +1089,7 @@
       "declared_methods": [
         "GET"
       ],
-      "effective_route": "/forward-auth/auth_form/login",
+      "effective_route": "/auth/auth_form/login",
       "inner_flask_methods": [
         "GET",
         "HEAD",
@@ -1102,7 +1102,7 @@
       "declared_methods": [
         "GET"
       ],
-      "effective_route": "/forward-auth/auth_form/logout",
+      "effective_route": "/auth/auth_form/logout",
       "inner_flask_methods": [
         "GET",
         "HEAD",
@@ -1139,10 +1139,10 @@
       "scope": "responses produced by managed pylon_auth Flask applications"
     },
     {
-      "id": "forward_auth.missing_forwarded_header",
+      "id": "browser_auth.missing_forwarded_header",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth"
+        "route": "/auth/auth"
       },
       "response": {
         "body": "Flask redirect HTML",
@@ -1151,10 +1151,10 @@
       }
     },
     {
-      "id": "forward_auth.rpc_success",
+      "id": "browser_auth.rpc_success",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth",
+        "route": "/auth/auth",
         "target": "rpc"
       },
       "response": {
@@ -1168,10 +1168,10 @@
       }
     },
     {
-      "id": "forward_auth.noop_success",
+      "id": "browser_auth.noop_success",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth",
+        "route": "/auth/auth",
         "target": null
       },
       "response": {
@@ -1181,11 +1181,11 @@
       }
     },
     {
-      "id": "forward_auth.empty_target",
+      "id": "browser_auth.empty_target",
       "request": {
         "method": "GET",
         "precondition": "a credential, browser session, or public-rule branch reaches the success mapper",
-        "route": "/forward-auth/auth",
+        "route": "/auth/auth",
         "target": ""
       },
       "response": {
@@ -1194,10 +1194,10 @@
       }
     },
     {
-      "id": "forward_auth.unknown_target",
+      "id": "browser_auth.unknown_target",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth",
+        "route": "/auth/auth",
         "target": "unregistered"
       },
       "response": {
@@ -1211,10 +1211,10 @@
         "matching public rule plus an accepted target mapper returns its success response",
         "otherwise redirect 302 to the configured access-denied URL"
       ],
-      "id": "forward_auth.invalid_credential",
+      "id": "browser_auth.invalid_credential",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth"
+        "route": "/auth/auth"
       },
       "tracked_effective_response": {
         "location": "${APP_PROTO}://${APP_HOST}/access_denied",
@@ -1224,10 +1224,10 @@
     },
     {
       "code_capability_not_effective_in_reviewed_config": "a matching Auth Core public rule could return 200, but no reviewed registration populates that set",
-      "id": "forward_auth.no_authentication",
+      "id": "browser_auth.no_authentication",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth"
+        "route": "/auth/auth"
       },
       "tracked_effective_branches": [
         "a done and unexpired browser session returns 200 through the selected success mapper",
@@ -1242,7 +1242,7 @@
       "id": "browser.login",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/login"
+        "route": "/auth/login"
       }
     },
     {
@@ -1253,14 +1253,14 @@
       "id": "browser.logout",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/logout"
+        "route": "/auth/logout"
       }
     },
     {
       "id": "browser.info.raw",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/info",
+        "route": "/auth/info",
         "target": null
       },
       "response": {
@@ -1272,7 +1272,7 @@
       "id": "browser.info.empty_target",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/info",
+        "route": "/auth/info",
         "target": ""
       },
       "response": {
@@ -1284,7 +1284,7 @@
       "id": "browser.info.json",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/info",
+        "route": "/auth/info",
         "target": "json"
       },
       "response": {
@@ -1296,7 +1296,7 @@
       "id": "browser.info.denied",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/info",
+        "route": "/auth/info",
         "target": "unregistered or mapper failure"
       },
       "response": {
@@ -1308,7 +1308,7 @@
       "id": "form.login",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth_form/login"
+        "route": "/auth/auth_form/login"
       },
       "response": {
         "content_type": "text/html",
@@ -1319,10 +1319,10 @@
       "id": "form.authorize.invalid",
       "request": {
         "method": "POST",
-        "route": "/forward-auth/auth_form/authorize"
+        "route": "/auth/auth_form/authorize"
       },
       "response": {
-        "location": "/forward-auth/auth_form/login?error=true",
+        "location": "/auth/auth_form/login?error=true",
         "status": 302
       }
     },
@@ -1330,7 +1330,7 @@
       "id": "form.authorize.success",
       "request": {
         "method": "POST",
-        "route": "/forward-auth/auth_form/authorize"
+        "route": "/auth/auth_form/authorize"
       },
       "response": {
         "location": "verified target URL, or configured default_login_url",
@@ -1341,7 +1341,7 @@
       "id": "form.authorize.processor_failure",
       "request": {
         "method": "POST",
-        "route": "/forward-auth/auth_form/authorize"
+        "route": "/auth/auth_form/authorize"
       },
       "response": {
         "location": "${APP_PROTO}://${APP_HOST}/access_denied",
@@ -1353,7 +1353,7 @@
       "id": "form.logout",
       "request": {
         "method": "GET",
-        "route": "/forward-auth/auth_form/logout"
+        "route": "/auth/auth_form/logout"
       },
       "response": {
         "location": "verified target URL, or configured default_logout_url",
@@ -1378,7 +1378,7 @@
       "id": "exposure.outer_unsupported_method",
       "request": {
         "method": "a method outside the outer listener allowlist, for example TRACE",
-        "route": "/forward-auth/..."
+        "route": "/auth/..."
       },
       "response": {
         "status": 405
@@ -1442,7 +1442,7 @@
     {
       "id": "exposure.registry_miss",
       "request": {
-        "route": "/forward-auth/..."
+        "route": "/auth/..."
       },
       "response": {
         "status": 404
@@ -1451,7 +1451,7 @@
     {
       "id": "exposure.timeout",
       "request": {
-        "route": "/forward-auth/..."
+        "route": "/auth/..."
       },
       "response": {
         "status": 504
@@ -1589,18 +1589,18 @@
     "auth_core_blueprint_prefix": "/",
     "auth_form_blueprint_prefix": "/auth_form",
     "auth_form_descriptor_name": "auth_form",
-    "auth_pylon_context_url_prefix": "/forward-auth",
-    "auth_pylon_server_path": "/forward-auth/",
+    "auth_pylon_context_url_prefix": "/auth",
+    "auth_pylon_server_path": "/auth/",
     "composition_chain": [
-      "pylon_main Auth before_request attempts auth_authorize; the configured /forward-auth public rule keeps negative decisions non-blocking",
-      "pylon_main exposure accepts the configured /forward-auth prefix",
+      "pylon_main Auth before_request attempts auth_authorize; the configured /auth public rule keeps negative decisions non-blocking",
+      "pylon_main exposure accepts the configured /auth prefix",
       "exposure forwards the original WSGI path to the pylon_auth process",
       "pylon_auth strips its context URL prefix before app-router dispatch",
       "ModuleDescriptor registers Auth Core at its configured blueprint prefix",
       "Auth Form derives /auth_form from Auth Core get_relative_url_prefix",
       "Flask combines the blueprint prefix with the literal route decorator"
     ],
-    "external_base_path": "/forward-auth",
+    "external_base_path": "/auth",
     "external_listener_methods": [
       "DELETE",
       "GET",
@@ -1611,7 +1611,7 @@
       "PUT"
     ],
     "main_exposure_prefixes": [
-      "/forward-auth"
+      "/auth"
     ],
     "pylon_runtime_ref": "1.2.25",
     "pylon_web_runtime": "gevent",
@@ -1628,7 +1628,7 @@
       "Auth Init login processor business rules",
       "Auth mapper info behavior",
       "Pylon server-side session/cookie mechanics",
-      "tracked Centry forward-auth composition",
+      "tracked Centry browser-auth composition",
       "tracked Main-local configured and dynamic public-rule registrations",
       "EliteaUI browser-auth consumers",
       "Admin UI logout consumer"
@@ -1742,10 +1742,10 @@
       "baseline": "pylon_main reaches pylon_auth through the Redis auth_authorize RPC and session reference headers",
       "id": "rpc.boundary",
       "migration": "remove_internal_only",
-      "requirement": "direct in-process typed calls in the merged monolith; no internal auth_authorize RPC or associated Redis result cache remains; retain HTTP /forward-auth/auth for ingress compatibility, and add no root /auth alias without a separate reviewed contract"
+      "requirement": "direct in-process typed calls in the merged monolith; no internal auth_authorize RPC or associated Redis result cache remains; retain HTTP /auth/auth for ingress compatibility, and add no root /auth alias without a separate reviewed contract"
     },
     {
-      "baseline": "/forward-auth/info has no local authentication check and target absent returns raw authentication context JSON",
+      "baseline": "/auth/info has no local authentication check and target absent returns raw authentication context JSON",
       "id": "info.disclosure",
       "migration": "correct",
       "requirement": "classify consumers, authorize access, and return a typed redacted projection; do not mount the raw mapper contract by default"
@@ -1927,7 +1927,7 @@
       "centry/pylon_main/configs/auth.yml#auth_gate_allowlist": "a636a9ea6898a2c21f0eb385847527347857d23743773b2f986f68b2c9bcb445",
       "centry/pylon_main/configs/elitea_core.yml#public_route_override_allowlist": "65741b218a43b164e65e21859ef3ae9daf43e7f2f649e9fe3ce24cea94aa505d",
       "centry/pylon_main/configs/shared.yml#cors_allowlist": "56cd8bea278fca6dfa0a932edf2d2cf5bcb987961a9d64a8e2ae9cbf23cb988c",
-      "centry/pylon_main/pylon.yml#forward_auth_exposure_allowlist": "29d83c0d5311098ac5464debae44656da63c787ffd9b200a56ac9809be4d5e64",
+      "centry/pylon_main/pylon.yml#browser_auth_exposure_allowlist": "29d83c0d5311098ac5464debae44656da63c787ffd9b200a56ac9809be4d5e64",
       "elitea_core/config.yml#public_route_allowlist": "3ce8e6f14ec74e951a00d5aa688b4ecc2ef35ae1415f51f12c7b9e01b0f41f82",
       "runtime_interface_litellm/config.yml#public_route_allowlist": "e3cf1fed9457dda56ab9a7231051e4702fcaec1bb22ab42a48f6d40b5f480f4d"
     },
@@ -1941,7 +1941,7 @@
       "centry/pylon_main/configs/auth.yml#auth_gate_allowlist",
       "centry/pylon_main/configs/elitea_core.yml#public_route_override_allowlist",
       "centry/pylon_main/configs/shared.yml#cors_allowlist",
-      "centry/pylon_main/pylon.yml#forward_auth_exposure_allowlist",
+      "centry/pylon_main/pylon.yml#browser_auth_exposure_allowlist",
       "elitea_core/config.yml#public_route_allowlist",
       "runtime_interface_litellm/config.yml#public_route_allowlist"
     ],
@@ -1977,14 +1977,14 @@
       "ui/src/[fsd]/widgets/sidebar-root/ui/button/UserButton.jsx"
     ],
     "logout_consumers": [
-      "Admin UI sidebar assigns same-origin /forward-auth/logout",
-      "settings action assigns same-origin /forward-auth/logout",
-      "sidebar user action assigns same-origin /forward-auth/logout"
+      "Admin UI sidebar assigns same-origin /auth/logout",
+      "settings action assigns same-origin /auth/logout",
+      "sidebar user action assigns same-origin /auth/logout"
     ],
     "reauthentication": {
       "callback_query": "auth_state must survive the authentication return target unchanged",
       "callback_route": "/auth-callback",
-      "detection": "a fetch redirect URL containing both /forward-auth/ and /login",
+      "detection": "a fetch redirect URL containing both /auth/ and /login",
       "retry": "retry the cloned original request after popup success",
       "success_channels": [
         "same-origin postMessage",
