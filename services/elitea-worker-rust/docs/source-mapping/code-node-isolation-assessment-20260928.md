@@ -2651,3 +2651,12 @@ Docker permits 125 child processes; Kubernetes permits 124. Runtime processes co
 Both return `errno: 11`, retain identical receipts, and remove their execution workloads.
 Formatting, diff checks, and Clippy with warnings denied pass.
 This closes the earlier live process-exhaustion item for the tested policies, not general load or browser acceptance.
+
+
+## Phase deadline follow-up: 2026-10-02
+
+The reservation-based deadline above records the original implementation.
+The [phase deadline mapping](sandbox-phase-deadlines-20261002.md) records the separate readiness and execution clocks.
+The first binding and dispatch timestamps remain durable across supervisor replacement.
+Migration 0010 preserves existing deadlines and nullable-column compatibility with older supervisors.
+Separate feature verification remains required before release.

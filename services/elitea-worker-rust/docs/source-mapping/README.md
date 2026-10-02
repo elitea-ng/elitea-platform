@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility.
+
 - [Main integration and PR 883 release preparation](main-integration-20261001.md) records conflict resolution, migration identities, fresh CI repairs, and preserved Point 5 work.
 
 - `document-memory-library-assessment-20260923.md` assesses native document engines, Xberg extraction, and YantrikDB memory against pinned sources.

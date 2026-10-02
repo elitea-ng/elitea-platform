@@ -697,6 +697,7 @@ async fn preparation_receipt_database() -> IsolatedPostgres {
         include_str!(
             "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
         ),
+        include_str!("../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&isolated.pool)
@@ -1021,6 +1022,12 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1371,6 +1378,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
@@ -1619,7 +1632,7 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         .unwrap();
     ledger.mark_dispatched(&abandoned_lease).await.unwrap();
     // Test-only time adjustment; no signal was sent to the prepared container.
-    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET created_at=clock_timestamp()-interval '2 hours', lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
+    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET dispatched_at=clock_timestamp()-interval '2 hours', lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
         .execute(&isolated.pool).await.unwrap();
     let deadline = tokio::time::timeout(
         Duration::from_secs(20),
@@ -1711,6 +1724,12 @@ async fn sandbox_submission(over_tls: bool) {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"
     ))
     .execute(&isolated.pool)
     .await
