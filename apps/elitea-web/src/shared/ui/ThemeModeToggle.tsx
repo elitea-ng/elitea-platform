@@ -56,7 +56,7 @@ const SYSTEM_MODE = 'system';
  * `defaultMode: 'system'`), could not be reached or even seen once a scheme
  * had been chosen.
  */
-export interface ThemeModeToggleProps {
+interface ThemeModeToggleProps {
   /**
    * Fill the container instead of the fixed 6.25rem-per-button width, for a
    * narrow host such as the admin rail (13.75rem less padding). Icons are
