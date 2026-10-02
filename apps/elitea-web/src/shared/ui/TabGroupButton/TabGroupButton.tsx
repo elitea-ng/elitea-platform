@@ -30,6 +30,8 @@ export interface TabGroupButtonProps {
    * outside `shared/brand/mui-overrides/`.
    */
   itemSx?: SxProps<Theme>;
+  /** The group fills its container and the buttons share the width equally, truncating labels. */
+  fullWidth?: boolean;
 }
 
 /**
@@ -69,6 +71,7 @@ export function TabGroupButton({
   id,
   sx,
   itemSx,
+  fullWidth,
 }: TabGroupButtonProps): ReactNode {
   const generatedId = useId();
   const groupId = id ?? `tab-group-button-${generatedId}`;
@@ -104,6 +107,7 @@ export function TabGroupButton({
       exclusive
       onChange={handleChange}
       aria-label={ariaLabel ?? t('shared.ui.tabGroupButton.ariaLabel', 'View toggle')}
+      fullWidth={fullWidth}
       sx={sx}
     >
       {items.map((item) => (
@@ -112,6 +116,7 @@ export function TabGroupButton({
           item={item}
           {...(disableTooltip !== undefined ? { disableTooltip } : {})}
           {...(itemSx !== undefined ? { sx: itemSx } : {})}
+          {...(fullWidth ? { fullWidth: true } : {})}
         />
       ))}
     </ToggleButtonGroup>

@@ -36,6 +36,12 @@ export interface TabButtonItemProps {
    * the button's internal DOM (R-T6, `elitea/no-mui-internal-selector`).
    */
   sx?: SxProps<Theme>;
+  /**
+   * The button shares the row's width equally (`flex: 1`, `min-width: 0`) and
+   * truncates its label with an ellipsis instead of widening the row. The
+   * tooltip wrapper is what the flex row sees, so it carries the sizing too.
+   */
+  fullWidth?: boolean;
 }
 
 /**
@@ -61,7 +67,7 @@ export interface TabButtonItemProps {
  *    text alone, which gives no accessible name to a screen reader or
  *    keyboard user (a `Tooltip` only adds `aria-describedby` while open).
  */
-export function TabButtonItem({ item, disableTooltip, sx }: TabButtonItemProps): ReactNode {
+export function TabButtonItem({ item, disableTooltip, sx, fullWidth }: TabButtonItemProps): ReactNode {
   const tooltipTitle = item.tooltip ?? item.label ?? item.value;
   // See `iconOnly`'s doc comment on `TabGroupButtonItem`: hidden only when a
   // caller explicitly opts in, never inferred from `icon` presence alone.
@@ -73,13 +79,13 @@ export function TabButtonItem({ item, disableTooltip, sx }: TabButtonItemProps):
       value={item.value}
       disabled={item.disabled}
       aria-label={showVisibleLabel ? undefined : accessibleName}
-      sx={sx}
+      sx={buttonSx(sx, fullWidth)}
     >
       {item.icon}
       {showVisibleLabel && (
         <Typography
           variant="labelSmall"
-          sx={item.icon ? labelWithIconSx : undefined}
+          sx={labelSx(Boolean(item.icon), fullWidth)}
         >
           {item.label}
         </Typography>
@@ -98,7 +104,7 @@ export function TabButtonItem({ item, disableTooltip, sx }: TabButtonItemProps):
     >
       <Box
         component="span"
-        sx={tooltipWrapperSx}
+        sx={fullWidth ? fullWidthWrapperSx : tooltipWrapperSx}
       >
         {button}
       </Box>
@@ -113,3 +119,39 @@ const labelWithIconSx: SxProps<Theme> = (theme: Theme) => ({
 const tooltipWrapperSx: SxProps<Theme> = {
   display: 'inline-flex',
 };
+
+const fullWidthWrapperSx: SxProps<Theme> = {
+  display: 'inline-flex',
+  flex: '1 1 0',
+  minWidth: 0,
+};
+
+const fullWidthButtonSx = {
+  width: '100%',
+  minWidth: 0,
+};
+
+const truncatedLabelSx = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+/** The caller's `sx` with the equal-share sizing layered underneath it. */
+function buttonSx(sx: SxProps<Theme> | undefined, fullWidth: boolean | undefined): SxProps<Theme> | undefined {
+  if (!fullWidth) {
+    return sx;
+  }
+  return (theme: Theme) => ({
+    ...fullWidthButtonSx,
+    ...(typeof sx === 'function' ? sx(theme) : (sx as object | undefined)),
+  });
+}
+
+function labelSx(hasIcon: boolean, fullWidth: boolean | undefined): SxProps<Theme> | undefined {
+  if (fullWidth) {
+    return hasIcon ? (theme: Theme) => ({ marginLeft: theme.spacing(0.5), ...truncatedLabelSx }) : truncatedLabelSx;
+  }
+  return hasIcon ? labelWithIconSx : undefined;
+}

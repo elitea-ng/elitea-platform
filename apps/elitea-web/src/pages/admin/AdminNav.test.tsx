@@ -497,6 +497,22 @@ describe('collapsed state', () => {
     expect(screen.queryByRole('group', { name: 'Theme' })).toBeNull();
   });
 
+  it('sizes the theme toggle to the rail, not to three fixed 6.25rem buttons', async () => {
+    // jsdom has no layout, so assert the declarations that keep it inside the
+    // 13.75rem rail: the group fills its container and every segment may
+    // shrink (min-width 0) rather than holding a fixed 6.25rem (3 x 6.25rem
+    // = 18.75rem overflowed the rail's ~11.5rem content box). Labels stay
+    // visible; each segment keeps its accessible name.
+    await mountAdmin();
+    const group = screen.getByRole('group', { name: 'Theme' });
+    expect(getComputedStyle(group).width).toBe('100%');
+    for (const name of ['System', 'Dark', 'Light']) {
+      const button = within(group).getByRole('button', { name });
+      expect(button).toHaveTextContent(name);
+      expect(getComputedStyle(button).minWidth).toBe('0px');
+    }
+  });
+
   it('persists through localStorage, under its own key', async () => {
     await mountAdmin();
     await userEvent.click(screen.getByTestId('admin-nav-collapse-toggle'));
