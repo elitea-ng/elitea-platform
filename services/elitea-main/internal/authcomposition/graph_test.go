@@ -76,7 +76,7 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 	response := httptest.NewRecorder()
 	graph.Routes().ServeHTTP(response, request)
 	if response.Code != http.StatusFound ||
-		response.Header().Get("Location") != "/forward-auth/login?target_to=%2Fforward-auth%2Flogin" {
+		response.Header().Get("Location") != "/auth/login?target_to=%2Fforward-auth%2Flogin" {
 		t.Fatalf("Direct response = %d location=%q body=%q", response.Code, response.Header().Get("Location"), response.Body.String())
 	}
 

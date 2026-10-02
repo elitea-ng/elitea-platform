@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/gateway"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -1143,44 +1142,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// Browser-facing OIDC session lifecycle. Legacy form authentication is not
 	// mounted because auth_core__user has no password credential columns; the
 	// previous prototype queried columns that do not exist in the legacy schema.
+	//
+	// The routes are served under `/auth` (canonical) and `/forward-auth`
+	// (deprecated alias); see auth_paths.go.
 	if cfg.SessionHandler != nil {
-		r.Route("/forward-auth", func(r chi.Router) {
-			// The sign-in page (browserauth/chooser.go). One usable provider
-			// keeps the old behaviour, a redirect to its login route, now with
-			// `target_to` preserved. Two show the provider buttons and the
-			// work email field.
-			if chooser := newSSOChooser(cfg.OIDCHandler, cfg.SAMLHandler, brandingResolver); chooser != nil {
-				r.Get("/login", chooser.Login)
-				r.Get(browserauth.ChooserContinuePath, chooser.Continue)
-				r.Post(browserauth.ChooserContinuePath, chooser.Continue)
-			}
-			r.Get("/logout", cfg.SessionHandler.Logout)
-			r.Get("/info", cfg.SessionHandler.Info)
-			r.Get("/auth_form/logout", cfg.SessionHandler.Logout)
-			if cfg.OIDCHandler != nil {
-				r.Get("/auth_oidc/login", cfg.OIDCHandler.Login)
-				r.Get("/auth_oidc/callback", cfg.OIDCHandler.Callback)
-			}
-			r.Get("/auth_oidc/logout", cfg.SessionHandler.Logout)
-			// SAML 2.0. Three routes, and the shapes are not
-			// interchangeable: metadata and login are GET navigations, and
-			// the assertion consumer service is a POST because the
-			// authentication request asks for the HTTP-POST binding.
-			//
-			// `/auth_saml/logout` clears the local session, as the OIDC one
-			// above does. Federated single logout — sending a LogoutRequest to
-			// the identity provider's SLO endpoint — is NOT mounted: it needs
-			// the session index of the assertion that started the session, and
-			// this deployment's session cookie does not carry one. Mounting a
-			// route that silently only cleared the local session would tell an
-			// operator their users were signed out everywhere.
-			if cfg.SAMLHandler != nil {
-				r.Get("/auth_saml/metadata", cfg.SAMLHandler.Metadata)
-				r.Get("/auth_saml/login", cfg.SAMLHandler.Login)
-				r.Post("/auth_saml/acs", cfg.SAMLHandler.ACS)
-				r.Get("/auth_saml/logout", cfg.SessionHandler.Logout)
-			}
-		})
+		chooser := newSSOChooser(cfg.OIDCHandler, cfg.SAMLHandler, brandingResolver)
+		for _, paths := range []ssoBrowserPaths{canonicalSSOPaths, legacySSOPaths} {
+			mountSSOBrowserRoutes(r, paths, cfg.SessionHandler, cfg.OIDCHandler, cfg.SAMLHandler, chooser)
+		}
 	}
 
 	// Static file serving for application icons (root level like pylon)

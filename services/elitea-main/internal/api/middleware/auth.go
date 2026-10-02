@@ -261,7 +261,7 @@ func writeJSONError(w http.ResponseWriter, status int, errType, code, message st
 // Exported so the admin-UI HTML handler resolves the SAME identity this
 // middleware does. That handler used to read the `elitea_session` cookie and
 // nothing else, and the runtime deployment does not issue that cookie: the
-// browser logs in through /forward-auth/login, which stores an opaque
+// browser logs in through /auth/login, which stores an opaque
 // server-side session under `elitea_browser_auth` and projects the principal
 // onto the upstream request as X-Auth-* (deploy/runtime/platform-edge-dynamic
 // .yml `authResponseHeaders`). The handler therefore injected an empty

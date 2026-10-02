@@ -103,7 +103,7 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 		// router.go:408 tests exactly this field. Testing the other one would
 		// miss a caller that sets the top-level field directly and panic again.
 		if cfg.SessionHandler == nil {
-			r.Mount(browserauth.BasePath, cfg.ProductionAuth.browser)
+			mountFormBrowserRoutes(r, cfg.ProductionAuth.browser)
 		}
 		// This address is reached only by the gateway's ForwardAuth middleware;
 		// deployment routing must never expose it as a product route.

@@ -14,7 +14,7 @@
 // policy, so on the cluster a probe of the public hostname answered
 //
 //	HTTP/2 302
-//	location: https://<host>/forward-auth/login?target_to=%2Fhealthz
+//	location: https://<host>/auth/login?target_to=%2Fhealthz
 //
 // while every compose test stayed green, because the compose edge runs no
 // forwardAuth at all (deploy/traefik/dynamic.yml, `strip-client-identity`).
@@ -209,7 +209,7 @@ func TestForwardAuthPolicyKeepsTheProbeSiblingsPrivate(t *testing.T) {
 
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, forwardAuthRequest(requestPath))
-			if recorder.Code != http.StatusFound || !strings.Contains(recorder.Header().Get("Location"), "/forward-auth/login?") {
+			if recorder.Code != http.StatusFound || !strings.Contains(recorder.Header().Get("Location"), "/auth/login?") {
 				t.Fatalf(
 					"the forward-auth policy answers %s with %d (Location %q), want the login redirect.\n"+
 						"A public rule now admits a probe sibling. Only /healthz is public (go.health.healthz); "+

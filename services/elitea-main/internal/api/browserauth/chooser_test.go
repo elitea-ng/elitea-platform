@@ -58,7 +58,7 @@ func getLogin(chooser *SSOChooser, rawQuery string, cookies ...*http.Cookie) *ht
 
 func postEmail(chooser *SSOChooser, email, target string) *httptest.ResponseRecorder {
 	form := url.Values{"email": {email}, "target_to": {target}}
-	request := httptest.NewRequest(http.MethodPost, "/forward-auth/login/continue", strings.NewReader(form.Encode()))
+	request := httptest.NewRequest(http.MethodPost, "/auth/login/continue", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recorder := httptest.NewRecorder()
 	chooser.Continue(recorder, request)
@@ -131,10 +131,10 @@ func TestTwoProvidersRenderTheBrandedPage(t *testing.T) {
 		`<title>Sign in to Acme &lt;AI&gt;</title>`,
 		`alt="Acme &lt;AI&gt;"`,
 		`<label class="field-label" for="email">Work email</label>`,
-		`action="/forward-auth/login/continue" method="post"`,
+		`action="/auth/login/continue" method="post"`,
 		`name="target_to" value="/app/chat"`,
-		`href="/forward-auth/login/continue?provider=oidc&amp;target_to=%2Fapp%2Fchat"`,
-		`href="/forward-auth/login/continue?provider=saml&amp;target_to=%2Fapp%2Fchat"`,
+		`href="/auth/login/continue?provider=oidc&amp;target_to=%2Fapp%2Fchat"`,
+		`href="/auth/login/continue?provider=saml&amp;target_to=%2Fapp%2Fchat"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
@@ -237,7 +237,7 @@ func TestAWorkEmailIsRoutedToItsProviderWithALoginHint(t *testing.T) {
 	}
 	cookie := recorder.Result().Cookies()
 	if len(cookie) != 1 || cookie[0].Name != LastUsedProviderCookie || cookie[0].Value != "saml" ||
-		!cookie[0].HttpOnly || !cookie[0].Secure || cookie[0].Path != BasePath {
+		!cookie[0].HttpOnly || !cookie[0].Secure || cookie[0].Path != "/" {
 		t.Fatalf("cookies = %+v", cookie)
 	}
 }
@@ -282,7 +282,7 @@ func TestAProviderButtonRemembersTheProvider(t *testing.T) {
 	chooser := newTestChooser(t, nil, gitHubProvider(), entraProvider())
 	recorder := httptest.NewRecorder()
 	chooser.Continue(recorder, httptest.NewRequest(http.MethodGet,
-		"/forward-auth/login/continue?provider=oidc&target_to=%2Fapp%2Fx", nil))
+		"/auth/login/continue?provider=oidc&target_to=%2Fapp%2Fx", nil))
 
 	location := locationOf(t, recorder)
 	if recorder.Code != http.StatusSeeOther || location.Path != oidcLogin || location.Query().Get("target_to") != "/app/x" {
@@ -301,16 +301,16 @@ func TestAnUnknownProviderGoesBackToThePage(t *testing.T) {
 	chooser := newTestChooser(t, nil, gitHubProvider(), entraProvider())
 	recorder := httptest.NewRecorder()
 	chooser.Continue(recorder, httptest.NewRequest(http.MethodGet,
-		"/forward-auth/login/continue?provider=ldap&target_to=%2Fapp", nil))
+		"/auth/login/continue?provider=ldap&target_to=%2Fapp", nil))
 	location := locationOf(t, recorder)
-	if location.Path != "/forward-auth/login" || location.Query().Get("target_to") != "/app" {
+	if location.Path != "/auth/login" || location.Query().Get("target_to") != "/app" {
 		t.Fatalf("Location = %s", location)
 	}
 }
 
 func TestTheContinueFormRefusesAnotherMediaType(t *testing.T) {
 	chooser := newTestChooser(t, nil, gitHubProvider(), entraProvider())
-	request := httptest.NewRequest(http.MethodPost, "/forward-auth/login/continue", strings.NewReader(`{"email":"a@contoso.com"}`))
+	request := httptest.NewRequest(http.MethodPost, "/auth/login/continue", strings.NewReader(`{"email":"a@contoso.com"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	chooser.Continue(recorder, request)

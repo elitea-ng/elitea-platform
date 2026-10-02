@@ -375,7 +375,7 @@ func TestMainHandlerRedirectsPrivateAnonymousRequestToFormLogin(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
 	}
 	location, err := url.Parse(recorder.Header().Get("Location"))
-	if err != nil || location.Path != "/forward-auth/login" ||
+	if err != nil || location.Path != "/auth/login" ||
 		location.Query().Get("target_to") != "/api/v2/projects/7?view=full" {
 		t.Fatalf("location = %q, parse error=%v", recorder.Header().Get("Location"), err)
 	}

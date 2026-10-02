@@ -34,6 +34,10 @@ func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
 		FormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
 		FormAuthorizePath: {http.MethodOptions, http.MethodPost},
 		FormLogoutPath:    {http.MethodGet, http.MethodHead, http.MethodOptions},
+		// The deprecated aliases, served under LegacyBasePath.
+		LegacyFormLoginPath:     {http.MethodGet, http.MethodHead, http.MethodOptions},
+		LegacyFormAuthorizePath: {http.MethodOptions, http.MethodPost},
+		LegacyFormLogoutPath:    {http.MethodGet, http.MethodHead, http.MethodOptions},
 	}
 	if len(observed) != len(expected) {
 		t.Fatalf("routes = %v, want %v", observed, expected)

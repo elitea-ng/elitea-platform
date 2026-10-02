@@ -9,9 +9,10 @@ import (
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 )
 
+// The chooser sends the browser to the canonical login routes.
 const (
-	ssoOIDCLoginPath = browserauth.BasePath + "/auth_oidc/login"
-	ssoSAMLLoginPath = browserauth.BasePath + "/auth_saml/login"
+	ssoOIDCLoginPath = v2auth.OIDCLoginPath
+	ssoSAMLLoginPath = v2auth.SAMLLoginPath
 )
 
 // ssoLoginOptionSource is the one method the sign-in page needs from a single
@@ -23,7 +24,7 @@ type ssoLoginOptionSource interface {
 // newSSOChooser composes the single sign-on sign-in page from the two planes.
 //
 // It returns nil when neither plane is mounted, and the caller then mounts no
-// `/forward-auth/login`. The fallback login route is the OIDC one when OIDC is
+// `/auth/login`. The fallback login route is the OIDC one when OIDC is
 // mounted, else the SAML one: with no usable provider, that route states that
 // single sign-on is not available, as `/forward-auth/login` did before.
 func newSSOChooser(

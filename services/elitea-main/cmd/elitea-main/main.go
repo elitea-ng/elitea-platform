@@ -2073,7 +2073,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// controls that the server refuses with 403 on each click.
 			Resolver: legacyrbac.NewPostgresResolver(pool),
 			// The runtime deployment authenticates the browser at
-			// /forward-auth/login, which sets `elitea_browser_auth` and projects
+			// /auth/login, which sets `elitea_browser_auth` and projects
 			// the principal as X-Auth-*. Without this verifier the handler has
 			// no way to read that identity, injects an empty permission list,
 			// and the SPA renders a sidebar with no items — see adminui's

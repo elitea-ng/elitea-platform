@@ -16,7 +16,7 @@
           {{if .Brand.Tagline}}<p class="brand-tagline">{{.Brand.Tagline}}</p>{{end}}
         </header>
         <h1>Sign in</h1>
-        <form action="/forward-auth/auth_form/authorize" method="post">
+        <form action="/auth/form/authorize" method="post">
           <div class="form-floating">
             <input class="form-control" type="text" id="login" name="login" placeholder="Login" autocomplete="username" required>
             <label for="login">Login</label>

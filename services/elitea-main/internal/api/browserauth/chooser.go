@@ -1,6 +1,6 @@
 package browserauth
 
-// The single sign-on sign-in page: `GET /forward-auth/login` on the SSO plane.
+// The single sign-on sign-in page: `GET /auth/login` on the SSO plane.
 //
 // # What it shows
 //
@@ -20,7 +20,7 @@ package browserauth
 // # Progressive enhancement
 //
 // The page has no script. The buttons are links and the email field is a
-// plain form; GET and POST `/forward-auth/login/continue` do the routing on
+// plain form; GET and POST `/auth/login/continue` do the routing on
 // the server. The CSP is the Form login page's: `default-src 'none'`, the
 // stylesheets pinned by hash, same-origin images and fonts.
 //
@@ -172,7 +172,7 @@ type chooserPage struct {
 	Error      string
 }
 
-// Login answers `GET /forward-auth/login`.
+// Login answers `GET /auth/login`.
 func (c *SSOChooser) Login(w http.ResponseWriter, r *http.Request) {
 	chooserHeaders(w)
 	query := r.URL.Query()
@@ -196,7 +196,7 @@ func (c *SSOChooser) Login(w http.ResponseWriter, r *http.Request) {
 	c.render(w, r, page)
 }
 
-// Continue answers `GET` and `POST /forward-auth/login/continue`.
+// Continue answers `GET` and `POST /auth/login/continue`.
 //
 // `provider` selects a provider by id. Otherwise `email` selects one by the
 // domain of the address. Both carry `target_to`.
@@ -308,7 +308,8 @@ func (c *SSOChooser) rememberProvider(w http.ResponseWriter, id string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     LastUsedProviderCookie,
 		Value:    id,
-		Path:     BasePath,
+		// Root, so the page reads it under BasePath and LegacyBasePath alike.
+		Path:     "/",
 		MaxAge:   lastUsedProviderMaxAge,
 		HttpOnly: true,
 		Secure:   c.secureCookies,

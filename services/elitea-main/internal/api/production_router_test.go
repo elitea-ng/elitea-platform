@@ -296,6 +296,9 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 	browser.Post("/auth_form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
+	browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusAccepted)
+	})
 	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
@@ -310,6 +313,14 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 		path   string
 		want   int
 	}{
+		// The canonical /auth prefix reaches the same Form router, with the
+		// prefix stripped (auth_paths.go). Only the canonical Form paths are
+		// served there: the legacy `/auth_form/*` names and the core check
+		// are not.
+		{http.MethodGet, "/auth/login", http.StatusNoContent},
+		{http.MethodPost, "/auth/form/authorize", http.StatusAccepted},
+		{http.MethodPost, "/auth/auth_form/authorize", http.StatusNotFound},
+		{http.MethodGet, "/auth/auth", http.StatusNotFound},
 		{http.MethodGet, "/forward-auth/login", http.StatusNoContent},
 		{http.MethodPost, "/forward-auth/auth_form/authorize", http.StatusNoContent},
 		{http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent},

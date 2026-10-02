@@ -22,13 +22,32 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
+// The browser authentication URLs.
+//
+// BasePath is the canonical prefix: `/auth/login`, `/auth/form/login` and so
+// on. LegacyBasePath is the prefix every route had before, and it stays
+// mounted as a DEPRECATED COMPATIBILITY ALIAS: identity provider
+// registrations, bookmarks and edge configurations in the field name it.
+// The alias serves the same handlers; it is not a redirect, because a SAML
+// assertion arrives as a POST and an OIDC callback carries a one-time code.
+// New links and redirects this service writes use BasePath.
+//
+// `/auth` itself (no trailing segment) is the edge's forward-auth check
+// (router.go). The browser routes are below it and never collide with it.
 const (
-	BasePath          = "/forward-auth"
+	BasePath       = "/auth"
+	LegacyBasePath = "/forward-auth"
+
 	LoginPath         = "/login"
 	LogoutPath        = "/logout"
-	FormLoginPath     = "/auth_form/login"
-	FormAuthorizePath = "/auth_form/authorize"
-	FormLogoutPath    = "/auth_form/logout"
+	FormLoginPath     = "/form/login"
+	FormAuthorizePath = "/form/authorize"
+	FormLogoutPath    = "/form/logout"
+
+	// The same Form routes under LegacyBasePath. Deprecated aliases.
+	LegacyFormLoginPath     = "/auth_form/login"
+	LegacyFormAuthorizePath = "/auth_form/authorize"
+	LegacyFormLogoutPath    = "/auth_form/logout"
 
 	DefaultMaxFormBodyBytes = int64(8 << 10)
 	maxMaxFormBodyBytes     = int64(64 << 10)
@@ -157,11 +176,24 @@ func (h *Handler) Routes() chi.Router {
 
 func (h *Handler) registerRoutes(router chi.Router) {
 	h.registerReadRoute(router, LoginPath, h.beginLogin)
-	h.registerReadRoute(router, FormLoginPath, h.renderForm)
-	router.MethodFunc(http.MethodPost, FormAuthorizePath, h.authorizeForm)
-	router.MethodFunc(http.MethodOptions, FormAuthorizePath, options("POST, OPTIONS"))
 	h.registerReadRoute(router, LogoutPath, h.beginLogout)
-	h.registerReadRoute(router, FormLogoutPath, h.logout)
+	for _, paths := range [][3]string{
+		{FormLoginPath, FormAuthorizePath, FormLogoutPath},
+		// Deprecated aliases, reachable under LegacyBasePath.
+		{LegacyFormLoginPath, LegacyFormAuthorizePath, LegacyFormLogoutPath},
+	} {
+		h.registerReadRoute(router, paths[0], h.renderForm)
+		router.MethodFunc(http.MethodPost, paths[1], h.authorizeForm)
+		router.MethodFunc(http.MethodOptions, paths[1], options("POST, OPTIONS"))
+		h.registerReadRoute(router, paths[2], h.logout)
+	}
+}
+
+// CanonicalFormPaths are the Form routes served under BasePath. The other
+// routes of the Form router (the core check at AuthPath and the legacy
+// `/auth_form/*` names) are served only under LegacyBasePath.
+func CanonicalFormPaths() []string {
+	return []string{LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath}
 }
 
 func (h *Handler) registerReadRoute(router chi.Router, path string, handler http.HandlerFunc) {

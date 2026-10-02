@@ -450,7 +450,7 @@ func TestCoreHandlerMissingOrExpiredSessionUsesSafeLoginRedirect(t *testing.T) {
 				t.Fatalf("status = %d, want 302", recorder.Code)
 			}
 			location, err := url.Parse(recorder.Header().Get("Location"))
-			if err != nil || location.Path != "/forward-auth/login" ||
+			if err != nil || location.Path != "/auth/login" ||
 				location.Query().Get("target_to") != "/api/private?project=7" {
 				t.Fatalf("Location = %q, parsed=%v error=%v", recorder.Header().Get("Location"), location, err)
 			}

@@ -29,7 +29,7 @@
         </ul>
         {{if .ShowEmail}}
         <div class="divider" role="separator" aria-label="or"><span aria-hidden="true">or</span></div>
-        <form class="email-form" action="/forward-auth/login/continue" method="post">
+        <form class="email-form" action="/auth/login/continue" method="post">
           <label class="field-label" for="email">Work email</label>
           <input class="form-control" type="email" id="email" name="email" value="{{.Email}}" autocomplete="username" inputmode="email" spellcheck="false" autocapitalize="none" required{{if .EmailError}} aria-invalid="true" aria-describedby="email-error"{{end}}>
           {{if .EmailError}}<p class="field-error" id="email-error" role="alert">{{.EmailError}}</p>{{end}}

@@ -325,7 +325,7 @@ func TestSessionInfoAnswersTheExpiryContractForAServerSession(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), SessionExpiredCode) {
 		t.Fatalf("body %s does not carry %q", recorder.Body.String(), SessionExpiredCode)
 	}
-	if got := recorder.Header().Get("Location"); !strings.HasPrefix(got, "/forward-auth/login?") {
+	if got := recorder.Header().Get("Location"); !strings.HasPrefix(got, "/auth/login?") {
 		t.Fatalf("Location = %q, want the login start", got)
 	}
 }

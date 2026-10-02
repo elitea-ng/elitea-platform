@@ -173,6 +173,13 @@ func TestTheOIDCLoginForwardsTheLoginHint(t *testing.T) {
 	if !strings.HasSuffix(location.Query().Get("state"), "|/app/chat") {
 		t.Fatalf("state = %q, want the return target", location.Query().Get("state"))
 	}
+	// Every login cookie is scoped to "/", so a login begun under /auth can
+	// return through the deprecated /forward-auth callback, and the reverse.
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Path != "/" {
+			t.Fatalf("cookie %s has Path %q, want /", cookie.Name, cookie.Path)
+		}
+	}
 
 	// A value that is not an address is dropped, not forwarded.
 	recorder = httptest.NewRecorder()

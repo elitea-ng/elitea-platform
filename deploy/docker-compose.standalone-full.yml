@@ -883,7 +883,7 @@ services:
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
-      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/forward-auth/auth_oidc/callback"
+      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/auth/oidc/callback"
       COOKIE_SECURE: "false"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). deploy/runtime/auth.form.yml's
