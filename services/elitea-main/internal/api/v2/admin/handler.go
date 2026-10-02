@@ -55,6 +55,10 @@ type Handler struct {
 	// WithSCIMGroupBindings is applied, and those routes answer 503 while it
 	// is — never an empty list, which would read as "no group is bound".
 	scimGroupBindings SCIMGroupBindingStore
+	// The dedicated SCIM client credentials (scim_clients.go, shared migration
+	// 0134). Nil unless WithSCIMClients is applied, and those routes answer
+	// 503 while it is.
+	scimClients SCIMClientStore
 	// The toolkit TYPE availability policy behind `Admin › Toolkits`
 	// (toolkit_types.go, shared migration 0114). Nil unless
 	// WithToolkitTypePolicy is applied, and those routes answer 503 while it
