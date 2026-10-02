@@ -209,11 +209,20 @@ impl JobLedger {
         Ok(())
     }
 
-    /// Use database time so reconnects do not reset a running job's deadline.
+    /// Start readiness at the first runtime binding. Lease renewal does not reset it.
     /// # Errors
     /// Returns `Missing` for an unknown request identity or a database error.
-    pub async fn age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
-        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-created_at))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
+    pub async fn readiness_age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
+        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-COALESCE(runtime_bound_at,created_at)))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+            .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
+    }
+
+    /// Start execution observation at dispatch. Reconnects and lease renewal do not reset it.
+    /// # Errors
+    /// Returns `Missing` for an unknown request identity or a database error.
+    pub async fn execution_age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
+        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-COALESCE(dispatched_at,created_at)))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
             .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
     }
@@ -352,6 +361,7 @@ impl JobLedger {
 
     /// Bind once before dispatch. Repeating the same binding is idempotent;
     /// changing it or using an expired lease is rejected.
+    /// Preserve reservation time when an older supervisor already bound the runtime.
     /// # Errors
     /// Returns `Invalid`, `Fenced`, or a database error.
     pub async fn bind_runtime(
@@ -367,7 +377,7 @@ impl JobLedger {
         {
             return Err(LedgerError::Invalid);
         }
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET runtime_id=$7,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND (runtime_id IS NULL OR runtime_id=$7)")
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET runtime_id=$7,runtime_bound_at=COALESCE(runtime_bound_at,CASE WHEN runtime_id IS NULL THEN clock_timestamp() ELSE created_at END),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND (runtime_id IS NULL OR runtime_id=$7)")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).bind(runtime_id).execute(&self.pool).await?.rows_affected();
         changed(count)
@@ -378,7 +388,7 @@ impl JobLedger {
     /// # Errors
     /// Returns `Fenced` if ownership or phase changed, or a database error.
     pub async fn mark_dispatched(&self, lease: &JobLease) -> Result<(), LedgerError> {
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND NOT cancellation_requested")
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',dispatched_at=COALESCE(dispatched_at,clock_timestamp()),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND NOT cancellation_requested")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).execute(&self.pool).await?.rows_affected();
         changed(count)

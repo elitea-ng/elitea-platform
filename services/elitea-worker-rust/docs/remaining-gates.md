@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-01. Main integration baseline: `8563c2d75` (release checks in progress).
+Updated: 2026-10-02. Main integration baseline: `20f0dfd04` (PR 883 merged).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -10,14 +10,16 @@ Current-platform code defines business behavior, not a requirement to copy its i
 
 ## Progression status
 
-- [Saved child variables](source-mapping/child-pipeline-variables-20260930.md) support typed pipeline mappings and per-call Agent instruction variables. Persistent and ephemeral browser checks pass. Worker-replacement verification with Agent variable overrides remains open.
+- [Saved child variables](source-mapping/child-pipeline-variables-20260930.md) support typed pipeline mappings and per-call Agent instruction variables. Persistent and ephemeral browser checks pass. Chat 765 proves sequential AskUser recovery after worker replacement with isolated variable overrides. Simultaneous mixed guards remain open.
 
 - Gate 1 has pipeline turn, regeneration, and nested-resume fixes with regression coverage. Mixed-guard and collaborative proofs remain open.
 - Gate 2 is accepted for progression, with explicit verification debt. OAuth/DCR support is not a claim of complete provider coverage.
 - Gate 3 is accepted for progression. The final restricted chat-operation permission check passes on 2026-09-14.
 - Gate 4 is accepted for progression on 2026-09-28. The final audit records every required contract and its evidence.
 - Gate 5 is active. [Direct HITL admission](source-mapping/pipeline-hitl-admission-20260928.md) records main-chat history, repeated edits, paused-worker recovery, and transaction evidence.
-- PR 883's main conflict resolution is pushed. Fresh CI exposes additional image, model-selection, fixture, and test repairs. Merge requires their verification. Persistent and ephemeral four-language benchmarks pass on the existing rehearsal backend with matching prepared runtime images.
+- PR 883 is merged. Its final CI reports 67 successful checks and three configured skips. Pending Point 5 work remains preserved.
+- Point 5 now uses separate feature PRs. Each feature requires its own source mapping, verification, and release decision.
+- Persistent and ephemeral four-language benchmarks pass on the existing rehearsal backend with matching prepared runtime images.
 - The [point 4 acceptance audit](source-mapping/point4-acceptance-audit-20260928.md) records the final requirement review and explicit acceptance limits. Chats 727/728 verify parent completion after child access-denial and rate-limit failures.
 - [Provider context accounting](source-mapping/provider-context-accounting-20260928.md) records provider usage retention, native cache normalization, and the combined-window context meter. Chat 717 passes fresh-browser synthetic/Haiku measurements, model switching, regeneration, and reload. Chat 719 verifies per-call pipeline continuation and repair measurements without replacing the root meter. Chat 721 verifies repeated Haiku input accounting without proving its adapter. Confirmed native-adapter regeneration and reload pass in chat 720; cache counters remain zero. Chat 720 exposes generic diagnostics for the separate 64 KiB instruction limit. The [instruction capacity correction](source-mapping/instruction-content-capacity-20260928.md) passes chat 720 regeneration and reload with the original large instructions. [Input-admission diagnostics](source-mapping/input-admission-diagnostics-20260928.md) add a separate public failure code; chat 723 verifies deployment, live UI, support details, reload, and ERROR logs. The user-message bound correction passes regeneration in chat 723. Recovery accounting passes in chat 724. Full-window accounting after compaction passes in chat 708. Section-specific input guidance passes deployed agent-settings rejection and reload in chat 725. Real-provider cache savings remain unproven; the final audit records this performance limitation.
 - [Legacy toolkit names](source-mapping/toolkit-name-compatibility-20260924.md) pass 51 pipeline tests and deployed direct MCP browser acceptance in chat 683. Exact names take precedence; ambiguous compatibility matches fail before connection. Real Haiku LLM-loop acceptance passes in chat 688, including final live output and reload. Same-operation collision acceptance passes direct-node chat 691 and real-Haiku LLM-loop chat 692, with distinct endpoint markers, live final output, and stable reload.
@@ -121,6 +123,13 @@ The test Cargo profile adds locked dependencies. It does not implement user-sele
 Persistent reload preserves one result. All eight browser-run sandbox jobs complete and remove their Pods.
 Local probe runs take 9.5–10.0 seconds. Deployed four-receipt spans take 16.4–16.5 seconds.
 On-demand preparation, user-selected Cargo profiles, and compiled-artifact caching remain open.
+The [phase deadline feature](source-mapping/sandbox-phase-deadlines-20261002.md) separates durable sandbox readiness and execution deadlines.
+PR 1014 passes deployed four-language execution in persistent chat and editor Test chat on Docker and hybrid Kubernetes.
+Both backends persist the new clocks and remove terminal execution workloads. Persistent reload preserves the exact result.
+Python shared delivery follows with offline reuse, replacement recovery, and browser acceptance.
+JavaScript/TypeScript and Rust dependency execution follow as separate features.
+Each feature preserves the existing sandbox authority and resource limits.
+Do not combine these features into another broad release PR.
 The [Python preparation component](source-mapping/code-python-demand-preparation-20261001.md) now discovers literal requirements and freezes native resolution.
 Focused integrity checks and offline execution pass with packages absent from the original image.
 This component is not connected to worker or supervisor dispatch. On-demand UI and recovery acceptance remain open.
@@ -140,6 +149,18 @@ The [trusted preparation adapter](source-mapping/code-python-preparation-runner-
 Automatic supervisor dispatch, backend delivery, recovery integration, and on-demand browser acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
+
+### Point 5 feature status, 2026-10-02
+
+Prepared package profiles and isolated execution are deployed. They do not provide automatic acquisition of user-selected dependencies.
+The preserved checkpoint connects Python preparation, publication, hydration, and recovery; the optional preparation profile is not deployed.
+Its private execution-export correction still requires compilation, runtime verification, and integrated UI acceptance.
+JavaScript/TypeScript and Rust have separate native preparation components. Shared delivery and product execution remain open for both.
+Existing activation recovery retains its recorded bundle root. Later-run lookup from requirements to a prior frozen bundle remains unproven.
+
+Repository workspace authorization, the scoped platform client, debug artifacts, state-variable approval, and compiled-artifact caching remain open.
+Graph acceptance also retains deeper composition, static pauses, concurrent mixed guards, and collaborative decision requirements.
+These requirements need separate feature decisions and acceptance evidence. Point 5 remains open.
 
 ### Deployment acceptance order
 

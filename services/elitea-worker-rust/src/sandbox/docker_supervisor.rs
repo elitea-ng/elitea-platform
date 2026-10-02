@@ -312,7 +312,7 @@ impl DockerSupervisor {
                     if let Some(stopped) = self.stop_if_requested(scope, lease).await? {
                         return Ok(stopped);
                     }
-                    if self.ledger.age_seconds(scope).await? >= 60 {
+                    if self.ledger.readiness_age_seconds(scope).await? >= 60 {
                         return self
                             .fail_expired_job(scope, lease, "sandbox.preparation_incomplete")
                             .await;
@@ -342,7 +342,7 @@ impl DockerSupervisor {
                     return self.persist_receipt(scope, lease, &bytes).await;
                 }
                 // Database time keeps the deadline stable across supervisor restarts.
-                if self.ledger.age_seconds(scope).await? >= MAX_JOB_AGE_SECONDS {
+                if self.ledger.execution_age_seconds(scope).await? >= MAX_JOB_AGE_SECONDS {
                     return self
                         .fail_expired_job(scope, lease, "sandbox.deadline_exceeded")
                         .await;
@@ -487,6 +487,10 @@ fn classify_receipt(bytes: &[u8]) -> Result<(Phase, Option<&'static str>), Super
         _ => return Err(SupervisorError::Receipt),
     })
 }
+
+#[cfg(test)]
+#[path = "docker_deadline_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 mod tests {
