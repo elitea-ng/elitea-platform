@@ -502,6 +502,9 @@ const (
 	GroupRemoveMembers
 	// GroupRename applies a displayName change.
 	GroupRename
+	// GroupSetExternalID replaces the identity provider's identifier; an empty
+	// ExternalID clears it.
+	GroupSetExternalID
 )
 
 // GroupOperation is one understood step of a PATCH.
@@ -509,6 +512,7 @@ type GroupOperation struct {
 	Kind        GroupOperationKind
 	Members     []int
 	DisplayName string
+	ExternalID  string
 }
 
 // ApplyGroupOperations applies a whole PATCH in ONE transaction.
@@ -530,6 +534,11 @@ func (s *Store) ApplyGroupOperations(ctx context.Context, id int64, operations [
 			switch operation.Kind {
 			case GroupRename:
 				if err := renameBinding(ctx, tx, id, operation.DisplayName); err != nil {
+					return err
+				}
+
+			case GroupSetExternalID:
+				if err := setBindingExternalID(ctx, tx, id, operation.ExternalID); err != nil {
 					return err
 				}
 
@@ -579,6 +588,23 @@ func renameBinding(ctx context.Context, db execer, id int64, displayName string)
 		`UPDATE elitea_auth.scim_group_bindings
 		    SET display_name = $2, updated_at = now() WHERE id = $1`,
 		id, displayName)
+	if isUniqueViolation(err) {
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func setBindingExternalID(ctx context.Context, db execer, id int64, externalID string) error {
+	tag, err := db.Exec(ctx,
+		`UPDATE elitea_auth.scim_group_bindings
+		    SET external_id = $2, updated_at = now() WHERE id = $1`,
+		id, strings.TrimSpace(externalID))
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}

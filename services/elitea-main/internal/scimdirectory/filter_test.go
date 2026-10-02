@@ -61,13 +61,50 @@ func requireUnsupported(t *testing.T, expression, mustMention string) {
 	}
 }
 
-// A compound expression is REFUSED, not half-applied. Applying only the first
-// half of `userName eq "x" and active eq true` would return a suspended
-// account to a client that asked for active ones.
-func TestACompoundExpressionIsRefused(t *testing.T) {
-	requireUnsupported(t, `userName eq "alice@corp.com" and active eq true`, "and/or/not")
+// `or` and `not` are REFUSED, not half-applied: answering only one side of
+// `userName eq "a" or userName eq "b"` would hide the other account.
+func TestOrAndNotAreRefused(t *testing.T) {
 	requireUnsupported(t, `userName eq "a" or userName eq "b"`, "and/or/not")
 	requireUnsupported(t, `not(active eq true)`, "and/or/not")
+	requireUnsupported(t, `(userName eq "a")`, "and/or/not")
+	requireUnsupported(t, `userName eq "a" and (active eq true)`, "and/or/not")
+}
+
+// Operators and brackets INSIDE a quoted value are part of the value.
+func TestOperatorsInsideQuotedValuesAreIgnored(t *testing.T) {
+	for _, testCase := range []struct{ expression, value string }{
+		{`displayName eq "Ops (EU) and Sales"`, "ops (eu) and sales"},
+		{`displayName eq "a [b] or not(c)"`, "a [b] or not(c)"},
+		{`userName eq "o'brien and (sons)@corp.com"`, "o'brien and (sons)@corp.com"},
+		{`displayName eq "say \"and\" now"`, `say "and" now`},
+	} {
+		filter, err := ParseFilter(testCase.expression)
+		if err != nil {
+			t.Fatalf("ParseFilter(%q): %v", testCase.expression, err)
+		}
+		_, arguments := filter.clause()
+		if len(arguments) != 1 || arguments[0] != testCase.value {
+			t.Fatalf("ParseFilter(%q) bound %v, want %q", testCase.expression, arguments, testCase.value)
+		}
+	}
+}
+
+func TestAndOfTwoComparisonsRendersBothAsBoundParameters(t *testing.T) {
+	filter, err := ParseFilter(`userName eq "Alice@corp.com" AND active eq true`)
+	if err != nil {
+		t.Fatalf("ParseFilter: %v", err)
+	}
+	clause, arguments := filter.clause()
+	if clause != " WHERE lower(lower(account.email)) = $1 AND (NOT account.suspended) = $2" {
+		t.Fatalf("unexpected clause %q", clause)
+	}
+	if len(arguments) != 2 || arguments[0] != "alice@corp.com" || arguments[1] != true {
+		t.Fatalf("unexpected arguments %v", arguments)
+	}
+}
+
+func TestAnUnclosedQuoteIsRefused(t *testing.T) {
+	requireUnsupported(t, `userName eq "abc`, "not closed")
 }
 
 // An attribute this directory does not store cannot be filtered on. Answering

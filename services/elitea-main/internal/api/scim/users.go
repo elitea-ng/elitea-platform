@@ -160,7 +160,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	resources := make([]any, 0, len(users))
 	for _, user := range users {
-		resources = append(resources, userResource(user))
+		resources = append(resources, projectResource(userResource(user), r))
 	}
 	body := listResponse(resources, total, len(resources))
 	body["startIndex"] = startIndex
@@ -209,7 +209,7 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreFailure(w, err, "read user")
 		return
 	}
-	writeJSON(w, http.StatusOK, userResource(user))
+	writeJSON(w, http.StatusOK, projectResource(userResource(user), r))
 }
 
 /* ── write ─────────────────────────────────────────────────────────────── */
@@ -313,18 +313,9 @@ type patchOperation struct {
 
 // PatchUser answers `PATCH /Users/{id}`.
 //
-// # Why only `active`
-//
-// The PATCH message is a small expression language of its own: `add`, `remove`
-// and `replace` against attribute paths with optional value filters. Almost
-// every identity provider uses exactly one of its shapes — turning `active` off
-// when somebody leaves, and back on when they return — and that is the shape
-// that carries the security consequence.
-//
-// Anything else is REFUSED with the path named, not accepted and dropped. A
-// PATCH that answered 200 without applying its change would tell an identity
-// provider that a rename or a deactivation had taken effect when it had not, and
-// the provider would never send it again.
+// The operations are interpreted by applyUserOperations (patch_user.go): every
+// attribute the platform stores is applied, every attribute it does not is
+// accepted and dropped, and the whole request is persisted once or not at all.
 func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	if !h.ready(w) {
 		return
@@ -345,89 +336,31 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	active, resolved, problem := resolveActivePatch(request.Operations)
-	if problem != "" {
-		writeError(w, http.StatusNotImplemented, "invalidPath", problem)
+	before, err := h.directory.Get(r.Context(), id)
+	if err != nil {
+		h.writeStoreFailure(w, err, "read user")
 		return
 	}
-	if !resolved {
+	patch := newUserPatch(before)
+	if problem := applyUserOperations(patch, request.Operations); problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
+		return
+	}
+	changes, changed := patch.changes(before)
+	if !changed {
 		// Every operation was understood and none of them changed anything this
 		// service stores. The resource is returned unchanged, which is a true
 		// answer: nothing was refused and nothing was applied.
-		user, err := h.directory.Get(r.Context(), id)
-		if err != nil {
-			h.writeStoreFailure(w, err, "read user")
-			return
-		}
-		writeJSON(w, http.StatusOK, userResource(user))
+		writeJSON(w, http.StatusOK, userResource(before))
 		return
 	}
 
-	user, err := h.directory.SetActive(r.Context(), id, active)
+	user, err := h.directory.ApplyUserChanges(r.Context(), id, changes)
 	if err != nil {
 		h.writeStoreFailure(w, err, "patch user")
 		return
 	}
 	writeJSON(w, http.StatusOK, userResource(user))
-}
-
-// resolveActivePatch reads the operations and returns the `active` value they
-// ask for.
-//
-// It returns a non-empty problem for an operation this service cannot apply.
-// The two accepted shapes are both in the wild:
-//
-//	{"op":"replace","path":"active","value":false}
-//	{"op":"replace","value":{"active":false}}
-//
-// The second is what Entra ID sends, and a handler that only knew the first
-// would silently ignore every deactivation from it.
-func resolveActivePatch(operations []patchOperation) (active, resolved bool, problem string) {
-	for _, operation := range operations {
-		if !strings.EqualFold(operation.Op, "replace") && !strings.EqualFold(operation.Op, "add") {
-			return false, false, "this directory applies only replace and add operations, " +
-				"and only to the active attribute"
-		}
-		// The path is matched case-insensitively (SCIM attribute names are), but
-		// the CLIENT'S spelling is what the refusal echoes: an operator reading
-		// their provider's log needs the attribute as they configured it, not a
-		// folded copy they then cannot find.
-		path := strings.TrimSpace(operation.Path)
-		switch strings.ToLower(path) {
-		case "active":
-			var value bool
-			if err := json.Unmarshal(operation.Value, &value); err != nil {
-				// Some clients send the string "False". Accepting it is not
-				// leniency for its own sake: refusing would leave the account
-				// active after the provider believed it had deactivated it.
-				var text string
-				if json.Unmarshal(operation.Value, &text) != nil {
-					return false, false, "the active attribute needs a boolean value"
-				}
-				value = strings.EqualFold(text, "true")
-			}
-			active, resolved = value, true
-		case "":
-			// A pathless operation carries an object of attributes.
-			var attributes struct {
-				Active *bool `json:"active"`
-			}
-			if err := json.Unmarshal(operation.Value, &attributes); err != nil {
-				return false, false, "the operation value could not be read"
-			}
-			if attributes.Active != nil {
-				active, resolved = *attributes.Active, true
-			}
-			// Other attributes in the object are left alone. A pathless
-			// operation is how a provider sends a whole profile update, and
-			// refusing the request because it also carried a display name would
-			// stop the deactivation this handler exists to apply.
-		default:
-			return false, false, "this directory can patch only the active attribute; " +
-				"send a PUT to change " + path
-		}
-	}
-	return active, resolved, ""
 }
 
 /* ── shared ────────────────────────────────────────────────────────────── */

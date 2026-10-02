@@ -43,13 +43,14 @@ type fakeBinding struct {
 type groupState struct {
 	bindings map[int64]*fakeBinding
 	// The calls, in the order the handler made them.
-	adopted  []string
-	renamed  []string
-	added    [][]int
-	replaced [][]int
-	removed  [][]int
-	deleted  []int64
-	applied  [][]scimdirectory.GroupOperation
+	adopted     []string
+	externalIDs []string
+	renamed     []string
+	added       [][]int
+	replaced    [][]int
+	removed     [][]int
+	deleted     []int64
+	applied     [][]scimdirectory.GroupOperation
 	// order records the create path's two writes in the order they arrived, so
 	// a test can assert which one a failure would have left behind.
 	order  []string
@@ -191,6 +192,10 @@ func (d *recordingDirectory) ApplyGroupOperations(
 		switch operation.Kind {
 		case scimdirectory.GroupRename:
 			group, err = d.RenameGroup(ctx, id, operation.DisplayName)
+		case scimdirectory.GroupSetExternalID:
+			d.groups.bindings[id].group.ExternalID = operation.ExternalID
+			d.groups.externalIDs = append(d.groups.externalIDs, operation.ExternalID)
+			group, err = d.GetGroup(ctx, id)
 		case scimdirectory.GroupAddMembers:
 			group, err = d.AddGroupMembers(ctx, id, operation.Members)
 		case scimdirectory.GroupReplaceMembers:
@@ -359,12 +364,12 @@ func TestADisplayNameChangeIsAppliedFromBothPatchShapes(t *testing.T) {
 func TestAnUnsupportedPatchPathIsRefusedByNameAndAppliesNothing(t *testing.T) {
 	directory := newRecordingDirectory()
 	recorder := serve(t, directory, http.MethodPatch, "/Groups/7",
-		`{"Operations":[{"op":"replace","path":"externalId","value":"grp-2"}]}`)
+		`{"Operations":[{"op":"replace","path":"description","value":"grp-2"}]}`)
 
 	require.Equal(t, http.StatusNotImplemented, recorder.Code)
 	body := decodeBody(t, recorder)
 	require.Equal(t, "invalidPath", body["scimType"])
-	require.Contains(t, body["detail"], `"externalId"`)
+	require.Contains(t, body["detail"], `"description"`)
 	require.Empty(t, directory.groups.renamed)
 	require.Empty(t, directory.groups.added)
 }
@@ -587,4 +592,74 @@ func TestACreateAppliesTheMembershipBeforeItStampsTheIdentifier(t *testing.T) {
 	require.Equal(t, []string{"members", "adopt"}, directory.groups.order)
 	// And the resource returned carries the identifier that was just stamped.
 	require.Equal(t, "grp-1", decodeBody(t, recorder)["externalId"])
+}
+
+/* ── Entra group shapes ────────────────────────────────────────────────── */
+
+func TestGroupExternalIDReplaceIsApplied(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPatch, "/Groups/7",
+		`{"Operations":[{"op":"Replace","path":"externalId","value":"grp-2"}]}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, []string{"grp-2"}, directory.groups.externalIDs)
+	require.Len(t, directory.groups.applied, 1)
+}
+
+func TestPathlessMembersAddAndReplaceAreReadWithTheirVerb(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPatch, "/Groups/7",
+		`{"Operations":[{"op":"Add","value":{"members":[{"value":"42"}],"externalId":"grp-3"}}]}`)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, [][]int{{42}}, directory.groups.added)
+	require.Equal(t, []string{"grp-3"}, directory.groups.externalIDs)
+
+	recorder = serve(t, directory, http.MethodPatch, "/Groups/7",
+		`{"Operations":[{"op":"Replace","value":{"members":[{"value":"43"}]}}]}`)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, [][]int{{43}}, directory.groups.replaced)
+}
+
+func TestEntraMemberAddThenBracketedRemoveInOneRequest(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPatch, "/Groups/7", `{"Operations":[
+		{"op":"Add","path":"members","value":[{"value":"43"}]},
+		{"op":"Remove","path":"members[value eq \"42\"]"}]}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Len(t, directory.groups.applied, 1, "one request, one store call")
+	require.Len(t, directory.groups.applied[0], 2)
+}
+
+func TestExcludedAttributesMembersIsHonouredOnGroups(t *testing.T) {
+	directory := newRecordingDirectory()
+	directory.groups.bindings[7].members = []int{42}
+
+	body := decodeBody(t, serve(t, directory, http.MethodGet, "/Groups/7?excludedAttributes=members", ""))
+	require.NotContains(t, body, "members")
+	require.Equal(t, "Platform Team", body["displayName"])
+
+	body = decodeBody(t, serve(t, directory, http.MethodGet, "/Groups/7", ""))
+	require.Contains(t, body, "members")
+
+	list := decodeBody(t, serve(t, directory, http.MethodGet, "/Groups?excludedAttributes=members", ""))
+	for _, resource := range list["Resources"].([]any) {
+		require.NotContains(t, resource.(map[string]any), "members")
+	}
+	body = decodeBody(t, serve(t, directory, http.MethodGet, "/Groups/7?attributes=displayName", ""))
+	require.Contains(t, body, "displayName")
+	require.NotContains(t, body, "members")
+}
+
+// The unbound-group refusal stays, and its body is a proper SCIM error.
+func TestUnboundGroupRefusalIsAScimErrorBody(t *testing.T) {
+	recorder := serve(t, newRecordingDirectory(), http.MethodPost, "/Groups", `{"displayName":"Finance"}`)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, contentType, recorder.Header().Get("Content-Type"))
+	body := decodeBody(t, recorder)
+	require.Equal(t, []any{schemaError}, body["schemas"])
+	require.Equal(t, "400", body["status"])
+	require.Equal(t, "invalidValue", body["scimType"])
+	require.NotEmpty(t, body["detail"])
 }

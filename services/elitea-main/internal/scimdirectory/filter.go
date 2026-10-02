@@ -25,22 +25,30 @@ package scimdirectory
 //	id          eq                      "value"    (users and groups)
 //	active      eq | ne                 true | false (users)
 //
-// Attribute names are matched case-insensitively, as RFC 7644 requires. Nothing
-// else is: no `and`, no `or`, no `not`, no `pr`, no grouping. Each of those is a
+// Attribute names are matched case-insensitively, as RFC 7644 requires. Comparisons may be
+// joined with `and`. Nothing else is: no `or`, no `not`, no `pr`, no grouping. Each of those is a
 // separate, testable addition, and each would be a lie if it were accepted and
 // half-applied.
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 )
 
-// Filter is one parsed comparison, or the empty filter that matches everything.
-type Filter struct {
+// comparison is one `attribute operator value` term.
+type comparison struct {
 	attribute string
 	operator  string
 	value     string
+}
+
+// Filter is one parsed comparison, a conjunction of them, or the empty filter
+// that matches everything.
+type Filter struct {
+	terms []comparison
 	// columns is the attribute-to-column map the expression was parsed
 	// against, carried so `clause` renders the SQL of the resource the filter
 	// was read FOR. A users filter and a groups filter are the same shape over
@@ -105,89 +113,146 @@ func ParseGroupFilter(expression string) (Filter, error) {
 	return parseFilter(expression, groupAttributes)
 }
 
+const compoundReason = "this directory answers comparisons joined by `and`; " +
+	"grouping and the or/not operators (and/or/not beyond a plain `and`) are not implemented"
+
 func parseFilter(expression string, columns map[string]string) (Filter, error) {
 	trimmed := strings.TrimSpace(expression)
 	if trimmed == "" {
 		return Filter{}, nil
 	}
 
-	// Refused BY NAME rather than by falling through to a parse failure, so the
-	// message tells an operator which construct is missing instead of
-	// "malformed filter" for a filter that is perfectly well formed.
-	for _, unsupported := range []string{" and ", " or ", "not(", "(", "["} {
-		if strings.Contains(strings.ToLower(trimmed), unsupported) {
-			return Filter{}, UnsupportedFilterError{
-				Expression: expression,
-				Reason: "this directory answers one comparison at a time: " +
-					"grouping and the and/or/not operators are not implemented",
+	unsupported := func(reason string) (Filter, error) {
+		return Filter{}, UnsupportedFilterError{Expression: expression, Reason: reason}
+	}
+
+	tokens, err := tokenizeFilter(trimmed)
+	if err != nil {
+		return unsupported(err.Error())
+	}
+
+	// Split on `and` TOKENS. An operator inside a quoted value is part of the
+	// value and never reaches here as a bare word, which is what the previous
+	// substring scan got wrong for `displayName eq "Ops (EU) and Sales"`.
+	var groups [][]filterToken
+	current := []filterToken{}
+	for _, token := range tokens {
+		if token.kind == tokenParen {
+			return unsupported(compoundReason)
+		}
+		if token.kind == tokenWord {
+			switch strings.ToLower(token.text) {
+			case "or", "not":
+				return unsupported(compoundReason)
+			case "and":
+				groups = append(groups, current)
+				current = []filterToken{}
+				continue
 			}
 		}
+		current = append(current, token)
 	}
+	groups = append(groups, current)
 
-	parts := strings.SplitN(trimmed, " ", 3)
-	if len(parts) != 3 {
-		return Filter{}, UnsupportedFilterError{
-			Expression: expression,
-			Reason:     "expected an expression of the form `attribute operator value`",
+	terms := make([]comparison, 0, len(groups))
+	for _, group := range groups {
+		term, reason := parseComparison(group, columns)
+		if reason != "" {
+			return unsupported(reason)
 		}
+		terms = append(terms, term)
 	}
+	return Filter{terms: terms, present: true, columns: columns}, nil
+}
 
-	attribute := strings.ToLower(parts[0])
+func parseComparison(tokens []filterToken, columns map[string]string) (comparison, string) {
+	if len(tokens) != 3 || tokens[0].kind != tokenWord || tokens[1].kind != tokenWord {
+		return comparison{}, "expected an expression of the form `attribute operator value`"
+	}
+	attribute := strings.ToLower(tokens[0].text)
 	if _, ok := columns[attribute]; !ok {
-		return Filter{}, UnsupportedFilterError{
-			Expression: expression,
-			// The message names what THIS resource can be filtered on, read
-			// from the same map the parser accepts against, so it can never
-			// advertise an attribute the parser then refuses.
-			Reason: "this directory can only filter on " + attributeList(columns),
-		}
+		// The message names what THIS resource can be filtered on, read from
+		// the same map the parser accepts against, so it can never advertise an
+		// attribute the parser then refuses.
+		return comparison{}, "this directory can only filter on " + attributeList(columns)
 	}
-
-	operator := strings.ToLower(parts[1])
-	value := strings.TrimSpace(parts[2])
-	// A quoted value is the RFC's form. Unquoted is accepted for `active`,
-	// whose values are the bare literals `true` and `false`.
-	if unquoted, err := strconv.Unquote(value); err == nil {
-		value = unquoted
-	}
+	operator := strings.ToLower(tokens[1].text)
+	value := tokens[2].text
 
 	if attribute == "active" {
 		if operator != "eq" && operator != "ne" {
-			return Filter{}, UnsupportedFilterError{
-				Expression: expression,
-				Reason:     "active can only be compared with eq or ne",
-			}
+			return comparison{}, "active can only be compared with eq or ne"
 		}
 		if value != "true" && value != "false" {
-			return Filter{}, UnsupportedFilterError{
-				Expression: expression,
-				Reason:     "active can only be compared with true or false",
-			}
+			return comparison{}, "active can only be compared with true or false"
 		}
-		return Filter{
-			attribute: attribute, operator: operator, value: value,
-			present: true, columns: columns,
-		}, nil
+		return comparison{attribute: attribute, operator: operator, value: value}, ""
 	}
-
 	switch operator {
 	case "eq", "ne", "co", "sw", "ew":
 	default:
-		return Filter{}, UnsupportedFilterError{
-			Expression: expression,
-			Reason:     "this directory implements the eq, ne, co, sw and ew operators",
-		}
+		return comparison{}, "this directory implements the eq, ne, co, sw and ew operators"
 	}
 	if attribute == "id" && operator != "eq" {
-		return Filter{}, UnsupportedFilterError{
-			Expression: expression,
-			Reason:     "id can only be compared with eq",
+		return comparison{}, "id can only be compared with eq"
+	}
+	return comparison{attribute: attribute, operator: operator, value: value}, ""
+}
+
+type filterTokenKind int
+
+const (
+	tokenWord filterTokenKind = iota
+	tokenQuoted
+	tokenParen
+)
+
+type filterToken struct {
+	kind filterTokenKind
+	text string
+}
+
+// tokenizeFilter splits an expression into words, quoted strings and
+// parentheses. A quoted string is one token whatever it contains, with the JSON
+// escapes RFC 7644 §3.4.2.2 uses.
+func tokenizeFilter(expression string) ([]filterToken, error) {
+	var tokens []filterToken
+	runes := []rune(expression)
+	for i := 0; i < len(runes); {
+		switch r := runes[i]; r {
+		case ' ', '\t', '\n', '\r':
+			i++
+		case '(', ')', '[', ']':
+			tokens = append(tokens, filterToken{kind: tokenParen, text: string(r)})
+			i++
+		case '"':
+			j := i + 1
+			for j < len(runes) && runes[j] != '"' {
+				if runes[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(runes) {
+				return nil, errors.New("a quoted value is not closed")
+			}
+			raw := string(runes[i : j+1])
+			var value string
+			if err := json.Unmarshal([]byte(raw), &value); err != nil {
+				value = string(runes[i+1 : j])
+			}
+			tokens = append(tokens, filterToken{kind: tokenQuoted, text: value})
+			i = j + 1
+		default:
+			j := i
+			for j < len(runes) && !strings.ContainsRune(" \t\n\r()[]\"", runes[j]) {
+				j++
+			}
+			tokens = append(tokens, filterToken{kind: tokenWord, text: string(runes[i:j])})
+			i = j
 		}
 	}
-	return Filter{
-		attribute: attribute, operator: operator, value: value,
-		present: true, columns: columns,
-	}, nil
+	return tokens, nil
 }
 
 // attributeList renders a closed set as the SCIM attribute names an operator
@@ -224,14 +289,24 @@ func (f Filter) clause() (string, []any) {
 	if !f.present {
 		return "", nil
 	}
-	column := f.columns[f.attribute]
+	conditions := make([]string, 0, len(f.terms))
+	arguments := make([]any, 0, len(f.terms))
+	for _, term := range f.terms {
+		position := "$" + strconv.Itoa(len(arguments)+1)
+		condition, argument := term.render(f.columns[term.attribute], position)
+		conditions = append(conditions, condition)
+		arguments = append(arguments, argument)
+	}
+	return " WHERE " + strings.Join(conditions, " AND "), arguments
+}
 
-	if f.attribute == "active" {
-		wanted := f.value == "true"
-		if f.operator == "ne" {
+func (t comparison) render(column, position string) (string, any) {
+	if t.attribute == "active" {
+		wanted := t.value == "true"
+		if t.operator == "ne" {
 			wanted = !wanted
 		}
-		return " WHERE (" + column + ") = $1", []any{wanted}
+		return "(" + column + ") = " + position, wanted
 	}
 
 	// Comparison is case-insensitive on both sides. SCIM defines `userName` as
@@ -239,18 +314,18 @@ func (f Filter) clause() (string, []any) {
 	// and later filters on `alice@corp.com` must find it — a case-sensitive
 	// match would report no such user and the client would create a second
 	// account.
-	pattern := strings.ToLower(f.value)
-	switch f.operator {
+	pattern := strings.ToLower(t.value)
+	switch t.operator {
 	case "eq":
-		return " WHERE lower(" + column + ") = $1", []any{pattern}
+		return "lower(" + column + ") = " + position, pattern
 	case "ne":
-		return " WHERE lower(" + column + ") <> $1", []any{pattern}
+		return "lower(" + column + ") <> " + position, pattern
 	case "co":
-		return " WHERE lower(" + column + ") LIKE $1", []any{"%" + escapeLike(pattern) + "%"}
+		return "lower(" + column + ") LIKE " + position, "%" + escapeLike(pattern) + "%"
 	case "sw":
-		return " WHERE lower(" + column + ") LIKE $1", []any{escapeLike(pattern) + "%"}
+		return "lower(" + column + ") LIKE " + position, escapeLike(pattern) + "%"
 	default: // "ew"
-		return " WHERE lower(" + column + ") LIKE $1", []any{"%" + escapeLike(pattern)}
+		return "lower(" + column + ") LIKE " + position, "%" + escapeLike(pattern)
 	}
 }
 

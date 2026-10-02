@@ -188,17 +188,44 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 	// An EXPLICIT `"active": true` still reactivates. The directory is the
 	// authority once it is connected, and a client that states the flag has made
 	// a statement about the person.
+	//
+	// THE LOOKUP IS CASE-INSENSITIVE. The unique index on `email` is not, so an
+	// account a first login (or the admin page) stored as `Alice@Corp.com` is
+	// invisible to `ON CONFLICT (email)` against the folded `alice@corp.com`,
+	// and the insert would create a second account for one person. The existing
+	// row is found by lower(email) first, as joinAccountByEmail does for a
+	// federated login, and adopted under the spelling it already has.
 	var id int
 	err = tx.QueryRow(ctx,
-		`INSERT INTO auth_core__user (email, name, suspended)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (email) DO UPDATE
-		     SET name = COALESCE(NULLIF(EXCLUDED.name, ''), auth_core__user.name),
-		         suspended = CASE WHEN $4 THEN EXCLUDED.suspended
-		                          ELSE auth_core__user.suspended END
-		 RETURNING id`,
-		userName, user.DisplayName, !user.Active, user.ActiveStated).Scan(&id)
-	if err != nil {
+		`SELECT id FROM auth_core__user WHERE lower(email) = $1 ORDER BY id LIMIT 1 FOR UPDATE`,
+		userName).Scan(&id)
+	switch {
+	case err == nil:
+		_, err = tx.Exec(ctx,
+			`UPDATE auth_core__user
+			    SET name = COALESCE(NULLIF($2, ''), name),
+			        suspended = CASE WHEN $3 THEN $4 ELSE suspended END
+			  WHERE id = $1`,
+			id, user.DisplayName, user.ActiveStated, !user.Active)
+		if err != nil {
+			return User{}, err
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		// Still ON CONFLICT: two concurrent creates both miss the lookup, and
+		// the exact-match index settles the race.
+		err = tx.QueryRow(ctx,
+			`INSERT INTO auth_core__user (email, name, suspended)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (email) DO UPDATE
+			     SET name = COALESCE(NULLIF(EXCLUDED.name, ''), auth_core__user.name),
+			         suspended = CASE WHEN $4 THEN EXCLUDED.suspended
+			                          ELSE auth_core__user.suspended END
+			 RETURNING id`,
+			userName, user.DisplayName, !user.Active, user.ActiveStated).Scan(&id)
+		if err != nil {
+			return User{}, err
+		}
+	default:
 		return User{}, err
 	}
 
@@ -267,6 +294,87 @@ func (s *Store) SetActive(ctx context.Context, id int, active bool) (User, error
 		return User{}, ErrNotFound
 	}
 	if err := s.touch(ctx, id); err != nil {
+		return User{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+// UserChanges is the result of a PATCH interpreted against a user. A nil field
+// is "leave alone"; a non-nil pointer to "" on DisplayName or ExternalID clears
+// it.
+type UserChanges struct {
+	UserName    *string
+	DisplayName *string
+	ExternalID  *string
+	Active      *bool
+}
+
+// ApplyUserChanges persists a whole PATCH in ONE transaction, holding the
+// account row. A changed address is re-checked for uniqueness
+// CASE-INSENSITIVELY — the unique index is case-sensitive, so the database
+// alone would let `Bob@corp.com` and `bob@corp.com` coexist.
+func (s *Store) ApplyUserChanges(ctx context.Context, id int, changes UserChanges) (User, error) {
+	if s == nil || s.pool == nil {
+		return User{}, ErrNoPool
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var current string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(email, '') FROM auth_core__user WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	} else if err != nil {
+		return User{}, err
+	}
+
+	if changes.UserName != nil {
+		userName := NormalizeUserName(*changes.UserName)
+		if userName == "" {
+			return User{}, errors.New("scimdirectory: userName is required")
+		}
+		var taken bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM auth_core__user WHERE lower(email) = $1 AND id <> $2)`,
+			userName, id).Scan(&taken); err != nil {
+			return User{}, err
+		}
+		if taken {
+			return User{}, ErrConflict
+		}
+		if _, err := tx.Exec(ctx, `UPDATE auth_core__user SET email = $2 WHERE id = $1`, id, userName); err != nil {
+			if isUniqueViolation(err) {
+				return User{}, ErrConflict
+			}
+			return User{}, err
+		}
+	}
+	if changes.DisplayName != nil {
+		if _, err := tx.Exec(ctx, `UPDATE auth_core__user SET name = $2 WHERE id = $1`,
+			id, *changes.DisplayName); err != nil {
+			return User{}, err
+		}
+	}
+	if changes.Active != nil {
+		if _, err := tx.Exec(ctx, `UPDATE auth_core__user SET suspended = $2 WHERE id = $1`,
+			id, !*changes.Active); err != nil {
+			return User{}, err
+		}
+	}
+	if changes.ExternalID != nil {
+		if err := upsertSCIMFacts(ctx, tx, id, *changes.ExternalID); err != nil {
+			return User{}, err
+		}
+	} else if _, err := tx.Exec(ctx,
+		`INSERT INTO elitea_auth.scim_users (user_id) VALUES ($1)
+		 ON CONFLICT (user_id) DO UPDATE SET updated_at = now()`, id); err != nil {
+		return User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
 	}
 	return s.Get(ctx, id)

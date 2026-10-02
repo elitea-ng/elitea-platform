@@ -677,3 +677,28 @@ func newGroupPool(t *testing.T) *pgxpool.Pool {
 
 	return pool
 }
+
+func TestAPatchCanReplaceAGroupsExternalIDInTheSameTransactionAsMembers(t *testing.T) {
+	pool := newGroupPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	project := seedProject(t, pool, "Platform", 0)
+	alice := seedUser(t, pool, "alice@corp.com")
+	binding, err := store.CreateBinding(ctx, "Platform Team", project, "editor")
+	require.NoError(t, err)
+
+	group, err := store.ApplyGroupOperations(ctx, binding.ID, []GroupOperation{
+		{Kind: GroupSetExternalID, ExternalID: "grp-9"},
+		{Kind: GroupAddMembers, Members: []int{alice}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "grp-9", group.ExternalID)
+	require.Len(t, group.Members, 1)
+
+	group, err = store.ApplyGroupOperations(ctx, binding.ID, []GroupOperation{
+		{Kind: GroupSetExternalID, ExternalID: ""},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "", group.ExternalID)
+}

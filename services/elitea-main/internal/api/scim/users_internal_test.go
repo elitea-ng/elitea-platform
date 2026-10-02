@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -33,11 +34,14 @@ import (
 )
 
 type recordingDirectory struct {
-	users        map[int]scimdirectory.User
-	created      []scimdirectory.User
-	replaced     []scimdirectory.User
-	activeCalls  []bool
-	listedFilter scimdirectory.Filter
+	users       map[int]scimdirectory.User
+	created     []scimdirectory.User
+	replaced    []scimdirectory.User
+	activeCalls []bool
+	changes     []scimdirectory.UserChanges
+	// conflictOnUserName makes ApplyUserChanges answer a uniqueness conflict.
+	conflictOnUserName bool
+	listedFilter       scimdirectory.Filter
 	// groups holds the /Groups half of the fake. It is a pointer to a type
 	// declared in groups_internal_test.go so the group tests own their own
 	// state, and a users test that never touches a group reads unchanged.
@@ -106,6 +110,34 @@ func (d *recordingDirectory) SetActive(
 	return user, nil
 }
 
+func (d *recordingDirectory) ApplyUserChanges(
+	_ context.Context, id int, changes scimdirectory.UserChanges,
+) (scimdirectory.User, error) {
+	user, ok := d.users[id]
+	if !ok {
+		return scimdirectory.User{}, scimdirectory.ErrNotFound
+	}
+	if changes.UserName != nil && d.conflictOnUserName {
+		return scimdirectory.User{}, scimdirectory.ErrConflict
+	}
+	d.changes = append(d.changes, changes)
+	if changes.UserName != nil {
+		user.UserName = scimdirectory.NormalizeUserName(*changes.UserName)
+	}
+	if changes.DisplayName != nil {
+		user.DisplayName = *changes.DisplayName
+	}
+	if changes.ExternalID != nil {
+		user.ExternalID = *changes.ExternalID
+	}
+	if changes.Active != nil {
+		d.activeCalls = append(d.activeCalls, *changes.Active)
+		user.Active = *changes.Active
+	}
+	d.users[id] = user
+	return user, nil
+}
+
 func serve(t *testing.T, directory Directory, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -126,7 +158,7 @@ func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder) map[string]an
 func TestAnUnsupportedFilterIsRefusedWithItsSCIMCode(t *testing.T) {
 	directory := newRecordingDirectory()
 	recorder := serve(t, directory, http.MethodGet,
-		`/Users?filter=`+`userName+eq+%22a%22+and+active+eq+true`, "")
+		`/Users?filter=`+`userName+eq+%22a%22+or+active+eq+true`, "")
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	body := decodeBody(t, recorder)
@@ -273,29 +305,6 @@ func TestAStringBooleanIsAccepted(t *testing.T) {
 	require.Equal(t, []bool{false}, directory.activeCalls)
 }
 
-// A PATCH of an attribute this directory cannot apply is REFUSED, and the
-// refusal names the path. Answering 200 would tell the identity provider that
-// the rename took effect, and it would never send it again.
-func TestAPatchOfAnotherAttributeIsRefusedRatherThanDropped(t *testing.T) {
-	directory := newRecordingDirectory()
-	recorder := serve(t, directory, http.MethodPatch, "/Users/42",
-		`{"Operations":[{"op":"replace","path":"displayName","value":"Alicia"}]}`)
-
-	require.Equal(t, http.StatusNotImplemented, recorder.Code)
-	require.Empty(t, directory.activeCalls)
-	require.Contains(t, decodeBody(t, recorder)["detail"], "displayName")
-}
-
-// A `remove` is not applied either, and is not silently treated as a replace.
-func TestARemoveOperationIsRefused(t *testing.T) {
-	directory := newRecordingDirectory()
-	recorder := serve(t, directory, http.MethodPatch, "/Users/42",
-		`{"Operations":[{"op":"remove","path":"active"}]}`)
-
-	require.Equal(t, http.StatusNotImplemented, recorder.Code)
-	require.Empty(t, directory.activeCalls)
-}
-
 // A pathless operation carrying only attributes this service does not store is
 // understood and changes nothing. Refusing it would stop a provider whose
 // profile update happens to travel with the deactivation this handler exists to
@@ -351,4 +360,260 @@ func TestTheServiceProviderConfigReportsWhatIsImplemented(t *testing.T) {
 func TestAnUnwiredDirectoryRefusesRatherThanAnsweringEmpty(t *testing.T) {
 	recorder := serve(t, nil, http.MethodGet, "/Users", "")
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+}
+
+/* ── PATCH: the Entra ID interpreter, with real request bodies ─────────── */
+
+const patchOpSchema = `"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"]`
+
+func patchUser(t *testing.T, directory *recordingDirectory, operations string) *httptest.ResponseRecorder {
+	t.Helper()
+	return serve(t, directory, http.MethodPatch, "/Users/42",
+		`{`+patchOpSchema+`,"Operations":[`+operations+`]}`)
+}
+
+func str(value string) *string { return &value }
+
+func TestUserPatchBodiesFromEntra(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		operations string
+		want       scimdirectory.UserChanges
+		wantNone   bool
+	}{
+		{
+			// Documented Entra example: legacy dialect, string boolean.
+			name:       "Replace active False string (legacy)",
+			operations: `{"op":"Replace","path":"active","value":"False"}`,
+			want:       scimdirectory.UserChanges{Active: new(bool)},
+		},
+		{
+			name:       "path-less object with string boolean",
+			operations: `{"op":"Replace","value":{"active":"False"}}`,
+			want:       scimdirectory.UserChanges{Active: new(bool)},
+		},
+		{
+			name:       "boolean spelled true",
+			operations: `{"op":"replace","path":"ACTIVE","value":true}`,
+			wantNone:   true, // already active
+		},
+		{
+			// Documented Entra multi-attribute update (aadOptscim062020).
+			name: "multiple ops with work email, name parts and enterprise department",
+			operations: `
+				{"op":"Replace","path":"emails[type eq \"work\"].value","value":"Alice.New@Corp.com"},
+				{"op":"Replace","path":"name.givenName","value":"Alicia"},
+				{"op":"Replace","path":"name.familyName","value":"Smith"},
+				{"op":"Add","path":"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department","value":"R&D"},
+				{"op":"Replace","path":"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:manager","value":"00u9"},
+				{"op":"Remove","path":"phoneNumbers[type eq \"work\"].value"}`,
+			want: scimdirectory.UserChanges{
+				UserName: str("Alice.New@Corp.com"), DisplayName: str("Alicia Smith"),
+			},
+		},
+		{
+			name: "path-less object with dotted and URN keys",
+			operations: `{"op":"Replace","value":{
+				"displayName":"Alicia S","externalId":"00u2",
+				"name.givenName":"Alicia",
+				"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department":"R&D",
+				"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User":{"manager":{"value":"1"}},
+				"phoneNumbers":[{"value":"+1","type":"work"}]}}`,
+			want: scimdirectory.UserChanges{DisplayName: str("Alicia S"), ExternalID: str("00u2")},
+		},
+		{
+			name:       "path-less nested name object",
+			operations: `{"op":"Replace","value":{"name":{"formatted":"Alicia Smith"}}}`,
+			want:       scimdirectory.UserChanges{DisplayName: str("Alicia Smith")},
+		},
+		{
+			name:       "whole emails array replace picks the primary",
+			operations: `{"op":"replace","path":"emails","value":[{"value":"x@corp.com","type":"home"},{"value":"new@corp.com","type":"work","primary":true}]}`,
+			want:       scimdirectory.UserChanges{UserName: str("new@corp.com")},
+		},
+		{
+			name:       "a home email is not the address",
+			operations: `{"op":"Replace","path":"emails[type eq \"home\"].value","value":"h@corp.com"}`,
+			wantNone:   true,
+		},
+		{
+			name:       "userName wins over a work email in the same request",
+			operations: `{"op":"Replace","path":"emails[type eq \"work\"].value","value":"mail@corp.com"},{"op":"Replace","path":"userName","value":"upn@corp.com"}`,
+			want:       scimdirectory.UserChanges{UserName: str("upn@corp.com")},
+		},
+		{
+			name:       "remove clears an optional attribute",
+			operations: `{"op":"Remove","path":"externalId"},{"op":"remove","path":"displayName"}`,
+			want:       scimdirectory.UserChanges{ExternalID: str(""), DisplayName: str("")},
+		},
+		{
+			name:       "a null displayName clears it",
+			operations: `{"op":"Replace","path":"displayName","value":null}`,
+			want:       scimdirectory.UserChanges{DisplayName: str("")},
+		},
+		{
+			name:       "later operations see earlier ones",
+			operations: `{"op":"Replace","path":"displayName","value":"A"},{"op":"Replace","path":"displayName","value":"Alice"}`,
+			wantNone:   true, // back to the stored value
+		},
+		{
+			name:       "only attributes that are not stored is a no-op 200",
+			operations: `{"op":"Add","path":"title","value":"Eng"},{"op":"Replace","path":"addresses[type eq \"work\"].streetAddress","value":"1 Main"}`,
+			wantNone:   true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := newRecordingDirectory()
+			recorder := patchUser(t, directory, testCase.operations)
+
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			if testCase.wantNone {
+				require.Empty(t, directory.changes, "nothing stored changed, so nothing is persisted")
+				return
+			}
+			// One request is ONE persist.
+			require.Len(t, directory.changes, 1)
+			require.Equal(t, testCase.want, directory.changes[0])
+		})
+	}
+}
+
+func TestUserPatchRefusals(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		operations string
+		status     int
+		scimType   string
+	}{
+		{"unknown op", `{"op":"move","path":"userName","value":"x"}`, 400, "invalidSyntax"},
+		{"remove userName", `{"op":"Remove","path":"userName"}`, 400, "mutability"},
+		{"empty userName", `{"op":"Replace","path":"userName","value":""}`, 400, "invalidValue"},
+		{"non boolean active", `{"op":"Replace","path":"active","value":"maybe"}`, 400, "invalidValue"},
+		{"remove without path", `{"op":"Remove"}`, 400, "noTarget"},
+		{"non string displayName", `{"op":"Replace","path":"displayName","value":{"a":1}}`, 400, "invalidValue"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := newRecordingDirectory()
+			// A refused operation anywhere must leave the earlier ones unapplied.
+			recorder := patchUser(t, directory,
+				`{"op":"Replace","path":"displayName","value":"Applied?"},`+testCase.operations)
+
+			require.Equal(t, testCase.status, recorder.Code)
+			require.Equal(t, testCase.scimType, decodeBody(t, recorder)["scimType"])
+			require.Empty(t, directory.changes)
+			require.Equal(t, "Alice", directory.users[42].DisplayName)
+		})
+	}
+}
+
+func TestUserPatchUniquenessConflictIsAScimConflict(t *testing.T) {
+	directory := newRecordingDirectory()
+	directory.conflictOnUserName = true
+	recorder := patchUser(t, directory, `{"op":"Replace","path":"userName","value":"Bob@corp.com"}`)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Equal(t, "uniqueness", decodeBody(t, recorder)["scimType"])
+}
+
+func TestUserPatchOnAnUnknownUserIsNotFound(t *testing.T) {
+	recorder := serve(t, newRecordingDirectory(), http.MethodPatch, "/Users/999",
+		`{"Operations":[{"op":"replace","path":"active","value":false}]}`)
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+/* ── filters ───────────────────────────────────────────────────────────── */
+
+// Entra's connection test: no such user is an EMPTY ListResponse, not an error.
+func TestEntraTestConnectionFilterAnswersAnEmptyListResponse(t *testing.T) {
+	directory := newRecordingDirectory()
+	directory.users = map[int]scimdirectory.User{}
+	recorder := serve(t, directory, http.MethodGet,
+		`/Users?filter=userName+eq+%22b4f4e5e9-2cf5-4f1c-a8c0-0e3c0e5b8c11%22&excludedAttributes=members`, "")
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	body := decodeBody(t, recorder)
+	require.EqualValues(t, 0, body["totalResults"])
+	require.Equal(t, []any{}, body["Resources"])
+}
+
+func TestFilterValuesMayContainOperatorsAndBrackets(t *testing.T) {
+	for _, filter := range []string{
+		`userName eq "o(brien) and sons@corp.com"`,
+		`displayName eq "a [b] or not(c)"`,
+		`userName eq "x" and active eq true`,
+		`externalId eq "00u1" and userName eq "a and b"`,
+	} {
+		directory := newRecordingDirectory()
+		recorder := serve(t, directory, http.MethodGet, "/Users?filter="+url.QueryEscape(filter), "")
+		require.Equal(t, http.StatusOK, recorder.Code, filter)
+	}
+}
+
+/* ── attributes / excludedAttributes ───────────────────────────────────── */
+
+func TestExcludedAttributesAndAttributesAreHonouredOnUsers(t *testing.T) {
+	directory := newRecordingDirectory()
+
+	body := decodeBody(t, serve(t, directory, http.MethodGet, "/Users/42?excludedAttributes=emails,name", ""))
+	require.NotContains(t, body, "emails")
+	require.NotContains(t, body, "name")
+	require.Contains(t, body, "userName")
+
+	body = decodeBody(t, serve(t, directory, http.MethodGet, "/Users/42?attributes=userName", ""))
+	require.Equal(t, "alice@corp.com", body["userName"])
+	require.Contains(t, body, "id")
+	require.NotContains(t, body, "emails")
+	require.NotContains(t, body, "displayName")
+}
+
+/* ── discovery ─────────────────────────────────────────────────────────── */
+
+func TestDiscoveryListsNameSubAttributesAndTheEnterpriseExtension(t *testing.T) {
+	directory := newRecordingDirectory()
+
+	schemas := decodeBody(t, serve(t, directory, http.MethodGet, "/Schemas", ""))
+	ids := map[string]map[string]any{}
+	for _, resource := range schemas["Resources"].([]any) {
+		document := resource.(map[string]any)
+		ids[document["id"].(string)] = document
+	}
+	require.Contains(t, ids, schemaEnterprise)
+
+	var name map[string]any
+	for _, attribute := range ids[schemaUser]["attributes"].([]any) {
+		if attribute.(map[string]any)["name"] == "name" {
+			name = attribute.(map[string]any)
+		}
+	}
+	require.NotNil(t, name)
+	subNames := []string{}
+	for _, sub := range name["subAttributes"].([]any) {
+		subNames = append(subNames, sub.(map[string]any)["name"].(string))
+	}
+	require.ElementsMatch(t, []string{"formatted", "givenName", "familyName"}, subNames)
+
+	types := decodeBody(t, serve(t, directory, http.MethodGet, "/ResourceTypes", ""))
+	for _, resource := range types["Resources"].([]any) {
+		document := resource.(map[string]any)
+		if document["id"] == "User" {
+			extensions := document["schemaExtensions"].([]any)
+			require.Equal(t, schemaEnterprise, extensions[0].(map[string]any)["schema"])
+			require.Equal(t, false, extensions[0].(map[string]any)["required"])
+		}
+	}
+}
+
+func TestMetaLocationsOfDiscoveryDocumentsResolve(t *testing.T) {
+	directory := newRecordingDirectory()
+	for _, listing := range []string{"/Schemas", "/ResourceTypes"} {
+		body := decodeBody(t, serve(t, directory, http.MethodGet, listing, ""))
+		for _, resource := range body["Resources"].([]any) {
+			location := resource.(map[string]any)["meta"].(map[string]any)["location"].(string)
+			recorder := serve(t, directory, http.MethodGet, strings.TrimPrefix(location, BasePath), "")
+			require.Equal(t, http.StatusOK, recorder.Code, location)
+			require.Equal(t, resource.(map[string]any)["id"], decodeBody(t, recorder)["id"])
+		}
+	}
+	require.Equal(t, http.StatusNotFound, serve(t, directory, http.MethodGet, "/Schemas/nope", "").Code)
+	require.Equal(t, http.StatusNotFound, serve(t, directory, http.MethodGet, "/ResourceTypes/nope", "").Code)
 }

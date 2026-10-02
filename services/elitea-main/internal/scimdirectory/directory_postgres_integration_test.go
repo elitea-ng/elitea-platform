@@ -291,3 +291,89 @@ func newDirectoryPool(t *testing.T) *pgxpool.Pool {
 
 	return pool
 }
+
+// The unique index on `email` is case-sensitive, so an account stored by a
+// first login as `Alice@Corp.com` is invisible to `ON CONFLICT (email)` against
+// the folded address. A create must adopt it, not add a second account.
+func TestACreateAdoptsAMixedCaseAccountInsteadOfDuplicatingIt(t *testing.T) {
+	pool := newDirectoryPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	var existing int
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO auth_core__user (email, name) VALUES ('Alice@Corp.com', 'Alice') RETURNING id`,
+	).Scan(&existing))
+
+	created, err := store.Create(ctx, User{UserName: "alice@corp.com", ExternalID: "00u1", Active: true})
+	require.NoError(t, err)
+	require.Equal(t, existing, created.ID)
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM auth_core__user WHERE lower(email) = 'alice@corp.com'`).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+func TestApplyUserChangesIsAtomicAndChecksUniquenessCaseInsensitively(t *testing.T) {
+	pool := newDirectoryPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	alice, err := store.Create(ctx, User{UserName: "alice@corp.com", DisplayName: "Alice", Active: true})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO auth_core__user (email, name) VALUES ('Bob@Corp.com', 'Bob')`)
+	require.NoError(t, err)
+
+	// The address collides with Bob's ONLY when compared case-insensitively;
+	// the display name and active flag in the same patch must not land.
+	taken, name, inactive := "bob@corp.com", "Changed", false
+	_, err = store.ApplyUserChanges(ctx, alice.ID, UserChanges{UserName: &taken, DisplayName: &name, Active: &inactive})
+	require.ErrorIs(t, err, ErrConflict)
+	unchanged, err := store.Get(ctx, alice.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Alice", unchanged.DisplayName)
+	require.True(t, unchanged.Active)
+
+	free, external := "Alice.New@Corp.com", "00u7"
+	updated, err := store.ApplyUserChanges(ctx, alice.ID, UserChanges{
+		UserName: &free, DisplayName: &name, Active: &inactive, ExternalID: &external,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "alice.new@corp.com", updated.UserName)
+	require.Equal(t, "Changed", updated.DisplayName)
+	require.False(t, updated.Active)
+	require.Equal(t, "00u7", updated.ExternalID)
+
+	cleared := ""
+	updated, err = store.ApplyUserChanges(ctx, alice.ID, UserChanges{ExternalID: &cleared})
+	require.NoError(t, err)
+	require.Equal(t, "", updated.ExternalID)
+
+	_, err = store.ApplyUserChanges(ctx, 999999, UserChanges{Active: &inactive})
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestAnAndFilterWithQuotedOperatorsAnswersFromTheDatabase(t *testing.T) {
+	pool := newDirectoryPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	_, err := store.Create(ctx, User{UserName: "a@corp.com", DisplayName: "Ops (EU) and Sales", Active: true})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, User{UserName: "b@corp.com", DisplayName: "Other", Active: false})
+	require.NoError(t, err)
+
+	filter, err := ParseFilter(`displayName eq "ops (eu) and sales" and active eq true`)
+	require.NoError(t, err)
+	found, total, err := store.List(ctx, filter, 1, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, "a@corp.com", found[0].UserName)
+
+	filter, err = ParseFilter(`userName eq "b@corp.com" and active eq true`)
+	require.NoError(t, err)
+	_, total, err = store.List(ctx, filter, 1, 10)
+	require.NoError(t, err)
+	require.Equal(t, 0, total)
+}
