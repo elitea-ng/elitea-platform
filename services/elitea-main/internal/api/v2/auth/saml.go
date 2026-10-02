@@ -333,6 +333,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email, name := samlIdentity(assertion, runtime.document)
+	email = normalizeAssertedEmail(email)
 	if email == "" {
 		slog.Error("SAML: the assertion carries no email address", "provider", runtime.origin)
 		http.Error(w, "email attribute required", http.StatusBadRequest)

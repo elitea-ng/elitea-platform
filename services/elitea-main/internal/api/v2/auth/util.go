@@ -66,3 +66,14 @@ func verifyBrowserValue(secret, cookie string) (string, bool) {
 	}
 	return value, true
 }
+
+// normalizeAssertedEmail reduces an address an identity provider asserted to
+// the form the account directory stores: trimmed and lower case.
+//
+// SCIM stores a lower-case userName (scimdirectory.NormalizeUserName). An
+// identity provider can assert the same person as "Alice@Corp.com". Without
+// this, a first login by such a person creates a second account instead of
+// adopting the one SCIM provisioned for them.
+func normalizeAssertedEmail(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
