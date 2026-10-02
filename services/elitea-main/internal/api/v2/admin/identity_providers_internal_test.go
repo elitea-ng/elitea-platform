@@ -431,3 +431,46 @@ func testCertificateBody(t *testing.T) string {
 	require.NoError(t, err)
 	return base64.StdEncoding.EncodeToString(der)
 }
+
+// Login domains travel through the admin surface inside the per-kind document:
+// a save stores them normalised, and the list renders them back.
+func TestLoginDomainsRoundTripThroughTheAdminSurface(t *testing.T) {
+	store := newRecordingProviderStore()
+	handler := handlerWithStore(store, newRecordingVault())
+	recorder := httptest.NewRecorder()
+
+	handler.IdentityProviderSave(recorder, providerRequest(http.MethodPut, "github", `{
+		"kind": "oidc",
+		"display_name": "GitHub",
+		"oidc": {
+			"issuer": "https://dex.example.com",
+			"client_id": "elitea",
+			"redirect_uri": "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			"login_domains": ["Example.COM", "@users.noreply.github.com"]
+		}
+	}`))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{"example.com", "users.noreply.github.com"},
+		store.rows["github"].OIDC.LoginDomains)
+
+	listed := httptest.NewRecorder()
+	handler.IdentityProviderList(listed, httptest.NewRequest(http.MethodGet, "/identity_providers/administration", nil))
+	require.Equal(t, http.StatusOK, listed.Code)
+	require.Contains(t, listed.Body.String(), `"login_domains":["example.com","users.noreply.github.com"]`)
+
+	refused := httptest.NewRecorder()
+	handler.IdentityProviderSave(refused, providerRequest(http.MethodPut, "github", `{
+		"kind": "oidc",
+		"display_name": "GitHub",
+		"oidc": {
+			"issuer": "https://dex.example.com",
+			"client_id": "elitea",
+			"redirect_uri": "https://elitea.example.com/forward-auth/auth_oidc/callback",
+			"login_domains": ["not a domain"]
+		}
+	}`))
+	require.Equal(t, http.StatusBadRequest, refused.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(refused.Body.Bytes(), &body))
+	require.Equal(t, "login_domains", body["field"])
+}

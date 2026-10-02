@@ -129,6 +129,12 @@ func validateOIDC(document OIDCDocument) (OIDCDocument, error) {
 	}
 	document.Scopes = scopes
 
+	domains, err := NormalizeLoginDomains(document.LoginDomains)
+	if err != nil {
+		return OIDCDocument{}, err
+	}
+	document.LoginDomains = domains
+
 	return document, nil
 }
 
@@ -249,7 +255,82 @@ func validateSAML(document SAMLDocument) (SAMLDocument, error) {
 		return SAMLDocument{}, err
 	}
 	document.ClockSkewSeconds = skew
+
+	domains, err := NormalizeLoginDomains(document.LoginDomains)
+	if err != nil {
+		return SAMLDocument{}, err
+	}
+	document.LoginDomains = domains
 	return document, nil
+}
+
+// MaxLoginDomains bounds the routing list of one provider. The sign-in page
+// compares a typed domain against every entry, so the list stays small.
+const MaxLoginDomains = 100
+
+// NormalizeLoginDomains returns the stored form of a provider's login domains.
+//
+// Each entry is trimmed, lower-cased and stripped of a leading "@", because an
+// operator often copies "@corp.com" from an address. An entry that is not a
+// host name with at least two labels is REFUSED, not dropped: a domain that
+// silently left the list would send its users to the wrong provider. Duplicate
+// entries collapse to one. Nil and empty input return nil.
+func NormalizeLoginDomains(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	domains := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		domain := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(entry)), "@")
+		if domain == "" {
+			continue
+		}
+		if !IsLoginDomain(domain) {
+			return nil, invalid("login_domains",
+				fmt.Sprintf("%q is not a domain name such as example.com", entry))
+		}
+		if seen[domain] {
+			continue
+		}
+		seen[domain] = true
+		domains = append(domains, domain)
+	}
+	if len(domains) > MaxLoginDomains {
+		return nil, invalid("login_domains",
+			fmt.Sprintf("a provider can list at most %d login domains", MaxLoginDomains))
+	}
+	if len(domains) == 0 {
+		return nil, nil
+	}
+	return domains, nil
+}
+
+// IsLoginDomain reports whether a lower-case value is a host name of two or
+// more labels. Each label is 1 to 63 characters of [a-z0-9-], and does not
+// start or end with a hyphen. An internationalised domain must be given in its
+// ASCII (punycode) form.
+func IsLoginDomain(value string) bool {
+	if len(value) == 0 || len(value) > 253 {
+		return false
+	}
+	labels := strings.Split(value, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			switch {
+			case character >= 'a' && character <= 'z', character >= '0' && character <= '9', character == '-':
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // knownNameIDFormats are the formats this service will request.
