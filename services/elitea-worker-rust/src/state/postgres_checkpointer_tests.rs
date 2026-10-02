@@ -1410,6 +1410,13 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     let identity = scope.runtime_identity().unwrap();
     let ledger = JobLedger::new(isolated.pool.clone());
     ledger.reserve(&scope).await.unwrap();
+    // A delayed reservation must not consume the real runtime's dispatch budget.
+    sqlx::query(
+        "UPDATE elitea_runtime.sandbox_jobs SET created_at=clock_timestamp()-interval '2 hours'",
+    )
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
     let lease = ledger
         .claim(&scope, "old-process".into(), 60)
         .await

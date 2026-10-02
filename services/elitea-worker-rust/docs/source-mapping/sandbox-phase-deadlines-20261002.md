@@ -67,6 +67,11 @@ These capabilities retain their separate implementation and acceptance gates.
 The six focused phase deadline tests pass against the existing isolated PostgreSQL service.
 The test run reports zero failures and zero ignored tests.
 Five existing PostgreSQL receipt, fencing, and dispatch-journal tests also pass without skips.
+The existing PostgreSQL/Docker recovery integration test also passes with zero ignored tests.
+It uses the cached ARM64 receipt runner `sha256:c5248d3c1d855d274979059549c2789bb6cbe4e10cfc514134a649616b19ae7d`.
+A two-hour-old reservation completes after a fresh dispatch.
+Committed dispatch without a runtime signal recovers through the original container.
+Cancellation and expired dispatch terminate the original runtime and retain durable receipts.
 All nine migration package tests pass, including the embedded agentstate head check.
 Rust formatting, strict Clippy across all targets and features, and workflow YAML parsing pass.
 The binary-file policy check passes for all 10,572 tracked files.
