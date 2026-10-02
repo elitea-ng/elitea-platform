@@ -589,8 +589,8 @@ def _safe_main_auth(text: str) -> dict[str, Any]:
 def _safe_main_pylon(text: str) -> dict[str, Any]:
     values, sequences = _yaml_paths(text)
     return {
-        "forward_auth_exposure_enabled": values.get("exposure.handle.enabled"),
-        "forward_auth_exposure_prefixes": sequences.get("exposure.handle.prefixes", []),
+        "browser_auth_exposure_enabled": values.get("exposure.handle.enabled"),
+        "browser_auth_exposure_prefixes": sequences.get("exposure.handle.prefixes", []),
     }
 
 
@@ -937,11 +937,11 @@ def _behavior_contracts() -> list[dict[str, Any]]:
 def _consumer_contract() -> dict[str, Any]:
     return {
         "auth_core_dispatch": {
-            "login": "/forward-auth/login selects configured auth_provider and redirects to its registered login route",
-            "logout": "/forward-auth/logout selects session provider, falling back to configured auth_provider",
+            "login": "/auth/login selects configured auth_provider and redirects to its registered login route",
+            "logout": "/auth/logout selects session provider, falling back to configured auth_provider",
         },
         "gateway": {
-            "main_exposure_prefix": "/forward-auth",
+            "main_exposure_prefix": "/auth",
             "main_rpc_consumer": (
                 "pylon_main auth_mode=rpc calls auth_authorize and consumes X-Auth-Type, "
                 "X-Auth-ID, and X-Auth-Reference"
@@ -958,9 +958,9 @@ def _consumer_contract() -> dict[str, Any]:
             "social current-author fallback reads provider_attr.attributes.picture",
         ],
         "ui": {
-            "direct_logout": "/forward-auth/logout from sidebar and settings",
+            "direct_logout": "/auth/logout from sidebar and settings",
             "popup": (
-                "a redirected API response containing /forward-auth/ and /login opens a UI "
+                "a redirected API response containing /auth/ and /login opens a UI "
                 "reauthentication popup; UI state correlates popup completion, not provider assertions"
             ),
         },
@@ -1071,7 +1071,7 @@ def _security_dispositions() -> list[dict[str, str]]:
 def _route_contracts(roots: dict[str, Path]) -> dict[str, dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     for provider, targets in ROUTE_TARGETS.items():
-        prefix = f"/forward-auth/{provider}"
+        prefix = f"/auth/{provider}"
         for relative, class_name, method_name, contract_id in targets:
             tree = _parse(roots[provider] / relative)
             node = _method(tree, class_name, method_name)

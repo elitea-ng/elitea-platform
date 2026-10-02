@@ -141,7 +141,7 @@ class BrowserAuthHTTPBaselineTest(unittest.TestCase):
     def test_checker_rejects_newly_reviewed_boundary_semantic_mutations(self) -> None:
         changed = deepcopy(self.catalog)
         contracts = {item["id"]: item for item in changed["behavior_contracts"]}
-        contracts["browser.forward_auth.get"]["target_query_semantics"][
+        contracts["browser.auth.get"]["target_query_semantics"][
             "explicit_empty"
         ] = "same as absent"
         main_rpc = contracts["browser.main_rpc_authorize"]
@@ -354,10 +354,10 @@ class BrowserAuthHTTPBaselineTest(unittest.TestCase):
         )
         self.assertEqual(
             exporter._yaml_list(
-                "exposure:\n  handle:\n    prefixes:\n    - /forward-auth\n",
+                "exposure:\n  handle:\n    prefixes:\n    - /auth\n",
                 "exposure.handle.prefixes",
             ),
-            ["/forward-auth"],
+            ["/auth"],
         )
 
     def test_form_config_never_exports_credential_bytes(self) -> None:
@@ -459,7 +459,7 @@ class BrowserAuthHTTPBaselineTest(unittest.TestCase):
     def test_route_composition_mismatch_is_value_free(self) -> None:
         changed = deepcopy(self.catalog["deployment_contract"])
         sentinel = "/SYNTHETIC_SECRET_PATH"
-        changed["pylon_main"]["forward_auth_exposure"][
+        changed["pylon_main"]["browser_auth_exposure"][
             "exposure.handle.prefixes"
         ] = [sentinel]
         with self.assertRaises(ValueError) as raised:
@@ -469,7 +469,7 @@ class BrowserAuthHTTPBaselineTest(unittest.TestCase):
     def test_selected_pylon_contract_ignores_unrelated_server_tuning(self) -> None:
         baseline = """
 server:
-  path: /forward-auth/
+  path: /auth/
   proxy:
     x_for: 1
     x_proto: 1
@@ -477,9 +477,9 @@ server:
 sessions:
   prefix: auth_
 application:
-  APPLICATION_ROOT: /forward-auth/
+  APPLICATION_ROOT: /auth/
 """
-        tuned = baseline.replace("  path: /forward-auth/", "  path: /forward-auth/\n  kwargs:\n    spawn: 512")
+        tuned = baseline.replace("  path: /auth/", "  path: /auth/\n  kwargs:\n    spawn: 512")
         changed = baseline.replace("  prefix: auth_", "  prefix: changed_")
         self.assertEqual(exporter._selected_auth_pylon(baseline), exporter._selected_auth_pylon(tuned))
         self.assertNotEqual(exporter._selected_auth_pylon(baseline), exporter._selected_auth_pylon(changed))

@@ -13,7 +13,7 @@ from typing import Any
 
 
 EXPECTED_SCHEMA_VERSION = 1
-EXPECTED_CATALOG_SHA256 = "c15dd9c6c3e1aa177b053d366565fcd4d89df6c1cfb103b729cc7df2c3095768"
+EXPECTED_CATALOG_SHA256 = "f4b66e012b9723b577d1c8a14da1a7283c88783dcbe6e1bc3efe2ca964cf52bc"
 EXPECTED_SOURCE_COUNT = 77
 EXPECTED_SOURCE_KEYSET_SHA256 = "481e22c121a04f376243d0260fbef97d8b35e1f1f29eeb72696f94f9bbf1e9dc"
 EXPECTED_FINGERPRINT_COUNT = 116
@@ -38,7 +38,7 @@ EXPECTED_TOP_LEVEL_KEYS = {
 EXPECTED_CONTRACT_IDS = {
     "browser.auth_init.processor",
     "browser.cors_options_replacement",
-    "browser.forward_auth.get",
+    "browser.auth.get",
     "browser.info.get",
     "browser.login.get",
     "browser.logout.get",
@@ -152,61 +152,61 @@ EXPECTED_PROVENANCE = {
     "ui_repo": ("53812f63c722512a225fe5fd27f895cd743555db", ".", set()),
 }
 EXPECTED_EFFECTIVE_ROUTES = {
-    "/forward-auth/auth": ["GET", "HEAD", "OPTIONS"],
-    "/forward-auth/auth_form/authorize": ["OPTIONS", "POST"],
-    "/forward-auth/auth_form/login": ["GET", "HEAD", "OPTIONS"],
-    "/forward-auth/auth_form/logout": ["GET", "HEAD", "OPTIONS"],
-    "/forward-auth/info": ["GET", "HEAD", "OPTIONS"],
-    "/forward-auth/login": ["GET", "HEAD", "OPTIONS"],
-    "/forward-auth/logout": ["GET", "HEAD", "OPTIONS"],
+    "/auth/auth": ["GET", "HEAD", "OPTIONS"],
+    "/auth/auth_form/authorize": ["OPTIONS", "POST"],
+    "/auth/auth_form/login": ["GET", "HEAD", "OPTIONS"],
+    "/auth/auth_form/logout": ["GET", "HEAD", "OPTIONS"],
+    "/auth/info": ["GET", "HEAD", "OPTIONS"],
+    "/auth/login": ["GET", "HEAD", "OPTIONS"],
+    "/auth/logout": ["GET", "HEAD", "OPTIONS"],
 }
 EXPECTED_ROUTE_RECORDS = {
     "auth_core/routes/auth.py#Route.auth": {
         "blueprint_prefix": "/",
         "declared_methods": ["GET"],
-        "effective_route": "/forward-auth/auth",
+        "effective_route": "/auth/auth",
         "inner_flask_methods": ["GET", "HEAD", "OPTIONS"],
         "source_route": "/auth",
     },
     "auth_core/routes/auth.py#Route.info": {
         "blueprint_prefix": "/",
         "declared_methods": ["GET"],
-        "effective_route": "/forward-auth/info",
+        "effective_route": "/auth/info",
         "inner_flask_methods": ["GET", "HEAD", "OPTIONS"],
         "source_route": "/info",
     },
     "auth_core/routes/auth.py#Route.login": {
         "blueprint_prefix": "/",
         "declared_methods": ["GET"],
-        "effective_route": "/forward-auth/login",
+        "effective_route": "/auth/login",
         "inner_flask_methods": ["GET", "HEAD", "OPTIONS"],
         "source_route": "/login",
     },
     "auth_core/routes/auth.py#Route.logout": {
         "blueprint_prefix": "/",
         "declared_methods": ["GET"],
-        "effective_route": "/forward-auth/logout",
+        "effective_route": "/auth/logout",
         "inner_flask_methods": ["GET", "HEAD", "OPTIONS"],
         "source_route": "/logout",
     },
     "auth_form/routes/form.py#Route.authorize": {
         "blueprint_prefix": "/auth_form",
         "declared_methods": ["POST"],
-        "effective_route": "/forward-auth/auth_form/authorize",
+        "effective_route": "/auth/auth_form/authorize",
         "inner_flask_methods": ["OPTIONS", "POST"],
         "source_route": "/authorize",
     },
     "auth_form/routes/form.py#Route.login": {
         "blueprint_prefix": "/auth_form",
         "declared_methods": ["GET"],
-        "effective_route": "/forward-auth/auth_form/login",
+        "effective_route": "/auth/auth_form/login",
         "inner_flask_methods": ["GET", "HEAD", "OPTIONS"],
         "source_route": "/login",
     },
     "auth_form/routes/form.py#Route.logout": {
         "blueprint_prefix": "/auth_form",
         "declared_methods": ["GET"],
-        "effective_route": "/forward-auth/auth_form/logout",
+        "effective_route": "/auth/auth_form/logout",
         "inner_flask_methods": ["GET", "HEAD", "OPTIONS"],
         "source_route": "/logout",
     },
@@ -228,22 +228,22 @@ EXPECTED_HTTP_OUTCOME_IDS = {
     "form.authorize.success",
     "form.login",
     "form.logout",
-    "forward_auth.invalid_credential",
-    "forward_auth.empty_target",
-    "forward_auth.missing_forwarded_header",
-    "forward_auth.no_authentication",
-    "forward_auth.noop_success",
-    "forward_auth.rpc_success",
-    "forward_auth.unknown_target",
+    "browser_auth.invalid_credential",
+    "browser_auth.empty_target",
+    "browser_auth.missing_forwarded_header",
+    "browser_auth.no_authentication",
+    "browser_auth.noop_success",
+    "browser_auth.rpc_success",
+    "browser_auth.unknown_target",
     "inner.automatic_options",
     "inner.head",
     "inner.not_found",
     "main.cors_options_replacement",
 }
 EXPECTED_LOGOUT_CONSUMERS = [
-    "Admin UI sidebar assigns same-origin /forward-auth/logout",
-    "settings action assigns same-origin /forward-auth/logout",
-    "sidebar user action assigns same-origin /forward-auth/logout",
+    "Admin UI sidebar assigns same-origin /auth/logout",
+    "settings action assigns same-origin /auth/logout",
+    "sidebar user action assigns same-origin /auth/logout",
 ]
 EXPECTED_SELECTED_CONFIG_SOURCES = [
     "centry/docker-compose.yml#auth_runtime_allowlist",
@@ -255,7 +255,7 @@ EXPECTED_SELECTED_CONFIG_SOURCES = [
     "centry/pylon_main/configs/auth.yml#auth_gate_allowlist",
     "centry/pylon_main/configs/elitea_core.yml#public_route_override_allowlist",
     "centry/pylon_main/configs/shared.yml#cors_allowlist",
-    "centry/pylon_main/pylon.yml#forward_auth_exposure_allowlist",
+    "centry/pylon_main/pylon.yml#browser_auth_exposure_allowlist",
     "elitea_core/config.yml#public_route_allowlist",
     "runtime_interface_litellm/config.yml#public_route_allowlist",
 ]
@@ -282,7 +282,7 @@ EXPECTED_TRACKED_AUTH_MAPPER_CONTRACT = {
 
 EXPECTED_CONFIGURED_PUBLIC_RULES = [
     {
-        "id": "config.forward_auth",
+        "id": "config.browser_auth",
         "ordinal": 0,
         "rule": {"uri": "/forward\\-auth/.*"},
         "source": "centry/pylon_main/configs/auth.yml#public_rules[0]",
@@ -465,7 +465,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         "Auth Init login processor business rules",
         "Auth mapper info behavior",
         "Pylon server-side session/cookie mechanics",
-        "tracked Centry forward-auth composition",
+        "tracked Centry browser-auth composition",
         "tracked Main-local configured and dynamic public-rule registrations",
         "EliteaUI browser-auth consumers",
         "Admin UI logout consumer",
@@ -498,8 +498,8 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         "top_level_email_consumed_by_route"
     ) is not False:
         failures.append("Form runtime/admin-schema mismatch changed")
-    forward_auth = contracts.get("browser.forward_auth.get", {})
-    target_semantics = forward_auth.get("target_query_semantics", {})
+    browser_auth = contracts.get("browser.auth.get", {})
+    target_semantics = browser_auth.get("target_query_semantics", {})
     if "returns None" not in str(target_semantics.get("absent", "")) or (
         "empty string" not in str(target_semantics.get("explicit_empty", ""))
         or "access is denied" not in str(target_semantics.get("explicit_empty", ""))
@@ -613,7 +613,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         failures.append("processor partial-authentication defect is no longer explicit")
     if dispositions.get("rpc.boundary", {}).get("migration") != "remove_internal_only":
         failures.append("internal RPC removal disposition changed")
-    if "/forward-auth/auth" not in str(
+    if "/auth/auth" not in str(
         dispositions.get("rpc.boundary", {}).get("requirement", "")
     ):
         failures.append("ForwardAuth ingress compatibility path changed")
@@ -688,18 +688,18 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         "auth_core_blueprint_prefix": "/",
         "auth_form_blueprint_prefix": "/auth_form",
         "auth_form_descriptor_name": "auth_form",
-        "auth_pylon_context_url_prefix": "/forward-auth",
-        "auth_pylon_server_path": "/forward-auth/",
+        "auth_pylon_context_url_prefix": "/auth",
+        "auth_pylon_server_path": "/auth/",
         "composition_chain": [
-            "pylon_main Auth before_request attempts auth_authorize; the configured /forward-auth public rule keeps negative decisions non-blocking",
-            "pylon_main exposure accepts the configured /forward-auth prefix",
+            "pylon_main Auth before_request attempts auth_authorize; the configured /auth public rule keeps negative decisions non-blocking",
+            "pylon_main exposure accepts the configured /auth prefix",
             "exposure forwards the original WSGI path to the pylon_auth process",
             "pylon_auth strips its context URL prefix before app-router dispatch",
             "ModuleDescriptor registers Auth Core at its configured blueprint prefix",
             "Auth Form derives /auth_form from Auth Core get_relative_url_prefix",
             "Flask combines the blueprint prefix with the literal route decorator",
         ],
-        "external_base_path": "/forward-auth",
+        "external_base_path": "/auth",
         "external_listener_methods": [
             "DELETE",
             "GET",
@@ -709,7 +709,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
             "POST",
             "PUT",
         ],
-        "main_exposure_prefixes": ["/forward-auth"],
+        "main_exposure_prefixes": ["/auth"],
         "pylon_runtime_ref": "1.2.25",
         "pylon_web_runtime": "gevent",
         "root_auth_alias": False,
@@ -760,11 +760,11 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         "status": 302,
     }:
         failures.append("explicit empty info target outcome changed")
-    if outcomes.get("forward_auth.empty_target", {}).get("response") != {
+    if outcomes.get("browser_auth.empty_target", {}).get("response") != {
         "location": denied_location,
         "status": 302,
     } or "reaches the success mapper" not in str(
-        outcomes.get("forward_auth.empty_target", {}).get("request", {}).get(
+        outcomes.get("browser_auth.empty_target", {}).get("request", {}).get(
             "precondition", ""
         )
     ):
@@ -800,7 +800,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         failures.append("exposure registry-miss outcome changed")
     if outcomes.get("exposure.timeout", {}).get("response") != {"status": 504}:
         failures.append("exposure timeout outcome changed")
-    invalid_credential = outcomes.get("forward_auth.invalid_credential", {})
+    invalid_credential = outcomes.get("browser_auth.invalid_credential", {})
     if invalid_credential.get("browser_session_traversed") is not False or invalid_credential.get(
         "tracked_effective_response"
     ) != {"location": denied_location, "reason": "reviewed Auth Core public-rule set is empty", "status": 302}:
@@ -869,10 +869,10 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
     if deployment.get("pylon_main") != {
         "allow_cors": True,
         "auth_mode": "rpc",
-        "forward_auth_exposure": {
+        "browser_auth_exposure": {
             "exposure.event_node.type": "RedisEventNode",
             "exposure.handle.enabled": "true",
-            "exposure.handle.prefixes": ["/forward-auth"],
+            "exposure.handle.prefixes": ["/auth"],
         },
         "public_uri_rules": [
             "/forward\\-auth/.*",
@@ -908,7 +908,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
     if deployment.get("public_rule_ownership") != expected_public_rule_ownership:
         failures.append("tracked Main/Auth Core public-rule ownership changed")
     if deployment.get("pylon_auth_selected") != {
-        "application.APPLICATION_ROOT": "/forward-auth/",
+        "application.APPLICATION_ROOT": "/auth/",
         "application.PERMANENT_SESSION_LIFETIME": "${COOKIES_LIFETIME}",
         "application.PREFERRED_URL_SCHEME": "${APP_PROTO}",
         "application.SECRET_KEY_configured": True,
@@ -922,7 +922,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
         "exposure.event_node.type": "RedisEventNode",
         "exposure.expose": "true",
         "rpc.redis_configured": True,
-        "server.path": "/forward-auth/",
+        "server.path": "/auth/",
         "server.proxy.x_for": "1",
         "server.proxy.x_host": "1",
         "server.proxy.x_proto": "1",
@@ -1001,7 +1001,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:
             ),
             "callback_route": "/auth-callback",
             "detection": (
-                "a fetch redirect URL containing both /forward-auth/ and /login"
+                "a fetch redirect URL containing both /auth/ and /login"
             ),
             "retry": "retry the cloned original request after popup success",
             "success_channels": [

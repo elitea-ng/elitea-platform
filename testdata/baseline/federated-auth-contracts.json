@@ -535,11 +535,11 @@
   },
   "consumer_contract": {
     "auth_core_dispatch": {
-      "login": "/forward-auth/login selects configured auth_provider and redirects to its registered login route",
-      "logout": "/forward-auth/logout selects session provider, falling back to configured auth_provider"
+      "login": "/auth/login selects configured auth_provider and redirects to its registered login route",
+      "logout": "/auth/logout selects session provider, falling back to configured auth_provider"
     },
     "gateway": {
-      "main_exposure_prefix": "/forward-auth",
+      "main_exposure_prefix": "/auth",
       "main_rpc_consumer": "pylon_main auth_mode=rpc calls auth_authorize and consumes X-Auth-Type, X-Auth-ID, and X-Auth-Reference"
     },
     "mapper_consumers": {
@@ -553,8 +553,8 @@
       "social current-author fallback reads provider_attr.attributes.picture"
     ],
     "ui": {
-      "direct_logout": "/forward-auth/logout from sidebar and settings",
-      "popup": "a redirected API response containing /forward-auth/ and /login opens a UI reauthentication popup; UI state correlates popup completion, not provider assertions"
+      "direct_logout": "/auth/logout from sidebar and settings",
+      "popup": "a redirected API response containing /auth/ and /login opens a UI reauthentication popup; UI state correlates popup completion, not provider assertions"
     }
   },
   "inference_limits": [
@@ -566,44 +566,44 @@
     "the fixture is not full pylon_auth, pylon_main Auth, Admin, Social, or RBAC parity evidence"
   ],
   "method_route_matrix": {
-    "/forward-auth/auth_oidc/login": {
+    "/auth/auth_oidc/login": {
       "GET": "oidc.login",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options"
     },
-    "/forward-auth/auth_oidc/login_callback": {
+    "/auth/auth_oidc/login_callback": {
       "GET": "oidc.callback",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options",
       "POST": "oidc.callback"
     },
-    "/forward-auth/auth_oidc/logout": {
+    "/auth/auth_oidc/logout": {
       "GET": "oidc.logout",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options"
     },
-    "/forward-auth/auth_oidc/logout_callback": {
+    "/auth/auth_oidc/logout_callback": {
       "GET": "oidc.logout_callback",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options"
     },
-    "/forward-auth/auth_saml/acs": {
+    "/auth/auth_saml/acs": {
       "GET": "saml.acs",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options",
       "POST": "saml.acs"
     },
-    "/forward-auth/auth_saml/login": {
+    "/auth/auth_saml/login": {
       "GET": "saml.login",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options"
     },
-    "/forward-auth/auth_saml/logout": {
+    "/auth/auth_saml/logout": {
       "GET": "saml.logout",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options"
     },
-    "/forward-auth/auth_saml/sls": {
+    "/auth/auth_saml/sls": {
       "GET": "saml.sls",
       "HEAD": "framework.head_via_get",
       "OPTIONS": "framework.automatic_options",
@@ -738,7 +738,7 @@
         "HEAD",
         "OPTIONS"
       ],
-      "effective_route": "/forward-auth/auth_oidc/login",
+      "effective_route": "/auth/auth_oidc/login",
       "provider": "oidc"
     },
     "auth_oidc/routes/login.py#Route.login_callback": {
@@ -754,7 +754,7 @@
         "OPTIONS",
         "POST"
       ],
-      "effective_route": "/forward-auth/auth_oidc/login_callback",
+      "effective_route": "/auth/auth_oidc/login_callback",
       "provider": "oidc"
     },
     "auth_oidc/routes/logout.py#Route.logout": {
@@ -768,7 +768,7 @@
         "HEAD",
         "OPTIONS"
       ],
-      "effective_route": "/forward-auth/auth_oidc/logout",
+      "effective_route": "/auth/auth_oidc/logout",
       "provider": "oidc"
     },
     "auth_oidc/routes/logout.py#Route.logout_callback": {
@@ -782,7 +782,7 @@
         "HEAD",
         "OPTIONS"
       ],
-      "effective_route": "/forward-auth/auth_oidc/logout_callback",
+      "effective_route": "/auth/auth_oidc/logout_callback",
       "provider": "oidc"
     },
     "auth_saml/routes/login.py#Route.acs": {
@@ -798,7 +798,7 @@
         "OPTIONS",
         "POST"
       ],
-      "effective_route": "/forward-auth/auth_saml/acs",
+      "effective_route": "/auth/auth_saml/acs",
       "provider": "saml"
     },
     "auth_saml/routes/login.py#Route.login": {
@@ -812,7 +812,7 @@
         "HEAD",
         "OPTIONS"
       ],
-      "effective_route": "/forward-auth/auth_saml/login",
+      "effective_route": "/auth/auth_saml/login",
       "provider": "saml"
     },
     "auth_saml/routes/logout.py#Route.logout": {
@@ -826,7 +826,7 @@
         "HEAD",
         "OPTIONS"
       ],
-      "effective_route": "/forward-auth/auth_saml/logout",
+      "effective_route": "/auth/auth_saml/logout",
       "provider": "saml"
     },
     "auth_saml/routes/logout.py#Route.sls": {
@@ -842,7 +842,7 @@
         "OPTIONS",
         "POST"
       ],
-      "effective_route": "/forward-auth/auth_saml/sls",
+      "effective_route": "/auth/auth_saml/sls",
       "provider": "saml"
     }
   },
