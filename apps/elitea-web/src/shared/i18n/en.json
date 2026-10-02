@@ -1272,7 +1272,7 @@
   "pages.admin.identityProviders.delete.title": "Remove identity provider",
   "pages.admin.identityProviders.description": "The identity providers this deployment federates logins through. Each secret is sealed in the platform vault and is never returned by any endpoint. One provider of each protocol can be live at a time.",
   "pages.admin.identityProviders.dialog.acsUrl": "Assertion consumer service URL",
-  "pages.admin.identityProviders.dialog.acsUrlHelp": "This deployment serves it at /forward-auth/auth_saml/acs. Service provider metadata is served at /forward-auth/auth_saml/metadata once this provider is live.",
+  "pages.admin.identityProviders.dialog.acsUrlHelp": "This deployment serves it at /auth/saml/acs. Service provider metadata is served at /auth/saml/metadata once this provider is live.",
   "pages.admin.identityProviders.dialog.attributeHelp": "Optional. Empty falls back to the common SAML attribute names, and to the NameID when it is an address.",
   "pages.admin.identityProviders.dialog.cancel": "Cancel",
   "pages.admin.identityProviders.dialog.clearSecret": "Remove the stored secret (a public client using PKCE alone)",
@@ -4455,5 +4455,9 @@
   "widgets.contextBudget.unknown": "Usage not yet measured",
   "widgets.contextBudget.window": "Total window",
   "settings.memory.summarization.contractDescription": "Elitea always preserves the task, constraints, key facts, decisions, completed work, open issues, next steps, and verified references in a structured summary. Your guidance only adds emphasis.",
-  "settings.memory.summarization.guidancePlaceholder": "Optional: emphasize decision reasons, deliverables, and unresolved risks."
+  "settings.memory.summarization.guidancePlaceholder": "Optional: emphasize decision reasons, deliverables, and unresolved risks.",
+  "pages.admin.identityProviders.dialog.error.loginDomain": "“{{domain}}” is not a domain name such as example.com.",
+  "pages.admin.identityProviders.dialog.loginDomains": "Login domains",
+  "pages.admin.identityProviders.dialog.loginDomainsHelp": "Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider.",
+  "pages.admin.identityProviders.dialog.loginDomainsPlaceholder": "example.com, example.org"
 }

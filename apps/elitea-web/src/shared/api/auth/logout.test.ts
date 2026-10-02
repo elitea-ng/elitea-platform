@@ -80,13 +80,13 @@ describe('performLogout', () => {
    * gating the SPA, which this stack does not do.
    *
    * DEFECT this value pins: the target used to be
-   * `/forward-auth/auth_oidc/login`. `internal/api/router.go` registers that
+   * `/auth/oidc/login`. `internal/api/router.go` registers that
    * path inside `if cfg.OIDCHandler != nil`, so a form-auth deployment does
    * not have it. The logout chain ended on chi's bare `404 page not found`,
-   * with the user signed out and no link back. `/forward-auth/login` is the
+   * with the user signed out and no link back. `/auth/login` is the
    * one login path that BOTH planes register, so it is the correct target.
    */
-  const LOGOUT_URL = '/forward-auth/logout?target_to=%2Fforward-auth%2Flogin';
+  const LOGOUT_URL = '/auth/logout?target_to=%2Fauth%2Flogin';
 
   it('hands the browser to the backend logout, targeted at the login screen', () => {
     const redirect = vi.fn();
@@ -98,8 +98,8 @@ describe('performLogout', () => {
     const redirect = vi.fn();
     performLogout({ redirect, origin: 'https://app.example' });
     const url = new URL(String(redirect.mock.calls[0]?.[0]));
-    expect(url.pathname).toBe('/forward-auth/logout');
-    expect(url.searchParams.get('target_to')).toBe('/forward-auth/login');
+    expect(url.pathname).toBe('/auth/logout');
+    expect(url.searchParams.get('target_to')).toBe('/auth/login');
   });
 
   it('targets a login path that a form-auth deployment also registers', () => {
@@ -107,8 +107,8 @@ describe('performLogout', () => {
     // `production_router.go` mounts `browserauth` when `SessionHandler` is
     // nil. That plane registers `/login`, `/auth_form/login`,
     // `/auth_form/authorize`, `/logout` and `/auth_form/logout` under
-    // `/forward-auth`, and nothing under `/auth_oidc/`. A target inside
-    // `/forward-auth/auth_oidc/` therefore ends the sign-out on a 404.
+    // `/auth`, and nothing under `/auth_oidc/`. A target inside
+    // `/auth/oidc/` therefore ends the sign-out on a 404.
     //
     // The existing E2E stack is OIDC-only, so it cannot see this. The check
     // is the assertion below, not a live request.

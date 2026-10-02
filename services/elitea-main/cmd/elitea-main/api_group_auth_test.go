@@ -189,7 +189,7 @@ func TestAPIGroupAuthConfigKeepsTheProductionCredentials(t *testing.T) {
 	}
 	if config.ForwardedIdentityVerifier != apimw.ForwardedIdentityPeerVerifier(verifier) {
 		t.Fatal("the production branch lost its forwarded identity verifier: " +
-			"the worker and the forward-auth edge authenticate with it")
+			"the worker and the auth edge authenticate with it")
 	}
 	if config.SessionSecret != apiGroupTestSecret {
 		t.Fatalf("the production branch lost its SessionSecret: %q — the chat "+

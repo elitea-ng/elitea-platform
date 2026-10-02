@@ -76,7 +76,7 @@ var publicByDesign = map[string]string{
 
 // publicPrefixes covers surfaces whose whole subtree is anonymous.
 var publicPrefixes = []struct{ prefix, reason string }{
-	{"/forward-auth", "the login surface itself. A caller here has no session yet — that is what it is for."},
+	{"/auth/", "the login surface itself. A caller here has no session yet — that is what it is for. `/auth` alone (the edge check) is not under this prefix."},
 	{"/api/v2/branding", "the brand pack a browser loads BEFORE it has a session, so the login page can be branded."},
 	{"/admin/app", "the admin SPA's static assets. A <script src> carries no credential; the page's data calls are gated."},
 }

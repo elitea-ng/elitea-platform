@@ -66,3 +66,31 @@ func verifyBrowserValue(secret, cookie string) (string, bool) {
 	}
 	return value, true
 }
+
+// normalizeAssertedEmail reduces an address an identity provider asserted to
+// the form the account directory stores: trimmed and lower case.
+//
+// SCIM stores a lower-case userName (scimdirectory.NormalizeUserName). An
+// identity provider can assert the same person as "Alice@Corp.com". Without
+// this, a first login by such a person creates a second account instead of
+// adopting the one SCIM provisioned for them.
+func normalizeAssertedEmail(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+// The browser routes of the single sign-on plane (internal/api/auth_paths.go).
+// Every URL this package writes uses these.
+const (
+	// SignInPath is the sign-in page every single sign-on plane returns to.
+	SignInPath = "/auth/login"
+	// OIDCLoginPath starts an OIDC login.
+	OIDCLoginPath = "/auth/oidc/login"
+	// OIDCCallbackPath is the OIDC redirect URI an operator registers.
+	OIDCCallbackPath = "/auth/oidc/callback"
+)
+
+// SignInErrorURL is the sign-in page with the generic login error banner, and
+// the return target the failed login carried.
+func SignInErrorURL(target string) string {
+	return SignInPath + "?error=sso_failed&target_to=" + url.QueryEscape(safeRedirectTarget(target))
+}

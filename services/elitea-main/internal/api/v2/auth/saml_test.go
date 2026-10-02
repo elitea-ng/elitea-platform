@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	testACSURL    = "https://elitea.example.com/forward-auth/auth_saml/acs"
+	testACSURL    = "https://elitea.example.com/auth/saml/acs"
 	testRequestID = "_a1b2c3d4"
 )
 

@@ -61,11 +61,11 @@ const stripMiddlewareName = "strip-client-identity"
 const protectedService = "elitea-main"
 
 // browserEdgeFiles are the two files #326 fixed. Both front elitea-main from a
-// browser and NEITHER runs a forwardAuth, so no identity header arriving at
+// browser and NEITHER runs an edgeAuth, so no identity header arriving at
 // them is ever legitimate client input.
 //
 // deploy/runtime/platform-edge-dynamic.yml is deliberately not in this list. It
-// has a different shape: it authenticates with forwardAuth and then PROJECTS
+// has a different shape: it authenticates with edgeAuth and then PROJECTS
 // verified identity headers, so the same names are legitimate on the way out of
 // its middleware chain. Holding it to the rule below would assert something
 // that is not true of it.

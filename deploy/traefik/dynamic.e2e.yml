@@ -45,7 +45,7 @@ http:
     # avatars broken there while every compose test stayed green. Change both
     # files. edge_gateway_api_test.go walks the same router against that file.
     api:
-      rule: "PathPrefix(`/api/`) || PathPrefix(`/forward-auth/`) || Path(`/auth`) || Path(`/healthz`) || PathPrefix(`/icons/`) || PathPrefix(`/avatars/`) || PathPrefix(`/artifacts/`) || PathPrefix(`/admin/app`) || PathPrefix(`/app/application_icon/`) || PathPrefix(`/app/application_tool_icon/`) || PathPrefix(`/llm/`)"
+      rule: "PathPrefix(`/api/`) || PathPrefix(`/auth/`) || Path(`/auth`) || Path(`/healthz`) || PathPrefix(`/icons/`) || PathPrefix(`/avatars/`) || PathPrefix(`/artifacts/`) || PathPrefix(`/admin/app`) || PathPrefix(`/app/application_icon/`) || PathPrefix(`/app/application_tool_icon/`) || PathPrefix(`/llm/`)"
       service: elitea-main
       entryPoints:
         - web

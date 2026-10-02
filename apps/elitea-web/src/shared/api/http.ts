@@ -44,7 +44,7 @@ export interface HttpConfig {
    * with the login URL it named.
    *
    * ONLY THE APP SHELL'S OWN SESSION PROBE SUPPLIES IT, and that is the whole
-   * design. `/forward-auth/info` answers `401 {"error":{"code":
+   * design. `/auth/info` answers `401 {"error":{"code":
    * "session_expired"}}` when a cookie was presented and no longer works
    * (services/elitea-main/docs/browser-sessions.md). That answer is about the
    * SESSION, so acting on it — a full-page navigation to the identity

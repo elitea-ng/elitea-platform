@@ -21,7 +21,7 @@ const (
 	// grant `initial_global_admins` confers. They are exported because a
 	// SECOND provisioning plane needs them: internal/api/v2/auth is the
 	// browser plane that is actually mounted when single sign-on is
-	// configured (internal/api/production_router.go resolves /forward-auth to
+	// configured (internal/api/production_router.go resolves /auth to
 	// one owner), and it must confer the same grant, not a lookalike.
 	InitialAdministrationMode = "administration"
 	InitialAdministrationRole = "super_admin"

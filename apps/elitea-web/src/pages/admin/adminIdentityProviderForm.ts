@@ -49,6 +49,11 @@ export interface IdentityProviderForm {
   readonly enabled: boolean;
   readonly secret: string;
   readonly clearSecret: boolean;
+  /**
+   * The login domains, as typed: separated by commas, spaces or new lines.
+   * Shared by both protocols, because both documents carry the same list.
+   */
+  readonly loginDomains: string;
 
   readonly issuer: string;
   readonly clientId: string;
@@ -91,6 +96,7 @@ const EMPTY_FORM: IdentityProviderForm = {
   enabled: false,
   secret: '',
   clearSecret: false,
+  loginDomains: '',
 
   issuer: '',
   clientId: '',
@@ -128,6 +134,7 @@ export function initialProviderForm(
     kind: editing.kind,
     displayName: editing.display_name,
     enabled: editing.enabled,
+    loginDomains: (editing.oidc?.login_domains ?? editing.saml?.login_domains ?? []).join(', '),
     ...oidcFormFields(editing.oidc),
     ...samlFormFields(editing.saml),
   };
@@ -209,6 +216,31 @@ function splitCertificates(raw: string): string[] {
     .filter((entry) => entry !== '');
 }
 
+/**
+ * Splits the login domains field into the entries the server stores.
+ *
+ * Lower case and without a leading "@", as the server stores them. The server
+ * normalises the same way, so this only makes the client check exact.
+ */
+export function splitLoginDomains(raw: string): string[] {
+  const domains = raw
+    .split(/[\s,;]+/)
+    .map((entry) => entry.trim().toLowerCase().replace(/^@/, ''))
+    .filter((entry) => entry !== '');
+  return [...new Set(domains)];
+}
+
+/**
+ * A host name of two or more labels: the server's `IsLoginDomain`. Each label
+ * is 1 to 63 characters of [a-z0-9-] and does not start or end with "-".
+ */
+const LOGIN_DOMAIN_PATTERN =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+export function isLoginDomain(value: string): boolean {
+  return LOGIN_DOMAIN_PATTERN.test(value);
+}
+
 /** Builds the draft the save mutation sends. */
 export function providerDraft(
   form: IdentityProviderForm,
@@ -228,6 +260,7 @@ export function providerDraft(
         redirect_uri: form.redirectUri.trim(),
         scopes: form.scopes.split(/\s+/).filter((scope) => scope !== ''),
         require_email_verified: form.requireEmailVerified,
+        login_domains: splitLoginDomains(form.loginDomains),
       },
     };
   }
@@ -251,6 +284,7 @@ export function providerDraft(
       sign_authn_requests: form.signAuthnRequests,
       sp_certificate: form.spCertificate.trim(),
       clock_skew_seconds: skew === '' ? 0 : Number(skew),
+      login_domains: splitLoginDomains(form.loginDomains),
     },
   };
 }
@@ -280,6 +314,14 @@ export function validateProviderForm(
     return t(
       'pages.admin.identityProviders.dialog.error.duplicate',
       'An identity provider already uses that key.',
+    );
+  }
+  const badDomain = splitLoginDomains(form.loginDomains).find((domain) => !isLoginDomain(domain));
+  if (badDomain !== undefined) {
+    return t(
+      'pages.admin.identityProviders.dialog.error.loginDomain',
+      '“{{domain}}” is not a domain name such as example.com.',
+      { domain: badDomain },
     );
   }
   return form.kind === 'oidc' ? validateOidcForm(form) : validateSamlForm(form);

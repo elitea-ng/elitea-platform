@@ -21,7 +21,7 @@
  * namespace survive (a blanket `clear()` would satisfy a sweep-only
  * assertion, and MUI's colour-scheme keys living outside `el.` is a
  * deliberate decision, not an oversight — see this file's second test).
- * The `/forward-auth/logout` handoff assigns `window.location.href`, which
+ * The `/auth/logout` handoff assigns `window.location.href`, which
  * jsdom cannot perform ("Not implemented: navigation to another Document");
  * that half is covered end to end by
  * `e2e/journeys/shell/shell.redirect.spec.ts`'s J4, which asserts the browser

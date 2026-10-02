@@ -167,7 +167,7 @@ tasks:
     # PoV launcher deploy/centry-hybrid/compose.sh already calls the same gate
     # (#368). The foundation stack had no such call, and that is the stack
     # #378 broke: it mounted a whole directory and loaded routers whose
-    # forward-auth endpoint it never registers. `docker compose config`
+    # edge-auth endpoint it never registers. `docker compose config`
     # accepts that model, because the defect is in the edge YAML.
     deps: ["deploy:check-edge"]
     cmds:
@@ -278,7 +278,7 @@ tasks:
 
   # ── Deploy ────────────────────────────────────────────────────────────────────
   deploy:check-edge:
-    desc: Check the middleware, the service and the forward-auth target of every Traefik router
+    desc: Check the middleware, the service and the edge-auth target of every Traefik router
     cmds:
       # -count=1 is required. The gate reads YAML from deploy/, which is
       # outside the module, so the Go test cache does not notice an edit to
@@ -322,7 +322,7 @@ tasks:
     desc: Check that the chart's browser edge publishes /healthz with no authenticating filter in front of it
     cmds:
       # #569: on the cluster /healthz sat in the HTTPRoute rule that carries
-      # the forward-auth ExtensionRef, and the policy did not name it, so every
+      # the edge-auth ExtensionRef, and the policy did not name it, so every
       # probe of the public hostname got a 302 to the login form. This gate
       # reads the RENDERED HTTPRoute and Ingress, and the Go half of the
       # contract is tests/deployedge/edge_public_policy_test.go. Needs yq.

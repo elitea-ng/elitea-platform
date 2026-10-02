@@ -28,7 +28,7 @@ http:
     # internal/api/production_runtime.go composes it with PrincipalValidator +
     # ForwardedIdentityVerifier only — no bearer, no session cookie — so the
     # PAT that admitted the turn cannot read the turn's own stream. It is
-    # reachable exclusively through a forward-auth edge that authenticates the
+    # reachable exclusively through a auth edge that authenticates the
     # caller and projects verified identity headers, which is what the two
     # middlewares below do and what deploy/centry-hybrid does for the same
     # routes.
@@ -45,7 +45,7 @@ http:
       tls: {}
       middlewares:
         - strip-caller-auth-context
-        - runtime-forward-auth
+        - runtime-auth
       service: elitea-main
 
     platform:
@@ -56,7 +56,7 @@ http:
       service: elitea-main
 
   middlewares:
-    # MUST run before the forward-auth call, and its absence would be an
+    # MUST run before the edge-auth call, and its absence would be an
     # authentication bypass rather than an inconvenience: elitea-main trusts
     # X-Auth-* from a trusted proxy, so a caller that could set them itself
     # would choose its own identity. Traefik deletes a header whose
@@ -73,12 +73,12 @@ http:
 
     # The internal address, never a product route. It authenticates the
     # request's own credential (bearer PAT or browser-auth session, via
-    # forwardauth.Kernel) and answers with the identity projection below;
+    # edgeauth.Kernel) and answers with the identity projection below;
     # authResponseHeaders is what copies that projection onto the forwarded
     # request, and anything not listed there does not reach elitea-main.
-    runtime-forward-auth:
+    runtime-auth:
       forwardAuth:
-        address: "http://elitea-main:8080/internal/forward-auth/main"
+        address: "http://elitea-main:8080/internal/auth/main"
         authResponseHeaders:
           - X-Auth-Type
           - X-Auth-ID

@@ -13,7 +13,7 @@ import (
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authattempt"
@@ -45,7 +45,7 @@ type FormGraphDependencies struct {
 type FormGraph struct {
 	routes           http.Handler
 	browserRoutes    http.Handler
-	mainForwardAuth  http.Handler
+	mainEdgeAuth  http.Handler
 	mainKernel       *forwardapp.Kernel
 	patIssuer        *authsvc.LocalIssuer
 	projectPATIssuer *authsvc.ProjectSystemIssuer
@@ -221,7 +221,7 @@ func newFormGraph(
 		},
 	)
 	if err != nil {
-		return nil, composeError("Main ForwardAuth handler", err)
+		return nil, composeError("Main EdgeAuth handler", err)
 	}
 	formHandler, err := browserapi.NewHandler(
 		flow,
@@ -246,7 +246,7 @@ func newFormGraph(
 	graph := &FormGraph{
 		routes:           routes,
 		browserRoutes:    formHandler.Routes(),
-		mainForwardAuth:  mainHandler,
+		mainEdgeAuth:  mainHandler,
 		mainKernel:       mainKernel,
 		patIssuer:        patIssuer,
 		projectPATIssuer: projectPATIssuer,
@@ -263,7 +263,7 @@ func newFormGraph(
 }
 
 // ForwardedIdentityVerifier returns the same trusted-peer policy used by the
-// browser and Main ForwardAuth edges. Production product routes must not parse
+// browser and Main EdgeAuth edges. Production product routes must not parse
 // a second CIDR configuration or trust forwarded identity headers directly.
 func (graph *FormGraph) ForwardedIdentityVerifier() *browserapi.TrustedProxyResolver {
 	if graph == nil {
@@ -280,7 +280,7 @@ func (graph *FormGraph) Routes() http.Handler {
 }
 
 // BrowserRoutes returns only the browser-facing Form login/logout surface.
-// The compatibility Auth Core /auth handler requires ForwardAuth-generated
+// The compatibility Auth Core /auth handler requires EdgeAuth-generated
 // source metadata and must not be exposed through an ordinary reverse proxy.
 func (graph *FormGraph) BrowserRoutes() http.Handler {
 	if graph == nil {
@@ -289,14 +289,14 @@ func (graph *FormGraph) BrowserRoutes() http.Handler {
 	return graph.browserRoutes
 }
 
-// MainForwardAuth returns the gateway-only current-Main authorization edge.
+// MainEdgeAuth returns the gateway-only current-Main authorization edge.
 // It is deliberately separate from the public Auth Core /auth route because
 // the two current-baseline credential traversal policies differ.
-func (graph *FormGraph) MainForwardAuth() http.Handler {
+func (graph *FormGraph) MainEdgeAuth() http.Handler {
 	if graph == nil {
 		return nil
 	}
-	return graph.mainForwardAuth
+	return graph.mainEdgeAuth
 }
 
 // Ping reports the dedicated Auth Redis dependency to the public readiness

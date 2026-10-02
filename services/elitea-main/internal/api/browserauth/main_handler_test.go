@@ -11,7 +11,7 @@ import (
 	"time"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 func TestMainHandlerTraversesRejectedCredentialIntoBrowserSession(t *testing.T) {
@@ -84,10 +84,10 @@ func TestMainHandlerProjectsAcceptedPATAndBoundsDecisionTime(t *testing.T) {
 	})
 }
 
-// A ForwardAuth response is consumed by the EDGE, not by the browser, and an
+// An EdgeAuth response is consumed by the EDGE, not by the browser, and an
 // edge resolves a relative Location against the address it called — this
 // service's internal one. Traefik handed browsers
-// http://elitea-main.elitea.svc.cluster.local:8080/forward-auth/login?... and
+// http://elitea-main.elitea.svc.cluster.local:8080/auth/login?... and
 // they answered ERR_NAME_NOT_RESOLVED, because that name exists only inside
 // the cluster.
 //
@@ -375,7 +375,7 @@ func TestMainHandlerRedirectsPrivateAnonymousRequestToFormLogin(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
 	}
 	location, err := url.Parse(recorder.Header().Get("Location"))
-	if err != nil || location.Path != "/forward-auth/login" ||
+	if err != nil || location.Path != "/auth/login" ||
 		location.Query().Get("target_to") != "/api/v2/projects/7?view=full" {
 		t.Fatalf("location = %q, parse error=%v", recorder.Header().Get("Location"), err)
 	}
@@ -440,7 +440,7 @@ func newMainTestHandler(
 }
 
 func mainRequest(uri string) *http.Request {
-	request := httptest.NewRequest(http.MethodGet, MainForwardAuthPath, nil)
+	request := httptest.NewRequest(http.MethodGet, MainEdgeAuthPath, nil)
 	request.RemoteAddr = "10.1.2.3:43120"
 	request.Header.Set("X-Forwarded-Method", http.MethodGet)
 	request.Header.Set("X-Forwarded-Proto", "https")

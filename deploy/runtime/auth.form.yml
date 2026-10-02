@@ -26,17 +26,17 @@ schema_version: elitea.auth.form.v1
 
 # This is NOT decoration, and it is not the browser's origin.
 #
-# TrustedProxyResolver.Resolve rejects a forward-auth call whose
+# TrustedProxyResolver.Resolve rejects an edge-auth call whose
 # X-Forwarded-Proto and X-Forwarded-Host do not EQUAL this origin's scheme and
 # host (internal/api/browserauth/forwarded.go:109-116), answering 403 before the
-# credential is even read. The only forward-auth caller in this stack is
+# credential is even read. The only edge-auth caller in this stack is
 # platform-edge, whose host is elitea-platform-edge, so that is what this must
 # say — pointing it at the browser edge (http://localhost:8084) made every
 # execution-events request 403 with nothing naming the header that mismatched.
 #
 # The browser is unaffected: it authenticates through oidc-mock against traefik
-# on :8084 and never traverses forward-auth. If a deployment routes browser
-# traffic through the forward-auth edge too, this must name THAT origin and the
+# on :8084 and never traverses edge-auth. If a deployment routes browser
+# traffic through the auth edge too, this must name THAT origin and the
 # edge must be the only public entrypoint.
 public_origin: https://elitea-platform-edge
 

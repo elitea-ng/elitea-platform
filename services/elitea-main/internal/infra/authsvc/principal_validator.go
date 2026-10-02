@@ -79,7 +79,7 @@ func (v *PrincipalValidator) ValidatePrincipal(ctx context.Context, principal au
 		// Compatibility handlers still use User.ID as an owning-user foreign
 		// key. Never allow the forwarded token row ID to reach those paths.
 		principal.ID = principal.UserID
-		// ForwardAuth intentionally emits the current-baseline token reference
+		// EdgeAuth intentionally emits the current-baseline token reference
 		// "-". Resolve mutable identity attributes from PostgreSQL instead of
 		// trusting that transport field or a stale session/cache value.
 		principal.Email = row.Email

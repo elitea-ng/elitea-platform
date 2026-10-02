@@ -11,7 +11,7 @@
  * That was harmless while the cookie was a self-contained signed token: a
  * logout could only delete the browser's own copy, and every other holder kept
  * working. Since shared migration 0117 the cookie names a ROW, and
- * `/forward-auth/logout` revokes it (`internal/api/v2/auth/session.go`). One
+ * `/auth/logout` revokes it (`internal/api/v2/auth/session.go`). One
  * journey that signs out therefore signs out every worker, and from that
  * instant every later test presents a revoked identifier:
  *
@@ -43,7 +43,7 @@ import { BASE_URL } from '../../playwright.config';
  * that can never appear.
  */
 export async function signInThroughOidc(page: Page, email: string): Promise<void> {
-  await page.goto(BASE_URL + '/forward-auth/auth_oidc/login', { waitUntil: 'domcontentloaded' });
+  await page.goto(BASE_URL + '/auth/oidc/login', { waitUntil: 'domcontentloaded' });
   await page.waitForURL(new RegExp(`oidc\\.localhost:${process.env['E2E_OIDC_PORT'] ?? '9400'}`), {
     timeout: 15_000,
   });
@@ -53,7 +53,7 @@ export async function signInThroughOidc(page: Page, email: string): Promise<void
 
   // The round trip must have produced a session, or every assertion the caller
   // then makes about signing OUT is satisfied by a browser that was never in.
-  const info = await page.request.get(BASE_URL + '/forward-auth/info');
+  const info = await page.request.get(BASE_URL + '/auth/info');
   expect(
     await info.json(),
     `the OIDC round trip did not establish a session for ${email}`,

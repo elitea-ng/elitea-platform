@@ -17,7 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
@@ -280,7 +280,7 @@ func TestFormPageUsesSelfContainedCurrentPresentation(t *testing.T) {
 		`data-auth-form="form"`,
 		`class="card card-signin"`,
 		`class="form-control"`,
-		`action="/forward-auth/auth_form/authorize"`,
+		`action="/auth/form/authorize"`,
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("login page is missing current Form marker %q", marker)
@@ -488,14 +488,14 @@ func TestFormLifecycleAcrossRealHTTPAndApplicationBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forwardRequest := coreRequest("/forward-auth/auth?target=rpc")
+	forwardRequest := coreRequest("/auth/check?target=rpc")
 	forwardRequest.AddCookie(authenticatedCookies[0])
 	forwardRecorder := httptest.NewRecorder()
 	core.ServeHTTP(forwardRecorder, forwardRequest)
 	if forwardRecorder.Code != http.StatusOK || forwardRecorder.Header().Get("X-Auth-Type") != "user" ||
 		forwardRecorder.Header().Get("X-Auth-ID") != "71" ||
 		forwardRecorder.Header().Get("X-Auth-Reference") != "-" {
-		t.Fatalf("forward-auth status=%d headers=%v", forwardRecorder.Code, forwardRecorder.Header())
+		t.Fatalf("edge-auth status=%d headers=%v", forwardRecorder.Code, forwardRecorder.Header())
 	}
 
 	restartRequest := httptest.NewRequest(http.MethodGet, BasePath+LoginPath+"?target_to=%2Fagain", nil)
@@ -599,7 +599,7 @@ func TestFormAuthorizeMapsCredentialAndDependencyFailuresGenerically(t *testing.
 //
 // THE DEFECT. An unauthenticated visit to /app/ asks for the login page twice:
 // the SPA router redirects, and the first API call answers 302 to the same
-// place. Each GET of /forward-auth/login mints a new session cookie and a new
+// place. Each GET of /auth/login mints a new session cookie and a new
 // transaction, so the two begins race and the last Set-Cookie wins. The form on
 // screen then carries a transaction the server no longer accepts. Complete
 // answers ErrTransactionRejected.

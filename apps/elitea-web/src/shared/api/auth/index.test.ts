@@ -11,7 +11,7 @@ describe('auth public surface', () => {
     expect(auth.AUTH_MESSAGE_TYPE).toBe('elitea-auth-result');
     expect(auth.AUTH_STATE_PARAM).toBe('auth_state');
     expect(auth.AUTH_CALLBACK_PATH).toBe('/auth-callback');
-    expect(auth.LOGOUT_PATH).toBe('/forward-auth/logout');
+    expect(auth.LOGOUT_PATH).toBe('/auth/logout');
     expect(auth.VERIFY_SESSION_PATH).toBe('/social/author/');
     expect(typeof auth.createAuthPopupController).toBe('function');
     expect(typeof auth.completeAuthCallback).toBe('function');

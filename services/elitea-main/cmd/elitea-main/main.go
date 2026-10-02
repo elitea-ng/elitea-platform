@@ -464,7 +464,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				runErr = fmt.Errorf("close production Form authentication: %w", err)
 			}
 		}()
-		productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainForwardAuth())
+		productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
 		if err != nil {
 			return fmt.Errorf("mount production Form authentication: %w", err)
 		}
@@ -477,7 +477,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Wire OIDC browser-session authentication when OIDC_ISSUER_URL is set.
 	// SessionHandler and OIDCHandler are independent of the FormGraph path and
 	// can coexist with it (both populate RouterConfig.Auth) — but only because
-	// internal/api/production_router.go now resolves the /forward-auth prefix to
+	// internal/api/production_router.go now resolves the /auth prefix to
 	// ONE owner. Composing both used to panic chi at startup; see the comment
 	// there before assuming any second browser-auth plane can simply be added.
 	var oidcSessionHandler *v2auth.SessionHandler
@@ -496,7 +496,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// Whether the routes are MOUNTED stays a boot decision, and it has to:
 	// internal/api/production_router.go allows exactly one browser-auth plane to
-	// own /forward-auth, so which plane owns it cannot change under a running
+	// own /auth, so which plane owns it cannot change under a running
 	// process. What the mounted routes DO is resolved per request, so editing,
 	// replacing or disabling a provider needs no restart — only introducing the
 	// first one on a deployment that had none does.
@@ -593,7 +593,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// authoring the first SAML provider on a deployment that already
 		// federates OIDC needs no restart. The reverse — a deployment with NO
 		// browser plane at boot — still does, because which plane owns
-		// /forward-auth is fixed there (internal/api/production_router.go).
+		// /auth is fixed there (internal/api/production_router.go).
 		oidcSAMLHandler = v2auth.NewSAMLHandler(
 			pool, appSecretKey, identityProviderStore, vault,
 			os.Getenv("COOKIE_SECURE") != "false",
@@ -726,7 +726,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Both answered `401 missing authorization header` to a browser holding a
 	// valid session: their AuthConfig carried the forwarded-identity verifier
 	// and no SessionSecret, and deploy/traefik/dynamic.yml strips every
-	// inbound X-Auth-* header and runs no forwardAuth, so forwarded identity
+	// inbound X-Auth-* header and runs no edgeAuth, so forwarded identity
 	// never arrives and cannot be made to. The avatar route is what renders
 	// the user menu, so the failure was visible on every page.
 	//
@@ -1654,7 +1654,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// exercised from a browser at all.
 		//
 		// Additive: the peer verifier and principal validator come with the
-		// same value, so the worker and the forward-auth edge authenticate
+		// same value, so the worker and the auth edge authenticate
 		// exactly as before, and each route still resolves permissions through
 		// the RBAC resolver it is given.
 		//
@@ -2073,7 +2073,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// controls that the server refuses with 403 on each click.
 			Resolver: legacyrbac.NewPostgresResolver(pool),
 			// The runtime deployment authenticates the browser at
-			// /forward-auth/login, which sets `elitea_browser_auth` and projects
+			// /auth/login, which sets `elitea_browser_auth` and projects
 			// the principal as X-Auth-*. Without this verifier the handler has
 			// no way to read that identity, injects an empty permission list,
 			// and the SPA renders a sidebar with no items — see adminui's

@@ -20,7 +20,7 @@ var (
 	// authentication denial without exposing the underlying reason.
 	ErrTokenRejected = auth.ErrCredentialRejected
 	// ErrTokenValidationUnavailable identifies configuration, storage, or data
-	// integrity failures. ForwardAuth must fail closed without misreporting an
+	// integrity failures. EdgeAuth must fail closed without misreporting an
 	// infrastructure outage as an ordinary bad credential.
 	ErrTokenValidationUnavailable = auth.ErrCredentialValidationUnavailable
 )

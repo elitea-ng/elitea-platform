@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	OIDCLoginPath         = "/auth_oidc/login"
-	OIDCLoginCallbackPath = "/auth_oidc/login_callback"
+	OIDCLoginPath         = "/oidc/login"
+	OIDCLoginCallbackPath = "/oidc/login_callback"
 	OIDCPKCEChallengeS256 = browserapp.OIDCPKCEChallengeS256
 
 	DefaultMaxOIDCCallbackBytes = int64(8 << 10)

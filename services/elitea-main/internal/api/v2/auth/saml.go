@@ -68,6 +68,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,9 +83,10 @@ import (
 )
 
 const (
-	SAMLMetadataPath = "/forward-auth/auth_saml/metadata"
-	SAMLLoginPath    = "/forward-auth/auth_saml/login"
-	SAMLACSPath      = "/forward-auth/auth_saml/acs"
+	// The SAML routes (internal/api/auth_paths.go).
+	SAMLMetadataPath = "/auth/saml/metadata"
+	SAMLLoginPath    = "/auth/saml/login"
+	SAMLACSPath      = "/auth/saml/acs"
 
 	// samlRequestCookie holds the identifier of ONE authentication request,
 	// with the redirect target, MAC-signed. See the InResponseTo note above:
@@ -204,7 +206,7 @@ func (h *SAMLHandler) resolve(w http.ResponseWriter, r *http.Request) (*samlRunt
 	return runtime, true
 }
 
-// Metadata answers `GET /forward-auth/auth_saml/metadata`.
+// Metadata answers `GET /auth/saml/metadata`.
 //
 // It is the document an operator uploads at the identity provider, and it is
 // SERVED rather than pasted together by hand there: entity ID, ACS URL, NameID
@@ -232,7 +234,7 @@ func (h *SAMLHandler) Metadata(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(document)
 }
 
-// Login answers `GET /forward-auth/auth_saml/login`.
+// Login answers `GET /auth/saml/login`.
 func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.resolve(w, r)
 	if !ok {
@@ -290,10 +292,23 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
 		return
 	}
+	// The sign-in page passes the address a person typed. Microsoft Entra ID
+	// reads a `login_hint` query parameter on its SAML endpoint and pre-fills
+	// its sign-in form. The parameter is APPENDED, not merged through
+	// url.Values: re-encoding would reorder the query, and a signed redirect
+	// is verified over the exact SAMLRequest, RelayState and SigAlg bytes.
+	// An identity provider that does not know the parameter ignores it.
+	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
+		separator := "&"
+		if !strings.Contains(authURL, "?") {
+			separator = "?"
+		}
+		authURL += separator + "login_hint=" + url.QueryEscape(hint)
+	}
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// ACS answers `POST /forward-auth/auth_saml/acs`.
+// ACS answers `POST /auth/saml/acs`.
 func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.resolve(w, r)
 	if !ok {
@@ -333,6 +348,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email, name := samlIdentity(assertion, runtime.document)
+	email = normalizeAssertedEmail(email)
 	if email == "" {
 		slog.Error("SAML: the assertion carries no email address", "provider", runtime.origin)
 		http.Error(w, "email attribute required", http.StatusBadRequest)

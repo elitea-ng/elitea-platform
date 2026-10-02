@@ -1,7 +1,7 @@
 /**
  * Minimal OIDC session store (E2E bootstrap; Wave-3 #60).
  *
- * Calls /forward-auth/info at mount time to read the server-side session
+ * Calls /auth/info at mount time to read the server-side session
  * cookie and populate the RouterContext's `auth` object.  Replaces the
  * permanent stubAuthContext stub so that the IndexRoute guard can resolve
  * the user and perform the correct redirect.
@@ -19,6 +19,7 @@
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
+import { SESSION_INFO_PATH } from '@/shared/api/auth/constants';
 import { createHttpClient } from '@/shared/api/http';
 import { getConfig } from '@/shared/config';
 import { readPersistedProject } from '@/shared/lib/selectedProjectPersistence';
@@ -31,7 +32,7 @@ interface SessionState {
   user: AuthUser | undefined;
   loaded: boolean;
   /**
-   * HTTP status of the last `/forward-auth/info` probe, or undefined when the
+   * HTTP status of the last `/auth/info` probe, or undefined when the
    * request produced none. It is kept because "no user" alone cannot say WHERE
    * to send the browser: a 404 means that endpoint is not mounted, i.e. the
    * Form plane, and a 401 means the OIDC plane answered "no session". See
@@ -89,7 +90,7 @@ const AUTHOR_PATH = '/social/author/';
 /**
  * The Form plane's session probe.
  *
- * `/forward-auth/info` exists only in the OIDC composition, so on a Form
+ * `/auth/info` exists only in the OIDC composition, so on a Form
  * deployment the probe above 404s and can never report a logged-in user — the
  * app would bounce a freshly-authenticated browser straight back to the login
  * form, forever. `/social/author` is the endpoint that CAN answer on both
@@ -226,7 +227,7 @@ type SessionStore = UseBoundStore<StoreApi<SessionState>>;
  * "not logged in", which is the answer we are asking for, not a condition to
  * recover from. Escalating it into the re-auth popup would loop.
  *
- * `baseUrl: '/'` — `/forward-auth/info` is served by the same origin as the
+ * `baseUrl: '/'` — `/auth/info` is served by the same origin as the
  * app, not by the API base.
  */
 export interface CreateSessionStoreOptions {
@@ -277,7 +278,7 @@ export function createSessionStore(options: CreateSessionStoreOptions = {}): Ses
     loaded: false,
     probeStatus: undefined,
     fetchSession: async () => {
-      const result = await http.get<SessionInfoResponse>('/forward-auth/info');
+      const result = await http.get<SessionInfoResponse>(SESSION_INFO_PATH);
       // The status lives in a different place on each arm of HttpResult, and
       // the arm that matters here is the FAILURE one: a 404 is what identifies
       // the Form plane. `network` and `aborted` failures carry no status.
@@ -297,7 +298,7 @@ export function createSessionStore(options: CreateSessionStoreOptions = {}): Ses
         set({ user: fallbackUser, loaded: true, probeStatus });
         return;
       }
-      // `/forward-auth/info` (services/elitea-main/internal/api/v2/auth/
+      // `/auth/info` (services/elitea-main/internal/api/v2/auth/
       // session.go) returns ONLY authenticated/user_id/email — there is no
       // project id in that response at all. This field used to be filled with
       // the USER id (issue #166), which is not a project id and generally

@@ -30,7 +30,7 @@ export interface AdminNavFooterProps {
  * The reference's user row: avatar + name, opening a menu whose only entry is
  * Logout.
  *
- * The reference assigns `window.location.origin + "/forward-auth/logout"`
+ * The reference assigns `window.location.origin + "/auth/logout"`
  * directly. This calls `performLogout()` instead — the same handoff plus the
  * `el.` storage-namespace sweep and the `target_to` that lands the browser on
  * the login screen (see `shared/api/auth/logout.ts`). Re-implementing the raw

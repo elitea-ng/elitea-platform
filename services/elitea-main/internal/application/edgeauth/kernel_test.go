@@ -1,4 +1,4 @@
-package forwardauth
+package edgeauth
 
 import (
 	"context"
@@ -410,10 +410,10 @@ func TestPublicPolicyRequiresExplicitMatchAll(t *testing.T) {
 }
 
 func TestPublicPolicyAcceptsTrackedPythonHyphenEscape(t *testing.T) {
-	policy := uriPublicPolicy(t, "forward-auth", `/forward\-auth/.*`)
+	policy := uriPublicPolicy(t, "edge-auth", `/auth/.*`)
 	kernel := newTestKernel(t, panicCredentialAuthenticator(), panicSessionAuthorizer(), policy)
 	request := validRequest(DirectHTTPTraversal)
-	request.Source.URI = "/forward-auth/login"
+	request.Source.URI = "/auth/login"
 
 	decision, err := kernel.Authorize(context.Background(), request)
 	if err != nil {

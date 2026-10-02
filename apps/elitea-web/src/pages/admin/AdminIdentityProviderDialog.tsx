@@ -302,6 +302,24 @@ export function AdminIdentityProviderDialog({
           </MenuItem>
         </TextField>
 
+        <TextField
+          label={t('pages.admin.identityProviders.dialog.loginDomains', 'Login domains')}
+          value={form.loginDomains}
+          onChange={(event) => {
+            update('loginDomains', event.target.value);
+          }}
+          fullWidth
+          placeholder={t(
+            'pages.admin.identityProviders.dialog.loginDomainsPlaceholder',
+            'example.com, example.org',
+          )}
+          helperText={t(
+            'pages.admin.identityProviders.dialog.loginDomainsHelp',
+            'Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider.',
+          )}
+          slotProps={{ htmlInput: { 'data-testid': 'identity-provider-login-domains' } }}
+        />
+
         {form.kind === 'oidc' ? (
           <OidcFields form={form} update={update} />
         ) : (

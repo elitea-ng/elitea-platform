@@ -200,7 +200,7 @@ export function AdminIdentityProvidersEditor() {
       {/* Stated once, on the page, rather than discovered when a save appears to
           do nothing. Editing a live provider takes effect on the next login;
           introducing the first one on a deployment that federated none needs a
-          restart, because which browser-auth plane owns /forward-auth is fixed
+          restart, because which browser-auth plane owns /auth is fixed
           at boot. */}
       <Alert
         severity="info"

@@ -71,6 +71,8 @@ export interface AdminOidcDocument {
   readonly redirect_uri: string;
   readonly scopes?: readonly string[];
   readonly require_email_verified?: boolean;
+  /** Email domains the sign-in page routes to this provider. Lower case. */
+  readonly login_domains?: readonly string[];
 }
 
 /** The SAML 2.0 document. Certificates here are the identity provider's PUBLIC ones. */
@@ -87,6 +89,8 @@ export interface AdminSamlDocument {
   readonly sign_authn_requests?: boolean;
   readonly sp_certificate?: string;
   readonly clock_skew_seconds?: number;
+  /** Email domains the sign-in page routes to this provider. Lower case. */
+  readonly login_domains?: readonly string[];
 }
 
 /** One authored definition, as the server renders it. */

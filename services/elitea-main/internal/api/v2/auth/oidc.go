@@ -89,6 +89,10 @@ type OIDCHandler struct {
 	// deployment configured only through the admin page.
 	envRuntime *oidcRuntime
 
+	// envOption is the environment fallback's sign-in page entry
+	// (OIDC_DISPLAY_NAME, OIDC_LOGIN_DOMAINS). Read once, with envRuntime.
+	envOption LoginOption
+
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*oidcRuntime
 }
@@ -116,6 +120,7 @@ func NewOIDCHandler(ctx context.Context, cfg *OIDCConfig, pool *pgxpool.Pool, se
 			return nil, err
 		}
 		handler.envRuntime = environment
+		handler.envOption = oidcEnvironmentOption()
 	}
 	return handler, nil
 }
@@ -220,8 +225,13 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   300,
 	})
 
-	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue,
-		oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier))
+	authOptions := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier)}
+	// The sign-in page passes the address a person typed, so the identity
+	// provider can pre-fill it (OpenID Connect Core 3.1.2.1 `login_hint`).
+	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
+		authOptions = append(authOptions, oauth2.SetAuthURLParam("login_hint", hint))
+	}
+	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue, authOptions...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -365,6 +375,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// Exchange authorization code for tokens
 	code := r.URL.Query().Get("code")
 	if code == "" {
+		if r.URL.Query().Get("error") != "" {
+			// The identity provider ended the login without a code: the person
+			// cancelled, or the provider refused them. The state was verified
+			// above, so this callback belongs to a login this browser started.
+			// Send the browser back to the sign-in page with a generic error
+			// and the same return target. The provider's own error text is
+			// not echoed: it is attacker-influenced input.
+			slog.Warn("OIDC: the identity provider returned an error instead of a code",
+				"error", r.URL.Query().Get("error"))
+			_, _ = h.consumeCodeVerifier(w, r)
+			http.Redirect(w, r, SignInErrorURL(targetTo), http.StatusFound)
+			return
+		}
 		http.Error(w, "missing authorization code", http.StatusBadRequest)
 		return
 	}
@@ -428,6 +451,9 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One spelling for every comparison that follows: the account lookup, the
+	// first-login grant list and the session. See normalizeAssertedEmail.
+	claims.Email = normalizeAssertedEmail(claims.Email)
 	if claims.Email == "" {
 		slog.Error("OIDC: no email in claims", "sub", claims.Sub)
 		http.Error(w, "email claim required", http.StatusBadRequest)
@@ -615,6 +641,10 @@ func resolveProvisionedUser(
 	emailVerified *bool,
 	requireVerifiedEmail bool,
 ) (int, error) {
+	// Applied here as well as at each handler, so no caller of the resolution
+	// can compare an address in a spelling the directory does not store.
+	email = normalizeAssertedEmail(email)
+
 	// Serializes two concurrent first logins for the same subject, so only one
 	// of them creates the link. Mirrors AcquireAuthProviderAdvisoryLock.
 	if _, err := tx.Exec(ctx,
@@ -662,10 +692,13 @@ func reuseLinkedAccount(
 		return 0, false, errUserSuspended
 	}
 
+	// A change of CASE only is not a change of address. The stored spelling is
+	// kept, so an account whose row predates normalisation does not collide
+	// with a lower-case row and refuse a login that worked before.
 	_, err = tx.Exec(ctx,
 		`UPDATE auth_core__user
 		 SET last_login = now(),
-		     email = $2,
+		     email = CASE WHEN lower(email) = lower($2) THEN email ELSE $2 END,
 		     name = COALESCE(NULLIF(name, ''), $3)
 		 WHERE id = $1`,
 		userID, email, name,
@@ -737,10 +770,22 @@ func joinAccountByEmail(
 		return 0, errEmailNotVerified
 	}
 
+	// The address is matched WITHOUT regard to case. SCIM stores a lower-case
+	// userName (scimdirectory.NormalizeUserName), pylon stored what the
+	// identity provider sent, and `email` is unique only as typed. The CTE
+	// picks the stored spelling of an existing account, an exact match first,
+	// so the upsert below conflicts with that row instead of inserting a
+	// second account for the same person.
 	var userID int
 	err := tx.QueryRow(ctx,
-		`INSERT INTO auth_core__user (email, name, last_login)
-		 VALUES ($1, $2, now())
+		`WITH existing AS (
+		     SELECT email FROM auth_core__user
+		     WHERE lower(email) = lower($1::text)
+		     ORDER BY (email = $1::text) DESC, id
+		     LIMIT 1
+		 )
+		 INSERT INTO auth_core__user (email, name, last_login)
+		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now()
 		 ON CONFLICT (email) DO UPDATE SET last_login = now()
 		 WHERE auth_core__user.suspended = false
 		   AND NOT EXISTS (
@@ -798,7 +843,10 @@ func joinAccountByEmail(
 func refusedEmailReason(ctx context.Context, tx pgx.Tx, email string) error {
 	var suspended bool
 	err := tx.QueryRow(ctx,
-		`SELECT suspended FROM auth_core__user WHERE email = $1`,
+		`SELECT suspended FROM auth_core__user
+		 WHERE lower(email) = lower($1::text)
+		 ORDER BY (email = $1::text) DESC, id
+		 LIMIT 1`,
 		email,
 	).Scan(&suspended)
 	if err == nil && suspended {

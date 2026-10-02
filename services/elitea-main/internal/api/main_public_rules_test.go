@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 type unusedPublicRuleCredentials struct{}
@@ -157,11 +157,11 @@ func TestSocketIOIsNoLongerAuthExempt(t *testing.T) {
 }
 
 // TestRouterPublicRoutesStayPublicInThePolicy pins the pairing between the
-// router and the forward-auth policy.
+// router and the edge-auth policy.
 //
 // Defect: router.go registers a small set of routes outside every
 // authentication group, because a browser sub-resource carries no credential.
-// The forward-auth edge asks CurrentMainRoutePublicRules() BEFORE the request
+// The auth edge asks CurrentMainRoutePublicRules() BEFORE the request
 // reaches the router. A route that is public in one layer and absent from the
 // other is answered with a 302 to the login form. The branding bootstrap
 // script hit exactly that: index.html loads it with a blocking <script src>,

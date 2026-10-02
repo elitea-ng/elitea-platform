@@ -407,7 +407,7 @@ func TestTheNonceMustMatchTheLoginInThisBrowser(t *testing.T) {
 		"neither side has a nonce":   {cookie: "", tokenNonce: "", want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/callback", nil)
+			request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback", nil)
 			if testCase.cookie != "" {
 				request.AddCookie(&http.Cookie{Name: oidcNonceCookie, Value: testCase.cookie})
 			}
@@ -422,7 +422,7 @@ func TestTheNonceMustMatchTheLoginInThisBrowser(t *testing.T) {
 // against a second callback.
 func TestTheNonceCookieIsClearedOnEveryCallback(t *testing.T) {
 	handler := &OIDCHandler{}
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/callback", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback", nil)
 	request.AddCookie(&http.Cookie{Name: oidcNonceCookie, Value: "n-1"})
 	recorder := httptest.NewRecorder()
 

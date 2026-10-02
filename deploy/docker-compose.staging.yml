@@ -35,6 +35,6 @@ services:
       # users provisioned; see the usage note above before logging in.
       OIDC_CLIENT_ID: "elitea-local"
       OIDC_CLIENT_SECRET: "elitea-local-secret"
-      OIDC_REDIRECT_URI: "http://localhost/forward-auth/auth_oidc/callback"
+      OIDC_REDIRECT_URI: "http://localhost/auth/oidc/callback"
       PUBLIC_PROJECT_ID: "1"
 

@@ -954,6 +954,21 @@ main:
     # Turn it on when your provider always sends the claim.
     OIDC_REQUIRE_EMAIL_VERIFIED: ""
 
+    # --- Sign-in page: environment-configured OIDC provider ---------------------
+    # These two apply ONLY to the OIDC provider set through the environment
+    # (OIDC_ISSUER_URL and friends). A provider authored on the admin
+    # Authentication page carries its own display name and login domains, and
+    # an enabled authored provider wins over the environment.
+    #
+    # OIDC_DISPLAY_NAME labels the sign-in page button: "Continue with <name>".
+    # Empty uses "Single sign-on". Example: "GitHub".
+    OIDC_DISPLAY_NAME: ""
+    # OIDC_LOGIN_DOMAINS lists the email domains, separated by commas, that the
+    # sign-in page's "Work email" field sends to this provider. Each entry must
+    # be a domain name such as example.com; an invalid list is logged and
+    # ignored. Empty means the provider is reached only by its button.
+    OIDC_LOGIN_DOMAINS: ""
+
     # --- Browser session lifetimes (shared migration 0117) ----------------------
     # The `elitea_session` cookie now carries an opaque identifier and nothing
     # else. The SESSION is a row in `elitea_auth.browser_sessions`, so a logout
@@ -3358,7 +3373,7 @@ worker:
 
   # The worker's platform_origin. A one-route Traefik whose only job is to
   # terminate TLS with a certificate the worker trusts (the runtime CA) and
-  # forward to elitea-main, plus forward-auth on the execution-events stream —
+  # forward to elitea-main, plus edge-auth on the execution-events stream —
   # the one route that accepts no credential a client can present.
   #
   # It is NOT the public edge. It has no route from the Gateway and is reachable

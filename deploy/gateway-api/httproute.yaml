@@ -84,17 +84,17 @@ spec:
         - path:
             type: PathPrefix
             value: /api
-        # Session and OIDC endpoints (router.go: SessionHandler, OIDCHandler).
+        # The browser authentication routes (internal/api/auth_paths.go):
+        # the sign-in page, session, OIDC and SAML endpoints under /auth/, and
+        # the edge auth check at /auth itself. PathPrefix matches
+        # on path element boundaries, so this one match covers both.
         - path:
             type: PathPrefix
-            value: /forward-auth
-        - path:
-            type: Exact
             value: /auth
         # The liveness endpoint. It is PUBLIC on both layers (#569): this
         # match forwards it, and internal/api/main_public_rules.go admits it
         # with no session (go.health.healthz). The deployment's copy of this
-        # rule carries the forward-auth ExtensionRef, and that filter asks the
+        # rule carries the edge-auth ExtensionRef, and that filter asks the
         # policy before it forwards, so a routed-but-not-public /healthz
         # answered every probe with a 302 to the login form. The body is the
         # minimal {"status":"ok"}. `/readyz` and `/startupz` are deliberately

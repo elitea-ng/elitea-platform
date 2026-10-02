@@ -206,7 +206,7 @@ def read_stream(client: Client, events_url: str, deadline_seconds: int,
     if status in (401, 403):
         # production_runtime.go composes this route with PrincipalValidator +
         # ForwardedIdentityVerifier only — no bearer, no session cookie — so it
-        # is reachable exclusively through a forward-auth edge that projects
+        # is reachable exclusively through a auth edge that projects
         # verified identity headers (#289). A 403 here usually means the edge's
         # X-Forwarded-Host does not equal auth.form.yml's public_origin host.
         raise Blocked(f"the events stream refused this caller: HTTP {status} (#289)")

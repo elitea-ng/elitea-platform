@@ -22,13 +22,17 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
+// The browser authentication URLs, relative to BasePath: `/auth/login`,
+// `/auth/form/login` and so on. `/auth` itself (no trailing segment) is the
+// edge auth check (router.go). The browser routes are below it.
 const (
-	BasePath          = "/forward-auth"
+	BasePath = "/auth"
+
 	LoginPath         = "/login"
 	LogoutPath        = "/logout"
-	FormLoginPath     = "/auth_form/login"
-	FormAuthorizePath = "/auth_form/authorize"
-	FormLogoutPath    = "/auth_form/logout"
+	FormLoginPath     = "/form/login"
+	FormAuthorizePath = "/form/authorize"
+	FormLogoutPath    = "/form/logout"
 
 	DefaultMaxFormBodyBytes = int64(8 << 10)
 	maxMaxFormBodyBytes     = int64(64 << 10)
@@ -162,6 +166,12 @@ func (h *Handler) registerRoutes(router chi.Router) {
 	router.MethodFunc(http.MethodOptions, FormAuthorizePath, options("POST, OPTIONS"))
 	h.registerReadRoute(router, LogoutPath, h.beginLogout)
 	h.registerReadRoute(router, FormLogoutPath, h.logout)
+}
+
+// FormPaths are every route of the Form router (NewFormRoutes), relative to
+// BasePath. The composition root registers each one under BasePath.
+func FormPaths() []string {
+	return []string{AuthPath, LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath}
 }
 
 func (h *Handler) registerReadRoute(router chi.Router, path string, handler http.HandlerFunc) {

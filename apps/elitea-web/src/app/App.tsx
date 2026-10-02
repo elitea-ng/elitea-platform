@@ -187,7 +187,7 @@ export function App() {
        * Every real answer has one — 200, 401 and the Form plane's 404 alike.
        *
        * DEFECT this repairs (J20c, webkit). The browser cancels every in-flight
-       * request the instant it starts leaving a page. `/forward-auth/info` is
+       * request the instant it starts leaving a page. `/auth/info` is
        * issued from this effect, so a reload or a link click during boot aborts
        * it. `fetchSession` then stored `user: undefined`, this continuation ran
        * inside the UNLOADING document, and the assign below fought the

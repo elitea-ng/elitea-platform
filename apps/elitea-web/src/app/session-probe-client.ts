@@ -11,7 +11,7 @@ import { createHttpClient, type HttpClient } from '@/shared/api/http';
 /**
  * THE PRIMARY SESSION CHECK, and the only client in this app that navigates.
  *
- * `/forward-auth/info` answers `401 session_expired` when a cookie was
+ * `/auth/info` answers `401 session_expired` when a cookie was
  * presented and no longer works. That is a statement about the SESSION, so the
  * shell acts on it with a full-page navigation to the login start, carrying
  * the page the user was on. Before this, an expired user sat on a screen whose
