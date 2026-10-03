@@ -134,6 +134,17 @@ export function useChatStreamTransport(
   const questionIdRef = useRef<string | undefined>(undefined);
 
   /**
+   * The seeded message a reattach replays into, until its first frame (#6654).
+   *
+   * The seeded turn is NOT cleared when the reattach starts. It is cleared in
+   * the same update that applies the first replayed frame. A stream that never
+   * delivers one (403 for a viewer without the chat permission, 404, a pruned
+   * log) then leaves the seeded row as it was: still seed-owned, so the
+   * settled refetch can replace it.
+   */
+  const pendingReplayRef = useRef<string | undefined>(undefined);
+
+  /**
    * The connection's own `close`, held in a ref because the two sides need
    * each other: `useChatStreamConnection` is handed the frame handlers below,
    * and those handlers end the turn by detaching — which closes the
@@ -158,7 +169,15 @@ export function useChatStreamTransport(
     ownerRef.current = undefined;
     cancelRef.current = null;
     questionIdRef.current = undefined;
+    pendingReplayRef.current = undefined;
     closeStreamRef.current();
+  }, []);
+
+  /** Take the pending replay target, once: the first frame of a reattach. */
+  const takePendingReplay = useCallback((): string | undefined => {
+    const messageId = pendingReplayRef.current;
+    pendingReplayRef.current = undefined;
+    return messageId;
   }, []);
 
   const onNodeEvent = useCallback(
@@ -175,8 +194,13 @@ export function useChatStreamTransport(
         ...frame,
         question_id: frameQuestionId ?? questionIdRef.current,
       };
+      const replayInto = takePendingReplay();
       setChatHistory((prev) =>
-        applyChatStreamFrame(prev, identifiedFrame, contextRef.current ?? {}),
+        applyChatStreamFrame(
+          replayInto === undefined ? prev : resetTurnForReplay(prev, replayInto),
+          identifiedFrame,
+          contextRef.current ?? {},
+        ),
       );
       // A terminal frame ENDS the turn, so the transport stops owning a run
       // right here — it does not wait for the connection to close, because
@@ -195,7 +219,7 @@ export function useChatStreamTransport(
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach, refreshContext],
+    [setChatHistory, detach, refreshContext, takePendingReplay],
   );
 
   /**
@@ -226,10 +250,24 @@ export function useChatStreamTransport(
       // assume a message exists to carry it; `recordStreamFailure` appends one
       // when nothing is in flight.
       refreshContext();
+      const replayInto = takePendingReplay();
+      if (replayInto !== undefined) setChatHistory((prev) => resetTurnForReplay(prev, replayInto));
       failWith(runtimeFailureReason(frame), typeof frame['code'] === 'string' ? frame['code'] : undefined);
     },
-    [failWith, refreshContext],
+    [failWith, refreshContext, setChatHistory, takePendingReplay],
   );
+
+  /**
+   * A reattach whose stream failed before it opened: this viewer cannot
+   * stream that execution (403), or it is gone (404). Give it up. Drop
+   * ownership so the composer is released, and leave the seeded row untouched
+   * for the settled refetch. A run this page started keeps retrying.
+   */
+  const onNeverOpened = useCallback((): boolean => {
+    if (pendingReplayRef.current === undefined) return false;
+    detach();
+    return true;
+  }, [detach]);
 
   const connection = useChatStreamConnection({
     onNodeEvent,
@@ -237,6 +275,7 @@ export function useChatStreamTransport(
     // A disconnected observer cannot declare the durable execution failed.
     // Retain ownership and Stop while the connection keeps retrying.
     onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
+    onNeverOpened,
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;
@@ -360,12 +399,16 @@ export function useChatStreamTransport(
   // again from cursor 0 into the seeded message; never start anything.
   const reattach = useCallback((target: ChatStreamReattachParams): boolean => {
     if (ownsRun()) return false;
-    setChatHistory((prev) => resetTurnForReplay(prev, target.responseMessageId));
-    return subscribeToRun({
-      events_url: executionEventsPath(target.projectId, target.executionId),
+    const eventsUrl = executionEventsPath(target.projectId, target.executionId);
+    if (eventsUrl === undefined) return false;
+    const subscribed = subscribeToRun({
+      events_url: eventsUrl,
       response_message_id: target.responseMessageId,
     }, target.conversationUuid, target.projectId, target.questionId);
-  }, [ownsRun, setChatHistory, subscribeToRun]);
+    // Only a run this hook now owns replays into the seeded row.
+    if (subscribed && ownsRun()) pendingReplayRef.current = target.responseMessageId;
+    return subscribed;
+  }, [ownsRun, subscribeToRun]);
 
   return useMemo(
     () => ({

@@ -38,6 +38,13 @@ export interface ChatStreamConnectionHandlers {
    * Report an extended outage once. Keep observing the same execution.
    */
   readonly onConnectionInterrupted: (reason: string) => void;
+  /**
+   * The stream failed before it ever opened or delivered a frame (a 403, a
+   * 404, a pruned log). Return `true` to give up instead of retrying; the
+   * connection then closes for good. A reattach to a run this viewer cannot
+   * stream uses it (#6654). Omitted or `false` keeps the retry loop.
+   */
+  readonly onNeverOpened?: (() => boolean) | undefined;
 }
 
 /** @public The connection half of the chat transport. */
@@ -72,6 +79,8 @@ export function useChatStreamConnection(
   /** Consecutive failed reopen attempts; reset by any delivered frame. */
   const attemptRef = useRef(0);
   const outageReportedRef = useRef(false);
+  /** The current subscription opened or delivered a frame at least once. */
+  const openedRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -94,14 +103,20 @@ export function useChatStreamConnection(
       cursorRef.current = null;
       attemptRef.current = 0;
       outageReportedRef.current = false;
+      openedRef.current = false;
       doneRef.current = false;
       setConnection({ baseUrl, url: baseUrl });
     },
     [clearRetry],
   );
 
+  const onOpen = useCallback(() => {
+    openedRef.current = true;
+  }, []);
+
   const onCursor = useCallback((cursor: string) => {
     cursorRef.current = cursor;
+    openedRef.current = true;
     // A delivered frame is proof the connection works, so the next drop starts
     // its backoff from the top instead of inheriting a spent budget.
     attemptRef.current = 0;
@@ -109,10 +124,12 @@ export function useChatStreamConnection(
   }, []);
 
   const onNodeEvent = useCallback((frame: ExecutionEventData) => {
+    openedRef.current = true;
     handlersRef.current.onNodeEvent(frame);
   }, []);
 
   const onFailed = useCallback((frame: ExecutionEventData) => {
+    openedRef.current = true;
     handlersRef.current.onFailed(frame);
   }, []);
 
@@ -124,6 +141,10 @@ export function useChatStreamConnection(
     }
     const baseUrl = connection?.baseUrl;
     if (baseUrl === undefined) return;
+    if (!openedRef.current && handlersRef.current.onNeverOpened?.() === true) {
+      close();
+      return;
+    }
 
     const attempt = attemptRef.current + 1;
     const shortDelay = streamReconnectDelayMs(attempt);
@@ -168,6 +189,7 @@ export function useChatStreamConnection(
     onFailed,
     onCursor,
     onError,
+    onOpen,
   });
 
   // Release a pending reconnect on unmount. HONEST SCOPE: this is timer

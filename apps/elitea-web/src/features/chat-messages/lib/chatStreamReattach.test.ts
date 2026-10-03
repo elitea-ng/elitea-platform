@@ -22,6 +22,18 @@ describe('findReattachableTurn (#6654)', () => {
     expect(findReattachableTurn([inFlight, question])).toBeUndefined();
     expect(findReattachableTurn([])).toBeUndefined();
   });
+
+  it.each(['..', '.', 'a/b', '%2e%2e', '../events', 'exec 1', 'exec?x=1', 'exec#1', '-exec', 'x'.repeat(257)])(
+    'refuses a task_id that is not an execution id: %s',
+    (taskId) => {
+      expect(findReattachableTurn([question, { ...inFlight, taskId }])).toBeUndefined();
+    },
+  );
+
+  it('accepts the hex execution id Main mints', () => {
+    const taskId = '0123456789abcdef0123456789abcdef';
+    expect(findReattachableTurn([question, { ...inFlight, taskId }])?.executionId).toBe(taskId);
+  });
 });
 
 describe('resetTurnForReplay', () => {
@@ -40,5 +52,17 @@ describe('resetTurnForReplay', () => {
 describe('executionEventsPath', () => {
   it('builds the stream path every start route answers with', () => {
     expect(executionEventsPath(7, 'exec-1')).toBe('/api/v2/executions/7/exec-1/events');
+  });
+
+  it.each(['..', '.', 'a/b', '%2e%2e', ''])('builds no path for %s', (executionId) => {
+    expect(executionEventsPath(7, executionId)).toBeUndefined();
+  });
+
+  it('keeps every built path under the project executions prefix', () => {
+    for (const executionId of ['exec-1', 'A_b-9']) {
+      const path = executionEventsPath('7', executionId);
+      expect(path).toBeDefined();
+      expect(new URL(path ?? '', 'https://elitea.test').pathname).toBe(`/api/v2/executions/7/${executionId}/events`);
+    }
   });
 });

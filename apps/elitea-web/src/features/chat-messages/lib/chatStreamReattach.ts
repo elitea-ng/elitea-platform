@@ -17,6 +17,22 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { ChatMessage } from './convertMessagesToChatHistory';
 
+/**
+ * The shape of an execution id the client may put in a URL path segment.
+ *
+ * Main mints execution ids as random hex (`submit_job.go` randomID), but the
+ * id reaches this client from a conversation read, not from a start route.
+ * Accept only letters, digits, `-` and `_`. That refuses `.`, `..`, `/`, `%`
+ * and every other character URL normalization or decoding can turn into a
+ * different same-origin route.
+ */
+const EXECUTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$/;
+
+/** Whether a value is an execution id this client may subscribe to. */
+function isExecutionId(value: string): boolean {
+  return EXECUTION_ID_PATTERN.test(value);
+}
+
 /** The in-flight turn a fresh page can observe again. */
 export interface ReattachableTurn {
   readonly messageId: string;
@@ -34,12 +50,16 @@ export function findReattachableTurn(history: readonly ChatMessage[]): Reattacha
   if (last === undefined || last.role !== ROLES.Assistant) return undefined;
   if (last.isStreaming !== true) return undefined;
   const executionId = typeof last.taskId === 'string' ? last.taskId.trim() : '';
-  if (executionId === '' || typeof last.id !== 'string' || last.id === '') return undefined;
+  if (!isExecutionId(executionId) || typeof last.id !== 'string' || last.id === '') return undefined;
   return { messageId: last.id, executionId, ...(last.questionId ? { questionId: last.questionId } : {}) };
 }
 
-/** The durable replay stream of one execution. */
-export function executionEventsPath(projectId: string | number, executionId: string): string {
+/**
+ * The durable replay stream of one execution, or `undefined` when the
+ * execution id does not have the expected shape. Nothing subscribes then.
+ */
+export function executionEventsPath(projectId: string | number, executionId: string): string | undefined {
+  if (!isExecutionId(executionId)) return undefined;
   return `/api/v2/executions/${encodeURIComponent(String(projectId))}/${encodeURIComponent(executionId)}/events`;
 }
 
