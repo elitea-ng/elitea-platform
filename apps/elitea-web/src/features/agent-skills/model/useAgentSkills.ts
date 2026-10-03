@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
+import { EliteaApiError } from '@/shared/api/generated/mutator';
+
 import {
   attachSkill,
   detachSkill,
@@ -37,6 +39,13 @@ export interface AgentSkillsState {
   readonly attached: readonly AgentSkill[];
   readonly isLoading: boolean;
   readonly isError: boolean;
+  /**
+   * True when the deployment serves no skills route at all: the list answers
+   * 404 because `ELITEA_APPLICATION_SKILLS_ENABLED` is off and the route is
+   * not mounted (UI-DC-2). The editor then hides the section instead of
+   * showing "0/5 skills added." and an error under it.
+   */
+  readonly isUnavailable: boolean;
   readonly max: number;
   readonly isFull: boolean;
   readonly attach: UseMutationResult<unknown, Error, AttachVariables>;
@@ -46,11 +55,15 @@ export interface AgentSkillsState {
 export function useAgentSkills(projectId: string | undefined, appVersionId: number | undefined): AgentSkillsState {
   const queryClient = useQueryClient();
   const enabled = projectId !== undefined && appVersionId !== undefined && Number.isFinite(appVersionId);
+  const defaultRetry = queryClient.getDefaultOptions().queries?.retry;
 
   const attachedQuery = useQuery({
     queryKey: agentSkillKeys.attached(projectId ?? '', appVersionId ?? 0),
     queryFn: () => fetchAttachedSkills(projectId ?? '', appVersionId ?? 0),
     enabled,
+    // A missing route stays missing; asking again only delays hiding the
+    // section. Every other failure keeps the client's own retry policy.
+    retry: (failureCount, error) => !isRouteMissing(error) && clientRetries(defaultRetry, failureCount, error),
   });
 
   const invalidate = (): void => {
@@ -73,11 +86,26 @@ export function useAgentSkills(projectId: string | undefined, appVersionId: numb
     attached,
     isLoading: attachedQuery.isLoading,
     isError: attachedQuery.isError,
+    isUnavailable: isRouteMissing(attachedQuery.error),
     max: MAX_SKILLS_PER_AGENT,
     isFull: attached.length >= MAX_SKILLS_PER_AGENT,
     attach,
     detach,
   };
+}
+
+/** TanStack Query's `retry` option, as the client sets it (default: 3 retries). */
+type RetryOption = boolean | number | ((failureCount: number, error: Error) => boolean) | undefined;
+
+function clientRetries(retry: RetryOption, failureCount: number, error: Error): boolean {
+  if (typeof retry === 'function') return retry(failureCount, error);
+  if (typeof retry === 'boolean') return retry;
+  return failureCount < (retry ?? 3);
+}
+
+/** A 404 from the attached-skills list: the deployment does not serve skills. */
+export function isRouteMissing(error: unknown): boolean {
+  return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 404;
 }
 
 export interface SkillPickerState {

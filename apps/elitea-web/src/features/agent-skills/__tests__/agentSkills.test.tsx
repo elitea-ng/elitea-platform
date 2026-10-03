@@ -245,4 +245,23 @@ describe('AgentSkillsPanel', () => {
     await waitFor(() => expect(screen.queryByTestId('agent-skill-option-3')).not.toBeInTheDocument());
     expect(screen.getByTestId('agent-skill-option-4')).toBeInTheDocument();
   });
+
+  it('hides the whole section when the deployment serves no skills route (404, UI-DC-2)', async () => {
+    let reads = 0;
+    server.use(
+      http.get(`${BASE}/elitea_core/application_skills/prompt_lib/:projectId/:appVersionId`, () => {
+        reads += 1;
+        return HttpResponse.json({ error: 'not found' }, { status: 404 });
+      }),
+    );
+    renderWithProviders(panel());
+
+    await waitFor(() => expect(reads).toBe(1));
+    await waitFor(() => expect(screen.queryByTestId('agent-skills-section')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('agent-skills-counter')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // A missing route is not retried.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reads).toBe(1);
+  });
 });
