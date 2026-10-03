@@ -342,9 +342,10 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 	// (every attach mints a fresh tool_id, so no unique constraint can
 	// catch the race after the fact).
 	var parentStatus string
+	var parentApplicationID int64
 	err = transaction.QueryRow(ctx, fmt.Sprintf(
-		`SELECT COALESCE(status, '') FROM %s.application_versions WHERE id = $1 FOR UPDATE`, s),
-		parentVersionID).Scan(&parentStatus)
+		`SELECT COALESCE(status, ''), application_id FROM %s.application_versions WHERE id = $1 FOR UPDATE`, s),
+		parentVersionID).Scan(&parentStatus, &parentApplicationID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the parent version does not exist"})
@@ -352,6 +353,14 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		}
 		slog.ErrorContext(ctx, "application relation: parent version read failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation lookup failed"})
+		return
+	}
+	// The body names the parent twice. A version of ANOTHER application must
+	// not be edited because a client sent a stale or wrong application_id.
+	if parentApplicationID != int64(*body.ApplicationID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "the parent version does not belong to application_id",
+		})
 		return
 	}
 	if parentStatus == "published" || parentStatus == "embedded" {

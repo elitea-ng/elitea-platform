@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -338,5 +339,39 @@ func TestApplicationRelationAttachAcceptsNumericStringIDs(t *testing.T) {
 	}
 	if mappings, _ := countRelationRows(t, pool, fixture.parentVersionID); mappings != 0 {
 		t.Fatalf("mappings after string-id detach = %d, want 0", mappings)
+	}
+}
+
+// TestApplicationRelationRefusesAVersionOfAnotherApplication pins the
+// application_id check. The parent row was locked by version_id alone, so a
+// body with a wrong application_id edited a version of another agent.
+func TestApplicationRelationRefusesAVersionOfAnotherApplication(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	fixture := seedRelationFixture(t, pool)
+	router := relationRouter(eliteacore.NewHandler(pool))
+
+	if recorder := relationDo(t, router, fixture, map[string]any{
+		"application_id": fixture.parentAppID,
+		"version_id":     fixture.parentVersionID,
+		"has_relation":   true,
+	}); recorder.Code != http.StatusCreated {
+		t.Fatalf("seed attach status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	// The child application does not own the parent version.
+	for _, hasRelation := range []bool{false, true} {
+		recorder := relationDo(t, router, fixture, map[string]any{
+			"application_id": fixture.childAppID,
+			"version_id":     fixture.parentVersionID,
+			"has_relation":   hasRelation,
+		})
+		if recorder.Code != http.StatusBadRequest ||
+			!strings.Contains(recorder.Body.String(), "does not belong to application_id") {
+			t.Fatalf("mismatched application_id (has_relation=%v) = %d %s, want 400",
+				hasRelation, recorder.Code, recorder.Body.String())
+		}
+	}
+	if mappings, _ := countRelationRows(t, pool, fixture.parentVersionID); mappings != 1 {
+		t.Fatalf("a refused mismatched body changed the relation: %d mappings, want 1", mappings)
 	}
 }
