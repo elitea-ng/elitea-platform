@@ -13,6 +13,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { ToolModal } from './ToolModal';
+import type { Theme } from '@mui/material/styles';
 
 /** @public Props for `ActionView`. */
 export interface ActionViewProps {
@@ -79,13 +80,13 @@ export function ActionView({ action, onClick, isSelected = false }: ActionViewPr
           borderColor: isError ? 'error.main' : isSelected ? 'primary.main' : 'transparent',
           backgroundColor: isError ? 'error.lighter' : isSelected ? 'action.selected' : 'transparent',
           cursor: 'pointer',
-          fontFamily: 'monospace',
-          fontSize: '0.8rem',
+          fontFamily: (theme: Theme) => theme.typography.fontFamilyMono,
+          fontSize: (theme: Theme) => theme.typography.bodySmall.fontSize,
           overflow: 'hidden',
         }}
       >
         <Typography
-          variant="caption"
+          variant="bodySmall"
           sx={{
             display: 'block',
             color: isError ? 'error.main' : 'primary.main',
@@ -96,7 +97,7 @@ export function ActionView({ action, onClick, isSelected = false }: ActionViewPr
           {action.name || action.type || 'Action'}
         </Typography>
         <Typography
-          variant="caption"
+          variant="bodySmall"
           sx={{
             // Clamped rather than free-flowing since a reasoning model's row
             // holds its ENTIRE chain of thought (`lib/chatStreamReasoning.ts`),
@@ -121,7 +122,7 @@ export function ActionView({ action, onClick, isSelected = false }: ActionViewPr
           // complete small result.
           <Typography
             data-testid="chat-tool-action-partial-output"
-            variant="caption"
+            variant="bodySmall"
             sx={{ display: 'block', mt: 0.25, color: 'warning.main', fontWeight: 600 }}
           >
             {t('chatMessages.actionView.partialOutput', 'Partial output — some of this result did not arrive.')}

@@ -74,7 +74,7 @@ describe('getNodeIconByType', () => {
 
   it('sizes the icon from the typography scale, not an ad-hoc literal', () => {
     const { container } = render(<>{getNodeIconByType(PipelineNodeTypes.Tool, theme)}</>);
-    expect(container.querySelector('svg')?.getAttribute('style')).toContain(theme.typography.body1.fontSize);
+    expect(container.querySelector('svg')?.getAttribute('style')).toContain(theme.typography.bodyMedium.fontSize);
   });
 
   it('honours an explicit colour override over the theme default', () => {

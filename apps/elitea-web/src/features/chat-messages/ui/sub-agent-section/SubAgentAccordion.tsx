@@ -86,9 +86,8 @@ export function SubAgentAccordion({
                         component="pre"
                         onClick={() => onActionClick?.(action)}
                         sx={{
-                          fontFamily: 'monospace',
-                          // eslint-disable-next-line elitea/ad-hoc-font-size — inline code size
-                          fontSize: '0.8rem',
+                          fontFamily: theme.typography.fontFamilyMono,
+                          fontSize: theme.typography.bodySmall.fontSize,
                           p: 1,
                           mb: 0.5,
                           backgroundColor: 'action.hover',
@@ -100,7 +99,7 @@ export function SubAgentAccordion({
                         }}
                       >
                         <Typography
-                          variant="caption"
+                          variant="bodySmall"
                           sx={{
                             display: 'block',
                             color: 'text.secondary',
@@ -114,7 +113,7 @@ export function SubAgentAccordion({
                     ))}
                     {block.pausedForResume && (
                       <Typography
-                        variant="caption"
+                        variant="bodySmall"
                         sx={{ color: 'warning.dark', fontStyle: 'italic' }}
                       >
                         Paused — awaiting resume

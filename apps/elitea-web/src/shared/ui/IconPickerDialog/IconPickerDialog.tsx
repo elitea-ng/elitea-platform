@@ -38,6 +38,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { DeletableIconTile } from './DeletableIconTile';
 import { IconTile } from './IconTile';
+import { typeScale } from '@/shared/brand/typography';
 
 /** One icon in either section. `url` absent means "draw the letter fallback". */
 export interface PickableIcon {
@@ -332,7 +333,6 @@ function UploadIconButton({
 /** Shows the icon image, or the first letter of its name when it has no url — or when that url fails. */
 function IconPlaceholder({ name, url }: { readonly name: string; readonly url?: string | undefined }): ReactNode {
   const theme = useTheme();
-  const fontSize = theme.typography.headingSmall.fontSize;
   const [failedUrl, setFailedUrl] = useState<string | undefined>(undefined);
   const onError = useCallback(() => { setFailedUrl(url); }, [url]);
 
@@ -347,7 +347,7 @@ function IconPlaceholder({ name, url }: { readonly name: string; readonly url?: 
       />
     );
   }
-  return <Box sx={{ ...cx.fallbackIcon, fontSize }}>{name ? name.charAt(0).toUpperCase() : '?'}</Box>;
+  return <Box sx={{ ...cx.fallbackIcon, ...typeScale(theme.typography.headingSmall) }}>{name ? name.charAt(0).toUpperCase() : '?'}</Box>;
 }
 
 const cx = {
@@ -373,8 +373,6 @@ const cx = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: 'var(--el-font-h3, 1rem)',
-    fontWeight: 600,
     color: 'text.primary',
   },
 } as const;

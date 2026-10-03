@@ -16,6 +16,7 @@ import { Box, IconButton, Typography } from '@mui/material';
 
 import { onboardingTips } from '@/features/onboarding/lib/constants/onboardingTips.constants';
 import { Markdown } from '@/shared/ui/Markdown';
+import type { Theme } from '@mui/material/styles';
 
 /** Props for {@link TourContent}. */
 interface TourContentProps {
@@ -116,7 +117,7 @@ const styles = {
     width: '2rem',
     height: '2rem',
     padding: 0,
-    fontSize: '1.5rem',
+    fontSize: (theme: Theme) => theme.typography.headingLarge.fontSize,
     marginLeft: '0rem',
     color: 'text.secondary',
     '&:disabled': {

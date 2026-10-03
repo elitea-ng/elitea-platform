@@ -68,12 +68,12 @@ export const participantItemStyles = (theme: { vars: { shape: { radiusMd: string
     width: '1.5rem', height: '1.5rem', minWidth: '1.5rem',
     borderRadius: 'var(--el-shape-radiusMd, 8px)', backgroundColor: isActive ? 'action.selected' : 'background.paper',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 'var(--el-font-body2, 0.75rem)', fontWeight: 600, overflow: 'hidden',
+    fontSize: (t: Theme) => t.typography.bodySmall.fontSize, fontWeight: 600, overflow: 'hidden',
   }),
   iconBoxAttention: {
     width: '1.5rem', height: '1.5rem', minWidth: '1.5rem',
     borderRadius: 'var(--el-shape-radiusMd, 8px)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 'var(--el-font-body2, 0.75rem)', fontWeight: 600, overflow: 'hidden',
+    fontSize: (t: Theme) => t.typography.bodySmall.fontSize, fontWeight: 600, overflow: 'hidden',
   },
 });

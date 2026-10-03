@@ -26,6 +26,7 @@ import { ReasonIcon } from '../icons/reason-icon';
 
 import { SETTINGS_LAYOUT } from './settings.constants';
 import { t } from '@/shared/i18n';
+import { typeScale } from '@/shared/brand/typography';
 
 /** Tab definition used by `SettingsDrawer`. */
 export interface SettingsTab {
@@ -138,11 +139,7 @@ const iconWrapperSx =
 const menuItemTextSx =
   (isActive: boolean): SxProps<Theme> =>
   (theme) => ({
-    fontWeight: 500,
-    // oxlint-disable-next-line elitea/ad-hoc-font-size — ported from baseline
-    fontSize: '0.75rem',
-    lineHeight: '1rem',
-    letterSpacing: 0,
+    ...typeScale(theme.typography.labelSmall),
     color: isActive ? theme.vars.palette.text.secondary : theme.vars.palette.text.metrics,
   });
 
@@ -308,11 +305,7 @@ const sectionGroupSx: SxProps<Theme> = {
 const sectionHeaderSx: SxProps<Theme> = (theme) => ({
   display: 'block',
   color: theme.vars.palette.text.metrics,
-  fontWeight: 500,
-  // oxlint-disable-next-line elitea/ad-hoc-font-size — ported from baseline
-  fontSize: '0.75rem',
-  lineHeight: '1rem',
-  letterSpacing: '0.06em',
+  ...typeScale(theme.typography.subtitle),
   textTransform: 'uppercase',
   // Baseline `SettingsDrawer.jsx:190`: the group label lines up with the
   // "Settings" title above it (both 1.5rem from the drawer's left edge), not

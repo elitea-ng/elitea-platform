@@ -26,6 +26,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { AiSparkleIcon } from '@/shared/ui/icons/ai-sparkle-icon';
 import { ContextIcon } from '@/shared/ui/icons/context-icon';
+import { typeScale } from '@/shared/brand/typography';
 
 export interface ProjectContextEmptyStateProps {
   /** `PERMISSIONS.projectContext.edit`. Without it the copy changes and the buttons go. */
@@ -104,17 +105,16 @@ const imageSx: SxProps<Theme> = { width: '2.5rem', height: '2.5rem' };
  */
 const titleSx: SxProps<Theme> = (theme) => ({
   color: theme.vars.palette.text.secondary,
-  // oxlint-disable-next-line elitea/ad-hoc-font-size — reference override of the headingSmall step
-  fontSize: '1.125rem',
-  fontWeight: 600,
+  // Empty-state title: `headingMedium` (typography spec §2). The reference's
+  // 18px sat off the ladder.
+  ...typeScale(theme.typography.headingMedium),
 });
 
 /* Live page: `14px/400`, line-height 21px (1.5), colour `rgb(202, 208, 216)`
  * — this app's `text.metrics` — capped at 480px (30rem). */
 const descriptionSx: SxProps<Theme> = (theme) => ({
   color: theme.vars.palette.text.metrics,
-  // oxlint-disable-next-line elitea/ad-hoc-font-size — ported from baseline
-  fontSize: '0.875rem',
+  fontSize: theme.typography.bodyMedium.fontSize,
   lineHeight: 1.5,
   maxWidth: '30rem',
 });

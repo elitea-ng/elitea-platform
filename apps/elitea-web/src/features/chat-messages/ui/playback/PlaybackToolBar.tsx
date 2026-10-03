@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Box, IconButton, Typography } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
 
 const IconButtonAny = IconButton as React.ComponentType<any>;
 
@@ -170,7 +171,7 @@ export function PlaybackToolBar({
                   padding: '0.25rem 0.5rem',
                   borderRadius: '0.25rem',
                   backgroundColor: 'action.selected',
-                  fontSize: '0.75rem',
+                  fontSize: (theme: Theme) => theme.typography.bodySmall.fontSize,
                   whiteSpace: 'nowrap',
                 }}
               >
@@ -209,7 +210,7 @@ export function PlaybackToolBar({
               color="tertiary"
               size="small"
               onClick={onClickExpander}
-              sx={{ fontSize: '16px' }}
+              sx={{ width: '1rem', height: '1rem' }}
               aria-label="Expand/collapse"
             >
               {rows === MAX_ROWS ? '▲' : '▼'}
