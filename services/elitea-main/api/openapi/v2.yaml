@@ -9766,13 +9766,18 @@ components:
           description: When an inbound call last presented a correct secret.
         auth_mode:
           type: string
-          enum: [token, hmac_sha256]
+          enum: [token, hmac_sha256, standard_webhooks_hmac]
           description: >
             How this trigger's inbound calls are authenticated. `token` is the
-            bearer secret in one of the three carriers. `hmac_sha256` verifies
+            bearer secret in one of the four carriers. `hmac_sha256` verifies
             HMAC-SHA256 of the RAW request body under the same secret, read
             from `signature_header` — which is what a GitHub repository webhook
             sends, and it sends no `Authorization` header at all.
+            `standard_webhooks_hmac` verifies a Standard Webhooks signature
+            (HMAC-SHA256 of `webhook-id.webhook-timestamp.body`, sent as
+            `webhook-signature: v1,<base64>`, inside a five-minute window),
+            which is what a GitLab webhook with a signing token sends. Its
+            secret has the `whsec_` form that specification defines.
 
             The mode is a property of the stored row. Nothing a caller sends
             can select it, and a signing trigger does NOT also accept the
@@ -9781,17 +9786,19 @@ components:
         signature_header:
           type: string
           description: >
-            The header the sender signs into, for `hmac_sha256` only. It is
+            The header the sender signs into, for the two signing modes
+            (`webhook-signature` for `standard_webhooks_hmac`). It is
             configuration, not a credential — the sender chooses to send it —
             so it is on the plain read as well, which is what lets the settings
             dialog say which header to configure without revealing anything.
         provider:
           type: string
-          enum: [custom, github]
+          enum: [custom, github, gitlab]
           description: >
             The preset a create named, and the URL SUFFIX that follows from it
             (`github` gives a url ending in `/github`, which is the shape a
-            GitHub webhook form expects). It selects nothing at call time: the
+            GitHub webhook form expects, and `gitlab` one ending in `/gitlab`).
+            It selects nothing at call time: the
             inbound path checks a suffix it is given AGAINST this value and
             refuses a mismatch rather than reading a mode out of the URL.
 
@@ -9805,29 +9812,35 @@ components:
       properties:
         type:
           type: string
-          enum: [custom, github]
+          enum: [custom, github, gitlab]
           description: >
             The preset. `github` expands to `auth_mode: hmac_sha256` with
-            `X-Hub-Signature-256` and a `/github` URL suffix.
+            `X-Hub-Signature-256` and a `/github` URL suffix. `gitlab` expands
+            to `auth_mode: token` with a `/gitlab` URL suffix: a GitLab secret
+            token is the trigger secret, sent in `X-Gitlab-Token`. Add
+            `auth_mode: standard_webhooks_hmac` for a GitLab signing token.
         provider:
           type: string
-          enum: [custom, github]
+          enum: [custom, github, gitlab]
           description: An alias of `type`, for callers that prefer the noun.
         auth_mode:
           type: string
-          enum: [token, hmac_sha256]
+          enum: [token, hmac_sha256, standard_webhooks_hmac]
           description: >
             The explicit form, for a sender that signs the same way under a
             header of its own. Asking for `token` beside the `github` preset is
             refused rather than resolved: turning the stricter request into the
             weaker setting is exactly the failure this refusal exists to stop.
+            `hmac_sha256` beside `gitlab` and `standard_webhooks_hmac` beside
+            `github` are refused too: neither provider sends that signature.
         signature_header:
           type: string
           maxLength: 128
           description: >
-            The header to read the signature from. Required by a signing mode
-            that names no preset; overrides the preset's own header when both
-            are given.
+            The header to read the signature from. Required by `hmac_sha256`
+            when no preset names one; overrides the preset's own header when
+            both are given. `standard_webhooks_hmac` always reads
+            `webhook-signature`, and any other name is refused.
 
     PipelineSchedule:
       type: object
@@ -21232,9 +21245,18 @@ paths:
         It is mounted above the API's authentication group, beside the anonymous
         shared-chat routes. Its ONLY credential is the per-pipeline secret,
         presented as `Authorization: Bearer <secret>`, as
-        `X-Elitea-Trigger-Token`, or as the `token` query parameter. The header
-        forms are preferred: a URL is written to proxy and browser logs, and a
-        credential in one outlives the request.
+        `X-Elitea-Trigger-Token`, as `X-Gitlab-Token` (what a GitLab webhook
+        with a secret token sends), or as the `token` query parameter. The
+        header forms are preferred: a URL is written to proxy and browser logs,
+        and a credential in one outlives the request.
+
+        ## The body may be empty
+
+        A webhook that only says "something happened" sends no body, or a
+        payload with no `input` key. The run starts with an empty input, and
+        the pipeline runs from its entry node. An `input` that is not UTF-8
+        text, or that holds a NUL character, is answered 422 and names
+        `input`.
 
         ## Nothing the caller sends selects a tenant
 
@@ -21304,6 +21326,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: The `input` is not UTF-8 text, or holds a NUL character
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: This deployment cannot run pipelines, or the trigger could not be checked
           content:
@@ -21337,6 +21364,13 @@ paths:
         digest is compared in constant time. A missing header, a malformed
         value and a wrong signature are all the one refusal, and none of them
         starts a run.
+
+        A trigger in `standard_webhooks_hmac` mode (a GitLab signing token)
+        reads `webhook-id`, `webhook-timestamp` and `webhook-signature`. The
+        signature is HMAC-SHA256 of `webhook-id.webhook-timestamp.body` under
+        the key behind the secret's `whsec_` prefix, as `v1,<base64>`. A
+        timestamp more than five minutes from the server clock is refused, so
+        a captured delivery cannot be replayed.
       tags: [applications]
       security: []
       parameters:
@@ -21352,7 +21386,7 @@ paths:
           in: path
           required: true
           description: The trigger's stored provider preset.
-          schema: { type: string, enum: [github] }
+          schema: { type: string, enum: [github, gitlab] }
       requestBody:
         required: false
         content:
@@ -21376,6 +21410,11 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '413':
           description: The request body is too large
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: The `input` is not UTF-8 text, or holds a NUL character
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

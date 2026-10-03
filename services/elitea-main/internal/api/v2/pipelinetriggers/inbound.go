@@ -57,8 +57,8 @@ const InboundProviderPath = InboundPath + "/{provider}"
 
 // TriggerTokenHeader is the preferred way to present the secret.
 //
-// Three carriers are accepted, in this order: `Authorization: Bearer`, this
-// header, then `?token=`. The query parameter is LAST and is documented as the
+// Four carriers are accepted, in this order: `Authorization: Bearer`, this
+// header, GitLab's `X-Gitlab-Token` (GitLabTokenHeader), then `?token=`. The query parameter is LAST and is documented as the
 // least safe: a URL is written to proxy and browser logs, and a credential in
 // one outlives the request. It is accepted at all because a large share of
 // webhook senders cannot set a header, and a trigger nobody can call is not a
@@ -303,7 +303,13 @@ func EventsURL(projectID int64, executionID string) string {
 	return fmt.Sprintf("/api/v2/executions/%d/%s/events", projectID, executionID)
 }
 
-// presentedSecret reads the credential from the three accepted carriers.
+// presentedSecret reads the credential from the four accepted carriers.
+//
+// `X-Gitlab-Token` is GitLab's: a GitLab webhook's SECRET TOKEN is sent
+// verbatim in it, and GitLab cannot be made to send it anywhere else. Before
+// legacy issue 6664 a GitLab sender therefore had no way to present the
+// secret except the query string. It is a carrier for a bearer trigger only;
+// a signing trigger reads no carrier at all (inboundCredentialAccepted).
 func presentedSecret(r *http.Request) string {
 	if header := r.Header.Get("Authorization"); header != "" {
 		if value, found := strings.CutPrefix(header, "Bearer "); found {
@@ -311,6 +317,9 @@ func presentedSecret(r *http.Request) string {
 		}
 	}
 	if header := strings.TrimSpace(r.Header.Get(TriggerTokenHeader)); header != "" {
+		return header
+	}
+	if header := strings.TrimSpace(r.Header.Get(GitLabTokenHeader)); header != "" {
 		return header
 	}
 	return strings.TrimSpace(r.URL.Query().Get(TriggerTokenQueryParam))
@@ -326,7 +335,7 @@ func presentedSecret(r *http.Request) string {
 func (h *Handler) inboundCredentialAccepted(
 	r *http.Request, trigger triggerRow, raw []byte,
 ) (accepted bool, unavailable string) {
-	if trigger.AuthMode != AuthModeHMACSHA256 {
+	if !modeSigns(trigger.AuthMode) {
 		presented := presentedSecret(r)
 		if presented == "" {
 			return false, ""
@@ -355,6 +364,9 @@ func (h *Handler) inboundCredentialAccepted(
 	secret, err := h.vault.LookupAdminHiddenSecret(r.Context(), trigger.SecretName)
 	if err != nil {
 		return false, "the stored credential for this trigger could not be read"
+	}
+	if trigger.AuthMode == AuthModeStandardWebhooks {
+		return standardWebhooksSignatureMatches(r.Header, raw, secret, time.Now()), ""
 	}
 	return signatureMatches(presented, raw, secret), ""
 }
@@ -386,7 +398,7 @@ func readInboundRaw(r *http.Request) ([]byte, error) {
 // everything else is held to the 64 KiB a decorative body has no reason to
 // exceed.
 func inboundBodyWithinCap(trigger triggerRow, raw []byte) bool {
-	if trigger.AuthMode == AuthModeHMACSHA256 {
+	if modeSigns(trigger.AuthMode) {
 		return true
 	}
 	return int64(len(raw)) <= maxInboundBody

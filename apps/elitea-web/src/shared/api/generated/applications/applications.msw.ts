@@ -5751,7 +5751,11 @@ export const getGetPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5759,7 +5763,7 @@ export const getGetPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
     undefined,
   ]),
   ...overrideResponse,
@@ -5803,7 +5807,11 @@ export const getRotatePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5811,7 +5819,7 @@ export const getRotatePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
     undefined,
   ]),
   ...overrideResponse,
@@ -5855,7 +5863,11 @@ export const getRevokePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5863,7 +5875,7 @@ export const getRevokePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
     undefined,
   ]),
   ...overrideResponse,
@@ -5907,7 +5919,11 @@ export const getRevealPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5915,7 +5931,7 @@ export const getRevealPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
     undefined,
   ]),
   ...overrideResponse,

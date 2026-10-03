@@ -67,7 +67,7 @@ func TestTheSecretCompareIsConstantTimeAndFixedWidth(t *testing.T) {
 // above describes, asserted directly.
 func TestMintedCredentialsVerifyAgainstTheirOwnDigest(t *testing.T) {
 	for range 32 {
-		tokenID, secret, hash, err := newCredential()
+		tokenID, secret, hash, err := newCredential(defaultAuthMode())
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -92,7 +92,7 @@ func TestMintedCredentialsVerifyAgainstTheirOwnDigest(t *testing.T) {
 func TestVaultNamesAreUniquePerCredential(t *testing.T) {
 	seen := map[string]bool{}
 	for range 64 {
-		tokenID, _, _, err := newCredential()
+		tokenID, _, _, err := newCredential(defaultAuthMode())
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}

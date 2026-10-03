@@ -65,6 +65,7 @@ const (
 var tenantMigrations = []string{
 	"tenant/0133_pipeline_triggers_and_schedules.sql",
 	"tenant/0138_pipeline_trigger_auth_mode.sql",
+	"tenant/0139_pipeline_trigger_gitlab_modes.sql",
 }
 
 /* ── doubles ───────────────────────────────────────────────────────────── */
@@ -1338,10 +1339,19 @@ func TestGitHubTriggerRefusesEverySignatureThatIsNotItsOwn(t *testing.T) {
 			header: map[string]string{pipelinetriggers.GitHubSignatureHeader: valid},
 		},
 		{
-			name:   "a well-formed signature in the wrong header",
+			// X-Gitlab-Token IS a carrier now (legacy issue 6664), but only
+			// for a BEARER trigger. A signing trigger reads no carrier at all,
+			// so a valid signature in it is still refused.
+			name:   "a well-formed signature in a bearer carrier",
 			target: url,
 			body:   body,
-			header: map[string]string{"X-Gitlab-Token": valid},
+			header: map[string]string{pipelinetriggers.GitLabTokenHeader: valid},
+		},
+		{
+			name:   "the bearer secret in GitLab's carrier",
+			target: url,
+			body:   body,
+			header: map[string]string{pipelinetriggers.GitLabTokenHeader: secret},
 		},
 		{
 			name:   "the malformed value a misconfigured sender sends",
@@ -1474,7 +1484,14 @@ func TestSignatureModeRefusesAModeThisServiceDoesNotImplement(t *testing.T) {
 	target := fmt.Sprintf("/api/v2/pipeline_triggers/prompt_lib/%s/%d", homeProject, versionID)
 
 	for _, body := range []string{
-		`{"type":"gitlab"}`,
+		// `gitlab` is a supported preset since legacy issue 6664
+		// (gitlab_postgres_integration_test.go). What stays unsupported is
+		// a preset nobody implements, and a GitLab trigger asking for a
+		// signature GitLab does not send.
+		`{"type":"bitbucket"}`,
+		`{"type":"gitlab","auth_mode":"hmac_sha256","signature_header":"X-Sig"}`,
+		`{"type":"github","auth_mode":"standard_webhooks_hmac"}`,
+		`{"auth_mode":"standard_webhooks_hmac","signature_header":"X-Sig"}`,
 		`{"auth_mode":"hmac_sha512","signature_header":"X-Sig"}`,
 		`{"auth_mode":"hmac_sha256"}`,
 		`{"type":"github","auth_mode":"token"}`,
