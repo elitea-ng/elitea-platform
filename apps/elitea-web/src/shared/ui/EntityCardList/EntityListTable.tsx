@@ -207,12 +207,12 @@ function HeaderCell({ label, active = false, onClick }: HeaderCellProps): ReactN
     <Box
       component="th"
       scope="col"
-      sx={headerCellSx(active, onClick !== undefined)}
+      sx={headerCellSx(onClick !== undefined)}
       onClick={onClick}
     >
       <Typography
         variant="labelMedium"
-        sx={headerTextSx}
+        sx={headerTextSx(active)}
       >
         {label}
       </Typography>
@@ -247,7 +247,7 @@ function headerSx(columns: string): SxProps<Theme> {
   });
 }
 
-function headerCellSx(active: boolean, sortable: boolean): SxProps<Theme> {
+function headerCellSx(sortable: boolean): SxProps<Theme> {
   return (theme: Theme) => ({
     display: 'flex',
     alignItems: 'center',
@@ -256,18 +256,27 @@ function headerCellSx(active: boolean, sortable: boolean): SxProps<Theme> {
     minWidth: 0,
     overflow: 'hidden',
     cursor: sortable ? 'pointer' : 'default',
-    opacity: active ? 1 : 0.7,
-    transition: 'opacity 0.2s ease',
-    '&:hover': { opacity: 1 },
   });
 }
 
-const headerTextSx: SxProps<Theme> = (theme: Theme) => ({
-  color: theme.vars.palette.text.secondary,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-});
+/**
+ * A table header is `labelMedium` in the dim `text.primary` token (spec §2,
+ * the same as MuiTableCell.head and the DataGrid header). The active sort
+ * column, and a header under the pointer, read in the strong
+ * `text.secondary` token instead. That colour step replaces the legacy
+ * `opacity: 0.7` fade, which on top of the dim token would drop the header
+ * under 4.5:1 in the light scheme.
+ */
+function headerTextSx(active: boolean): SxProps<Theme> {
+  return (theme: Theme) => ({
+    color: active ? theme.vars.palette.text.secondary : theme.vars.palette.text.primary,
+    transition: 'color 0.2s ease',
+    'th:hover > &': { color: theme.vars.palette.text.secondary },
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  });
+}
 
 const bodySx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', width: '100%' };
 

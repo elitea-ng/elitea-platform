@@ -67,9 +67,12 @@ export const MuiDataGrid: EliteaComponents['MuiDataGrid'] = {
           borderRadius: theme.vars.shape.radiusMd,
           overflow: 'hidden',
         },
+        // The one table-header role (spec §2): labelMedium in the dim
+        // `text.primary` token, the same as MuiTableCell.head. Colour, not
+        // size, separates the header row from the cells.
         '& .MuiDataGrid-columnHeaderTitle': {
           ...typeScale(theme.typography.labelMedium),
-          color: theme.vars.palette.text.secondary,
+          color: theme.vars.palette.text.primary,
         },
         // The legacy divider is a SHORT, vertically centred tick (1.25rem of a
         // 2.25rem strip) sitting on the cell's trailing edge — not a full-height
