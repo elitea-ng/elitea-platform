@@ -347,6 +347,56 @@ describe('useNotificationsSSE — connection indicator reporting', () => {
       registry.fail();
     });
     expect(status.result.current).toBe('offline');
+
+    // The network coming back revives a dead stream with a fresh budget, so
+    // a transient outage does not leave the dot red until a reload.
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(status.result.current).toBe('reconnecting');
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getOpen()).toHaveLength(1);
+    act(() => {
+      registry.emit('open');
+    });
+    expect(status.result.current).toBe('connected');
+    warn.mockRestore();
+  });
+
+  it('revives a dead stream when the tab becomes visible again, and ignores events while it is alive', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { status } = renderWithStatus('7');
+    act(() => {
+      registry.emit('open');
+      window.dispatchEvent(new Event('online'));
+    });
+    // Alive: no extra stream opened.
+    expect(registry.getSources()).toHaveLength(1);
+
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      act(() => {
+        registry.fail();
+      });
+      act(() => {
+        vi.advanceTimersByTime(delay);
+      });
+    }
+    act(() => {
+      registry.fail();
+    });
+    expect(status.result.current).toBe('offline');
+    const before = registry.getSources().length;
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getSources()).toHaveLength(before + 1);
+    expect(status.result.current).toBe('reconnecting');
     warn.mockRestore();
   });
 

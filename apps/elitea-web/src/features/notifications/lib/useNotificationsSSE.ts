@@ -128,6 +128,36 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
   // No url means no subscription, and so nothing to claim about it.
   useReportRealtimeChannel(channelKey, baseUrl === null ? null : channelState);
 
+  // A spent ladder is not forever. The network coming back (`online`) or the
+  // user returning to the tab (`visibilitychange` to visible) starts a fresh
+  // budget, resuming from the last cursor. Without this a transient outage —
+  // a laptop asleep, a burst of 429s from the per-principal cap — left the
+  // stream dead and the connection dot red until a full reload.
+  useEffect(() => {
+    if (!streamDead || baseUrl === null) return undefined;
+    const revive = (): void => {
+      if (document.visibilityState === 'hidden') return;
+      clearRetry();
+      attemptRef.current = 0;
+      setStreamDead(false);
+      setChannelState('reconnecting');
+      // Same null-then-url step as `scheduleReopen`: the dead stream's url can
+      // be byte-identical to the resumed one, and `useEventSource` reopens
+      // only on a url CHANGE.
+      setStreamUrl(null);
+      retryTimerRef.current = setTimeout(() => {
+        retryTimerRef.current = undefined;
+        setStreamUrl(withResumeCursor(baseUrl, cursorRef.current));
+      }, 0);
+    };
+    window.addEventListener('online', revive);
+    document.addEventListener('visibilitychange', revive);
+    return () => {
+      window.removeEventListener('online', revive);
+      document.removeEventListener('visibilitychange', revive);
+    };
+  }, [streamDead, baseUrl, clearRetry]);
+
   // `id:` is written before every frame the route emits. It is the cursor a
   // resume must send back, so record it from every frame.
   const rememberCursor = useCallback((event: MessageEvent) => {
