@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -74,6 +75,12 @@ var (
 	ErrVersionNotRunnable = errors.New("pipelinetriggers: the pipeline version cannot be run")
 	// ErrInputTooLarge is a body this package refuses before touching storage.
 	ErrInputTooLarge = errors.New("pipelinetriggers: run input is too large")
+	// ErrInvalidInput is an `input` the run cannot carry: text that is not
+	// UTF-8, or that holds a NUL character. It is refused before anything is
+	// written, and the inbound route answers it 422 naming `input`. It used to
+	// reach the start use case's own validation and come back as an opaque
+	// 503 "the pipeline run could not be started" (regression UI-PD-3).
+	ErrInvalidInput = errors.New("pipelinetriggers: run input is not valid text")
 )
 
 // runTarget is the stored description of what a run starts. Every field comes
@@ -180,8 +187,11 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	if h.pool == nil || h.start == nil {
 		return runOutcome{}, ErrRuntimeUnavailable
 	}
-	if !utf8.ValidString(request.Input) || len(request.Input) > maxRunInput {
+	if len(request.Input) > maxRunInput {
 		return runOutcome{}, ErrInputTooLarge
+	}
+	if !utf8.ValidString(request.Input) || strings.ContainsRune(request.Input, '\x00') {
+		return runOutcome{}, ErrInvalidInput
 	}
 	if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
 		return runOutcome{}, err
@@ -203,8 +213,20 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 		TargetParticipantID: participantID,
 		QuestionID:          uuid.NewString(),
 		UserInput:           request.Input,
+		// Both origins this package serves are unattended. A webhook with
+		// no body and a schedule with no input are both ordinary, and both
+		// run the pipeline from its entry node (UI-PD-3).
+		AllowEmptyUserInput: true,
 	})
 	if err != nil {
+		if errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart) {
+			// The use case refused the request's shape. Every identifier in
+			// it was built here from stored rows, so what is left for a
+			// caller to have got wrong is the input. Named as such rather
+			// than reported as a runtime outage.
+			h.discardRunConversation(ctx, schema, conversationUUID)
+			return runOutcome{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
+		}
 		// The turn was never admitted, so the conversation created a moment ago
 		// holds nothing and never will. Left behind, a misconfigured webhook
 		// retried by its sender fills the chat list with empty transcripts.

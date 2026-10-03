@@ -41,6 +41,10 @@ type CurrentApplicationTurn struct {
 	ResponseMessageID    string
 	QuestionMeta         json.RawMessage
 	UserInput            string
+	// AllowEmptyUserInput carries CurrentApplicationStartRequest's flag onto
+	// the turn, so the repository's re-validation admits the same empty input
+	// the use case admitted.
+	AllowEmptyUserInput bool
 	// Attachments are the `attachment_message` items written onto the QUESTION
 	// group in the same transaction (#606). Empty for a turn with no files.
 	Attachments []CurrentTurnAttachment
@@ -51,7 +55,7 @@ func (turn CurrentApplicationTurn) Validate() error {
 		turn.ApplicationID <= 0 || turn.ApplicationVersionID <= 0 ||
 		!validUUID(turn.ConversationUUID) || !validUUID(turn.QuestionID) ||
 		!validUUID(turn.QuestionItemID) || !validUUID(turn.ResponseMessageID) ||
-		!validCurrentAgentText(turn.UserInput, maxCurrentAgentUserInputBytes) ||
+		!validCurrentAgentInput(turn.UserInput, turn.AllowEmptyUserInput) ||
 		!validJSONObject(turn.QuestionMeta) ||
 		!validCurrentTurnAttachments(turn.Attachments) {
 		return ErrInvalidCurrentAgentStart
@@ -108,6 +112,16 @@ type CurrentApplicationStartRequest struct {
 	TargetParticipantID int64
 	QuestionID          string
 	UserInput           string
+	// AllowEmptyUserInput admits an EMPTY UserInput. Only the unattended
+	// entry points set it — an inbound pipeline trigger and a pipeline
+	// schedule (internal/api/v2/pipelinetriggers). A webhook that only says
+	// "something happened" carries no text, and a schedule may have none
+	// configured. Both used to fail this Validate and surface as an opaque
+	// 503 "the pipeline run could not be started" (regression finding
+	// UI-PD-3). A typed chat turn never sets it: an empty composer message is
+	// still refused. Skill projection sends "continue" to the model for an
+	// empty input, which is what a pipeline started from its entry node needs.
+	AllowEmptyUserInput bool
 	InteractionUUID     string
 	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
@@ -131,7 +145,7 @@ type CurrentApplicationStartRequest struct {
 func (request CurrentApplicationStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID <= 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
-		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
+		!validCurrentAgentInput(request.UserInput, request.AllowEmptyUserInput) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
 		!validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
@@ -316,7 +330,8 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			ApplicationVersionID: target.ApplicationVersionID,
 			QuestionID:           request.QuestionID, QuestionItemID: questionItemID,
 			ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
-			UserInput: request.UserInput, Attachments: attachments,
+			UserInput: request.UserInput, AllowEmptyUserInput: request.AllowEmptyUserInput,
+			Attachments: attachments,
 		},
 	})
 	if err != nil {
@@ -625,6 +640,16 @@ var currentTurnNamespace = uuid.MustParse("71581f1e-fb1b-4d50-a9db-8ebd4b47db76"
 
 func currentTurnUUID(questionID, role string) string {
 	return uuid.NewSHA1(currentTurnNamespace, []byte(questionID+"\x00"+role)).String()
+}
+
+// validCurrentAgentInput is the user-input rule for an application start. An
+// empty value passes only when the caller opted in (AllowEmptyUserInput);
+// every other rule — size, UTF-8, no NUL — applies either way.
+func validCurrentAgentInput(value string, allowEmpty bool) bool {
+	if value == "" {
+		return allowEmpty
+	}
+	return validCurrentAgentText(value, maxCurrentAgentUserInputBytes)
 }
 
 func validCurrentAgentText(value string, limit int) bool {

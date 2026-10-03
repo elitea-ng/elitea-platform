@@ -258,6 +258,13 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		record(http.StatusBadRequest, projectID, trigger.CreatedBy, trigger.VersionID, "input too large")
 		writeError(w, http.StatusBadRequest, "the run input is too large")
 		return
+	case errors.Is(err, ErrInvalidInput):
+		// 422 and the field's name. The credential was accepted, so this is
+		// a statement about the BODY the caller chose, and it is no oracle.
+		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID, "input is not valid")
+		writeError(w, http.StatusUnprocessableEntity,
+			"`input` is not valid: it must be UTF-8 text without NUL characters")
+		return
 	case errors.Is(err, ErrRuntimeUnavailable):
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
 			"no agent runtime on this deployment")

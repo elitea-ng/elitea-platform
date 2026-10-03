@@ -245,6 +245,11 @@ func (h *Handler) fireSchedule(
 	case errors.Is(err, ErrVersionNotRunnable):
 		result.Skipped++
 		record(resultSkippedMissing, "the pipeline version is gone or is not a pipeline", "")
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, ErrInputTooLarge):
+		// The schedule's own stored input, so retrying the next tick cannot
+		// help. Named, so the settings tab says what to fix.
+		result.Failed++
+		record(resultFailed, "the schedule's `input` is not valid run input", "")
 	case err != nil:
 		h.log().Error("pipelinetriggers: scheduled run failed",
 			"project_id", tenant.ProjectID, "schedule_id", schedule.ID, "err", err)

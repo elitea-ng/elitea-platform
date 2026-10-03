@@ -82,6 +82,12 @@ func (s *fakeStart) StartCurrentApplication(
 ) (agentexecutionapp.CurrentApplicationStartOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// The real use case validates the request before anything else, and the
+	// double does too. Without this a body the real start refuses — an empty
+	// webhook before UI-PD-3 — passed here and 503'd in production.
+	if err := request.Validate(); err != nil {
+		return agentexecutionapp.CurrentApplicationStartOutcome{}, err
+	}
 	s.requests = append(s.requests, request)
 	return s.outcome, s.err
 }
@@ -401,6 +407,67 @@ SELECT (mapping.entity_settings ->> 'version_id')::bigint
 	}
 	if source != pipelinetriggers.TriggerConversationSource {
 		t.Fatalf("conversation source = %q, want %q", source, pipelinetriggers.TriggerConversationSource)
+	}
+}
+
+// TestAWebhookWithNoBodyStartsARun is regression finding UI-PD-3. A sender
+// that only says "something happened" posts no body, or a payload with no
+// `input` key. The start use case refused the empty input, and the sender read
+// 503 "the pipeline run could not be started" with nothing to fix.
+func TestAWebhookWithNoBodyStartsARun(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+	}{
+		{"no body at all", ""},
+		{"an empty JSON object", `{}`},
+		{"a payload with no input key", `{"object_kind":"push","ref":"refs/heads/main"}`},
+		{"an explicitly empty input", `{"input":""}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			_, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "On push", ownerUserID)
+			response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), test.body,
+				map[string]string{"Authorization": "Bearer " + secret})
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202; body = %s", response.Code, response.Body.String())
+			}
+			request, ok := h.start.last()
+			if !ok {
+				t.Fatal("nothing was dispatched")
+			}
+			if request.UserInput != "" || !request.AllowEmptyUserInput {
+				t.Fatalf("UserInput = %q, AllowEmptyUserInput = %v; want an empty, unattended start",
+					request.UserInput, request.AllowEmptyUserInput)
+			}
+		})
+	}
+}
+
+// TestAnInputTheRunCannotCarryIsA422NamingInput is the other half of UI-PD-3.
+// An input the run cannot carry is the caller's body, so the answer names the
+// field. It is never the 503 a runtime outage gets, and nothing is written.
+func TestAnInputTheRunCannotCarryIsA422NamingInput(t *testing.T) {
+	h := newHarness(t)
+	_, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "On push", ownerUserID)
+	response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), `{"input":"a\u0000b"}`,
+		map[string]string{"Authorization": "Bearer " + secret})
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "`input`") {
+		t.Fatalf("body = %s, want it to name `input`", response.Body.String())
+	}
+	if h.start.count() != 0 {
+		t.Fatalf("dispatches = %d, want 0", h.start.count())
+	}
+	var conversations int
+	if err := h.pool.QueryRow(context.Background(), fmt.Sprintf(
+		`SELECT count(*) FROM %s.chat_conversations WHERE source = $1`, homeSchema),
+		pipelinetriggers.TriggerConversationSource).Scan(&conversations); err != nil {
+		t.Fatal(err)
+	}
+	if conversations != 0 {
+		t.Fatalf("a refused input left %d trigger conversations behind", conversations)
 	}
 }
 
@@ -845,6 +912,36 @@ func TestScheduleTickDispatchesAndStampsOnlyOnDispatch(t *testing.T) {
 	if third.Dispatched != 1 {
 		t.Fatalf("dispatched = %d after a six-hour gap, want exactly 1 — a catch-up storm would land "+
 			"the whole backlog on a platform that has just come back", third.Dispatched)
+	}
+}
+
+// TestAScheduleWithNoInputDispatches is UI-PD-3 for the schedule origin. The
+// settings dialog lets a person save a schedule with no input, and every tick
+// of it used to fail with "the run could not be started".
+func TestAScheduleWithNoInputDispatches(t *testing.T) {
+	h := newHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Nightly report", ownerUserID)
+	body, _ := json.Marshal(map[string]any{"cron": "* * * * *", "active": true, "input": ""})
+	response := h.do(t, http.MethodPut,
+		fmt.Sprintf("/api/v2/pipeline_schedules/prompt_lib/%s/%d", homeProject, versionID), string(body), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("save schedule: status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	now := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Second)
+	result, err := h.handler.RunDueSchedules(context.Background(), now)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if result.Dispatched != 1 || result.Failed != 0 {
+		t.Fatalf("result = %+v, want one dispatch and no failure", result)
+	}
+	request, ok := h.start.last()
+	if !ok || request.UserInput != "" || !request.AllowEmptyUserInput {
+		t.Fatalf("dispatch = %+v (present=%v), want an empty, unattended start", request, ok)
+	}
+	if after := h.readSchedule(t, versionID); after["last_result"] != "dispatched" {
+		t.Fatalf("last_result = %v, want dispatched", after["last_result"])
 	}
 }
 
