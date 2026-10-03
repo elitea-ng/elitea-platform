@@ -247,7 +247,8 @@ type Repository interface {
 	ListMessageGroups(ctx context.Context, projectID, conversationID string, limit int, sortOrder string) ([]map[string]any, error)
 	ListParticipants(ctx context.Context, projectID, conversationID string) ([]Participant, error)
 	AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error
-	AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error
+	// AddParticipants returns the participant id of each body, in order.
+	AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error)
 	RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error
 	UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error
 	BatchUpdateEntitySettings(ctx context.Context, projectID, conversationID string, settings []map[string]any) error
@@ -1325,18 +1326,44 @@ func (h *Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.repo.AddParticipants(r.Context(), projectID, conversationID, bodyList); err != nil {
+	addedIDs, err := h.repo.AddParticipants(r.Context(), projectID, conversationID, bodyList)
+	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
 
-	// Return the participants list from DB
+	// Answer with the participants of THIS request only, in request order.
+	// Legacy returns `[serialize(p) for p in result_details]`, the rows it
+	// added or found. This handler used to return the whole conversation, and
+	// the web callers that treat the answer as "the added rows"
+	// (useAddNewParticipants, the create-from-chat attach, the toolkit
+	// chat helper) then merged or reported every existing participant again.
 	participants, err := h.repo.ListParticipants(r.Context(), projectID, conversationID)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, participants)
+	writeJSON(w, http.StatusOK, participantsInRequestOrder(participants, addedIDs))
+}
+
+// participantsInRequestOrder picks the rows named by ids, in the order of
+// ids, once each. A body that names one entity twice yields one row.
+func participantsInRequestOrder(all []Participant, ids []int) []Participant {
+	byID := make(map[int]Participant, len(all))
+	for _, participant := range all {
+		byID[participant.ID] = participant
+	}
+	added := make([]Participant, 0, len(ids))
+	seen := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		participant, ok := byID[id]
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		added = append(added, participant)
+	}
+	return added
 }
 
 // GetParticipant reads only a participant mapped to an actor-visible conversation.

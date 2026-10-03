@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
@@ -621,7 +622,7 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 			return conversations.Conversation{}, apierr.BadRequest("invalid participant metadata")
 		}
 		body := map[string]any{"entity_name": participant.EntityName, "entity_meta": participant.EntityMeta, "entity_settings": participant.EntitySettings}
-		if err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
+		if _, err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
 			return conversations.Conversation{}, err
 		}
 	}
@@ -1022,38 +1023,45 @@ func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte
 // ON CONFLICT does not catch that, because the two transactions hold different
 // participant ids.
 func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error {
-	return r.AddParticipants(ctx, projectID, conversationID, []map[string]any{body})
+	_, err := r.AddParticipants(ctx, projectID, conversationID, []map[string]any{body})
+	return err
 }
 
-// AddParticipants preserves the current all-or-nothing batch boundary.
-func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error {
+// AddParticipants preserves the current all-or-nothing batch boundary. It
+// returns the participant id of each body, in request order. An entity that
+// was already a participant returns its existing id; legacy's POST answers
+// with those same rows (get_or_create_one), not the whole conversation.
+func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error) {
 	if len(bodies) > 100 {
-		return apierr.BadRequest("at most 100 participants are allowed")
+		return nil, apierr.BadRequest("at most 100 participants are allowed")
 	}
 
 	s := schema(projectID)
 
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	transaction, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("conversations: add participant: %w", err)
+		return nil, fmt.Errorf("conversations: add participant: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
+	participantIDs := make([]int, 0, len(bodies))
 	for _, body := range bodies {
-		if err := addConversationParticipant(ctx, transaction, s, id, body); err != nil {
-			return err
+		participantID, err := addConversationParticipant(ctx, transaction, s, id, body)
+		if err != nil {
+			return nil, err
 		}
+		participantIDs = append(participantIDs, participantID)
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("conversations: add participant commit: %w", err)
+		return nil, fmt.Errorf("conversations: add participant commit: %w", err)
 	}
-	return nil
+	return participantIDs, nil
 }
 
 func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error {
@@ -1125,16 +1133,49 @@ func (r *ConversationsRepo) SelectConversation(ctx context.Context, projectID, c
 	if err != nil {
 		return err
 	}
-	// Schema: id, user_id, conversation_id (no unique on user_id, so delete+insert)
+	// Schema: id, user_id, conversation_id (no unique on user_id, so delete+insert).
+	//
+	// Issue #6674. The DELETE and the INSERT ran as two autocommit statements,
+	// so a concurrent unselect, or a select of another conversation, could
+	// leave the user with zero or two selection rows. A conversation deleted
+	// after resolveConversationID failed the INSERT on the foreign key and
+	// answered 500. Both statements now run in one transaction. The INSERT
+	// re-reads the conversation, so a deleted one inserts zero rows, and a
+	// foreign-key refusal (23503) also maps to 404.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("conversations: select conversation begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	delQ := fmt.Sprintf(`DELETE FROM %s.chat_selected_conversations WHERE user_id = $1`, s)
-	if _, err := r.pool.Exec(ctx, delQ, userID); err != nil {
+	if _, err := tx.Exec(ctx, delQ, userID); err != nil {
 		return fmt.Errorf("conversations: select conversation delete old: %w", err)
 	}
-	insQ := fmt.Sprintf(`INSERT INTO %s.chat_selected_conversations (conversation_id, user_id) VALUES ($1, $2)`, s)
-	if _, err := r.pool.Exec(ctx, insQ, id, userID); err != nil {
+	insQ := fmt.Sprintf(`INSERT INTO %[1]s.chat_selected_conversations (conversation_id, user_id)
+		SELECT c.id, $2 FROM %[1]s.chat_conversations c WHERE c.id = $1`, s)
+	tag, err := tx.Exec(ctx, insQ, id, userID)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return apierr.NotFound("conversation not found")
+		}
 		return fmt.Errorf("conversations: select conversation insert: %w", err)
 	}
+	if tag.RowsAffected() == 0 {
+		return apierr.NotFound("conversation not found")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		if isForeignKeyViolation(err) {
+			return apierr.NotFound("conversation not found")
+		}
+		return fmt.Errorf("conversations: select conversation commit: %w", err)
+	}
 	return nil
+}
+
+// isForeignKeyViolation reports a PostgreSQL foreign_key_violation (23503).
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 func (r *ConversationsRepo) DeselectConversation(ctx context.Context, projectID, userID string) error {
@@ -2908,7 +2949,7 @@ func nilIfEmpty(s string) *string {
 }
 
 // addConversationParticipant writes a participant and mapping in the caller's transaction.
-func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) error {
+func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) (int, error) {
 	entityName, _ := body["entity_name"].(string)
 	entityMetaMap, _ := body["entity_meta"].(map[string]any)
 	entityMeta, _ := json.Marshal(body["entity_meta"])
@@ -2925,10 +2966,10 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 		if err = transaction.QueryRow(ctx, insert,
 			entityName, entityMeta, participantDisplayMeta(entityName, entityMetaMap),
 		).Scan(&participantID); err != nil {
-			return fmt.Errorf("conversations: create participant: %w", err)
+			return 0, fmt.Errorf("conversations: create participant: %w", err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("conversations: add participant lookup: %w", err)
+		return 0, fmt.Errorf("conversations: add participant lookup: %w", err)
 	}
 
 	// ON CONFLICT names the COLUMNS, not the constraint.
@@ -2945,7 +2986,7 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
 		VALUES ($1, $2, $3::jsonb) ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
 	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
-		return fmt.Errorf("conversations: add participant mapping: %w", err)
+		return 0, fmt.Errorf("conversations: add participant mapping: %w", err)
 	}
 
 	// Stamp `meta.single_participant` for the entity types run-history
@@ -2969,15 +3010,15 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 			"entity_settings": body["entity_settings"],
 		})
 		if err != nil {
-			return fmt.Errorf("conversations: encode single_participant: %w", err)
+			return 0, fmt.Errorf("conversations: encode single_participant: %w", err)
 		}
 		metaUpdate := fmt.Sprintf(`UPDATE %s.chat_conversations
 			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('single_participant', $1::jsonb)
 			WHERE id = $2`, s)
 		if _, err := transaction.Exec(ctx, metaUpdate, singleParticipant, id); err != nil {
-			return fmt.Errorf("conversations: stamp single_participant: %w", err)
+			return 0, fmt.Errorf("conversations: stamp single_participant: %w", err)
 		}
 	}
 
-	return nil
+	return participantID, nil
 }

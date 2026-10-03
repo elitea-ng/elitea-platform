@@ -29,6 +29,7 @@ type mockRepo struct {
 	deleteFn                  func(ctx context.Context, projectID, conversationID string) error
 	listMessagesFn            func(ctx context.Context, projectID, conversationID string, query conversations.MessagesQuery) (conversations.MessagesListResponse, error)
 	addParticipantFn          func(ctx context.Context, projectID, conversationID string, body map[string]any) error
+	addParticipantsFn         func(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error)
 	removeParticipantFn       func(ctx context.Context, projectID, conversationID, participantID string) error
 	updateEntitySettingsFn    func(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error
 	batchUpdateEntitySettings func(ctx context.Context, projectID, conversationID string, settings []map[string]any) error
@@ -109,13 +110,18 @@ func (m *mockRepo) AddParticipant(ctx context.Context, projectID, conversationID
 	return m.addParticipantFn(ctx, projectID, conversationID, body)
 }
 
-func (m *mockRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error {
-	for _, body := range bodies {
-		if err := m.AddParticipant(ctx, projectID, conversationID, body); err != nil {
-			return err
-		}
+func (m *mockRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error) {
+	if m.addParticipantsFn != nil {
+		return m.addParticipantsFn(ctx, projectID, conversationID, bodies)
 	}
-	return nil
+	ids := make([]int, 0, len(bodies))
+	for index, body := range bodies {
+		if err := m.AddParticipant(ctx, projectID, conversationID, body); err != nil {
+			return nil, err
+		}
+		ids = append(ids, index+1)
+	}
+	return ids, nil
 }
 
 func (m *mockRepo) RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error {
@@ -1914,4 +1920,41 @@ func (m *mockRepo) AuthorizeChatResource(ctx context.Context, projectID, resourc
 		return m.authorizeFn(ctx, projectID, conversationID)
 	}
 	return nil
+}
+
+// TestAddParticipant_AnswersOnlyTheAddedRowsInRequestOrder pins the legacy
+// body: the rows of this request, in request order, once each. It is not the
+// whole conversation (F5).
+func TestAddParticipant_AnswersOnlyTheAddedRowsInRequestOrder(t *testing.T) {
+	repo := &mockRepo{
+		addParticipantsFn: func(_ context.Context, _, _ string, bodies []map[string]any) ([]int, error) {
+			if len(bodies) != 3 {
+				t.Fatalf("repository got %d bodies, want 3", len(bodies))
+			}
+			return []int{30, 20, 30}, nil
+		},
+		listParticipantsFn: func(_ context.Context, _, _ string) ([]conversations.Participant, error) {
+			return []conversations.Participant{
+				{ID: 10, EntityName: "user", EntityMeta: map[string]any{"id": 1}},
+				{ID: 20, EntityName: "user", EntityMeta: map[string]any{"id": 2}},
+				{ID: 30, EntityName: "user", EntityMeta: map[string]any{"id": 3}},
+			}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	body := `[{"entity_name":"user","entity_meta":{"id":3}},{"entity_name":"user","entity_meta":{"id":2}},{"entity_name":"user","entity_meta":{"id":3}}]`
+	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/conv-1/participants", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var got []conversations.Participant
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	if len(got) != 2 || got[0].ID != 30 || got[1].ID != 20 {
+		t.Fatalf("answer = %+v, want participants 30 then 20 only", got)
+	}
 }
