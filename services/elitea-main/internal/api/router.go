@@ -316,6 +316,13 @@ type RouterConfig struct {
 	// webhook.Handler's destinationGuard field for why that direction is
 	// fail-closed unlike WebhookDispatcher's own nil-gated degrade above.
 	WebhookDestinationGuard *webhook.DestinationGuard
+	// MCPAuthorizationEgressGuard is the SSRF guard of the MCP OAuth and DCR
+	// proxies (eliteacore/mcp_oauth_egress.go). main.go builds it from
+	// ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST. Nil does NOT disable the guard: the
+	// router then builds one with an empty allowlist, which refuses every
+	// private, loopback and link-local destination. A viewer may call these
+	// proxies (#6885), so they are never composed unguarded.
+	MCPAuthorizationEgressGuard *webhook.DestinationGuard
 	// EvalDimensionsRepo backs the Agent Evaluation DIMENSION LIBRARY — the
 	// first and, for now, only slice of that feature. Unassigned, the four
 	// routes are not registered at all, which answers 404: a stubbed 200 with
@@ -1407,6 +1414,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
 		v2core.WithMCPDCRClients(mcpOAuthClientStore(cfg.Pool)),
 		v2core.WithMCPDelegatedTokens(mcpOAuthTokenStore(cfg.Pool)),
+		v2core.WithMCPAuthorizationEgressGuard(mcpAuthorizationEgressGuard(cfg)),
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),

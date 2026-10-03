@@ -91,6 +91,9 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_token_endpoint"})
 		return
 	}
+	if !h.mcpAuthorizationDestinationAllowed(w, r, tokenEndpoint, "invalid_token_endpoint") {
+		return
+	}
 	grantType := body.GrantType
 	if grantType == "" {
 		grantType = "authorization_code"
@@ -145,7 +148,7 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	httpRequest.Header.Set("Accept", "application/json")
 
-	response, err := h.doMCPProxyRequest(httpRequest)
+	response, err := h.doMCPAuthorizationRequest(httpRequest)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "token_exchange_failed"})
 		return
@@ -184,6 +187,9 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 	registrationEndpoint, err := validateMCPProxyURL(body.RegistrationEndpoint)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_registration_endpoint"})
+		return
+	}
+	if !h.mcpAuthorizationDestinationAllowed(w, r, registrationEndpoint, "invalid_registration_endpoint") {
 		return
 	}
 	if !validMCPProxyStringList(body.RedirectURIs, true) ||
@@ -251,7 +257,7 @@ func (h *Handler) mcpDCRProxy(w http.ResponseWriter, r *http.Request) {
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "application/json")
 
-	response, err := h.doMCPProxyRequest(httpRequest)
+	response, err := h.doMCPAuthorizationRequest(httpRequest)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "dcr_failed"})
 		return

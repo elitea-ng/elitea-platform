@@ -1314,6 +1314,13 @@ main:
     # bitbucket.org, *.atlassian.net). Set it to reach a self-hosted GitLab or
     # Jira — the value REPLACES that default, it does not extend it.
     ELITEA_TOOLKIT_CHECK_ALLOWLIST: ""
+    # The SSRF guard of the MCP OAuth and DCR proxies, which POST to a token
+    # or registration endpoint the caller sends and which a project viewer may
+    # call. EMPTY IS FAIL-CLOSED: every private, loopback and link-local
+    # address is refused, before the request and again at dial time. Name a
+    # private identity provider here (egresslib grammar: hosts, `*.` wildcards,
+    # CIDR blocks). Link-local and multicast stay refused whatever it says.
+    ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: ""
     # The origin the Inventory provider calls back to for artifacts and models.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
     # Inventory tools that only read an existing graph still work, and the

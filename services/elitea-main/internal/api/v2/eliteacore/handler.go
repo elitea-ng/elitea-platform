@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -56,7 +57,12 @@ type Handler struct {
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
 	httpClient         *http.Client
-	store              storage.ObjectStore
+	// The egress guard of the MCP OAuth and DCR proxies (mcp_oauth_egress.go)
+	// and the client built from httpClient with the guard's dialer.
+	mcpAuthorizationGuard MCPAuthorizationEgressGuard
+	guardedClientOnce     sync.Once
+	guardedClient         *http.Client
+	store                 storage.ObjectStore
 	// The pre-built MCP server catalogue and the vault holding its client
 	// secrets (mcp_prebuilt_resolution.go). Both nil unless
 	// WithPrebuiltMCPCatalogue is applied, in which case resolution is a no-op.
@@ -5202,7 +5208,10 @@ func effectiveURLPort(endpoint *url.URL) string {
 }
 
 func (h *Handler) doMCPProxyRequest(req *http.Request) (*http.Response, error) {
-	client := h.httpClient
+	return h.doMCPProxyRequestWith(h.httpClient, req)
+}
+
+func (h *Handler) doMCPProxyRequestWith(client *http.Client, req *http.Request) (*http.Response, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
