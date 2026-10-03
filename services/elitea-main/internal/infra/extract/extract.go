@@ -16,7 +16,11 @@
 //     the parser runs inside a WebAssembly sandbox with a memory ceiling, so a
 //     hostile file cannot corrupt the Go heap or crash the process.
 //   - DOCX and PPTX with archive/zip and encoding/xml.
-//   - XLSX with excelize.
+//   - XLSX with archive/zip and encoding/xml as well. Every cell refers to
+//     a shared string by index, so one long string that many cells refer to
+//     expands far past the file's own size. This reader keeps each shared
+//     string once and stops each sheet at the text limit while it writes,
+//     so that expansion never reaches memory.
 //   - UTF-8 and UTF-16 text (TXT, MD, CSV, JSON, code) as it is.
 //
 // The format comes from the file's BYTES (magic numbers and the ZIP
@@ -154,9 +158,12 @@ type Document struct {
 	Units []Unit
 	// UnitCount is how many pages, slides or sheets the SOURCE has.
 	UnitCount int
-	// LowTextUnits lists 1-based unit numbers with fewer than
-	// lowTextThreshold characters of text. For a PDF that usually means a
-	// scanned page with no text layer.
+	// LowTextUnits lists 1-based PDF page numbers with fewer than
+	// LowTextUnitCharacters characters of text, which usually means a
+	// scanned page with no text layer. It is empty for every other format:
+	// a short slide, sheet, section or text part is short, not without a
+	// text layer, and the worker tells the model that the content of a
+	// low-text unit is not included.
 	LowTextUnits []int
 	Partial      bool
 	PartialBy    PartialReason
@@ -201,8 +208,11 @@ func DefaultLimits() Limits {
 		MaxXMLEntryBytes: 64 << 20,
 		MaxCells:         1_000_000,
 		Timeout:          60 * time.Second,
-		// 512 MiB of WebAssembly linear memory (64 KiB pages).
-		PDFMemoryLimitPages:   8_192,
+		// 160 MiB of WebAssembly linear memory (64 KiB pages). wazero grows
+		// linear memory by reallocation, so one PDF can briefly hold about
+		// twice this. PeakMemoryBytes counts that, and the Helm chart's
+		// memory limit for elitea-main is tested against it.
+		PDFMemoryLimitPages:   2_560,
 		TextPartBytes:         8 << 10,
 		LowTextUnitCharacters: 50,
 	}
@@ -215,9 +225,41 @@ type Extractor struct {
 	pdf    *pdfEngine
 }
 
-// New returns an Extractor. The PDF engine starts lazily on the first PDF.
+// PeakMemoryBytes estimates the peak memory of `extractions` extractions
+// that run at the same time under limits. Each holds its source bytes and
+// its text output three times (the builder's buffer, its growth copy and
+// the normalised copy). At most PDFEngineConcurrency of them hold the PDF
+// engine's linear memory, counted at twice its ceiling because wazero grows
+// it by reallocation. Each other one holds the largest office XML part and
+// its decoded copy. elitea-main's Helm memory limit is tested against this.
+func PeakMemoryBytes(limits Limits, extractions int) int64 {
+	if extractions <= 0 {
+		return 0
+	}
+	text := int64(limits.MaxTextBytes) * 3
+	pdf := limits.MaxInputBytes + int64(limits.PDFMemoryLimitPages)*(64<<10)*2 + text
+	office := limits.MaxInputBytes + limits.MaxXMLEntryBytes*2 + text
+	engines := int64(min(extractions, PDFEngineConcurrency))
+	others := int64(extractions) - engines
+	return engines*pdf + others*max(office, limits.MaxInputBytes)
+}
+
+// New returns an Extractor. The PDF engine starts on the first PDF; call
+// Warm to compile it before the first request.
 func New(limits Limits) *Extractor {
 	return &Extractor{limits: limits, pdf: newPDFEngine(limits.PDFMemoryLimitPages)}
+}
+
+// Warm compiles the PDF engine's WebAssembly module into the extractor's
+// compilation cache. Compiling PDFium takes seconds. Without Warm, the
+// FIRST PDF a process reads pays for that inside the request's wait, so
+// even a one-page PDF can answer "processing". Warm is safe to call more
+// than once and at the same time as Extract.
+func (extractor *Extractor) Warm(ctx context.Context) error {
+	if extractor == nil {
+		return ErrUnavailable
+	}
+	return extractor.pdf.warm(ctx)
 }
 
 // Extract reads one document. The context deadline and Limits.Timeout both
@@ -380,9 +422,31 @@ func (builder *textBuilder) add(kind UnitKind, label, raw string) bool {
 		separator = builder.separator
 	}
 	if builder.text.Len()+len(separator)+len(body) > builder.maxBytes {
+		// The unit does not fit whole, but its start does. Keep the start,
+		// cut at a line or character boundary, and mark the document
+		// partial. Never drop the unit whole: a FIRST unit over the limit
+		// (one DOCX section, one sheet) would otherwise leave no text at
+		// all, and the file would be refused as having none.
+		room := builder.maxBytes - builder.text.Len() - len(separator)
+		if prefix := cutText(body, room); strings.TrimSpace(prefix) != "" {
+			builder.write(kind, label, separator, prefix)
+		}
 		builder.stop(PartialTextLimit)
 		return false
 	}
+	builder.write(kind, label, separator, body)
+	return true
+}
+
+// remaining is how many more bytes of text the builder accepts.
+func (builder *textBuilder) remaining() int {
+	if builder.full() {
+		return 0
+	}
+	return max(builder.maxBytes-builder.text.Len(), 0)
+}
+
+func (builder *textBuilder) write(kind UnitKind, label, separator, body string) {
 	builder.text.WriteString(separator)
 	start := builder.text.Len()
 	builder.text.WriteString(body)
@@ -393,7 +457,26 @@ func (builder *textBuilder) add(kind UnitKind, label, raw string) bool {
 		End:     builder.text.Len(),
 		HasText: strings.TrimSpace(body) != "",
 	})
-	return true
+}
+
+// cutText returns the longest prefix of text of at most limit bytes. It ends
+// at a line end when one is in the second half of that prefix, and at a
+// character boundary otherwise.
+func cutText(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+	if newline := strings.LastIndexByte(text[:limit], '\n'); newline > limit/2 {
+		return text[:newline]
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 func (builder *textBuilder) document(format Format, lowText int) Document {
@@ -402,10 +485,15 @@ func (builder *textBuilder) document(format Format, lowText int) Document {
 	if count < len(builder.units) {
 		count = len(builder.units)
 	}
+	// Only a PDF page can lack a text layer. A short slide, sheet, section
+	// or text part is only short. To flag it would make the worker tell the
+	// model that text it can see is not included.
 	var low []int
-	for index, unit := range builder.units {
-		if utf8.RuneCountInString(strings.TrimSpace(text[unit.Start:unit.End])) < lowText {
-			low = append(low, index+1)
+	if format == FormatPDF {
+		for index, unit := range builder.units {
+			if utf8.RuneCountInString(strings.TrimSpace(text[unit.Start:unit.End])) < lowText {
+				low = append(low, index+1)
+			}
 		}
 	}
 	return Document{

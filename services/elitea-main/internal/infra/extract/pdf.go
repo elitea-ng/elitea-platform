@@ -15,10 +15,12 @@ import (
 	"github.com/tetratelabs/wazero"
 )
 
-// pdfEngineConcurrency is how many PDFs one process extracts at the same
+// PDFEngineConcurrency is how many PDFs one process extracts at the same
 // time. Each extraction holds its own WebAssembly linear memory (up to the
-// memory limit), so this number is also a memory bound.
-const pdfEngineConcurrency = 2
+// memory limit, and briefly twice that while it grows), so this number is
+// also a memory bound. It is one: elitea-main is one API process, and a
+// second PDF waits for the first rather than doubling the peak.
+const PDFEngineConcurrency = 1
 
 // pdfEngine runs PDFium compiled to WebAssembly.
 //
@@ -31,7 +33,9 @@ const pdfEngineConcurrency = 2
 // shared, so a new runtime costs an instantiation, not a compilation.
 //
 // THE SANDBOX. The module gets an EMPTY file system (go-pdfium mounts the
-// host root "/" by default), no stdout or stderr, and a memory ceiling.
+// host root "/" by default), no stdout or stderr, and a memory ceiling. The
+// whole configuration comes from poolConfig, and pdf_sandbox_test.go pins
+// that it mounts nothing.
 type pdfEngine struct {
 	memoryLimitPages uint32
 	cache            wazero.CompilationCache
@@ -42,27 +46,37 @@ func newPDFEngine(memoryLimitPages uint32) *pdfEngine {
 	return &pdfEngine{
 		memoryLimitPages: memoryLimitPages,
 		cache:            wazero.NewCompilationCache(),
-		slots:            make(chan struct{}, pdfEngineConcurrency),
+		slots:            make(chan struct{}, PDFEngineConcurrency),
 	}
 }
 
-func (engine *pdfEngine) open(ctx context.Context) (pdfium.Pool, pdfium.Pdfium, error) {
-	config := wazero.NewRuntimeConfig().
+// poolConfig is the ONE place the WebAssembly pool is configured. Every
+// sandbox property is set here: an empty file system, no output streams, a
+// memory ceiling, and a runtime that stops when ctx ends.
+func (engine *pdfEngine) poolConfig(ctx context.Context) webassembly.Config {
+	runtime := wazero.NewRuntimeConfig().
 		WithCloseOnContextDone(true).
 		WithCompilationCache(engine.cache)
 	if engine.memoryLimitPages > 0 {
-		config = config.WithMemoryLimitPages(engine.memoryLimitPages)
+		runtime = runtime.WithMemoryLimitPages(engine.memoryLimitPages)
 	}
-	pool, err := webassembly.Init(webassembly.Config{
+	return webassembly.Config{
 		Context:       ctx,
 		MinIdle:       0,
 		MaxIdle:       1,
 		MaxTotal:      1,
-		RuntimeConfig: config,
-		FSConfig:      wazero.NewFSConfig(),
-		Stdout:        io.Discard,
-		Stderr:        io.Discard,
-	})
+		RuntimeConfig: runtime,
+		// An empty FSConfig mounts no directory. Without it go-pdfium
+		// mounts the host root, and a path-based open inside a hostile
+		// document could reach elitea-main's secrets and certificates.
+		FSConfig: wazero.NewFSConfig(),
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+	}
+}
+
+func (engine *pdfEngine) open(ctx context.Context) (pdfium.Pool, pdfium.Pdfium, error) {
+	pool, err := webassembly.Init(engine.poolConfig(ctx))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
@@ -78,6 +92,24 @@ func (engine *pdfEngine) open(ctx context.Context) (pdfium.Pool, pdfium.Pdfium, 
 		return nil, nil, fmt.Errorf("%w: pdf instance: %w", ErrUnavailable, err)
 	}
 	return pool, instance, nil
+}
+
+// warm opens and closes one instance, which compiles the module into the
+// engine's cache. It takes a slot like an extraction, so it never adds to
+// the memory bound.
+func (engine *pdfEngine) warm(ctx context.Context) error {
+	select {
+	case engine.slots <- struct{}{}:
+		defer func() { <-engine.slots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	pool, instance, err := engine.open(ctx)
+	if err != nil {
+		return err
+	}
+	_ = instance.Close()
+	return pool.Close()
 }
 
 // extract reads every page's text layer.
@@ -131,28 +163,42 @@ func readPDF(
 		}
 		return refuse(ReasonMalformed, err)
 	}
-	builder.unitCount = count.PageCount
-	pages := count.PageCount
-	if pages > limits.MaxPages {
-		pages = limits.MaxPages
-		builder.stop(PartialPageLimit)
-	}
+	return readPages(ctx, count.PageCount, limits, builder, func(index int) (string, error) {
+		return pageText(instance, opened.Document, index)
+	})
+}
+
+// readPages adds each page in turn. The page limit is recorded only when it
+// is what actually stopped the read: a text limit reached at page 600 of a
+// 2,500-page document is a text limit, and the worker says so.
+func readPages(
+	ctx context.Context,
+	pageCount int,
+	limits Limits,
+	builder *textBuilder,
+	text func(index int) (string, error),
+) error {
+	builder.unitCount = pageCount
+	pages := min(pageCount, limits.MaxPages)
 	for index := range pages {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		text, err := pageText(instance, opened.Document, index)
+		body, err := text(index)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			// One broken page is recorded as a page without text rather
 			// than refusing a document whose other pages read fine.
-			text = ""
+			body = ""
 		}
-		if !builder.add(UnitPage, strconv.Itoa(index+1), text) {
+		if !builder.add(UnitPage, strconv.Itoa(index+1), body) {
 			return nil
 		}
+	}
+	if pages < pageCount {
+		builder.stop(PartialPageLimit)
 	}
 	return nil
 }

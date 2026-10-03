@@ -39,7 +39,7 @@ func (extractor *Extractor) extractOOXML(
 	case entries["ppt/presentation.xml"] != nil:
 		return FormatPPTX, extractPPTX(ctx, reader, builder)
 	case entries["xl/workbook.xml"] != nil:
-		return FormatXLSX, extractXLSX(ctx, data, reader, extractor.limits, builder)
+		return FormatXLSX, extractXLSX(ctx, reader, extractor.limits, builder)
 	}
 	return "", refuse(ReasonUnsupportedFormat, errors.New("zip is not an office document"))
 }
@@ -174,9 +174,30 @@ func extractDOCX(ctx context.Context, parts *zipParts, builder *textBuilder) err
 	// space, cells with a tab, and a table row ends the line, so a table
 	// reads as tab-separated rows.
 	cellDepth := 0
+	// tabsDepth > 0 inside <w:tabs>, the paragraph's tab-stop DEFINITIONS.
+	// A <w:tab> there is a stop position, not a tab character; only a
+	// <w:tab> in a run is text.
+	tabsDepth := 0
+	// collected bounds what the parse holds. The text limit applies when the
+	// sections are added; past it nothing more is kept, so a document part
+	// near its size limit does not also become a second copy in memory.
+	budget := builder.remaining()
+	collected := 0
+	uncollected := 0
+	over := func() bool { return collected > budget }
 	flush := func() {
 		text := paragraph.String()
 		paragraph.Reset()
+		if over() {
+			// Still count the sections past the limit, so the worker can
+			// say how many it did not read.
+			if heading && cellDepth == 0 && strings.TrimSpace(text) != "" {
+				uncollected++
+			}
+			heading = false
+			return
+		}
+		collected += len(text) + 1
 		if cellDepth > 0 {
 			if row.Len() > 0 && !strings.HasSuffix(row.String(), "\t") && text != "" {
 				row.WriteByte(' ')
@@ -204,8 +225,12 @@ func extractDOCX(ctx context.Context, parts *zipParts, builder *textBuilder) err
 				inText = true
 			case "tc":
 				cellDepth++
+			case "tabs":
+				tabsDepth++
 			case "tab":
-				paragraph.WriteByte('\t')
+				if tabsDepth == 0 {
+					paragraph.WriteByte('\t')
+				}
 			case "br", "cr":
 				paragraph.WriteByte('\n')
 			case "pStyle":
@@ -220,6 +245,10 @@ func extractDOCX(ctx context.Context, parts *zipParts, builder *textBuilder) err
 			switch element.Name.Local {
 			case "t":
 				inText = false
+			case "tabs":
+				if tabsDepth > 0 {
+					tabsDepth--
+				}
 			case "p":
 				flush()
 			case "tc":
@@ -228,13 +257,15 @@ func extractDOCX(ctx context.Context, parts *zipParts, builder *textBuilder) err
 				}
 				row.WriteByte('\t')
 			case "tr":
-				current := sections[len(sections)-1]
-				current.body.WriteString(strings.TrimRight(row.String(), "\t"))
-				current.body.WriteByte('\n')
+				if !over() {
+					current := sections[len(sections)-1]
+					current.body.WriteString(strings.TrimRight(row.String(), "\t"))
+					current.body.WriteByte('\n')
+				}
 				row.Reset()
 			}
 		case xml.CharData:
-			if inText {
+			if inText && !over() {
 				paragraph.Write(element)
 			}
 		}
@@ -249,7 +280,7 @@ func extractDOCX(ctx context.Context, parts *zipParts, builder *textBuilder) err
 	if strings.TrimSpace(sections[0].body.String()) == "" && len(sections) > 1 {
 		sections = sections[1:]
 	}
-	builder.unitCount = len(sections)
+	builder.unitCount = len(sections) + uncollected
 	for _, current := range sections {
 		if !builder.add(UnitSection, current.label, strings.TrimRight(current.body.String(), "\n")) {
 			return nil
@@ -363,7 +394,7 @@ func slideOrder(parts *zipParts) ([]string, error) {
 		return nil, err
 	}
 	if len(ordered) > 0 {
-		return ordered, nil
+		return distinct(ordered), nil
 	}
 	for name := range parts.entries {
 		if slideNumber(name) > 0 {
@@ -374,6 +405,22 @@ func slideOrder(parts *zipParts) ([]string, error) {
 		return slideNumber(ordered[left]) < slideNumber(ordered[right])
 	})
 	return ordered, nil
+}
+
+// distinct keeps the first occurrence of each slide part. A real deck lists
+// each slide once; a crafted sldIdLst that names one large slide thousands
+// of times would otherwise make every repeat a new read of the same part.
+func distinct(names []string) []string {
+	seen := make(map[string]struct{}, len(names))
+	out := names[:0]
+	for _, name := range names {
+		if _, repeated := seen[name]; repeated {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 func slideNumber(name string) int {
