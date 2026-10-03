@@ -199,10 +199,14 @@ test("a real PDF attached in chat reaches the model as its text", async ({
         "`agent_input_attachment_unreadable` (elitea-main refused it, with a reason) and " +
         "`agent_input_attachment_read_failed` (the read itself failed) in the worker log.",
     ).toContain(token);
+    // The unreadable note both workers write names the file:
+    // `"<name>" could not be read`. The bare phrase also appears in the
+    // attachment instructions the mock model echoes back ("a note that says
+    // which part could not be read and why"), so it proves nothing.
     expect(
       answer.content,
       "a readable PDF must not be reported as unreadable",
-    ).not.toContain("could not be read");
+    ).not.toContain(`"${fileName}" could not be read`);
   } finally {
     fs.unlinkSync(tmpFile);
     if (projectId !== "" && conversationId !== "") {
