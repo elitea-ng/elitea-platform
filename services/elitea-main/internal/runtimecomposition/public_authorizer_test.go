@@ -43,6 +43,30 @@ func (s *authorizationStore) ResolveRuntimeExecutionEventCapability(
 	return s.row.capabilityID, s.row.err
 }
 
+// allowObservers admits every observer, so the tests that pin the permission
+// branches are not also about execution ownership.
+type allowObservers struct{}
+
+func (allowObservers) MayObserveAgentExecution(context.Context, int64, string, auth.User) (bool, error) {
+	return true, nil
+}
+
+// recordingObservers answers a fixed verdict and records what it was asked.
+type recordingObservers struct {
+	allowed     bool
+	err         error
+	calls       int
+	project     int64
+	executionID string
+	principal   auth.User
+}
+
+func (o *recordingObservers) MayObserveAgentExecution(_ context.Context, project int64, executionID string, principal auth.User) (bool, error) {
+	o.calls++
+	o.project, o.executionID, o.principal = project, executionID, principal
+	return o.allowed, o.err
+}
+
 type authorizationPermissionResolver struct {
 	resolution auth.PermissionResolution
 	err        error
@@ -80,6 +104,7 @@ func TestPublicAuthorizerDerivesPhaseOneIdentityFromVerifiedMembership(t *testin
 		store,
 		&authorizationStore{row: authorizationRow{capabilityID: "index.ingest.v1"}},
 		indexEventPermissions(),
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +128,7 @@ func TestPublicAuthorizerAcceptsVerifiedForwardedMembership(t *testing.T) {
 		store,
 		&authorizationStore{row: authorizationRow{capabilityID: "index.ingest.v1"}},
 		indexEventPermissions(),
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +149,7 @@ func TestPublicAuthorizerRejectsDevelopmentAndMissingMembership(t *testing.T) {
 		developmentStore,
 		&authorizationStore{row: authorizationRow{capabilityID: "index.ingest.v1"}},
 		indexEventPermissions(),
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +167,7 @@ func TestPublicAuthorizerRejectsDevelopmentAndMissingMembership(t *testing.T) {
 		store,
 		&authorizationStore{row: authorizationRow{capabilityID: "index.ingest.v1"}},
 		indexEventPermissions(),
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +185,7 @@ func TestPublicAuthorizerBindsAllowlistedExecutionEventsToProjectionProject(t *t
 		&authorizationStore{row: authorizationRow{active: true}},
 		store,
 		permissions,
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +209,7 @@ func TestPublicAuthorizerBindsAllowlistedExecutionEventsToProjectionProject(t *t
 		&authorizationStore{row: authorizationRow{active: true}},
 		store,
 		indexEventPermissions(),
+		allowObservers{},
 	)
 	if err := authorizer.AuthorizeExecutionEvents(ctx, "42", "execution-1"); !errors.Is(err, executionapi.ErrExecutionEventsForbidden) {
 		t.Fatalf("unauthorized event error = %v", err)
@@ -198,6 +228,7 @@ func TestPublicAuthorizerRequiresIndexObservationPermission(t *testing.T) {
 		&authorizationStore{row: authorizationRow{active: true}},
 		store,
 		permissions,
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +262,7 @@ func TestPublicAuthorizerRequiresChatPermissionForBothAgentCapabilities(t *testi
 			&authorizationStore{row: authorizationRow{active: true}},
 			store,
 			permissions,
+			allowObservers{},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -242,6 +274,75 @@ func TestPublicAuthorizerRequiresChatPermissionForBothAgentCapabilities(t *testi
 		if err := authorizer.AuthorizeExecutionEvents(ctx, "42", "execution-1"); !errors.Is(err, executionapi.ErrExecutionEventsForbidden) {
 			t.Fatalf("capability %s missing permission error = %v", capabilityID, err)
 		}
+	}
+}
+
+// The chat permission says who may chat in the project, not whose execution
+// this is. An agent execution's stream is bound to the execution: the observer
+// authority decides, and its refusal or failure is the route's answer.
+func TestPublicAuthorizerBindsAgentEventsToTheExecutionObserver(t *testing.T) {
+	ctx := auth.ContextWithAuthenticatedUser(
+		context.Background(),
+		auth.User{ID: "17", UserID: "17"},
+		auth.AuthenticationSourceSession,
+	)
+	for _, capabilityID := range []string{
+		executiondomain.AgentApplicationCapability,
+		executiondomain.AgentAdhocCapability,
+	} {
+		observers := &recordingObservers{}
+		authorizer, err := newPostgresPublicAuthorizer(
+			&authorizationStore{row: authorizationRow{active: true}},
+			&authorizationStore{row: authorizationRow{capabilityID: capabilityID}},
+			&authorizationPermissionResolver{resolution: auth.PermissionResolution{
+				UserID: 17, Permissions: []string{"models.chat.messages.create"},
+			}},
+			observers,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := authorizer.AuthorizeExecutionEvents(ctx, "42", "execution-of-another-user"); !errors.Is(err, executionapi.ErrExecutionEventsForbidden) {
+			t.Fatalf("capability %s: a member who may not observe the execution got %v", capabilityID, err)
+		}
+		if observers.calls != 1 || observers.project != 42 || observers.executionID != "execution-of-another-user" || observers.principal.ID != "17" {
+			t.Fatalf("capability %s: observer asked %+v", capabilityID, observers)
+		}
+		observers.allowed = true
+		if err := authorizer.AuthorizeExecutionEvents(ctx, "42", "execution-of-another-user"); err != nil {
+			t.Fatalf("capability %s: an observer was refused: %v", capabilityID, err)
+		}
+		observers.err = errors.New("database unavailable")
+		if err := authorizer.AuthorizeExecutionEvents(ctx, "42", "execution-of-another-user"); err == nil {
+			t.Fatalf("capability %s: an observer lookup failure admitted the stream", capabilityID)
+		}
+	}
+
+	// The binding is the agent branches' alone: index ingest keeps its own
+	// named permission and never asks the observer authority.
+	observers := &recordingObservers{}
+	authorizer, err := newPostgresPublicAuthorizer(
+		&authorizationStore{row: authorizationRow{active: true}},
+		&authorizationStore{row: authorizationRow{capabilityID: executiondomain.IndexIngestCapability}},
+		indexEventPermissions(),
+		observers,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.AuthorizeExecutionEvents(ctx, "42", "index-execution"); err != nil {
+		t.Fatalf("index events: %v", err)
+	}
+	if observers.calls != 0 {
+		t.Fatalf("index events asked the agent observer authority %d times", observers.calls)
+	}
+}
+
+func TestPublicAuthorizerRequiresAnExecutionObserverAuthority(t *testing.T) {
+	if _, err := newPostgresPublicAuthorizer(
+		&authorizationStore{}, &authorizationStore{}, indexEventPermissions(), nil,
+	); err == nil {
+		t.Fatal("an authorizer with no observer authority was built")
 	}
 }
 
@@ -303,7 +404,7 @@ func TestPublicAuthorizerAuthorizesValidationEventsOnMembershipNotPermissionCoun
 					Permissions: testCase.permissions,
 				},
 			}
-			authorizer, err := newPostgresPublicAuthorizer(admission, output, permissions)
+			authorizer, err := newPostgresPublicAuthorizer(admission, output, permissions, allowObservers{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -335,6 +436,7 @@ func TestPublicAuthorizerRefusesValidationEventsForInactivePrincipal(t *testing.
 		admission,
 		&authorizationStore{row: authorizationRow{capabilityID: "configuration.validate.v1"}},
 		&authorizationPermissionResolver{err: errors.New("inactive principal")},
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -355,6 +457,7 @@ func TestPublicAuthorizerRefusesValidationEventsWhenMembershipQueryFails(t *test
 		&authorizationStore{row: authorizationRow{active: true, err: errors.New("connection reset")}},
 		&authorizationStore{row: authorizationRow{capabilityID: "configuration.validate.v1"}},
 		&authorizationPermissionResolver{resolution: auth.PermissionResolution{UserID: 17}},
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -391,6 +494,7 @@ func TestPublicAuthorizerKeepsNamedPermissionBranchesIndependentOfMembership(t *
 				admission,
 				&authorizationStore{row: authorizationRow{capabilityID: testCase.capabilityID}},
 				permissions,
+				allowObservers{},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -415,6 +519,7 @@ func TestPublicAuthorizerRejectsUnverifiedExecutionEventPrincipalBeforeDatabase(
 		&authorizationStore{row: authorizationRow{active: true}},
 		store,
 		indexEventPermissions(),
+		allowObservers{},
 	)
 	if err != nil {
 		t.Fatal(err)

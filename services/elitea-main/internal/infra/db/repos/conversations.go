@@ -2378,7 +2378,8 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 				FROM %s.chat_message_items mi
 				JOIN %s.chat_messages_text mt ON mt.id = mi.id
 				WHERE mi.message_group_id = mg.id AND mi.item_type = 'text_message'
-			), '')
+			), ''),
+			mg.is_streaming, mg.task_id
 		FROM %s.chat_message_group mg
 		JOIN %s.chat_participants p ON p.id = mg.author_participant_id
 		WHERE mg.conversation_id = $1%s
@@ -2403,16 +2404,24 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 		var meta []byte
 		var entityName string
 		var groupID int
+		var isStreaming bool
+		var taskID *string
 		// A scan failure used to `continue`, so an unreadable row silently
 		// dropped a message out of the transcript.
 		// `updated_at` is nullable, so it is scanned into the pointer the wire
 		// field is: a group that has never been rewritten states no update
 		// time rather than claiming one.
 		if err := rows.Scan(&groupID, &m.ConversationID, &m.UUID, &entityName, &meta, &m.CreatedAt,
-			&m.UpdatedAt, &m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content); err != nil {
+			&m.UpdatedAt, &m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content, &isStreaming, &taskID); err != nil {
 			return conversations.MessagesListResponse{}, fmt.Errorf("conversations: scan message: %w", err)
 		}
 		m.ID = strconv.Itoa(groupID)
+		if isStreaming {
+			m.IsStreaming = true
+			if taskID != nil && *taskID != "" {
+				m.TaskID = taskID
+			}
+		}
 		if meta != nil {
 			_ = json.Unmarshal(meta, &m.Metadata) // best-effort: DB column is trusted JSON
 		}

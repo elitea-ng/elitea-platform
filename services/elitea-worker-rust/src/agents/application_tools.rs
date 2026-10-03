@@ -2511,7 +2511,7 @@ pub(super) fn child_failure_report(
         safe_message.to_owned()
     };
     let recovery = match kind {
-        RuntimeFailureKind::ModelAccessDenied | RuntimeFailureKind::ModelBudgetExhausted => {
+        RuntimeFailureKind::ModelAccessDenied | RuntimeFailureKind::ModelBudgetExhausted(_) => {
             "ask_administrator"
         }
         _ if retryable => "verify_before_retry",

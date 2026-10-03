@@ -16,15 +16,22 @@ func TestModelFailurePoliciesCrossOutputBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	var policies []struct {
-		Code      string `json:"code"`
-		Message   string `json:"message"`
-		Retryable bool   `json:"retryable"`
+		Code       string `json:"code"`
+		PublicCode string `json:"public_code"`
+		Message    string `json:"message"`
+		Retryable  bool   `json:"retryable"`
 	}
 	if err := json.Unmarshal(data, &policies); err != nil {
 		t.Fatal(err)
 	}
 	for _, policy := range policies {
-		t.Run(policy.Code, func(t *testing.T) {
+		// A scoped budget refusal (#6732) shares its wire code with the
+		// unscoped one, and Main reports it under its own public code.
+		publicCode := policy.Code
+		if policy.PublicCode != "" {
+			publicCode = policy.PublicCode
+		}
+		t.Run(publicCode, func(t *testing.T) {
 			for _, injected := range []bool{false, true} {
 				frame := proto.Clone(readCorpusFrame(t, "unsupported")).(*runtimev1.ExecutionOutputFrameV1)
 				code, ok := runtimev1.RuntimeErrorCodeV1_value["RUNTIME_ERROR_CODE_V1_"+policy.Code]
@@ -54,7 +61,7 @@ func TestModelFailurePoliciesCrossOutputBoundary(t *testing.T) {
 					t.Fatalf("failure rejected: %v", stream.acks)
 				}
 				got := failures.frames[0].Failure
-				if got.Code != policy.Code || got.SafeMessage != policy.Message || got.Retryable != policy.Retryable {
+				if got.Code != publicCode || got.SafeMessage != policy.Message || got.Retryable != policy.Retryable {
 					t.Fatalf("reason lost: %+v", got)
 				}
 			}

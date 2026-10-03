@@ -22,6 +22,13 @@ type publicOutputAuthorizationQuerier interface {
 	ResolveRuntimeExecutionEventCapability(context.Context, sqlcgen.ResolveRuntimeExecutionEventCapabilityParams) (string, error)
 }
 
+// agentExecutionObserverAuthority binds an agent execution's event stream to
+// the execution: its starter, or a principal who may read its conversation.
+// repos.ExecutionObserverAuthority is the production implementation.
+type agentExecutionObserverAuthority interface {
+	MayObserveAgentExecution(ctx context.Context, project int64, executionID string, principal auth.User) (bool, error)
+}
+
 // postgresPublicAuthorizer accepts only a principal with server-derived
 // authentication provenance. Forwarded identities are admitted only after the
 // opaque production route has verified the proxy peer and reloaded the active
@@ -33,20 +40,23 @@ type postgresPublicAuthorizer struct {
 	admissionStore publicAdmissionAuthorizationQuerier
 	outputStore    publicOutputAuthorizationQuerier
 	permissions    auth.PermissionResolver
+	observers      agentExecutionObserverAuthority
 }
 
 func newPostgresPublicAuthorizer(
 	admissionStore publicAdmissionAuthorizationQuerier,
 	outputStore publicOutputAuthorizationQuerier,
 	permissions auth.PermissionResolver,
+	observers agentExecutionObserverAuthority,
 ) (*postgresPublicAuthorizer, error) {
-	if admissionStore == nil || outputStore == nil || permissions == nil {
-		return nil, errors.New("runtime authorization databases and permission resolver are required")
+	if admissionStore == nil || outputStore == nil || permissions == nil || observers == nil {
+		return nil, errors.New("runtime authorization databases, permission resolver and execution observer authority are required")
 	}
 	return &postgresPublicAuthorizer{
 		admissionStore: admissionStore,
 		outputStore:    outputStore,
 		permissions:    permissions,
+		observers:      observers,
 	}, nil
 }
 
@@ -157,6 +167,17 @@ func (a *postgresPublicAuthorizer) AuthorizeExecutionEvents(ctx context.Context,
 		}
 	case executiondomain.AgentApplicationCapability, executiondomain.AgentAdhocCapability:
 		if !containsPermission(resolution.Permissions, "models.chat.messages.create") {
+			return executionapi.ErrExecutionEventsForbidden
+		}
+		// The permission names who may chat in the project, not whose
+		// execution this is. Bind the stream to the execution: its starter,
+		// or a principal who may read its conversation. A member who learns
+		// the id of another user's private chat execution must not replay it.
+		allowed, err := a.observers.MayObserveAgentExecution(ctx, project, executionID, principal)
+		if err != nil {
+			return err
+		}
+		if !allowed {
 			return executionapi.ErrExecutionEventsForbidden
 		}
 	default:

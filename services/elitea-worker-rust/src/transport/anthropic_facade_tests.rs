@@ -6,7 +6,7 @@ use adk_rust::{
 };
 use bytes::Bytes;
 use http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
-use http::{HeaderValue, Version};
+use http::{HeaderValue, Response, StatusCode, Version};
 use http_body_util::Full;
 use tokio_stream::StreamExt as _;
 use tonic::body::Body;
@@ -1464,4 +1464,55 @@ fn an_image_media_type_anthropic_does_not_take_refuses_the_message() {
         anthropic_message_for_test(&content, true).is_err(),
         "a media type this block type cannot express must be refused, not guessed at"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_budget_refusal_names_the_refusing_scope() {
+    // #6732: the native Anthropic path reads the 402 body the same way the
+    // OpenAI-compatible path does, in either error envelope.
+    for (body, expected_code) in [
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","scope":"member","message":"secret"}}"#[..],
+            "model_gateway.member_budget_exhausted",
+        ),
+        (
+            &br#"{"type":"error","error":{"type":"budget_exceeded","code":"member_budget_exceeded","message":"secret"}}"#[..],
+            "model_gateway.member_budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","scope":"project","message":"secret"}}"#[..],
+            "model_gateway.project_budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","message":"secret"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+    ] {
+        let response = Response::builder()
+            .status(StatusCode::PAYMENT_REQUIRED)
+            .version(Version::HTTP_2)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::new(Full::new(Bytes::from_static(body))))
+            .expect("budget refusal response");
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(response)],
+            test_model_gateway_config(),
+        )
+        .expect("model gateway client");
+        let bound = client
+            .bind_anthropic_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                invocation(MODEL, None),
+            )
+            .expect("native Anthropic model");
+        let Err(error) = bound.generate_for_test(request(MODEL, Some(0.7))).await else {
+            panic!("a budget refusal must fail")
+        };
+        assert_eq!(error.category, ErrorCategory::InvalidInput);
+        assert_eq!(error.code, expected_code);
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains(TOKEN));
+    }
 }

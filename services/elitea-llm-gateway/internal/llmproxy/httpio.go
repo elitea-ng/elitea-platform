@@ -77,6 +77,9 @@ type openAIErrorFields struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
+	// Scope is set only by writeBudgetRefusal on a gate-decided budget
+	// refusal. See budgetScopeFieldProject.
+	Scope string `json:"scope,omitempty"`
 }
 
 // writeError writes an OpenAI-shaped error body at the given status.

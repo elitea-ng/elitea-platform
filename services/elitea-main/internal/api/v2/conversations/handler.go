@@ -107,7 +107,15 @@ type Message struct {
 	// message_items"), so an always-present empty array would make every
 	// message claim an items list it does not have.
 	MessageItems []map[string]any `json:"message_items,omitempty"`
-	CreatedAt    time.Time        `json:"created_at"`
+	// A turn still in flight (#6654): `is_streaming` and the execution it
+	// runs as (`task_id`), the two keys the details route's message groups
+	// already carry. The chat page seeds from THIS route, and a reload
+	// mid-turn reattaches to the execution only when its last row names it.
+	// Both are OMITTED for a settled row, so a finished transcript reads
+	// exactly as before.
+	IsStreaming bool      `json:"is_streaming,omitempty"`
+	TaskID      *string   `json:"task_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 	// When this group was last REWRITTEN, which for an assistant row is the
 	// moment its text was finalized — including the finalize of a
 	// REGENERATION, which rewrites the row in place

@@ -73,6 +73,7 @@ from elitea_worker.execution.errors import (
     IncompatibleVersion,
     InternalFailure,
     InvalidInput,
+    ModelBudgetExhausted,
     OutputCancellationWon,
     OutputDeadlineWon,
     ResourceExhausted,
@@ -2682,20 +2683,20 @@ class AgentExecutionDeliveryProcessor(IndexIngestDeliveryProcessor):
             raise InternalFailure() from None
         except Exception as error:
             if isinstance(error, SdkBudgetExceeded):
-                # The same mapping the index path makes, for the same reason.
                 # A budget rejection is a policy outcome, and it is terminal:
-                # no retry clears an exhausted budget. RESOURCE_EXHAUSTED is
-                # the canonical non-retryable contract for it.
+                # no retry clears an exhausted budget. MODEL_BUDGET_EXHAUSTED is
+                # its non-retryable contract, the same one the Rust worker
+                # sends. The index path keeps RESOURCE_EXHAUSTED.
                 #
                 # Reporting it as InternalFailure, which is what happened
                 # before the agent adapter had a budget boundary, told the
                 # caller the worker had broken and invited a retry that could
                 # only fail again.
                 #
-                # RuntimeErrorV1 still has no budget-specific wire code, so the
-                # SDK/proxy message and the scope that won (member or project)
-                # do not cross this boundary.
-                raise ResourceExhausted() from None
+                # MODEL_BUDGET_EXHAUSTED carries the scope that won (member or
+                # project) as one of two registered messages (#6732). The
+                # SDK/proxy message still does not cross this boundary.
+                raise ModelBudgetExhausted(error.scope) from None
             if _is_mcp_dependency_failure(error):
                 _emit_agent_internal_failure(
                     stage="mcp_materialization",

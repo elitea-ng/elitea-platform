@@ -262,3 +262,70 @@ WHERE conversation_id = $1::int
 		t.Fatalf("exactly one group was rewritten, %d came back stamped", stamped)
 	}
 }
+
+// #6654: the chat page seeds from this route, so a reload mid-turn can only
+// reattach to the execution when the in-flight row says it is streaming and
+// names its execution. A settled row states neither.
+func TestListMessagesNamesTheExecutionOfATurnInFlight(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	numericID, _ := seedTranscript(t, repo)
+
+	settled, err := repo.ListMessages(ctx, "1", numericID, wholeTranscript())
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	for _, message := range settled.Items {
+		if message.IsStreaming || message.TaskID != nil {
+			t.Fatalf("a settled row must state neither is_streaming nor task_id")
+		}
+	}
+
+	if _, err := repo.pool.Exec(ctx, `
+UPDATE p_1.chat_message_group
+SET is_streaming = TRUE, task_id = 'a1b2c3d4e5f60718'
+WHERE conversation_id = $1::int
+  AND author_participant_id IN (
+      SELECT id FROM p_1.chat_participants WHERE entity_name <> 'user'
+  )`, numericID); err != nil {
+		t.Fatalf("mark the answer in flight: %v", err)
+	}
+
+	inFlight, err := repo.ListMessages(ctx, "1", numericID, wholeTranscript())
+	if err != nil {
+		t.Fatalf("list messages in flight: %v", err)
+	}
+	streaming := 0
+	for _, message := range inFlight.Items {
+		if message.Role == "user" {
+			if message.IsStreaming || message.TaskID != nil {
+				t.Fatalf("the question is not in flight")
+			}
+			continue
+		}
+		if !message.IsStreaming || message.TaskID == nil || *message.TaskID != "a1b2c3d4e5f60718" {
+			t.Fatalf("the answer in flight must name its execution, got %v %v", message.IsStreaming, message.TaskID)
+		}
+		streaming++
+	}
+	if streaming != 1 {
+		t.Fatalf("exactly one row is in flight, %d came back streaming", streaming)
+	}
+
+	// A row whose stream ended keeps its task_id column; the route omits it,
+	// so the client never reattaches to a finished execution.
+	if _, err := repo.pool.Exec(ctx,
+		`UPDATE p_1.chat_message_group SET is_streaming = FALSE WHERE conversation_id = $1::int`, numericID); err != nil {
+		t.Fatalf("settle the answer: %v", err)
+	}
+	ended, err := repo.ListMessages(ctx, "1", numericID, wholeTranscript())
+	if err != nil {
+		t.Fatalf("list messages after the end: %v", err)
+	}
+	for _, message := range ended.Items {
+		if message.IsStreaming || message.TaskID != nil {
+			t.Fatalf("an ended row must state neither is_streaming nor task_id")
+		}
+	}
+}

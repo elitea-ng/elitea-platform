@@ -44,6 +44,7 @@ import { ChatContinue } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
+import { BudgetUsageLink } from '../error-trace/BudgetUsageLink';
 import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
 
@@ -305,6 +306,7 @@ export function ApplicationAnswer({
             <>
               {renderedContent}
               {!!exception && <ErrorTrace error={exception} />}
+              {!!exception && <BudgetUsageLink code={answer.failureCode} />}
             </>
           )}
 

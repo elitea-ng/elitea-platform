@@ -1,7 +1,7 @@
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
 import { useCallback, useMemo } from "react";
 
-import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
+import { useChatStreamTransport, type ChatMessage, type ReattachableTurn } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
 import { getExecutionTokens } from "@/features/mcps";
 import type { useUploadAttachments } from "@/entities/conversation";
@@ -28,6 +28,7 @@ import {
   creationMeta,
   internalToolsSaveFailure,
   positiveParticipantId,
+  resolveSendLlmSettings,
   resolveSendModelName,
   resolveStartContract,
   resolveTargetParticipant,
@@ -59,7 +60,9 @@ export interface UseChatBoxSendParams {
    * optional chain lives here — reading it at the ChatBox call site pushed that
    * component over its complexity budget.
    */
-  readonly model?: { readonly name?: string | undefined } | null | undefined;
+  readonly model?: { readonly name?: string | undefined; readonly projectId?: string | undefined } | null | undefined;
+  /** The picker's project for a configured model saved with no project id. */
+  readonly configuredModelProjectId?: number | undefined;
   readonly setChatHistory: (
     updater: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
   ) => void;
@@ -119,6 +122,11 @@ export interface UseChatBoxSendResult {
   }) => Promise<StreamStartOutcome>;
   readonly isStreaming: boolean;
   /**
+   * Observe a turn that was in flight when the page loaded (#6654). `false`
+   * ⇒ nothing was opened: no project or conversation, or a run is owned.
+   */
+  readonly reattachStreamedExecution: (turn: ReattachableTurn) => boolean;
+  /**
    * The user pressed Stop: cancel the run server-side and close its stream.
    * A no-op when this transport does not own the current run, so it is safe to
    * call alongside the socket-era `stopStreaming`.
@@ -143,6 +151,10 @@ export function useChatBoxSend(
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
   const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
+  const llmSettings = useMemo(
+    () => resolveSendLlmSettings(params.llmSettings, params.model, params.configuredModelProjectId),
+    [params.llmSettings, params.model, params.configuredModelProjectId],
+  );
   const target = useMemo(
     () => resolveTargetParticipant(params.activeParticipant, params.participants),
     [params.activeParticipant, params.participants],
@@ -191,7 +203,7 @@ export function useChatBoxSend(
         conversationUuid,
         projectId: projectIdString,
         payload,
-        llmSettings: params.llmSettings,
+        llmSettings,
         modelName,
         isApplicationTurn,
         participantId:
@@ -214,7 +226,7 @@ export function useChatBoxSend(
       startDetailed,
       projectId,
       projectIdString,
-      params.llmSettings,
+      llmSettings,
       getInternalToolsForSend,
       modelName,
       target,
@@ -263,7 +275,7 @@ export function useChatBoxSend(
         responseMessageId: input.messageId,
         questionId: input.questionId,
         question: input.question,
-        llmSettings: params.llmSettings,
+        llmSettings,
         modelName,
         isApplicationTurn,
         participantId: positiveParticipantId(
@@ -289,7 +301,7 @@ export function useChatBoxSend(
       projectIdString,
       params.conversationUuid,
       target,
-      params.llmSettings,
+      llmSettings,
       getInternalToolsForSend,
       modelName,
     ],
@@ -304,9 +316,9 @@ export function useChatBoxSend(
           question.slice(0, 50) ||
           t("widgets.chatBox.defaultConversationName", "New Chat"),
         isPrivate: true,
-        meta: creationMeta(params.llmSettings, internalTools),
+        meta: creationMeta(llmSettings, internalTools),
         ...(!isAgentsPage && modelName ? {
-          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings: params.llmSettings }),
+          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings }),
         } : {}),
       });
       if (!created) return undefined;
@@ -325,7 +337,7 @@ export function useChatBoxSend(
       isAgentsPage,
       modelName,
       params.userId,
-      params.llmSettings,
+      llmSettings,
       getInternalToolsForSend,
     ],
   );
@@ -346,10 +358,27 @@ export function useChatBoxSend(
     [deps, projectId],
   );
 
+  const { reattach } = transport;
+  const conversationUuid = params.conversationUuid;
+  const reattachStreamedExecution = useCallback(
+    (turn: ReattachableTurn): boolean => {
+      if (projectId === undefined || conversationUuid === undefined) return false;
+      return reattach({
+        projectId,
+        conversationUuid,
+        executionId: turn.executionId,
+        responseMessageId: turn.messageId,
+        questionId: turn.questionId,
+      });
+    },
+    [projectId, conversationUuid, reattach],
+  );
+
   return {
     startStreamedExecution,
     continueStreamedExecution,
     regenerateStreamedExecution,
+    reattachStreamedExecution,
     isStreaming: transport.isStreaming,
     stopStreamedExecution: transport.stop,
     createConversationForSend,

@@ -245,6 +245,13 @@ export const paramSchemas = {
    * regardless of what was just created. `String(ConfigurationWire.id)`.
    */
   reveal: text(),
+  /**
+   * Not in P1's manifest — `/settings/usage?scope=user` (#6732). A member
+   * budget refusal in the chat links here, so the page reads the CALLER's
+   * own budget instead of the project's. Bare enum, like `view`: no
+   * JSON-coerced value is a member, so `.catch()` absorbs it.
+   */
+  scope: z.enum(['project', 'user']).catch('project').prefault('project'),
 
   // ── shared/"any" scope (PARAM-062..087) ──────────────────────────────────
   author_id: text(),

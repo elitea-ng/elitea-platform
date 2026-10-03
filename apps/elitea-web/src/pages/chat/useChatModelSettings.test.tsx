@@ -97,7 +97,6 @@ describe('useChatModelSettings', () => {
     );
 
     expect(result.current.settings).toMatchObject({
-      model_project_id: 77,
       temperature: 0.6,
       max_tokens: -1,
       steps_limit: 25,
@@ -108,5 +107,40 @@ describe('useChatModelSettings', () => {
     await Promise.resolve();
     expect(result.current.settings).toMatchObject({ max_tokens: 1024, steps_limit: 6 });
     expect(writes).toBe(0);
+  });
+
+  it('does not pin a chat with no saved model to the current project (UI-PD-2)', () => {
+    // The project default is a model SHARED from project 1. Defaulting
+    // model_project_id to the chat's project 77 made the picker look for it in
+    // 77, find nothing and show "None".
+    const activeConversation = {
+      id: '5',
+      participants: [{ id: 'p-user', entity_name: 'user', entity_meta: { id: 9 }, entity_settings: {} }],
+    };
+    const { result } = renderHook(
+      () => useChatModelSettings({ activeConversation, projectId: '77', userId: '9' }),
+      { wrapper },
+    );
+
+    expect(result.current.settings).not.toHaveProperty('model_project_id');
+    expect(result.current.settings).not.toHaveProperty('model_name');
+  });
+
+  it('keeps a saved shared model with its own project', () => {
+    const activeConversation = {
+      id: '5',
+      participants: [{
+        id: 'p-user',
+        entity_name: 'user',
+        entity_meta: { id: 9 },
+        entity_settings: { llm_settings: { model_name: 'gpt-shared', model_project_id: 1 } },
+      }],
+    };
+    const { result } = renderHook(
+      () => useChatModelSettings({ activeConversation, projectId: '77', userId: '9' }),
+      { wrapper },
+    );
+
+    expect(result.current.settings).toMatchObject({ model_name: 'gpt-shared', model_project_id: 1 });
   });
 });
