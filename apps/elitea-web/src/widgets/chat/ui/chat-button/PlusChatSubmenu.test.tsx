@@ -73,6 +73,54 @@ describe('PlusChatSubmenu renders outside a Menu', () => {
   });
 });
 
+describe('PlusChatSubmenu header and size (#6629)', () => {
+  it('keeps the create row in the header with the search, outside the scrolling list', async () => {
+    const onCreateNew = vi.fn();
+    render(
+      <Harness>
+        <PlusChatSubmenu
+          items={Array.from({ length: 40 }, (_, index) => ({ key: `a-${String(index)}`, label: `Agent ${String(index)}` }))}
+          showCreateNew
+          onCreateNew={onCreateNew}
+          createNewLabel="Create Agent"
+        />
+      </Harness>,
+    );
+    const header = screen.getByTestId('plus-submenu-header');
+    const list = screen.getByTestId('plus-submenu-list');
+    const create = screen.getByTestId('plus-submenu-create-new');
+    expect(header).toContainElement(create);
+    expect(header).toContainElement(screen.getByRole('textbox'));
+    expect(list).not.toContainElement(create);
+    expect(create).toHaveTextContent('Create Agent');
+    await userEvent.click(create);
+    expect(onCreateNew).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives every list one fixed height, full or empty', () => {
+    render(
+      <Harness>
+        <PlusChatSubmenu items={[]} />
+      </Harness>,
+    );
+    expect(screen.getByTestId('plus-submenu-list')).toHaveStyle({ height: '20.3125rem' });
+  });
+
+  it('draws the search and plus glyphs at 16px', () => {
+    render(
+      <Harness>
+        <PlusChatSubmenu
+          items={[]}
+          showCreateNew
+          onCreateNew={vi.fn()}
+        />
+      </Harness>,
+    );
+    expect(screen.getByTestId('plus-submenu-search-icon')).toHaveStyle({ width: '1rem', height: '1rem' });
+    expect(screen.getByTestId('plus-submenu-create-icon')).toHaveStyle({ width: '1rem', height: '1rem' });
+  });
+});
+
 describe('UsersParticipantDropdown footer renders outside a Menu', () => {
   it('renders the "All users" row under a bare Paper', async () => {
     const onSelectAll = vi.fn();
