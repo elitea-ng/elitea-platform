@@ -17,6 +17,7 @@ import { ServicePromptsBody } from './ui/system-prompts/ServicePromptsBody';
 export type { PromptConfig } from './ui/system-prompts/ServicePrompts.types';
 
 import { SecretsTable } from './ui/secrets/SecretsTable';
+import { SecretsLoadError } from './ui/secrets/SecretsLoadError';
 import { SecretValueCell } from './ui/secrets/SecretValueCell';
 import { useSecretPermissions } from './lib/secrets/useSecretPermissions';
 
@@ -87,7 +88,7 @@ export const servicePromptsFeature = { ServicePromptsBody };
  * the masked-value cell — reveal toggle, and a copy that re-fetches the
  * plaintext instead of reading the rendered text — is the same component.
  */
-export const secretsFeature = { SecretsTable, SecretValueCell, useSecretPermissions };
+export const secretsFeature = { SecretsTable, SecretsLoadError, SecretValueCell, useSecretPermissions };
 
 /** Webhooks tab (`pages/settings/Webhooks.tsx`, #876). */
 export const webhooksFeature = {
