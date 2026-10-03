@@ -219,14 +219,16 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 		AllowEmptyUserInput: true,
 	})
 	if err != nil {
-		if errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart) {
-			// The use case refused the request's shape. Every identifier in
-			// it was built here from stored rows, so what is left for a
-			// caller to have got wrong is the input. Named as such rather
-			// than reported as a runtime outage.
-			h.discardRunConversation(ctx, schema, conversationUUID)
-			return runOutcome{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
-		}
+		// NOT relabelled as ErrInvalidInput, even when the use case answers
+		// ErrInvalidCurrentAgentStart. Every input refusal that use case can
+		// make is made above first (size, UTF-8, NUL; empty input is allowed
+		// through AllowEmptyUserInput), so an ErrInvalidCurrentAgentStart that
+		// still arrives here has a cause the caller did not write: a stored
+		// row the freezer or the context policy refused, or a request this
+		// package assembled wrongly. Relabelling it answered 422 "`input` is
+		// not valid" — telling a sender to fix a body that was fine — and
+		// skipped the caller's error log. It is our fault, reported as one.
+		//
 		// The turn was never admitted, so the conversation created a moment ago
 		// holds nothing and never will. Left behind, a misconfigured webhook
 		// retried by its sender fills the chat list with empty transcripts.

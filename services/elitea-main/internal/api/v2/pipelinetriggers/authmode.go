@@ -82,8 +82,12 @@ const (
 
 // StandardWebhooksTolerance is how far a signed timestamp may be from this
 // server's clock, in either direction. The specification's reference
-// libraries use five minutes. A delivery outside it is refused, which is what
-// stops a captured request from being replayed later.
+// libraries use five minutes. A delivery outside it is refused, which stops a
+// captured request from being replayed AFTER the window. It does nothing
+// inside the window: a copy sent within five minutes carries a timestamp that
+// is still good. What stops that copy is the delivery log (deliveries.go),
+// keyed on the signed `webhook-id`, which answers a repeat with the run the
+// first copy started instead of starting another.
 const StandardWebhooksTolerance = 5 * time.Minute
 
 // standardWebhooksSecretPrefix marks a Standard Webhooks secret: the rest is

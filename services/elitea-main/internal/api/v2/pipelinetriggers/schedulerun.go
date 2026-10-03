@@ -247,7 +247,10 @@ func (h *Handler) fireSchedule(
 		record(resultSkippedMissing, "the pipeline version is gone or is not a pipeline", "")
 	case errors.Is(err, ErrInvalidInput), errors.Is(err, ErrInputTooLarge):
 		// The schedule's own stored input, so retrying the next tick cannot
-		// help. Named, so the settings tab says what to fix.
+		// help. Named, so the settings tab says what to fix, and logged,
+		// because that one sentence is otherwise all an operator has.
+		h.log().Warn("pipelinetriggers: scheduled run input refused",
+			"project_id", tenant.ProjectID, "schedule_id", schedule.ID, "err", err)
 		result.Failed++
 		record(resultFailed, "the schedule's `input` is not valid run input", "")
 	case err != nil:

@@ -200,6 +200,13 @@ func TestPresentedSecretReadsTheGitLabTokenHeader(t *testing.T) {
 		{"bearer wins over gitlab", map[string]string{"Authorization": "Bearer first", GitLabTokenHeader: "second"}, "", "first"},
 		{"elitea header wins over gitlab", map[string]string{TriggerTokenHeader: "first", GitLabTokenHeader: "second"}, "", "first"},
 		{"gitlab wins over the query string", map[string]string{GitLabTokenHeader: "first"}, "?token=second", "first"},
+		// A proxy or a GitLab custom header adding its own Authorization:
+		// a Bearer value is still the carrier compared (and a wrong one is
+		// refused); any other scheme is not a carrier and falls through.
+		{"a wrong bearer beside gitlab is the value compared", map[string]string{"Authorization": "Bearer wrong", GitLabTokenHeader: "right"}, "", "wrong"},
+		{"basic auth beside gitlab falls through", map[string]string{"Authorization": "Basic dXNlcjpwYXNz", GitLabTokenHeader: "right"}, "", "right"},
+		{"a whitespace-only elitea header falls through", map[string]string{TriggerTokenHeader: "   ", GitLabTokenHeader: "right"}, "", "right"},
+		{"a padded gitlab header is trimmed", map[string]string{GitLabTokenHeader: "  right  "}, "", "right"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/api/v2/pipeline_trigger/1/abc"+test.query, nil)

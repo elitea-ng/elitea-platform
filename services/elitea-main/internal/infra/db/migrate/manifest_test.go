@@ -721,7 +721,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// mode (what a GitLab signing token sends), and the signature-header rule
 	// to every mode but `token`. No table and no permission, so no shared
 	// sibling.
-	require.EqualValues(t, 139, Head(tenant))
+	// 140: tenant/0140_pipeline_trigger_deliveries.sql, the signed
+	// deliveries an inbound trigger has admitted, keyed by the delivery's
+	// signed identity (Standard Webhooks `webhook-id`, or the HMAC-signed raw
+	// body), so a replay or a provider retry answers the first run instead of
+	// starting a second (PR #1027 review). A table and no permission, so no
+	// shared sibling.
+	require.EqualValues(t, 140, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

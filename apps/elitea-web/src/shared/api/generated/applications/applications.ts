@@ -19565,7 +19565,28 @@ export const getRunPipelineInboundTriggerForProviderUrl = (
  * signature is HMAC-SHA256 of `webhook-id.webhook-timestamp.body` under
  * the key behind the secret's `whsec_` prefix, as `v1,<base64>`. A
  * timestamp more than five minutes from the server clock is refused, so
- * a captured delivery cannot be replayed.
+ * a captured delivery cannot be replayed after that window.
+ *
+ * ## A signed delivery starts one run
+ *
+ * Inside the window, and for `hmac_sha256` (which signs no timestamp at
+ * all), a signature alone does not tell a new delivery from a copy. So
+ * each admitted signed delivery is remembered for 72 hours, keyed on
+ * what the sender signed: the `webhook-id` for Standard Webhooks, the raw
+ * body for `hmac_sha256` (an unsigned header such as
+ * `X-GitHub-Delivery` is not part of the key). A repeat is answered 202
+ * with the first run's ids and starts nothing; a provider retry of a
+ * delivery whose answer it lost therefore reads as a success. A copy
+ * that arrives while the first is still being admitted is answered 503
+ * with `Retry-After`. A delivery whose admission failed is forgotten,
+ * so its retry is a first try. A generic HMAC sender that wants two runs
+ * must send two different bodies.
+ *
+ * ## Provider payloads get the larger body cap
+ *
+ * A GitHub or GitLab trigger's body is the provider's own event payload,
+ * so it may be up to 1 MiB in every mode, including a GitLab secret-token
+ * trigger. A custom bearer trigger's body is held to 64 KiB.
  * @summary Start a pipeline run from a provider-shaped webhook URL
  */
 export const runPipelineInboundTriggerForProvider = async (
