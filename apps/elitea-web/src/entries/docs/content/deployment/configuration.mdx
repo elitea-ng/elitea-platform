@@ -11,7 +11,7 @@ Configure identity providers under **Configuration › Authentication** in the a
 
 - **The first global admin** is a chart/environment setting, not a console one — `identity.initial_global_admins` in the auth document, or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS`. See the Helm install guide.
 - **An OIDC-only install now gets the configuration plane.** Before, only a Form authentication document (`ELITEA_AUTH_CONFIG_FILE`) composed the principal validator the configuration write path needs; now `env.OIDC_ISSUER_URL` alone composes it too, as long as `ELITEA_AI_PROJECT_ID` is set. A deployment with no authentication at all is still refused, in both the chart and the binary.
-- **SCIM** provisions accounts and groups at `/api/v2/scim/v2`, authenticated with a personal access token; the console side is only the group-to-role binding (see [Authentication](/admin/authentication#bind-scim-groups-to-a-project-role)).
+- **SCIM** provisions accounts and groups at `/api/v2/scim/v2`. It authenticates with a dedicated SCIM client credential (a bearer secret, or OAuth2 client credentials at `/api/v2/scim/oauth/token`), not with a personal access token. Create the client and bind groups to project roles in the console (see [Authentication](/admin/authentication#connect-an-identity-provider-with-scim)). `ELITEA_SCIM_ACCESS_TOKEN_TTL` sets the access token lifetime (default `1h`).
 
 ## The first global administrator
 

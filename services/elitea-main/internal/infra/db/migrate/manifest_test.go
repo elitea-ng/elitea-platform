@@ -571,7 +571,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// GET answers with what the identity provider sent and Entra ID converges
 	// instead of re-PATCHing the name (and overwriting the display name) on
 	// every provisioning cycle.
-	require.EqualValues(t, 134, Head(shared))
+	//
+	// 135: shared/0135_scim_clients.sql, the dedicated SCIM client
+	// credentials. SCIM stops accepting personal access tokens; it accepts a
+	// bearer secret or an OAuth2 client-credentials access token from these
+	// two tables. Only SHA-256 hashes of the secrets are stored.
+	require.EqualValues(t, 135, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

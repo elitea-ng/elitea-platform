@@ -1007,6 +1007,36 @@ main:
     # own is 24 hours.
     ELITEA_SESSION_REJECT_LEGACY_COOKIES: ""
 
+    # --- SCIM 2.0 provisioning (shared migration 0135) -------------------------
+    # BREAKING CHANGE: SCIM no longer accepts personal access tokens. Create a
+    # SCIM client under Admin > Configuration > Authentication > SCIM
+    # provisioning, and configure the identity provider with it:
+    #   Tenant URL      https://<host>/api/v2/scim/v2
+    #   Token endpoint  https://<host>/api/v2/scim/oauth/token  (OAuth2 only)
+    # A "Secret token (Bearer)" client gives one secret for the identity
+    # provider's "Secret token" field. An "OAuth2 client credentials" client
+    # gives a client identifier and a client secret. See
+    # apps/elitea-web/src/entries/docs/content/admin/authentication.mdx.
+    #
+    # Maintenance mode does NOT pause SCIM: a SCIM client has no administration
+    # permissions, so the maintenance gate does not apply to it. Pause
+    # provisioning in the identity provider to freeze the directory.
+    #
+    # ELITEA_SCIM_ACCESS_TOKEN_TTL is the lifetime of an access token the token
+    # endpoint issues to an OAuth2 client. A Go duration between 5m and 24h.
+    # Empty means 1h. A value outside the range stops the boot.
+    ELITEA_SCIM_ACCESS_TOKEN_TTL: ""
+
+    # ELITEA_TRUSTED_PROXY_CIDRS lists the proxies (ingress, gateway) whose
+    # X-Forwarded-For is believed, as comma-separated CIDRs, for example the
+    # pod network "10.42.0.0/16". The SCIM token endpoint keys its failure
+    # limit on (client id, caller address) and needs the real caller behind
+    # the ingress. It is merged with the Form document's trusted_proxy_cidrs,
+    # so set it on an OIDC-only or SAML-only install. Empty: the caller
+    # address is unknown, the endpoint verifies every secret before it
+    # throttles, and the boot logs a WARN.
+    ELITEA_TRUSTED_PROXY_CIDRS: ""
+
     # --- The first administrator, on a single-sign-on-only deployment -----------
     # Comma-separated provider references that are granted the administration
     # super_admin role the first time they sign in

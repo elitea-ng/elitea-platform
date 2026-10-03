@@ -99,6 +99,7 @@ In your project, open Settings → AI Providers (`/settings/create-configuration
 | `/admin/app` | The admin console |
 | `/app/{projectId}/mcp/…` | Elitea's own MCP server, for external MCP clients |
 | `/api/v2/scim/v2` | SCIM provisioning, if you connect an identity provider that supports it |
+| `/api/v2/scim/oauth/token` | The OAuth 2.0 token endpoint for SCIM clients that use the client credentials grant |
 
 Observability runs over OpenTelemetry through elitea-main's collector proxy — there is no Langfuse or other third-party APM integration.
 

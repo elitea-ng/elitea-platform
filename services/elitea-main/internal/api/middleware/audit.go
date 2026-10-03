@@ -293,6 +293,11 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 		if annotation.ProjectID != nil {
 			event.ProjectID = annotation.ProjectID
 		}
+		// A non-user actor (a SCIM client) fills the actor column only when
+		// no user principal did. A user id is never replaced by a label.
+		if annotation.Actor != "" && event.UserID == nil && event.UserEmail == "" {
+			event.UserEmail = annotation.Actor
+		}
 	}
 	return event
 }

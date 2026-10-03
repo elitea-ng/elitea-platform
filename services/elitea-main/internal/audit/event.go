@@ -139,6 +139,11 @@ type Annotation struct {
 	EntityID   *int64
 	EntityName string
 	ProjectID  *int64
+	// Actor names a NON-USER caller, for example `scim:<client name>` for a
+	// SCIM client. The middleware writes it into `user_email` when the request
+	// carries no user principal, so the trail names the integration that made
+	// the change rather than showing an empty actor. It never overrides a user.
+	Actor string
 }
 
 // AnnotationSlot is the mutable cell the middleware puts on the context before
@@ -197,6 +202,9 @@ func Annotate(ctx context.Context, a Annotation) {
 	}
 	if a.ProjectID != nil {
 		slot.annotation.ProjectID = a.ProjectID
+	}
+	if a.Actor != "" {
+		slot.annotation.Actor = a.Actor
 	}
 }
 

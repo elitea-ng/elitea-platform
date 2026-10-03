@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -77,6 +78,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
@@ -165,6 +167,14 @@ type RouterConfig struct {
 	// gets audit.NewPostgresRecorder(Pool). A nil Pool and a nil field together
 	// mean the audit middleware is not mounted at all.
 	AuditRecorder audit.Recorder
+	// SCIMAccessTokenTTL is the lifetime of an access token the SCIM token
+	// endpoint issues. Zero selects scimclient.DefaultAccessTokenTTL (1h).
+	// cmd/elitea-main reads it from ELITEA_SCIM_ACCESS_TOKEN_TTL.
+	SCIMAccessTokenTTL time.Duration
+	// SCIMClientAddresses resolves the real caller address for the SCIM token
+	// endpoint's failure limiter, from the trusted proxy CIDRs. Nil means no
+	// address is known; see internal/api/scim/token.go for that behaviour.
+	SCIMClientAddresses *scimapi.ClientAddressResolver
 	// ArtifactPermissionResolver overrides the legacyrbac.NewPostgresResolver
 	// built from Pool for the artifact routes only (S11) — tests inject a
 	// resolver here to control RBAC outcomes without a live database. Every
@@ -1426,6 +1436,68 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
 	)
 
+	// SCIM 2.0 provisioning (shared migrations 0096, 0098, 0134).
+	//
+	// The base URL an operator pastes into their identity provider is
+	// `https://<host>/api/v2/scim/v2`, and the OAuth 2.0 token endpoint is
+	// `https://<host>/api/v2/scim/oauth/token`.
+	//
+	// This group sits OUTSIDE the `/api/v2` group below, and that is the point.
+	// That group's Auth middleware resolves a USER from a session or a personal
+	// access token. A SCIM request runs as a SCIM CLIENT (internal/scimclient):
+	// scimapi.Authenticate admits a client credential and refuses a personal
+	// access token and a browser session. Until shared migration 0135 the tree
+	// was mounted inside that group behind `admin.auth.users`, which tied every
+	// identity provider to one person's personal access token.
+	//
+	// chi matches the longer static prefix first, so `/api/v2/scim/...` reaches
+	// this group and never the `/api/v2` catch-all, as `/api/v2/artifacts` does.
+	//
+	// AUDIT sits BELOW authentication on the SCIM tree, and records only
+	// successful issues on the token endpoint. Both are deliberate: the two
+	// routes are reachable without a session, and an audit middleware above
+	// the credential check would let any anonymous caller write a row to
+	// `centry.audit_events` per request. An authenticated SCIM change is
+	// recorded with the actor `scim:<client name>`, because a client has no
+	// user id.
+	//
+	// MAINTENANCE MODE is NOT mounted, and this is a decision, not an
+	// omission: it admits only callers whose administration permissions
+	// resolve, and a SCIM client has none. A push during a maintenance window
+	// is therefore answered as on any other day. The SCIM documentation
+	// (apps/elitea-web/src/entries/docs/content/admin/authentication.mdx) and
+	// the Helm values comment say so; an operator who must freeze the
+	// directory pauses provisioning in the identity provider.
+	var (
+		scimCredentials scimapi.Credentials
+		scimTokenIssuer scimapi.TokenIssuer
+		scimClientStore admin.SCIMClientStore
+	)
+	// Interface variables stay nil without a pool. A typed nil *Store in an
+	// interface would pass the nil checks and panic on the first request.
+	if cfg.Pool != nil {
+		store := scimclient.NewStore(cfg.Pool, cfg.SCIMAccessTokenTTL)
+		scimCredentials, scimTokenIssuer, scimClientStore = store, store, store
+	}
+	// The caller-address resolver for the token endpoint's failure limiter.
+	// cmd/elitea-main builds it from the deployment's trusted proxy CIDRs on
+	// every authentication plane. A nil resolver is valid: the endpoint then
+	// verifies every secret before it throttles (internal/api/scim/token.go).
+	var scimClientAddresses scimapi.ClientAddresses
+	if cfg.SCIMClientAddresses != nil {
+		scimClientAddresses = cfg.SCIMClientAddresses
+	}
+	r.Group(func(r chi.Router) {
+		r.Use(apimw.NoStore)
+		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).
+			Method(http.MethodPost, scimapi.TokenPath, scimapi.NewTokenHandler(scimTokenIssuer, scimClientAddresses))
+		r.With(
+			scimapi.Authenticate(scimCredentials),
+			apimw.Audit(auditRecorder),
+			scimapi.AnnotateAuditActor,
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
+	})
+
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, so every handler in the
 	// group writes plain JSON and only the outermost layer encodes it.
@@ -1623,6 +1695,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// the screen and a group push can never disagree about which
 					// project a binding names.
 					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+					// The SCIM client credentials, the same store the SCIM tree
+					// authenticates against.
+					admin.WithSCIMClients(scimClientStore),
 					// The toolkit type policy the served catalogue also reads.
 					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
 				}, adminOptions...)...,
@@ -1707,31 +1782,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			requireProjectsView := central("projects.projects.projects.view")
 			requireProjectsEdit := central("projects.projects.projects.edit")
 
-			// SCIM 2.0 user provisioning (shared migration 0096).
-			//
-			// Mounted UNDER /api/v2, not at the root, so it inherits the one
-			// authentication middleware this service has rather than acquiring a
-			// second identity check. The base URL an operator pastes into their
-			// identity provider is therefore `https://<host>/api/v2/scim/v2`;
-			// internal/api/scim states that in its package comment, next to the
-			// paths themselves.
-			//
-			// The gate is `admin.auth.users` in administration mode — the SAME
-			// permission the admin Users page's write routes carry above. A SCIM
-			// client creating and deactivating accounts is doing what that page
-			// does, so no new permission string arrives here and the grant gate
-			// in router_permission_grant_gate_test.go stays untripped.
-			// `/Groups` is served too, and the gate does not change with it. An
-			// identity provider presents ONE credential for both resources, so
-			// a second permission on the group half would stop every SCIM
-			// client already configured against this deployment. What a group
-			// push can do is bounded by the BINDING an administrator authored
-			// under `/admin/scim_group_bindings/administration` (below, on the
-			// project-membership permission), not by a second gate here: a push
-			// cannot choose a project, cannot choose a role, and cannot create
-			// or delete either.
-			r.With(requireAdminUsers).Mount(scimapi.MountPath,
-				scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
+			// The SCIM 2.0 tree is NOT mounted here. It authenticates a SCIM
+			// client, not a user, so it sits outside this group's Auth
+			// middleware; see the group above the `/api/v2` group.
 
 			r.Route("/admin", func(r chi.Router) {
 				// Admin panel endpoints (administration mode, no projectID)
@@ -1807,6 +1860,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/user_project_permissions/administration", adminHandler.UserProjectPermissions)
 				r.With(central(admin.UserProjectPermissionsEditPermission)).
 					Put("/user_project_permissions/administration", adminHandler.UserProjectPermissionsSave)
+				// The dedicated SCIM client credentials (shared migration 0135).
+				// Gated on `admin.auth.users`, the permission the SCIM tree
+				// itself required before 0134: a SCIM client creates and
+				// deactivates accounts, so minting one must need the right to
+				// do that by hand. internal/api/v2/admin/scim_clients.go
+				// states why a weaker gate would be an escalation. A secret is
+				// returned once, by the create and the rotate.
+				r.With(requireAdminUsers).
+					Get("/scim_clients/administration", adminHandler.SCIMClientList)
+				r.With(requireAdminUsers).
+					Post("/scim_clients/administration", adminHandler.SCIMClientCreate)
+				r.With(requireAdminUsers).
+					Post("/scim_clients/administration/{id}/rotate", adminHandler.SCIMClientRotate)
+				r.With(requireAdminUsers).
+					Post("/scim_clients/administration/{id}/revoke", adminHandler.SCIMClientRevoke)
+				r.With(requireAdminUsers).
+					Delete("/scim_clients/administration/{id}", adminHandler.SCIMClientDelete)
 				// The SCIM group bindings (shared migration 0098): which
 				// identity provider group grants which role on which project.
 				//

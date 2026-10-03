@@ -9,6 +9,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/brandpackage"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"log/slog"
 	"net/http"
 	"os"
@@ -415,6 +416,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load outbound e-mail settings: %w", err)
 	}
+	// The SCIM access token lifetime (shared migration 0135). A value that is
+	// not a duration, or is outside 5m..24h, stops the boot and names the
+	// variable, rather than running with a lifetime nobody chose.
+	scimAccessTokenTTL, err := scimclient.AccessTokenTTLFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("load SCIM settings: %w", err)
+	}
 	// ONE store and ONE resolver, shared by the composer that sends and the
 	// admin surface that writes (wired through api.Config.EmailSettings).
 	// Building two would let the page that reports a relay configured and the
@@ -438,6 +446,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose outbound e-mail: %w", err)
 	}
 
+	// The Form document's trusted proxy CIDRs, kept for the SCIM token
+	// endpoint's caller-address resolver, which every plane builds below.
+	var authDocumentTrustedProxyCIDRs []string
 	if authEnabled {
 		if err := pool.Ping(ctx); err != nil {
 			return fmt.Errorf("verify authentication PostgreSQL dependency: %w", err)
@@ -446,6 +457,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if loadErr != nil {
 			return fmt.Errorf("load production Form authentication: %w", loadErr)
 		}
+		authDocumentTrustedProxyCIDRs = append([]string(nil), authConfig.TrustedProxyCIDRs...)
 		// The document is the PRIMARY source, so the list has one meaning on
 		// whichever browser plane ends up mounted.
 		firstLoginPolicy = v2auth.FirstLoginPolicy{
@@ -2147,6 +2159,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		patSigner = formGraph
 	}
 
+	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
+	if err != nil {
+		return fmt.Errorf("load SCIM caller-address settings: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
@@ -2209,6 +2226,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitDiscovery:           toolkitDiscovery,
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
+		SCIMAccessTokenTTL:         scimAccessTokenTTL,
+		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,

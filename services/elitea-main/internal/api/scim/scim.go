@@ -20,19 +20,19 @@
 // (internal/api/router.go). A second, separately-authenticated tree at the root
 // would be a second place for the identity check to be got wrong.
 //
-// # How a client authenticates, and why there is no SCIM token type
+// # How a client authenticates
 //
-// With a PERSONAL ACCESS TOKEN, as a bearer credential, belonging to an account
-// that holds `admin.auth.users` in administration mode — the same permission the
-// admin Users page's write routes require. A SCIM client that can create and
-// deactivate accounts is doing exactly what that page does.
+// With a SCIM CLIENT credential (shared migration 0135), and with nothing else.
+// An administrator creates the client under Admin > Configuration >
+// Authentication. A `bearer` client presents its secret as the bearer token; a
+// `client_credentials` client first gets an access token from
+// `/api/v2/scim/oauth/token` (token.go). auth.go is the check, and it refuses a
+// personal access token and a browser session.
 //
-// The alternative was a dedicated SCIM token table with its own hashing,
-// rotation and admin surface. It was rejected: a PAT is already a static bearer
-// credential with an owner, an expiry and a revocation path, and a second
-// credential type would be a second set of those to get right. What an operator
-// does instead is create a service account, grant it the administration role,
-// and mint a token — all of which the platform already supports.
+// The first revision accepted a personal access token of an account holding
+// `admin.auth.users`. That tied every identity provider to one person: their
+// full rights, their name on every change, and an integration that stopped when
+// they left. The dedicated credential replaced it.
 //
 // # Groups map onto a project, and the missing half is authored
 //
@@ -213,10 +213,12 @@ func (h *Handler) ServiceProviderConfig(w http.ResponseWriter, _ *http.Request) 
 		"sort":           map[string]any{"supported": false},
 		"etag":           map[string]any{"supported": false},
 		"authenticationSchemes": []map[string]any{{
-			"type":        "oauthbearertoken",
-			"name":        "OAuth Bearer Token",
-			"description": "A platform personal access token belonging to an account that holds admin.auth.users.",
-			"primary":     true,
+			"type": "oauthbearertoken",
+			"name": "OAuth Bearer Token",
+			"description": "A SCIM client credential: the secret of a bearer client, or an access token " +
+				"from the OAuth 2.0 client credentials grant at " + TokenPath + ". Personal access tokens are not accepted.",
+			"specUri": "https://www.rfc-editor.org/rfc/rfc6750",
+			"primary": true,
 		}},
 		"meta": map[string]any{
 			"resourceType": "ServiceProviderConfig",
