@@ -48,7 +48,7 @@ export function StatusPage({
         justifyContent: 'center',
         padding: '1.5rem 1rem',
         backgroundColor: theme.vars.palette.background.default,
-        color: theme.vars.palette.text.primary,
+        color: theme.vars.palette.text.secondary,
       })}
     >
       <Box
@@ -69,7 +69,11 @@ export function StatusPage({
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <BrandLogoMark style={{ width: '1.75rem', height: '1.75rem' }} />
-          <Typography component="span" variant="labelMedium">
+          <Typography
+            component="span"
+            variant="labelMedium"
+            sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}
+          >
             {productName}
           </Typography>
         </Box>
@@ -101,7 +105,7 @@ export function StatusPage({
         <Typography
           component="h1"
           variant="headingLarge"
-          sx={(theme: Theme) => ({ color: theme.vars.palette.text.primary, margin: 0 })}
+          sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, margin: 0 })}
         >
           {title}
         </Typography>

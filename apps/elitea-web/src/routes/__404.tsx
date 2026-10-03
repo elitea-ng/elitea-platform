@@ -85,7 +85,6 @@ export function NotFoundPage() {
       testId="not-found-page"
       code="404"
       title={t('route.notFound.title', 'Page not found')}
-      minHeight="70vh"
       actions={
         <>
           <Button variant="contained" component="a" href="/">
@@ -107,7 +106,7 @@ export function NotFoundPage() {
       <Typography
         component="p"
         variant="bodyMedium"
-        sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, lineHeight: 1.6, margin: 0 })}
+        sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, margin: 0 })}
       >
         {t(
           'route.notFound.message',
