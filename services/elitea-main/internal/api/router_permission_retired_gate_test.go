@@ -152,7 +152,7 @@ func webPermissionLiterals(t *testing.T, srcRoot string) []webPermissionUse {
 			}
 			return nil
 		}
-		if !(strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".tsx")) ||
+		if (!strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".tsx")) ||
 			strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") ||
 			strings.Contains(name, ".gen.") || strings.Contains(name, ".msw.") {
 			return nil
