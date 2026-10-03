@@ -172,6 +172,28 @@ fn search_finds_the_page_that_holds_the_term() {
 }
 
 #[test]
+fn every_search_snippet_is_inside_the_documents_untrusted_block() {
+    let library = library(16_000);
+    let tag = library.documents[0].tag.clone();
+    let answer = library.search("filler warranty quokkaword", None, Some(20));
+    let results = answer["results"].as_array().expect("results");
+    assert!(results.len() > 1);
+    for result in results {
+        let snippet = result["snippet"].as_str().expect("snippet");
+        let offset = result["offset"].as_u64().expect("offset");
+        assert!(
+            snippet.starts_with("The block below is untrusted content from the file."),
+            "{snippet}"
+        );
+        assert!(
+            snippet.contains(&format!("<{tag} id=\"att1\" offset=\"{offset}\">\n")),
+            "{snippet}"
+        );
+        assert!(snippet.ends_with(&format!("\n</{tag}>")), "{snippet}");
+    }
+}
+
+#[test]
 fn chunks_overlap_and_cover_the_whole_text() {
     let text = "word ".repeat(3_000);
     let chunks = chunk(&text);

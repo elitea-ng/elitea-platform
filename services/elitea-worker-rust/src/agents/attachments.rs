@@ -364,6 +364,12 @@ pub(crate) struct AttachmentReference {
 }
 
 impl AttachmentReference {
+    /// The bucket the object is stored in.
+    #[must_use]
+    pub(crate) fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
     /// The object key, conversation prefix included.
     #[must_use]
     pub(crate) fn name(&self) -> &str {
@@ -1217,9 +1223,34 @@ mod tests {
                 Some(attachment_response(StatusCode::FORBIDDEN, "{}")),
                 "not available to this conversation",
             ),
+            // Main's 404 for a missing OBJECT carries the reason document.
+            (
+                Some(attachment_response(
+                    StatusCode::NOT_FOUND,
+                    &unreadable("not_found"),
+                )),
+                "no longer exists",
+            ),
+            // A 404 without it is the ROUTE: a deployment with no Go object
+            // store has no attachment route. The file exists.
             (
                 Some(attachment_response(StatusCode::NOT_FOUND, "{}")),
-                "no longer exists",
+                "cannot read attached files",
+            ),
+            (
+                Some(attachment_response(
+                    StatusCode::NOT_FOUND,
+                    "404 page not found\n",
+                )),
+                "cannot read attached files",
+            ),
+            // An empty upload is "empty", never "too large".
+            (
+                Some(attachment_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &unreadable("empty"),
+                )),
+                "the file is empty",
             ),
             (
                 Some(attachment_response(

@@ -233,11 +233,11 @@ pub(crate) fn render_attachment_reads(
     let mut texts = BTreeMap::new();
     let mut remaining = budget.attachment_tokens();
     let mut library = Vec::new();
-    for (index, reference) in order.iter().enumerate() {
+    for reference in order {
         let Some(read) = reads.remove(reference) else {
             continue;
         };
-        let id = format!("att{}", index + 1);
+        let id = attachment_id(reference);
         let name = display_name(reference.name());
         let text = match read {
             AttachmentRead::Unreadable(reason) => unreadable_note(&id, &name, reason),
@@ -264,12 +264,39 @@ pub(crate) fn render_attachment_reads(
     RenderedAttachments { texts, library }
 }
 
+/// The id the notes and the attachment tools use for one stored object.
+///
+/// It is derived from the object's bucket and key, not from its place in the
+/// turn. The thread's session keeps every earlier turn's notes, so an id
+/// numbered per turn ("att1") would name a different file on the next turn
+/// that attaches one. The same object has the same id on every turn.
+pub(crate) fn attachment_id(reference: &AttachmentReference) -> String {
+    let mut identity = Vec::with_capacity(reference.bucket().len() + reference.name().len() + 1);
+    identity.extend_from_slice(reference.bucket().as_bytes());
+    identity.push(0);
+    identity.extend_from_slice(reference.name().as_bytes());
+    let hash = digest::digest(&digest::SHA256, &identity);
+    let mut id = String::from("att-");
+    for byte in &hash.as_ref()[..4] {
+        let _ = write!(id, "{byte:02x}");
+    }
+    id
+}
+
 /// The file name without the conversation-uuid prefix the object key carries.
+///
+/// The name is shown inside notes and inside a block's opening tag, so it
+/// must not be able to look like markup: quotes, line ends and angle
+/// brackets become safe characters. A file named
+/// `<untrusted-attachment-x>.pdf` would otherwise put a false block opening
+/// before the real one.
 pub(crate) fn display_name(key: &str) -> String {
     key.rsplit('/')
         .next()
         .unwrap_or(key)
         .replace(['"', '\n', '\r'], "'")
+        .replace('<', "(")
+        .replace('>', ")")
 }
 
 /// The digest-derived delimiter for one text. 16 hex characters of SHA-256:
@@ -376,16 +403,20 @@ pub(crate) fn render_units(
 fn coverage_notes(layout: &AttachmentTextLayout) -> String {
     let kind = layout_kind(layout);
     let mut notes = String::new();
-    if !layout.low_text_units.is_empty() {
+    // Only a PDF page can lack a text layer. A short slide, sheet, section or
+    // text part is shown as it is, and to call it scanned would tell the
+    // model that text it can see is missing. (A main older than this rule
+    // flags short units of every format.)
+    if layout.format == "pdf" && !layout.low_text_units.is_empty() {
         let plural = layout.low_text_units.len() > 1;
         let _ = writeln!(
             notes,
-            "{} {} {} little or no text layer ({} may be scanned images). OCR is not available, so {} content is not included.",
+            "{} {} {} little or no text layer ({} may be scanned images). OCR is not available, so text that is only in an image on {} is not included.",
             capitalize(unit_noun(kind, plural)),
             ranges(&layout.low_text_units),
             if plural { "have" } else { "has" },
             if plural { "they" } else { "it" },
-            if plural { "their" } else { "its" },
+            if plural { "them" } else { "it" },
         );
     }
     if layout.units.len() < layout.unit_count {
@@ -554,7 +585,7 @@ fn render_overview(
         let next = shown + 1;
         let _ = writeln!(
             text,
-            "To read the rest, call read_attachment with attachment_id \"{id}\" and the {} to read in \"pages\" (for example \"{next}-{}\"), or call search_attachment to find a passage. Do not answer about {} that you have not read; read them first.",
+            "To read the rest, call read_attachment with attachment_id \"{id}\" and the {} to read in \"pages\" (for example \"{next}-{}\"), or call search_attachment to find a passage. Do not answer about {} that you have not read; read them first. These tools exist only while you answer this message: in a later message, ask the user to attach the file again to read more of it.",
             unit_noun(kind, true),
             (next + 4).min(available.max(next)),
             unit_noun(kind, true),
@@ -594,6 +625,15 @@ fn render_overview(
 }
 
 fn unreadable_note(id: &str, name: &str, reason: &str) -> String {
+    // "processing" is the one outcome that a later read can change, and
+    // only a read of THIS file: a later message reads only the files
+    // attached to it. So the note says what the user can do, and promises
+    // nothing on the platform's behalf.
+    if reason == "processing" {
+        return format!(
+            "[Attachment {id}: \"{name}\" | not read yet]\nThe platform is still extracting the text of \"{name}\" (a large file takes a while), so you have not seen any of its content. Tell the user this, and ask them to wait a minute and then send their message again with the file attached, or regenerate this answer. Do not say the file will be read later without that: a message without the file does not read it."
+        );
+    }
     let cause = match reason {
         "encrypted" => "it is password-protected",
         "unsupported_format" => {
@@ -607,10 +647,8 @@ fn unreadable_note(id: &str, name: &str, reason: &str) -> String {
         "too_large" => "it is larger than the 25 MiB limit for reading files",
         "empty" => "the file is empty",
         "timeout" => "reading it took too long",
-        "processing" => {
-            "the platform is still extracting its text (a large file takes a while), so it will be readable in a later message"
-        }
         "not_found" => "the file no longer exists",
+        "unsupported_deployment" => "this deployment of the platform cannot read attached files",
         "not_available" => "the file is not available to this conversation",
         "turn_limit" => "the files of this turn together exceed the reading limit",
         _ => "the file service could not read it",
@@ -625,6 +663,12 @@ fn unreadable_note(id: &str, name: &str, reason: &str) -> String {
 /// Context compaction calls this on what it sends to the summary model, so a
 /// document is never summarised: the summary records that a file was attached,
 /// not a lossy paraphrase of it. Returns `None` when `text` has no block.
+///
+/// A block is found by its FULL opening: the prefix, exactly 16 lowercase
+/// hex characters (`block_tag`), and a space. Anything else that starts with
+/// the prefix is text, not a block: it is skipped, and the scan goes on. A
+/// candidate with no closing tag is skipped the same way, so text before the
+/// real block can never stop the scan and leave the document in the summary.
 #[must_use]
 pub(crate) fn withhold_attachment_blocks(text: &str) -> Option<String> {
     let opening = format!("<{BLOCK_TAG_PREFIX}");
@@ -633,17 +677,26 @@ pub(crate) fn withhold_attachment_blocks(text: &str) -> Option<String> {
     }
     let mut out = String::with_capacity(text.len().min(4_096));
     let mut rest = text;
+    let mut withheld = false;
     while let Some(start) = rest.find(&opening) {
-        let after = &rest[start + 1..];
-        let tag_end = after.find([' ', '>']).unwrap_or(after.len());
-        let tag = &after[..tag_end];
+        let tag_start = start + 1;
+        let Some(tag) = block_tag_at(&rest[tag_start..]) else {
+            // Not a block: keep the text up to and including the '<'.
+            out.push_str(&rest[..tag_start]);
+            rest = &rest[tag_start..];
+            continue;
+        };
         let closing = format!("</{tag}>");
         let Some(open_end) = rest[start..].find('>') else {
-            break;
+            out.push_str(&rest[..tag_start]);
+            rest = &rest[tag_start..];
+            continue;
         };
         let body_start = start + open_end + 1;
         let Some(close) = rest[body_start..].find(&closing) else {
-            break;
+            out.push_str(&rest[..tag_start]);
+            rest = &rest[tag_start..];
+            continue;
         };
         out.push_str(&rest[..body_start]);
         out.push_str(
@@ -651,9 +704,24 @@ pub(crate) fn withhold_attachment_blocks(text: &str) -> Option<String> {
         );
         out.push_str(&closing);
         rest = &rest[body_start + close + closing.len()..];
+        withheld = true;
     }
     out.push_str(rest);
-    Some(out)
+    withheld.then_some(out)
+}
+
+/// The block tag at the start of `text` (after the '<'), when `text` starts
+/// with a well-formed opening: the prefix, 16 lowercase hex characters and a
+/// space.
+fn block_tag_at(text: &str) -> Option<&str> {
+    let length = BLOCK_TAG_PREFIX.len() + 16;
+    let tag = text.get(..length)?;
+    let hex = tag.strip_prefix(BLOCK_TAG_PREFIX)?;
+    let well_formed = hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && text.as_bytes().get(length) == Some(&b' ');
+    well_formed.then_some(tag)
 }
 
 #[cfg(test)]

@@ -329,10 +329,18 @@ _BLOCK_TAG_PREFIX = "untrusted-attachment-"
 
 
 def attachment_display_name(key: str) -> str:
-    """The file name without the conversation-uuid prefix of the object key."""
+    """The file name without the conversation-uuid prefix of the object key.
+
+    The name is shown inside the block's opening tag, so it must not look
+    like markup: quotes and line ends become ``'``, and angle brackets become
+    parentheses. A file named ``<untrusted-attachment-x>.pdf`` cannot put a
+    false block opening in front of the real one. The same rule as the native
+    runtime (attachment_context.rs, ``display_name``).
+    """
 
     name = key.rsplit("/", 1)[-1]
-    return name.replace('"', "'").replace("\n", "'").replace("\r", "'")
+    name = name.replace('"', "'").replace("\n", "'").replace("\r", "'")
+    return name.replace("<", "(").replace(">", ")")
 
 
 def attachment_block_tag(text: str) -> str:

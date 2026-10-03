@@ -49,7 +49,9 @@ const MAX_ATTACHMENT_UNREADABLE_BYTES: usize = 4 * 1_024;
 /// `RuntimeContextError::Rejected` can carry one. Anything else is reported
 /// as `unreadable`.
 const ATTACHMENT_UNREADABLE_REASONS: [&str; 9] = [
-    // Main is still extracting a large file; a later turn reads it.
+    // Main is still extracting a large file. A read of the same file after
+    // the extraction is filed (a regenerate, or the file attached again)
+    // gets its text; a message without the file does not read it.
     "processing",
     "empty",
     "too_large",
@@ -1492,6 +1494,15 @@ async fn load_attachment_response(
     if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
         return Err(attachment_rejection(response).await);
     }
+    // A 404 is two different answers. Main answers a missing OBJECT with the
+    // reason document (reason `not_found`). A 404 without it is the ROUTE:
+    // a deployment with no Go object store builds its listener without the
+    // attachment route, and there the file exists and this deployment simply
+    // cannot read it. Telling the model the file "no longer exists" would be
+    // false.
+    if response.status() == StatusCode::NOT_FOUND {
+        return Err(attachment_not_found(response).await);
+    }
     let declared_length =
         validate_response_head_with_limit(&response, config.max_attachment_response_bytes)?;
     let body = collect_body(
@@ -1577,28 +1588,41 @@ async fn load_attachment_response(
 /// and that must never turn into a retryable outage because a body was odd.
 async fn attachment_rejection(response: Response<Body>) -> RuntimeContextError {
     let fallback = RuntimeContextError::Rejected("unreadable");
-    let Some(declared) = response
+    let Some(reason) = attachment_reason(response).await else {
+        return fallback;
+    };
+    ATTACHMENT_UNREADABLE_REASONS
+        .iter()
+        .find(|known| **known == reason)
+        .map_or(fallback, |reason| RuntimeContextError::Rejected(reason))
+}
+
+/// Read a 404 from the attachment route. The reason document with
+/// `not_found` is a missing object; anything else is a deployment without
+/// the route, which is a terminal rejection with its own reason, never an
+/// outage to retry.
+async fn attachment_not_found(response: Response<Body>) -> RuntimeContextError {
+    if attachment_reason(response).await.as_deref() == Some("not_found") {
+        return RuntimeContextError::NotFound("the attachment object no longer exists");
+    }
+    RuntimeContextError::Rejected("unsupported_deployment")
+}
+
+/// The reason in main's small reason document
+/// (`elitea.runtime.attachment-unreadable.v1`), or `None` when the body is
+/// not that document.
+async fn attachment_reason(response: Response<Body>) -> Option<String> {
+    let declared = response
         .headers()
         .get(CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok())
-        .filter(|length| *length > 0 && *length <= MAX_ATTACHMENT_UNREADABLE_BYTES)
-    else {
-        return fallback;
-    };
-    let Ok(body) = collect_body(response, declared, MAX_ATTACHMENT_UNREADABLE_BYTES).await else {
-        return fallback;
-    };
-    let Ok(document) = serde_json::from_slice::<AttachmentUnreadableResponse>(&body) else {
-        return fallback;
-    };
-    if document.schema_version != ATTACHMENT_UNREADABLE_SCHEMA {
-        return fallback;
-    }
-    ATTACHMENT_UNREADABLE_REASONS
-        .iter()
-        .find(|reason| **reason == document.reason)
-        .map_or(fallback, |reason| RuntimeContextError::Rejected(reason))
+        .filter(|length| *length > 0 && *length <= MAX_ATTACHMENT_UNREADABLE_BYTES)?;
+    let body = collect_body(response, declared, MAX_ATTACHMENT_UNREADABLE_BYTES)
+        .await
+        .ok()?;
+    let document = serde_json::from_slice::<AttachmentUnreadableResponse>(&body).ok()?;
+    (document.schema_version == ATTACHMENT_UNREADABLE_SCHEMA).then_some(document.reason)
 }
 
 /// The unit map must describe the served text exactly: ordered, disjoint,

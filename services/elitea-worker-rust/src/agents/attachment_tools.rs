@@ -314,7 +314,14 @@ impl AttachmentLibrary {
                     },
                     "offset": snippet_start,
                     "score": (score * 1_000.0).round() / 1_000.0,
-                    "snippet": &document.document.content[snippet_start..snippet_end],
+                    // The same delimiters as read_attachment: a snippet is
+                    // file text, and file text never reaches the model
+                    // outside its untrusted block.
+                    "snippet": untrusted_block(
+                        &document.tag,
+                        &format!("id=\"{}\" offset=\"{snippet_start}\"", document.id),
+                        &document.document.content[snippet_start..snippet_end],
+                    ),
                 })
             })
             .collect();
@@ -437,7 +444,7 @@ impl Tool for ReadAttachmentTool {
         Some(json!({
             "type": "object",
             "properties": {
-                "attachment_id": {"type": "string", "description": "The id from the attachment note, such as att1."},
+                "attachment_id": {"type": "string", "description": "The id from the attachment note, such as att-1a2b3c4d."},
                 "pages": {"type": "string", "description": "Pages, slides, sheets, sections or parts to read: \"N\" or \"N-M\"."},
                 "offset": {"type": "integer", "minimum": 0, "description": "Byte offset to start from when pages is not given."},
                 "max_chars": {"type": "integer", "minimum": 1, "description": "At most this many characters; the platform also applies its own limit."}
@@ -479,7 +486,7 @@ impl Tool for SearchAttachmentTool {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Key words to find."},
-                "attachment_id": {"type": "string", "description": "Search one attachment only, such as att1."},
+                "attachment_id": {"type": "string", "description": "Search one attachment only, such as att-1a2b3c4d."},
                 "top_k": {"type": "integer", "minimum": 1, "maximum": MAX_TOP_K, "description": "How many passages to return (default 8)."}
             },
             "required": ["query"],
