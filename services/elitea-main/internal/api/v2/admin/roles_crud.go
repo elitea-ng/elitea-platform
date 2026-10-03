@@ -132,15 +132,20 @@ var roleNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // centralRoleModes are the modes a central role can be created in.
 //
-// pylon accepts any string. A role in a mode no resolver reads is invisible
-// work: `legacyrbac.PostgresResolver` resolves `default`, `administration` and
-// `developer` and nothing else, so a role in a fourth mode can never grant
-// anything to anybody. It is refused rather than stored.
+// pylon accepts any string. A role in a mode no route reads is invisible work,
+// so it is refused rather than stored.
+//
+// `developer` is refused too (#6880). No route, no UI and no worker gates on a
+// developer-mode permission, and no user holds a developer role. pylon seeded
+// the mode for every registered permission, and the admin console already
+// hides it. A role created in it could never grant anything to anybody.
 var centralRoleModes = map[string]struct{}{
 	"default":        {},
 	"administration": {},
-	"developer":      {},
 }
+
+// centralRoleModesHint is the list an error names when it refuses a mode.
+const centralRoleModesHint = "expected default or administration"
 
 /* ── request bodies ────────────────────────────────────────────────────── */
 
@@ -213,9 +218,8 @@ func (h *Handler) resolveRoleTarget(ctx context.Context, scope, mode string) (ro
 	if scope == scopeAdministration {
 		if _, ok := centralRoleModes[mode]; !ok {
 			return roleTarget{}, matrixError{
-				status: http.StatusBadRequest,
-				message: "unknown role mode " + strconv.Quote(mode) +
-					": expected default, administration or developer",
+				status:  http.StatusBadRequest,
+				message: "unknown role mode " + strconv.Quote(mode) + ": " + centralRoleModesHint,
 			}
 		}
 		return roleTarget{scope: scope, mode: mode}, nil

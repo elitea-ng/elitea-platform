@@ -129,7 +129,7 @@ func TestResolveRoleTargetRefusesUnknownScopesAndModes(t *testing.T) {
 		assertStatus(t, err, http.StatusBadRequest)
 	}
 
-	for _, mode := range []string{"default", "administration", "developer"} {
+	for _, mode := range []string{"default", "administration"} {
 		target, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, mode)
 		if err != nil {
 			t.Fatalf("resolve %s: %v", mode, err)
@@ -137,6 +137,22 @@ func TestResolveRoleTargetRefusesUnknownScopesAndModes(t *testing.T) {
 		if !target.central() || target.mode != mode {
 			t.Fatalf("resolve %s = %+v", mode, target)
 		}
+	}
+}
+
+// `developer` is no longer a central role mode (#6880). Nothing gates on it,
+// so a role created in it could never grant anything. The refusal names the
+// two modes that remain, so the caller learns what to send instead.
+func TestResolveRoleTargetRefusesTheDeveloperMode(t *testing.T) {
+	handler := NewHandler(nil)
+
+	_, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "developer")
+	if err == nil {
+		t.Fatal("the developer mode was accepted")
+	}
+	assertStatus(t, err, http.StatusBadRequest)
+	if want := `unknown role mode "developer": expected default or administration`; err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 

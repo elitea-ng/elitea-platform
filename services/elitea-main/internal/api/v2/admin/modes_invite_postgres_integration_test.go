@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -507,10 +508,13 @@ func TestModesRefusesSuperAdminEscalationInEveryMode(t *testing.T) {
 		t.Fatalf("seed developer-mode super_admin role: %v", err)
 	}
 
+	// #6880 closes this path one step earlier: the developer mode itself is
+	// refused, before any role lookup or escalation check. Either refusal
+	// keeps the assignment out of the table, and that is what this test pins.
 	recorder := adminDo(t, router, http.MethodPost, "/admin/modes/administration",
 		map[string]any{"user_id": memberID, "mode": "developer", "role": "super_admin"})
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("POST developer-mode super_admin status = %d, want 403 (body %s)",
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST developer-mode super_admin status = %d, want 400 (body %s)",
 			recorder.Code, recorder.Body.String())
 	}
 	if roles := storedModeRoles(t, pool, memberID, "developer"); len(roles) != 0 {
@@ -547,14 +551,14 @@ WHERE role.mode = 'developer' AND role.name = 'super_admin'`, memberID); err != 
 	}
 }
 
-// TestModesAssignScopesTheDemotionGuardToAdministration pins the OTHER half of
-// the guard, the arm that protects an existing super_admin from a demotion.
+// TestModesAssignRefusesTheDeveloperModeAndKeepsTheDemotionGuard pins the two
+// rules ModesAssign applies to a caller without `admin.auth.users.super_admin`.
 //
-// currentAdminRole reads the administration-mode role only, and the DELETE in
-// ModesAssign removes assignments in the REQUESTED mode only. A developer-mode
-// write therefore demotes nobody. An unscoped demotion arm refused that write
-// and gave nothing back: fail-closed, but wrong.
-func TestModesAssignScopesTheDemotionGuardToAdministration(t *testing.T) {
+// A developer-mode write is refused with 400 (#6880): no route reads that mode,
+// so the assignment could only be clutter. The administration super_admin
+// assignment of the target never moves. Inside `administration`, the demotion
+// arm of the escalation guard still refuses a demotion.
+func TestModesAssignRefusesTheDeveloperModeAndKeepsTheDemotionGuard(t *testing.T) {
 	pool, router, _, memberID := newModesEnvironment(t, grantingResolver("modes.users"))
 	ctx := context.Background()
 
@@ -572,12 +576,15 @@ WHERE role.mode = 'administration' AND role.name = 'super_admin'`, memberID); er
 	// The caller holds `modes.users` but NOT `admin.auth.users.super_admin`.
 	recorder := adminDo(t, router, http.MethodPost, "/admin/modes/administration",
 		map[string]any{"user_id": memberID, "mode": "developer", "role": "editor"})
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("POST developer-mode editor status = %d, want 200 (body %s)",
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST developer-mode editor status = %d, want 400 (body %s)",
 			recorder.Code, recorder.Body.String())
 	}
-	if roles := storedModeRoles(t, pool, memberID, "developer"); len(roles) != 1 || roles[0] != "editor" {
-		t.Fatalf("stored developer roles = %v, want [editor]", roles)
+	if !strings.Contains(recorder.Body.String(), "expected default or administration") {
+		t.Fatalf("POST developer-mode editor body = %s, want the accepted modes named", recorder.Body.String())
+	}
+	if roles := storedModeRoles(t, pool, memberID, "developer"); len(roles) != 0 {
+		t.Fatalf("stored developer roles = %v, want none", roles)
 	}
 	// The administration assignment the guard protects never moved.
 	if roles := storedModeRoles(t, pool, memberID, "administration"); len(roles) != 1 ||

@@ -153,6 +153,17 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Any other mode except `administration` is refused before a role is
+	// looked up (#6880). Before this, `developer` and any free-form string
+	// reached the INSERT, and a legacy database answered with a developer-mode
+	// assignment that no route reads. The removal below still accepts a
+	// developer-mode id, so an operator can clear a row pylon left behind.
+	if _, known := centralRoleModes[mode]; !known {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "unknown role mode " + strconv.Quote(mode) + ": " + centralRoleModesHint,
+		})
+		return
+	}
 
 	ctx := r.Context()
 	userID, err := h.resolveModeUser(ctx, body.UserID)
@@ -166,19 +177,16 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// table, so without it `modes.users` would be a second, unguarded way to
 	// grant the platform's highest role.
 	//
-	// The GRANT arm runs for EVERY accepted mode, not only `administration`.
-	// The mode arrives in the request body. auth_core__role is UNIQUE
-	// (name, mode). A legacy database therefore also carries a `super_admin`
-	// role in the `developer` mode.
-	//
-	// A body of {"mode":"developer","role":"super_admin"}
-	// therefore reached the INSERT with no escalation check at all.
+	// The GRANT arm is not scoped to a mode. Only `administration` reaches
+	// this point today, but a `super_admin` role can exist in any mode
+	// (auth_core__role is UNIQUE (name, mode)), and a body of
+	// {"mode":"developer","role":"super_admin"} once reached the INSERT with no
+	// escalation check at all. The arm stays unscoped so that a mode added to
+	// centralRoleModes later cannot reopen that path.
 	//
 	// The DEMOTION arm stays scoped to `administration`. currentAdminRole
 	// (users.go) reads the administration-mode role only, and the DELETE below
-	// removes assignments in the requested mode only. A developer-mode write
-	// leaves the administration super_admin assignment untouched, so it demotes
-	// nobody. An unscoped arm refused that write for no gain.
+	// removes assignments in the requested mode only.
 	{
 		current, err := h.currentAdminRole(ctx, userID)
 		if err != nil {
