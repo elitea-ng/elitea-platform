@@ -271,6 +271,24 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 		}
 	}
 
+	// The project-owned rows that no foreign key ties to the project (C1).
+	// Nothing blocks the delete on them, so the project row went and they
+	// stayed behind as orphans, and a reused id would adopt them.
+	for _, cleanup := range projectOwnedDeletes() {
+		var present bool
+		if err := transaction.QueryRow(ctx,
+			`SELECT to_regclass($1) IS NOT NULL`, cleanup.table,
+		).Scan(&present); err != nil {
+			return fmt.Errorf("resolve %s: %w", cleanup.table, err)
+		}
+		if !present {
+			continue
+		}
+		if _, err := transaction.Exec(ctx, cleanup.statement, state.projectID); err != nil {
+			return fmt.Errorf("delete rows in %s: %w", cleanup.table, err)
+		}
+	}
+
 	for _, statement := range []string{
 		`DELETE FROM centry.statistic WHERE project_id = $1`,
 		`DELETE FROM centry.project_quota WHERE project_id = $1`,
@@ -367,6 +385,58 @@ DELETE FROM elitea_runtime.input_bundles WHERE resource_project_id = $1`,
 			table: "elitea_runtime.index_generation_counters",
 			statement: `
 DELETE FROM elitea_runtime.index_generation_counters WHERE resource_project_id = $1`,
+		},
+	}
+}
+
+// projectOwnedDeletes clears the shared rows that belong to the project but
+// carry no foreign key to centry.project (C1, found during the 2026-10
+// regression cleanup). Each statement takes the project id as $1.
+//
+// The artifact bucket rows go here, live and soft-deleted alike; the delete
+// cascades to their object rows and transfer grants. The physical objects are
+// purged before this, by the artifact_buckets step (TeardownProjectBuckets),
+// which runs earlier in the reverse walk. That purge is best-effort: a bucket
+// whose purge failed still loses its row here, because a row for a project
+// that no longer exists is not a usable handle on those bytes either, and a
+// reused project id would inherit it.
+//
+// Request logs, usage events and audit events are deliberately NOT here. They
+// are the history of what the project spent and did, and they outlive it.
+func projectOwnedDeletes() []referencingDelete {
+	return []referencingDelete{
+		{
+			table:     "elitea_storage.buckets",
+			statement: `DELETE FROM elitea_storage.buckets WHERE project_id = $1`,
+		},
+		{
+			table:     "elitea_storage.bucket_permissions",
+			statement: `DELETE FROM elitea_storage.bucket_permissions WHERE project_id = $1`,
+		},
+		{
+			table:     "elitea_storage.project_storage_policy",
+			statement: `DELETE FROM elitea_storage.project_storage_policy WHERE project_id = $1`,
+		},
+		{
+			table:     "elitea_storage.attachment_chunks",
+			statement: `DELETE FROM elitea_storage.attachment_chunks WHERE project_id = $1`,
+		},
+		{
+			// project_id is TEXT on this table.
+			table:     "public.pipeline_runs",
+			statement: `DELETE FROM public.pipeline_runs WHERE project_id = ($1::bigint)::text`,
+		},
+		{
+			table:     "centry.social_pins",
+			statement: `DELETE FROM centry.social_pins WHERE project_id = $1`,
+		},
+		{
+			table:     "gateway.llm_budget_accumulators",
+			statement: `DELETE FROM gateway.llm_budget_accumulators WHERE project_id = $1`,
+		},
+		{
+			table:     "elitea_runtime.tool_call_records",
+			statement: `DELETE FROM elitea_runtime.tool_call_records WHERE project_id = $1`,
 		},
 	}
 }
