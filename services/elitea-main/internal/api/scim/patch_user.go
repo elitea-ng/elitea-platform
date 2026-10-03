@@ -19,6 +19,9 @@ package scim
 // store (the enterprise department, a manager, phone numbers) is accepted and
 // dropped, which is the RFC 7643 §3.3 stance create already takes. What is never
 // done is accepting a value this service DOES act on and then not applying it.
+// The one deliberate exception is a work email: the account's single address is
+// its userName, and an email PATCH is accepted as a no-op rather than allowed to
+// re-address the account (see userPatch).
 //
 // # All or nothing
 //
@@ -47,30 +50,47 @@ type patchProblem struct {
 }
 
 // userPatch is the working copy the operations are applied to.
+//
+// # The address changes ONLY through userName
+//
+// An email operation never re-addresses the account. Entra ID sends the UPN as
+// `userName` and the `mail` attribute as the work email, and it sends only the
+// attributes that changed — so a mail change arrives ALONE. Applying it to the
+// address flipped the account's userName to the mail value, Entra's next
+// `userName eq "<upn>"` lookup missed, and it POSTed a duplicate account. Create
+// and PUT already let userName win; PATCH now agrees. The email operation is
+// still READ (a malformed value is refused) and then accepted as a no-op: the
+// platform stores one address per account, and that address is the userName.
+// userResource documents what the client reads back.
+//
+// # The display name and the name parts
+//
+// `displayName` is the name the platform shows, and the client manages it
+// directly. The `name` parts (given, family, formatted) are stored as sent, on
+// the SCIM side table, and returned as sent by GET — so a client comparing its
+// source with the resource sees no difference and stops re-sending them. The
+// parts NEVER overwrite a stored display name ("Smith, John (Contractor)" is
+// not rewritten to "John Smith" on every sync); they only fill an EMPTY one.
+// A single part is merged with the stored counterpart, so `name.familyName`
+// alone is applied, not dropped.
 type userPatch struct {
 	userName    string
 	displayName string
 	externalID  string
 	active      bool
 
-	// What the request stated, so the stored name is composed from the right
-	// source: an explicit displayName wins over name.formatted, which wins over
-	// given+family.
 	userNameStated    bool
 	displayNameStated bool
-	formatted         string
-	formattedStated   bool
-	given, family     string
-	givenStated       bool
-	familyStated      bool
-	emailValue        string
-	emailStated       bool
+
+	// The name parts, starting from what is stored.
+	given, family, formatted string
 }
 
 func newUserPatch(user scimdirectory.User) *userPatch {
 	return &userPatch{
 		userName: user.UserName, displayName: user.DisplayName,
 		externalID: user.ExternalID, active: user.Active,
+		given: user.GivenName, family: user.FamilyName, formatted: user.FormattedName,
 	}
 }
 
@@ -79,26 +99,35 @@ func (p *userPatch) changes(before scimdirectory.User) (scimdirectory.UserChange
 	var changes scimdirectory.UserChanges
 	changed := false
 
-	// userName wins over an email stated in the same request, as it does on
-	// create: Entra sends a UPN as userName and the routable address as mail.
-	address := before.UserName
-	switch {
-	case p.userNameStated:
-		address = p.userName
-	case p.emailStated:
-		address = p.emailValue
-	}
-	if scimdirectory.NormalizeUserName(address) != scimdirectory.NormalizeUserName(before.UserName) {
+	if p.userNameStated &&
+		scimdirectory.NormalizeUserName(p.userName) != scimdirectory.NormalizeUserName(before.UserName) {
+		address := p.userName
 		changes.UserName, changed = &address, true
 	}
 
-	name := p.displayName
+	if p.given != before.GivenName {
+		given := p.given
+		changes.GivenName, changed = &given, true
+	}
+	if p.family != before.FamilyName {
+		family := p.family
+		changes.FamilyName, changed = &family, true
+	}
+	if p.formatted != before.FormattedName {
+		formatted := p.formatted
+		changes.FormattedName, changed = &formatted, true
+	}
+
+	name := before.DisplayName
 	switch {
 	case p.displayNameStated:
-	case p.formattedStated:
+		name = p.displayName
+	case before.DisplayName == "":
+		// Only an EMPTY display name is filled from the parts.
 		name = strings.TrimSpace(p.formatted)
-	case p.givenStated && p.familyStated:
-		name = strings.TrimSpace(p.given + " " + p.family)
+		if name == "" {
+			name = strings.TrimSpace(p.given + " " + p.family)
+		}
 	}
 	if name != before.DisplayName {
 		changes.DisplayName, changed = &name, true
@@ -127,12 +156,12 @@ func applyUserOperations(patch *userPatch, operations []patchOperation) *patchPr
 			if op == "remove" {
 				return &patchProblem{400, "noTarget", "a remove operation needs a path"}
 			}
-			if problem := patch.applyObject(op, operation.Value); problem != nil {
+			if problem := patch.applyObject(op, operation.Value, false); problem != nil {
 				return problem
 			}
 			continue
 		}
-		if problem := patch.applyPath(op, path, operation.Value); problem != nil {
+		if problem := patch.applyPath(op, path, operation.Value, false); problem != nil {
 			return problem
 		}
 	}
@@ -142,13 +171,17 @@ func applyUserOperations(patch *userPatch, operations []patchOperation) *patchPr
 // applyObject reads a path-less add/replace: an object of attributes, whose keys
 // are paths in their own right (`name.givenName`, a URN-prefixed attribute, or a
 // plain attribute whose value may itself be an object such as `name`).
-func (p *userPatch) applyObject(op string, raw json.RawMessage) *patchProblem {
+//
+// `nested` is true inside a core-schema URN object or a `name` object. The URN
+// key is honoured ONLY at the top level, so a value cannot nest
+// `{"urn:…:User":{"urn:…:User":{…}}}` and have every level re-read.
+func (p *userPatch) applyObject(op string, raw json.RawMessage, nested bool) *patchProblem {
 	var attributes map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &attributes); err != nil {
 		return &patchProblem{400, "invalidValue", "a path-less operation needs an object value"}
 	}
 	for key, value := range attributes {
-		if problem := p.applyPath(op, key, value); problem != nil {
+		if problem := p.applyPath(op, key, value, nested); problem != nil {
 			return problem
 		}
 	}
@@ -156,7 +189,7 @@ func (p *userPatch) applyObject(op string, raw json.RawMessage) *patchProblem {
 }
 
 // applyPath applies one operation to one attribute path.
-func (p *userPatch) applyPath(op, rawPath string, value json.RawMessage) *patchProblem {
+func (p *userPatch) applyPath(op, rawPath string, value json.RawMessage, nested bool) *patchProblem {
 	path := strings.TrimSpace(rawPath)
 	lowered := strings.ToLower(path)
 
@@ -172,7 +205,11 @@ func (p *userPatch) applyPath(op, rawPath string, value json.RawMessage) *patchP
 		lowered = strings.ToLower(path)
 	} else if lowered == strings.ToLower(schemaUser) {
 		// `{"urn:...:core:2.0:User": {...}}`: the object holds core attributes.
-		return p.applyObject(op, value)
+		if nested {
+			return &patchProblem{400, "invalidPath",
+				"the core User schema URN is read only as a top-level key"}
+		}
+		return p.applyObject(op, value, true)
 	}
 
 	switch {
@@ -202,23 +239,20 @@ func (p *userPatch) applyPath(op, rawPath string, value json.RawMessage) *patchP
 
 	case lowered == "name":
 		if op == "remove" {
-			p.formatted, p.formattedStated = "", true
+			// Removes the name PARTS. The display name is a separate
+			// attribute the client manages through `displayName`, and
+			// removing `name` must not blank it.
+			p.given, p.family, p.formatted = "", "", ""
 			return nil
 		}
-		return p.applyObject(op, rewriteKeys(value, "name."))
+		return p.applyObject(op, rewriteKeys(value, "name."), true)
 
 	case lowered == "name.formatted":
-		return p.setString(op, value, "name.formatted", false, func(s string) {
-			p.formatted, p.formattedStated = s, true
-		})
+		return p.setString(op, value, "name.formatted", false, func(s string) { p.formatted = s })
 	case lowered == "name.givenname":
-		return p.setString(op, value, "name.givenName", false, func(s string) {
-			p.given, p.givenStated = s, true
-		})
+		return p.setString(op, value, "name.givenName", false, func(s string) { p.given = s })
 	case lowered == "name.familyname":
-		return p.setString(op, value, "name.familyName", false, func(s string) {
-			p.family, p.familyStated = s, true
-		})
+		return p.setString(op, value, "name.familyName", false, func(s string) { p.family = s })
 
 	case lowered == "emails" || strings.HasPrefix(lowered, "emails["):
 		return p.applyEmails(op, lowered, value)
@@ -325,12 +359,10 @@ func (p *userPatch) applyEmails(op, loweredPath string, value json.RawMessage) *
 	return p.setEmail(chosen)
 }
 
-func (p *userPatch) setEmail(value string) *patchProblem {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	p.emailValue, p.emailStated = value, true
+// setEmail accepts a work/primary email value and stores nothing: the address
+// changes only through userName. See the userPatch comment for why applying it
+// duplicated accounts under Entra ID.
+func (p *userPatch) setEmail(string) *patchProblem {
 	return nil
 }
 

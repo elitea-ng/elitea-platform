@@ -275,19 +275,38 @@ func newDirectoryPool(t *testing.T) *pgxpool.Pool {
 			name TEXT,
 			last_login TIMESTAMP,
 			suspended BOOLEAN NOT NULL DEFAULT false
-		)`)
+		);
+		CREATE TABLE auth_core__role (
+			id SERIAL PRIMARY KEY,
+			name VARCHAR(64) NOT NULL,
+			mode VARCHAR(64) NOT NULL,
+			UNIQUE (name, mode)
+		);
+		CREATE TABLE auth_core__user_role (
+			id SERIAL PRIMARY KEY,
+			user_id INTEGER NOT NULL REFERENCES auth_core__user(id) ON DELETE CASCADE,
+			role_id INTEGER NOT NULL REFERENCES auth_core__role(id) ON DELETE CASCADE,
+			UNIQUE (user_id, role_id)
+		);
+		INSERT INTO auth_core__role (name, mode) VALUES
+			('admin', 'administration'), ('viewer', 'administration'), ('member', 'default')`)
 	require.NoError(t, err)
 
-	migration, err := os.ReadFile("../../migrations/shared/0096_scim_provisioning.sql")
-	require.NoError(t, err, "the migration file must be readable: this test proves IT, not a copy of it")
-	_, err = pool.Exec(ctx, string(migration))
-	require.NoError(t, err)
+	for _, file := range []string{
+		"../../migrations/shared/0096_scim_provisioning.sql",
+		"../../migrations/shared/0134_scim_user_name_parts.sql",
+	} {
+		migration, err := os.ReadFile(file)
+		require.NoError(t, err, "the migration file must be readable: this test proves IT, not a copy of it")
+		_, err = pool.Exec(ctx, string(migration))
+		require.NoError(t, err)
 
-	// Applying it twice must be a no-op. Every file in this corpus is expected
-	// to be idempotent, and a re-run is what a partially-applied deployment
-	// does.
-	_, err = pool.Exec(ctx, string(migration))
-	require.NoError(t, err, "migration 0096 must be idempotent")
+		// Applying it twice must be a no-op. Every file in this corpus is
+		// expected to be idempotent, and a re-run is what a partially-applied
+		// deployment does.
+		_, err = pool.Exec(ctx, string(migration))
+		require.NoError(t, err, "%s must be idempotent", file)
+	}
 
 	return pool
 }

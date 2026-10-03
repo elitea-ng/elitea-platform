@@ -41,7 +41,10 @@ type recordingDirectory struct {
 	changes     []scimdirectory.UserChanges
 	// conflictOnUserName makes ApplyUserChanges answer a uniqueness conflict.
 	conflictOnUserName bool
-	listedFilter       scimdirectory.Filter
+	// protected makes every user write answer this refusal, as the store does
+	// for an administrator's or a platform principal's row.
+	protected    *scimdirectory.ProtectedError
+	listedFilter scimdirectory.Filter
 	// groups holds the /Groups half of the fake. It is a pointer to a type
 	// declared in groups_internal_test.go so the group tests own their own
 	// state, and a users test that never touches a group reads unchanged.
@@ -91,6 +94,9 @@ func (d *recordingDirectory) Replace(
 	if _, ok := d.users[id]; !ok {
 		return scimdirectory.User{}, scimdirectory.ErrNotFound
 	}
+	if d.protected != nil {
+		return scimdirectory.User{}, d.protected
+	}
 	user.ID = id
 	d.replaced = append(d.replaced, user)
 	d.users[id] = user
@@ -104,6 +110,9 @@ func (d *recordingDirectory) SetActive(
 	if !ok {
 		return scimdirectory.User{}, scimdirectory.ErrNotFound
 	}
+	if d.protected != nil {
+		return scimdirectory.User{}, d.protected
+	}
 	d.activeCalls = append(d.activeCalls, active)
 	user.Active = active
 	d.users[id] = user
@@ -116,6 +125,9 @@ func (d *recordingDirectory) ApplyUserChanges(
 	user, ok := d.users[id]
 	if !ok {
 		return scimdirectory.User{}, scimdirectory.ErrNotFound
+	}
+	if d.protected != nil {
+		return scimdirectory.User{}, d.protected
 	}
 	if changes.UserName != nil && d.conflictOnUserName {
 		return scimdirectory.User{}, scimdirectory.ErrConflict
@@ -133,6 +145,15 @@ func (d *recordingDirectory) ApplyUserChanges(
 	if changes.Active != nil {
 		d.activeCalls = append(d.activeCalls, *changes.Active)
 		user.Active = *changes.Active
+	}
+	if changes.GivenName != nil {
+		user.GivenName = *changes.GivenName
+	}
+	if changes.FamilyName != nil {
+		user.FamilyName = *changes.FamilyName
+	}
+	if changes.FormattedName != nil {
+		user.FormattedName = *changes.FormattedName
 	}
 	d.users[id] = user
 	return user, nil
@@ -407,9 +428,9 @@ func TestUserPatchBodiesFromEntra(t *testing.T) {
 				{"op":"Add","path":"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department","value":"R&D"},
 				{"op":"Replace","path":"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:manager","value":"00u9"},
 				{"op":"Remove","path":"phoneNumbers[type eq \"work\"].value"}`,
-			want: scimdirectory.UserChanges{
-				UserName: str("Alice.New@Corp.com"), DisplayName: str("Alicia Smith"),
-			},
+			// The work email does NOT re-address the account (userName does),
+			// and the name parts do not overwrite the stored display name.
+			want: scimdirectory.UserChanges{GivenName: str("Alicia"), FamilyName: str("Smith")},
 		},
 		{
 			name: "path-less object with dotted and URN keys",
@@ -419,17 +440,38 @@ func TestUserPatchBodiesFromEntra(t *testing.T) {
 				"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department":"R&D",
 				"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User":{"manager":{"value":"1"}},
 				"phoneNumbers":[{"value":"+1","type":"work"}]}}`,
-			want: scimdirectory.UserChanges{DisplayName: str("Alicia S"), ExternalID: str("00u2")},
+			want: scimdirectory.UserChanges{
+				DisplayName: str("Alicia S"), ExternalID: str("00u2"), GivenName: str("Alicia"),
+			},
 		},
 		{
 			name:       "path-less nested name object",
 			operations: `{"op":"Replace","value":{"name":{"formatted":"Alicia Smith"}}}`,
-			want:       scimdirectory.UserChanges{DisplayName: str("Alicia Smith")},
+			want:       scimdirectory.UserChanges{FormattedName: str("Alicia Smith")},
 		},
 		{
-			name:       "whole emails array replace picks the primary",
+			name:       "a whole emails array replace is accepted and changes nothing",
 			operations: `{"op":"replace","path":"emails","value":[{"value":"x@corp.com","type":"home"},{"value":"new@corp.com","type":"work","primary":true}]}`,
-			want:       scimdirectory.UserChanges{UserName: str("new@corp.com")},
+			wantNone:   true,
+		},
+		{
+			// CR1: Entra sends a mail change ALONE. Applying it re-addressed the
+			// account, Entra's next `userName eq "<upn>"` missed, and it POSTed
+			// a duplicate account.
+			name:       "an email-only PATCH never re-addresses the account",
+			operations: `{"op":"Replace","path":"emails[type eq \"work\"].value","value":"alice.mail@corp.com"}`,
+			wantNone:   true,
+		},
+		{
+			name:       "a single familyName change is applied, not dropped",
+			operations: `{"op":"Replace","path":"name.familyName","value":"Jones"}`,
+			want:       scimdirectory.UserChanges{FamilyName: str("Jones")},
+		},
+		{
+			// CR4: removing `name` removes the parts, never the display name.
+			name:       "remove name keeps the display name",
+			operations: `{"op":"Remove","path":"name"}`,
+			wantNone:   true, // no parts stored, and the display name is untouched
 		},
 		{
 			name:       "a home email is not the address",
@@ -491,6 +533,10 @@ func TestUserPatchRefusals(t *testing.T) {
 		{"non boolean active", `{"op":"Replace","path":"active","value":"maybe"}`, 400, "invalidValue"},
 		{"remove without path", `{"op":"Remove"}`, 400, "noTarget"},
 		{"non string displayName", `{"op":"Replace","path":"displayName","value":{"a":1}}`, 400, "invalidValue"},
+		// L1: the core URN key is read once, at the top level, never recursively.
+		{"nested core schema URN", `{"op":"Replace","value":{
+			"urn:ietf:params:scim:schemas:core:2.0:User":{
+				"urn:ietf:params:scim:schemas:core:2.0:User":{"displayName":"Nested"}}}}`, 400, "invalidPath"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			directory := newRecordingDirectory()
@@ -504,6 +550,128 @@ func TestUserPatchRefusals(t *testing.T) {
 			require.Equal(t, "Alice", directory.users[42].DisplayName)
 		})
 	}
+}
+
+func TestTheCoreSchemaURNKeyIsReadAtTheTopLevel(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := patchUser(t, directory, `{"op":"Replace","value":{
+		"urn:ietf:params:scim:schemas:core:2.0:User":{"displayName":"Alicia"}}}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, []scimdirectory.UserChanges{{DisplayName: str("Alicia")}}, directory.changes)
+}
+
+// CR2: Entra maps displayName, givenName and surname independently and sends
+// only what changed. The parts are stored and read back as sent, they never
+// rewrite a display name the client manages, and a repeat of the same PATCH
+// changes nothing — the client converges instead of flapping.
+func TestEntraNamePartsConvergeAndNeverRewriteTheDisplayName(t *testing.T) {
+	directory := newRecordingDirectory()
+	alice := directory.users[42]
+	alice.DisplayName = "Smith, John (Contractor)"
+	directory.users[42] = alice
+
+	operations := `{"op":"Replace","path":"name.givenName","value":"John"},
+		{"op":"Replace","path":"name.familyName","value":"Smith"},
+		{"op":"Replace","path":"name.formatted","value":"John Smith"}`
+	recorder := patchUser(t, directory, operations)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "Smith, John (Contractor)", directory.users[42].DisplayName)
+
+	body := decodeBody(t, serve(t, directory, http.MethodGet, "/Users/42", ""))
+	require.Equal(t, "Smith, John (Contractor)", body["displayName"])
+	require.Equal(t, map[string]any{
+		"givenName": "John", "familyName": "Smith", "formatted": "John Smith",
+	}, body["name"])
+
+	// The same PATCH again is a no-op: nothing differs any more.
+	require.Equal(t, http.StatusOK, patchUser(t, directory, operations).Code)
+	require.Len(t, directory.changes, 1, "a repeated name PATCH must not write again")
+
+	// A single part is MERGED with the stored counterpart.
+	require.Equal(t, http.StatusOK, patchUser(t, directory,
+		`{"op":"Replace","path":"name.familyName","value":"Jones"}`).Code)
+	require.Equal(t, "John", directory.users[42].GivenName)
+	require.Equal(t, "Jones", directory.users[42].FamilyName)
+	require.Equal(t, "Smith, John (Contractor)", directory.users[42].DisplayName)
+
+	// `remove name` clears the parts and leaves the display name alone (CR4).
+	require.Equal(t, http.StatusOK, patchUser(t, directory, `{"op":"Remove","path":"name"}`).Code)
+	require.Empty(t, directory.users[42].GivenName)
+	require.Empty(t, directory.users[42].FamilyName)
+	require.Empty(t, directory.users[42].FormattedName)
+	require.Equal(t, "Smith, John (Contractor)", directory.users[42].DisplayName)
+}
+
+// The parts FILL an empty display name, which is the one case they may.
+func TestNamePartsFillAnEmptyDisplayName(t *testing.T) {
+	directory := newRecordingDirectory()
+	alice := directory.users[42]
+	alice.DisplayName = ""
+	directory.users[42] = alice
+
+	recorder := patchUser(t, directory, `{"op":"Replace","path":"name.givenName","value":"Alice"},
+		{"op":"Replace","path":"name.familyName","value":"Smith"}`)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "Alice Smith", directory.users[42].DisplayName)
+}
+
+// The GET derives `formatted` from the stored parts when none was sent, and
+// from the display name when there are no parts at all.
+func TestTheNameIsRenderedFromWhatWasStored(t *testing.T) {
+	directory := newRecordingDirectory()
+	body := decodeBody(t, serve(t, directory, http.MethodGet, "/Users/42", ""))
+	require.Equal(t, map[string]any{"formatted": "Alice"}, body["name"])
+
+	alice := directory.users[42]
+	alice.GivenName, alice.FamilyName = "Alice", "Smith"
+	directory.users[42] = alice
+	body = decodeBody(t, serve(t, directory, http.MethodGet, "/Users/42", ""))
+	require.Equal(t, map[string]any{
+		"givenName": "Alice", "familyName": "Smith", "formatted": "Alice Smith",
+	}, body["name"])
+}
+
+// A create or a replace carries the parts, and says whether its display name
+// was composed from them (so the store lets it fill an empty one only).
+func TestCreateAndReplaceCarryTheNamePartsAndWhereTheDisplayNameCameFrom(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPost, "/Users",
+		`{"userName":"bob@corp.com","name":{"givenName":"Bob","familyName":"Ray"}}`)
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	created := directory.created[0]
+	require.True(t, created.NameStated)
+	require.True(t, created.DisplayNameDerived)
+	require.Equal(t, "Bob Ray", created.DisplayName)
+	require.Equal(t, "Bob", created.GivenName)
+	require.Equal(t, "Ray", created.FamilyName)
+
+	recorder = serve(t, directory, http.MethodPut, "/Users/42",
+		`{"userName":"alice@corp.com","displayName":"Alice S"}`)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	replaced := directory.replaced[0]
+	require.False(t, replaced.DisplayNameDerived)
+	require.False(t, replaced.NameStated)
+}
+
+// H1: a write the directory refuses as protected is 403 `mutability`, and the
+// reason reaches the client so the operator knows where to act instead.
+func TestAProtectedAccountIsRefusedWithMutabilityAndTheReason(t *testing.T) {
+	directory := newRecordingDirectory()
+	directory.protected = &scimdirectory.ProtectedError{Reason: "the account holds an administration role"}
+
+	for _, request := range []struct{ method, body string }{
+		{http.MethodPatch, `{"Operations":[{"op":"replace","path":"userName","value":"evil@corp.com"}]}`},
+		{http.MethodPut, `{"userName":"evil@corp.com"}`},
+		{http.MethodDelete, ""},
+	} {
+		recorder := serve(t, directory, request.method, "/Users/42", request.body)
+		require.Equal(t, http.StatusForbidden, recorder.Code, request.method)
+		body := decodeBody(t, recorder)
+		require.Equal(t, "mutability", body["scimType"], request.method)
+		require.Equal(t, "the account holds an administration role", body["detail"], request.method)
+	}
+	require.Equal(t, "alice@corp.com", directory.users[42].UserName)
 }
 
 func TestUserPatchUniquenessConflictIsAScimConflict(t *testing.T) {

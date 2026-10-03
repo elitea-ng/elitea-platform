@@ -484,8 +484,14 @@ func userResource(user scimdirectory.User) map[string]any {
 		"id":          strconv.Itoa(user.ID),
 		"userName":    user.UserName,
 		"displayName": user.DisplayName,
-		"name":        map[string]any{"formatted": user.DisplayName},
+		"name":        nameResource(user),
 		"active":      user.Active,
+		// ONE address: the account's, which is the userName. The platform
+		// stores no second address, so a client that maps a different work
+		// email (Entra: `mail` beside a UPN userName) reads back a value that
+		// differs from what it sent. Its PATCH of the email is accepted and
+		// is a no-op (patch_user.go), so the difference costs one harmless
+		// request per cycle and never re-addresses the account.
 		"emails": []map[string]any{{
 			"value": user.UserName, "primary": true, "type": "work",
 		}},
@@ -502,6 +508,35 @@ func userResource(user scimdirectory.User) map[string]any {
 		resource["externalId"] = user.ExternalID
 	}
 	return resource
+}
+
+// nameResource renders the `name` complex attribute from what was STORED.
+//
+// givenName and familyName are returned exactly as the client sent them, and
+// omitted when it sent none. `formatted` is the stored value when the client
+// sent one, else the given and family name joined (which is what Entra ID's
+// default `Join(" ", givenName, surname)` mapping computes), else the display
+// name. Answering with what was sent is what lets a client that compares its
+// source against a GET see no difference and stop re-sending the name.
+func nameResource(user scimdirectory.User) map[string]any {
+	name := map[string]any{}
+	if user.GivenName != "" {
+		name["givenName"] = user.GivenName
+	}
+	if user.FamilyName != "" {
+		name["familyName"] = user.FamilyName
+	}
+	formatted := user.FormattedName
+	if formatted == "" {
+		formatted = strings.TrimSpace(user.GivenName + " " + user.FamilyName)
+	}
+	if formatted == "" {
+		formatted = user.DisplayName
+	}
+	if formatted != "" {
+		name["formatted"] = formatted
+	}
+	return name
 }
 
 // groupResource renders one bound group.

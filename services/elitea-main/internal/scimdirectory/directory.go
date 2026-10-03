@@ -47,6 +47,117 @@ var ErrConflict = errors.New("scimdirectory: the identifier is already in use")
 // composition failure, not a request failure.
 var ErrNoPool = errors.New("scimdirectory: no database pool")
 
+// ErrProtected reports that the write targets an account, or names an
+// identity, that a SCIM client must never manage. Match it with errors.Is; the
+// concrete *ProtectedError carries the reason a client is told.
+var ErrProtected = errors.New("scimdirectory: the account is not managed by SCIM")
+
+// ProtectedError is ErrProtected with the reason.
+//
+// # Why a directory client cannot touch these rows
+//
+// A SCIM credential can rename an account's address and suspend it. Pointed at
+// the WRONG rows, those two verbs are an account takeover and a lock-out:
+//
+//   - An administrator. Re-address an administrator who has not yet signed in
+//     through single sign-on to an address the attacker controls, then sign in
+//     through any configured provider asserting it: the first-login email
+//     fallback (internal/api/v2/auth/oidc.go joinAccountByEmail) adopts the
+//     row, administration role included. Suspending the same rows locks the
+//     operators out of the screen that would undo it.
+//   - The platform's own principals: `system@centry.user`, every
+//     `system_user_<n>@centry.user` and every `:system:project:<n>:` name.
+//     The project resolver maps `system_user_<n>@centry.user` to project <n>
+//     with no membership check, and the admin Users list hides the
+//     `@centry.user` domain, so a row MOVED into that domain both gains a
+//     project and disappears from the screen that would show it.
+//
+// So those rows are refused whatever the verb, and an address or a display
+// name in those reserved shapes is refused as a new value. The operator still
+// manages them from the admin Users page, where the consequence is on screen.
+type ProtectedError struct{ Reason string }
+
+func (e *ProtectedError) Error() string { return "scimdirectory: " + e.Reason }
+
+// Is makes errors.Is(err, ErrProtected) true.
+func (e *ProtectedError) Is(target error) bool { return target == ErrProtected }
+
+// reservedAddressDomain is the domain of the platform's own principals
+// (`system@centry.user`, `system_user_<n>@centry.user`) and of the fallback
+// address internal/application/identity gives a login with no email.
+const reservedAddressDomain = "@centry.user"
+
+// reservedNamePrefix starts every system principal's name
+// (`:system:project:<n>:`, internal/api/middleware/project.go).
+const reservedNamePrefix = ":system:"
+
+// reservedIdentity names why an address or a display name may not be written
+// by a SCIM client, or "" when it may.
+func reservedIdentity(address, displayName string) string {
+	if strings.HasSuffix(NormalizeUserName(address), reservedAddressDomain) {
+		return "addresses in the " + reservedAddressDomain + " domain are reserved for platform principals"
+	}
+	if strings.HasPrefix(strings.TrimSpace(displayName), reservedNamePrefix) {
+		return "names starting with " + reservedNamePrefix + " are reserved for platform principals"
+	}
+	return ""
+}
+
+// guardTarget locks the account row and refuses one a SCIM client must not
+// manage. It returns ErrNotFound for a missing row.
+func guardTarget(ctx context.Context, tx pgx.Tx, id int) error {
+	var (
+		email, name   string
+		administrator bool
+	)
+	err := tx.QueryRow(ctx,
+		`SELECT COALESCE(account.email, ''), COALESCE(account.name, ''),
+		        EXISTS (
+		            SELECT 1
+		              FROM auth_core__user_role AS assignment
+		              JOIN auth_core__role AS role ON role.id = assignment.role_id
+		             WHERE assignment.user_id = account.id
+		               AND role.mode = 'administration'
+		        )
+		   FROM auth_core__user AS account
+		  WHERE account.id = $1
+		    FOR UPDATE OF account`, id,
+	).Scan(&email, &name, &administrator)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if administrator {
+		return &ProtectedError{Reason: "the account holds an administration role; " +
+			"manage it from the admin Users page, not through SCIM"}
+	}
+	if reason := reservedIdentity(email, name); reason != "" {
+		return &ProtectedError{Reason: "the account is a platform principal (" + reason + ")"}
+	}
+	return nil
+}
+
+// refuseReservedValue refuses a NEW address or display name in a reserved shape.
+func refuseReservedValue(address, displayName string) error {
+	if reason := reservedIdentity(address, displayName); reason != "" {
+		return &ProtectedError{Reason: reason}
+	}
+	return nil
+}
+
+// addressTaken reports whether ANOTHER account holds the address, compared
+// case-insensitively. The unique index on `email` is case-sensitive, so the
+// database alone would let `Bob@corp.com` and `bob@corp.com` coexist.
+func addressTaken(ctx context.Context, tx pgx.Tx, userName string, id int) (bool, error) {
+	var taken bool
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM auth_core__user WHERE lower(email) = $1 AND id <> $2)`,
+		userName, id).Scan(&taken)
+	return taken, err
+}
+
 // User is one account as SCIM sees it.
 type User struct {
 	ID         int
@@ -58,8 +169,28 @@ type User struct {
 	UserName string
 	// DisplayName is the SCIM `displayName`, stored as `auth_core__user.name`.
 	DisplayName string
+	// DisplayNameDerived reports that DisplayName was COMPOSED from the `name`
+	// parts because the client sent no `displayName`.
+	//
+	// The difference decides whether it may OVERWRITE a stored display name.
+	// Entra ID manages `displayName` directly ("Smith, John (Contractor)") and
+	// maps given and family name separately, so a name composed from the parts
+	// ("John Smith") replacing the stored one would rewrite the operator's
+	// choice on every sync. A composed name only fills an EMPTY display name.
+	DisplayNameDerived bool
 	// Active is the inverse of `suspended`.
 	Active bool
+	// GivenName, FamilyName and FormattedName are the SCIM `name`
+	// sub-attributes, stored on the SCIM side table (shared migration 0134) and
+	// returned as sent. They never stand in for a stored DisplayName; see
+	// internal/api/scim/patch_user.go for why.
+	GivenName     string
+	FamilyName    string
+	FormattedName string
+	// NameStated reports whether the client sent a `name` object at all. A
+	// create that omits it leaves stored parts alone (a re-sync); a replace
+	// clears them, because a PUT is the whole resource.
+	NameStated bool
 	// ActiveStated reports whether the CLIENT said anything about `active`.
 	//
 	// It exists because an omitted flag and an explicit `true` mean different
@@ -90,7 +221,8 @@ func NormalizeUserName(raw string) string {
 }
 
 const userColumns = `account.id, account.email, account.name, account.suspended,
-	COALESCE(scim.external_id, ''), COALESCE(scim.created_at, now()), COALESCE(scim.updated_at, now())`
+	COALESCE(scim.external_id, ''), COALESCE(scim.created_at, now()), COALESCE(scim.updated_at, now()),
+	COALESCE(scim.given_name, ''), COALESCE(scim.family_name, ''), COALESCE(scim.formatted_name, '')`
 
 const userSource = `auth_core__user AS account
 	LEFT JOIN elitea_auth.scim_users AS scim ON scim.user_id = account.id`
@@ -169,6 +301,9 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 	if userName == "" {
 		return User{}, errors.New("scimdirectory: userName is required")
 	}
+	if err := refuseReservedValue(userName, user.DisplayName); err != nil {
+		return User{}, err
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -201,12 +336,21 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 		userName).Scan(&id)
 	switch {
 	case err == nil:
+		// An adoption is a write to an EXISTING row, and it is held to the
+		// same guard as every other write: an administrator's row or a
+		// platform principal's is never taken over by a directory push.
+		if err := guardTarget(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+		// A name DERIVED from `name` parts fills an empty display name only;
+		// an explicit displayName replaces it. See User.DisplayNameDerived.
 		_, err = tx.Exec(ctx,
 			`UPDATE auth_core__user
-			    SET name = COALESCE(NULLIF($2, ''), name),
+			    SET name = CASE WHEN NOT $5 OR COALESCE(name, '') = ''
+			                    THEN COALESCE(NULLIF($2, ''), name) ELSE name END,
 			        suspended = CASE WHEN $3 THEN $4 ELSE suspended END
 			  WHERE id = $1`,
-			id, user.DisplayName, user.ActiveStated, !user.Active)
+			id, user.DisplayName, user.ActiveStated, !user.Active, user.DisplayNameDerived)
 		if err != nil {
 			return User{}, err
 		}
@@ -217,11 +361,13 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 			`INSERT INTO auth_core__user (email, name, suspended)
 			 VALUES ($1, $2, $3)
 			 ON CONFLICT (email) DO UPDATE
-			     SET name = COALESCE(NULLIF(EXCLUDED.name, ''), auth_core__user.name),
+			     SET name = CASE WHEN NOT $5 OR COALESCE(auth_core__user.name, '') = ''
+			                     THEN COALESCE(NULLIF(EXCLUDED.name, ''), auth_core__user.name)
+			                     ELSE auth_core__user.name END,
 			         suspended = CASE WHEN $4 THEN EXCLUDED.suspended
 			                          ELSE auth_core__user.suspended END
 			 RETURNING id`,
-			userName, user.DisplayName, !user.Active, user.ActiveStated).Scan(&id)
+			userName, user.DisplayName, !user.Active, user.ActiveStated, user.DisplayNameDerived).Scan(&id)
 		if err != nil {
 			return User{}, err
 		}
@@ -231,6 +377,11 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 
 	if err := upsertSCIMFacts(ctx, tx, id, user.ExternalID); err != nil {
 		return User{}, err
+	}
+	if user.NameStated {
+		if err := writeNameParts(ctx, tx, id, user.GivenName, user.FamilyName, user.FormattedName); err != nil {
+			return User{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
@@ -254,9 +405,31 @@ func (s *Store) Replace(ctx context.Context, id int, user User) (User, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	tag, err := tx.Exec(ctx,
-		`UPDATE auth_core__user SET email = $2, name = $3, suspended = $4 WHERE id = $1`,
-		id, userName, user.DisplayName, !user.Active)
+	if err := guardTarget(ctx, tx, id); err != nil {
+		return User{}, err
+	}
+	if err := refuseReservedValue(userName, user.DisplayName); err != nil {
+		return User{}, err
+	}
+	// The same CASE-INSENSITIVE check PATCH makes. The unique index alone
+	// would let a PUT store `bob@corp.com` beside an existing `Bob@corp.com`.
+	taken, err := addressTaken(ctx, tx, userName, id)
+	if err != nil {
+		return User{}, err
+	}
+	if taken {
+		return User{}, ErrConflict
+	}
+
+	// The display name: an explicit displayName replaces it; one derived from
+	// `name` parts fills an EMPTY one and never overwrites a stored one.
+	_, err = tx.Exec(ctx,
+		`UPDATE auth_core__user
+		    SET email = $2,
+		        name = CASE WHEN NOT $5 OR COALESCE(name, '') = '' THEN $3 ELSE name END,
+		        suspended = $4
+		  WHERE id = $1`,
+		id, userName, user.DisplayName, !user.Active, user.DisplayNameDerived)
 	if isUniqueViolation(err) {
 		// Another account already holds the address. Only an operator can
 		// decide which of the two survives, so the write stops rather than
@@ -266,11 +439,12 @@ func (s *Store) Replace(ctx context.Context, id int, user User) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
-	if tag.RowsAffected() == 0 {
-		return User{}, ErrNotFound
-	}
 
 	if err := upsertSCIMFacts(ctx, tx, id, user.ExternalID); err != nil {
+		return User{}, err
+	}
+	// A PUT is the whole resource: a replace without `name` clears the parts.
+	if err := writeNameParts(ctx, tx, id, user.GivenName, user.FamilyName, user.FormattedName); err != nil {
 		return User{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -285,15 +459,30 @@ func (s *Store) SetActive(ctx context.Context, id int, active bool) (User, error
 	if s == nil || s.pool == nil {
 		return User{}, ErrNoPool
 	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE auth_core__user SET suspended = $2 WHERE id = $1`, id, !active)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return User{}, err
 	}
-	if tag.RowsAffected() == 0 {
-		return User{}, ErrNotFound
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Suspension is held to the guard too: a directory client that could
+	// suspend the administrators could lock the operators out of the screen
+	// that undoes it.
+	if err := guardTarget(ctx, tx, id); err != nil {
+		return User{}, err
 	}
-	if err := s.touch(ctx, id); err != nil {
+	if _, err := tx.Exec(ctx,
+		`UPDATE auth_core__user SET suspended = $2 WHERE id = $1`, id, !active); err != nil {
+		return User{}, err
+	}
+	// Moves `meta.lastModified`, creating the SCIM row when the account was
+	// made by a first login rather than by a directory push.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO elitea_auth.scim_users (user_id) VALUES ($1)
+		 ON CONFLICT (user_id) DO UPDATE SET updated_at = now()`, id); err != nil {
+		return User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
 	}
 	return s.Get(ctx, id)
@@ -307,6 +496,11 @@ type UserChanges struct {
 	DisplayName *string
 	ExternalID  *string
 	Active      *bool
+	// The stored `name` sub-attributes. Each is written on its own; a nil one
+	// keeps its stored value.
+	GivenName     *string
+	FamilyName    *string
+	FormattedName *string
 }
 
 // ApplyUserChanges persists a whole PATCH in ONE transaction, holding the
@@ -323,12 +517,18 @@ func (s *Store) ApplyUserChanges(ctx context.Context, id int, changes UserChange
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var current string
-	if err := tx.QueryRow(ctx,
-		`SELECT COALESCE(email, '') FROM auth_core__user WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
-		return User{}, ErrNotFound
-	} else if err != nil {
+	if err := guardTarget(ctx, tx, id); err != nil {
+		return User{}, err
+	}
+
+	newAddress, newDisplayName := "", ""
+	if changes.UserName != nil {
+		newAddress = *changes.UserName
+	}
+	if changes.DisplayName != nil {
+		newDisplayName = *changes.DisplayName
+	}
+	if err := refuseReservedValue(newAddress, newDisplayName); err != nil {
 		return User{}, err
 	}
 
@@ -337,10 +537,8 @@ func (s *Store) ApplyUserChanges(ctx context.Context, id int, changes UserChange
 		if userName == "" {
 			return User{}, errors.New("scimdirectory: userName is required")
 		}
-		var taken bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM auth_core__user WHERE lower(email) = $1 AND id <> $2)`,
-			userName, id).Scan(&taken); err != nil {
+		taken, err := addressTaken(ctx, tx, userName, id)
+		if err != nil {
 			return User{}, err
 		}
 		if taken {
@@ -374,6 +572,18 @@ func (s *Store) ApplyUserChanges(ctx context.Context, id int, changes UserChange
 		 ON CONFLICT (user_id) DO UPDATE SET updated_at = now()`, id); err != nil {
 		return User{}, err
 	}
+	if changes.GivenName != nil || changes.FamilyName != nil || changes.FormattedName != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE elitea_auth.scim_users
+			    SET given_name     = COALESCE($2, given_name),
+			        family_name    = COALESCE($3, family_name),
+			        formatted_name = COALESCE($4, formatted_name),
+			        updated_at     = now()
+			  WHERE user_id = $1`,
+			id, changes.GivenName, changes.FamilyName, changes.FormattedName); err != nil {
+			return User{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
 	}
@@ -387,12 +597,14 @@ func (s *Store) Deactivate(ctx context.Context, id int) error {
 	return err
 }
 
-// touch moves `meta.lastModified`, creating the SCIM row when the account was
-// made by a first login rather than by a directory push.
-func (s *Store) touch(ctx context.Context, id int) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO elitea_auth.scim_users (user_id) VALUES ($1)
-		 ON CONFLICT (user_id) DO UPDATE SET updated_at = now()`, id)
+// writeNameParts stores the three `name` sub-attributes exactly. The SCIM row
+// exists by now: every caller has upserted it in the same transaction.
+func writeNameParts(ctx context.Context, tx pgx.Tx, id int, given, family, formatted string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE elitea_auth.scim_users
+		    SET given_name = $2, family_name = $3, formatted_name = $4, updated_at = now()
+		  WHERE user_id = $1`,
+		id, strings.TrimSpace(given), strings.TrimSpace(family), strings.TrimSpace(formatted))
 	return err
 }
 
@@ -454,7 +666,8 @@ func scanUser(row rowScanner) (User, error) {
 		suspended bool
 	)
 	if err := row.Scan(&user.ID, &email, &name, &suspended,
-		&user.ExternalID, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		&user.ExternalID, &user.CreatedAt, &user.UpdatedAt,
+		&user.GivenName, &user.FamilyName, &user.FormattedName); err != nil {
 		return User{}, err
 	}
 	// email and name are NULLABLE on `auth_core__user`, and a row created by

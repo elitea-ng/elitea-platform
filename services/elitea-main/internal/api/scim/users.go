@@ -117,16 +117,26 @@ func (b userBody) toUser(activeDefault bool) scimdirectory.User {
 	if b.Active != nil {
 		active = *b.Active
 	}
-	return scimdirectory.User{
+	user := scimdirectory.User{
 		ExternalID:  strings.TrimSpace(b.ExternalID),
 		UserName:    b.resolveUserName(),
 		DisplayName: b.resolveDisplayName(),
-		Active:      active,
+		// A name composed from the parts fills an empty display name only; it
+		// never overwrites one the client manages through `displayName`.
+		DisplayNameDerived: strings.TrimSpace(b.DisplayName) == "",
+		Active:             active,
 		// Carried through so the store can tell an explicit flag from a
 		// default. Create uses it to leave an operator's manual suspension
 		// alone on a re-sync; see scimdirectory.Create.
 		ActiveStated: b.Active != nil,
 	}
+	if b.Name != nil {
+		user.NameStated = true
+		user.GivenName = strings.TrimSpace(b.Name.GivenName)
+		user.FamilyName = strings.TrimSpace(b.Name.FamilyName)
+		user.FormattedName = strings.TrimSpace(b.Name.Formatted)
+	}
+	return user
 }
 
 /* ── read ──────────────────────────────────────────────────────────────── */
@@ -395,6 +405,17 @@ func (h *Handler) writeStoreFailure(w http.ResponseWriter, err error, operation 
 	switch {
 	case errors.Is(err, scimdirectory.ErrNotFound):
 		writeError(w, http.StatusNotFound, "", "no such user")
+	case errors.Is(err, scimdirectory.ErrProtected):
+		// 403 with `mutability`: the request is well formed, and this
+		// credential may not make it against this account. The reason names
+		// which rule refused it, so an operator reading the identity
+		// provider's log knows to act on the admin Users page instead.
+		var protected *scimdirectory.ProtectedError
+		detail := "this account is not managed through SCIM"
+		if errors.As(err, &protected) {
+			detail = protected.Reason
+		}
+		writeError(w, http.StatusForbidden, "mutability", detail)
 	case errors.Is(err, scimdirectory.ErrConflict):
 		// `uniqueness` is the code a client switches on to decide it should
 		// look the existing resource up rather than retry the create.
