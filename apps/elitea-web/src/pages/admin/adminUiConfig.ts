@@ -35,6 +35,8 @@
  * server route does not independently re-check.
  */
 
+export type AdminAccess = 'granted' | 'denied' | 'unauthenticated' | 'unavailable';
+
 interface AdminUiConfig {
   readonly vite_server_url?: string;
   readonly vite_base_uri?: string;
@@ -43,6 +45,13 @@ interface AdminUiConfig {
   readonly user_email?: string;
   /** Presentation hint only — see this module's header. */
   readonly permissions?: readonly string[];
+  /**
+   * WHY `permissions` is what it is (handler.go `adminUIConfig.Access`): an
+   * empty list is injected for "no administration role", "no / expired
+   * session" and "lookup failed" alike, and only this field tells them apart.
+   * Absent from an older handler and from dev/tests.
+   */
+  readonly access?: AdminAccess;
   /** Always empty. The handler resolves permissions only. */
   readonly roles?: readonly string[];
 }
@@ -88,4 +97,15 @@ export function adminUiUserName(): string {
  */
 export function adminUiShowsControlFor(permission: string): boolean {
   return readAdminUiConfig().permissions?.includes(permission) ?? false;
+}
+
+const ADMIN_ACCESS_VALUES: readonly string[] = ['granted', 'denied', 'unauthenticated', 'unavailable'];
+
+/**
+ * The handler's stated access reason, or `undefined` when none was injected
+ * (older handler, dev, tests) or the value is not one of the four known ones.
+ */
+export function adminUiAccess(): AdminAccess | undefined {
+  const access = readAdminUiConfig().access;
+  return access !== undefined && ADMIN_ACCESS_VALUES.includes(access) ? access : undefined;
 }

@@ -4530,5 +4530,11 @@
   "pages.admin.scimClients.expiry.expired": "Expired {{date}}",
   "pages.admin.scimClients.expiry.inDays": "Expires in {{count}} days",
   "pages.admin.scimClients.expiry.none": "No expiry",
-  "pages.admin.scimClients.table.expires": "Expires"
+  "pages.admin.scimClients.table.expires": "Expires",
+  "pages.admin.signIn.title": "Taking you to sign in…",
+  "pages.admin.signIn.retryTitle": "Sign in to continue",
+  "pages.admin.signIn.button": "Sign in",
+  "pages.admin.unavailable.title": "We couldn't check your permissions",
+  "pages.admin.unavailable.retry": "Try again",
+  "pages.admin.unavailable.explanation": "Something went wrong on our side while loading your access. Try again in a moment."
 }

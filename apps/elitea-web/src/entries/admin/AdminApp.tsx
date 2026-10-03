@@ -25,16 +25,38 @@
  * tree.
  */
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 
 import { RouterProvider } from '@tanstack/react-router';
 
 import { AppProviders } from '@/app/providers';
 import { AdminAccessDenied } from '@/pages/admin/AdminAccessDenied';
+import { AdminAccessUnavailable } from '@/pages/admin/AdminAccessUnavailable';
+import { AdminSignInRedirect } from '@/pages/admin/AdminSignInRedirect';
 import { hasAnyAdminNavAccess } from '@/pages/admin/adminNavItems';
+import { adminUiAccess } from '@/pages/admin/adminUiConfig';
 import { createAdminRouter } from '@/pages/admin/router';
 
-export function AdminApp() {
-  const [router] = useState(() => (hasAnyAdminNavAccess() ? createAdminRouter() : null));
+/**
+ * What the boot gate shows. The handler's `access` reason decides when it was
+ * injected; an older handler (or dev/tests) injects none, and then the
+ * permission list alone decides, as it always did.
+ */
+function resolveGate(): 'router' | 'denied' | 'unauthenticated' | 'unavailable' {
+  const access = adminUiAccess();
+  if (access === undefined) return hasAnyAdminNavAccess() ? 'router' : 'denied';
+  return access === 'granted' ? 'router' : access;
+}
 
-  return <AppProviders>{router ? <RouterProvider router={router} /> : <AdminAccessDenied />}</AppProviders>;
+export function AdminApp() {
+  const [gate] = useState(resolveGate);
+  const [router] = useState(() => (gate === 'router' ? createAdminRouter() : null));
+
+  let content: ReactNode;
+  if (router) content = <RouterProvider router={router} />;
+  else if (gate === 'unauthenticated') content = <AdminSignInRedirect />;
+  else if (gate === 'unavailable') content = <AdminAccessUnavailable />;
+  else content = <AdminAccessDenied />;
+
+  return <AppProviders>{content}</AppProviders>;
 }
