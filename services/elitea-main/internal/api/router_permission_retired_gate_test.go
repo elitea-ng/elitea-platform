@@ -12,13 +12,16 @@ package api_test
 //
 //   - the dead_permission array in migrations/shared/0136;
 //   - admin.RetiredPermissions(), which hides the names in the Roles matrix;
-//   - the code: no route gate, no later grant and no web permission constant
-//     may name a retired string.
+//   - the code: no route gate, no later grant and no web gate may name a
+//     retired string. The web side is the permission constants AND every
+//     literal gate list in apps/elitea-web/src, such as the admin nav's
+//     `anyPermission`.
 //
 // If a retired name gets a real check again, this test fails. The fix is to
 // remove the name from BOTH lists, in a new migration if rows must come back.
 
 import (
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -100,11 +103,107 @@ func TestRetiredPermissionsAreNeitherGatedNorGranted(t *testing.T) {
 		}
 	}
 
-	// The web app's permission constants are its only gate source.
-	web := readFile(t, filepath.Join(root, "../../apps/elitea-web/src/shared/lib/permissions.ts"))
-	for name := range retired {
-		if strings.Contains(web, "'"+name+"'") {
-			t.Errorf("apps/elitea-web permissions.ts names the retired permission %q", name)
+	// The web app gates in more than one place: the permission constants, and
+	// literal lists such as the admin nav's `anyPermission`. Both are scanned.
+	for _, use := range webPermissionLiterals(t, filepath.Join(root, "../../apps/elitea-web/src")) {
+		if retired[use.name] {
+			t.Errorf("%s gates on the retired permission %q, which shared/0136 deletes as checked by no code",
+				use.file, use.name)
+		}
+	}
+}
+
+// webPermissionUse is one permission string a web gate names.
+type webPermissionUse struct {
+	file string
+	name string
+}
+
+var (
+	// A literal list handed to a gate: `anyPermission: [...]`,
+	// `requirePermission([...])` and the like.
+	webPermissionList = regexp.MustCompile(
+		`(?s)\b(?:anyPermission|allPermissions|requiredPermissions|requirePermission)\s*[:(]\s*\[([^\]]*)\]`)
+	// A literal handed to a hook: `useHasPermission(projectId, '...')`.
+	webPermissionHook = regexp.MustCompile(`\buseHas\w*Permission\(\s*[^,()]*,\s*'([^']+)'`)
+	webQuotedLiteral  = regexp.MustCompile(`'([^']+)'`)
+)
+
+// webPermissionLiterals collects the permission strings the web app gates on.
+//
+// The source of every constant is shared/lib/permissions.ts, so each quoted
+// literal in that file counts. Elsewhere only literals inside a gate's list or
+// a permission hook count: a whole-tree scan for quoted words would match
+// route ids and query keys such as 'projects' and 'configuration'. Tests and
+// generated code are skipped.
+func webPermissionLiterals(t *testing.T, srcRoot string) []webPermissionUse {
+	t.Helper()
+	var uses []webPermissionUse
+	constants := filepath.Join(srcRoot, "shared", "lib", "permissions.ts")
+	gateSites := 0
+	err := filepath.WalkDir(srcRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			if name == "generated" || name == "__tests__" || name == "test" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !(strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".tsx")) ||
+			strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") ||
+			strings.Contains(name, ".gen.") || strings.Contains(name, ".msw.") {
+			return nil
+		}
+		source := readFile(t, path)
+		relative, _ := filepath.Rel(srcRoot, path)
+		if path == constants {
+			for _, literal := range webQuotedLiteral.FindAllStringSubmatch(source, -1) {
+				uses = append(uses, webPermissionUse{file: relative, name: literal[1]})
+			}
+			return nil
+		}
+		for _, list := range webPermissionList.FindAllStringSubmatch(source, -1) {
+			gateSites++
+			for _, literal := range webQuotedLiteral.FindAllStringSubmatch(list[1], -1) {
+				uses = append(uses, webPermissionUse{file: relative, name: literal[1]})
+			}
+		}
+		for _, hook := range webPermissionHook.FindAllStringSubmatch(source, -1) {
+			gateSites++
+			uses = append(uses, webPermissionUse{file: relative, name: hook[1]})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", srcRoot, err)
+	}
+	// The admin nav alone has more than a dozen `anyPermission` lists. Fewer
+	// than ten gate sites means the patterns no longer match the source, and
+	// this scan would pass for the wrong reason.
+	if gateSites < 10 {
+		t.Fatalf("found only %d web gate sites under %s; the scan patterns no longer match the source", gateSites, srcRoot)
+	}
+	return uses
+}
+
+// The scan must find the strings the admin nav really gates on. Without this,
+// a pattern that matched nothing would let every retired name through.
+func TestWebPermissionScanReadsTheAdminNav(t *testing.T) {
+	t.Parallel()
+
+	uses := webPermissionLiterals(t, filepath.Join(repoRootFrom(t), "../../apps/elitea-web/src"))
+	found := map[string]bool{}
+	for _, use := range uses {
+		if strings.HasSuffix(use.file, "adminNavGroups.ts") {
+			found[use.name] = true
+		}
+	}
+	for _, want := range []string{"runtime.plugins", "configuration.branding", "projects.projects.projects.view"} {
+		if !found[want] {
+			t.Errorf("the web scan did not read %q from adminNavGroups.ts", want)
 		}
 	}
 }

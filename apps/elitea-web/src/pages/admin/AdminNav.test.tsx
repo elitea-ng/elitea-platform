@@ -217,7 +217,7 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  * The names the nav also asks for that NO administration-mode seed in this
  * repository grants.
  *
- * Six are the reference sidebar's pylon SECTION names. One,
+ * Four are the reference sidebar's pylon SECTION names. One,
  * `admin.moderation.view`, this platform does seed — in the DEFAULT mode
  * (`migrations/shared/0077_moderation_permissions.sql`), which the admin
  * console never resolves.
@@ -229,11 +229,9 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  */
 const NOT_SEEDED_IN_ADMINISTRATION = new Set([
   'admin.moderation.view',
-  'configuration',
   'configuration.roles',
   'configuration.secrets.secret.list',
   'configuration.service_descriptors',
-  'projects',
   'projects.projects',
 ]);
 
@@ -326,7 +324,7 @@ describe('permission filtering', () => {
 
   it('drops a group that loses every item, rather than rendering an empty one', () => {
     const groups = visibleAdminNavGroups((permission) =>
-      ['admin.auth.users', 'configuration.roles', 'projects', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
+      ['admin.auth.users', 'configuration.roles', 'projects.projects', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
         permission,
       ),
     );
