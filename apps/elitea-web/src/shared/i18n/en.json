@@ -4542,5 +4542,7 @@
   "widgets.chatBox.hashPicker.title": "Agents and pipelines",
   "chatMessages.error.budgetUsageMember": "View my usage",
   "chatMessages.error.budgetUsageProject": "View project usage",
-  "entities.author.deletedUser": "Deleted user"
+  "entities.author.deletedUser": "Deleted user",
+  "settings.usage.memberScope": "Your own usage against your budget in this project.",
+  "settings.usage.noMemberCeiling": "You have no enforced spend ceiling in this project this period."
 }

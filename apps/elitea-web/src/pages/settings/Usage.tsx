@@ -31,7 +31,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
-import { useProjectUsage, type ProjectUsage } from './api/projectUsageApi';
+import { useProjectUsage, type ProjectUsage, type UsageScope } from './api/projectUsageApi';
 
 const DASH = '—';
 
@@ -58,7 +58,7 @@ function UsageFigure({ label, value }: { readonly label: string; readonly value:
   );
 }
 
-function UsageBody({ usage }: { readonly usage: ProjectUsage }) {
+function UsageBody({ usage, scope }: { readonly usage: ProjectUsage; readonly scope: UsageScope }) {
   const percentUsed = usage.percent_used;
   const warningPct = usage.warning_pct ?? 80;
   const unlimited = percentUsed === null || percentUsed === undefined;
@@ -86,10 +86,12 @@ function UsageBody({ usage }: { readonly usage: ProjectUsage }) {
 
       {unlimited ? (
         <Typography variant="bodyMedium" color="text.secondary">
-          {t(
-            'settings.usage.noCeiling',
-            'This project has no enforced spend ceiling this period.',
-          )}
+          {scope === 'user'
+            ? t('settings.usage.noMemberCeiling', 'You have no enforced spend ceiling in this project this period.')
+            : t(
+                'settings.usage.noCeiling',
+                'This project has no enforced spend ceiling this period.',
+              )}
         </Typography>
       ) : (
         <Box sx={styles.bar} data-testid="settings-usage-bar">
@@ -139,13 +141,20 @@ function UsageBody({ usage }: { readonly usage: ProjectUsage }) {
 
 interface UsageProps {
   readonly projectId?: string | undefined;
+  /** `user` shows the caller's own member budget (#6732). */
+  readonly scope?: UsageScope | undefined;
 }
 
-const Usage = memo(({ projectId }: UsageProps) => {
-  const query = useProjectUsage(projectId);
+const Usage = memo(({ projectId, scope = 'project' }: UsageProps) => {
+  const query = useProjectUsage(projectId, scope);
 
   return (
-    <Box sx={styles.container} data-testid="settings-usage">
+    <Box sx={styles.container} data-testid="settings-usage" data-scope={scope}>
+      {scope === 'user' ? (
+        <Typography variant="bodyMedium" color="text.secondary" data-testid="settings-usage-member-scope">
+          {t('settings.usage.memberScope', 'Your own usage against your budget in this project.')}
+        </Typography>
+      ) : null}
       {query.isLoading ? <LinearProgress data-testid="settings-usage-loading" /> : null}
 
       {/* Reported as the failure it is. An empty panel renders identically to
@@ -156,7 +165,7 @@ const Usage = memo(({ projectId }: UsageProps) => {
         </Alert>
       ) : null}
 
-      {query.data !== undefined ? <UsageBody usage={query.data} /> : null}
+      {query.data !== undefined ? <UsageBody usage={query.data} scope={scope} /> : null}
     </Box>
   );
 });
