@@ -279,7 +279,11 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 		if _, supported := c.supportedToolTypes[toolkitType]; supported {
 			return true, ""
 		}
-		return false, "the native worker has no toolkit family for " + toolkitType
+		// A sentence for the person reading it in the UI (the Indexes tab
+		// and the toolkit catalogue show it verbatim). "Native worker" and
+		// "toolkit family" are internal terms (UI-DC-1).
+		return false, "This deployment's agent worker does not support the " +
+			toolkitType + " toolkit."
 	default:
 		return true, ""
 	}

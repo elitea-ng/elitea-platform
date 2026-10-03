@@ -120,6 +120,11 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 		!strings.Contains(reason, "jira") {
 		t.Errorf("jira supported=%v reason=%q", supported, reason)
 	}
+	// UI-DC-1: the reason is a sentence for a person, with no internal terms.
+	if _, reason := rust.SupportsToolkitType("ado_boards", "ado_boards"); reason !=
+		"This deployment's agent worker does not support the ado_boards toolkit." {
+		t.Errorf("ado_boards reason = %q", reason)
+	}
 
 	// A nil projection supports everything: a deployment that has not stated
 	// its worker keeps the catalogue it had before this projection existed.
