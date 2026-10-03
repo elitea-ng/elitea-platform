@@ -78,16 +78,31 @@ export function resolveSendModelName(
  * A chat with no configured model runs on the saved-or-default model. That
  * model can be shared from another project, so the turn must name ITS project.
  * Without it the server resolves the name in the chat's own project (UI-PD-2).
- * A configured model keeps its own `model_project_id` untouched.
+ * A configured model keeps its own `model_project_id` untouched. A configured
+ * model with NO `model_project_id` gets the project the picker resolved
+ * (`configuredModelProjectId`), so the turn runs the model the picker shows.
  */
 export function resolveSendLlmSettings(
   settings: Readonly<Record<string, unknown>> | undefined,
   model: { readonly name?: string | undefined; readonly projectId?: string | number | undefined } | null | undefined,
+  configuredModelProjectId?: number,
 ): Readonly<Record<string, unknown>> | undefined {
   const configuredName = settings?.['model_name'];
-  if (typeof configuredName === 'string' && configuredName !== '') return settings;
-  const projectId = Number(model?.projectId);
-  if (model?.name === undefined || !Number.isInteger(projectId) || projectId <= 0) return settings;
+  if (typeof configuredName === 'string' && configuredName !== '') {
+    // A configured model with its own project keeps it.
+    return settings?.['model_project_id'] == null
+      ? withModelProject(settings, configuredModelProjectId)
+      : settings;
+  }
+  return model?.name === undefined ? settings : withModelProject(settings, Number(model.projectId));
+}
+
+/** `settings` naming `projectId` as the model's project, when it is a positive integer. */
+function withModelProject(
+  settings: Readonly<Record<string, unknown>> | undefined,
+  projectId: number | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  if (projectId === undefined || !Number.isInteger(projectId) || projectId <= 0) return settings;
   return { ...settings, model_project_id: projectId };
 }
 

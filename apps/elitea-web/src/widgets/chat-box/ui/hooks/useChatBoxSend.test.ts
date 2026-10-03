@@ -60,6 +60,19 @@ describe('resolveSendLlmSettings (UI-PD-2)', () => {
     expect(resolveSendLlmSettings(settings, { name: 'x' })).toBe(settings);
     expect(resolveSendLlmSettings(undefined, { name: 'x', projectId: 'abc' })).toBeUndefined();
   });
+
+  it('sends the picker project for a configured model saved with no project id', () => {
+    expect(resolveSendLlmSettings({ model_name: 'gpt-4o' }, null, 1))
+      .toStrictEqual({ model_name: 'gpt-4o', model_project_id: 1 });
+  });
+
+  it('never overrides a configured model project id', () => {
+    const settings = { model_name: 'gpt-4o', model_project_id: 3 };
+    expect(resolveSendLlmSettings(settings, null, 1)).toBe(settings);
+    const bare = { model_name: 'gpt-4o' };
+    expect(resolveSendLlmSettings(bare, null, undefined)).toBe(bare);
+    expect(resolveSendLlmSettings(bare, null, 0)).toBe(bare);
+  });
 });
 
 describe('resolveStartContract', () => {

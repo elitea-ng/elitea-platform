@@ -59,6 +59,34 @@ describe('pipeline test model selection', () => {
     expect(result.current.selectedLlmModel?.id).toBe('shared');
   });
 
+  it('prefers the chat project model for a configured name saved with no project id', () => {
+    // The include_shared list puts the shared copy first; the server resolves
+    // a project-less name in the chat project, so the picker must show that one.
+    const { result } = renderHook(() => useChatBoxModelSelection({
+      projectId: '9', selectedModel: { name: 'default-model' }, setSelectedModel: vi.fn(),
+      llm: { settings: { model_name: 'pipeline-model' } },
+    }));
+    expect(result.current.selectedLlmModel?.id).toBe('private');
+    expect(result.current.configuredModelProjectId).toBe(9);
+  });
+
+  it('falls back to a shared model only when the chat project has none, and names its project', () => {
+    const { result } = renderHook(() => useChatBoxModelSelection({
+      projectId: '5', selectedModel: { name: 'default-model' }, setSelectedModel: vi.fn(),
+      llm: { settings: { model_name: 'pipeline-model' } },
+    }));
+    expect(result.current.selectedLlmModel?.id).toBe('shared');
+    expect(result.current.configuredModelProjectId).toBe(1);
+  });
+
+  it('adds no project when the configured model already names one', () => {
+    const { result } = renderHook(() => useChatBoxModelSelection({
+      projectId: '9', selectedModel: { name: 'default-model' }, setSelectedModel: vi.fn(),
+      llm: { settings: { model_name: 'pipeline-model', model_project_id: '1' } },
+    }));
+    expect(result.current.configuredModelProjectId).toBeUndefined();
+  });
+
   it('refuses an object project identity without invoking its string conversion', () => {
     const toString = vi.fn(() => '1');
     const { result } = renderHook(() => useChatBoxModelSelection({

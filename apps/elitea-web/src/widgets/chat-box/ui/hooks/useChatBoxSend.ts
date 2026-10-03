@@ -61,6 +61,8 @@ export interface UseChatBoxSendParams {
    * component over its complexity budget.
    */
   readonly model?: { readonly name?: string | undefined; readonly projectId?: string | undefined } | null | undefined;
+  /** The picker's project for a configured model saved with no project id. */
+  readonly configuredModelProjectId?: number | undefined;
   readonly setChatHistory: (
     updater: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
   ) => void;
@@ -150,8 +152,8 @@ export function useChatBoxSend(
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
   const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
   const llmSettings = useMemo(
-    () => resolveSendLlmSettings(params.llmSettings, params.model),
-    [params.llmSettings, params.model],
+    () => resolveSendLlmSettings(params.llmSettings, params.model, params.configuredModelProjectId),
+    [params.llmSettings, params.model, params.configuredModelProjectId],
   );
   const target = useMemo(
     () => resolveTargetParticipant(params.activeParticipant, params.participants),
