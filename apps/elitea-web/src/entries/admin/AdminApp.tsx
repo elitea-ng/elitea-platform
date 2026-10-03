@@ -24,19 +24,15 @@
  * access is granted, so a refused caller never even constructs the route
  * tree.
  */
-import { lazy, Suspense, useState } from 'react';
+import { Suspense, useState } from 'react';
 
 import { RouterProvider } from '@tanstack/react-router';
 
 import { AppProviders } from '@/app/providers';
 import { hasAnyAdminNavAccess } from '@/pages/admin/adminNavItems';
+import { AdminRefusalLazy } from '@/pages/admin/AdminRefusalLazy';
 import { adminUiAccess } from '@/pages/admin/adminUiConfig';
 import { createAdminRouter } from '@/pages/admin/router';
-
-// The whole refusal path (StatusPage, the three pages, their helpers) sits
-// behind ONE dynamic import: a granted operator loads none of it, which keeps
-// it out of the admin initial-bundle budget.
-const AdminRefusal = lazy(() => import('@/pages/admin/AdminRefusal').then((m) => ({ default: m.AdminRefusal })));
 
 /**
  * What the boot gate shows. The handler's `access` reason decides when it was
@@ -56,7 +52,7 @@ export function AdminApp() {
   return (
     <AppProviders>
       <Suspense fallback={null}>
-        {router ? <RouterProvider router={router} /> : <AdminRefusal gate={gate === 'router' ? 'denied' : gate} />}
+        {router ? <RouterProvider router={router} /> : <AdminRefusalLazy gate={gate === 'router' ? 'denied' : gate} />}
       </Suspense>
     </AppProviders>
   );

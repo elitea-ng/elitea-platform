@@ -40,7 +40,7 @@ export function AdminAccessUnavailable({ reload = reloadPage }: AdminAccessUnava
       >
         {t(
           'pages.admin.unavailable.explanation',
-          'Something went wrong on our side while loading your access. Try again in a moment.',
+          'Something went wrong on our side. Try again in a moment.',
         )}
       </Typography>
     </StatusPage>

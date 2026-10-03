@@ -2188,7 +2188,7 @@
   "processes.chat.editorShell.publicBadgeLabel": "Public",
   "route.notFound.back": "Go back",
   "route.notFound.homeButton": "Go to the home page",
-  "route.notFound.message": "The page you are looking for does not exist or may have been moved. Check the address, or head back to the home page.",
+  "route.notFound.message": "This page does not exist or has moved.",
   "route.notFound.title": "Page not found",
   "route.projectSwitcher.switching": "Switching project…",
   "routes.error": "Something went wrong.",
@@ -4531,10 +4531,9 @@
   "pages.admin.scimClients.expiry.inDays": "Expires in {{count}} days",
   "pages.admin.scimClients.expiry.none": "No expiry",
   "pages.admin.scimClients.table.expires": "Expires",
-  "pages.admin.signIn.title": "Taking you to sign in…",
-  "pages.admin.signIn.retryTitle": "Sign in to continue",
+  "pages.admin.signIn.title": "Sign in to continue",
   "pages.admin.signIn.button": "Sign in",
   "pages.admin.unavailable.title": "We couldn't check your permissions",
   "pages.admin.unavailable.retry": "Try again",
-  "pages.admin.unavailable.explanation": "Something went wrong on our side while loading your access. Try again in a moment."
+  "pages.admin.unavailable.explanation": "Something went wrong on our side. Try again in a moment."
 }

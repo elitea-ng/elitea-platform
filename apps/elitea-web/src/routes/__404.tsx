@@ -110,7 +110,7 @@ export function NotFoundPage() {
       >
         {t(
           'route.notFound.message',
-          'The page you are looking for does not exist or may have been moved. Check the address, or head back to the home page.',
+          'This page does not exist or has moved.',
         )}
       </Typography>
     </StatusPage>

@@ -99,13 +99,12 @@ export function adminUiShowsControlFor(permission: string): boolean {
   return readAdminUiConfig().permissions?.includes(permission) ?? false;
 }
 
-const ADMIN_ACCESS_VALUES: readonly string[] = ['granted', 'denied', 'unauthenticated', 'unavailable'];
-
 /**
  * The handler's stated access reason, or `undefined` when none was injected
- * (older handler, dev, tests) or the value is not one of the four known ones.
+ * (older handler, dev, tests). An unknown value reads as "denied": fail closed.
  */
 export function adminUiAccess(): AdminAccess | undefined {
   const access = readAdminUiConfig().access;
-  return access !== undefined && ADMIN_ACCESS_VALUES.includes(access) ? access : undefined;
+  if (access === undefined) return undefined;
+  return access === 'granted' || access === 'unauthenticated' || access === 'unavailable' ? access : 'denied';
 }

@@ -58,11 +58,7 @@ export function AdminSignInRedirect({ redirect = replaceLocation }: AdminSignInR
   return (
     <StatusPage
       testId="admin-sign-in-redirect"
-      title={
-        alreadyTried
-          ? t('pages.admin.signIn.retryTitle', 'Sign in to continue')
-          : t('pages.admin.signIn.title', 'Taking you to sign in…')
-      }
+      title={t('pages.admin.signIn.title', 'Sign in to continue')}
       actions={
         alreadyTried ? (
           <Button variant="contained" component="a" href={url}>
