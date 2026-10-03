@@ -1165,12 +1165,17 @@ const MAX_BUDGET_REFUSAL_BYTES: usize = 4096;
 
 /// Classify a 402 budget refusal by the scope the gateway names (#6732).
 ///
-/// The gateway writes `{"error":{"type":"budget_exceeded","code":...}}`, with
-/// `member_budget_exceeded` for the member ceiling and any other code for the
-/// project ceiling (`budget_gate.go`). Only the scope leaves this function; the
-/// body itself is never logged or forwarded. A body that cannot be read in time
-/// or does not have that shape keeps the unscoped refusal.
-async fn budget_refusal(response: Response<Body>, read_timeout: Duration) -> AdkError {
+/// The gateway's own gate writes
+/// `{"error":{"type":"budget_exceeded","code":...,"scope":"project"|"member"}}`
+/// (`budget_gate.go`). A provider's quota or billing refusal reaches the worker
+/// as the same type and `insufficient_quota` code, but with no `scope`, so only
+/// `scope` (or the gate-only member code) names a ceiling. Every other budget
+/// body keeps the unscoped refusal, which points at provider billing too.
+/// Only the scope leaves this function; the body itself is never logged or
+/// forwarded. A body that cannot be read in time, is larger than
+/// `MAX_BUDGET_REFUSAL_BYTES`, or does not have that shape keeps the unscoped
+/// refusal. Both facades (OpenAI-compatible and native Anthropic) call it.
+pub(super) async fn budget_refusal(response: Response<Body>, read_timeout: Duration) -> AdkError {
     let body = http_body_util::Limited::new(response.into_body(), MAX_BUDGET_REFUSAL_BYTES);
     let bytes = match timeout(read_timeout, body.collect()).await {
         Ok(Ok(collected)) => collected.to_bytes(),
@@ -1210,9 +1215,16 @@ fn budget_refusal_scope(body: &[u8]) -> Option<BudgetRefusalScope> {
     if error.get("type")?.as_str()? != "budget_exceeded" {
         return None;
     }
-    match error.get("code").and_then(serde_json::Value::as_str) {
-        Some("member_budget_exceeded") => Some(BudgetRefusalScope::Member),
-        _ => Some(BudgetRefusalScope::Project),
+    match (
+        error.get("scope").and_then(serde_json::Value::as_str),
+        error.get("code").and_then(serde_json::Value::as_str),
+    ) {
+        (Some("member"), _) | (None, Some("member_budget_exceeded")) => {
+            Some(BudgetRefusalScope::Member)
+        }
+        (Some("project"), _) => Some(BudgetRefusalScope::Project),
+        // A provider's own quota refusal: no ceiling of this platform refused.
+        _ => None,
     }
 }
 

@@ -1239,6 +1239,7 @@ func (w *realtimeRefusalRecorder) verdict() budgetVerdict {
 	var body openAIError
 	if err := json.Unmarshal(w.body.Bytes(), &body); err == nil && body.Error.Type != "" {
 		v.errType, v.code, v.message = body.Error.Type, body.Error.Code, body.Error.Message
+		v.scope = body.Error.Scope
 	}
 	return v
 }
@@ -1583,12 +1584,14 @@ type realtimeErrorEventFields struct {
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
+	// Scope is the same error.scope the HTTP budget refusal carries.
+	Scope string `json:"scope,omitempty"`
 }
 
 // sendRefusalEvent writes the refusal to the caller. It is best effort: a caller
 // that has already gone away is about to end the session anyway.
 func (s *realtimeSession) sendRefusalEvent(v budgetVerdict) {
-	frame := realtimeRefusalFrame(v.errType, v.code, v.message)
+	frame := realtimeRefusalFrameScoped(v.errType, v.code, v.message, v.scope)
 	if frame == nil {
 		return
 	}
@@ -1600,9 +1603,15 @@ func (s *realtimeSession) sendRefusalEvent(v budgetVerdict) {
 
 // realtimeRefusalFrame renders one refusal as the provider's `error` event.
 func realtimeRefusalFrame(errType, code, message string) []byte {
+	return realtimeRefusalFrameScoped(errType, code, message, "")
+}
+
+// realtimeRefusalFrameScoped is realtimeRefusalFrame with the gate's
+// error.scope, which is empty for every refusal the gate did not decide.
+func realtimeRefusalFrameScoped(errType, code, message, scope string) []byte {
 	frame, err := json.Marshal(realtimeErrorEvent{
 		Type:  string(schemas.RTEventError),
-		Error: realtimeErrorEventFields{Type: errType, Code: code, Message: message},
+		Error: realtimeErrorEventFields{Type: errType, Code: code, Message: message, Scope: scope},
 	})
 	if err != nil {
 		return nil

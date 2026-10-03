@@ -43,15 +43,25 @@ BUDGET_EXHAUSTED_MESSAGES = frozenset(
 )
 
 
+# The unscoped refusal: no Elitea ceiling is known to have refused the call,
+# for example a provider's own quota or billing refusal. It is the codec's
+# MODEL_BUDGET_EXHAUSTED default, and Main maps it to MODEL_BUDGET_EXHAUSTED.
+UNSCOPED_BUDGET_EXHAUSTED_MESSAGE = (
+    "The model budget is exhausted. Ask an administrator to check the project "
+    "budget or provider billing before retrying."
+)
+
+
 class ModelBudgetExhausted(WorkerError):
     """A model budget refused the call. Carries only the refusing scope."""
 
-    def __init__(self, scope: str = "project") -> None:
-        message = (
-            MEMBER_BUDGET_EXHAUSTED_MESSAGE
-            if scope == "member"
-            else PROJECT_BUDGET_EXHAUSTED_MESSAGE
-        )
+    def __init__(self, scope: str = "unknown") -> None:
+        if scope == "member":
+            message = MEMBER_BUDGET_EXHAUSTED_MESSAGE
+        elif scope == "project":
+            message = PROJECT_BUDGET_EXHAUSTED_MESSAGE
+        else:
+            message = UNSCOPED_BUDGET_EXHAUSTED_MESSAGE
         super().__init__("MODEL_BUDGET_EXHAUSTED", message, exit_code=2)
 
 

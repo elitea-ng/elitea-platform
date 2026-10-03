@@ -102,6 +102,16 @@ const (
 	// concept with no OpenAI equivalent, so there is no canonical code to keep
 	// here, and the SDK needs this exact spelling to report the member scope.
 	budgetCodeMember = "member_budget_exceeded"
+	// budgetScopeFieldProject and budgetScopeFieldMember are the values of the
+	// error.scope field. Only a refusal this gateway's own gate decided carries
+	// error.scope. A provider's own quota refusal also arrives as
+	// budget_exceeded/insufficient_quota (statusAndType), so the code alone
+	// cannot say that the PROJECT ceiling refused the call. The workers read
+	// error.scope to name the refusing budget, and treat its absence as an
+	// unknown scope, for example provider billing (#6732). The SDK ignores the
+	// field, so its type/code contract above does not change.
+	budgetScopeFieldProject = "project"
+	budgetScopeFieldMember  = "member"
 )
 
 // perImageFallbackNano is the fixed per-image billing cost in nano-USD used
@@ -188,8 +198,23 @@ func (h *Handler) checkBudget(
 	if v.retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(v.retryAfter/time.Second)+1, 10))
 	}
-	writeError(w, v.status, v.errType, v.message, v.code)
+	writeBudgetRefusal(w, v)
 	return false
+}
+
+// writeBudgetRefusal writes a refusal verdict. A gate-decided budget refusal
+// adds error.scope; every other refusal is the plain writeError body.
+func writeBudgetRefusal(w http.ResponseWriter, v budgetVerdict) {
+	if v.scope == "" {
+		writeError(w, v.status, v.errType, v.message, v.code)
+		return
+	}
+	if sink, ok := w.(requestlog.ErrorCodeSetter); ok {
+		sink.SetErrorCode(v.errType)
+	}
+	writeJSON(w, v.status, openAIError{Error: openAIErrorFields{
+		Message: v.message, Type: v.errType, Code: v.code, Scope: v.scope,
+	}})
 }
 
 // budgetVerdict is one admission decision, with no dependency on how it is
@@ -200,11 +225,14 @@ func (h *Handler) checkBudget(
 // retryAfter is non-zero only for the loop-breaker refusal, which is the one
 // refusal that carries a Retry-After header on the HTTP path.
 type budgetVerdict struct {
-	allow      bool
-	status     int
-	errType    string
-	message    string
-	code       string
+	allow   bool
+	status  int
+	errType string
+	message string
+	code    string
+	// scope is set only on a budget refusal the gate decided: "project" or
+	// "member". See budgetScopeFieldProject.
+	scope      string
 	retryAfter time.Duration
 }
 
@@ -348,6 +376,7 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 			errType: budgetErrorType,
 			message: "project budget exhausted for this billing period",
 			code:    budgetCodeProject,
+			scope:   budgetScopeFieldProject,
 		}
 	case failmode.Block503:
 		return budgetVerdict{
@@ -450,6 +479,7 @@ func (h *Handler) memberVerdict(
 			errType: budgetErrorType,
 			message: "member budget exhausted for this billing period",
 			code:    budgetCodeMember,
+			scope:   budgetScopeFieldMember,
 		}
 	case failmode.Block503:
 		return budgetVerdict{
