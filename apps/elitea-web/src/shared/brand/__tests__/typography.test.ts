@@ -150,12 +150,11 @@ describe('default-pack variants', () => {
   } as const;
 
   it.each(Object.entries(SPEC))('%s matches the spec', (name, expected) => {
-    expect(built[name]).toMatchObject({
-      fontWeight: expected.fontWeight,
-      fontSize: expected.size,
-      lineHeight: expected.leading,
-      fontStyle: 'normal',
-    });
+    const variant = built[name];
+    expect(variant?.['fontSize']).toBe(expected.size);
+    expect(variant?.['lineHeight']).toBe(expected.leading);
+    expect(variant?.['fontWeight']).toBe(expected.fontWeight);
+    expect(variant?.['fontStyle']).toBe('normal');
   });
 
   it('keeps the subtitle uppercase, with relative tracking', () => {
