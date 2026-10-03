@@ -1870,10 +1870,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime replay repository: %w", err)
 	}
+	executionObservers, err := repos.NewExecutionObserverAuthority(dependencies.ReplayPool)
+	if err != nil {
+		return nil, fmt.Errorf("construct runtime execution observer authority: %w", err)
+	}
 	publicAuthorizer, err := newPostgresPublicAuthorizer(
 		sqlcgen.New(dependencies.AdmissionPool),
 		sqlcgen.New(dependencies.ReplayPool),
 		dependencies.PermissionResolver,
+		executionObservers,
 	)
 	if err != nil {
 		return nil, err

@@ -626,7 +626,11 @@ func newIndexRBACRouter(
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorizer, err := newPostgresPublicAuthorizer(sqlcgen.New(pool), sqlcgen.New(pool), resolver)
+	observers, err := repos.NewExecutionObserverAuthority(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := newPostgresPublicAuthorizer(sqlcgen.New(pool), sqlcgen.New(pool), resolver, observers)
 	if err != nil {
 		t.Fatal(err)
 	}
