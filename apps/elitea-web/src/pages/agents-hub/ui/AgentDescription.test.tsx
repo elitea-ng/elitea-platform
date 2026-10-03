@@ -60,6 +60,38 @@ describe('AgentDescription', () => {
     expect(await screen.findByRole('button', { name: 'Show more' })).toBeInTheDocument();
   });
 
+  it('scrolls an opened description inside a bounded box so "Show less" stays reachable', async () => {
+    // The modal content clips (`overflow: hidden`) on a normal-height window:
+    // an unbounded opened description pushed its own tail and the "Show less"
+    // button past the clipped edge, where nothing scrolled them back.
+    renderWithTheme(
+      <AgentDescription
+        description={'A long description. '.repeat(115)}
+        isSmallHeight={false}
+      />,
+    );
+    const text = screen.getByTestId('agent-modal-description');
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(text).toHaveStyle({ maxHeight: '10rem', overflowY: 'auto' });
+    const showLess = screen.getByRole('button', { name: 'Show less' });
+    // The button is a sibling of the scroll box, never inside it.
+    expect(text.contains(showLess)).toBe(false);
+
+    fireEvent.click(showLess);
+    await screen.findByRole('button', { name: 'Show more' });
+    expect(text).not.toHaveStyle({ maxHeight: '10rem' });
+  });
+
+  it('leaves the description unbounded on a short window, whose content box already scrolls', () => {
+    renderWithTheme(
+      <AgentDescription
+        description={'A long description. '.repeat(115)}
+        isSmallHeight
+      />,
+    );
+    expect(screen.getByTestId('agent-modal-description')).not.toHaveStyle({ maxHeight: '10rem' });
+  });
+
   it('offers no button when the text fits', async () => {
     cutText = false;
     renderWithTheme(

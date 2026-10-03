@@ -6,6 +6,10 @@
  * cuts the text, a "Show more" button now opens it in place, and "Show less"
  * clamps it again. A description that fits gets no button. A short window
  * (`isSmallHeight`) never clamps, so it never needs the button.
+ *
+ * The modal content clips on a normal-height window, so the opened text is
+ * capped at `EXPANDED_DESCRIPTION_MAX_HEIGHT` and scrolls; the button sits
+ * outside that scroll box and is always reachable.
  */
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -27,6 +31,10 @@ export function AgentDescription({ description, isSmallHeight }: AgentDescriptio
   const { textRef, isOverflowing } = useLineClampOverflow<HTMLSpanElement>(description);
   const textId = useId();
   const clamped = !isSmallHeight && !expanded;
+  // On a normal-height window the modal content clips (`overflow: hidden`),
+  // so an opened description scrolls inside its own bounded box: the rest of
+  // the text and the "Show less" button below it stay reachable.
+  const bounded = !isSmallHeight && expanded;
 
   return (
     <Box sx={containerSx}>
@@ -34,7 +42,7 @@ export function AgentDescription({ description, isSmallHeight }: AgentDescriptio
         ref={textRef}
         id={textId}
         variant="bodySmall"
-        sx={descriptionSx(clamped)}
+        sx={descriptionSx(clamped, bounded)}
         data-testid="agent-modal-description"
       >
         {description}
@@ -60,7 +68,10 @@ const containerSx: SxProps<Theme> = {
   flexShrink: 0,
 };
 
-const descriptionSx = (clamped: boolean): SxProps<Theme> => ({
+/** The tallest an opened description grows before it scrolls (about eight lines). */
+const EXPANDED_DESCRIPTION_MAX_HEIGHT = '10rem';
+
+const descriptionSx = (clamped: boolean, bounded: boolean): SxProps<Theme> => ({
   textAlign: 'center',
   color: 'text.metrics',
   width: '100%',
@@ -74,4 +85,5 @@ const descriptionSx = (clamped: boolean): SxProps<Theme> => ({
         overflow: 'hidden',
       }
     : { whiteSpace: 'pre-wrap' }),
+  ...(bounded ? { maxHeight: EXPANDED_DESCRIPTION_MAX_HEIGHT, overflowY: 'auto' } : {}),
 });
