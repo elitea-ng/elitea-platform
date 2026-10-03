@@ -252,6 +252,32 @@ func TestAttachmentObjectServiceStillAnswersWhenFilingFails(t *testing.T) {
 	require.Equal(t, "notes", document.Content)
 }
 
+func TestAttachmentObjectServiceSurvivesAPanickingExtraction(t *testing.T) {
+	t.Parallel()
+	key := attachmentTestConversation + "/odd.bin"
+	var calls atomic.Int32
+	service, err := NewRuntimeAttachmentObjectService(
+		attachmentTestAuthorizer(t, 4242, attachmentTestConversation),
+		fixtureSource("chat-attachments", key, []byte("words"), "text/plain"),
+		extractorFunc(func(ctx context.Context, data []byte) (extract.Document, error) {
+			if calls.Add(1) == 1 {
+				panic("parser bug")
+			}
+			return extract.New(extract.DefaultLimits()).Extract(ctx, data)
+		}),
+		nil,
+	)
+	require.NoError(t, err)
+	_, err = service.Resolve(context.Background(), testAttachmentClaim, "chat-attachments", key)
+	require.ErrorIs(t, err, ErrContentUnavailable)
+	// The slot was released: the next read extracts.
+	document, err := service.Resolve(context.Background(), testAttachmentClaim, "chat-attachments", key)
+	require.NoError(t, err)
+	require.Equal(t, "words", document.Content)
+	require.Zero(t, service.queued.Load())
+	require.Empty(t, service.extractions)
+}
+
 // THE SIDECAR IS BEHIND THE SAME GATES AS THE BYTES. A cache that would
 // answer for any key must never be asked about a key of another
 // conversation, nor about anything under a rejected claim.

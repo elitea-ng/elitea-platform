@@ -230,15 +230,16 @@ type Extractor struct {
 // its text output three times (the builder's buffer, its growth copy and
 // the normalised copy). At most PDFEngineConcurrency of them hold the PDF
 // engine's linear memory, counted at twice its ceiling because wazero grows
-// it by reallocation. Each other one holds the largest office XML part and
-// its decoded copy. elitea-main's Helm memory limit is tested against this.
+// it by reallocation. Each other one holds three office XML parts at their
+// limit: a workbook's shared strings with their decoded copy, and the sheet
+// being read. elitea-main's Helm memory limit is tested against this.
 func PeakMemoryBytes(limits Limits, extractions int) int64 {
 	if extractions <= 0 {
 		return 0
 	}
 	text := int64(limits.MaxTextBytes) * 3
 	pdf := limits.MaxInputBytes + int64(limits.PDFMemoryLimitPages)*(64<<10)*2 + text
-	office := limits.MaxInputBytes + limits.MaxXMLEntryBytes*2 + text
+	office := limits.MaxInputBytes + limits.MaxXMLEntryBytes*3 + text
 	engines := int64(min(extractions, PDFEngineConcurrency))
 	others := int64(extractions) - engines
 	return engines*pdf + others*max(office, limits.MaxInputBytes)

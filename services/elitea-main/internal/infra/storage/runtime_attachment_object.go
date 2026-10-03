@@ -543,7 +543,16 @@ func (service *RuntimeAttachmentObjectService) extractDetached(
 	name string,
 	cached bool,
 	version AttachmentObjectVersion,
-) attachmentExtractionResult {
+) (result attachmentExtractionResult) {
+	// It runs on its own goroutine, where a panic would end the process
+	// (singleflight re-panics it). One attachment must not take the API
+	// down: report the stage as unavailable instead.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			service.logger.ErrorContext(ctx, "attachment extraction panicked", "panic", recovered)
+			result = attachmentExtractionResult{err: runtimeContextUnavailable(runtimeContextStageAttachmentExtract)}
+		}
+	}()
 	if service.queued.Add(1) > maxQueuedAttachmentExtractions {
 		service.queued.Add(-1)
 		service.logger.WarnContext(ctx, "attachment extraction queue is full")
