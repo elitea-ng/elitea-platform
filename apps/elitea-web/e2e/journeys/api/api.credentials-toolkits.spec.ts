@@ -312,44 +312,54 @@ test('each GitHub authentication shape is stored with its secret sealed and its 
   expect(proved).toEqual(AUTHENTICATION_SHAPES.map((shape) => shape.name));
 });
 
-test('a GitHub credential with no authentication, and one with half a pair, are both stored', async ({
+test('a GitHub credential with no authentication is stored; one with half a pair is refused', async ({
   request,
 }) => {
   /*
-   * Both are DELIBERATE. `auth` is `required: false` in the type's schema and
-   * each of its fields is nullable, because a GitHub Enterprise endpoint may
-   * be reachable anonymously and because the create form saves what has been
-   * filled in so far. A route that refused either would make the form
-   * unsavable half way through.
+   * No authentication at all is DELIBERATE: `auth` is `required: false` in
+   * the type's schema, because a GitHub Enterprise endpoint may be reachable
+   * anonymously. Half a pair is not: pylon refused a username without its
+   * password (and an app id without its private key), and so does the create
+   * route (configurations/required_fields.go), naming the pair, so a
+   * credential that can never authenticate is not saved as if it could.
    */
-  const shapes = [
-    { name: 'no authentication at all', data: {} as Record<string, string> },
-    { name: 'a username with no password', data: { username: `${AUTOTEST_PREFIX}gh_user` } },
-  ];
   const created: string[] = [];
-  const proved: string[] = [];
   try {
-    for (const shape of shapes) {
-      const title = autotestName('cred_partial');
-      const { id, stored } = await postCredential(request, {
+    const title = autotestName('cred_noauth');
+    const { id, stored } = await postCredential(request, {
+      type: 'github',
+      elitea_title: title,
+      label: title,
+      shared: false,
+      data: { base_url: PLACEHOLDER_BASE_URL },
+    });
+    created.push(id);
+    expect(stored.section, 'no authentication: filed under credentials').toBe('credentials');
+    const data = stored.data ?? {};
+    expect(data['base_url'], 'no authentication: the base URL is stored').toBe(PLACEHOLDER_BASE_URL);
+    expect(data['password'], 'no authentication: no password may be conjured').toBeUndefined();
+
+    const halfTitle = autotestName('cred_partial');
+    const half = await request.post(CREDENTIALS, {
+      data: {
         type: 'github',
-        elitea_title: title,
-        label: title,
+        elitea_title: halfTitle,
+        label: halfTitle,
         shared: false,
-        data: { base_url: PLACEHOLDER_BASE_URL, ...shape.data },
-      });
-      created.push(id);
-      expect(stored.section, `${shape.name}: filed under credentials`).toBe('credentials');
-      const data = stored.data ?? {};
-      expect(data['base_url'], `${shape.name}: the base URL is stored`).toBe(PLACEHOLDER_BASE_URL);
-      // Nothing is invented in place of the missing half.
-      expect(data['password'], `${shape.name}: no password may be conjured`).toBeUndefined();
-      proved.push(shape.name);
+        data: { base_url: PLACEHOLDER_BASE_URL, username: `${AUTOTEST_PREFIX}gh_user` },
+      },
+    });
+    const halfRaw = await half.text();
+    if (half.status() === 201) {
+      // Clean up a wrongly stored row before the assertion below fails.
+      const halfId = String((JSON.parse(halfRaw) as StoredConfiguration).id ?? '');
+      if (halfId !== '') created.push(halfId);
     }
+    expect(half.status(), halfRaw).toBe(400);
+    expect(halfRaw, 'the refusal names the pair').toContain('data.username+data.password');
   } finally {
     for (const id of created) await deleteConfiguration(request, id);
   }
-  expect(proved).toEqual(shapes.map((shape) => shape.name));
 });
 
 test('a GitHub credential can be marked shared, and the flag survives the read', async ({

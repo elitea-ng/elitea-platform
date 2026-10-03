@@ -268,7 +268,7 @@ test('the expanded read names the project each sub-agent tool lives in', async (
   try {
     const linked = await attachSubAgent(
       request,
-      parent.versionId,
+      parent,
       { applicationId: child.id, versionId: child.versionId },
       DEFAULT_PROJECT_ID,
     );
