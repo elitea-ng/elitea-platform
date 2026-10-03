@@ -34,7 +34,7 @@ import {
   deleteAgent,
   detachSubAgent,
   PUBLISHABLE_TAGS,
-  readProjectModels,
+  readCatalogueModels,
   readVersion,
   resolveCatalogueProjectId,
   unpublishAllVersions,
@@ -81,7 +81,7 @@ test.describe('publish validation: code-based rules', () => {
   /* onetest: ELITEA-0159 — main + sub-agent both on a valid shared Public model raise no llm_settings finding */
   test('an agent and its sub-agent on a valid shared Public model raise no LLM finding', async ({ request }) => {
     const catalogueProjectId = await resolveCatalogueProjectId(request);
-    const models = await readProjectModels(request, catalogueProjectId);
+    const models = await readCatalogueModels(request, catalogueProjectId);
     expect(models.length, 'the catalogue project serves no model').toBeGreaterThan(0);
     const model = models[0];
 
