@@ -26,8 +26,8 @@ memberTest('a non-admin opening /admin/app sees the 403, and the router never mo
   );
 
   await expect(page.getByTestId('admin-access-denied')).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Access denied' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Back to the app' })).toHaveAttribute('href', '/app/');
+  await expect(page.getByRole('heading', { name: 'Nice Try, Hacker!' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back to the app now' })).toHaveAttribute('href', '/app/');
 
   // The router itself must never mount: no nav, no Users heading, no chunk
   // for any of the eleven admin pages.
@@ -39,6 +39,11 @@ memberTest('a non-admin opening /admin/app sees the 403, and the router never mo
   await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('admin-access-denied')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-nav')).toHaveCount(0);
+
+  // The page sends the caller back to /app/ after 5 s; stay put so the axe
+  // scan below cannot race the redirect.
+  await page.getByRole('button', { name: 'Stay on this page' }).click();
+  await expect(page.getByTestId('admin-access-denied-countdown')).toHaveText('Automatic redirect cancelled.');
 
   await checkA11y(page);
 });

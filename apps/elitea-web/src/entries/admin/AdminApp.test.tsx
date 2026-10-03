@@ -36,7 +36,7 @@ vi.setConfig({ testTimeout: 30_000 });
 const ALL_PERMISSIONS = adminNavGroups().flatMap((group) => group.items.flatMap((item) => item.anyPermission));
 
 interface AdminUiConfigWindow {
-  admin_ui_config?: { permissions?: readonly string[] };
+  admin_ui_config?: { permissions?: readonly string[]; access?: string };
 }
 
 afterEach(() => {
@@ -61,8 +61,8 @@ describe('AdminApp boot gate', () => {
 
     expect(await screen.findByTestId('admin-access-denied')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-nav')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to the app' })).toHaveAttribute('href', '/app/');
+    expect(screen.getByRole('heading', { name: 'Nice Try, Hacker!' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to the app now' })).toHaveAttribute('href', '/app/');
   });
 
   it('renders the 403 page for a caller the handler never resolved at all', async () => {
@@ -85,6 +85,48 @@ describe('AdminApp boot gate', () => {
     // Give any lazy route chunk a tick to have mounted if it were going to.
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: 'Users' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('the handler-stated access reason', () => {
+    afterEach(() => {
+      window.history.replaceState(null, '', '/');
+    });
+
+    it('"granted" mounts the console', async () => {
+      (window as unknown as AdminUiConfigWindow).admin_ui_config = {
+        permissions: ALL_PERMISSIONS,
+        access: 'granted',
+      };
+      render(<AdminApp />);
+      expect(await screen.findByTestId('admin-nav')).toBeInTheDocument();
+    });
+
+    it('"denied" shows the Nice Try page even for a non-empty list it would otherwise trust', async () => {
+      (window as unknown as AdminUiConfigWindow).admin_ui_config = { permissions: [], access: 'denied' };
+      render(<AdminApp />);
+      expect(await screen.findByRole('heading', { name: 'Nice Try, Hacker!' })).toBeInTheDocument();
+    });
+
+    it('"unauthenticated" is a sign-in problem: no hacker copy, no console', async () => {
+      // `auth_retry` is the loop guard: it keeps this test from navigating.
+      window.history.replaceState(null, '', '/admin/app/users?auth_retry=1');
+      (window as unknown as AdminUiConfigWindow).admin_ui_config = { permissions: [], access: 'unauthenticated' };
+      render(<AdminApp />);
+
+      expect(await screen.findByTestId('admin-sign-in-redirect')).toBeInTheDocument();
+      expect(screen.queryByText('Nice Try, Hacker!')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('admin-nav')).not.toBeInTheDocument();
+    });
+
+    it('"unavailable" is neutral: no hacker copy and no countdown', async () => {
+      (window as unknown as AdminUiConfigWindow).admin_ui_config = { permissions: [], access: 'unavailable' };
+      render(<AdminApp />);
+
+      expect(await screen.findByRole('heading', { name: "We couldn't check your permissions" })).toBeInTheDocument();
+      expect(screen.queryByText('Nice Try, Hacker!')).not.toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     });
   });
 });

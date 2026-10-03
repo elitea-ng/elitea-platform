@@ -24,17 +24,36 @@
  * access is granted, so a refused caller never even constructs the route
  * tree.
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 
 import { RouterProvider } from '@tanstack/react-router';
 
 import { AppProviders } from '@/app/providers';
-import { AdminAccessDenied } from '@/pages/admin/AdminAccessDenied';
 import { hasAnyAdminNavAccess } from '@/pages/admin/adminNavItems';
+import { AdminRefusalLazy } from '@/pages/admin/AdminRefusalLazy';
+import { adminUiAccess } from '@/pages/admin/adminUiConfig';
 import { createAdminRouter } from '@/pages/admin/router';
 
-export function AdminApp() {
-  const [router] = useState(() => (hasAnyAdminNavAccess() ? createAdminRouter() : null));
+/**
+ * What the boot gate shows. The handler's `access` reason decides when it was
+ * injected; an older handler (or dev/tests) injects none, and then the
+ * permission list alone decides, as it always did.
+ */
+function resolveGate(): 'router' | 'denied' | 'unauthenticated' | 'unavailable' {
+  const access = adminUiAccess();
+  if (access === undefined) return hasAnyAdminNavAccess() ? 'router' : 'denied';
+  return access === 'granted' ? 'router' : access;
+}
 
-  return <AppProviders>{router ? <RouterProvider router={router} /> : <AdminAccessDenied />}</AppProviders>;
+export function AdminApp() {
+  const [gate] = useState(resolveGate);
+  const [router] = useState(() => (gate === 'router' ? createAdminRouter() : null));
+
+  return (
+    <AppProviders>
+      <Suspense fallback={null}>
+        {router ? <RouterProvider router={router} /> : <AdminRefusalLazy gate={gate === 'router' ? 'denied' : gate} />}
+      </Suspense>
+    </AppProviders>
+  );
 }

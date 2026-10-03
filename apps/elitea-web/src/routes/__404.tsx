@@ -1,4 +1,9 @@
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
+import type { Theme } from '@mui/material/styles';
+
 import { t } from '@/shared/i18n';
+import { StatusPage } from '@/shared/ui/status-page';
 
 /**
  * ROUTE-071 (spec §8.1) — the "Page404" component, ported from
@@ -74,10 +79,40 @@ import { t } from '@/shared/i18n';
  * was a convenience, not an observable-behaviour parity requirement.
  */
 export function NotFoundPage() {
+  const canGoBack = window.history.length > 1;
   return (
-    <main>
-      {t('route.notFound.message', 'Page not found. Try ')}
-      <a href="/">{t('route.notFound.homeLink', 'Home page')}</a>
-    </main>
+    <StatusPage
+      testId="not-found-page"
+      code="404"
+      title={t('route.notFound.title', 'Page not found')}
+      actions={
+        <>
+          <Button variant="contained" component="a" href="/">
+            {t('route.notFound.homeButton', 'Go to the home page')}
+          </Button>
+          {canGoBack ? (
+            <Button
+              variant="outlined"
+              onClick={() => {
+                window.history.back();
+              }}
+            >
+              {t('route.notFound.back', 'Go back')}
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      <Typography
+        component="p"
+        variant="bodyMedium"
+        sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, margin: 0 })}
+      >
+        {t(
+          'route.notFound.message',
+          'This page does not exist or has moved.',
+        )}
+      </Typography>
+    </StatusPage>
   );
 }

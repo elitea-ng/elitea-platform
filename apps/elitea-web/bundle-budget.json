@@ -43,7 +43,18 @@
         "5.6 KiB of headroom, deliberately small so the next framework bump is",
         "a conversation rather than a silent slide."
       ],
-      "initialKB": 325,
+      "initialNote3": [
+        "326, not 325: measured 2026-10-03 on PR #1021 (styled access-denied /",
+        "sign-in / unavailable pages). The refusal pages are lazy-loaded behind one",
+        "dynamic import, so a granted admin never fetches their code. The admin",
+        "initial set still grew from 323.4 to 325.1 KiB gzip: ~1.7 KiB of that is",
+        "React/MUI chunk-split overhead (the bundler splits the shared React and",
+        "MUI code three more ways once a lazy chunk needs a subset of it), not",
+        "content; the raw size of the initial chunks moved by 0.5 KB. Variants",
+        "tried (single lazy module, Paper, no brand imports) all landed within",
+        "0.2 KiB of each other."
+      ],
+      "initialKB": 326,
       "routeChunkKB": 250
     },
     "maintenance": {
