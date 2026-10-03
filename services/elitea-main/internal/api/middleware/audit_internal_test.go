@@ -351,7 +351,7 @@ func TestAuditedSurfacesIsACopy(t *testing.T) {
 	}
 }
 
-/* ── non-user actors (shared migration 0134) ────────────────────────────── */
+/* ── non-user actors (shared migration 0135) ────────────────────────────── */
 
 // A SCIM client has no user id. Its change must still name an actor, or the
 // trail shows a provisioning change made by nobody.

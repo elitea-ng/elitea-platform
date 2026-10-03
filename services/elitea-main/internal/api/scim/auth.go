@@ -1,6 +1,6 @@
 package scim
 
-// How a SCIM request authenticates (shared migration 0134).
+// How a SCIM request authenticates (shared migration 0135).
 //
 // The SCIM tree accepts ONE kind of credential: a SCIM client credential from
 // `elitea_auth.scim_clients`. The bearer token is either the secret of a

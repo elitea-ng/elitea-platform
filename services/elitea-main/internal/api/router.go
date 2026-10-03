@@ -1442,7 +1442,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// That group's Auth middleware resolves a USER from a session or a personal
 	// access token. A SCIM request runs as a SCIM CLIENT (internal/scimclient):
 	// scimapi.Authenticate admits a client credential and refuses a personal
-	// access token and a browser session. Until shared migration 0134 the tree
+	// access token and a browser session. Until shared migration 0135 the tree
 	// was mounted inside that group behind `admin.auth.users`, which tied every
 	// identity provider to one person's personal access token.
 	//
@@ -1851,7 +1851,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/user_project_permissions/administration", adminHandler.UserProjectPermissions)
 				r.With(central(admin.UserProjectPermissionsEditPermission)).
 					Put("/user_project_permissions/administration", adminHandler.UserProjectPermissionsSave)
-				// The dedicated SCIM client credentials (shared migration 0134).
+				// The dedicated SCIM client credentials (shared migration 0135).
 				// Gated on `admin.auth.users`, the permission the SCIM tree
 				// itself required before 0134: a SCIM client creates and
 				// deactivates accounts, so minting one must need the right to

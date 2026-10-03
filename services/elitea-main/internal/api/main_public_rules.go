@@ -66,7 +66,7 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// each dependency's state. The query alternative covers a monitor's
 		// cache-busting parameter.
 		uriRule("go.health.healthz", `^/healthz(\?.*)?$`),
-		// SCIM 2.0 (shared migration 0134). router.go mounts both outside
+		// SCIM 2.0 (shared migration 0135). router.go mounts both outside
 		// the session Auth group, because a SCIM caller is an identity
 		// provider with a SCIM client credential and never has a browser
 		// session. The token endpoint is how such a client gets a credential;

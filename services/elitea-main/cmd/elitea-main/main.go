@@ -416,7 +416,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load outbound e-mail settings: %w", err)
 	}
-	// The SCIM access token lifetime (shared migration 0134). A value that is
+	// The SCIM access token lifetime (shared migration 0135). A value that is
 	// not a duration, or is outside 5m..24h, stops the boot and names the
 	// variable, rather than running with a lifetime nobody chose.
 	scimAccessTokenTTL, err := scimclient.AccessTokenTTLFromEnv(os.Getenv)

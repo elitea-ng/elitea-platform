@@ -1007,7 +1007,7 @@ main:
     # own is 24 hours.
     ELITEA_SESSION_REJECT_LEGACY_COOKIES: ""
 
-    # --- SCIM 2.0 provisioning (shared migration 0134) -------------------------
+    # --- SCIM 2.0 provisioning (shared migration 0135) -------------------------
     # BREAKING CHANGE: SCIM no longer accepts personal access tokens. Create a
     # SCIM client under Admin > Configuration > Authentication > SCIM
     # provisioning, and configure the identity provider with it:

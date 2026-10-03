@@ -2,7 +2,7 @@ package scimclient
 
 // The SCIM client store against a real PostgreSQL.
 //
-// The schema is created from shared migration 0134's own file, read from the
+// The schema is created from shared migration 0135's own file, read from the
 // embedded corpus, so this test cannot pass against a schema the migration does
 // not create.
 

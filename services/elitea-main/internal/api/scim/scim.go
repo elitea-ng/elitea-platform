@@ -22,7 +22,7 @@
 //
 // # How a client authenticates
 //
-// With a SCIM CLIENT credential (shared migration 0134), and with nothing else.
+// With a SCIM CLIENT credential (shared migration 0135), and with nothing else.
 // An administrator creates the client under Admin > Configuration >
 // Authentication. A `bearer` client presents its secret as the bearer token; a
 // `client_credentials` client first gets an access token from
