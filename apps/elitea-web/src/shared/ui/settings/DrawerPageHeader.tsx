@@ -4,12 +4,12 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import SvgIcon from '@mui/material/SvgIcon';
 import Typography from '@mui/material/Typography';
-import { useTheme } from '@mui/material/styles';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { ArrowLeftIcon } from '../icons/arrow-left-icon';
 import { AddButton } from '../AddButton/AddButton';
 import { combineSx } from '../lib/combineSx';
+import { SimpleSearchBar } from '../SimpleSearchBar';
 import { t } from '@/shared/i18n';
 
 export interface DrawerPageHeaderSlotProps {
@@ -57,24 +57,7 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
 }: DrawerPageHeaderProps) {
   const { search, onChangeSearch, placeholder } = slotProps?.searchInput ?? {};
   const { onAdd, tooltip: addButtonTooltip } = slotProps?.addButton ?? {};
-  const theme = useTheme();
   const styles = getStyles();
-
-  const searchInputStyles: React.CSSProperties = {
-    flexShrink: 0,
-    width: '15rem',
-    height: '2.25rem',
-    // oxlint-disable-next-line elitea/no-theme-palette — ported from baseline
-    backgroundColor: theme.vars.palette.background.userInputBackgroundActive,
-    // oxlint-disable-next-line elitea/ad-hoc-radius — ported from baseline
-    borderRadius: '1.6875rem',
-    gap: '.5rem',
-    borderBottom: '0rem',
-    padding: '0.375rem 0.75rem',
-    border: 'none',
-    outline: 'none',
-    fontSize: theme.typography.bodyMedium.fontSize,
-  };
 
   const handleInputChange = useCallback(
     (value: string) => {
@@ -113,13 +96,17 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
       </Box>
       <Box sx={styles.body}>
         {showSearchInput && (
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => handleInputChange(e.target.value)}
+          // #6646: the shared search box, not a bare `<input>`. The bare
+          // input had no search glyph and no hover state, so Secrets, Tokens
+          // and Notifications looked unlike every other search in the app.
+          // `debounceMs={0}` keeps the caller's every-keystroke filtering.
+          <SimpleSearchBar
+            value={search ?? ''}
+            onChange={handleInputChange}
+            debounceMs={0}
             placeholder={placeholder ?? t('shared.ui.settings.header.searchPlaceholder', 'Search something amazing!')}
-            style={searchInputStyles}
             aria-label={t('shared.ui.settings.header.search', 'Search')}
+            sx={searchBarSx}
           />
         )}
         {extraContent}
@@ -133,6 +120,8 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
     </Box>
   );
 });
+
+const searchBarSx: SxProps<Theme> = { flexShrink: 0, width: '15rem' };
 
 const getStyles = (): {
   container: (showBorder: boolean) => SxProps<Theme>;

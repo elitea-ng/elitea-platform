@@ -6,11 +6,12 @@
  */
 import type { ReactNode } from 'react';
 
+import Box from '@mui/material/Box';
 import ListSubheader from '@mui/material/ListSubheader';
-import TextField from '@mui/material/TextField';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 /**
  * A `ListSubheader`, not a `MenuItem`: `Select` walks its children looking
@@ -21,6 +22,10 @@ import { t } from '@/shared/i18n';
  * reaching `Select`'s own handlers — without it, MUI's built-in "type to jump
  * to an option" behaviour steals keystrokes meant for this field.
  *
+ * The field is the shared `SimpleSearchBar` (#6646), so it has the same icon,
+ * hover and focus state as every other search box. It filters a list that is
+ * already in memory, so the debounce is off: the rows narrow as the user types.
+ *
  * No `autoFocus`: `jsx-a11y/no-autofocus` (R-C1) bans the JSX prop outright
  * in this app — the same fence `shared/ui/SimpleSearchBar`'s own doc comment
  * (dropped there for the identical reason) already documents. The user
@@ -28,6 +33,7 @@ import { t } from '@/shared/i18n';
  */
 export function CredentialsSearchField(props: { readonly query: string; readonly onQueryChange: (next: string) => void }): ReactNode {
   const { query, onQueryChange } = props;
+  const placeholder = t('credentials.select.searchPlaceholder', 'Search credentials');
   return (
     <ListSubheader
       key="credentials-search"
@@ -36,22 +42,22 @@ export function CredentialsSearchField(props: { readonly query: string; readonly
       }}
       sx={searchListSubheaderSx}
     >
-      <TextField
-        size="small"
-        fullWidth
-        variant="outlined"
-        placeholder={t('credentials.select.searchPlaceholder', 'Search credentials')}
-        value={query}
-        onChange={(event) => {
-          onQueryChange(event.target.value);
-        }}
+      <Box
         onKeyDown={(event) => {
           event.stopPropagation();
         }}
         onClick={(event) => {
           event.stopPropagation();
         }}
-      />
+      >
+        <SimpleSearchBar
+          value={query}
+          onChange={onQueryChange}
+          debounceMs={0}
+          placeholder={placeholder}
+          aria-label={placeholder}
+        />
+      </Box>
     </ListSubheader>
   );
 }
