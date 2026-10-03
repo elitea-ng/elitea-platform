@@ -40,6 +40,7 @@ import { t } from '@/shared/i18n';
 import { formatDuration } from './auditFormat';
 import { useAuditSpans, type AuditSpanRow } from './api/adminAuditApi';
 import type { AdminScheduleRow } from './api/adminSchedulesApi';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 const PAGE_SIZE = 50;
 const HISTORY_WINDOW_DAYS = 7;
@@ -134,8 +135,8 @@ export function ScheduleHistoryDrawer({ schedule, onClose }: ScheduleHistoryDraw
 
       {schedule !== null ? (
         <Stack direction="row" spacing={0.5} sx={{ mt: '0.75rem', flexWrap: 'wrap', gap: '0.25rem' }}>
-          <Chip size="small" variant="outlined" label={schedule.cron} sx={{ fontFamily: 'monospace' }} />
-          <Chip size="small" variant="outlined" label={schedule.rpc_func} sx={{ fontFamily: 'monospace' }} />
+          <Chip size="small" variant="outlined" label={schedule.cron} sx={{ fontFamily: monoFontFamily }} />
+          <Chip size="small" variant="outlined" label={schedule.rpc_func} sx={{ fontFamily: monoFontFamily }} />
           <Chip
             size="small"
             color={schedule.active ? 'success' : 'default'}

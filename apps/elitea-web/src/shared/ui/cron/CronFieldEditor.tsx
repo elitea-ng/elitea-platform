@@ -112,7 +112,7 @@ export function CronFieldEditor(props: CronFieldEditorProps): JSX.Element {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <FormLabel id={kindLabelId} sx={{ typography: 'labelSmall' }}>
+      <FormLabel id={kindLabelId}>
         {label}
       </FormLabel>
       <ToggleButtonGroup

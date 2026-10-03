@@ -1,5 +1,6 @@
 import DialogTitle from '@mui/material/DialogTitle';
 import FormControl from '@mui/material/FormControl';
+import FormLabel from '@mui/material/FormLabel';
 import InputLabel from '@mui/material/InputLabel';
 import ListItemText from '@mui/material/ListItemText';
 import OutlinedInput from '@mui/material/OutlinedInput';
@@ -10,12 +11,13 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 
 /**
- * Render surfaces for the four override keys the typography spec (rev. 2)
+ * Render surfaces for the five override keys the typography spec (rev. 2)
  * added — merged into `OVERRIDE_SURFACES` in `surfaces.tsx`, so the §4.6
  * check 7 sweep still covers every key `muiOverrides()` wires.
  */
 export const TYPE_SCALE_SURFACES: Record<string, () => React.ReactElement> = {
   MuiDialogTitle: () => <DialogTitle>dialog title</DialogTitle>,
+  MuiFormLabel: () => <FormLabel>form label</FormLabel>,
   MuiInputLabel: () => (
     <FormControl variant="outlined">
       <InputLabel shrink>shrunk label</InputLabel>

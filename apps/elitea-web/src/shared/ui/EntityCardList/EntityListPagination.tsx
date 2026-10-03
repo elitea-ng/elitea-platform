@@ -44,7 +44,7 @@ export function EntityListPagination({ page, pageSize, total, onPageChange, onPa
     >
       <Box sx={contentSx}>
         <Box sx={leftSx}>
-          <Typography variant="bodyMedium">{t('shared.entityList.pagination.rowsPerPage', 'Rows per page:')}</Typography>
+          <Typography variant="labelSmall">{t('shared.entityList.pagination.rowsPerPage', 'Rows per page:')}</Typography>
           <Select
             value={pageSize}
             variant="standard"
@@ -66,7 +66,7 @@ export function EntityListPagination({ page, pageSize, total, onPageChange, onPa
           </Select>
         </Box>
         <Typography
-          variant="bodyMedium"
+          variant="labelSmall"
           data-testid="entity-list-page-info"
           sx={pageInfoSx}
         >

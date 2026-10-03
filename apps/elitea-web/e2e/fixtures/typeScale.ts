@@ -21,13 +21,17 @@ export const LADDER_PX = [12, 14, 16, 20] as const;
  * Surfaces that are NOT on the app's type scale by design. Each one is a
  * documented exception, not a convenience:
  *  - the sign-in page has no MUI and its own owner (spec §6 follow-up b);
- *  - the support assistant is a vendored widget with its own design system
- *    (`widgets/support-assistant/vendor/**`, see `.oxlintrc.json`);
- *  - CodeMirror and charts size glyphs in their own engines.
+ *  - CodeMirror and charts lay out glyphs in their own engines (a code
+ *    editor's monospace metrics, a chart's SVG label fitting) rather than
+ *    through the theme's variants.
+ *
+ * The support assistant is NOT exempt: its vendored CSS
+ * (`widgets/support-assistant/vendor/theme/styles`) is mapped onto the ladder,
+ * so the walk measures it like any other surface. (Its former selector,
+ * `[data-testid^="support-assistant"]`, matched no element the widget renders.)
  */
 const EXEMPT_ANCESTORS = [
   '[data-testid="sign-in-page"]',
-  '[data-testid^="support-assistant"]',
   '.cm-editor',
   '.recharts-wrapper',
 ].join(', ');

@@ -51,11 +51,11 @@ export const tableStyles: Record<string, SxProps<Theme>> = {
     display: 'flex',
     alignItems: 'center',
     gap: '0.5rem',
-    fontSize: ({ typography }) => typography.headingMedium.fontSize,
+    // The pagination role is labelSmall, as MuiTablePagination (spec §2).
+    typography: 'labelSmall',
     color: 'text.secondary',
   },
   pageInfo: {
-    fontSize: ({ typography }) => typography.headingMedium.fontSize,
     color: 'text.secondary',
   },
 };

@@ -51,7 +51,7 @@ export const NotificationsTablePagination = memo(function NotificationsTablePagi
     <Box sx={footerSx}>
       <Box sx={footerInnerSx}>
         <Box sx={footerLeftSx}>
-          <Typography variant="bodyMedium" sx={footerLabelSx}>
+          <Typography variant="labelSmall" sx={footerLabelSx}>
             {t('routes.settings.notifications.pageSize', 'Rows per page:')}
           </Typography>
           <SingleSelect
@@ -65,7 +65,7 @@ export const NotificationsTablePagination = memo(function NotificationsTablePagi
             sx={pageSizeSelectSx}
           />
         </Box>
-        <Typography variant="bodyMedium" sx={pageInfoSx}>
+        <Typography variant="labelSmall" sx={pageInfoSx}>
           {`${startRow} - ${endRow} of ${total}`}
         </Typography>
         <Box sx={footerRightSx}>

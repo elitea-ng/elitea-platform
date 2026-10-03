@@ -196,7 +196,7 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
               color: theme.vars.palette.text.secondary,
             },
             '& .ProseMirror code': {
-              fontFamily: 'monospace',
+              fontFamily: theme.typography.fontFamilyMono,
               backgroundColor: theme.vars.palette.background.aiAnswerBkg,
               borderRadius: theme.vars.shape.radiusSm,
               padding: '0.125rem 0.25rem',

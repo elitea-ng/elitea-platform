@@ -17,6 +17,7 @@ import { MuiDrawer } from './MuiDrawer';
 import { MuiFormControl } from './MuiFormControl';
 import { MuiFormControlLabel } from './MuiFormControlLabel';
 import { MuiFormHelperText } from './MuiFormHelperText';
+import { MuiFormLabel } from './MuiFormLabel';
 import { MuiIconButton } from './MuiIconButton';
 import { MuiInput } from './MuiInput';
 import { MuiInputLabel } from './MuiInputLabel';
@@ -60,7 +61,7 @@ import { MuiTypography } from './MuiTypography';
  * file's own doc comment). The platform-parity wave adds `MuiAccordion` —
  * not a baseline key either, see `MuiAccordion.ts`'s own doc comment.
  * The typography spec (rev. 2) adds `MuiDialogTitle`, `MuiTableCell`,
- * `MuiListItemText` and `MuiInputLabel`: the stock-variant slots that kept
+ * `MuiListItemText`, `MuiInputLabel` and `MuiFormLabel`: the stock-variant slots that kept
  * rendering at MUI's own sizes after the type scale was aliased.
  *
  * The trailing `as EliteaComponents` is one reviewed, necessary cast:
@@ -95,6 +96,7 @@ export function muiOverrides(): EliteaComponents {
     MuiFormControl,
     MuiFormControlLabel,
     MuiFormHelperText,
+    MuiFormLabel,
     MuiIconButton,
     MuiInput,
     MuiInputLabel,

@@ -201,7 +201,7 @@ const snippetSx: SxProps<Theme> = (theme: Theme) => ({
   margin: 0,
   padding: '0.25rem',
   overflowX: 'auto',
-  fontFamily: 'monospace',
+  fontFamily: theme.typography.fontFamilyMono,
   whiteSpace: 'pre-wrap',
   borderRadius: theme.vars.shape.radiusSm,
   background: theme.vars.palette.background.default,

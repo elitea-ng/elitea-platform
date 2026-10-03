@@ -24,8 +24,9 @@ The baseline's canonical `components` map is `apps/elitea-ui/src/MainTheme.js:11
 
 | `MuiDialogTitle` | `MuiDialogTitle.ts` | Typography spec rev. 2. `headingMedium` + `text.secondary` (strong) for every dialog title. |
 | `MuiTableCell` | `MuiTableCell.ts` | Typography spec rev. 2. head `labelMedium` + `text.primary` (dim), body `bodyMedium`, footer `bodySmall`. |
-| `MuiListItemText` | `MuiListItemText.ts` | Typography spec rev. 2. `defaultProps.slotProps`: primary `bodyMedium`, secondary `bodySmall` (keeps `<p>`). |
+| `MuiListItemText` | `MuiListItemText.ts` | Typography spec rev. 2. `defaultProps.slotProps`: primary `bodyMedium` (colour inherited), secondary `bodySmall` + `textPrimary` (dim; keeps `<p>`). |
 | `MuiInputLabel` | `MuiInputLabel.ts` | Typography spec rev. 2. root `labelMedium`; shrunk label scales by `k = rung(−1)/rung(0)` from the built ladder (the notch legend in `MuiOutlinedInput.tsx` matches). |
+| `MuiFormLabel` | `MuiFormLabel.ts` | Typography spec rev. 2. root `labelMedium`, so a bare `<FormLabel>` (radio/toggle group) matches the field labels instead of reading `body1`. |
 
 ## Owned by unit S1 — 28 keys
 

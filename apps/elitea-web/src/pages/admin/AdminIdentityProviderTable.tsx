@@ -18,6 +18,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import type { AdminIdentityProvider } from './api/adminIdentityProvidersApi';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 function protocolLabel(kind: AdminIdentityProvider['kind']): string {
   return kind === 'oidc'
@@ -78,9 +79,9 @@ export function ProviderTable({
                 {provider.secret !== undefined && provider.secret !== '' ? (
                   // The mask, exactly as the server sent it. There is no reveal
                   // control because there is nothing to reveal.
-                  <Typography variant="bodySmall">{provider.secret}</Typography>
+                  <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>{provider.secret}</Typography>
                 ) : (
-                  <Typography variant="bodySmall" color="text.secondary">
+                  <Typography variant="bodyMedium" color="text.secondary">
                     {t('pages.admin.identityProviders.noSecret', 'None')}
                   </Typography>
                 )}

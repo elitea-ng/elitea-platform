@@ -39,6 +39,7 @@ import { secretsFeature } from '@/features/settings';
 import { t } from '@/shared/i18n';
 
 import type { AdminSecret } from './api/adminSecretsApi';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 const { SecretValueCell } = secretsFeature;
 
@@ -127,7 +128,7 @@ export const AdminSecretsTable = memo(function AdminSecretsTable({
         flex: 1,
         minWidth: 160,
         renderCell: (params: GridRenderCellParams<AdminSecretGridRow>) => (
-          <Typography variant="bodyMedium" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+          <Typography variant="bodySmall" color="text.secondary" sx={{ fontFamily: monoFontFamily }}>
             {params.row.name}
           </Typography>
         ),

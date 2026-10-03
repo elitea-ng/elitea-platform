@@ -12,7 +12,7 @@ export function ContextBudgetModeControl({ value, onChange, disabled = false }: 
 }) {
   return (
     <Box data-testid="context-budget-mode-control" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Typography variant="bodySmall">{t('contextBudget.mode.title', 'Context window')}</Typography>
+      <Typography variant="labelMedium">{t('contextBudget.mode.title', 'Context window')}</Typography>
       <RadioButtonGroup
         aria-label={t('contextBudget.mode.title', 'Context window')}
         value={value}
