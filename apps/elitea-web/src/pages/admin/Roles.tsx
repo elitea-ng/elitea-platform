@@ -105,6 +105,13 @@ function roleWriteText(message: string | undefined): string | undefined {
   return message;
 }
 
+/**
+ * A header action keeps its label on one line and does not give up width:
+ * the search field beside it shrinks first. Without this the 28px pill
+ * stacked "New role" on two lines.
+ */
+const headerActionSx = { whiteSpace: 'nowrap', flexShrink: 0 } as const;
+
 function RolesActions({ state }: { readonly state: AdminRolesPageState }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -112,6 +119,7 @@ function RolesActions({ state }: { readonly state: AdminRolesPageState }) {
         <Button
           variant="secondary"
           size="small"
+          sx={headerActionSx}
           disabled={state.isWritingRole || state.isSaving}
           onClick={state.onCreateRole}
         >
@@ -122,6 +130,7 @@ function RolesActions({ state }: { readonly state: AdminRolesPageState }) {
         <Button
           variant="elitea" color="primary"
           size="small"
+          sx={headerActionSx}
           disabled={state.isSyncing || state.isSaving}
           onClick={state.onApplyToProjects}
         >
@@ -130,10 +139,10 @@ function RolesActions({ state }: { readonly state: AdminRolesPageState }) {
       ) : null}
       {state.canEdit && state.isDirty ? (
         <>
-          <Button variant="secondary" size="small" disabled={state.isSaving} onClick={state.onDiscard}>
+          <Button variant="secondary" size="small" sx={headerActionSx} disabled={state.isSaving} onClick={state.onDiscard}>
             {t('pages.admin.roles.action.discard', 'Discard')}
           </Button>
-          <Button variant="elitea" color="primary" size="small" disabled={state.isSaving} onClick={state.onSave}>
+          <Button variant="elitea" color="primary" size="small" sx={headerActionSx} disabled={state.isSaving} onClick={state.onSave}>
             {t('pages.admin.roles.action.save', 'Save')}
           </Button>
         </>

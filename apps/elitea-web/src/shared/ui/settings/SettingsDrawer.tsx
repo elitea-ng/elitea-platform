@@ -261,8 +261,19 @@ const drawerSx: SxProps<Theme> = (theme) => ({
   boxSizing: 'border-box',
 });
 
+/*
+ * A fixed 60px bar, the same as PageHeader and DrawerPageHeader, so this
+ * column's rule lines up with the page header's rule beside it. The height
+ * used to come from padding plus the title's line box; when `headingSmall`'s
+ * leading moved from a fixed 24px to a 1.43 ratio (20px) the bar shrank to
+ * 55px and left a 5px step where the two rules meet.
+ */
 const headerSx: SxProps<Theme> = (theme) => ({
-  padding: '1rem 1rem 1.1875rem 1.5rem',
+  height: '3.75rem',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  padding: '0 1rem 0 1.5rem',
   borderBottom: `0.0625rem solid ${theme.vars.palette.border.table ?? 'transparent'}`,
 });
 
