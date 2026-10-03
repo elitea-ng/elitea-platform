@@ -113,7 +113,7 @@ func withSecret(view triggerView, secret string) triggerView {
 	// PRESENT the bearer secret, and a signing trigger does not accept it —
 	// handing one back would be a copy button for a URL that answers 401, and
 	// a credential written into proxy logs for nothing.
-	if view.AuthMode == AuthModeHMACSHA256 {
+	if modeSigns(view.AuthMode) {
 		return view
 	}
 	view.SecretURL = view.URL + "?" + TriggerTokenQueryParam + "=" + secret
@@ -214,7 +214,8 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	mode, modeNamed, err := parseAuthMode(raw)
 	if err != nil {
 		writeError(w, http.StatusBadRequest,
-			"this trigger type is not supported; use `github`, or `auth_mode: hmac_sha256` with the header the sender signs into")
+			"this trigger type is not supported; use `github`, `gitlab` (optionally with `auth_mode: standard_webhooks_hmac`), "+
+				"or `auth_mode: hmac_sha256` with the header the sender signs into")
 		return
 	}
 	target, err := h.resolveRunTarget(r.Context(), schema, versionID)
@@ -245,7 +246,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	if !modeNamed && previousErr == nil {
 		mode = storedAuthMode(previous)
 	}
-	tokenID, secret, hash, err := newCredential()
+	tokenID, secret, hash, err := newCredential(mode)
 	if err != nil {
 		h.log().Error("pipelinetriggers: mint credential", "err", err)
 		writeError(w, http.StatusInternalServerError, "a trigger credential could not be created")

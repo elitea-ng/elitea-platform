@@ -16,6 +16,21 @@ A pipeline has two unattended ways to start without a person watching a chat: an
 
 <Screenshot id="pipeline-trigger-schedule-panel" alt="Triggers and schedules panel on a pipeline's configuration form" mask="trigger-url" />
 
+### Webhook types
+
+The **Webhook type** in the trigger's settings dialog sets how an inbound call proves it knows the secret. Changing the type rotates the secret, so give the sender the new one.
+
+| Type | What the sender sends | Where to configure it |
+| --- | --- | --- |
+| Custom (bearer secret) | The secret as `Authorization: Bearer`, `X-Elitea-Trigger-Token`, or the `token` query parameter. | Any sender that can set a header. |
+| GitHub (signed payload) | `X-Hub-Signature-256: sha256=<hex>`, an HMAC-SHA256 of the raw body keyed with the secret. | The repository's webhook **Secret** field. The URL ends in `/github`. |
+| GitLab (secret token) | The secret, unchanged, in `X-Gitlab-Token`. | The GitLab webhook's **Secret token** field. The URL ends in `/gitlab`. |
+| GitLab (signing token) | A Standard Webhooks signature: `webhook-id`, `webhook-timestamp`, and `webhook-signature: v1,<base64>` over `id.timestamp.body`. Deliveries more than five minutes old are refused. | The GitLab webhook's **Signing token** field. The secret starts with `whsec_`. The URL ends in `/gitlab`. |
+
+A signing type never accepts the bearer secret, so a leaked URL plus the secret alone cannot start a run.
+
+The request body is optional. A delivery with no body, or a payload with no `input` field, starts the pipeline with an empty input. An `input` that is not valid text is refused with `422`.
+
 <Note>
 The same section also configures the cron schedule, and an agent's info panel shows which trigger type (chat message, schedule, or webhook — GitHub, GitLab, or custom) is wired to it.
 </Note>

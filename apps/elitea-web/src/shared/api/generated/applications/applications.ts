@@ -19141,6 +19141,11 @@ export type runPipelineInboundTriggerResponse413 = {
   status: 413;
 };
 
+export type runPipelineInboundTriggerResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
 export type runPipelineInboundTriggerResponse503 = {
   data: ErrorResponse;
   status: 503;
@@ -19154,6 +19159,7 @@ export type runPipelineInboundTriggerResponseError = (
   | runPipelineInboundTriggerResponse400
   | runPipelineInboundTriggerResponse401
   | runPipelineInboundTriggerResponse413
+  | runPipelineInboundTriggerResponse422
   | runPipelineInboundTriggerResponse503
 ) & {
   headers: Headers;
@@ -19192,9 +19198,18 @@ export const getRunPipelineInboundTriggerUrl = (
  * It is mounted above the API's authentication group, beside the anonymous
  * shared-chat routes. Its ONLY credential is the per-pipeline secret,
  * presented as `Authorization: Bearer <secret>`, as
- * `X-Elitea-Trigger-Token`, or as the `token` query parameter. The header
- * forms are preferred: a URL is written to proxy and browser logs, and a
- * credential in one outlives the request.
+ * `X-Elitea-Trigger-Token`, as `X-Gitlab-Token` (what a GitLab webhook
+ * with a secret token sends), or as the `token` query parameter. The
+ * header forms are preferred: a URL is written to proxy and browser logs,
+ * and a credential in one outlives the request.
+ *
+ * ## The body may be empty
+ *
+ * A webhook that only says "something happened" sends no body, or a
+ * payload with no `input` key. The run starts with an empty input, and
+ * the pipeline runs from its entry node. An `input` that is not UTF-8
+ * text, or that holds a NUL character, is answered 422 and names
+ * `input`.
  *
  * ## Nothing the caller sends selects a tenant
  *
@@ -19485,6 +19500,11 @@ export type runPipelineInboundTriggerForProviderResponse413 = {
   status: 413;
 };
 
+export type runPipelineInboundTriggerForProviderResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
 export type runPipelineInboundTriggerForProviderResponse503 = {
   data: ErrorResponse;
   status: 503;
@@ -19498,6 +19518,7 @@ export type runPipelineInboundTriggerForProviderResponseError = (
   | runPipelineInboundTriggerForProviderResponse400
   | runPipelineInboundTriggerForProviderResponse401
   | runPipelineInboundTriggerForProviderResponse413
+  | runPipelineInboundTriggerForProviderResponse422
   | runPipelineInboundTriggerForProviderResponse503
 ) & {
   headers: Headers;
@@ -19510,7 +19531,7 @@ export type runPipelineInboundTriggerForProviderResponse =
 export const getRunPipelineInboundTriggerForProviderUrl = (
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
 ) => {
   return `/pipeline_trigger/${projectId}/${tokenId}/${provider}`;
 };
@@ -19538,12 +19559,40 @@ export const getRunPipelineInboundTriggerForProviderUrl = (
  * digest is compared in constant time. A missing header, a malformed
  * value and a wrong signature are all the one refusal, and none of them
  * starts a run.
+ *
+ * A trigger in `standard_webhooks_hmac` mode (a GitLab signing token)
+ * reads `webhook-id`, `webhook-timestamp` and `webhook-signature`. The
+ * signature is HMAC-SHA256 of `webhook-id.webhook-timestamp.body` under
+ * the key behind the secret's `whsec_` prefix, as `v1,<base64>`. A
+ * timestamp more than five minutes from the server clock is refused, so
+ * a captured delivery cannot be replayed after that window.
+ *
+ * ## A signed delivery starts one run
+ *
+ * Inside the window, and for `hmac_sha256` (which signs no timestamp at
+ * all), a signature alone does not tell a new delivery from a copy. So
+ * each admitted signed delivery is remembered for 72 hours, keyed on
+ * what the sender signed: the `webhook-id` for Standard Webhooks, the raw
+ * body for `hmac_sha256` (an unsigned header such as
+ * `X-GitHub-Delivery` is not part of the key). A repeat is answered 202
+ * with the first run's ids and starts nothing; a provider retry of a
+ * delivery whose answer it lost therefore reads as a success. A copy
+ * that arrives while the first is still being admitted is answered 503
+ * with `Retry-After`. A delivery whose admission failed is forgotten,
+ * so its retry is a first try. A generic HMAC sender that wants two runs
+ * must send two different bodies.
+ *
+ * ## Provider payloads get the larger body cap
+ *
+ * A GitHub or GitLab trigger's body is the provider's own event payload,
+ * so it may be up to 1 MiB in every mode, including a GitLab secret-token
+ * trigger. A custom bearer trigger's body is held to 64 KiB.
  * @summary Start a pipeline run from a provider-shaped webhook URL
  */
 export const runPipelineInboundTriggerForProvider = async (
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<runPipelineInboundTriggerForProviderResponse> => {
@@ -19585,7 +19634,7 @@ export const runPipelineInboundTriggerForProvider = async (
 export const getRunPipelineInboundTriggerForProviderQueryKey = (
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
 ) => {
   return [
@@ -19601,7 +19650,7 @@ export const getRunPipelineInboundTriggerForProviderQueryOptions = <
 >(
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
   options?: {
     query?: Partial<
@@ -19665,7 +19714,7 @@ export function useRunPipelineInboundTriggerForProvider<
 >(
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest:
     undefined | PipelineInboundTriggerRunRequest,
   options: {
@@ -19696,7 +19745,7 @@ export function useRunPipelineInboundTriggerForProvider<
 >(
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
   options?: {
     query?: Partial<
@@ -19726,7 +19775,7 @@ export function useRunPipelineInboundTriggerForProvider<
 >(
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
   options?: {
     query?: Partial<
@@ -19752,7 +19801,7 @@ export function useRunPipelineInboundTriggerForProvider<
 >(
   projectId: number,
   tokenId: string,
-  provider: "github",
+  provider: "github" | "gitlab",
   pipelineInboundTriggerRunRequest?: PipelineInboundTriggerRunRequest,
   options?: {
     query?: Partial<

@@ -97,7 +97,12 @@ const (
 // id derived from the secret would let anyone holding a URL recover a
 // constraint on the secret, and a secret derived from the id would be no secret
 // at all.
-func newCredential() (tokenID, secret string, hash []byte, err error) {
+//
+// A Standard Webhooks trigger gets its secret in that specification's own
+// form, `whsec_` + standard base64 of the key bytes. A conforming sender (a
+// GitLab signing token among them) decodes exactly that form, and
+// standardWebhooksKey reads it back the same way.
+func newCredential(mode triggerAuthMode) (tokenID, secret string, hash []byte, err error) {
 	var encoded string
 	idBytes := make([]byte, tokenIDBytes)
 	if _, err = rand.Read(idBytes); err != nil {
@@ -115,6 +120,9 @@ func newCredential() (tokenID, secret string, hash []byte, err error) {
 	// it, which is why both call sites go through these two functions and
 	// neither hashes anything itself.
 	encoded = base64.RawURLEncoding.EncodeToString(secretBytes)
+	if mode.AuthMode == AuthModeStandardWebhooks {
+		encoded = standardWebhooksSecretPrefix + base64.StdEncoding.EncodeToString(secretBytes)
+	}
 	return hex.EncodeToString(idBytes), encoded, secretDigest(encoded), nil
 }
 

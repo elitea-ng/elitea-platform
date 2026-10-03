@@ -26,17 +26,20 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
-// The stored `auth_mode` vocabulary. Both values are in 0138's CHECK
-// constraint, so a value invented here is refused by the database rather than
-// falling through to the bearer path.
+// The stored `auth_mode` vocabulary. Every value is in the CHECK constraint
+// (0138, widened by 0139), so a value invented here is refused by the database
+// rather than falling through to the bearer path.
 const (
 	// AuthModeToken is the bearer secret every trigger had before #970 and
 	// the default for every new one.
@@ -44,6 +47,12 @@ const (
 	// AuthModeHMACSHA256 verifies HMAC-SHA256 of the RAW request body under
 	// the trigger secret, read from the provider's own header.
 	AuthModeHMACSHA256 = "hmac_sha256"
+	// AuthModeStandardWebhooks verifies a Standard Webhooks signature
+	// (standardwebhooks.com): HMAC-SHA256 of `webhook-id.webhook-timestamp.body`
+	// under the trigger secret, sent as `webhook-signature: v1,<base64>`, with
+	// a timestamp inside StandardWebhooksTolerance. It is what a GitLab
+	// webhook with a SIGNING TOKEN sends (legacy issue 6664).
+	AuthModeStandardWebhooks = "standard_webhooks_hmac"
 )
 
 // The stored `provider` vocabulary — the URL suffix, and the preset a create
@@ -51,7 +60,39 @@ const (
 const (
 	ProviderCustom = "custom"
 	ProviderGitHub = "github"
+	// ProviderGitLab is a GitLab project or group webhook. Its preset is the
+	// bearer mode, because GitLab's SECRET TOKEN is the trigger secret sent
+	// verbatim in `X-Gitlab-Token` — a carrier, not a signature. A GitLab
+	// webhook configured with a SIGNING TOKEN instead asks for
+	// `auth_mode: standard_webhooks_hmac` beside this preset.
+	ProviderGitLab = "gitlab"
 )
+
+// GitLabTokenHeader is the header a GitLab webhook sends its secret token in.
+// It is a fourth bearer carrier (inbound.go presentedSecret).
+const GitLabTokenHeader = "X-Gitlab-Token" //nolint:gosec // header NAME, not a credential
+
+// The three Standard Webhooks headers. The signature header is what a
+// standard_webhooks_hmac row stores as its signature_header.
+const (
+	StandardWebhooksIDHeader        = "webhook-id"
+	StandardWebhooksTimestampHeader = "webhook-timestamp"
+	StandardWebhooksSignatureHeader = "webhook-signature"
+)
+
+// StandardWebhooksTolerance is how far a signed timestamp may be from this
+// server's clock, in either direction. The specification's reference
+// libraries use five minutes. A delivery outside it is refused, which stops a
+// captured request from being replayed AFTER the window. It does nothing
+// inside the window: a copy sent within five minutes carries a timestamp that
+// is still good. What stops that copy is the delivery log (deliveries.go),
+// keyed on the signed `webhook-id`, which answers a repeat with the run the
+// first copy started instead of starting another.
+const StandardWebhooksTolerance = 5 * time.Minute
+
+// standardWebhooksSecretPrefix marks a Standard Webhooks secret: the rest is
+// the base64 of the key bytes. Secrets minted for this mode carry it.
+const standardWebhooksSecretPrefix = "whsec_"
 
 // GitHubSignatureHeader is what GitHub sends, and the preset's header.
 const GitHubSignatureHeader = "X-Hub-Signature-256" //nolint:gosec // header NAME, not a credential
@@ -85,7 +126,15 @@ func defaultAuthMode() triggerAuthMode {
 }
 
 // signs reports whether this mode verifies a body signature.
-func (m triggerAuthMode) signs() bool { return m.AuthMode == AuthModeHMACSHA256 }
+func (m triggerAuthMode) signs() bool { return modeSigns(m.AuthMode) }
+
+// modeSigns reports whether a stored `auth_mode` verifies a body signature
+// rather than a presented bearer secret. Every place that branches on "is
+// this a signing trigger" asks this one function, so a third signing mode
+// cannot be added to one branch and forgotten in another.
+func modeSigns(authMode string) bool {
+	return authMode == AuthModeHMACSHA256 || authMode == AuthModeStandardWebhooks
+}
 
 // createTriggerBody is what the create/rotate route accepts. Every field is
 // optional; a body that carries none of them (or no body at all) asks for the
@@ -150,6 +199,8 @@ func parseAuthMode(raw []byte) (triggerAuthMode, bool, error) {
 			SignatureHeader: GitHubSignatureHeader,
 			Provider:        ProviderGitHub,
 		}
+	case ProviderGitLab:
+		mode = triggerAuthMode{AuthMode: AuthModeToken, Provider: ProviderGitLab}
 	default:
 		return triggerAuthMode{}, named, errInvalidAuthMode
 	}
@@ -165,7 +216,20 @@ func parseAuthMode(raw []byte) (triggerAuthMode, bool, error) {
 			}
 			mode.AuthMode = AuthModeToken
 		case AuthModeHMACSHA256:
+			// GitLab signs no raw body digest. A GitLab trigger in this
+			// mode would refuse every delivery GitLab can send.
+			if mode.Provider == ProviderGitLab {
+				return triggerAuthMode{}, named, errInvalidAuthMode
+			}
 			mode.AuthMode = AuthModeHMACSHA256
+		case AuthModeStandardWebhooks:
+			// GitHub does not send Standard Webhooks headers; the same
+			// reasoning in the other direction.
+			if mode.Provider == ProviderGitHub {
+				return triggerAuthMode{}, named, errInvalidAuthMode
+			}
+			mode.AuthMode = AuthModeStandardWebhooks
+			mode.SignatureHeader = StandardWebhooksSignatureHeader
 		default:
 			return triggerAuthMode{}, named, errInvalidAuthMode
 		}
@@ -175,7 +239,15 @@ func parseAuthMode(raw []byte) (triggerAuthMode, bool, error) {
 		if !validHeaderName(header) {
 			return triggerAuthMode{}, named, errInvalidAuthMode
 		}
-		mode.SignatureHeader = header
+		// The Standard Webhooks headers are fixed by the specification. A
+		// different name could never match a conforming sender.
+		if mode.AuthMode == AuthModeStandardWebhooks &&
+			!strings.EqualFold(header, StandardWebhooksSignatureHeader) {
+			return triggerAuthMode{}, named, errInvalidAuthMode
+		}
+		if mode.AuthMode != AuthModeStandardWebhooks {
+			mode.SignatureHeader = header
+		}
 	}
 
 	if mode.signs() && mode.SignatureHeader == "" {
@@ -288,4 +360,73 @@ func signatureMatches(presented string, body []byte, secret string) bool {
 	_, _ = mac.Write(body)
 	expected := mac.Sum(nil)
 	return subtle.ConstantTimeCompare(expected, presentedDigest) == 1
+}
+
+// standardWebhooksSignatureMatches reports whether the request carries a valid
+// Standard Webhooks signature of `body` under `secret`, at `now`.
+//
+// The signed content is `webhook-id + "." + webhook-timestamp + "." + body`,
+// and `webhook-signature` is a space-separated list of `v1,<base64>` entries.
+// One matching entry is enough: a sender rotating its key sends both
+// signatures for a while. Entries with another version label are skipped, not
+// refused, because the specification reserves them.
+//
+// The key is the secret's bytes after a `whsec_` prefix, base64-decoded. A
+// secret without the prefix is used as its raw bytes, so a sender that takes
+// an arbitrary string (and signs with it as given) also verifies.
+//
+// CONSTANT TIME on the digest, the same rule signatureMatches follows. The
+// shape checks in front of it branch on the caller's own input only.
+func standardWebhooksSignatureMatches(headers http.Header, body []byte, secret string, now time.Time) bool {
+	id := strings.TrimSpace(headers.Get(StandardWebhooksIDHeader))
+	timestamp := strings.TrimSpace(headers.Get(StandardWebhooksTimestampHeader))
+	signatures := strings.TrimSpace(headers.Get(StandardWebhooksSignatureHeader))
+	if id == "" || timestamp == "" || signatures == "" || secret == "" {
+		return false
+	}
+	seconds, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return false
+	}
+	signedAt := time.Unix(seconds, 0)
+	if signedAt.Before(now.Add(-StandardWebhooksTolerance)) || signedAt.After(now.Add(StandardWebhooksTolerance)) {
+		return false
+	}
+	key, ok := standardWebhooksKey(secret)
+	if !ok {
+		return false
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(id + "." + timestamp + "."))
+	_, _ = mac.Write(body)
+	expected := mac.Sum(nil)
+
+	matched := false
+	for _, entry := range strings.Fields(signatures) {
+		version, encoded, found := strings.Cut(entry, ",")
+		if !found || version != "v1" {
+			continue
+		}
+		presented, decodeErr := base64.StdEncoding.DecodeString(encoded)
+		if decodeErr != nil || len(presented) != sha256.Size {
+			continue
+		}
+		if subtle.ConstantTimeCompare(expected, presented) == 1 {
+			matched = true
+		}
+	}
+	return matched
+}
+
+// standardWebhooksKey derives the HMAC key from a stored trigger secret.
+func standardWebhooksKey(secret string) ([]byte, bool) {
+	encoded, prefixed := strings.CutPrefix(secret, standardWebhooksSecretPrefix)
+	if !prefixed {
+		return []byte(secret), true
+	}
+	key, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(key) == 0 {
+		return nil, false
+	}
+	return key, true
 }
