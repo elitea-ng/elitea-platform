@@ -25,7 +25,6 @@
  * tree.
  */
 import { lazy, Suspense, useState } from 'react';
-import type { ReactNode } from 'react';
 
 import { RouterProvider } from '@tanstack/react-router';
 
@@ -34,17 +33,10 @@ import { hasAnyAdminNavAccess } from '@/pages/admin/adminNavItems';
 import { adminUiAccess } from '@/pages/admin/adminUiConfig';
 import { createAdminRouter } from '@/pages/admin/router';
 
-// The three refusal pages are code-split: a granted operator (the common case)
-// never loads them, which keeps them out of the admin initial-bundle budget.
-const AdminAccessDenied = lazy(() =>
-  import('@/pages/admin/AdminAccessDenied').then((m) => ({ default: m.AdminAccessDenied })),
-);
-const AdminAccessUnavailable = lazy(() =>
-  import('@/pages/admin/AdminAccessUnavailable').then((m) => ({ default: m.AdminAccessUnavailable })),
-);
-const AdminSignInRedirect = lazy(() =>
-  import('@/pages/admin/AdminSignInRedirect').then((m) => ({ default: m.AdminSignInRedirect })),
-);
+// The whole refusal path (StatusPage, the three pages, their helpers) sits
+// behind ONE dynamic import: a granted operator loads none of it, which keeps
+// it out of the admin initial-bundle budget.
+const AdminRefusal = lazy(() => import('@/pages/admin/AdminRefusal').then((m) => ({ default: m.AdminRefusal })));
 
 /**
  * What the boot gate shows. The handler's `access` reason decides when it was
@@ -61,15 +53,11 @@ export function AdminApp() {
   const [gate] = useState(resolveGate);
   const [router] = useState(() => (gate === 'router' ? createAdminRouter() : null));
 
-  let content: ReactNode;
-  if (router) content = <RouterProvider router={router} />;
-  else if (gate === 'unauthenticated') content = <AdminSignInRedirect />;
-  else if (gate === 'unavailable') content = <AdminAccessUnavailable />;
-  else content = <AdminAccessDenied />;
-
   return (
     <AppProviders>
-      <Suspense fallback={null}>{content}</Suspense>
+      <Suspense fallback={null}>
+        {router ? <RouterProvider router={router} /> : <AdminRefusal gate={gate === 'router' ? 'denied' : gate} />}
+      </Suspense>
     </AppProviders>
   );
 }
