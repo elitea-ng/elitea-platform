@@ -659,3 +659,43 @@ func equalInts(a, b []int) bool {
 	}
 	return true
 }
+
+// pylon seeded developer-mode roles, `admin` among them, on every legacy
+// database. #6880 refuses the mode for create and rename. A DELETE must still
+// remove those leftovers, including the ones with a built-in name: no code
+// names a developer-mode role. Create and rename in that mode stay refused.
+func TestAdminRoleDeleteRemovesALeftoverDeveloperRole(t *testing.T) {
+	pool, writes, _ := newRoleWriteEnvironment(t)
+
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO public.auth_core__role (name, mode)
+VALUES ('admin', 'developer'), ('legacy_dev', 'developer')
+ON CONFLICT (name, mode) DO NOTHING`); err != nil {
+		t.Fatalf("seed the developer-mode roles: %v", err)
+	}
+
+	if recorder := adminDo(t, writes, http.MethodPost, rolesURL("administration", "developer"),
+		map[string]any{"name": "fresh_dev"}); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create in developer mode status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	if recorder := adminDo(t, writes, http.MethodPut, rolesURL("administration", "developer"),
+		map[string]any{"name": "legacy_dev", "new_name": "renamed_dev"}); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("rename in developer mode status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+	}
+
+	for _, name := range []string{"legacy_dev", "admin"} {
+		recorder := adminDo(t, writes, http.MethodDelete, rolesURL("administration", "developer"),
+			map[string]any{"name": name})
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("delete developer-mode %q status = %d, want 200 (body %s)",
+				name, recorder.Code, recorder.Body.String())
+		}
+		if centralRoleExists(t, pool, "developer", name) {
+			t.Fatalf("the delete answered 200 and left the developer-mode %q", name)
+		}
+	}
+	// The default-mode `admin` of the same name is untouched.
+	if !centralRoleExists(t, pool, "default", "admin") {
+		t.Fatal("deleting the developer-mode admin removed the default-mode admin")
+	}
+}

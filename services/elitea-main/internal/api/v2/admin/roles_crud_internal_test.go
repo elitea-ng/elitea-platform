@@ -117,20 +117,20 @@ func TestDecodeRoleRequestFallsBackToTheQuery(t *testing.T) {
 func TestResolveRoleTargetRefusesUnknownScopesAndModes(t *testing.T) {
 	handler := NewHandler(nil)
 
-	if _, err := handler.resolveRoleTarget(t.Context(), "not_a_scope", "default"); err == nil {
+	if _, err := handler.resolveRoleTarget(t.Context(), "not_a_scope", "default", roleModeWrite); err == nil {
 		t.Fatal("an unknown scope was accepted")
 	} else {
 		assertStatus(t, err, http.StatusNotFound)
 	}
 
-	if _, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "prompt_lib"); err == nil {
+	if _, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "prompt_lib", roleModeDelete); err == nil {
 		t.Fatal("a mode no resolver reads was accepted")
 	} else {
 		assertStatus(t, err, http.StatusBadRequest)
 	}
 
 	for _, mode := range []string{"default", "administration"} {
-		target, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, mode)
+		target, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, mode, roleModeWrite)
 		if err != nil {
 			t.Fatalf("resolve %s: %v", mode, err)
 		}
@@ -146,7 +146,7 @@ func TestResolveRoleTargetRefusesUnknownScopesAndModes(t *testing.T) {
 func TestResolveRoleTargetRefusesTheDeveloperMode(t *testing.T) {
 	handler := NewHandler(nil)
 
-	_, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "developer")
+	_, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "developer", roleModeWrite)
 	if err == nil {
 		t.Fatal("the developer mode was accepted")
 	}
@@ -181,5 +181,23 @@ func assertStatus(t *testing.T, err error, want int) {
 	}
 	if typed.status != want {
 		t.Fatalf("status = %d, want %d (%s)", typed.status, want, typed.message)
+	}
+}
+
+// A DELETE still accepts `developer`, so the roles pylon left in that mode can
+// be removed. Create and rename refuse it (the test above).
+func TestResolveRoleTargetAcceptsTheDeveloperModeForADeleteOnly(t *testing.T) {
+	handler := NewHandler(nil)
+
+	target, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "developer", roleModeDelete)
+	if err != nil {
+		t.Fatalf("a delete in the developer mode was refused: %v", err)
+	}
+	if !target.central() || target.mode != "developer" {
+		t.Fatalf("resolve developer for a delete = %+v", target)
+	}
+	// A mode that never existed stays refused, for a delete too.
+	if _, err := handler.resolveRoleTarget(t.Context(), scopeAdministration, "prompt_lib", roleModeDelete); err == nil {
+		t.Fatal("a delete in an unknown mode was accepted")
 	}
 }
