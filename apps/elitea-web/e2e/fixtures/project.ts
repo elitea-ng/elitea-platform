@@ -25,17 +25,61 @@
  */
 import { expect, type Page } from '@playwright/test';
 
-/**
- * The seeded shared project (`scripts/e2e-stack.sh`): id 1, the project the
- * seed fills, that both journey personas hold a role on, and that every visual
- * baseline naming no other project was taken in.
+// The defaults and their parsing live in `scripts/lib` so they are unit-tested
+// without Playwright — `scripts/e2e-live-assumptions.test.mjs`.
+import { e2eTenancy, NO_PROJECT } from '../../scripts/lib/e2e-live-assumptions.mjs';
+
+/* ── the tenancy a run targets ───────────────────────────────────────────────
+ *
+ * Every value below defaults to what `scripts/e2e-stack.sh` seeds, so a run
+ * against the e2e rig sets none of them and behaves exactly as before. A run
+ * against a DEPLOYED instance (`playwright.live.config.ts`) cannot reuse the
+ * rig's tenancy — project 1 there holds real data, the regression personas
+ * work in a project of their own, and the seeded publish/public projects do not
+ * exist — so it names its own through these variables instead of editing
+ * specs.
+ *
+ *   E2E_PROJECT_ID                 the project the personas work in
+ *   E2E_DEFAULT_PROJECT_NAME       that project's name, as the switcher shows it
+ *   E2E_PUBLIC_PROJECT_ID          the FRONTEND-public project (VITE_PUBLIC_PROJECT_ID)
+ *   E2E_CATALOGUE_PROJECT_ID       the backend catalogue project (ELITEA_AI_PROJECT_ID)
+ *   E2E_PUBLISH_AUTHOR_PROJECT_ID  the project publish journeys author in, or
+ *                                  `none` when the deployment has no such project
+ *
+ * The resolvers that consume the last three live in `fixtures/api.ts`; the
+ * live config itself is `playwright.live.config.ts`.
  */
-export const DEFAULT_PROJECT_ID = '1';
-export const DEFAULT_PROJECT_NAME = 'Default Project';
+
+const TENANCY = e2eTenancy(process.env);
+
+/**
+ * The project the personas work in. On the rig: the seeded shared project, id
+ * 1, the project the seed fills, that both journey personas hold a role on, and
+ * that every visual baseline naming no other project was taken in.
+ */
+export const DEFAULT_PROJECT_ID = TENANCY.projectId;
+/** `DEFAULT_PROJECT_ID`'s name, exactly as the sidebar switcher lists it. */
+export const DEFAULT_PROJECT_NAME = TENANCY.projectName;
+
+/** `E2E_PUBLIC_PROJECT_ID`, when the run declares the frontend-public project by id. */
+export const PUBLIC_PROJECT_ID_OVERRIDE = TENANCY.publicProjectId;
+/** `E2E_CATALOGUE_PROJECT_ID`, when the run declares the catalogue project by id. */
+export const CATALOGUE_PROJECT_ID_OVERRIDE = TENANCY.catalogueProjectId;
+/**
+ * `E2E_PUBLISH_AUTHOR_PROJECT_ID`: a project id, `NO_PROJECT` (`none`), or
+ * undefined — resolve the seeded project by name, which is the rig's behaviour.
+ */
+export const PUBLISH_AUTHOR_PROJECT_ID_OVERRIDE = TENANCY.publishAuthorProjectId;
+export { NO_PROJECT };
 
 /** `RegExp` metacharacters in a project name, so a name is matched literally. */
 function escapeForRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** The switcher trigger's accessible name once `projectName` is selected, matched literally. */
+export function switcherNameFor(projectName: string): RegExp {
+  return new RegExp(`Project:\\s*${escapeForRegExp(projectName)}`);
 }
 
 /** The sidebar switcher's trigger — `widgets/sidebar/ui/ProjectSwitcher.tsx`. */
@@ -91,8 +135,5 @@ export async function ensureProjectSelected(page: Page, projectName: string): Pr
   const option = listbox.getByRole('option', { name: projectName });
   await expect(option, `the switcher must list ${projectName}`).toBeVisible({ timeout: 20_000 });
   await option.click();
-  await expect(trigger).toHaveAccessibleName(
-    new RegExp(`Project:\\s*${escapeForRegExp(projectName)}`),
-    { timeout: 20_000 },
-  );
+  await expect(trigger).toHaveAccessibleName(switcherNameFor(projectName), { timeout: 20_000 });
 }
