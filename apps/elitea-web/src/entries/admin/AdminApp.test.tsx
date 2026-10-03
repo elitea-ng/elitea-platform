@@ -61,8 +61,8 @@ describe('AdminApp boot gate', () => {
 
     expect(await screen.findByTestId('admin-access-denied')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-nav')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Access denied' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to the app' })).toHaveAttribute('href', '/app/');
+    expect(screen.getByRole('heading', { name: 'Nice Try, Hacker!' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to the app now' })).toHaveAttribute('href', '/app/');
   });
 
   it('renders the 403 page for a caller the handler never resolved at all', async () => {

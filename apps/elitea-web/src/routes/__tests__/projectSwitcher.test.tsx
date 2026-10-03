@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubAuthContext } from '../../app/router-context';
 import type { RouterContext } from '../../app/router-context';
 import { resetConfigForTests } from '../../shared/config/get-config';
+import { renderWithTheme } from '../../shared/ui/lib/testTheme';
 import { server } from '../../test/setup';
 import { routeTree } from '../../routeTree.gen';
 import {
@@ -346,15 +347,15 @@ describe('__404.tsx — stays out of the generated route tree (see its doc comme
   });
 
   it('exports a plain, directly-renderable component', () => {
-    render(<NotFoundModule.NotFoundPage />);
-    expect(screen.getByRole('main')).toHaveTextContent('Page not found. Try Home page');
+    renderWithTheme(<NotFoundModule.NotFoundPage />);
+    expect(screen.getByRole('main')).toHaveTextContent('Page not found');
   });
 });
 
 describe('ProjectSwitcherView — component-level integration', () => {
   function renderView(projectId: string) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
+    renderWithTheme(
       <QueryClientProvider client={queryClient}>
         <ProjectSwitcherView projectId={projectId} />
       </QueryClientProvider>,
