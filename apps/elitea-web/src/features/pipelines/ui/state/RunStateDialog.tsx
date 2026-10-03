@@ -53,6 +53,7 @@ import { t } from '@/shared/i18n';
 
 import { ProcessConnector, ProcessStepIcon, RunStatus, StateItemView, StateValueModal } from './RunStateDialog.parts';
 import { HeaderActions, StatusIndicatorRow } from './RunStateDialog.status';
+import { stepStateValues } from './runStateValues';
 import {
   contentContainerSx,
   dialogContentSx,
@@ -141,6 +142,7 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
   };
 
   const isError = data.status === FlowEditorConstants.PipelineStatus.Error;
+  const isRunInProgress = data.status === FlowEditorConstants.PipelineStatus.InProgress;
   const lastStep = timeline[timeline.length - 1];
   const timelineStepLabel =
     data.status === FlowEditorConstants.PipelineStatus.InProgress
@@ -249,6 +251,9 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
               </Box>
               <Box sx={statesContainerSx}>
                 {variables.map((variable, index) => {
+                  // #6883: the last step of a finished run shows the run's
+                  // final state — see `runStateValues.ts`.
+                  const values = stepStateValues(timeline, selectedStep, variable, !isRunInProgress);
                   const items: readonly AccordionItem[] = [
                     {
                       title: variable,
@@ -256,8 +261,9 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
                         <StateItemView
                           name={variable}
                           onFullScreen={onFullScreen}
-                          valueBefore={selectedStep ? timeline[selectedStep - 1]?.state?.[variable] : ''}
-                          valueAfter={timeline[selectedStep]?.state?.[variable]}
+                          valueBefore={values.before}
+                          valueAfter={values.after}
+                          isFinal={values.isFinal}
                         />
                       ),
                     },

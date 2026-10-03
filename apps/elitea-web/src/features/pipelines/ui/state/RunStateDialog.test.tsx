@@ -163,4 +163,34 @@ describe('RunStateDialog', () => {
     const valueDialog = dialogs[dialogs.length - 1] as HTMLElement;
     expect(within(valueDialog).getByText('counter')).toBeInTheDocument();
   });
+
+  it('labels the terminal step of a finished run "Final state" and shows the final value (#6883)', () => {
+    renderWithTheme(
+      <RunStateDialog
+        data={baseData({
+          timeline: [
+            { id: 'start', status: 'Completed', created_at: '2024-01-01T00:00:00.000Z', state: { answer: 'none yet' } },
+            { id: 'agent', status: 'Completed', created_at: '2024-01-01T00:00:05.000Z', state: { answer: 'the final answer' } },
+            { id: 'agent', status: 'Completed', created_at: '2024-01-01T00:00:06.000Z', state: {} },
+          ],
+        })}
+        state={{ answer: { type: 'str' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    const steps = screen.getAllByRole('button', { name: 'agent' });
+    fireEvent.click(steps[1] as HTMLElement);
+    expect(screen.getByText('Final state')).toBeInTheDocument();
+    expect(screen.queryByText('After')).not.toBeInTheDocument();
+    expect(screen.getAllByText('"the final answer"').length).toBeGreaterThan(0);
+
+    // A middle step keeps the plain Before / After pair.
+    fireEvent.click(screen.getByRole('button', { name: 'start' }));
+    expect(screen.getByText('After')).toBeInTheDocument();
+    expect(screen.queryByText('Final state')).not.toBeInTheDocument();
+  });
 });
