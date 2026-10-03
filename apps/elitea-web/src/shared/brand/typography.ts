@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 
 import { CSS_VAR_PREFIX } from './constants';
 import type { BrandPack } from './schema';
-import { typeScale, type TypeScale } from './typeScale';
+import { typeScale, type EliteaTypographyVariant, type TypeScale } from './typeScale';
 
 /**
  * Typography (spec §4.2 tier 2; typography spec rev. 2). ONE type scale for
@@ -76,10 +76,10 @@ const VARIANTS = {
     letterSpacing: '0.06em',
     textTransform: 'uppercase',
   },
-} as const satisfies Record<string, VariantSpec>;
+} as const satisfies Record<EliteaTypographyVariant, VariantSpec>;
 
-/** @public Wave-1 surface: unit S1 types `<Typography variant>` call sites with it. */
-export type EliteaTypographyVariant = keyof typeof VARIANTS;
+/** Re-exported: the union lives in the leaf `typeScale.ts` (no import cycle). */
+export type { EliteaTypographyVariant };
 
 /**
  * Every MUI stock variant → the custom variant it renders as. Only the
