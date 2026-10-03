@@ -145,3 +145,40 @@ func (v *vaultData) moveToHidden(name string) bool {
 	}
 	return true
 }
+
+// rename moves regular secret `oldName` to `newName` holding `value`, and
+// carries its stored JSON type across when the value is unchanged. A rename
+// alone does not change a value: `42` stays the integer 42 and `false` stays
+// the boolean false (the STRING "false" is truthy in pylon, so writing it as
+// one would flip its meaning). A changed value is a JSON string, as every
+// other route write is.
+func (v *vaultData) rename(oldName, newName, value string) {
+	raw, typed := v.raw[regularCollection][oldName]
+	delete(v.Secrets, oldName)
+	delete(v.raw[regularCollection], oldName)
+	delete(v.raw[regularCollection], newName)
+	v.Secrets[newName] = value
+	if typed && string(raw) == value {
+		v.raw[regularCollection][newName] = raw // typed ⇒ the inner map exists
+	}
+}
+
+// credential reads `name` for use AS A CREDENTIAL — regular first, then
+// hidden, the order ResolveSecretValue reads them in.
+//
+// A value stored as anything but a JSON string is NOT a credential. Its text
+// (`null`, `true`, `0`) is guessable, so it reports found=true, usable=false
+// and the caller must treat it as no value at all. Pylon compares the Python
+// value itself, so a stored `None` never equals any header; reading it as the
+// text "null" would accept `X-SECRET: null`.
+func (v vaultData) credential(name string) (value string, found, usable bool) {
+	if text, ok := v.Secrets[name]; ok {
+		_, typed := v.raw[regularCollection][name]
+		return text, true, !typed
+	}
+	if text, ok := v.HiddenSecrets[name]; ok {
+		_, typed := v.raw[hiddenCollection][name]
+		return text, true, !typed
+	}
+	return "", false, false
+}

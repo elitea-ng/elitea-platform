@@ -157,6 +157,7 @@ func TestVaultErrorClassNamesEachCause(t *testing.T) {
 		"none":         nil,
 		"absent":       ErrVaultAbsent,
 		"write":        fmt.Errorf("%w: x", errVaultWrite),
+		"tx":           fmt.Errorf("%w: x: %w", errVaultTx, cause),
 		"rows":         fmt.Errorf("%w: x: %w", errVaultRows, cause),
 		"half_written": fmt.Errorf("%w: x", errVaultHalfWritten),
 		"key":          fmt.Errorf("%w: x: %w", errVaultKey, cause),

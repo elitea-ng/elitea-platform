@@ -480,8 +480,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errMutationRefused):
 		return
-	case errors.Is(err, errVaultWrite):
-		vaultSaveFailed(w, "failed to save the secret")
+	case isVaultSaveFailure(err):
+		vaultSaveFailed(w, r, err, "failed to save the secret")
 		return
 	case err != nil:
 		vaultUnreadable(w, r, err)
@@ -589,8 +589,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("Secret %q already exists", body.Name))
 			return false, errMutationRefused
 		}
-		delete(vault.Secrets, oldName)
-		vault.Secrets[body.Name] = body.Value
+		// rename, not delete+set: a rename that leaves the value as it was
+		// keeps its stored JSON type (an integer model id, a boolean).
+		vault.rename(oldName, body.Name, body.Value)
 		return true, nil
 	})
 	switch {
@@ -599,8 +600,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrVaultAbsent):
 		apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("secret %q not found", oldName))
 		return
-	case errors.Is(err, errVaultWrite):
-		vaultSaveFailed(w, "failed to save the secret")
+	case isVaultSaveFailure(err):
+		vaultSaveFailed(w, r, err, "failed to save the secret")
 		return
 	case err != nil:
 		vaultUnreadable(w, r, err)
@@ -637,10 +638,10 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrVaultAbsent):
 		w.WriteHeader(http.StatusNoContent)
 		return
-	case errors.Is(err, errVaultWrite):
+	case isVaultSaveFailure(err):
 		// The write error was swallowed here, so a delete that did not persist
 		// still answered 204 and the page removed the row it had just re-listed.
-		vaultSaveFailed(w, "failed to delete the secret")
+		vaultSaveFailed(w, r, err, "failed to delete the secret")
 		return
 	case err != nil:
 		vaultUnreadable(w, r, err)
@@ -650,11 +651,24 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // Hide moves a secret from secrets → hidden_secrets.
+//
+// It applies the default-secret policy as every other project route does, and
+// as pylon's hide does (secrets/api/v2/hide.py: 400 "Default secrets API
+// disabled"). Without it a project editor could move a platform-provisioned
+// default secret into hidden_secrets with no X-SECRET, where List no longer
+// shows it and LookupProjectSecret (regular secrets only) stops finding it.
 func (h *Handler) Hide(w http.ResponseWriter, r *http.Request) {
+	policy, policyOK := h.readDefaultSecretPolicy(w, r)
+	if !policyOK {
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	name := chi.URLParam(r, "name")
 
 	err := h.mutateVaultCtx(r.Context(), projectID, false, func(vault *vaultData) (bool, error) {
+		if policy.refuse(w, r, *vault, name) {
+			return false, errMutationRefused
+		}
 		if !vault.moveToHidden(name) {
 			apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("secret %q not found", name))
 			return false, errMutationRefused
@@ -667,8 +681,8 @@ func (h *Handler) Hide(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrVaultAbsent):
 		apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("secret %q not found", name))
 		return
-	case errors.Is(err, errVaultWrite):
-		vaultSaveFailed(w, "failed to hide the secret")
+	case isVaultSaveFailure(err):
+		vaultSaveFailed(w, r, err, "failed to hide the secret")
 		return
 	case err != nil:
 		vaultUnreadable(w, r, err)
@@ -717,6 +731,20 @@ var errVaultWrite = errors.New("secrets: vault write failed")
 // route that the response is done.
 var errMutationRefused = errors.New("secrets: mutation refused")
 
+// errVaultTx marks a failure of the write's own machinery BEFORE the vault was
+// read: beginning the transaction, minting or wrapping a new vault key, or
+// inserting the key row. None of them says anything about the vault's
+// contents — a pool that is exhausted or a database that is briefly away
+// fails here — so a route answers it as "failed to save", never as "the vault
+// is unreadable", and the log names it apart.
+var errVaultTx = errors.New("secrets: vault write could not start")
+
+// isVaultSaveFailure reports whether a mutateVaultByID error is a failed save
+// (errVaultWrite, errVaultTx) rather than a vault that would not open.
+func isVaultSaveFailure(err error) bool {
+	return errors.Is(err, errVaultWrite) || errors.Is(err, errVaultTx)
+}
+
 // The classes of an unreadable vault. openVaultContents and openVault wrap
 // each failure in one, so the log line for a 500 says WHICH part of the vault
 // would not open without carrying any of its content.
@@ -737,6 +765,8 @@ func vaultErrorClass(err error) string {
 		return "absent"
 	case errors.Is(err, errVaultWrite):
 		return "write"
+	case errors.Is(err, errVaultTx):
+		return "tx"
 	case errors.Is(err, errVaultRows):
 		return "rows"
 	case errors.Is(err, errVaultHalfWritten):
@@ -903,7 +933,7 @@ func (h *Handler) mutateVaultByID(
 ) error {
 	tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite})
 	if err != nil {
-		return fmt.Errorf("begin %s vault write: %w", vaultID, err)
+		return fmt.Errorf("%w: begin %s vault write: %w", errVaultTx, vaultID, err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
@@ -953,11 +983,11 @@ func (h *Handler) mutateVaultByID(
 func (h *Handler) claimVaultKey(ctx context.Context, tx vaultQuerier, vaultID string) ([]byte, bool, error) {
 	minted, err := newFernetKey()
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("%w: mint %s vault key: %w", errVaultTx, vaultID, err)
 	}
 	encoded, err := h.encryptKey(minted)
 	if err != nil {
-		return nil, false, fmt.Errorf("encrypt %s vault key: %w", vaultID, err)
+		return nil, false, fmt.Errorf("%w: encrypt %s vault key: %w", errVaultTx, vaultID, err)
 	}
 	var insertedID string
 	err = tx.QueryRow(ctx,
@@ -971,7 +1001,7 @@ func (h *Handler) claimVaultKey(ctx context.Context, tx vaultQuerier, vaultID st
 		// A key row exists (committed by somebody else, possibly just now).
 		return nil, false, nil
 	case err != nil:
-		return nil, false, fmt.Errorf("write %s secrets_key: %w", vaultID, err)
+		return nil, false, fmt.Errorf("%w: write %s secrets_key: %w", errVaultTx, vaultID, err)
 	}
 	return minted, true, nil
 }
@@ -1038,27 +1068,51 @@ func (h *Handler) writeVaultCtx(ctx context.Context, projectID string, v vaultDa
 	return h.writeVaultByID(ctx, dbKey(projectID), v)
 }
 
-// vaultSaveFailed answers a write that failed after the vault was opened.
-func vaultSaveFailed(w http.ResponseWriter, message string) {
+// logVaultFailure logs the cause of a vault 500 with its class (see
+// vaultErrorClass). The cause is logged and never returned: a 500 with nothing
+// in the log is what kept F1 (an integer default-model id the decoder refused)
+// invisible until a regression run hit it. The error text carries vault ids
+// and driver messages, never vault content.
+func logVaultFailure(r *http.Request, message, vaultID string, err error) {
+	slog.ErrorContext(r.Context(), message,
+		"class", vaultErrorClass(err),
+		"vault_id", vaultID,
+		"error", err,
+	)
+}
+
+// projectVaultID names the project vault a route works on, for a log line.
+func projectVaultID(r *http.Request) string {
+	return dbKey(chi.URLParam(r, "projectID"))
+}
+
+// vaultSaveFailed answers a project write that failed to save — after the
+// vault was opened (errVaultWrite), or before it could be (errVaultTx).
+func vaultSaveFailed(w http.ResponseWriter, r *http.Request, err error, message string) {
+	logVaultFailure(r, "project vault write failed", projectVaultID(r), err)
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": message})
 }
 
 // vaultUnreadable answers the one failure every project route shares: the vault
 // exists and could not be opened.  It is a 500 and not an empty result, because
 // an empty result is what invites the write that destroys it.
-//
-// The cause is logged with its class (see vaultErrorClass), never returned: a
-// 500 with nothing in the log is what kept F1 (an integer default-model id
-// the decoder refused) invisible until a regression run hit it.
 func vaultUnreadable(w http.ResponseWriter, r *http.Request, err error) {
-	slog.ErrorContext(r.Context(), "project vault is unreadable",
-		"class", vaultErrorClass(err),
-		"project_id", chi.URLParam(r, "projectID"),
-		"error", err,
-	)
+	logVaultFailure(r, "project vault is unreadable", projectVaultID(r), err)
 	writeJSON(w, http.StatusInternalServerError, map[string]string{
 		"error": "project vault is unreadable",
 	})
+}
+
+// adminVaultSaveFailed and adminVaultUnreadable are the administration-mode
+// answers: the same logging, in the `{"message": …}` shape admin_ui reads.
+func adminVaultSaveFailed(w http.ResponseWriter, r *http.Request, err error, message string) {
+	logVaultFailure(r, "global vault write failed", adminVaultKey, err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"message": message})
+}
+
+func adminVaultUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	logVaultFailure(r, "global vault is unreadable", adminVaultKey, err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
 }
 
 // encryptKey renders a raw 32-byte Fernet key in the ON-DISK representation

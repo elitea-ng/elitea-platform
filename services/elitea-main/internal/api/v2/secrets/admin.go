@@ -169,7 +169,7 @@ func (h *Handler) AdminList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
+		adminVaultUnreadable(w, r, err)
 		return
 	}
 	items := make([]adminSecretListItem, 0, len(vault.Secrets))
@@ -198,7 +198,7 @@ func (h *Handler) AdminGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
+		adminVaultUnreadable(w, r, err)
 		return
 	}
 	if value, exists := vault.Secrets[name]; exists {
@@ -245,11 +245,11 @@ func (h *Handler) AdminCreate(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errMutationRefused):
 		return
-	case errors.Is(err, errVaultWrite):
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to save the secret"})
+	case isVaultSaveFailure(err):
+		adminVaultSaveFailed(w, r, err, "failed to save the secret")
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
+		adminVaultUnreadable(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Project secret was saved"})
@@ -296,8 +296,8 @@ func (h *Handler) AdminUpdate(w http.ResponseWriter, r *http.Request) {
 				return false, errMutationRefused
 			}
 		}
-		delete(vault.Secrets, oldName)
-		vault.Secrets[name] = body.Secret.Value
+		// rename keeps a typed value's JSON type when the value is unchanged.
+		vault.rename(oldName, name, body.Secret.Value)
 		return true, nil
 	})
 	switch {
@@ -306,11 +306,11 @@ func (h *Handler) AdminUpdate(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrVaultAbsent):
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Project secret was not found"})
 		return
-	case errors.Is(err, errVaultWrite):
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to save the secret"})
+	case isVaultSaveFailure(err):
+		adminVaultSaveFailed(w, r, err, "failed to save the secret")
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
+		adminVaultUnreadable(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Project secret was updated"})
@@ -334,11 +334,11 @@ func (h *Handler) AdminDelete(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrVaultAbsent):
 		w.WriteHeader(http.StatusNoContent)
 		return
-	case errors.Is(err, errVaultWrite):
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to delete the secret"})
+	case isVaultSaveFailure(err):
+		adminVaultSaveFailed(w, r, err, "failed to delete the secret")
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "global vault is unreadable"})
+		adminVaultUnreadable(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -81,14 +81,25 @@ func (h *Handler) EnsureProjectSecretsHeaderValue(ctx context.Context, projectID
 		// Both maps are consulted because ResolveSecretValue reads both, in
 		// this order. A value hidden by the Hide route still answers the
 		// `X-SECRET` check, so it counts as set.
-		if strings.TrimSpace(vault.Secrets[SecretsHeaderValueName]) != "" ||
-			strings.TrimSpace(vault.HiddenSecrets[SecretsHeaderValueName]) != "" {
-			return false, nil
+		//
+		// A value stored as a JSON number, boolean, null or structure is NOT
+		// set: it is guessable as text (`null`, `true`, `0`), the policy check
+		// refuses it, and ResolveSecretValue refuses it ("not a string"). Such
+		// a regular value is REPLACED — it is the one ResolveSecretValue reads
+		// first, so leaving it would keep the project without a usable value.
+		_, regularTyped := vault.raw[regularCollection][SecretsHeaderValueName]
+		_, hiddenTyped := vault.raw[hiddenCollection][SecretsHeaderValueName]
+		if !regularTyped {
+			if strings.TrimSpace(vault.Secrets[SecretsHeaderValueName]) != "" ||
+				(!hiddenTyped && strings.TrimSpace(vault.HiddenSecrets[SecretsHeaderValueName]) != "") {
+				return false, nil
+			}
 		}
 		value, err := NewSecretsHeaderValue()
 		if err != nil {
 			return false, err
 		}
+		delete(vault.raw[regularCollection], SecretsHeaderValueName)
 		vault.Secrets[SecretsHeaderValueName] = value
 		written = true
 		return true, nil
