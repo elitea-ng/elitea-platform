@@ -48,9 +48,20 @@ export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactN
         onClick={(event: MouseEvent<HTMLElement>) => setAnchor(event.currentTarget)}
       >
         <DatasetIcon style={iconStyle} />
+        {/*
+          * #6638: "Storage:" above the name, the same two-line shape as the
+          * sidebar's "Project:" selector (`widgets/sidebar/ui/ProjectSwitcher`).
+          */}
         <Box sx={labelBoxSx}>
           <Typography
-            variant="bodyMedium"
+            variant="labelSmall"
+            sx={captionSx}
+            data-testid="bucket-storage-caption"
+          >
+            {t('artifacts.buckets.storageCaption', 'Storage:')}
+          </Typography>
+          <Typography
+            variant="labelSmall"
             sx={titleSx}
           >
             {label}
@@ -110,7 +121,8 @@ const rowSx: SxProps<Theme> = (theme) => ({
   alignItems: 'center',
   gap: theme.spacing(1.5),
   padding: theme.spacing(0.9, 3),
-  height: '2.55rem',
+  // Two lines now ("Storage:" over the name), as tall as the project selector.
+  minHeight: '3.25rem',
   width: '100%',
   border: 0,
   borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
@@ -124,7 +136,8 @@ const rowSx: SxProps<Theme> = (theme) => ({
   transition: 'background-color 0.2s ease',
   '&:hover': { backgroundColor: theme.vars.palette.background.button.secondary.hover },
 });
-const labelBoxSx: SxProps<Theme> = { flex: 1, minWidth: 0 };
+const labelBoxSx: SxProps<Theme> = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' };
+const captionSx: SxProps<Theme> = (theme) => ({ color: theme.vars.palette.text.metrics });
 const titleSx: SxProps<Theme> = (theme) => ({
   color: theme.vars.palette.text.secondary,
   overflow: 'hidden',
