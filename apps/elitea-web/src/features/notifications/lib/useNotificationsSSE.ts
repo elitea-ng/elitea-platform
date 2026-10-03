@@ -62,12 +62,20 @@
  * caller decides what to do with the flag. `NotificationButton` turns the
  * badge query into a slow poll. Without a live stream and without that flag,
  * the badge updates only on refocus or remount.
+ *
+ * CONNECTION INDICATOR. This is the app shell's always-on live channel, so
+ * it reports its health into `shared/api/sse`'s real-time status store
+ * (`useReportRealtimeChannel`), which the sidebar's connection dot reads:
+ * `connecting` until the first `open`, `open` while the stream is up,
+ * `reconnecting` during a browser-driven reconnect or a scheduled reopen,
+ * and `offline` once the ladder is spent. The key is per hook instance, and
+ * the report is withdrawn on unmount or when there is no url to open.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { streamReconnectDelayMs, useEventSource, withResumeCursor } from '@/shared/api/sse';
+import { streamReconnectDelayMs, useEventSource, useReportRealtimeChannel, withResumeCursor, type RealtimeChannelState } from '@/shared/api/sse';
 import { getConfig } from '@/shared/config';
 
 import { NOTIFICATIONS_QUERY_ROOT } from '../api/useNotifications';
@@ -92,6 +100,8 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
 
   const [streamUrl, setStreamUrl] = useState<string | null>(baseUrl);
   const [streamDead, setStreamDead] = useState(false);
+  const [channelState, setChannelState] = useState<RealtimeChannelState>('connecting');
+  const channelKey = `notifications:${useId()}`;
   const attemptRef = useRef(0);
   const cursorRef = useRef<string | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -109,10 +119,14 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
     attemptRef.current = 0;
     cursorRef.current = null;
     setStreamDead(false);
+    setChannelState('connecting');
     setStreamUrl(baseUrl);
   }, [baseUrl, clearRetry]);
 
   useEffect(() => clearRetry, [clearRetry]);
+
+  // No url means no subscription, and so nothing to claim about it.
+  useReportRealtimeChannel(channelKey, baseUrl === null ? null : channelState);
 
   // `id:` is written before every frame the route emits. It is the cursor a
   // resume must send back, so record it from every frame.
@@ -125,11 +139,13 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
     const delay = streamReconnectDelayMs(attempt);
     if (delay === undefined || baseUrl === null) {
       setStreamDead(true);
+      setChannelState('offline');
       // eslint-disable-next-line no-console -- same contract as shared/api/socket/client.ts: warn, never throw or silently drop
       console.warn('notifications SSE stream failed and every reconnect attempt is spent; the badge falls back to polling');
       return;
     }
     attemptRef.current = attempt;
+    setChannelState('reconnecting');
     clearRetry();
     // Clear the url first. The resumed url can be byte-identical, and
     // `useEventSource` reopens only when the url CHANGES — the same technique
@@ -159,10 +175,15 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
       onOpen: () => {
         attemptRef.current = 0;
         setStreamDead(false);
+        setChannelState('open');
       },
       onError: (_event, readyState) => {
-        // CONNECTING means the browser is reconnecting by itself. Leave it.
-        if (readyState !== EVENT_SOURCE_CLOSED) return;
+        // CONNECTING means the browser is reconnecting by itself. Leave the
+        // stream alone; only the indicator learns about it.
+        if (readyState !== EVENT_SOURCE_CLOSED) {
+          setChannelState('reconnecting');
+          return;
+        }
         scheduleReopen();
       },
     },

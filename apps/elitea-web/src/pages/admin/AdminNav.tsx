@@ -18,15 +18,15 @@
  *
  * The reference paints a green/red dot on the logo, driven by Redux
  * `settings.socketConnected`, itself written by socket.io lifecycle listeners.
- * This bundle has no socket at all: `AppProviders` mounts no
- * `SocketClientContext.Provider`, so `widgets/sidebar`'s `SidebarConnectionDot`
- * — the ported equivalent — renders `null` in the admin entry by design, and the
- * platform is migrating off socket.io entirely (#93). A dot that is always the
+ * The ported equivalent, `widgets/sidebar`'s `SidebarConnectionDot`, now reads
+ * the health of the app's SSE channels (`shared/api/sse`'s `useRealtimeStatus`)
+ * instead of socket.io, and this bundle subscribes to no live channel, so it
+ * would only ever be `idle` (rendered as nothing). A dot that is always the
  * same colour, or one wired to a client that never connects, tells an operator
  * the server is unreachable when it is not, which is worse than telling them
  * nothing. There is no admin-side liveness signal to drive it from honestly, so
- * it is omitted rather than faked; when #93 lands a real transport with a
- * connection state, this header is where it goes.
+ * it is omitted rather than faked; the day the admin bundle subscribes to a live
+ * channel that reports into `useRealtimeStatus`, this header is where it goes.
  *
  * ## Accessibility
  *

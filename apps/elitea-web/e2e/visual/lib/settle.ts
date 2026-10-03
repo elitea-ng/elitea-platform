@@ -35,6 +35,12 @@ export function volatileRegions(page: Page): Locator[] {
     // 09/08/2026 00:51 (run 31345403013, issue #159). A locator that matches
     // nothing on the other routes is a no-op there.
     page.locator('[data-testid="analytics-date-range"]'),
+    // The sidebar's live-connection dot reports the notification SSE stream's
+    // health, so its colour depends on whether that stream has opened yet (or
+    // is being refused 429 by the per-principal cap other workers share) when
+    // the shutter opens. It used to be a constant red only because it read the
+    // noop socket.io client — the defect it now no longer has.
+    page.locator('[data-testid="sidebar-connection-dot"]'),
   ];
 }
 
