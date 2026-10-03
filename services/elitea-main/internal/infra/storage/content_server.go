@@ -112,7 +112,12 @@ type ContentServer struct {
 	sandboxBundles   *SandboxBundleContentService
 	maxBytes         int64
 	requests         chan struct{}
-	logger           *slog.Logger
+	// attachmentRequests is the attachment route's OWN pool. One attachment
+	// read can wait up to attachmentExtractionWait for an extraction, so in
+	// the shared pool a burst of first-time PDFs would answer 503 to every
+	// token, version and artifact request on the listener.
+	attachmentRequests chan struct{}
+	logger             *slog.Logger
 }
 
 func NewContentServer(authorizer ContentAuthorizer, store ContentStore, maxBytes int64) (*ContentServer, error) {
@@ -276,15 +281,16 @@ func newContentServer(
 		return nil, errors.New("content size and concurrency limits must be positive and bounded")
 	}
 	return &ContentServer{
-		authorizer:      authorizer,
-		store:           store,
-		materializer:    materializer,
-		runtimeToken:    runtimeToken,
-		runtimeVersions: runtimeVersions,
-		runtimeObjects:  runtimeObjects,
-		maxBytes:        maxBytes,
-		requests:        make(chan struct{}, maxConcurrentRequests),
-		logger:          slog.Default(),
+		authorizer:         authorizer,
+		store:              store,
+		materializer:       materializer,
+		runtimeToken:       runtimeToken,
+		runtimeVersions:    runtimeVersions,
+		runtimeObjects:     runtimeObjects,
+		maxBytes:           maxBytes,
+		requests:           make(chan struct{}, maxConcurrentRequests),
+		attachmentRequests: make(chan struct{}, maxConcurrentRequests),
+		logger:             slog.Default(),
 	}, nil
 }
 
@@ -664,10 +670,10 @@ func (s *ContentServer) PostApplicationVersion(w http.ResponseWriter, r *http.Re
 // the model why, so neither ever fails a turn.
 func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Request) {
 	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
+	if !acquireSlot(w, s.attachmentRequests) {
 		return
 	}
-	defer s.release()
+	defer func() { <-s.attachmentRequests }()
 	if s.runtimeObjects == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
@@ -694,7 +700,12 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 			// conversation it does not hold a claim for.
 			status = http.StatusForbidden
 		case errors.Is(err, ErrContentNotFound):
-			status = http.StatusNotFound
+			// A JSON body, so the worker can tell "this object is gone"
+			// from a 404 for the ROUTE: a listener built without a Go
+			// object store has no attachment route at all, and that file
+			// still exists.
+			s.writeAttachmentReason(w, r, http.StatusNotFound, attachmentReasonNotFound)
+			return
 		case errors.Is(err, ErrContentRejected):
 			// The body names the reason, so the worker can tell the model
 			// WHY the file has no text rather than only that it has none.
@@ -745,30 +756,39 @@ func encodeAttachmentDocument(value any) ([]byte, error) {
 	return []byte(strings.TrimSuffix(buffer.String(), "\n")), nil
 }
 
+// attachmentReasonNotFound is the 404 body's reason: the claim and the
+// conversation were accepted, and there is no such object.
+const attachmentReasonNotFound = "not_found"
+
 // writeAttachmentUnreadable answers 422 with the refusal's reason. A
-// rejection without a reason (the source refused the object from its
-// metadata row) is reported as too_large, which is the only cause the source
-// has.
+// rejection that names no reason is reported as "unreadable", which claims
+// nothing about the file.
 func (s *ContentServer) writeAttachmentUnreadable(w http.ResponseWriter, r *http.Request, err error) {
-	reason := "too_large"
+	reason := string(ReasonAttachmentUnreadable)
 	var refusal *AttachmentUnreadableError
 	if errors.As(err, &refusal) && refusal.Reason != "" {
 		reason = string(refusal.Reason)
 	}
+	s.writeAttachmentReason(w, r, http.StatusUnprocessableEntity, reason)
+}
+
+// writeAttachmentReason answers status with the small reason document
+// (elitea.runtime.attachment-unreadable.v1).
+func (s *ContentServer) writeAttachmentReason(w http.ResponseWriter, r *http.Request, status int, reason string) {
 	encoded, encodeErr := json.Marshal(RuntimeAttachmentUnreadable{
 		SchemaVersion: RuntimeAttachmentUnreadableSchemaVersion,
 		Reason:        reason,
 	})
 	if encodeErr != nil {
-		http.Error(w, http.StatusText(http.StatusUnprocessableEntity), http.StatusUnprocessableEntity)
+		http.Error(w, http.StatusText(status), status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusUnprocessableEntity)
+	w.WriteHeader(status)
 	if _, writeErr := w.Write(encoded); writeErr != nil {
-		s.logger.WarnContext(r.Context(), "attachment unreadable write failed")
+		s.logger.WarnContext(r.Context(), "attachment reason write failed")
 	}
 }
 
@@ -1026,8 +1046,12 @@ func (s *ContentServer) writeRuntimeResponse(
 }
 
 func (s *ContentServer) acquire(w http.ResponseWriter) bool {
+	return acquireSlot(w, s.requests)
+}
+
+func acquireSlot(w http.ResponseWriter, slots chan struct{}) bool {
 	select {
-	case s.requests <- struct{}{}:
+	case slots <- struct{}{}:
 		return true
 	default:
 		w.Header().Set("Retry-After", "1")

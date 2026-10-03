@@ -741,13 +741,19 @@ main:
       key: brand-pack.json
       mountPath: /etc/elitea/brand-pack.json
 
+  # The memory limit covers attachment text extraction. elitea-main runs up
+  # to two extractions at once, one of them a PDF in a WebAssembly sandbox
+  # with a 160 MiB memory ceiling. Their peak (extract.PeakMemoryBytes) plus
+  # 256 MiB for the rest of the process must fit, and
+  # internal/runtimecomposition/attachment_memory_chart_test.go fails when
+  # this limit is lowered below that.
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 1Gi
 
   # Arbitrary env vars for the elitea-main container. The whole map is rendered
   # into the ConfigMap (templates/configmap.yaml) and consumed via envFrom, so

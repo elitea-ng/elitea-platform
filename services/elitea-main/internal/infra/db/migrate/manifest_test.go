@@ -587,7 +587,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// page/section/sheet map and the extractor version, deleted with its
 	// object. No new permission: only the claim-authorized runtime content
 	// route reads or writes it.
-	require.EqualValues(t, 137, Head(shared))
+	//
+	// 138: shared/0138_attachment_extraction_source_digest.sql, the SHA-256
+	// of the bytes an extraction was made from, so a byte-identical
+	// re-upload (the chat client uploads the file again with every message)
+	// finds the filed extraction. No new permission.
+	require.EqualValues(t, 138, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

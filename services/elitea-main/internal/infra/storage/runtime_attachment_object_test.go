@@ -254,13 +254,14 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 			status: http.StatusUnprocessableEntity, reason: "empty",
 		},
 		// The metadata row and the bytes disagree: neither answer is
-		// trustworthy, so neither is sent.
+		// trustworthy, so neither is sent. It is a server condition (a read
+		// that raced a re-upload), not "too large".
 		"length disagrees with the bytes": {
 			record: AttachmentObjectRecord{
 				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
 				ByteLength: 99, Content: []byte("short"),
 			},
-			status: http.StatusUnprocessableEntity, reason: "too_large",
+			status: http.StatusServiceUnavailable,
 		},
 		// A source that answered about a different object than was asked for.
 		"identity does not echo the request": {

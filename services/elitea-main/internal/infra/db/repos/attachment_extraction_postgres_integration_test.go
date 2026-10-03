@@ -73,7 +73,7 @@ func TestAttachmentExtractionSidecarRoundTripsAndGoesStale(t *testing.T) {
 		TokenEstimate:    5,
 		ExtractorVersion: extract.Version,
 	}
-	if err := repository.SaveAttachmentExtraction(ctx, version, storage.AttachmentExtraction{Document: document}); err != nil {
+	if err := repository.SaveAttachmentExtraction(ctx, version, nil, storage.AttachmentExtraction{Document: document}); err != nil {
 		t.Fatalf("SaveAttachmentExtraction: %v", err)
 	}
 	loaded, _, found, err := repository.LoadAttachmentExtraction(ctx, project, bucketName, key, extract.Version)
@@ -107,9 +107,8 @@ func TestAttachmentExtractionSidecarRoundTripsAndGoesStale(t *testing.T) {
 	if err != nil || found {
 		t.Fatalf("load after re-upload = found %v, err %v; want a miss", found, err)
 	}
-	// …and a save under the OLD version is a no-op rather than filing old
-	// text under the new object.
-	if err := repository.SaveAttachmentExtraction(ctx, version, storage.AttachmentExtraction{Document: document}); err != nil {
+	// …and a save under the OLD version never answers for the new object.
+	if err := repository.SaveAttachmentExtraction(ctx, version, nil, storage.AttachmentExtraction{Document: document}); err != nil {
 		t.Fatalf("stale save: %v", err)
 	}
 	if _, _, found, _ := repository.LoadAttachmentExtraction(ctx, project, bucketName, key, extract.Version); found {
@@ -117,7 +116,7 @@ func TestAttachmentExtractionSidecarRoundTripsAndGoesStale(t *testing.T) {
 	}
 
 	// A refusal is filed with its reason.
-	if err := repository.SaveAttachmentExtraction(ctx, fresh, storage.AttachmentExtraction{
+	if err := repository.SaveAttachmentExtraction(ctx, fresh, nil, storage.AttachmentExtraction{
 		Refused: true, Reason: extract.ReasonEncrypted,
 	}); err != nil {
 		t.Fatalf("save refusal: %v", err)
@@ -125,6 +124,17 @@ func TestAttachmentExtractionSidecarRoundTripsAndGoesStale(t *testing.T) {
 	refusal, _, found, err := repository.LoadAttachmentExtraction(ctx, project, bucketName, key, extract.Version)
 	if err != nil || !found || !refusal.Refused || refusal.Reason != extract.ReasonEncrypted {
 		t.Fatalf("refusal round trip = %+v found %v err %v", refusal, found, err)
+	}
+	if refusal.ExtractedAt.IsZero() {
+		t.Fatal("a filed row carries when it was made")
+	}
+	// An extraction for an OLDER version never replaces the row filed for
+	// the current one.
+	if err := repository.SaveAttachmentExtraction(ctx, version, nil, storage.AttachmentExtraction{Document: document}); err != nil {
+		t.Fatalf("late stale save: %v", err)
+	}
+	if again, _, found, _ := repository.LoadAttachmentExtraction(ctx, project, bucketName, key, extract.Version); !found || again.Reason != extract.ReasonEncrypted {
+		t.Fatalf("a late save for an older version replaced the current row: %+v found %v", again, found)
 	}
 
 	// The row goes with its object.

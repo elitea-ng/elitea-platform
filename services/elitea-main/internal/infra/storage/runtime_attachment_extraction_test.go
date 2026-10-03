@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -138,11 +138,37 @@ func TestAttachmentObjectRouteDoesNotHTMLEscapeText(t *testing.T) {
 }
 
 type fakeExtractionCache struct {
-	mu      sync.Mutex
-	hit     *AttachmentExtraction
-	version AttachmentObjectVersion
-	loadErr error
-	saved   []AttachmentExtraction
+	mu        sync.Mutex
+	hit       *AttachmentExtraction
+	digestHit *AttachmentExtraction
+	version   AttachmentObjectVersion
+	loadErr   error
+	saveErr   error
+	saved     []AttachmentExtraction
+	digests   [][]byte
+	loads     int
+	// serveSaved makes a load return what was filed, as the real store does.
+	serveSaved bool
+}
+
+func (cache *fakeExtractionCache) LoadAttachmentExtractionByDigest(
+	_ context.Context, version AttachmentObjectVersion, extractorVersion string, digest []byte,
+) (AttachmentExtraction, bool, error) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if version != cache.version || extractorVersion != extract.Version || len(digest) != sha256.Size {
+		return AttachmentExtraction{}, false, errors.New("wrong digest lookup")
+	}
+	if cache.digestHit != nil {
+		return *cache.digestHit, true, nil
+	}
+	return AttachmentExtraction{}, false, nil
+}
+
+func (cache *fakeExtractionCache) savedCount() int {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return len(cache.saved)
 }
 
 func (cache *fakeExtractionCache) LoadAttachmentExtraction(
@@ -150,6 +176,7 @@ func (cache *fakeExtractionCache) LoadAttachmentExtraction(
 ) (AttachmentExtraction, AttachmentObjectVersion, bool, error) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+	cache.loads++
 	if projectID != 4242 || extractorVersion != extract.Version {
 		return AttachmentExtraction{}, AttachmentObjectVersion{}, false, errors.New("wrong lookup")
 	}
@@ -159,18 +186,26 @@ func (cache *fakeExtractionCache) LoadAttachmentExtraction(
 	if cache.hit != nil {
 		return *cache.hit, cache.version, true, nil
 	}
+	// What was filed answers the next load, as the real store does.
+	if len(cache.saved) > 0 && cache.serveSaved {
+		return cache.saved[len(cache.saved)-1], cache.version, true, nil
+	}
 	return AttachmentExtraction{}, cache.version, false, nil
 }
 
 func (cache *fakeExtractionCache) SaveAttachmentExtraction(
-	_ context.Context, version AttachmentObjectVersion, extraction AttachmentExtraction,
+	_ context.Context, version AttachmentObjectVersion, digest []byte, extraction AttachmentExtraction,
 ) error {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if version != cache.version {
 		return errors.New("saved under the wrong version")
 	}
+	if cache.saveErr != nil {
+		return cache.saveErr
+	}
 	cache.saved = append(cache.saved, extraction)
+	cache.digests = append(cache.digests, digest)
 	return nil
 }
 
@@ -252,13 +287,17 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 		require.Len(t, cache.saved, 1)
 		require.False(t, cache.saved[0].Refused)
 		require.Contains(t, cache.saved[0].Document.Text, "FIXTURETOKENPDF1")
+		digest := sha256.Sum256(attachmentFixture(t, "report.pdf"))
+		require.Equal(t, digest[:], cache.digests[0], "the extraction is filed with the digest of its bytes")
 	})
 
-	t.Run("a refusal is filed, a timeout is not", func(t *testing.T) {
+	t.Run("a refusal is filed, a timeout too", func(t *testing.T) {
 		t.Parallel()
+		// A timeout is filed so that a file that always times out is not
+		// parsed on every turn; it answers for attachmentTimeoutRetryAfter.
 		for reason, filed := range map[extract.Reason]bool{
 			extract.ReasonMalformed: true,
-			extract.ReasonTimeout:   false,
+			extract.ReasonTimeout:   true,
 		} {
 			cache := &fakeExtractionCache{version: version}
 			service, err := NewRuntimeAttachmentObjectService(

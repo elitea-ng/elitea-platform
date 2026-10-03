@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -107,8 +108,13 @@ func (repository *CurrentAttachmentObjectRepository) ReadAttachmentObject(
 	if err != nil {
 		return storage.AttachmentObjectRecord{}, err
 	}
-	if record.ByteLength <= 0 || record.ByteLength > maxBytes {
-		return storage.AttachmentObjectRecord{}, storage.ErrContentRejected
+	// Each refusal names its own reason: the worker turns it into the
+	// sentence the model reads, and an empty upload is not "too large".
+	switch {
+	case record.ByteLength <= 0:
+		return storage.AttachmentObjectRecord{}, &storage.AttachmentUnreadableError{Reason: extract.ReasonEmpty}
+	case record.ByteLength > maxBytes:
+		return storage.AttachmentObjectRecord{}, &storage.AttachmentUnreadableError{Reason: extract.ReasonTooLarge}
 	}
 
 	ref, err := storage.NewObjectRef(strconv.FormatInt(projectID, 10), bucket, name)
@@ -133,8 +139,12 @@ func (repository *CurrentAttachmentObjectRepository) ReadAttachmentObject(
 	if err != nil {
 		return storage.AttachmentObjectRecord{}, fmt.Errorf("read attachment object: %w", err)
 	}
-	if int64(len(content)) > maxBytes || int64(len(content)) != record.ByteLength {
-		return storage.AttachmentObjectRecord{}, storage.ErrContentRejected
+	if int64(len(content)) != record.ByteLength {
+		// The row and the bytes disagree, usually a read that raced a
+		// re-upload between the store write and the row write. That is
+		// a server condition the next read does not see: it is reported
+		// as an error, not as a property of the file.
+		return storage.AttachmentObjectRecord{}, errAttachmentLengthMismatch
 	}
 	return storage.AttachmentObjectRecord{
 		Bucket:     bucket,
@@ -187,6 +197,10 @@ func (repository *CurrentAttachmentObjectRepository) attachmentObjectRow(
 	return ObjectRow{}, storage.ErrContentNotFound
 }
 
+// errAttachmentLengthMismatch is a stored object whose bytes do not match
+// its metadata row's length.
+var errAttachmentLengthMismatch = errors.New("attachment object length disagrees with its metadata row")
+
 var _ storage.AttachmentObjectSource = (*CurrentAttachmentObjectRepository)(nil)
 
 // ReadCurrentAttachmentImage is the ADMISSION path's read (#979): the bytes of
@@ -202,8 +216,9 @@ var _ storage.AttachmentObjectSource = (*CurrentAttachmentObjectRepository)(nil)
 // media type is NOT carried over: the application layer derives it from the
 // extension, because the recorded one is whatever the browser sent.
 //
-// `storage.ErrContentRejected` (over the cap, or a length disagreement) and
-// `storage.ErrContentNotFound` both reach the caller as an error, which it
+// A refusal (`*storage.AttachmentUnreadableError`: empty, or over the cap),
+// a length disagreement and `storage.ErrContentNotFound` all reach the
+// caller as an error, which it
 // treats as "no bytes, announce the file" — the pre-#979 behaviour.
 func (repository *CurrentAttachmentObjectRepository) ReadCurrentAttachmentImage(
 	ctx context.Context,
