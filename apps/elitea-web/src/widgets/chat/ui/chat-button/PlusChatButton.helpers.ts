@@ -153,7 +153,7 @@ interface SubmenuCreateConfig {
  * The create row's label per category (#6629). The design names the entity
  * ("Create Agent") instead of the generic "Create new".
  */
-export function submenuCreateLabel(activeSubmenu: SubmenuKey): string {
+function submenuCreateLabel(activeSubmenu: SubmenuKey): string {
   switch (activeSubmenu) {
     case 'agents':
       return t('widgets.chat.plusChatButton.createAgent', 'Create Agent');

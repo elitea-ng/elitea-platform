@@ -104,7 +104,7 @@ function clientRetries(retry: RetryOption, failureCount: number, error: Error): 
 }
 
 /** A 404 from the attached-skills list: the deployment does not serve skills. */
-export function isRouteMissing(error: unknown): boolean {
+function isRouteMissing(error: unknown): boolean {
   return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 404;
 }
 
