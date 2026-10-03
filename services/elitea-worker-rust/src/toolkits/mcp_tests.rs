@@ -11,11 +11,14 @@ use serde_json::{Map, Value, json};
 
 use super::delegated_auth::delegated_authorization_requirement;
 use super::mcp::{
-    McpConnector, McpMaterializationError, McpMaterializationErrorCode, RemoteMcpConfig,
-    authorization_resource_metadata, materialize_mcp_toolsets,
-    materialize_mcp_toolsets_with_tokens, materialize_mcp_toolsets_with_tokens_and_authorization,
-    mcp_authorization_required_fixture,
+    McpConnector, McpMaterializationError, McpMaterializationErrorCode, McpSession,
+    RETIRED_SSE_MESSAGE, RemoteMcpConfig, authorization_resource_metadata,
+    materialize_mcp_toolsets, materialize_mcp_toolsets_with_tokens,
+    materialize_mcp_toolsets_with_tokens_and_authorization, mcp_authorization_required_fixture,
+    names_sse_endpoint, redirect_allowed, retired_sse_failure_for_test,
+    same_origin_redirect_policy,
 };
+use super::mcp_tool_cache::McpToolCaller;
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
 
@@ -439,12 +442,14 @@ async fn claim_materialized_prebuilt_http_uses_fixed_headers_and_exclusions() {
     assert_eq!(publish_calls.load(Ordering::Acquire), 0);
 }
 
+/// #6691: a configured Authorization header (a PAT) wins over the delegated
+/// OAuth token, matching Load Tools, so both act as the same identity.
 #[tokio::test]
-async fn prebuilt_exact_alias_token_overrides_static_authorization() {
+async fn prebuilt_configured_authorization_wins_over_alias_token() {
     let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
     let connector = PrebuiltConnector {
         expected_type: "mcp_release_intelligence",
-        expected_authorization: "Bearer runtime-secret",
+        expected_authorization: "Static fixed-secret",
         tools: vec![lookup],
     };
     let mut settings = prebuilt_settings();
@@ -462,6 +467,30 @@ async fn prebuilt_exact_alias_token_overrides_static_authorization() {
             .await
             .expect("token-authorized prebuilt MCP toolset");
     assert_eq!(toolsets.len(), 1);
+}
+
+#[tokio::test]
+async fn prebuilt_alias_token_applies_when_no_authorization_is_configured() {
+    let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+    let connector = PrebuiltConnector {
+        expected_type: "mcp_release_intelligence",
+        expected_authorization: "Bearer runtime-secret",
+        tools: vec![lookup],
+    };
+    let mut settings = prebuilt_settings();
+    settings["selected_tools"] = json!(["lookup_release"]);
+    settings["headers"] = json!({"X-Platform": "fixed-value"});
+    let version = frozen("mcp_release_intelligence", &settings);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("prebuilt MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let tokens = Map::from_iter([(
+        "release_intelligence".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    materialize_mcp_toolsets_with_tokens(&snapshot, &connector, &policy(&[]), &tokens)
+        .await
+        .expect("token-authorized prebuilt MCP toolset");
 }
 
 #[tokio::test]
@@ -763,4 +792,412 @@ async fn oversized_mcp_results_are_redacted_and_never_retried() {
     assert_eq!(error.category, ErrorCategory::Internal);
     assert!(!error.is_retryable());
     assert!(!format!("{error:?} {error}").contains(secret));
+}
+
+// ---- #6691: tool-list cache honours enable_caching / cache_ttl ----
+
+struct CountingToolset {
+    lists: Arc<AtomicUsize>,
+    tools: Vec<Arc<dyn Tool>>,
+}
+
+#[async_trait]
+impl Toolset for CountingToolset {
+    fn name(&self) -> &'static str {
+        "counting_mcp"
+    }
+
+    async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> adk_rust::Result<Vec<Arc<dyn Tool>>> {
+        self.lists.fetch_add(1, Ordering::AcqRel);
+        Ok(self.tools.clone())
+    }
+}
+
+type RecordedCalls = Arc<Mutex<Vec<(String, Map<String, Value>)>>>;
+
+struct CountingCaller {
+    calls: RecordedCalls,
+}
+
+#[async_trait]
+impl McpToolCaller for CountingCaller {
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Map<String, Value>,
+    ) -> adk_rust::Result<Value> {
+        self.calls
+            .lock()
+            .expect("caller calls")
+            .push((name.to_owned(), arguments));
+        Ok(json!({"cached": true}))
+    }
+}
+
+struct CachingConnector {
+    lists: Arc<AtomicUsize>,
+    calls: RecordedCalls,
+    tools: Vec<Arc<dyn Tool>>,
+}
+
+impl CachingConnector {
+    fn new() -> Self {
+        let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+        Self {
+            lists: Arc::new(AtomicUsize::new(0)),
+            calls: Arc::new(Mutex::new(Vec::new())),
+            tools: vec![lookup],
+        }
+    }
+
+    fn lists(&self) -> usize {
+        self.lists.load(Ordering::Acquire)
+    }
+}
+
+#[async_trait]
+impl McpConnector for CachingConnector {
+    async fn connect(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        self.connect_session(config)
+            .await
+            .map(|session| session.toolset)
+    }
+
+    async fn connect_session(
+        &self,
+        _config: &RemoteMcpConfig,
+    ) -> Result<McpSession, McpMaterializationError> {
+        Ok(McpSession {
+            toolset: Arc::new(CountingToolset {
+                lists: self.lists.clone(),
+                tools: self.tools.clone(),
+            }),
+            caller: Some(Arc::new(CountingCaller {
+                calls: self.calls.clone(),
+            })),
+        })
+    }
+}
+
+fn caching_settings(endpoint: &str, enable_caching: bool, cache_ttl: u64) -> Value {
+    let mut configured = settings(&["lookup_release"]);
+    configured["url"] = json!(endpoint);
+    configured["enable_caching"] = json!(enable_caching);
+    configured["cache_ttl"] = json!(cache_ttl);
+    configured
+}
+
+async fn materialize_once(
+    connector: &CachingConnector,
+    configured: &Value,
+    tokens: &Map<String, Value>,
+) -> Vec<Arc<dyn Tool>> {
+    let version = frozen("mcp", configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let toolsets = materialize_mcp_toolsets_with_tokens(&snapshot, connector, &policy(&[]), tokens)
+        .await
+        .expect("materialized MCP toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    toolsets[0].tools(readonly).await.expect("MCP tools")
+}
+
+#[tokio::test(start_paused = true)]
+async fn tool_listing_is_reused_within_cache_ttl_and_refreshed_after_it() {
+    let connector = CachingConnector::new();
+    let configured = caching_settings("https://mcp.example.invalid/ttl/mcp", true, 120);
+
+    let first = materialize_once(&connector, &configured, &Map::new()).await;
+    assert_eq!(connector.lists(), 1);
+    assert_eq!(first[0].name(), "lookup_release");
+
+    tokio::time::advance(Duration::from_secs(119)).await;
+    let second = materialize_once(&connector, &configured, &Map::new()).await;
+    assert_eq!(
+        connector.lists(),
+        1,
+        "a run inside the TTL issues no tools/list"
+    );
+    assert_eq!(second[0].name(), "lookup_release");
+    assert!(
+        second[0].is_read_only(),
+        "cached descriptors keep annotations"
+    );
+    assert!(second[0].description().contains("release intelligence"));
+    assert_eq!(second[0].parameters_schema(), first[0].parameters_schema());
+    let result = second[0]
+        .execute(context(), json!({"query": "1.2"}))
+        .await
+        .expect("cached tool executes through the current session");
+    assert_eq!(result, json!({"cached": true}));
+    let calls = connector.calls.lock().expect("calls").clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "lookup_release");
+    assert_eq!(calls[0].1.get("query"), Some(&json!("1.2")));
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    materialize_once(&connector, &configured, &Map::new()).await;
+    assert_eq!(connector.lists(), 2, "a run after the TTL rediscovers");
+}
+
+#[tokio::test(start_paused = true)]
+async fn disabled_caching_lists_on_every_run() {
+    let connector = CachingConnector::new();
+    let configured = caching_settings("https://mcp.example.invalid/nocache/mcp", false, 3_600);
+    materialize_once(&connector, &configured, &Map::new()).await;
+    materialize_once(&connector, &configured, &Map::new()).await;
+    assert_eq!(connector.lists(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cached_listing_is_keyed_by_the_credential_sent() {
+    let connector = CachingConnector::new();
+    let endpoint = "https://mcp.example.invalid/keyed/mcp";
+    let configured = caching_settings(endpoint, true, 3_600);
+    let alice = Map::from_iter([(endpoint.to_owned(), json!({"access_token": "alice"}))]);
+    let bob = Map::from_iter([(endpoint.to_owned(), json!({"access_token": "bob"}))]);
+    materialize_once(&connector, &configured, &alice).await;
+    materialize_once(&connector, &configured, &alice).await;
+    assert_eq!(connector.lists(), 1);
+    materialize_once(&connector, &configured, &bob).await;
+    assert_eq!(
+        connector.lists(),
+        2,
+        "another identity never reuses a listing"
+    );
+}
+
+#[tokio::test]
+async fn connectors_without_a_caller_never_serve_a_cached_listing() {
+    let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+    let connector = FixtureConnector::new(vec![lookup]);
+    let version = frozen(
+        "mcp",
+        &caching_settings("https://mcp.example.invalid/nocaller/mcp", true, 3_600),
+    );
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    for _ in 0..2 {
+        let toolsets = materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+            .await
+            .expect("materialized");
+        let readonly: Arc<dyn ReadonlyContext> = context();
+        toolsets[0].tools(readonly).await.expect("tools");
+    }
+    assert_eq!(connector.calls.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn out_of_range_cache_ttl_is_rejected_before_connecting() {
+    for ttl in [json!(59), json!(3_601), json!("soon")] {
+        let connector = CachingConnector::new();
+        let mut configured = caching_settings("https://mcp.example.invalid/range/mcp", true, 300);
+        configured["cache_ttl"] = ttl;
+        let version = frozen("mcp", &configured);
+        let snapshot = FrozenToolSnapshot::from_version_details(&version)
+            .expect("MCP snapshot")
+            .apply_policy(policy(&[]).as_ref());
+        let error = materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+            .await
+            .err()
+            .expect("invalid TTL");
+        assert_eq!(
+            error.code(),
+            McpMaterializationErrorCode::InvalidConfiguration
+        );
+        assert_eq!(connector.lists(), 0);
+    }
+}
+
+// ---- #6688: same-origin redirects only, bounded ----
+
+#[test]
+fn redirect_decision_keeps_the_frozen_origin_and_bounds_hops() {
+    let origin = reqwest_mcp::Url::parse("https://mcp.example.invalid/mcp").unwrap();
+    let url = |value: &str| reqwest_mcp::Url::parse(value).unwrap();
+    assert!(redirect_allowed(
+        &origin,
+        &url("https://mcp.example.invalid/mcp/"),
+        1
+    ));
+    assert!(redirect_allowed(
+        &origin,
+        &url("https://mcp.example.invalid:443/x"),
+        3
+    ));
+    assert!(!redirect_allowed(
+        &origin,
+        &url("https://mcp.example.invalid/mcp/"),
+        4
+    ));
+    assert!(!redirect_allowed(
+        &origin,
+        &url("https://login.example.invalid/mcp"),
+        1
+    ));
+    assert!(!redirect_allowed(
+        &origin,
+        &url("http://mcp.example.invalid/mcp"),
+        1
+    ));
+    assert!(!redirect_allowed(
+        &origin,
+        &url("https://mcp.example.invalid:8443/mcp"),
+        1
+    ));
+    assert!(!redirect_allowed(
+        &origin,
+        &url("https://user:pw@mcp.example.invalid/mcp"),
+        1
+    ));
+}
+
+/// A plain-HTTP server that redirects by path; the policy under test only
+/// compares origins, so HTTP exercises the same wiring as HTTPS.
+async fn redirect_server(other_origin: String) -> (String, Arc<Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0_u8; 8_192];
+            let read = socket.read(&mut buffer).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+            log.lock().unwrap().push(path.clone());
+            let location = match path.as_str() {
+                "/mcp" => Some("/mcp/".to_owned()),
+                "/cross" => Some(format!("{other_origin}/stolen")),
+                "/loop" => Some("/loop".to_owned()),
+                _ => None,
+            };
+            let response = location.map_or_else(
+                || "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok".to_owned(),
+                |location| {
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    )
+                },
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+    (base, seen)
+}
+
+#[tokio::test]
+async fn same_origin_redirect_is_followed_and_cross_origin_is_refused() {
+    let (other, other_seen) = redirect_server(String::new()).await;
+    let (base, seen) = redirect_server(other.clone()).await;
+    let client_for = |path: &str| {
+        reqwest_mcp::Client::builder()
+            .redirect(same_origin_redirect_policy(
+                reqwest_mcp::Url::parse(&format!("{base}{path}")).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    };
+
+    let followed = client_for("/mcp")
+        .post(format!("{base}/mcp"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(followed.status(), 200);
+    assert_eq!(followed.url().path(), "/mcp/");
+
+    let refused = client_for("/cross")
+        .post(format!("{base}/cross"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status(),
+        307,
+        "the cross-origin hop is not followed"
+    );
+    assert!(other_seen.lock().unwrap().is_empty());
+
+    let looped = client_for("/loop")
+        .get(format!("{base}/loop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(looped.status(), 307, "hops stop after the bound");
+    let loops = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|path| *path == "/loop")
+        .count();
+    assert_eq!(loops, 4, "the original request plus three same-origin hops");
+}
+
+// ---- #6688: retired HTTP+SSE endpoints get an actionable error ----
+
+#[derive(Debug)]
+struct ChainError(&'static str, Option<Box<ChainError>>);
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ChainError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.1
+            .as_deref()
+            .map(|error| error as &(dyn std::error::Error + 'static))
+    }
+}
+
+#[test]
+fn retired_sse_is_recognised_only_for_sse_urls_refusing_with_405_or_410() {
+    let nested = |text: &'static str| {
+        ChainError(
+            "Transport error: send initialize request",
+            Some(Box::new(ChainError(text, None))),
+        )
+    };
+    for status in ["HTTP 405 Method Not Allowed: ", "HTTP 410 Gone: "] {
+        let error = nested(status);
+        assert!(retired_sse_failure_for_test(
+            "https://mcp.deepwiki.com/sse",
+            &error
+        ));
+        assert!(retired_sse_failure_for_test(
+            "https://mcp.example.invalid/v1/sse/",
+            &error
+        ));
+        assert!(!retired_sse_failure_for_test(
+            "https://mcp.deepwiki.com/mcp",
+            &error
+        ));
+    }
+    let other = nested("HTTP 500 Internal Server Error: ");
+    assert!(!retired_sse_failure_for_test(
+        "https://mcp.deepwiki.com/sse",
+        &other
+    ));
+    assert!(names_sse_endpoint("https://docs.mcp.cloudflare.com/SSE"));
+    assert!(!names_sse_endpoint(
+        "https://mcp.example.invalid/sse-tools/mcp"
+    ));
+    let display = McpMaterializationErrorCode::RetiredSseEndpoint;
+    assert_ne!(display, McpMaterializationErrorCode::DependencyUnavailable);
+    assert!(RETIRED_SSE_MESSAGE.contains("HTTP+SSE is not supported"));
+    assert!(RETIRED_SSE_MESSAGE.contains("/mcp"));
 }

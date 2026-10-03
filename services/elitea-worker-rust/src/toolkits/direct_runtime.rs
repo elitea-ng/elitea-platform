@@ -284,7 +284,8 @@ impl DirectToolkitRuntime {
                         McpMaterializationErrorCode::DependencyUnavailable => {
                             failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
                         }
-                        McpMaterializationErrorCode::UnsupportedAuthority => {
+                        McpMaterializationErrorCode::UnsupportedAuthority
+                        | McpMaterializationErrorCode::RetiredSseEndpoint => {
                             failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
                         }
                     })?;
