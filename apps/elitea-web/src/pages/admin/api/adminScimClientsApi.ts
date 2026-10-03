@@ -62,6 +62,8 @@ export interface AdminScimClient {
   readonly last_used_at?: string | null;
   readonly rotated_at?: string | null;
   readonly revoked_at?: string | null;
+  /** After this instant the client stops authenticating. Absent: no expiry. */
+  readonly expires_at?: string | null;
 }
 
 interface AdminScimClientList {
@@ -126,6 +128,8 @@ function readSecret(raw: unknown): AdminScimClientSecret {
 export interface AdminScimClientDraft {
   readonly name: string;
   readonly authMethod: ScimClientAuthMethod;
+  /** RFC 3339 instant; omitted for a client with no expiry. */
+  readonly expiresAt?: string | undefined;
 }
 
 /** `POST /admin/scim_clients/administration` — answers the secret once. */
@@ -144,6 +148,9 @@ export function useCreateAdminScimClient(): UseMutationResult<
           body: JSON.stringify({
             name: draft.name,
             auth_method: draft.authMethod,
+            ...(draft.expiresAt === undefined
+              ? {}
+              : { expires_at: draft.expiresAt }),
           }),
         }),
       ),

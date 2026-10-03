@@ -23,6 +23,11 @@ import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import {
+  SCIM_MAX_LIFETIME_DAYS,
+  dateInputValue,
+  expiryInstant,
+} from "./AdminScimClientExpiry";
 import { scimMethodLabel } from "./AdminScimClientTable";
 import type {
   AdminScimClientDraft,
@@ -65,6 +70,8 @@ export function AdminScimClientCreateDialog({
 }: AdminScimClientCreateDialogProps) {
   const [name, setName] = useState("");
   const [authMethod, setAuthMethod] = useState<ScimClientAuthMethod>("bearer");
+  // `yyyy-mm-dd` or empty for "no expiry".
+  const [expiresOn, setExpiresOn] = useState("");
 
   // A fresh dialog each time it opens; a refusal keeps what was typed because
   // the dialog does not close on one.
@@ -72,11 +79,29 @@ export function AdminScimClientCreateDialog({
     if (open) {
       setName("");
       setAuthMethod("bearer");
+      setExpiresOn("");
     }
   }, [open]);
 
   const trimmed = name.trim();
-  const valid = trimmed.length > 0 && trimmed.length <= NAME_MAX;
+  // The date input bounds: tomorrow to two years ahead, the server's range.
+  const today = new Date();
+  const minDate = dateInputValue(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1),
+  );
+  const maxDate = dateInputValue(
+    new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() + SCIM_MAX_LIFETIME_DAYS - 1,
+    ),
+  );
+  const expiryValid =
+    expiresOn === "" ||
+    (expiryInstant(expiresOn) !== undefined &&
+      expiresOn >= minDate &&
+      expiresOn <= maxDate);
+  const valid = trimmed.length > 0 && trimmed.length <= NAME_MAX && expiryValid;
 
   return (
     <Dialog
@@ -117,6 +142,39 @@ export function AdminScimClientCreateDialog({
               htmlInput: {
                 maxLength: NAME_MAX,
                 "data-testid": "admin-scim-client-name",
+              },
+            }}
+          />
+          <TextField
+            label={t(
+              "pages.admin.scimClients.create.expiresOn",
+              "Expires on (optional)",
+            )}
+            type="date"
+            value={expiresOn}
+            onChange={(event) => {
+              setExpiresOn(event.target.value);
+            }}
+            fullWidth
+            size="small"
+            error={!expiryValid}
+            helperText={
+              expiryValid
+                ? t(
+                    "pages.admin.scimClients.create.expiresOnHint",
+                    "Leave empty for no expiry. After this date the client stops working; the list warns 30 days before.",
+                  )
+                : t(
+                    "pages.admin.scimClients.create.expiresOnInvalid",
+                    "Choose a date from tomorrow to two years ahead.",
+                  )
+            }
+            slotProps={{
+              inputLabel: { shrink: true },
+              htmlInput: {
+                min: minDate,
+                max: maxDate,
+                "data-testid": "admin-scim-client-expires-on",
               },
             }}
           />
@@ -169,7 +227,11 @@ export function AdminScimClientCreateDialog({
           color="primary"
           disabled={!valid || isSaving}
           onClick={() => {
-            onSubmit({ name: trimmed, authMethod });
+            onSubmit({
+              name: trimmed,
+              authMethod,
+              expiresAt: expiresOn === "" ? undefined : expiryInstant(expiresOn),
+            });
           }}
           sx={{ textTransform: "none" }}
           data-testid="admin-scim-client-create-submit"

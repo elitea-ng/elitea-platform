@@ -4518,5 +4518,12 @@
   "pages.admin.scimClients.tenantUrl": "Tenant URL",
   "pages.admin.scimClients.title": "SCIM provisioning",
   "pages.admin.scimClients.tokenEndpoint": "Token endpoint",
-  "pages.admin.scimClients.status.expired": "Expired"
+  "pages.admin.scimClients.status.expired": "Expired",
+  "pages.admin.scimClients.create.expiresOn": "Expires on (optional)",
+  "pages.admin.scimClients.create.expiresOnHint": "Leave empty for no expiry. After this date the client stops working; the list warns 30 days before.",
+  "pages.admin.scimClients.create.expiresOnInvalid": "Choose a date from tomorrow to two years ahead.",
+  "pages.admin.scimClients.expiry.expired": "Expired {{date}}",
+  "pages.admin.scimClients.expiry.inDays": "Expires in {{count}} days",
+  "pages.admin.scimClients.expiry.none": "No expiry",
+  "pages.admin.scimClients.table.expires": "Expires"
 }

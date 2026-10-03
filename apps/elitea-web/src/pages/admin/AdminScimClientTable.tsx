@@ -20,6 +20,7 @@ import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { ScimClientExpiryCell } from "./AdminScimClientExpiry";
 import type {
   AdminScimClient,
   ScimClientAuthMethod,
@@ -99,6 +100,9 @@ function ClientRow({
           {formatDate(client.last_used_at) ??
             t("pages.admin.scimClients.table.never", "Never")}
         </Typography>
+      </TableCell>
+      <TableCell>
+        <ScimClientExpiryCell expiresAt={client.expires_at} />
       </TableCell>
       <TableCell>
         <Chip
@@ -188,6 +192,9 @@ export function AdminScimClientTable({
           </TableCell>
           <TableCell>
             {t("pages.admin.scimClients.table.lastUsed", "Last used")}
+          </TableCell>
+          <TableCell>
+            {t("pages.admin.scimClients.table.expires", "Expires")}
           </TableCell>
           <TableCell>
             {t("pages.admin.scimClients.table.status", "Status")}

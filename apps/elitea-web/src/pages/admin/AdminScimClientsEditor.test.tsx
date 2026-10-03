@@ -23,6 +23,7 @@ import {
 } from "@/shared/api/generated/mutator";
 import { server } from "@/test/setup";
 
+import { daysUntil, expiryInstant } from "./AdminScimClientExpiry";
 import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
 import { renderAdminRoute } from "./__tests__/testRouter";
 
@@ -47,6 +48,8 @@ const CC_CLIENT = {
   status: "active" as const,
   created_at: "2026-09-02T10:00:00Z",
   last_used_at: "2026-09-03T10:00:00Z",
+  // Inside the 30-day warning window, whatever day the suite runs on.
+  expires_at: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
 };
 
 const BEARER_SECRET = "scim_fixture-not-a-real-secret-ab12";
@@ -339,5 +342,58 @@ describe("Admin › Authentication › SCIM clients", () => {
     expect(
       screen.queryByTestId("admin-scim-clients-empty"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows the days left and warns inside 30 days", async () => {
+    renderAdminRoute(<AdminScimClientsEditor />);
+    await screen.findByText("Entra production");
+
+    expect(screen.getByTestId("admin-scim-client-row-c1")).toHaveTextContent(
+      "No expiry",
+    );
+    const ccRow = screen.getByTestId("admin-scim-client-row-c2");
+    expect(
+      within(ccRow).getByTestId("admin-scim-client-expiry-warning"),
+    ).toHaveTextContent("Expires in 10 days");
+  });
+
+  it("sends an optional expiry as the end of the chosen day", async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminScimClientsEditor />);
+    await screen.findByText("Entra production");
+
+    const inYear = new Date();
+    inYear.setDate(inYear.getDate() + 365);
+    const value = `${inYear.getFullYear()}-${String(inYear.getMonth() + 1).padStart(2, "0")}-${String(inYear.getDate()).padStart(2, "0")}`;
+
+    await user.click(screen.getByTestId("admin-scim-clients-add"));
+    await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
+    const dateInput = screen.getByTestId("admin-scim-client-expires-on");
+    await user.clear(dateInput);
+    await user.type(dateInput, value);
+    await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+
+    await waitFor(() => {
+      expect(writes()).toHaveLength(1);
+    });
+    expect(writes()[0]?.body).toEqual({
+      name: "Okta",
+      auth_method: "bearer",
+      expires_at: expiryInstant(value),
+    });
+  });
+
+  it("refuses an expiry in the past", async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminScimClientsEditor />);
+    await screen.findByText("Entra production");
+
+    await user.click(screen.getByTestId("admin-scim-clients-add"));
+    await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
+    const dateInput = screen.getByTestId("admin-scim-client-expires-on");
+    await user.clear(dateInput);
+    await user.type(dateInput, "2020-01-01");
+    expect(screen.getByTestId("admin-scim-client-create-submit")).toBeDisabled();
+    expect(daysUntil("2020-01-01T00:00:00Z")).toBeLessThan(0);
   });
 });
