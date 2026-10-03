@@ -120,7 +120,15 @@ class SdkValidationOutcome:
 
 
 class SdkBudgetExceeded(Exception):
-    """Data-free marker for an exact SDK budget policy rejection."""
+    """Data-free marker for an exact SDK budget policy rejection.
+
+    It carries only the refusing scope, ``"project"`` or ``"member"`` (#6732),
+    so the chat can say whose budget ran out. The SDK message never crosses.
+    """
+
+    def __init__(self, scope: str = "project") -> None:
+        super().__init__()
+        self.scope = scope if scope in ("project", "member") else "project"
 
 
 @contextmanager
@@ -146,7 +154,7 @@ def _sdk_budget_boundary() -> Any:
         yield
     except Exception as error:
         if _is_sdk_budget_exceeded(error):
-            raise SdkBudgetExceeded() from None
+            raise SdkBudgetExceeded(_sdk_budget_scope(error)) from None
         raise
 
 
@@ -1678,6 +1686,12 @@ def _current_index_tool_name_compatibility(
         migrated.append("list_indexes")
     settings["selected_tools"] = migrated
     return result
+
+
+def _sdk_budget_scope(error: Exception) -> str:
+    """The SDK names the member ceiling ``member_budget_exceeded``; all else is the project."""
+
+    return "member" if getattr(error, "scope", None) == "member_budget_exceeded" else "project"
 
 
 def _is_sdk_budget_exceeded(error: Exception) -> bool:

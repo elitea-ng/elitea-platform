@@ -26,6 +26,35 @@ class ResourceExhausted(WorkerError):
         super().__init__("RESOURCE_EXHAUSTED", safe_message, exit_code=2)
 
 
+# The registered budget-refusal messages (#6732). Main maps each one, under
+# MODEL_BUDGET_EXHAUSTED, to the public code the chat keys its copy on
+# (PROJECT_BUDGET_EXHAUSTED / MEMBER_BUDGET_EXHAUSTED). The Rust worker and
+# testdata/proto/runtime/v1/model_failure_policies.json state the same text.
+PROJECT_BUDGET_EXHAUSTED_MESSAGE = (
+    "The shared model budget of this project is exhausted. Requests are "
+    "unavailable until the budget resets or an administrator raises the limit."
+)
+MEMBER_BUDGET_EXHAUSTED_MESSAGE = (
+    "Your budget in this project is exhausted. Requests are unavailable until "
+    "the budget resets or an administrator raises your limit."
+)
+BUDGET_EXHAUSTED_MESSAGES = frozenset(
+    {PROJECT_BUDGET_EXHAUSTED_MESSAGE, MEMBER_BUDGET_EXHAUSTED_MESSAGE}
+)
+
+
+class ModelBudgetExhausted(WorkerError):
+    """A model budget refused the call. Carries only the refusing scope."""
+
+    def __init__(self, scope: str = "project") -> None:
+        message = (
+            MEMBER_BUDGET_EXHAUSTED_MESSAGE
+            if scope == "member"
+            else PROJECT_BUDGET_EXHAUSTED_MESSAGE
+        )
+        super().__init__("MODEL_BUDGET_EXHAUSTED", message, exit_code=2)
+
+
 class UnsupportedCapability(WorkerError):
     def __init__(self, safe_message: str = "The requested capability is not supported.") -> None:
         super().__init__("UNSUPPORTED_CAPABILITY", safe_message, exit_code=3)

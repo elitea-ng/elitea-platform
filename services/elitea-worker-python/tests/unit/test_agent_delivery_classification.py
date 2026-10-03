@@ -76,7 +76,7 @@ def test_agent_execution_classifies_a_budget_rejection_before_any_fault() -> Non
     assert budget_at < mcp_at < internal_at, (
         "a budget rejection must be answered before the dependency and internal arms"
     )
-    assert "raise ResourceExhausted() from None" in source
+    assert "raise ModelBudgetExhausted(error.scope) from None" in source
 
 
 def test_the_agent_terminal_binds_the_attachment_write_back_from_the_adapter() -> None:

@@ -550,6 +550,11 @@ impl Llm for EliteaOpenAiCompatibleModel {
                     "the model gateway transport is unavailable",
                 )
             })?;
+            if response.status() == StatusCode::PAYMENT_REQUIRED
+                && response.version() == Version::HTTP_2
+            {
+                return Err(budget_refusal(response, self.config.response_header_timeout).await);
+            }
             validate_response_head(&response)?;
             Ok(model_response_stream(
                 response,
@@ -1153,6 +1158,62 @@ fn build_http_request(
     authorization.set_sensitive(true);
     headers.insert(AUTHORIZATION, authorization);
     Ok(request)
+}
+
+/// The most of a 402 body the worker reads to learn the refusing budget.
+const MAX_BUDGET_REFUSAL_BYTES: usize = 4096;
+
+/// Classify a 402 budget refusal by the scope the gateway names (#6732).
+///
+/// The gateway writes `{"error":{"type":"budget_exceeded","code":...}}`, with
+/// `member_budget_exceeded` for the member ceiling and any other code for the
+/// project ceiling (`budget_gate.go`). Only the scope leaves this function; the
+/// body itself is never logged or forwarded. A body that cannot be read in time
+/// or does not have that shape keeps the unscoped refusal.
+async fn budget_refusal(response: Response<Body>, read_timeout: Duration) -> AdkError {
+    let body = http_body_util::Limited::new(response.into_body(), MAX_BUDGET_REFUSAL_BYTES);
+    let bytes = match timeout(read_timeout, body.collect()).await {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        _ => Bytes::new(),
+    };
+    budget_refusal_error(&bytes)
+}
+
+pub(super) fn budget_refusal_error(body: &[u8]) -> AdkError {
+    match budget_refusal_scope(body) {
+        Some(BudgetRefusalScope::Member) => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.member_budget_exhausted",
+            "the member model budget is exhausted",
+        ),
+        Some(BudgetRefusalScope::Project) => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.project_budget_exhausted",
+            "the project model budget is exhausted",
+        ),
+        None => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.budget_exhausted",
+            "the model budget is exhausted",
+        ),
+    }
+}
+
+enum BudgetRefusalScope {
+    Project,
+    Member,
+}
+
+fn budget_refusal_scope(body: &[u8]) -> Option<BudgetRefusalScope> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    if error.get("type")?.as_str()? != "budget_exceeded" {
+        return None;
+    }
+    match error.get("code").and_then(serde_json::Value::as_str) {
+        Some("member_budget_exceeded") => Some(BudgetRefusalScope::Member),
+        _ => Some(BudgetRefusalScope::Project),
+    }
 }
 
 pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), AdkError> {
