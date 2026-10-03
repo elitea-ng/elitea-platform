@@ -9,6 +9,7 @@ import { test, expect } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 import { createAgent, deleteAgent, DEFAULT_PROJECT_ID, AUTOTEST_PREFIX } from '../../fixtures/api';
+import { DEFAULT_PROJECT_NAME, switcherNameFor } from '../../fixtures/project';
 
 /**
  * A deep link that renders the route error boundary is the failure mode
@@ -136,7 +137,7 @@ j6Test('J6: share link with project id switches project and reloads', async ({ p
     // project by `auth.setup.ts`, so what is really under test is that
     // ROUTE-070's reload did not LOSE it.
     await expect(page.getByRole('button', { name: /Project:/ })).toHaveAccessibleName(
-      /Project:\s*Default Project/,
+      switcherNameFor(DEFAULT_PROJECT_NAME),
       { timeout: 20_000 },
     );
 

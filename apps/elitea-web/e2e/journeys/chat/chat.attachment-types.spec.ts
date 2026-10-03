@@ -35,6 +35,7 @@ import type { Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent } from '../../fixtures/deployment';
 
 interface ServedTypes {
   readonly document_types?: Record<string, string>;
@@ -74,6 +75,12 @@ async function openPicker(page: Page) {
 }
 
 test.describe('composer attachments: the served type gate', () => {
+  // The served types ARE `index_types`; a deployment that leaves
+  // ELITEA_INDEX_TYPES_ENABLED off serves none (404) — skipped there only.
+  test.beforeEach(async ({ request }) => {
+    await skipWhenIndexTypesAbsent(request);
+  });
+
   /* ── ATT1 ────────────────────────────────────────────────────────────────
    * onetest: ELITEA-0484, ELITEA-0486, ELITEA-0487 — a SQL file and a shell
    * script (both in the served `code_types`) attach alongside a document and

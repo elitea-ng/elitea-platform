@@ -67,7 +67,9 @@ import {
   deleteConversation,
   readCallerPersonalProjectId,
   readVersion,
+  resolveCatalogueProjectId,
 } from '../../fixtures/api';
+import { skipWhenDeploymentLacks } from '../../fixtures/deployment';
 import { STORAGE_STATE } from '../../../playwright.config';
 
 test.use({ storageState: STORAGE_STATE.admin });
@@ -225,11 +227,32 @@ async function ownProjectId(request: APIRequestContext): Promise<string> {
   return id;
 }
 
+/**
+ * The accepting side needs an agent that LIVES in the public project, and the
+ * only project these personas may author in is `DEFAULT_PROJECT_ID`. On the rig
+ * the two are the same project (`ELITEA_AI_PROJECT_ID` defaults to 1). On a
+ * deployed instance they are not — its public project holds real data and the
+ * personas are not even members — so the accepting cases cannot be staged
+ * there without writing into it, and are skipped rather than run against an
+ * agent the rule correctly refuses. On the rig a mismatch is NOT skipped: the
+ * cases run and fail on the refusal, which is the honest report of a rig whose
+ * public project moved.
+ */
+async function requirePersonaProjectIsPublic(request: APIRequestContext): Promise<void> {
+  const catalogueProjectId = await resolveCatalogueProjectId(request);
+  skipWhenDeploymentLacks(
+    catalogueProjectId !== DEFAULT_PROJECT_ID,
+    `the public project (${catalogueProjectId}) is not the project the personas author in ` +
+      `(${DEFAULT_PROJECT_ID}), so no agent can be staged in it`,
+  );
+}
+
 /* ── the accepting side: an agent in the public project ───────────────────── */
 
 test('a model override is accepted for an agent in the public project and echoed back', async ({
   request,
 }) => {
+  await requirePersonaProjectIsPublic(request);
   const fixture = await seedAgentParticipant(request, 'ovaccept', DEFAULT_PROJECT_ID);
   try {
     const override = {
@@ -282,6 +305,7 @@ test('a model override is accepted for an agent in the public project and echoed
 test('a second override fully replaces the first, and omitting the key clears it', async ({
   request,
 }) => {
+  await requirePersonaProjectIsPublic(request);
   const fixture = await seedAgentParticipant(request, 'ovreplace', DEFAULT_PROJECT_ID);
   const url = entitySettingsURL(fixture.projectId, fixture.conversationId, fixture.participantId);
   try {
@@ -355,6 +379,7 @@ test('a second override fully replaces the first, and omitting the key clears it
 test('an override stays applied through later writes to another participant', async ({
   request,
 }) => {
+  await requirePersonaProjectIsPublic(request);
   const fixture = await seedAgentParticipant(request, 'ovpersist', DEFAULT_PROJECT_ID);
   const secondName = autotestName('ovpersist2');
   const second = await createAgentWithVersion(
@@ -607,6 +632,7 @@ test('switching version resends the version’s own settings and is not refused'
 test('a conversation elsewhere may write settings for a catalogue participant, not a stranger’s', async ({
   request,
 }) => {
+  await requirePersonaProjectIsPublic(request);
   const ownProject = await ownProjectId(request);
   expect(
     ownProject,

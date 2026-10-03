@@ -46,6 +46,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent } from '../../fixtures/deployment';
 import { BASE_URL } from '../../../playwright.config';
 
 const INDEX_META_RE = /\/elitea_core\/index_meta\/prompt_lib\//;
@@ -196,6 +197,12 @@ test.afterAll(async ({ browser }) => {
     await page.request.delete(`${API_BASE}/elitea_core/tool/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`).catch(() => undefined);
   }
   await context.close();
+});
+
+/* A deployed instance with ELITEA_INDEX_TYPES_ENABLED off has nothing to index:
+ * skipped there, never on the rig (`fixtures/deployment.ts`). */
+test.beforeEach(async ({ request }) => {
+  await skipWhenIndexTypesAbsent(request);
 });
 
 /* elitea_issues: #6229 — Improve Indexing and Reindexing Summaries in Toolkit and Index History: a categorised, source-appropriate summary (indexed/skipped/unsupported) instead of a raw chunk-count JSON blob. */

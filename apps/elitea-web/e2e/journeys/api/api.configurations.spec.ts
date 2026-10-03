@@ -62,6 +62,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { skipWhenProjectOwnModelsDisallowed } from '../../fixtures/deployment';
 import {
   configurationBody,
   createConfiguration,
@@ -546,6 +547,11 @@ test('deleting an embedding model a toolkit depends on makes that toolkit fail v
   };
   let toolkitId = '';
   try {
+    // Project-own models are a deployment choice: with
+    // ELITEA_ALLOW_PROJECT_OWN_LLMS=false the model above is stored but never
+    // admitted, so no toolkit may name it. Skipped there (inside the try, so the
+    // rows are still removed), never on the rig.
+    await skipWhenProjectOwnModelsDisallowed(request, embedding.modelName);
     const created = await request.post(TOOLKITS, {
       data: { name: autotestName('tk_dep'), type: 'github', settings },
     });

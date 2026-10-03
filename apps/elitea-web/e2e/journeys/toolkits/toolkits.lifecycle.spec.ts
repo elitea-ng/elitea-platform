@@ -54,6 +54,7 @@ import {
   DEFAULT_PROJECT_ID,
   gotoAppRoute,
 } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent, skipWhenToolkitDiscoveryAbsent } from '../../fixtures/deployment';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
 /** Unique to THIS file so concurrent journeys never collide on a name. */
@@ -314,6 +315,7 @@ test('J17.5: a toolkit whose type supports indexing renders the real Indexes pan
    * of a broken scan (webkit, retried green).
    */
   test.setTimeout(90_000);
+  await skipWhenIndexTypesAbsent(page.request);
 
   // ── Derive the type from the live catalogue rather than trusting a literal.
   const schemasResp = await page.request.get(
@@ -467,6 +469,11 @@ test('J17.7: a failed tool-catalogue read shows an error with a retry, not an em
   expect(created.status(), await created.text()).toBe(201);
   const { id } = (await created.json()) as { id: string };
   createdIds.push(id);
+
+  // The retry below needs the REAL catalogue read to succeed. A deployment that
+  // leaves runtime discovery off answers it 503, so the error correctly stays
+  // after Retry — skipped there, never on the rig.
+  await skipWhenToolkitDiscoveryAbsent(page.request, id);
 
   // The server answers this route with an error for a lost read (#381). The
   // route is failed at the network layer here because a healthy stack cannot

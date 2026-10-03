@@ -50,6 +50,7 @@ import type { Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent } from '../../fixtures/deployment';
 import { BASE_URL } from '../../../playwright.config';
 
 /** The rail's own list request — the one `useIndexesListQuery` issues. */
@@ -124,6 +125,7 @@ test.afterAll(async ({ browser }) => {
 /* ── §1. THE CONTROL ─────────────────────────────────────────────────────── */
 
 test('the working tab still works: a healthy read shows the empty state, not an error', async ({ page }) => {
+  await skipWhenIndexTypesAbsent(page.request);
   const toolkit = await createIndexCapableToolkit(page);
   const panel = await openIndexesTab(page, toolkit.id);
 
@@ -142,6 +144,7 @@ test('the working tab still works: a healthy read shows the empty state, not an 
 /* ── §2. THE MEASURED FAILED READ ────────────────────────────────────────── */
 
 test('a failed index_meta read names the prerequisite instead of claiming the project is empty', async ({ page }) => {
+  await skipWhenIndexTypesAbsent(page.request);
   const toolkit = await createIndexCapableToolkit(page);
 
   // The exact response the parity walk recorded, injected on the rail's own

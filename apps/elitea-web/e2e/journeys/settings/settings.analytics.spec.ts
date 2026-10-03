@@ -32,6 +32,7 @@ import type { Page, Locator } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { DEFAULT_PROJECT_NAME } from '../../fixtures/project';
 
 /** `GET /elitea_core/analytics/prompt_lib/{projectID}` — the Overview/Health fetch. */
 const USAGE_RE = /\/api\/v2\/elitea_core\/analytics\/prompt_lib\/\d+(\?|$)/;
@@ -149,7 +150,7 @@ test('J24: settings: analytics renders the live backend\'s own usage figures', a
   // slow case. Headroom for a slow boot, NOT a correctness race: which NAME
   // gets stored is no longer order-dependent (issue #161 — AppShell and
   // ProjectSwitcher both resolve it from the project list now).
-  await expect(page.getByText('Project: Default Project', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(`Project: ${DEFAULT_PROJECT_NAME}`, { exact: true })).toBeVisible({ timeout: 15_000 });
   for (const preset of ['Last 24h', 'Last 7d', 'Last 30d', 'Last 90d']) {
     await expect(page.getByRole('button', { name: preset, exact: true })).toBeVisible();
   }
@@ -488,7 +489,7 @@ test('J24c: a failing analytics load shows the error state instead of empty char
 
   // The rest of the screen is still alive — the failure is scoped to the tab body.
   await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toBeVisible();
-  await expect(page.getByText('Project: Default Project', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(`Project: ${DEFAULT_PROJECT_NAME}`, { exact: true })).toBeVisible({ timeout: 15_000 });
 
   await checkA11y(page);
 });
