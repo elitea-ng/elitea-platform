@@ -272,8 +272,8 @@ func removeProjectModel(ctx context.Context, p *Provisioner, state *provisionSta
 	}
 
 	// The project-owned rows that no foreign key ties to the project (C1).
-	// Nothing blocks the delete on them, so the project row went and they
-	// stayed behind as orphans, and a reused id would adopt them.
+	// Nothing blocked the delete on them, so the project row went and they
+	// stayed behind as orphans. See projectOwnedDeletes for what stays.
 	for _, cleanup := range projectOwnedDeletes() {
 		var present bool
 		if err := transaction.QueryRow(ctx,
@@ -393,21 +393,27 @@ DELETE FROM elitea_runtime.index_generation_counters WHERE resource_project_id =
 // carry no foreign key to centry.project (C1, found during the 2026-10
 // regression cleanup). Each statement takes the project id as $1.
 //
-// The artifact bucket rows go here, live and soft-deleted alike; the delete
-// cascades to their object rows and transfer grants. The physical objects are
-// purged before this, by the artifact_buckets step (TeardownProjectBuckets),
-// which runs earlier in the reverse walk. That purge is best-effort: a bucket
-// whose purge failed still loses its row here, because a row for a project
-// that no longer exists is not a usable handle on those bytes either, and a
-// reused project id would inherit it.
+// The artifact bucket rows go here only when they are soft-deleted; the
+// delete cascades to their object rows and transfer grants. The physical
+// objects are purged before this, by the artifact_buckets step
+// (TeardownProjectBuckets), which runs earlier in the reverse walk and
+// soft-deletes a bucket only after its purge succeeded. A LIVE row is a bucket
+// whose purge failed or never ran (no object store is configured). That row is
+// the only handle on the bytes under p/<id>/<bucket>/, so it stays: Deprovision
+// then reports ErrArtifactsNotRemoved, and another delete of the same id
+// retries the purge.
 //
-// Request logs, usage events and audit events are deliberately NOT here. They
-// are the history of what the project spent and did, and they outlive it.
+// Request logs, usage events, audit events and the budget accumulators
+// (gateway.llm_budget_accumulators) are deliberately NOT here. They are the
+// history of what the project spent and did, and they outlive it. The
+// accumulators are the one money source of /analytics_costs and the budgets
+// API. A delete of them would also not hold: the scheduler's budget write-back
+// re-creates the row for any delta that was in flight at delete time.
 func projectOwnedDeletes() []referencingDelete {
 	return []referencingDelete{
 		{
 			table:     "elitea_storage.buckets",
-			statement: `DELETE FROM elitea_storage.buckets WHERE project_id = $1`,
+			statement: `DELETE FROM elitea_storage.buckets WHERE project_id = $1 AND deleted_at IS NOT NULL`,
 		},
 		{
 			table:     "elitea_storage.bucket_permissions",
@@ -429,10 +435,6 @@ func projectOwnedDeletes() []referencingDelete {
 		{
 			table:     "centry.social_pins",
 			statement: `DELETE FROM centry.social_pins WHERE project_id = $1`,
-		},
-		{
-			table:     "gateway.llm_budget_accumulators",
-			statement: `DELETE FROM gateway.llm_budget_accumulators WHERE project_id = $1`,
 		},
 		{
 			table:     "elitea_runtime.tool_call_records",
@@ -799,13 +801,51 @@ func createArtifactBuckets(ctx context.Context, p *Provisioner, state *provision
 }
 
 func removeArtifactBuckets(ctx context.Context, p *Provisioner, state *provisionState) error {
-	if p.buckets == nil || state.projectID == 0 {
+	if state.projectID == 0 {
+		return nil
+	}
+	if p.buckets == nil {
+		// No object store is configured, so nothing can purge the bytes. A
+		// project with no live bucket has nothing to purge. A project WITH one
+		// must not report this step as done: its bytes stay in storage.
+		live, err := p.liveBucketCount(ctx, state.projectID)
+		if err != nil {
+			return err
+		}
+		if live > 0 {
+			return fmt.Errorf("teardown project buckets: %d live bucket(s) and no object store to purge them", live)
+		}
 		return nil
 	}
 	if err := p.buckets.TeardownProjectBuckets(ctx, state.projectIDString()); err != nil {
 		return fmt.Errorf("teardown project buckets: %w", err)
 	}
 	return nil
+}
+
+// liveBucketCount counts the project's artifact buckets that are not
+// soft-deleted. A deployment without the storage schema has none.
+func (p *Provisioner) liveBucketCount(ctx context.Context, projectID int64) (int, error) {
+	if p.pool == nil {
+		return 0, nil
+	}
+	var present bool
+	if err := p.pool.QueryRow(ctx,
+		`SELECT to_regclass('elitea_storage.buckets') IS NOT NULL`,
+	).Scan(&present); err != nil {
+		return 0, fmt.Errorf("resolve elitea_storage.buckets: %w", err)
+	}
+	if !present {
+		return 0, nil
+	}
+	var live int
+	if err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM elitea_storage.buckets WHERE project_id = $1 AND deleted_at IS NULL`,
+		projectID,
+	).Scan(&live); err != nil {
+		return 0, fmt.Errorf("count live buckets: %w", err)
+	}
+	return live, nil
 }
 
 /* ── project_pgvector ──────────────────────────────────────────────────── */

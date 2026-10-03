@@ -32,6 +32,16 @@ var ErrProjectNotRemoved = errors.New("projectprovisioning: project was not remo
 // avoid. Another delete of the same id clears it.
 var ErrTenantSchemaNotRemoved = errors.New("projectprovisioning: tenant schema was not removed")
 
+// ErrArtifactsNotRemoved reports a delete that removed the project and left
+// live artifact buckets behind: their object purge failed, or no object store
+// is configured to run it.
+//
+// The bucket rows are kept on purpose. They are the only handle on the bytes
+// under p/<id>/, and a project id is never reused, so nothing else could find
+// those bytes again. Another delete of the same id retries the purge. The
+// route answers 500 with the per-step detail, so an operator sees the leak.
+var ErrArtifactsNotRemoved = errors.New("projectprovisioning: artifact buckets were not purged")
+
 // Deprovision removes a project and everything provisioning created for it.
 //
 // TWO DELIBERATE DEVIATIONS from the reference:
@@ -76,11 +86,13 @@ func (p *Provisioner) Deprovision(ctx context.Context, projectID int64) (Result,
 		return Result{}, errors.New("projectprovisioning: provisioner is not configured")
 	}
 
-	// A project is present when its row is there OR when its schema is there.
-	// The row alone would make the delete of a leftover schema impossible: a
-	// delete that removed the row and could not drop the schema would answer
-	// "not found" on every retry, and the schema would stay for ever. Neither
-	// half present is a real not-found.
+	// A project is present when its row is there OR when its schema is there
+	// OR when it still has a live artifact bucket. The row alone would make
+	// the delete of a leftover schema impossible: a delete that removed the
+	// row and could not drop the schema would answer "not found" on every
+	// retry, and the schema would stay for ever. A live bucket is the same
+	// residue for the bytes in object storage (ErrArtifactsNotRemoved).
+	// Nothing present is a real not-found.
 	state := &provisionState{projectID: projectID}
 	var exists bool
 	if err := p.pool.QueryRow(ctx, `
@@ -89,6 +101,13 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1)
 		projectID, state.tenantSchema(),
 	).Scan(&exists); err != nil {
 		return Result{}, fmt.Errorf("projectprovisioning: resolve project %d: %w", projectID, err)
+	}
+	if !exists {
+		live, err := p.liveBucketCount(ctx, projectID)
+		if err != nil {
+			return Result{}, fmt.Errorf("projectprovisioning: resolve project %d: %w", projectID, err)
+		}
+		exists = live > 0
 	}
 	if !exists {
 		return Result{}, ErrProjectNotFound
@@ -136,6 +155,15 @@ SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1),
 	}
 	if schemaSurvived {
 		return result, ErrTenantSchemaNotRemoved
+	}
+	live, err := p.liveBucketCount(ctx, projectID)
+	if err != nil {
+		return result, fmt.Errorf("projectprovisioning: verify project %d removal: %w", projectID, err)
+	}
+	if live > 0 {
+		p.logger.ErrorContext(ctx, "project deleted with artifact buckets left to purge",
+			"project_id", projectID, "live_buckets", live, "prefix", fmt.Sprintf("p/%d/", projectID))
+		return result, ErrArtifactsNotRemoved
 	}
 	return result, nil
 }
