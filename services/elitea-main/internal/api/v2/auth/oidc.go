@@ -470,7 +470,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, err := h.provisionUser(ctx, claims.Sub, claims.Email, claims.Name,
-		claims.EmailVerified, runtime.requireEmailVerified)
+		claims.EmailVerified, runtime.requireEmailVerified, runtime.adoptSCIMUsers)
 	if err != nil {
 		if errors.Is(err, errUserSuspended) {
 			slog.Warn("OIDC: suspended user attempted login", "email", claims.Email)
@@ -544,6 +544,20 @@ func oidcRequiresVerifiedEmail() bool {
 	return strings.EqualFold(os.Getenv("OIDC_REQUIRE_EMAIL_VERIFIED"), "true")
 }
 
+// oidcAdoptsSCIMUsers reports whether the ENVIRONMENT-configured OIDC provider
+// may adopt a SCIM-provisioned account on a first login.
+//
+// The default is OFF. A provider authored on the admin Authentication page
+// carries its own `adopt_scim_users`; this variable stands in for it only on the
+// environment fallback, which has no document. See
+// identityproviders.SAMLDocument.AdoptSCIMUsers for why the default refuses.
+//
+// A LITERAL name, for the same env-drift-check.sh reason as above.
+// deploy/helm/elitea/values.yaml carries the matching knob.
+func oidcAdoptsSCIMUsers() bool {
+	return strings.EqualFold(os.Getenv("OIDC_ADOPT_SCIM_USERS"), "true")
+}
+
 // verifiedEmailClaim answers the address that an `email:` entry of
 // `initial_global_admins` may be compared against, and "" when there is none.
 //
@@ -594,6 +608,7 @@ func (h *OIDCHandler) provisionUser(
 	sub, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
+	adoptSCIMUsers bool,
 ) (string, error) {
 	providerRef := OIDCProviderRefPrefix + sub
 
@@ -603,7 +618,8 @@ func (h *OIDCHandler) provisionUser(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	userID, err := resolveProvisionedUser(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail)
+	userID, err := resolveProvisionedUserFor(
+		ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
 	if err != nil {
 		return "", err
 	}
@@ -634,12 +650,28 @@ func (h *OIDCHandler) WithFirstLoginPolicy(policy FirstLoginPolicy) *OIDCHandler
 // resolveProvisionedUser is provisionUser inside one transaction. The split
 // lets a test assert the resolution ORDER without a database. The subject
 // lookup must come first. The email fallback must run only after it misses.
+//
+// It is resolveProvisionedUserFor with adoptSCIMUsers OFF, the safe default: a
+// SCIM-provisioned account is not adopted.
 func resolveProvisionedUser(
 	ctx context.Context,
 	tx pgx.Tx,
 	providerRef, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
+) (int, error) {
+	return resolveProvisionedUserFor(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, false)
+}
+
+// resolveProvisionedUserFor is resolveProvisionedUser for a provider whose
+// `adopt_scim_users` setting is known. See joinAccountByEmail.
+func resolveProvisionedUserFor(
+	ctx context.Context,
+	tx pgx.Tx,
+	providerRef, email, name string,
+	emailVerified *bool,
+	requireVerifiedEmail bool,
+	adoptSCIMUsers bool,
 ) (int, error) {
 	// Applied here as well as at each handler, so no caller of the resolution
 	// can compare an address in a spelling the directory does not store.
@@ -660,7 +692,7 @@ func resolveProvisionedUser(
 	if linked {
 		return userID, nil
 	}
-	return joinAccountByEmail(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail)
+	return joinAccountByEmail(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
 }
 
 // reuseLinkedAccount returns the account this provider subject already owns.
@@ -759,12 +791,23 @@ func federatedRefPatterns() []string {
 // providers; letting an assertion from one adopt an account the other owns makes
 // either one able to take over the other's accounts by asserting an address.
 // The operator resolves it, which is what the 409 says.
+//
+// A SCIM-PROVISIONED ACCOUNT IS ADOPTED ONLY BY A PROVIDER THAT SAYS SO. An
+// account with an `elitea_auth.scim_users` record and no federated link was
+// created (or is managed) by the directory, and its address is the directory's
+// statement about a person. Any configured provider asserting that address — a
+// GitHub connector behind Dex, a social login, a SAML IdP that verifies
+// nothing about the address — would otherwise take the account. So the
+// adoption runs only when the asserting provider has `adopt_scim_users`
+// (adoptSCIMUsers here; OIDC_ADOPT_SCIM_USERS for the environment-configured
+// provider). Otherwise the login is refused with the same conflict.
 func joinAccountByEmail(
 	ctx context.Context,
 	tx pgx.Tx,
 	providerRef, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
+	adoptSCIMUsers bool,
 ) (int, error) {
 	if requireVerifiedEmail && (emailVerified == nil || !*emailVerified) {
 		return 0, errEmailNotVerified
@@ -793,8 +836,12 @@ func joinAccountByEmail(
 		       WHERE bound.user_id = auth_core__user.id
 		         AND bound.provider_ref LIKE ANY ($3)
 		   )
+		   AND ($4::boolean OR NOT EXISTS (
+		       SELECT 1 FROM elitea_auth.scim_users AS scim
+		       WHERE scim.user_id = auth_core__user.id
+		   ))
 		 RETURNING id`,
-		email, name, federatedRefPatterns(),
+		email, name, federatedRefPatterns(), adoptSCIMUsers,
 	).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The address matched a row the conflict clause refused. Read which of

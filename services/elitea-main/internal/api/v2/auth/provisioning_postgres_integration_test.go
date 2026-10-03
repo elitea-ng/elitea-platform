@@ -226,5 +226,99 @@ func newProvisioningPool(t *testing.T) *pgxpool.Pool {
 		)`)
 	require.NoError(t, err)
 
+	// The SCIM side table the adoption guard reads, from the migration's own
+	// file rather than a copy of it.
+	migration, err := os.ReadFile("../../../../migrations/shared/0096_scim_provisioning.sql")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(migration))
+	require.NoError(t, err)
+
 	return pool
+}
+
+/* ── M5: a SCIM-provisioned account is adopted only by a paired provider ── */
+
+// seedSCIMAccount is an account a SCIM client provisioned: an address, a SCIM
+// record, and no federated link.
+func seedSCIMAccount(t *testing.T, pool *pgxpool.Pool, email string) int {
+	t.Helper()
+	ctx := context.Background()
+	var id int
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO auth_core__user (email, name) VALUES ($1, 'Provisioned') RETURNING id`, email,
+	).Scan(&id))
+	_, err := pool.Exec(ctx,
+		`INSERT INTO elitea_auth.scim_users (user_id, external_id) VALUES ($1, 'entra-object-id')`, id)
+	require.NoError(t, err)
+	return id
+}
+
+func resolveOnceFor(t *testing.T, pool *pgxpool.Pool, providerRef, email string, adoptSCIMUsers bool) (int, error) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	userID, err := resolveProvisionedUserFor(ctx, tx, providerRef, email, "Alice", nil, false, adoptSCIMUsers)
+	if err != nil {
+		return 0, err
+	}
+	return userID, tx.Commit(ctx)
+}
+
+// A provider NOT paired with SCIM — a GitHub connector behind Dex, any OIDC or
+// SAML provider without `adopt_scim_users` — asserting a directory-provisioned
+// address is refused, and nothing is linked.
+func TestAnUnpairedProviderCannotAdoptASCIMProvisionedAccount(t *testing.T) {
+	pool := newProvisioningPool(t)
+	provisioned := seedSCIMAccount(t, pool, "alice@corp.com")
+
+	_, err := resolveOnceFor(t, pool, OIDCProviderRefPrefix+"github|mallory", "alice@corp.com", false)
+	require.ErrorIs(t, err, errIdentityConflict)
+	// The default resolution (no provider setting known) refuses too.
+	_, err = resolveOnce(t, pool, SAMLProviderRefPrefix+"some-nameid", "Alice@Corp.com")
+	require.ErrorIs(t, err, errIdentityConflict)
+
+	var links int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM auth_core__user_provider WHERE user_id = $1`, provisioned).Scan(&links))
+	require.Zero(t, links)
+}
+
+// The provider PAIRED with the SCIM client (Entra ID's SAML app, with
+// `adopt_scim_users` on) adopts the provisioned account on its first login, and
+// the next login resolves by subject.
+func TestThePairedProviderAdoptsTheSCIMProvisionedAccount(t *testing.T) {
+	pool := newProvisioningPool(t)
+	provisioned := seedSCIMAccount(t, pool, "alice@corp.com")
+
+	adopted, err := resolveOnceFor(t, pool, SAMLProviderRefPrefix+"entra-nameid", "Alice@Corp.com", true)
+	require.NoError(t, err)
+	require.Equal(t, provisioned, adopted)
+
+	again, err := resolveOnce(t, pool, SAMLProviderRefPrefix+"entra-nameid", "alice@corp.com")
+	require.NoError(t, err)
+	require.Equal(t, provisioned, again)
+
+	// Once linked, a DIFFERENT provider is refused even with the setting on:
+	// the federated-link guard still applies.
+	_, err = resolveOnceFor(t, pool, OIDCProviderRefPrefix+"other-sub", "alice@corp.com", true)
+	require.ErrorIs(t, err, errIdentityConflict)
+}
+
+// An account with no SCIM record keeps the old rule: adoptable whatever the
+// setting says, so turning SCIM on does not lock out existing users.
+func TestAnAccountWithoutASCIMRecordIsStillAdoptedWithTheSettingOff(t *testing.T) {
+	pool := newProvisioningPool(t)
+	ctx := context.Background()
+
+	var existing int
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO auth_core__user (email, name) VALUES ('erin@corp.com', 'Erin') RETURNING id`,
+	).Scan(&existing))
+
+	adopted, err := resolveOnceFor(t, pool, OIDCProviderRefPrefix+"erin-sub", "erin@corp.com", false)
+	require.NoError(t, err)
+	require.Equal(t, existing, adopted)
 }

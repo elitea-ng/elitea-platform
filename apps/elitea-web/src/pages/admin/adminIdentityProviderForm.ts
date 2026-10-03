@@ -54,6 +54,12 @@ export interface IdentityProviderForm {
    * Shared by both protocols, because both documents carry the same list.
    */
   readonly loginDomains: string;
+  /**
+   * `adopt_scim_users`: whether this provider's first sign-in may adopt an
+   * account a SCIM client provisioned. Shared by both protocols. Off by
+   * default — see `internal/identityproviders/provider.go`.
+   */
+  readonly adoptScimUsers: boolean;
 
   readonly issuer: string;
   readonly clientId: string;
@@ -97,6 +103,7 @@ const EMPTY_FORM: IdentityProviderForm = {
   secret: '',
   clearSecret: false,
   loginDomains: '',
+  adoptScimUsers: false,
 
   issuer: '',
   clientId: '',
@@ -135,6 +142,7 @@ export function initialProviderForm(
     displayName: editing.display_name,
     enabled: editing.enabled,
     loginDomains: (editing.oidc?.login_domains ?? editing.saml?.login_domains ?? []).join(', '),
+    adoptScimUsers: editing.oidc?.adopt_scim_users ?? editing.saml?.adopt_scim_users ?? false,
     ...oidcFormFields(editing.oidc),
     ...samlFormFields(editing.saml),
   };
@@ -261,6 +269,7 @@ export function providerDraft(
         scopes: form.scopes.split(/\s+/).filter((scope) => scope !== ''),
         require_email_verified: form.requireEmailVerified,
         login_domains: splitLoginDomains(form.loginDomains),
+        adopt_scim_users: form.adoptScimUsers,
       },
     };
   }
@@ -285,6 +294,7 @@ export function providerDraft(
       sp_certificate: form.spCertificate.trim(),
       clock_skew_seconds: skew === '' ? 0 : Number(skew),
       login_domains: splitLoginDomains(form.loginDomains),
+      adopt_scim_users: form.adoptScimUsers,
     },
   };
 }

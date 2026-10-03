@@ -35,6 +35,7 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import FormHelperText from '@mui/material/FormHelperText';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 
@@ -319,6 +320,28 @@ export function AdminIdentityProviderDialog({
           )}
           slotProps={{ htmlInput: { 'data-testid': 'identity-provider-login-domains' } }}
         />
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={form.adoptScimUsers}
+              onChange={(event) => {
+                update('adoptScimUsers', event.target.checked);
+              }}
+              slotProps={{ input: { 'aria-describedby': 'identity-provider-adopt-scim-help' } }}
+            />
+          }
+          label={t(
+            'pages.admin.identityProviders.dialog.adoptScimUsers',
+            'Users provisioned by SCIM may sign in through this provider',
+          )}
+        />
+        <FormHelperText id="identity-provider-adopt-scim-help">
+          {t(
+            'pages.admin.identityProviders.dialog.adoptScimUsersHelp',
+            'Turn this on only for the provider paired with your SCIM client (for example Entra ID). When it is off, a first sign-in through this provider cannot take over an account SCIM created.',
+          )}
+        </FormHelperText>
 
         {form.kind === 'oidc' ? (
           <OidcFields form={form} update={update} />

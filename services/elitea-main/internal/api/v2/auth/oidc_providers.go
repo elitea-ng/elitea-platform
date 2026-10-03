@@ -95,6 +95,11 @@ type oidcRuntime struct {
 	// see Callback.
 	requireEmailVerified bool
 
+	// adoptSCIMUsers lets a first login adopt a SCIM-provisioned account. See
+	// identityproviders.SAMLDocument.AdoptSCIMUsers; the environment fallback
+	// reads OIDC_ADOPT_SCIM_USERS.
+	adoptSCIMUsers bool
+
 	// origin names where this runtime came from, for the log line only. An
 	// operator debugging a login needs to know whether the deployment used the
 	// row they just saved or the environment it fell back to.
@@ -219,6 +224,7 @@ func (h *OIDCHandler) buildRuntime(
 		},
 		verifier:             discovered.Verifier(&oidc.Config{ClientID: document.ClientID}),
 		requireEmailVerified: document.RequireEmailVerified,
+		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
 	}, nil
 }
@@ -243,6 +249,7 @@ func newOIDCRuntimeFromEnvironment(ctx context.Context, cfg *OIDCConfig) (*oidcR
 		},
 		verifier:             provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
 		requireEmailVerified: oidcRequiresVerifiedEmail(),
+		adoptSCIMUsers:       oidcAdoptsSCIMUsers(),
 		origin:               "environment",
 	}, nil
 }

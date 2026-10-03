@@ -351,7 +351,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := h.provisionUser(r.Context(), assertion.NameID, email, name)
+	userID, err := h.provisionUser(r.Context(), assertion.NameID, email, name, runtime.document.AdoptSCIMUsers)
 	if err != nil {
 		h.writeProvisioningFailure(w, err, email)
 		return
@@ -612,7 +612,12 @@ func samlAttribute(assertion *saml2.AssertionInfo, authored string, fallbacks []
 // address already. If a future SAML document gains an explicit operator flag
 // that marks its address attribute trusted, this is the ONE call site that
 // reads it.
-func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name string) (string, error) {
+//
+// `adoptSCIMUsers` is the provider's `adopt_scim_users`: whether this first
+// login may adopt a SCIM-provisioned account. See joinAccountByEmail.
+func (h *SAMLHandler) provisionUser(
+	ctx context.Context, nameID, email, name string, adoptSCIMUsers bool,
+) (string, error) {
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return "", err
@@ -620,7 +625,7 @@ func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name str
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	providerRef := SAMLProviderRefPrefix + nameID
-	userID, err := resolveProvisionedUser(ctx, tx, providerRef, email, name, nil, false)
+	userID, err := resolveProvisionedUserFor(ctx, tx, providerRef, email, name, nil, false, adoptSCIMUsers)
 	if err != nil {
 		return "", err
 	}
