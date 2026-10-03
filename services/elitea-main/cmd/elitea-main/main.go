@@ -1638,14 +1638,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			publicRoutes.ExecutionEvents,
 			principalValidator,
 			forwardedIdentityVerifier,
-			// The browser's only credential for the events stream: an
-			// EventSource sends a cookie and nothing else (#93). The GROUP's
-			// own credential set is handed over whole, so a session is
-			// accepted here on exactly the terms it is accepted everywhere
-			// else — including the server-side session store, which the
-			// literal that used to stand here did not carry. Only the cookie
-			// fields are read; NewProductionRuntimeRoutes drops the token
-			// validators, so these two routes stay narrower than the group.
+			// The GROUP's own credential set, handed over whole. A browser's
+			// EventSource sends a cookie and nothing else (#93), and an SDK or
+			// a server-side client follows the run it started with the SAME
+			// personal access token it started it with (#289). Both are
+			// accepted here on exactly the terms they are accepted on every
+			// other /api/v2 route — including the server-side session store,
+			// which the literal that used to stand here did not carry, and the
+			// token validator, which NewProductionRuntimeRoutes used to drop.
 			//
 			// A deployment with no authentication plane hands over the zero
 			// AuthConfig, whose SessionSecret is empty. That is the same
