@@ -60,6 +60,8 @@ An identity provider authenticates to SCIM with a **SCIM client**. A SCIM client
 
     - **Secret token (Bearer)** — one secret. The identity provider sends it as the bearer token on each request.
     - **OAuth2 client credentials** — a client identifier and a client secret. The identity provider gets a short-lived access token from the token endpoint (1 hour by default), and sends that access token.
+
+    Optionally, set **Expires on**. The date must be from tomorrow to two years ahead. After that day the client stops working. The list shows the days left, and it shows a warning in the last 30 days.
   </Step>
   <Step title="Copy the secret">
     The secret shows **one time only**. Copy it into the identity provider before you close the dialog. Elitea keeps only a hash of the secret, so nobody can show it again.
@@ -82,6 +84,12 @@ In the Entra ID enterprise application, open **Provisioning**, set the mode to *
 Select **Test connection**. Entra ID calls `/Users` with the credential, and a correct credential answers `200`.
 
 The token endpoint accepts `grant_type=client_credentials` with the client identifier and secret in the form body (`client_secret_post`) or in an HTTP Basic header (`client_secret_basic`). The operator sets the access token lifetime with `ELITEA_SCIM_ACCESS_TOKEN_TTL` (between `5m` and `24h`).
+
+<Note>
+Maintenance mode does not stop SCIM. A SCIM client has no administration permissions, and the maintenance gate admits only administrators, so the gate does not apply to SCIM. The identity provider continues to create, update and deactivate accounts during a maintenance window. To freeze the directory, pause provisioning in the identity provider.
+</Note>
+
+Each OAuth2 client can hold at most 20 live access tokens. A new token removes the oldest one. A failed token request is limited per client identifier and caller address. A request with the correct secret always gets a token.
 
 ### Rotate or revoke a SCIM client
 

@@ -1018,6 +1018,10 @@ main:
     # gives a client identifier and a client secret. See
     # apps/elitea-web/src/entries/docs/content/admin/authentication.mdx.
     #
+    # Maintenance mode does NOT pause SCIM: a SCIM client has no administration
+    # permissions, so the maintenance gate does not apply to it. Pause
+    # provisioning in the identity provider to freeze the directory.
+    #
     # ELITEA_SCIM_ACCESS_TOKEN_TTL is the lifetime of an access token the token
     # endpoint issues to an OAuth2 client. A Go duration between 5m and 24h.
     # Empty means 1h. A value outside the range stops the boot.
