@@ -74,7 +74,7 @@ func TestLoginBrandFromPack_AllowlistsEveryValue(t *testing.T) {
 	hostile.Assets.LoginArt = ptr(`/art.png")}body{background:url(https://evil.example/x`)
 	hostile.Typography.FontFamily = `Inter}; body{display:none}`
 	hostile.Typography.FontFaces = []v2branding.FontFace{{Family: "x", URL: "https://fonts.example/x.woff2"}}
-	hostile.Shape = v2branding.Shape{RadiusMd: -5, RadiusLg: 1e9}
+	hostile.Shape = v2branding.Shape{RadiusMd: -5, RadiusLg: 1e9, RadiusPill: -1}
 	hostile.Schemes.Light = map[string]string{
 		"primary.main":            "red;}body{display:none",
 		"background.default":      "url(https://evil.example/x)",

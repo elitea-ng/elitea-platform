@@ -204,6 +204,15 @@ func TestThePackSchemeTokensReachBothSchemes(t *testing.T) {
 	}
 }
 
+// A pack may ask for square corners: a stated 0 is a radius, not "unset".
+func TestAZeroRadiusIsKept(t *testing.T) {
+	pack := v2branding.DefaultPack()
+	pack.Shape = v2branding.Shape{RadiusMd: 0, RadiusLg: 0, RadiusPill: 0}
+	if css := string(loginBrandFromPack(pack).Style); !strings.Contains(css, ":root{--radius-md:0px;--radius-lg:0px;--radius-pill:0px}") {
+		t.Fatalf("brand css = %s", css)
+	}
+}
+
 // The built-in logo is the product's own: a renamed product without a logo
 // shows its name, never Elitea's mark.
 func TestTheBuiltInLogoIsOnlyForTheDefaultProduct(t *testing.T) {
