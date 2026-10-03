@@ -49,7 +49,6 @@ export declare function refusedForMissingCredential(
   credentialKeys: readonly string[],
 ): boolean;
 export declare function toleratesCredentialOnlyCategories(env: Env): boolean;
-export declare const TOOLKIT_DISCOVERY_ABSENT_ERROR: 'toolkit discovery unavailable';
 export declare function discoveryAbsentAnswer(status: number, body: unknown): boolean;
 export declare function catalogueListsModel(status: number, body: string, modelName: string): boolean;
 export declare const LIVE_SAFETY_EXCLUDED: readonly string[];
@@ -63,11 +62,6 @@ export declare const LIVE_JOURNEYS_OWN_IGNORE: readonly RegExp[];
 export declare const LIVE_STREAM_ALLOWLIST: readonly RegExp[];
 export declare function liveAdminReadonly(env: Env): string[];
 export declare function liveSelectedSpecs(specs: readonly string[], env: Env): string[];
-export declare const LIVE_SHARED_STATE_MARKERS: readonly {
-  readonly name: string;
-  readonly pattern: RegExp;
-  readonly needsWrite?: boolean;
-}[];
 export declare function liveSharedStateViolations(
   source: string,
 ): { readonly line: number; readonly marker: string; readonly reason: string }[];

@@ -387,6 +387,11 @@ describe('refusedForMissingCredential', () => {
     expect(refusedForMissingCredential(400, undefined, ['github_configuration'])).toBe(false);
     expect(refusedForMissingCredential(400, github, [''])).toBe(false);
   });
+
+  it('does not excuse a JSON body whose error is not a sentence', () => {
+    expect(refusedForMissingCredential(400, '{"error":5}', ['github_configuration'])).toBe(false);
+    expect(refusedForMissingCredential(400, '{}', ['github_configuration'])).toBe(false);
+  });
 });
 
 describe('socketServerConfigured', () => {
@@ -520,6 +525,27 @@ describe('liveSharedStateViolations', () => {
     expect(liveSharedStateViolations(noted)).toEqual([]);
   });
 
+  it('accepts a top-level case that carries its own guard', () => {
+    const topLevel = [
+      "test('publishes', async ({ request }) => {",
+      "  neverOnLiveTarget('x');",
+      '  await request.post(`/x/publish/prompt_lib/1/2`);',
+      '});',
+    ].join('\n');
+    expect(liveSharedStateViolations(topLevel)).toEqual([]);
+  });
+
+  it('flags a writer in a helper of an unguarded describe that has no cases', () => {
+    const helperOnly = [
+      "test.describe('d', () => {",
+      '  const publish = (r) => r.post(`/x/publish/prompt_lib/1/2`);',
+      '});',
+    ].join('\n');
+    expect(liveSharedStateViolations(helperOnly)).toEqual([
+      { line: 2, marker: 'catalogue publish', reason: 'in a describe helper, describe not guarded' },
+    ]);
+  });
+
   it('does not let a guard in one case cover its sibling', () => {
     const siblings = unguarded.replace(
       "test.describe('d', () => {",
@@ -601,6 +627,11 @@ describe('the live selection writes no shared state', () => {
     expect(liveSelectedSpecs(allSpecs(), { ...widest, LIVE_ADMIN_PERSONA_SCOPE: 'project' })).not.toContain(
       'journeys/admin/admin.navigation.spec.ts',
     );
+    // The seeded audit trail joins the admin-readonly lane only for triage.
+    const { LIVE_INCLUDE_ENV_DEPENDENT: _triage, ...strict } = widest;
+    expect(selected).toContain('journeys/admin/admin.audit-trail.spec.ts');
+    expect(liveSelectedSpecs(allSpecs(), strict)).not.toContain('journeys/admin/admin.audit-trail.spec.ts');
+    expect(liveSelectedSpecs(allSpecs(), strict)).toContain('journeys/admin/admin.navigation.spec.ts');
   });
 
   it('selects no spec that reaches shared state outside a live-guarded case', () => {

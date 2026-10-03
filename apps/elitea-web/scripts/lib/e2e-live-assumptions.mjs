@@ -304,7 +304,7 @@ export function socketServerConfigured(env, uiConfig) {
  * "toolkit settings could not be resolved") — a runtime fault, not a
  * deployment choice — so only this exact error counts as "absent".
  */
-export const TOOLKIT_DISCOVERY_ABSENT_ERROR = 'toolkit discovery unavailable';
+const TOOLKIT_DISCOVERY_ABSENT_ERROR = 'toolkit discovery unavailable';
 
 /** Whether an `AvailableTools` answer says discovery is not composed — and nothing else. */
 export function discoveryAbsentAnswer(status, body) {
@@ -519,7 +519,7 @@ export function liveSelectedSpecs(specs, env) {
  * `neverOnLiveTarget(` (in the case, or in its describe's `beforeEach`), or a
  * case that says why it is safe with a `live-safe:` comment.
  */
-export const LIVE_SHARED_STATE_MARKERS = Object.freeze([
+const LIVE_SHARED_STATE_MARKERS = Object.freeze([
   { name: 'platform flag write', pattern: /withPlatformFlag\(/ },
   { name: 'catalogue publish', pattern: /\/publish\/prompt_lib\// },
   { name: 'publish wizard', pattern: /agent-publish-menuitem/ },
