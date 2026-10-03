@@ -115,8 +115,9 @@ func TestFormPageRendersTheBrandUnderTheHashedCSP(t *testing.T) {
 	body := recorder.Body.String()
 	for _, marker := range []string{
 		"<title>Acme &lt;AI&gt; login</title>",
-		`<img class="brand-logo" src="/api/v2/branding/assets/logo-full/`,
-		`alt="Acme &lt;AI&gt;"`,
+		`<img class="brand-logo" id="brand-logo" src="/api/v2/branding/assets/logo-full/`,
+		// The name is a text wordmark under the logo, never only alt text.
+		`<p class="brand-name brand-name-fallback">Acme &lt;AI&gt;</p>`,
 		`<p class="brand-tagline">Ship faster &amp; safer</p>`,
 		`<link rel="icon" href="/api/v2/branding/assets/favicon/`,
 		"--brand-light:#ff6600;",

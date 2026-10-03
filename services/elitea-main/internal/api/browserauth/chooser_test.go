@@ -129,7 +129,7 @@ func TestTwoProvidersRenderTheBrandedPage(t *testing.T) {
 		"Continue with GitHub",
 		"Continue with Microsoft",
 		`<title>Sign in to Acme &lt;AI&gt;</title>`,
-		`alt="Acme &lt;AI&gt;"`,
+		`<p class="brand-name brand-name-fallback">Acme &lt;AI&gt;</p>`,
 		`<label class="field-label" for="email">Work email</label>`,
 		`action="/auth/login/continue" method="post"`,
 		`name="target_to" value="/app/chat"`,

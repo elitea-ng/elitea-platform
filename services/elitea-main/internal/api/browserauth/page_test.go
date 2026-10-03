@@ -236,6 +236,48 @@ func TestAStatedSchemeAccentGetsItsOwnInk(t *testing.T) {
 	}
 }
 
+// A pack logo never stands alone: the product name renders as a text
+// wordmark, so a logo that is absent or fails to load leaves the name, not a
+// broken image with alt text. The script swaps them only after the load.
+func TestTheProductNameIsATextWordmarkWhateverTheLogo(t *testing.T) {
+	withLogo := brandedPack()
+	withLogo.Product.Name = "Acme AI"
+	noLogo := brandedPack()
+	noLogo.Product.Name = "Acme AI"
+	noLogo.Assets.LogoFull = "./brand/logo-full.svg"
+	for name, pack := range map[string]*v2branding.Pack{"logo": withLogo, "no logo": noLogo} {
+		body := getLogin(newTestChooser(t, brandSourceStub{pack: pack}, gitHubProvider(), entraProvider()), "").Body.String()
+		if !strings.Contains(body, `">Acme AI</p>`) || !strings.Contains(body, `class="brand-name`) {
+			t.Errorf("%s: no text wordmark:\n%s", name, body)
+		}
+		if strings.Contains(body, `alt="Acme AI"`) {
+			t.Errorf("%s: the name is alt text, which a failed load shows as a broken image", name)
+		}
+	}
+	noLogoBody := getLogin(newTestChooser(t, brandSourceStub{pack: noLogo}, gitHubProvider(), entraProvider()), "").Body.String()
+	if !strings.Contains(noLogoBody, `<p class="brand-name">Acme AI</p>`) || strings.Contains(noLogoBody, "<img") {
+		t.Errorf("logo absent: want the plain wordmark and no image:\n%s", noLogoBody)
+	}
+	withLogoBody := getLogin(newTestChooser(t, brandSourceStub{pack: withLogo}, gitHubProvider(), entraProvider()), "").Body.String()
+	if !strings.Contains(withLogoBody, `<img class="brand-logo" id="brand-logo" src="/api/v2/branding/assets/logo-full/`) ||
+		!strings.Contains(withLogoBody, `alt=""><p class="brand-name brand-name-fallback">Acme AI</p>`) {
+		t.Errorf("logo present: want a decorative image followed by the wordmark:\n%s", withLogoBody)
+	}
+	for _, want := range []string{
+		":root[data-el-mode] .brand-logo:not(.is-loaded) {",
+		".brand-logo.is-loaded + .brand-name-fallback {",
+	} {
+		if !strings.Contains(authStyleSource, want) {
+			t.Errorf("stylesheet lacks %q", want)
+		}
+	}
+	for _, want := range []string{`document.getElementById("brand-logo")`, `logo.naturalWidth > 0`, `logo.classList.add("is-loaded")`} {
+		if !strings.Contains(authScriptSource, want) {
+			t.Errorf("theme script lacks %q", want)
+		}
+	}
+}
+
 // The built-in logo is the product's own: a renamed product without a logo
 // shows its name, never Elitea's mark.
 func TestTheBuiltInLogoIsOnlyForTheDefaultProduct(t *testing.T) {
