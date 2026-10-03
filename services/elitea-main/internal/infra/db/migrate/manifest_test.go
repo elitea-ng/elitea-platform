@@ -565,7 +565,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// Feature migrations 127 through 133 retain their SQL bytes.
 	// Reconcile existing rehearsal ledgers before deployment.
-	require.EqualValues(t, 133, Head(shared))
+	//
+	// 134: shared/0134_scim_user_name_parts.sql, the SCIM name.givenName,
+	// name.familyName and name.formatted, stored on the SCIM side table so a
+	// GET answers with what the identity provider sent and Entra ID converges
+	// instead of re-PATCHing the name (and overwriting the display name) on
+	// every provisioning cycle.
+	require.EqualValues(t, 134, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

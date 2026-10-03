@@ -126,6 +126,10 @@ type OIDCDocument struct {
 	// LoginDomains are the email domains whose users sign in through this
 	// provider. See SAMLDocument.LoginDomains.
 	LoginDomains []string `json:"login_domains,omitempty"`
+
+	// AdoptSCIMUsers lets this provider's FIRST login adopt an account a SCIM
+	// client provisioned. See SAMLDocument.AdoptSCIMUsers.
+	AdoptSCIMUsers bool `json:"adopt_scim_users"`
 }
 
 // Two fields that a reader might expect here are absent on purpose, because
@@ -209,6 +213,21 @@ type SAMLDocument struct {
 	// Validate stores each entry lower-cased and refuses one that is not a
 	// host name.
 	LoginDomains []string `json:"login_domains,omitempty"`
+
+	// AdoptSCIMUsers lets this provider's FIRST login adopt an account a SCIM
+	// client provisioned (one with an `elitea_auth.scim_users` record and no
+	// federated link yet). It is OFF by default.
+	//
+	// A first login joins an existing account by the asserted address
+	// (internal/api/v2/auth/oidc.go joinAccountByEmail). A SAML assertion
+	// states nothing about whether that address is verified, and an OIDC
+	// provider may omit `email_verified`. So without this flag ANY configured
+	// provider — a GitHub connector behind Dex, a social login — that asserts a
+	// directory-provisioned address would take that person's account. The
+	// operator turns it on for the provider PAIRED with the SCIM client (Entra
+	// ID's SAML or OIDC app for Entra's provisioning), and leaves it off for
+	// every other.
+	AdoptSCIMUsers bool `json:"adopt_scim_users"`
 }
 
 // MaxClockSkewSeconds bounds the tolerance either kind may author.

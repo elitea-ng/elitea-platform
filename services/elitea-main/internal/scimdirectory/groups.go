@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -502,6 +503,9 @@ const (
 	GroupRemoveMembers
 	// GroupRename applies a displayName change.
 	GroupRename
+	// GroupSetExternalID replaces the identity provider's identifier; an empty
+	// ExternalID clears it.
+	GroupSetExternalID
 )
 
 // GroupOperation is one understood step of a PATCH.
@@ -509,6 +513,7 @@ type GroupOperation struct {
 	Kind        GroupOperationKind
 	Members     []int
 	DisplayName string
+	ExternalID  string
 }
 
 // ApplyGroupOperations applies a whole PATCH in ONE transaction.
@@ -530,6 +535,11 @@ func (s *Store) ApplyGroupOperations(ctx context.Context, id int64, operations [
 			switch operation.Kind {
 			case GroupRename:
 				if err := renameBinding(ctx, tx, id, operation.DisplayName); err != nil {
+					return err
+				}
+
+			case GroupSetExternalID:
+				if err := setBindingExternalID(ctx, tx, id, operation.ExternalID); err != nil {
 					return err
 				}
 
@@ -579,6 +589,23 @@ func renameBinding(ctx context.Context, db execer, id int64, displayName string)
 		`UPDATE elitea_auth.scim_group_bindings
 		    SET display_name = $2, updated_at = now() WHERE id = $1`,
 		id, displayName)
+	if isUniqueViolation(err) {
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func setBindingExternalID(ctx context.Context, db execer, id int64, externalID string) error {
+	tag, err := db.Exec(ctx,
+		`UPDATE elitea_auth.scim_group_bindings
+		    SET external_id = $2, updated_at = now() WHERE id = $1`,
+		id, strings.TrimSpace(externalID))
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}
@@ -934,7 +961,9 @@ func (e AmbiguousMemberError) Error() string {
 // address, or a nearest guess.
 //
 // A value that matches nothing is refused, and so is a value that matches more
-// than one account. Both refusals name the value.
+// than one account. Both refusals name the value. A platform principal is
+// returned with its id AND a *ProtectedError: a removal may proceed, a grant
+// must refuse.
 func (s *Store) ResolveMember(ctx context.Context, value string) (int, error) {
 	if s == nil || s.pool == nil {
 		return 0, ErrNoPool
@@ -945,7 +974,7 @@ func (s *Store) ResolveMember(ctx context.Context, value string) (int, error) {
 	}
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT account.id
+		`SELECT DISTINCT account.id, COALESCE(account.email, '')
 		   FROM auth_core__user AS account
 		   LEFT JOIN elitea_auth.scim_users AS scim ON scim.user_id = account.id
 		  WHERE account.id::text = $1
@@ -956,13 +985,20 @@ func (s *Store) ResolveMember(ctx context.Context, value string) (int, error) {
 	}
 	defer rows.Close()
 
-	var matches []int
+	var (
+		matches   []int
+		addresses []string
+	)
 	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
+		var (
+			id      int
+			address string
+		)
+		if err := rows.Scan(&id, &address); err != nil {
 			return 0, err
 		}
 		matches = append(matches, id)
+		addresses = append(addresses, address)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
@@ -971,6 +1007,16 @@ func (s *Store) ResolveMember(ctx context.Context, value string) (int, error) {
 	case 0:
 		return 0, UnknownMemberError{Value: value}
 	case 1:
+		// A PLATFORM PRINCIPAL is never a member a group may grant to: a
+		// bound project role on `system_user_<n>@centry.user` or
+		// `system@centry.user` is a grant to the platform's own identity.
+		// The id is returned WITH the refusal, so a caller removing members
+		// can still remove it; a caller granting must refuse.
+		if IsReservedAddress(addresses[0]) {
+			return matches[0], &ProtectedError{Reason: "the member " + strconv.Quote(value) +
+				" is a platform principal (an address in the " + reservedAddressDomain +
+				" domain); a group cannot grant it a project role"}
+		}
 		return matches[0], nil
 	default:
 		return 0, AmbiguousMemberError{Value: value}

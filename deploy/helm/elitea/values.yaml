@@ -954,6 +954,16 @@ main:
     # Turn it on when your provider always sends the claim.
     OIDC_REQUIRE_EMAIL_VERIFIED: ""
 
+    # Set "true" to let the ENVIRONMENT-configured OIDC provider's first login
+    # adopt an account a SCIM client provisioned (internal/api/v2/auth/oidc.go,
+    # joinAccountByEmail). Empty (the default) refuses it with 409, because any
+    # provider asserting a directory-provisioned address would otherwise take
+    # that person's account. Turn it on only when this provider is the one
+    # paired with your SCIM client (for example Entra ID for Entra provisioning).
+    # A provider authored on the admin Authentication page has its own
+    # "Users provisioned by SCIM may sign in through this provider" setting.
+    OIDC_ADOPT_SCIM_USERS: ""
+
     # --- Sign-in page: environment-configured OIDC provider ---------------------
     # These two apply ONLY to the OIDC provider set through the environment
     # (OIDC_ISSUER_URL and friends). A provider authored on the admin

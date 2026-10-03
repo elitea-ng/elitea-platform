@@ -231,6 +231,28 @@ describe('Admin › Authentication › identity providers', () => {
     expect(oidc['login_domains']).toEqual(['corp.example.com', 'example.org']);
   });
 
+  it('sends adopt_scim_users, off unless the operator turns it on', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    const adopt = await screen.findByRole('checkbox', {
+      name: 'Users provisioned by SCIM may sign in through this provider',
+    });
+    expect(adopt).not.toBeChecked();
+    expect(adopt).toHaveAccessibleDescription(/paired with your SCIM client/);
+    await user.click(adopt);
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    await waitFor(() => {
+      expect(writes()).toHaveLength(1);
+    });
+    const body = writes()[0]?.body as Record<string, unknown>;
+    const oidc = body['oidc'] as Record<string, unknown>;
+    expect(oidc['adopt_scim_users']).toBe(true);
+    expect(body['saml']).toBeUndefined();
+  });
+
   it('refuses a login domain that is not a domain name before it saves', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminIdentityProvidersEditor />);

@@ -404,6 +404,7 @@ func compiledAttemptConfig(prefix string, key []byte) authattempt.Config {
 func provisioningPolicy(config IdentityConfig) identityapp.ProvisioningPolicy {
 	policy := identityapp.ProvisioningPolicy{
 		InitialGlobalAdmins: append([]string(nil), config.InitialGlobalAdmins...),
+		AdoptSCIMUsers:      config.AdoptSCIMUsers,
 	}
 	if config.ProjectEnrollment != nil {
 		policy.ProjectEnrollment = identityapp.ProjectEnrollmentPolicy{

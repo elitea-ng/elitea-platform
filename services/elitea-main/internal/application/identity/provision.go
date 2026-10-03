@@ -37,6 +37,11 @@ const (
 var (
 	ErrInvalidAssertion          = errors.New("invalid verified identity assertion")
 	ErrIdentitySuspended         = errors.New("authenticated identity is suspended")
+	// ErrIdentityConflict reports that the asserted address names an account
+	// this provider may not adopt: another federated subject holds it, or a
+	// SCIM client provisioned it and the provider is not configured to adopt
+	// such accounts (identityrepo.AdoptionGuard).
+	ErrIdentityConflict = errors.New("authenticated identity names an account this provider may not adopt")
 	ErrProvisioningFailed        = errors.New("authenticated identity provisioning failed")
 	ErrInvalidProvisioningResult = errors.New("identity repository returned an invalid provisioning result")
 )
@@ -72,6 +77,9 @@ type ProjectEnrollmentPolicy struct {
 type ProvisioningPolicy struct {
 	InitialGlobalAdmins []string
 	ProjectEnrollment   ProjectEnrollmentPolicy
+	// AdoptSCIMUsers lets a first login on this plane adopt an account a SCIM
+	// client provisioned. Off by default; see identityrepo.AdoptionGuard.
+	AdoptSCIMUsers bool
 }
 
 // ProjectEnrollmentDecision is the identity-derived part of project
@@ -94,6 +102,9 @@ type ProvisionCommand struct {
 	InitialAdministrationMode string
 	InitialAdministrationRole string
 	ProjectEnrollment         ProjectEnrollmentDecision
+	// AdoptSCIMUsers lets this login adopt an account a SCIM client
+	// provisioned. From ProvisioningPolicy.AdoptSCIMUsers.
+	AdoptSCIMUsers bool
 }
 
 type ProvisionResult struct {
@@ -208,6 +219,7 @@ func deriveCommand(assertion VerifiedAssertion, policy ProvisioningPolicy) Provi
 		Email:             email,
 		Name:              name,
 		ProjectEnrollment: deriveProjectEnrollment(email, policy.ProjectEnrollment),
+		AdoptSCIMUsers:    policy.AdoptSCIMUsers,
 	}
 	if IsInitialGlobalAdmin(policy.InitialGlobalAdmins, assertion.ProviderReference) {
 		command.InitialAdministrationMode = InitialAdministrationMode
@@ -400,6 +412,8 @@ func sanitizedRepositoryError(err error) error {
 		return context.Canceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return context.DeadlineExceeded
+	case errors.Is(err, ErrIdentityConflict):
+		return ErrIdentityConflict
 	default:
 		return ErrProvisioningFailed
 	}
