@@ -287,8 +287,9 @@ func TestFormPageUsesSelfContainedCurrentPresentation(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"<link", "<script", " src=", "http://", "https://", "highly-sensitive-password",
-		// No pack: no brand stylesheet, no logo, and the page names the product.
+		"<link", " src=", "http://", "https://", "highly-sensitive-password",
+		// No pack: no brand stylesheet and no logo image; the built-in logo
+		// is inline SVG.
 		"<style></style>", `class="brand-logo"`,
 	} {
 		if strings.Contains(body, forbidden) {
@@ -308,6 +309,7 @@ func TestFormPageUsesSelfContainedCurrentPresentation(t *testing.T) {
 	if !strings.Contains(csp, "style-src "+wantSource) || strings.Contains(csp, "'unsafe-inline'") {
 		t.Fatalf("CSP = %q, want exact embedded-style hash %s", csp, wantSource)
 	}
+	assertScriptPinned(t, body, csp)
 }
 
 func TestFormPageRejectsMissingCookieWithoutRendering(t *testing.T) {

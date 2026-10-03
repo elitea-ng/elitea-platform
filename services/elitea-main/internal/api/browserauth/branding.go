@@ -7,11 +7,13 @@ package browserauth
 // thing a customer's users see, so it is the one surface a rebrand must
 // reach that the web app's BrandThemeProvider cannot. This file derives what
 // the page shows from the same resolved pack the bootstrap route serves —
-// the product name, tagline, logo, favicon, login artwork, brand colour,
-// radius and font — and renders it under the same CSP discipline:
+// the product name, tagline, logo, favicon, login artwork, brand colour and
+// the per-scheme accent, page, card and text colours, radii and font — and
+// renders it under the same CSP discipline:
 //
 //   - Every value passes through a narrow allowlist before it becomes HTML
-//     or CSS. A hue is six hex digits or nothing; an asset is a root-relative
+//     or CSS. A hue is six hex digits or nothing; a scheme colour is a hex
+//     colour or a numeric rgb()/rgba() or nothing; an asset is a root-relative
 //     path with no quote, bracket, backslash, angle bracket or whitespace, or
 //     nothing; a font family is letters, digits, spaces, commas, hyphens and
 //     quotes, or nothing. The values were validated on the way in
@@ -23,8 +25,13 @@ package browserauth
 //     nothing else; a served pack cannot point the login page at another
 //     origin because the allowlist above already dropped the value.
 //
-// Without a brand source, or with nothing served, the page renders exactly
-// as before with the product name "Elitea".
+// The brand reaches the stylesheet as custom properties (`--brand-light`,
+// `--brand-dark`, `--page-dark`, `--radius-lg`, ...) that templates/auth.css
+// reads with the product default as the fallback, so a pack restyles both
+// colour schemes and the ring art without the brand rules knowing selectors.
+//
+// Without a brand source, or with nothing served, the page renders the
+// product default: the name "Elitea" and its built-in logo.
 
 import (
 	"bytes"
@@ -33,6 +40,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"math"
 	"regexp"
 	"strings"
 
@@ -54,6 +62,10 @@ type loginBrand struct {
 	Tagline     string
 	LogoURL     string
 	FaviconURL  string
+	// DefaultLogo shows the product's built-in logo (templates/partials.html)
+	// when the pack names no logo of its own and keeps the default name; a
+	// renamed product without a logo shows its name instead.
+	DefaultLogo bool
 	// Style is the brand's own rules; empty when the pack states nothing the
 	// page renders. StyleSource is its CSP hash source, "" when Style is empty.
 	Style       template.CSS
@@ -62,19 +74,28 @@ type loginBrand struct {
 
 func (h *Handler) loginBrand(ctx context.Context) loginBrand {
 	if h.brand == nil {
-		return loginBrand{ProductName: DefaultProductName}
+		return defaultLoginBrand()
 	}
 	snapshot := h.brand.Current(ctx)
 	if snapshot.Pack == nil {
-		return loginBrand{ProductName: DefaultProductName}
+		return defaultLoginBrand()
 	}
 	return loginBrandFromPack(snapshot.Pack)
 }
 
+// defaultLoginBrand is the page with no pack served.
+func defaultLoginBrand() loginBrand {
+	return loginBrand{ProductName: DefaultProductName, DefaultLogo: true}
+}
+
 var (
-	hexColourPattern  = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-	fontFamilyPattern = regexp.MustCompile(`^[A-Za-z0-9 ,'"_-]{1,200}$`)
-	fontWeightPattern = regexp.MustCompile(`^(?:normal|bold|[1-9][0-9]{0,2}(?: [1-9][0-9]{0,2})?)$`)
+	hexColourPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+	// schemeColourPattern is the subset of a scheme token the page admits:
+	// #RGB, #RRGGBB, #RRGGBBAA, or rgb()/rgba() with plain numbers. Gradients
+	// and every other function are left to the web app.
+	schemeColourPattern = regexp.MustCompile(`^(?:#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d{1,4}|1\.0{1,4})\s*)?\))$`)
+	fontFamilyPattern   = regexp.MustCompile(`^[A-Za-z0-9 ,'"_-]{1,200}$`)
+	fontWeightPattern   = regexp.MustCompile(`^(?:normal|bold|[1-9][0-9]{0,2}(?: [1-9][0-9]{0,2})?)$`)
 )
 
 // loginBrandFromPack derives the page's brand from a resolved pack. Every
@@ -90,20 +111,18 @@ func loginBrandFromPack(pack *v2branding.Pack) loginBrand {
 	}
 	brand.LogoURL = cssSafeAssetPath(pack.Assets.LogoFull)
 	brand.FaviconURL = cssSafeAssetPath(pack.Assets.Favicon)
+	brand.DefaultLogo = brand.LogoURL == "" && brand.ProductName == DefaultProductName
 
 	var css strings.Builder
-	if hue := cssHexColour(pack.Brand.Hue); hue != "" {
-		onBrand := "#ffffff"
-		if pack.Brand.OnBrand != nil {
-			if v := cssHexColour(*pack.Brand.OnBrand); v != "" {
-				onBrand = v
+	if vars := brandSchemeVariables(pack); len(vars) > 0 {
+		css.WriteString(":root{")
+		for i, v := range vars {
+			if i > 0 {
+				css.WriteString(";")
 			}
+			fmt.Fprintf(&css, "%s:%s", v.name, v.value)
 		}
-		fmt.Fprintf(&css,
-			".sign-in-button{background:%s;border-color:%s;color:%s}"+
-				".sign-in-button:hover{background:%s;border-color:%s;filter:brightness(0.92)}"+
-				".form-control:focus{border-color:%s;outline-color:%s}",
-			hue, hue, onBrand, hue, hue, hue, hue)
+		css.WriteString("}")
 	}
 	for _, face := range pack.Typography.FontFaces {
 		family := cssFontFamily(face.Family)
@@ -126,12 +145,27 @@ func loginBrandFromPack(pack *v2branding.Pack) loginBrand {
 	if family := cssFontFamily(pack.Typography.FontFamily); family != "" {
 		fmt.Fprintf(&css, ":root{font-family:%s}", family)
 	}
-	if radius := pack.Shape.RadiusMd; radius >= 0 && radius <= 9999 {
-		fmt.Fprintf(&css, ".card-signin{border-radius:%gpx}", radius)
+	var radii []string
+	for _, radius := range []struct {
+		name  string
+		value float64
+	}{
+		{"--radius-md", pack.Shape.RadiusMd},
+		{"--radius-lg", pack.Shape.RadiusLg},
+		{"--radius-pill", pack.Shape.RadiusPill},
+	} {
+		if radius.value > 0 && radius.value <= 9999 {
+			radii = append(radii, fmt.Sprintf("%s:%gpx", radius.name, radius.value))
+		}
+	}
+	if len(radii) > 0 {
+		fmt.Fprintf(&css, ":root{%s}", strings.Join(radii, ";"))
 	}
 	if pack.Assets.LoginArt != nil {
 		if art := cssSafeAssetPath(*pack.Assets.LoginArt); art != "" {
-			fmt.Fprintf(&css, "body{background-image:url(%q);background-size:cover;background-position:center}", art)
+			// The operator's artwork replaces the generated rings.
+			fmt.Fprintf(&css, "body{background-image:url(%q);background-size:cover;background-position:center}"+
+				".auth-backdrop{display:none}", art)
 		}
 	}
 	if css.Len() > 0 {
@@ -140,6 +174,96 @@ func loginBrandFromPack(pack *v2branding.Pack) loginBrand {
 		brand.StyleSource = "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
 	}
 	return brand
+}
+
+type cssVariable struct{ name, value string }
+
+// schemeTokens maps the web app's scheme token ids (default.pack.json) to the
+// page's per-scheme inputs. The muted text colour is deliberately not taken
+// from the pack: the app's `text.primary` is below AA on the light card.
+var schemeTokens = []struct{ id, name string }{
+	{"primary.main", "brand"},
+	{"text.button.primary", "on-brand"},
+	{"background.default", "page"},
+	{"background.card.default", "card"},
+	{"text.secondary", "text"},
+}
+
+// brandSchemeVariables derives the page's colour inputs for both schemes. A
+// token the pack states for a scheme wins; otherwise the accent is the brand
+// hue, and the text on it is the pack's onBrand or, without one, whichever of
+// white and the default ink reads better on it.
+func brandSchemeVariables(pack *v2branding.Pack) []cssVariable {
+	hue := cssHexColour(pack.Brand.Hue)
+	onBrand := ""
+	if pack.Brand.OnBrand != nil {
+		onBrand = cssHexColour(*pack.Brand.OnBrand)
+	}
+	var vars []cssVariable
+	for _, scheme := range []struct {
+		suffix string
+		tokens map[string]string
+	}{
+		{"light", pack.Schemes.Light},
+		{"dark", pack.Schemes.Dark},
+	} {
+		values := map[string]string{}
+		for _, token := range schemeTokens {
+			if value := cssSchemeColour(scheme.tokens[token.id]); value != "" {
+				values[token.name] = value
+			}
+		}
+		if values["brand"] == "" && hue != "" {
+			values["brand"] = hue
+		}
+		if values["brand"] != "" && values["on-brand"] == "" {
+			if onBrand != "" {
+				values["on-brand"] = onBrand
+			} else if ink := readableInk(values["brand"]); ink != "" {
+				values["on-brand"] = ink
+			}
+		}
+		for _, token := range schemeTokens {
+			if value := values[token.name]; value != "" {
+				vars = append(vars, cssVariable{"--" + token.name + "-" + scheme.suffix, value})
+			}
+		}
+	}
+	return vars
+}
+
+// cssSchemeColour admits a scheme token the page can use as a colour.
+func cssSchemeColour(value string) string {
+	value = strings.TrimSpace(value)
+	if !schemeColourPattern.MatchString(value) {
+		return ""
+	}
+	return strings.ToLower(value)
+}
+
+// readableInk is #ffffff or #0e131d, whichever contrasts more with a #RRGGBB
+// background; "" for any other form.
+func readableInk(background string) string {
+	if !hexColourPattern.MatchString(background) {
+		return ""
+	}
+	var channels [3]float64
+	for i := range channels {
+		var v int
+		_, _ = fmt.Sscanf(background[1+2*i:3+2*i], "%02x", &v)
+		c := float64(v) / 255
+		if c <= 0.04045 {
+			channels[i] = c / 12.92
+		} else {
+			channels[i] = math.Pow((c+0.055)/1.055, 2.4)
+		}
+	}
+	luminance := 0.2126*channels[0] + 0.7152*channels[1] + 0.0722*channels[2]
+	// #0e131d has a relative luminance of about 0.0065.
+	if (1.05)/(luminance+0.05) >= (luminance+0.05)/(0.0065+0.05) {
+		return "#ffffff"
+	}
+	return "#0e131d"
 }
 
 // cssHexColour admits exactly #RRGGBB, lower-cased.
@@ -178,41 +302,25 @@ func cssSafeAssetPath(value string) string {
 	return value
 }
 
-// loginContentSecurityPolicy is the form page's CSP: the static stylesheet
-// hash, the brand stylesheet hash when there is one, and same-origin images
-// and fonts for the brand assets.
-func loginContentSecurityPolicy(brandStyleSource string) string {
-	styleSources := loginStyleCSPSource
-	if brandStyleSource != "" {
-		styleSources += " " + brandStyleSource
-	}
-	return "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; " +
-		"img-src 'self'; font-src 'self'; style-src " + styleSources
-}
-
 // RenderLoginPreview renders the login page as it would look under pack, for
 // a branding package's preview folder (ADR-0024 decision 9). It is the same
 // template and the same allowlists as the live page, with a placeholder
 // transaction target and no error state; the form posts nowhere useful from
 // a file on disk, which is the point of a preview.
 func RenderLoginPreview(pack *v2branding.Pack) ([]byte, error) {
-	page, err := template.New("login.html").Parse(loginTemplateSource)
+	page, err := parseAuthPage("login.html", loginTemplateSource)
 	if err != nil {
 		return nil, err
 	}
-	brand := loginBrand{ProductName: DefaultProductName}
+	brand := defaultLoginBrand()
 	if pack != nil {
 		brand = loginBrandFromPack(pack)
 	}
 	var body bytes.Buffer
-	if err := page.Execute(&body, struct {
-		Target string
-		Error  bool
-		Style  template.CSS
-		Brand  loginBrand
-	}{
+	if err := page.Execute(&body, loginPage{
 		Target: "preview",
-		Style:  template.CSS(loginStyleSource), //nolint:gosec // compiled into this binary
+		Style:  authPageStyle(),
+		Script: authPageScript(),
 		Brand:  brand,
 	}); err != nil {
 		return nil, err
