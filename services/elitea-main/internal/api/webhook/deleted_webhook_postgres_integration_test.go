@@ -52,3 +52,52 @@ func TestDeliveryLogOfADeletedWebhookIsTheTypedGoneError(t *testing.T) {
 		t.Fatalf("log a delivery of a deleted webhook = %v, want webhook.ErrWebhookGone", err)
 	}
 }
+
+// TestRedeliveryOfAPrunedDeliveryIsLoggedNotGone pins the other foreign key
+// of webhook_deliveries. A redelivery whose original row was removed after
+// Redeliver read it fails on webhook_deliveries_redelivery_of_fkey, also a
+// 23503. The webhook still exists, so the answer must not be ErrWebhookGone.
+// The attempt was sent, so it is logged without the link.
+func TestRedeliveryOfAPrunedDeliveryIsLoggedNotGone(t *testing.T) {
+	pool := newWebhookPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	webhooksRepo := repos.NewWebhooksRepo(pool)
+	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
+
+	const projectID = "proj-webhook-pruned"
+	created, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
+		URL:    "https://autotest.invalid/hook",
+		Events: []string{"conversation.created"},
+		Secret: "integration-secret",
+		Active: true,
+	})
+	if err != nil {
+		t.Fatalf("create webhook: %v", err)
+	}
+	delivery := webhook.Delivery{
+		WebhookID: created.ID,
+		ProjectID: projectID,
+		Event:     "conversation.created",
+		Status:    webhook.DeliveryStatusFailed,
+		Attempts:  1,
+		Payload:   []byte(`{"type":"conversation.created"}`),
+	}
+	original, err := deliveriesRepo.Create(ctx, delivery)
+	if err != nil {
+		t.Fatalf("log the original delivery: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM public.webhook_deliveries WHERE id = $1`, original.ID); err != nil {
+		t.Fatalf("prune the original delivery: %v", err)
+	}
+
+	redelivery := delivery
+	redelivery.RedeliveryOf = original.ID
+	logged, err := deliveriesRepo.Create(ctx, redelivery)
+	if err != nil {
+		t.Fatalf("log a redelivery of a pruned delivery = %v, want it logged", err)
+	}
+	if logged.ID == "" || logged.RedeliveryOf != "" {
+		t.Fatalf("logged redelivery = %+v, want a new row with no redelivery_of link", logged)
+	}
+}

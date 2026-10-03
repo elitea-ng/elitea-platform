@@ -2,9 +2,11 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
@@ -27,6 +29,43 @@ func (r *WebhookDeliveriesRepo) Create(ctx context.Context, d webhook.Delivery) 
 	if d.RedeliveryOf != "" {
 		redeliveryOf = d.RedeliveryOf
 	}
+	created, err := r.insert(ctx, d, redeliveryOf)
+	if err != nil && redeliveryOf != nil && foreignKeyConstraint(err) == webhookDeliveriesRedeliveryOfFK {
+		// The original delivery was removed (pruned) after Redeliver read it.
+		// The attempt was still sent, so log it without the link, as the
+		// ON DELETE SET NULL rule would have left it.
+		created, err = r.insert(ctx, d, nil)
+	}
+	if err != nil {
+		// The webhook was deleted while the attempt ran: its delivery log
+		// went with it (ON DELETE CASCADE), and the FK refuses the new row.
+		// Only THIS constraint means the webhook is gone.
+		if foreignKeyConstraint(err) == webhookDeliveriesWebhookFK {
+			return webhook.Delivery{}, webhook.ErrWebhookGone
+		}
+		return webhook.Delivery{}, fmt.Errorf("webhook_deliveries: create: %w", err)
+	}
+	return created, nil
+}
+
+// The foreign keys of public.webhook_deliveries, by the names Postgres gives
+// them (migrations/shared/0122_webhooks_and_deliveries.sql).
+const (
+	webhookDeliveriesWebhookFK      = "webhook_deliveries_webhook_id_fkey"
+	webhookDeliveriesRedeliveryOfFK = "webhook_deliveries_redelivery_of_fkey"
+)
+
+// foreignKeyConstraint names the constraint of a foreign_key_violation
+// (23503), or answers "" for any other error.
+func foreignKeyConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
+func (r *WebhookDeliveriesRepo) insert(ctx context.Context, d webhook.Delivery, redeliveryOf any) (webhook.Delivery, error) {
 	var created webhook.Delivery
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO webhook_deliveries
@@ -38,15 +77,7 @@ func (r *WebhookDeliveriesRepo) Create(ctx context.Context, d webhook.Delivery) 
 	).Scan(&created.ID, &created.WebhookID, &created.ProjectID, &created.Event, &created.Status,
 		&created.Attempts, &created.ResponseCode, &created.LastError, &created.Payload, &created.RedeliveryOf,
 		&created.CreatedAt, &created.UpdatedAt)
-	if err != nil {
-		// The webhook was deleted while the attempt ran: its delivery log
-		// went with it (ON DELETE CASCADE), and the FK refuses the new row.
-		if isForeignKeyViolation(err) {
-			return webhook.Delivery{}, webhook.ErrWebhookGone
-		}
-		return webhook.Delivery{}, fmt.Errorf("webhook_deliveries: create: %w", err)
-	}
-	return created, nil
+	return created, err
 }
 
 func (r *WebhookDeliveriesRepo) ListRecent(ctx context.Context, projectID, webhookID string, limit int) ([]webhook.Delivery, error) {
