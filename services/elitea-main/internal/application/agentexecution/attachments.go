@@ -359,7 +359,7 @@ func inlineAttachmentImageFor(
 	if !inlineable {
 		return inlineAttachmentImage{
 			refusal: "NOTE: this image is in a format that cannot be sent to the model directly " +
-				"(only PNG, JPEG, GIF and WebP are). Its contents may be read with a file-reading tool.",
+				"(only PNG, JPEG, GIF and WebP are). It is not shown to you as an image.",
 			extract: true,
 		}
 	}
@@ -374,7 +374,7 @@ func inlineAttachmentImageFor(
 		return inlineAttachmentImage{
 			refusal: "NOTE: this image could not be embedded for the model (it is larger than " +
 				strconv.Itoa(maxInlineAttachmentImageBytes/1024) +
-				" KiB, or its bytes could not be read). Its contents may be read with a file-reading tool.",
+				" KiB, or its bytes could not be read). It is not shown to you as an image.",
 			extract: true,
 		}
 	}
@@ -384,8 +384,7 @@ func inlineAttachmentImageFor(
 		if cost > *budget {
 			return inlineAttachmentImage{
 				refusal: "NOTE: this image was not embedded because the turn's other attachments " +
-					"already use the space available for images. Its contents may be read with a " +
-					"file-reading tool.",
+					"already use the space available for images. It is not shown to you as an image.",
 				extract: true,
 			}
 		}
@@ -407,6 +406,23 @@ func attachmentImageChunk(dataURL string) map[string]any {
 		"image_url": map[string]any{"url": dataURL},
 	}
 }
+
+// attachmentHeaderNote is the one sentence the header makes about the file's
+// content, and it must be TRUE on every runtime.
+//
+// It replaced pylon's three lines ("File content may be EMBEDDED in the next
+// message chunk ... the full text is already included ... File reading tools
+// are available if needed"). Those claimed a complete text and a file-reading
+// tool that the native runtime did not have, so a model shown only this header
+// answered about a PDF it had never read. Both workers now ALWAYS follow the
+// header with either the content (marked complete or partial) or a note that
+// says why the file could not be read
+// (services/elitea-worker-rust/src/agents/attachments.rs,
+// services/elitea-worker-python/src/elitea_worker/agents/attachments.py), so
+// this sentence only points at that chunk and makes no promise of its own.
+const attachmentHeaderNote = "NOTE: The next message chunk holds this file's content as the platform " +
+	"read it, or a note that says which part could not be read and why. " +
+	"Do not describe content that you were not shown."
 
 // attachmentContentScaffold is the creation-time `content` chunk, in pylon's
 // shape (utils/attachments.py:288-320, DocumentToModelProcessor.process): a
@@ -444,9 +460,7 @@ func attachmentContentScaffold(
 		"Filename: " + ref.Name,
 		"filepath: " + filepath,
 		"",
-		"NOTE: File content may be EMBEDDED in the next message chunk.",
-		"If embedded content is provided below, please review it first - the full text is already included.",
-		"File reading tools are available if needed for specific operations (search, partial access), but prefer embedded content when available.",
+		attachmentHeaderNote,
 	}
 	// An image that could NOT be embedded says so here. Without this line the
 	// model is told a picture is attached, shown nothing, and answers as

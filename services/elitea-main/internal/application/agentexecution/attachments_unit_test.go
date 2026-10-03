@@ -4,7 +4,9 @@ package agentexecution
 // stores in chat_messages_attachment.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -112,6 +114,54 @@ func TestCurrentTurnAttachmentsNumbersItemsFromOneAndScaffoldsContent(t *testing
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("scaffold %q missing %q", text, want)
+		}
+	}
+}
+
+// TestAttachmentHeaderMakesNoPromiseTheRuntimeCannotKeep pins the removal of
+// pylon's note. It told the model that the full text was already embedded and
+// that file-reading tools were available; on the native runtime neither was
+// true, and the model answered about a PDF it had never read.
+func TestAttachmentHeaderMakesNoPromiseTheRuntimeCannotKeep(t *testing.T) {
+	ref := CurrentTurnAttachmentRef{Bucket: "chat-attachments", Name: testConversationUUID + "/Unknown.pdf"}
+	for name, image := range map[string]inlineAttachmentImage{
+		"document":         {},
+		"unembedded image": {refusal: "NOTE: x", extract: true},
+		"embedded image":   {dataURL: "data:image/png;base64,AAAA"},
+	} {
+		var chunks []map[string]any
+		if err := json.Unmarshal(attachmentContentScaffold(ref, AttachmentKindDocument, "item-1", image), &chunks); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		header, _ := chunks[0]["text"].(string)
+		for _, falsehood := range []string{"EMBEDDED", "full text is already included", "File reading tools are available"} {
+			if strings.Contains(header, falsehood) {
+				t.Fatalf("%s: header still claims %q:\n%s", name, falsehood, header)
+			}
+		}
+		if !strings.Contains(header, attachmentHeaderNote) {
+			t.Fatalf("%s: header lacks the honest note:\n%s", name, header)
+		}
+	}
+}
+
+func TestAttachmentImageRefusalsDoNotOfferAToolThatDoesNotExist(t *testing.T) {
+	failing := &stubAttachmentImageReader{err: errors.New("gone")}
+	fitting := &stubAttachmentImageReader{content: []byte("png bytes")}
+	budget := 0
+	for _, image := range []inlineAttachmentImage{
+		inlineAttachmentImageFor(context.Background(), failing, 7,
+			CurrentTurnAttachmentRef{Bucket: "chat-attachments", Name: testConversationUUID + "/diagram.bmp"}, nil),
+		inlineAttachmentImageFor(context.Background(), failing, 7,
+			CurrentTurnAttachmentRef{Bucket: "chat-attachments", Name: testConversationUUID + "/photo.png"}, nil),
+		inlineAttachmentImageFor(context.Background(), fitting, 7,
+			CurrentTurnAttachmentRef{Bucket: "chat-attachments", Name: testConversationUUID + "/photo.png"}, &budget),
+	} {
+		if image.refusal == "" {
+			t.Fatalf("expected a refusal, got %+v", image)
+		}
+		if strings.Contains(image.refusal, "file-reading tool") {
+			t.Fatalf("refusal offers a tool: %q", image.refusal)
 		}
 	}
 }

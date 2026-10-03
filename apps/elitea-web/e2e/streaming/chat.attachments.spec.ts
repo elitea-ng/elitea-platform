@@ -108,13 +108,13 @@
  * refusals are pinned by that route's own unit tests, which is where a 403 can
  * be asserted without a second conversation's worth of fixture.
  *
- * WHAT NEITHER LEG DOES is extract text from a format that is not already text.
- * The Go route serves UTF-8 or refuses (422), because the native runtime has no
- * pdf/docx extractor, and the worker then ANNOUNCES the file by name and SKIPS
- * the read with a data-free log rather than failing the turn — pylon's own rule
- * for a file the platform cannot read (`rpc/chat_all.py:384-386`). That is why
- * this spec attaches a .txt: it is the shape both legs can genuinely read, and
- * the skip path is unit-tested rather than staged here.
+ * A FORMAT THAT IS NOT ALREADY TEXT is extracted by elitea-main now
+ * (internal/infra/extract: PDF, DOCX, PPTX, XLSX), and `chat.attachment-pdf.spec.ts`
+ * holds the PDF journey. A file with no text the platform can read is answered
+ * 422 with a reason, and the worker adds a note that says the file could not
+ * be read and why, rather than failing the turn — pylon's own rule for a file
+ * the platform cannot read (`rpc/chat_all.py:384-386`). That path is
+ * unit-tested rather than staged here; this spec keeps the .txt shape.
  *
  * That read is NOT the `attachments` INTERNAL TOOL — that toggle is on the
  * runtime's platform list and is merely SKIPPED with an

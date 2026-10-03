@@ -34,7 +34,37 @@ use crate::protocol::control::{
 
 const TOKEN_CONTEXT_SCHEMA: &str = "elitea.runtime.elitea-client-token.v1";
 const APPLICATION_VERSION_SCHEMA: &str = "elitea.runtime.application-version.v1";
-const ATTACHMENT_OBJECT_SCHEMA: &str = "elitea.runtime.attachment-object.v1";
+/// v1 served raw UTF-8 bytes only; v2 serves EXTRACTED text with its unit
+/// map (`RuntimeAttachmentObjectSchemaVersion`,
+/// `services/elitea-main/internal/infra/storage/runtime_attachment_object.go`).
+/// Both are accepted so that this worker can run against a main that has not
+/// been upgraded yet.
+const ATTACHMENT_OBJECT_SCHEMA_V1: &str = "elitea.runtime.attachment-object.v1";
+const ATTACHMENT_OBJECT_SCHEMA_V2: &str = "elitea.runtime.attachment-object.v2";
+/// The 422 body: why a stored attachment has no text main can serve.
+const ATTACHMENT_UNREADABLE_SCHEMA: &str = "elitea.runtime.attachment-unreadable.v1";
+/// A 422 body larger than this is not the small reason document main sends.
+const MAX_ATTACHMENT_UNREADABLE_BYTES: usize = 4 * 1_024;
+/// The refusal reasons main may send, as `'static` strings so that a
+/// `RuntimeContextError::Rejected` can carry one. Anything else is reported
+/// as `unreadable`.
+const ATTACHMENT_UNREADABLE_REASONS: [&str; 9] = [
+    // Main is still extracting a large file. A read of the same file after
+    // the extraction is filed (a regenerate, or the file attached again)
+    // gets its text; a message without the file does not read it.
+    "processing",
+    "empty",
+    "too_large",
+    "unsupported_format",
+    "encrypted",
+    "malformed",
+    "unsafe_structure",
+    "no_text",
+    "timeout",
+];
+/// The unit kinds main's extractor produces (`extract.UnitKind`).
+const ATTACHMENT_UNIT_KINDS: [&str; 5] = ["page", "slide", "sheet", "section", "part"];
+const MAX_ATTACHMENT_UNIT_LABEL_BYTES: usize = 512;
 const SKILL_WRITE_SCHEMA: &str = "elitea.runtime.skill-write.v1";
 const PROJECT_CONTEXT_WRITE_SCHEMA: &str = "elitea.runtime.project-context-write.v1";
 /// The `artifact` toolkit family's four schemas (#906).
@@ -75,16 +105,16 @@ const MAX_SAFE_TEXT_BYTES: usize = 256;
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_TOKEN_CONTEXT_BYTES: usize = 32 * 1_024;
 const MAX_APPLICATION_VERSION_BYTES: usize = 1_024 * 1_024;
-/// The attachment ENVELOPE's ceiling, which is not the object's.
+/// The attachment ENVELOPE's ceiling, which is not the text's.
 ///
-/// Main caps one attachment's bytes at 128 KiB and its JSON envelope at 1 MiB
-/// (`maxRuntimeAttachmentObjectBytes` / `maxRuntimeAttachmentObjectResponseBytes`
-/// in `services/elitea-main/internal/infra/storage/runtime_attachment_object.go`),
-/// because the content travels as a JSON string and a control-character-dense
-/// file escapes to six characters per byte. This side has to admit the envelope
-/// main is willing to send, so it is the larger of the two numbers that appears
-/// here.
-const MAX_ATTACHMENT_OBJECT_BYTES: usize = 1_024 * 1_024;
+/// Main serves at most 2 MiB of extracted text per attachment and caps the
+/// JSON envelope at 6 MiB (`maxRuntimeAttachmentServedTextBytes` /
+/// `maxRuntimeAttachmentObjectResponseBytes` in
+/// `services/elitea-main/internal/infra/storage/runtime_attachment_object.go`):
+/// the text has no control characters but newline and tab and is encoded
+/// without HTML escaping, so it at most doubles, and the unit map adds under
+/// 1.5 MiB. This side has to admit the envelope main is willing to send.
+pub(crate) const MAX_ATTACHMENT_OBJECT_BYTES: usize = 6 * 1_024 * 1_024;
 const MAX_TOKEN_BYTES: usize = 16 * 1_024;
 const MAX_RUNTIME_CONTEXT_DEADLINE: Duration = Duration::from_mins(5);
 const CLAIM_HEADER: HeaderName = HeaderName::from_static("x-elitea-claim-id");
@@ -181,6 +211,10 @@ pub(crate) enum RuntimeContextError {
     /// fine, the content is not, so the caller's honest move is to tell the
     /// model what it wrote is too large or empty and let it write again —
     /// retrying the identical body would fail identically.
+    ///
+    /// The attachment READ route produces it too, for a stored file main has no
+    /// text for (main answers 422 with a reason). The message is then that
+    /// reason code — see `rejection_reason`.
     Rejected(&'static str),
     DependencyUnavailable(&'static str),
     Transport(RuntimeContextTransportError),
@@ -201,6 +235,15 @@ impl RuntimeContextError {
                 "runtime_context.dependency_unavailable"
             }
             Self::Timeout(_) => "runtime_context.timeout",
+        }
+    }
+
+    /// The reason code of a `Rejected` error, for the attachment read route.
+    #[must_use]
+    pub(crate) const fn rejection_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Rejected(reason) => Some(reason),
+            _ => None,
         }
     }
 
@@ -780,14 +823,63 @@ pub(crate) struct ProjectContextWriteOutcome {
 /// claimed execution's own project and conversation by the service that served
 /// it.
 ///
-/// `content` is TEXT: main refuses anything it cannot serve as valid UTF-8, so
-/// this type has no binary shape to represent. It is deliberately not `Debug`
-/// or `Clone` — the bytes are tenant document content and belong in exactly one
-/// place, the prompt this turn is building.
+/// `content` is TEXT that main extracted (v2) or the file's own UTF-8 bytes
+/// (v1), so this type has no binary shape to represent. It is deliberately not
+/// `Debug` or `Clone` — the text is tenant document content and belongs in
+/// exactly one place, the prompt this turn is building (and the turn's own
+/// attachment tools).
 pub(crate) struct RuntimeAttachmentObject {
     bucket: String,
     name: String,
     content: String,
+    layout: AttachmentTextLayout,
+}
+
+/// One page, slide, sheet, section or text part. `start` and `end` are byte
+/// offsets into the served text, on character boundaries.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttachmentTextUnit {
+    pub(crate) kind: String,
+    pub(crate) label: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) has_text: bool,
+}
+
+/// What main says about the text it served: its unit map, how many units the
+/// SOURCE has, which units have little or no text, and whether the text is the
+/// whole document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttachmentTextLayout {
+    pub(crate) format: String,
+    pub(crate) units: Vec<AttachmentTextUnit>,
+    pub(crate) unit_count: usize,
+    pub(crate) low_text_units: Vec<usize>,
+    pub(crate) text_bytes: u64,
+    pub(crate) complete: bool,
+    pub(crate) partial_reason: String,
+}
+
+impl AttachmentTextLayout {
+    /// The layout of a v1 document: one text part covering everything.
+    fn whole_text(content: &str) -> Self {
+        Self {
+            format: "text".to_owned(),
+            units: vec![AttachmentTextUnit {
+                kind: "part".to_owned(),
+                label: "1".to_owned(),
+                start: 0,
+                end: content.len(),
+                has_text: true,
+            }],
+            unit_count: 1,
+            low_text_units: Vec::new(),
+            text_bytes: content.len() as u64,
+            complete: true,
+            partial_reason: String::new(),
+        }
+    }
 }
 
 impl RuntimeAttachmentObject {
@@ -804,6 +896,11 @@ impl RuntimeAttachmentObject {
     #[must_use]
     pub(crate) fn into_content(self) -> String {
         self.content
+    }
+
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (String, AttachmentTextLayout) {
+        (self.content, self.layout)
     }
 }
 
@@ -1389,6 +1486,23 @@ async fn load_attachment_response(
         .post(request)
         .await
         .map_err(RuntimeContextError::Transport)?;
+    // 422 is checked BEFORE the shared head validation, because that function
+    // maps every non-success status onto the retryable dependency-unavailable
+    // branch. A file main has no text for is not an outage: retrying reads the
+    // same file and fails the same way, and logging it as
+    // `dependency_unavailable` sends an operator after a healthy service.
+    if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
+        return Err(attachment_rejection(response).await);
+    }
+    // A 404 is two different answers. Main answers a missing OBJECT with the
+    // reason document (reason `not_found`). A 404 without it is the ROUTE:
+    // a deployment with no Go object store builds its listener without the
+    // attachment route, and there the file exists and this deployment simply
+    // cannot read it. Telling the model the file "no longer exists" would be
+    // false.
+    if response.status() == StatusCode::NOT_FOUND {
+        return Err(attachment_not_found(response).await);
+    }
     let declared_length =
         validate_response_head_with_limit(&response, config.max_attachment_response_bytes)?;
     let body = collect_body(
@@ -1397,31 +1511,148 @@ async fn load_attachment_response(
         config.max_attachment_response_bytes,
     )
     .await?;
-    let decoded: AttachmentObjectResponse = serde_json::from_slice(&body).map_err(|_| {
+    let decoded: Value = serde_json::from_slice(&body).map_err(|_| {
         RuntimeContextError::InvalidResponse("the attachment response is malformed")
     })?;
+    let malformed = || RuntimeContextError::InvalidResponse("the attachment response is malformed");
+    let (identity, content, layout) = match decoded.get("schema_version").and_then(Value::as_str) {
+        Some(ATTACHMENT_OBJECT_SCHEMA_V2) => {
+            let document: AttachmentObjectResponseV2 =
+                serde_json::from_value(decoded).map_err(|_| malformed())?;
+            let layout = AttachmentTextLayout {
+                format: document.format,
+                units: document.units,
+                unit_count: document.unit_count,
+                low_text_units: document.low_text_units,
+                text_bytes: document.text_bytes,
+                complete: document.complete,
+                partial_reason: document.partial_reason,
+            };
+            if !valid_attachment_layout(&document.content, &layout) {
+                return Err(malformed());
+            }
+            (
+                (document.project_id, document.bucket, document.name),
+                document.content,
+                layout,
+            )
+        }
+        Some(ATTACHMENT_OBJECT_SCHEMA_V1) => {
+            let document: AttachmentObjectResponse =
+                serde_json::from_value(decoded).map_err(|_| malformed())?;
+            if u64::try_from(document.content.len()) != Ok(document.byte_length) {
+                return Err(RuntimeContextError::AuthorizationFailed(
+                    "the attachment response does not match the accepted execution",
+                ));
+            }
+            let layout = AttachmentTextLayout::whole_text(&document.content);
+            (
+                (document.project_id, document.bucket, document.name),
+                document.content,
+                layout,
+            )
+        }
+        _ => {
+            return Err(RuntimeContextError::AuthorizationFailed(
+                "the attachment response does not match the accepted execution",
+            ));
+        }
+    };
     // The identity is re-checked against what was ASKED for, not merely against
     // itself. Main derives the project and the conversation from the claim, so
     // a document that names a different project or a different object than this
     // request selected means the two ends disagree about what was authorized —
     // which must fail the read, never silently enrich a prompt.
-    if decoded.schema_version != ATTACHMENT_OBJECT_SCHEMA
-        || decoded.project_id == 0
-        || decoded.project_id.to_string() != binding.resource_project_id
-        || decoded.bucket != bucket
-        || decoded.name != name
-        || decoded.content.is_empty()
-        || u64::try_from(decoded.content.len()) != Ok(decoded.byte_length)
+    let (project_id, decoded_bucket, decoded_name) = identity;
+    if project_id == 0
+        || project_id.to_string() != binding.resource_project_id
+        || decoded_bucket != bucket
+        || decoded_name != name
+        || content.is_empty()
     {
         return Err(RuntimeContextError::AuthorizationFailed(
             "the attachment response does not match the accepted execution",
         ));
     }
     Ok(RuntimeAttachmentObject {
-        bucket: decoded.bucket,
-        name: decoded.name,
-        content: decoded.content,
+        bucket: decoded_bucket,
+        name: decoded_name,
+        content,
+        layout,
     })
+}
+
+/// Read main's 422 body for its reason. Any body that is not the small,
+/// well-formed reason document still yields a terminal rejection, with the
+/// reason `unreadable`: the status alone already says "this file has no text",
+/// and that must never turn into a retryable outage because a body was odd.
+async fn attachment_rejection(response: Response<Body>) -> RuntimeContextError {
+    let fallback = RuntimeContextError::Rejected("unreadable");
+    let Some(reason) = attachment_reason(response).await else {
+        return fallback;
+    };
+    ATTACHMENT_UNREADABLE_REASONS
+        .iter()
+        .find(|known| **known == reason)
+        .map_or(fallback, |reason| RuntimeContextError::Rejected(reason))
+}
+
+/// Read a 404 from the attachment route. The reason document with
+/// `not_found` is a missing object; anything else is a deployment without
+/// the route, which is a terminal rejection with its own reason, never an
+/// outage to retry.
+async fn attachment_not_found(response: Response<Body>) -> RuntimeContextError {
+    if attachment_reason(response).await.as_deref() == Some("not_found") {
+        return RuntimeContextError::NotFound("the attachment object no longer exists");
+    }
+    RuntimeContextError::Rejected("unsupported_deployment")
+}
+
+/// The reason in main's small reason document
+/// (`elitea.runtime.attachment-unreadable.v1`), or `None` when the body is
+/// not that document.
+async fn attachment_reason(response: Response<Body>) -> Option<String> {
+    let declared = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|length| *length > 0 && *length <= MAX_ATTACHMENT_UNREADABLE_BYTES)?;
+    let body = collect_body(response, declared, MAX_ATTACHMENT_UNREADABLE_BYTES)
+        .await
+        .ok()?;
+    let document = serde_json::from_slice::<AttachmentUnreadableResponse>(&body).ok()?;
+    (document.schema_version == ATTACHMENT_UNREADABLE_SCHEMA).then_some(document.reason)
+}
+
+/// The unit map must describe the served text exactly: ordered, disjoint,
+/// inside it, on character boundaries, of a known kind, and no more units than
+/// the source has. A map that fails this would make the read tool slice the
+/// wrong text, so the whole document is refused instead.
+fn valid_attachment_layout(content: &str, layout: &AttachmentTextLayout) -> bool {
+    let mut previous_end = 0;
+    for unit in &layout.units {
+        if unit.start < previous_end
+            || unit.start > unit.end
+            || unit.end > content.len()
+            || !content.is_char_boundary(unit.start)
+            || !content.is_char_boundary(unit.end)
+            || !ATTACHMENT_UNIT_KINDS.contains(&unit.kind.as_str())
+            || unit.label.len() > MAX_ATTACHMENT_UNIT_LABEL_BYTES
+        {
+            return false;
+        }
+        previous_end = unit.end;
+    }
+    !layout.units.is_empty()
+        && layout.unit_count >= layout.units.len()
+        && layout.text_bytes >= content.len() as u64
+        && layout
+            .low_text_units
+            .iter()
+            .all(|number| *number >= 1 && *number <= layout.units.len())
+        && layout.format.len() <= MAX_SAFE_TEXT_BYTES
+        && layout.partial_reason.len() <= MAX_SAFE_TEXT_BYTES
 }
 
 fn validate_response_head(
@@ -1642,6 +1873,7 @@ struct RuntimeContextResponse {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AttachmentObjectResponse {
+    #[allow(dead_code)] // Matched before this struct is decoded.
     schema_version: String,
     project_id: u64,
     bucket: String,
@@ -1650,6 +1882,39 @@ struct AttachmentObjectResponse {
     media_type: String,
     byte_length: u64,
     content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttachmentObjectResponseV2 {
+    #[allow(dead_code)] // Matched before this struct is decoded.
+    schema_version: String,
+    project_id: u64,
+    bucket: String,
+    name: String,
+    #[allow(dead_code)] // Carried for diagnostics; the bytes decided, not the type.
+    media_type: String,
+    #[allow(dead_code)] // The SOURCE object's size, not the text's.
+    byte_length: u64,
+    format: String,
+    #[allow(dead_code)] // Recorded by main with the sidecar.
+    extractor_version: String,
+    content: String,
+    units: Vec<AttachmentTextUnit>,
+    unit_count: usize,
+    low_text_units: Vec<usize>,
+    text_bytes: u64,
+    #[allow(dead_code)] // The worker counts its own budget from the text.
+    token_estimate: u64,
+    complete: bool,
+    partial_reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttachmentUnreadableResponse {
+    schema_version: String,
+    reason: String,
 }
 
 #[derive(Deserialize)]
