@@ -4541,5 +4541,6 @@
   "pages.admin.unavailable.explanation": "Something went wrong on our side. Try again in a moment.",
   "widgets.chatBox.hashPicker.title": "Agents and pipelines",
   "chatMessages.error.budgetUsageMember": "View my usage",
-  "chatMessages.error.budgetUsageProject": "View project usage"
+  "chatMessages.error.budgetUsageProject": "View project usage",
+  "entities.author.deletedUser": "Deleted user"
 }

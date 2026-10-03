@@ -33,6 +33,12 @@ describe('AuthorsButton', () => {
     expect(getByText('B')).toBeInTheDocument();
   });
 
+  it('shows a placeholder avatar, not a crash, for a deleted author (#6702)', () => {
+    const gone = { id: 'a9', name: '', email: '' };
+    const { getByTestId } = renderWithProviders(<AuthorsButton versions={[{ author: gone }]} />);
+    expect(getByTestId('deleted-author-avatar')).toBeInTheDocument();
+  });
+
   it('renders nothing when there is no author anywhere', () => {
     const { container } = renderWithProviders(<AuthorsButton versions={[{}]} />);
     expect(container).toBeEmptyDOMElement();

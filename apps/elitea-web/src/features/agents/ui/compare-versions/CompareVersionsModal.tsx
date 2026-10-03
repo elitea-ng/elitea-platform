@@ -11,6 +11,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { authorDisplayName } from '@/entities/author';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -58,10 +59,10 @@ import { CompareInstructionsStep, CompareToolsSkillsStep, CompareUserInteraction
  * `CompareVersionsModal`'s own complexity budget.
  */
 function versionLabelWithAuthor(name: string, detail: ApplicationVersionDetail | undefined): string {
-  const authorName = detail?.author?.name;
-  return authorName === undefined
+  const author = detail?.author;
+  return author == null
     ? name
-    : t('features.agents.compareVersions.versionByAuthor', '{{name}} · {{author}}', { name, author: authorName });
+    : t('features.agents.compareVersions.versionByAuthor', '{{name}} · {{author}}', { name, author: authorDisplayName(author) });
 }
 
 export interface CompareVersionsModalProps {
