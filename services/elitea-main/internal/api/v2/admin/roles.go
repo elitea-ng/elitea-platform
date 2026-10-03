@@ -254,13 +254,19 @@ func catalogueFrom(granted []string) []string {
 	return mergePermissionCatalogue(live, declaredPermissions())
 }
 
-// retiredPermissions are permission strings that no code checks (#6874).
+// retiredPermissions are permission strings that no code in this repository
+// checks (#6874): no Go route, no elitea-web gate and no worker.
 //
 // The resolver matches exact strings and does no prefix matching, so each of
-// these rows grants nothing. They are bare section nodes that pylon's admin
-// module registered, prefix nodes the legacy Roles matrix saved when an
+// these rows grants nothing here. They are bare section nodes that pylon's
+// admin module registered, prefix nodes the legacy Roles matrix saved when an
 // operator clicked a group toggle, and strings a pylon migration seeded for
 // features that never checked them.
+//
+// pylon's own admin UI still gates its sections on the bare nodes
+// (legacy/plugins/admin/module.py). Where it runs against this database, it
+// loses those sections after 0136 until it re-seeds its roles on restart.
+// The re-seeded rows are why this list also filters the catalogue.
 //
 // Shared migration 0136 deletes the rows. This list MUST equal the list in that
 // file; internal/api/router_permission_retired_gate_test.go checks both that,
