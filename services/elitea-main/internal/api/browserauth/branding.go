@@ -42,6 +42,7 @@ import (
 	"html/template"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	v2branding "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/branding"
@@ -217,7 +218,9 @@ func brandSchemeVariables(pack *v2branding.Pack) []cssVariable {
 			values["brand"] = hue
 		}
 		if values["brand"] != "" && values["on-brand"] == "" {
-			if onBrand != "" {
+			// onBrand was chosen to read on the hue, so it applies only when
+			// the accent IS the hue; a stated scheme accent gets its own ink.
+			if onBrand != "" && values["brand"] == hue {
 				values["on-brand"] = onBrand
 			} else if ink := readableInk(values["brand"]); ink != "" {
 				values["on-brand"] = ink
@@ -241,29 +244,63 @@ func cssSchemeColour(value string) string {
 	return strings.ToLower(value)
 }
 
-// readableInk is #ffffff or #0e131d, whichever contrasts more with a #RRGGBB
-// background; "" for any other form.
+// readableInk is #ffffff or #0e131d, whichever contrasts more with an opaque
+// colour that cssSchemeColour admitted (#RGB, #RRGGBB, #RRGGBBAA, rgb(),
+// rgba()); "" when the value cannot be read. Alpha is ignored.
 func readableInk(background string) string {
-	if !hexColourPattern.MatchString(background) {
+	rgb, ok := parseSchemeColour(background)
+	if !ok {
 		return ""
 	}
-	var channels [3]float64
-	for i := range channels {
-		var v int
-		_, _ = fmt.Sscanf(background[1+2*i:3+2*i], "%02x", &v)
-		c := float64(v) / 255
+	var luminance float64
+	for i, weight := range [3]float64{0.2126, 0.7152, 0.0722} {
+		c := float64(rgb[i]) / 255
 		if c <= 0.04045 {
-			channels[i] = c / 12.92
+			c /= 12.92
 		} else {
-			channels[i] = math.Pow((c+0.055)/1.055, 2.4)
+			c = math.Pow((c+0.055)/1.055, 2.4)
 		}
+		luminance += weight * c
 	}
-	luminance := 0.2126*channels[0] + 0.7152*channels[1] + 0.0722*channels[2]
 	// #0e131d has a relative luminance of about 0.0065.
 	if (1.05)/(luminance+0.05) >= (luminance+0.05)/(0.0065+0.05) {
 		return "#ffffff"
 	}
 	return "#0e131d"
+}
+
+// parseSchemeColour reads the channels of a colour in one of the admitted
+// forms.
+func parseSchemeColour(value string) ([3]int, bool) {
+	var rgb [3]int
+	value = strings.TrimSpace(value)
+	if !schemeColourPattern.MatchString(value) {
+		return rgb, false
+	}
+	if strings.HasPrefix(value, "#") {
+		hex := value[1:]
+		if len(hex) == 3 {
+			hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+		}
+		for i := range rgb {
+			v, err := strconv.ParseUint(hex[2*i:2*i+2], 16, 8)
+			if err != nil {
+				return rgb, false
+			}
+			rgb[i] = int(v)
+		}
+		return rgb, true
+	}
+	inner := value[strings.IndexByte(value, '(')+1 : strings.IndexByte(value, ')')]
+	parts := strings.Split(inner, ",")
+	for i := range rgb {
+		v, err := strconv.Atoi(strings.TrimSpace(parts[i]))
+		if err != nil || v > 255 {
+			return rgb, false
+		}
+		rgb[i] = v
+	}
+	return rgb, true
 }
 
 // cssHexColour admits exactly #RRGGBB, lower-cased.

@@ -197,7 +197,11 @@ func TestThePackSchemeTokensReachBothSchemes(t *testing.T) {
 	if !strings.Contains(css, want) {
 		t.Fatalf("brand css = %s\nwant it to contain %s", css, want)
 	}
-	for background, ink := range map[string]string{"#6ae8fa": "#0e131d", "#c428dd": "#ffffff", "#ff6600": "#0e131d", "#0b5ed7": "#ffffff"} {
+	for background, ink := range map[string]string{
+		"#6ae8fa": "#0e131d", "#c428dd": "#ffffff", "#ff6600": "#0e131d", "#0b5ed7": "#ffffff",
+		"rgba(26, 35, 126, 1)": "#ffffff", "#fe0": "#0e131d", "#1a237eff": "#ffffff", "rgb(300, 0, 0)": "",
+		"linear-gradient(red, blue)": "",
+	} {
 		if got := readableInk(background); got != ink {
 			t.Errorf("readableInk(%s) = %s, want %s", background, got, ink)
 		}
@@ -210,6 +214,25 @@ func TestAZeroRadiusIsKept(t *testing.T) {
 	pack.Shape = v2branding.Shape{RadiusMd: 0, RadiusLg: 0, RadiusPill: 0}
 	if css := string(loginBrandFromPack(pack).Style); !strings.Contains(css, ":root{--radius-md:0px;--radius-lg:0px;--radius-pill:0px}") {
 		t.Fatalf("brand css = %s", css)
+	}
+}
+
+// onBrand was picked for the hue. A scheme that states its own accent gets
+// the ink that reads on that accent instead.
+func TestAStatedSchemeAccentGetsItsOwnInk(t *testing.T) {
+	pack := v2branding.DefaultPack()
+	pack.Brand.Hue = "#ffee00"
+	pack.Brand.OnBrand = ptr("#000000")
+	pack.Schemes.Light = map[string]string{}
+	pack.Schemes.Dark = map[string]string{"primary.main": "rgba(26, 35, 126, 1)"}
+	css := string(loginBrandFromPack(pack).Style)
+	for _, want := range []string{
+		"--brand-light:#ffee00;--on-brand-light:#000000;",
+		"--brand-dark:rgba(26, 35, 126, 1);--on-brand-dark:#ffffff",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("brand css = %s\nwant it to contain %s", css, want)
+		}
 	}
 }
 
