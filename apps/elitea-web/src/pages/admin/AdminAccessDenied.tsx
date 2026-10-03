@@ -13,7 +13,7 @@
  * adjustable). The SPA is served 200 by the Go handler — the "403" is the
  * client-side gate, see `admin.access-denied.spec.ts`.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
@@ -58,6 +58,7 @@ function ShieldIcon(): ReactNode {
 export function AdminAccessDenied({ redirect = assignLocation }: AdminAccessDeniedProps = {}) {
   // `null` once the visitor chose to stay: the timer stops and the countdown goes away.
   const [remaining, setRemaining] = useState<number | null>(REDIRECT_SECONDS);
+  const homeLinkRef = useRef<HTMLAnchorElement>(null);
 
   useEffect(() => {
     if (remaining === null) return undefined;
@@ -80,14 +81,17 @@ export function AdminAccessDenied({ redirect = assignLocation }: AdminAccessDeni
       title={t('pages.admin.accessDenied.title', 'Nice Try, Hacker!')}
       actions={
         <>
-          <Button variant="contained" component="a" href={APP_URL}>
+          <Button variant="contained" component="a" href={APP_URL} ref={homeLinkRef}>
             {t('pages.admin.accessDenied.backToApp', 'Back to the app now')}
           </Button>
           {remaining !== null ? (
             <Button
               variant="outlined"
               onClick={() => {
+                // The button unmounts on cancel; hand focus to the primary link so
+                // keyboard and screen-reader users keep their place (WCAG 2.4.3).
                 setRemaining(null);
+                homeLinkRef.current?.focus();
               }}
             >
               {t('pages.admin.accessDenied.stay', 'Stay on this page')}

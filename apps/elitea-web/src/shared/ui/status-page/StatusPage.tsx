@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
@@ -35,7 +36,9 @@ export function StatusPage({
   actions,
   minHeight = '100vh',
 }: StatusPageProps): ReactNode {
-  const productName = resolveBrandPack().product.name;
+  // Resolved once: parents re-render (the countdown ticks every second) and a
+  // malformed served pack makes resolveBrandPack() console.warn each call.
+  const [productName] = useState(() => resolveBrandPack().product.name);
   return (
     <Box
       component="main"
