@@ -5,6 +5,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 
+import { authorDisplayName, isDeletedAuthor } from '@/entities/author';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
@@ -50,7 +51,10 @@ function toRow(application: Application, onSelectForkedFrom: (id: string) => voi
     id: application.id,
     name: applicationName(application),
     description: application.description ?? '',
-    authors: (application.authors ?? []).map((author) => ({ id: author.id, name: author.name })),
+    // A deleted author's account answers no name or email (#6702).
+    authors: (application.authors ?? []).map((author) => ({
+      id: author.id, name: authorDisplayName(author), deleted: isDeletedAuthor(author),
+    })),
     tags: application.tags ?? [],
     createdAt: application.created_at,
     ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),

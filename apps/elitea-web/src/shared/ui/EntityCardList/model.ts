@@ -15,6 +15,8 @@ export interface EntityListAuthor {
   readonly id?: string;
   readonly name: string;
   readonly avatar?: string;
+  /** The author's account was deleted (#6702): draw a placeholder avatar, not initials. */
+  readonly deleted?: boolean;
 }
 
 /** One tag chip on a card's bottom row (`components/CardTagSection.jsx`). */

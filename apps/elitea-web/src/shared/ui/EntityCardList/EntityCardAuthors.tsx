@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined';
 import Avatar from '@mui/material/Avatar';
 import Box from '@mui/material/Box';
 import Tooltip from '@mui/material/Tooltip';
@@ -41,12 +42,15 @@ export function EntityCardAuthors({ authors }: EntityCardAuthorsProps): ReactNod
         {shown.map((author, index) => (
           <Avatar
             key={author.id ?? author.name}
-            {...(author.avatar === undefined ? {} : { src: author.avatar })}
+            {...(author.avatar === undefined || author.deleted === true ? {} : { src: author.avatar })}
             alt={author.name}
             data-testid="entity-card-author-avatar"
-            sx={avatarSx(index, shown.length - index, author.avatar === undefined ? author.name : undefined)}
+            sx={avatarSx(index, shown.length - index, author.avatar === undefined && author.deleted !== true && author.name.trim() !== '' ? author.name : undefined)}
           >
-            {getInitials(author.name)}
+            {author.deleted === true || author.name.trim() === ''
+              // A deleted account has no name to take initials from (#6702).
+              ? <PersonOffOutlinedIcon sx={{ fontSize: 'inherit' }} data-testid="entity-card-deleted-author-avatar" />
+              : getInitials(author.name)}
           </Avatar>
         ))}
         {extra > 0 && <Box sx={extraSx}>{`+${String(extra)}`}</Box>}

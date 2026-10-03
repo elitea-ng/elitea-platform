@@ -300,7 +300,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
-			COALESCE(u.id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
+			COALESCE(av.author_id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
 			`+statusExpr+`,
 			`+tagsExpr+`
 		FROM %s.applications a`, s) + join +
@@ -363,6 +363,10 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			app.Meta["parent_project_id"] = projectID
 		}
 		app.Authors = []applications.Author{}
+		// The id comes from the VERSION, not from the user join, so an author
+		// whose account was deleted stays on the row with an empty name and
+		// email, the same shape the detail read answers. The list card then
+		// reads "Deleted user" instead of showing no author at all (#6702).
 		if authorID > 0 {
 			app.Authors = append(app.Authors, applications.Author{
 				ID: strconv.Itoa(authorID), Email: authorEmail, Name: authorName,
