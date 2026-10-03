@@ -94,6 +94,48 @@ export function mcpSessionFromFrame(
   return { serverUrl, sessionId };
 }
 
+/** The processing timeline entry an `agent_tool_start` frame creates. */
+function newToolAction(frame: ChatStreamFrame, runId: string): ToolAction {
+  const metadata = toolMetadata(frame);
+  const hierarchy = normalizeExecutionHierarchy(metadata, frame.response_metadata);
+  const toolkit = toolkitIdentity(frame, metadata);
+  // Built imperatively, not with conditional spreads: spreading a
+  // `{name: X} | {}` union infers `name?: X | undefined`, which
+  // `exactOptionalPropertyTypes` rejects against `SubAgentGroupable`'s
+  // "absent or string". Same convention as
+  // `useToolkitChatSocket.hooks.ts:79-90`.
+  const draft: Record<string, unknown> = {
+    id: runId,
+    type: TOOL_ACTION_TYPES.Tool,
+    status: ToolActionStatus.processing,
+    message: '',
+    ...hierarchy,
+    toolInputs: frame.response_metadata?.tool_inputs,
+    toolOutputs: frame.response_metadata?.tool_outputs,
+    toolMeta: { ...metadata, toolkit_type: toolkit.type, toolkit_name: toolkit.name, ...hierarchy },
+    created_at: frame.response_metadata?.timestamp_start ?? frame.created_at,
+  };
+  const displayName = toolDisplayName(frame, metadata);
+  if (displayName !== undefined) draft['name'] = displayName;
+  if (typeof metadata['original_name'] === 'string') draft['original_name'] = metadata['original_name'];
+  return draft as unknown as ToolAction;
+}
+
+/**
+ * The message with a timeline entry for `runId`, synthesized from an END frame
+ * when its start never arrived (#6832).
+ *
+ * A dropped connection or a replay that began past the start used to leave an
+ * end with nothing to update, so the tool vanished from the live trace and
+ * the thinking section drew empty separators until a reload. The end frame
+ * carries the same identity fields as the start, so the entry is built from
+ * it, and the end then settles it like any other.
+ */
+function withToolAction(message: ChatMessage, frame: ChatStreamFrame, runId: string): ChatMessage {
+  if (findToolAction(message, runId)) return message;
+  return { ...message, toolActions: [...((message.toolActions ?? []) as readonly ToolAction[]), newToolAction(frame, runId)] };
+}
+
 /**
  * Reduce one tool-lifecycle frame, or return `undefined` for a frame this
  * family does not own so the dispatcher can offer it to the next one.
@@ -128,27 +170,7 @@ export function reduceToolFrame(
         });
       }
 
-      const toolkit = toolkitIdentity(frame, metadata);
-      // Built imperatively, not with conditional spreads: spreading a
-      // `{name: X} | {}` union infers `name?: X | undefined`, which
-      // `exactOptionalPropertyTypes` rejects against `SubAgentGroupable`'s
-      // "absent or string". Same convention as
-      // `useToolkitChatSocket.hooks.ts:79-90`.
-      const draft: Record<string, unknown> = {
-        id: runId,
-        type: TOOL_ACTION_TYPES.Tool,
-        status: ToolActionStatus.processing,
-        message: '',
-        ...hierarchy,
-        toolInputs: frame.response_metadata?.tool_inputs,
-        toolOutputs: frame.response_metadata?.tool_outputs,
-        toolMeta: { ...metadata, toolkit_type: toolkit.type, toolkit_name: toolkit.name, ...hierarchy },
-        created_at: frame.response_metadata?.timestamp_start ?? frame.created_at,
-      };
-      const displayName = toolDisplayName(frame, metadata);
-      if (displayName !== undefined) draft['name'] = displayName;
-      if (typeof metadata['original_name'] === 'string') draft['original_name'] = metadata['original_name'];
-      const created = draft as unknown as ToolAction;
+      const created = newToolAction(frame, runId);
       return replaceAt(history, index, {
         toolActions: [...((current.toolActions ?? []) as readonly ToolAction[]), created],
         ...(threadId !== undefined ? { threadId } : {}),
@@ -161,9 +183,10 @@ export function reduceToolFrame(
     case SocketMessageType.AgentToolEnd:
     case SocketMessageType.AgentToolError: {
       if (index === -1) return history;
-      const current = history[index];
+      const original = history[index];
       const runId = frame.response_metadata?.tool_run_id;
-      if (!current || !runId || !findToolAction(current, runId)) return history;
+      if (!original || !runId) return history;
+      const current = withToolAction(original, frame, runId);
       const metadata = toolMetadata(frame);
       const isError = type === SocketMessageType.AgentToolError;
       if (isError && frame.response_metadata?.tool_output_chunk_v1 === undefined) {

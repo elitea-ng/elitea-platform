@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sha256Hex } from '@/shared/lib/hash/sha256';
+import { ToolActionStatus } from '@/shared/lib/chat';
 
 import { applyChatStreamFrame, mcpSessionFromFrame, type ChatStreamContext, type ToolAction } from './chatStreamReducer';
 import { HANDLED_STREAM_TYPES, SocketMessageType, isChatStreamFrame } from './chatStreamFrame';
@@ -491,10 +492,14 @@ describe('the tool lifecycle', () => {
     expect(actions[1]?.['status']).toBe('processing');
   });
 
-  it('ignores an end or error for a run id it never saw start', () => {
+  it('adds, rather than ignores, an end or error for a run id it never saw start (#6832)', () => {
+    // Ignoring it was the defect: the tool vanished from the live trace and
+    // only a reload, which reads the persisted steps, brought it back.
     const before = withStartedTool();
-    expect(applyChatStreamFrame(before, frame(SocketMessageType.AgentToolEnd, { response_metadata: { tool_run_id: 'ghost' } }), CONTEXT)).toBe(before);
-    expect(applyChatStreamFrame(before, frame(SocketMessageType.AgentToolError, { response_metadata: { tool_run_id: 'ghost' } }), CONTEXT)).toBe(before);
+    const ended = applyChatStreamFrame(before, frame(SocketMessageType.AgentToolEnd, { response_metadata: { tool_run_id: 'ghost' } }), CONTEXT);
+    expect(((ended[0]?.toolActions ?? []) as readonly ToolAction[]).map((action) => action.id)).toEqual([RUN_ID, 'ghost']);
+    const errored = applyChatStreamFrame(before, frame(SocketMessageType.AgentToolError, { response_metadata: { tool_run_id: 'ghost' } }), CONTEXT);
+    expect(((errored[0]?.toolActions ?? []) as readonly ToolAction[]).find((action) => action.id === 'ghost')?.status).toBe(ToolActionStatus.error);
   });
 });
 
@@ -1606,5 +1611,46 @@ describe('a streamed token is renderable the moment it arrives', () => {
 
     expect(history[0]?.isLoading).toBe(true);
     expect(history[0]?.isStreaming).toBe(true);
+  });
+});
+
+describe('a tool end whose start never arrived (#6832)', () => {
+  it('synthesizes a complete tool action from the end frame', () => {
+    const history = applyChatStreamFrame([pendingAssistant()], frame(SocketMessageType.AgentToolEnd, {
+      content: 'found 3 issues',
+      response_metadata: {
+        tool_run_id: 'orphan-1', tool_name: 'search_issues', toolkit_name: 'jira', toolkit_type: 'jira',
+        tool_inputs: { jql: 'project = X' }, tool_output: 'found 3 issues',
+      },
+    }), CONTEXT);
+    const actions = (history[0]?.toolActions ?? []) as readonly ToolAction[];
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      id: 'orphan-1', name: 'search_issues', status: ToolActionStatus.complete, toolOutputs: 'found 3 issues',
+      toolInputs: { jql: 'project = X' }, content: 'found 3 issues',
+    });
+    expect(actions[0]?.toolMeta).toMatchObject({ toolkit_name: 'jira', toolkit_type: 'jira' });
+  });
+
+  it('synthesizes an errored tool action from an orphan error frame', () => {
+    const history = applyChatStreamFrame([pendingAssistant()], frame(SocketMessageType.AgentToolError, {
+      content: 'boom', response_metadata: { tool_run_id: 'orphan-2', tool_name: 'run_query' },
+    }), CONTEXT);
+    const actions = (history[0]?.toolActions ?? []) as readonly ToolAction[];
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ id: 'orphan-2', status: ToolActionStatus.error, isError: true, content: 'boom' });
+  });
+
+  it('does not duplicate an action whose start did arrive', () => {
+    let history: readonly ChatMessage[] = [pendingAssistant()];
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolStart, {
+      response_metadata: { tool_run_id: 'seen', tool_name: 'Search' },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolEnd, {
+      content: 'ok', response_metadata: { tool_run_id: 'seen', tool_output: 'ok' },
+    }), CONTEXT);
+    const actions = (history[0]?.toolActions ?? []) as readonly ToolAction[];
+    expect(actions.map((action) => action.id)).toEqual(['seen']);
+    expect(actions[0]?.status).toBe(ToolActionStatus.complete);
   });
 });
