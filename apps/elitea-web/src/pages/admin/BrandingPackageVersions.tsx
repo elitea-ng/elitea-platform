@@ -89,7 +89,7 @@ export function BrandingPackageVersions(props: BrandingPackageVersionsProps) {
   const { versions, isLoading, error } = props;
   return (
     <Box component="section" aria-labelledby="branding-package-versions-heading" data-testid="branding-package-versions" sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <Typography id="branding-package-versions-heading" variant="h6" component="h2">
+      <Typography id="branding-package-versions-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.package.versions.title', 'Previous packages')}
       </Typography>
       <Typography variant="bodySmall" color="text.secondary">

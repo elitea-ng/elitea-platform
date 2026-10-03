@@ -70,7 +70,7 @@ export function AdminGatewayGovernance() {
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.governance.title', 'LLM Governance')}
         </Typography>
         <Button

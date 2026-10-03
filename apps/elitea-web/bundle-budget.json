@@ -10,7 +10,19 @@
   "targets": {
     "app": {
       "html": "index.html",
-      "initialKB": 300,
+      "initialNote": [
+        "301, not 300: measured 2026-10-03 on fix/typography-scale (one type scale",
+        "for the app and the admin console). main (d49b4c9ac) measures 299.7 KiB",
+        "gzip; the branch 300.4. Attribution, per initial chunk: the theme chunk",
+        "(channelC) +0.54 KiB — four new MUI override keys (DialogTitle,",
+        "TableCell, ListItemText, InputLabel), type-scale slots on eleven more,",
+        "the thirteen stock-variant aliases and the ladder's floor/separation",
+        "guards — and +0.24 KiB for shared/brand/typeScale.ts, which the",
+        "overrides and lazy route chunks share and the bundler therefore splits",
+        "into its own preloaded chunk. No route code moved into the initial set;",
+        "the growth is the type scale itself."
+      ],
+      "initialKB": 301,
       "routeChunkKB": 250
     },
     "admin": {

@@ -345,7 +345,10 @@ export function CanvasEditHeader({
                 borderRadius: '4px',
                 border: '1px solid',
                 borderColor: 'divider',
-                fontSize: '0.875rem',
+                // A native <select> does not inherit font by default; this
+                // makes it take the surrounding bodyMedium text.
+                font: 'inherit',
+                fontSize: 'inherit',
                 background: disabledAll ? '#f0f0f0' : undefined,
                 cursor: disabledAll || disableLanguageSelect ? 'not-allowed' : 'pointer',
                 margin: '5px 0 0 0',

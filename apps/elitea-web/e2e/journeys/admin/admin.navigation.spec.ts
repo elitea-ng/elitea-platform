@@ -37,6 +37,7 @@
 import { test as adminTest, expect, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { expectTextSpacingSurvives, expectTypeScale } from '../../fixtures/typeScale';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 adminTest.use({ storageState: STORAGE_STATE.admin });
@@ -230,4 +231,28 @@ adminTest('J37e: collapsing the nav survives a full reload', async ({ page }) =>
   // prove the toggle works in both directions, not to tidy up.
   await page.getByTestId('admin-nav-collapse-toggle').click();
   await expect(reloadedNav.getByText('Schedules & Tasks')).toBeVisible();
+});
+
+/*
+ * Typography spec rev. 2 §4.6: ONE type scale for the console. Every admin
+ * page reached through the nav must paint its text at a rung of the default
+ * pack's ladder (12/14/16/20px) — the unit and Storybook suites prove the
+ * theme and the component overrides, but only a real page shows a call site
+ * that sizes its own text. On the landing page the WCAG 1.4.12 text-spacing
+ * overrides must not make a button, chip or nav item clip its label.
+ */
+adminTest('J37f: every admin page renders on the one type scale', async ({ page }) => {
+  adminTest.setTimeout(120_000);
+  await openAdminLanding(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
+  await expectTextSpacingSurvives(page, 'admin landing');
+
+  const nav = page.getByRole('navigation', { name: 'Admin navigation' });
+  for (const item of ITEMS) {
+    await nav.getByTestId(`admin-nav-item-${item.id}`).click();
+    await expect(page.getByRole('heading', { level: 1, name: item.heading, exact: true })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expectTypeScale(page, item.path);
+  }
 });

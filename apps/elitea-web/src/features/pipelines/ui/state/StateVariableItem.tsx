@@ -176,7 +176,7 @@ export function StateVariableItem(props: StateVariableItemProps): ReactNode {
       {errorMessage && (
         <Box sx={errorContainerSx}>
           <Typography
-            variant="caption"
+            variant="bodySmall"
             sx={errorTextSx}
           >
             {errorMessage}
@@ -203,11 +203,11 @@ const containerSx: SxProps<Theme> = (theme: Theme) => ({
 
 // Baseline: `fontSize: '0.6875rem'` (an ad-hoc size below `caption`'s own).
 // Dropped per R-T11 — `fontSize` literals are banned outright, no token is
-// close enough to justify a substitution — `variant="caption"` (below)
-// supplies the font size instead.
+// close enough to justify a substitution — `variant="bodySmall"` (below)
+// supplies the size and its 1.5 leading (the baseline's 1.3 is under the
+// spec §5 floor of 1.4, and this text wraps).
 const errorTextSx: SxProps<Theme> = (theme: Theme) => ({
   color: theme.vars.palette.error.main,
-  lineHeight: 1.3,
   whiteSpace: 'normal',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',

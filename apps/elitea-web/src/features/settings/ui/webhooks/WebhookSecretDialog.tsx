@@ -21,6 +21,7 @@ import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { InputBase } from '@/shared/ui/InputBase';
 import { handleCopy } from '@/shared/lib/clipboard';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 export interface WebhookSecretDialogProps {
   readonly open: boolean;
@@ -29,7 +30,7 @@ export interface WebhookSecretDialogProps {
 }
 
 const contentSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: '25rem' };
-const secretInputSx: SxProps<Theme> = { '& input': { fontFamily: 'monospace' } };
+const secretInputSx: SxProps<Theme> = { '& input': { fontFamily: monoFontFamily } };
 
 export function WebhookSecretDialog({ open, secret, onClose }: WebhookSecretDialogProps) {
   const [copyLabel, setCopyLabel] = useState(() => t('entities.webhook.secretDialog.copy', 'Copy'));

@@ -291,7 +291,7 @@ export function AdminConfiguration() {
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
-      <Typography variant="h5" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingLarge" component="h1">
         {t('pages.admin.configuration.title', 'Configuration')}
       </Typography>
 

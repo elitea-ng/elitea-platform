@@ -25,6 +25,7 @@ import type {
   AdminScimClient,
   ScimClientAuthMethod,
 } from "./api/adminScimClientsApi";
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 /** The method's operator-facing name, shared with the create dialog. */
 export function scimMethodLabel(method: ScimClientAuthMethod): string {
@@ -43,7 +44,7 @@ function CreatedCell({ client }: { readonly client: AdminScimClient }) {
   const when = formatDate(client.created_at) ?? "";
   const by = client.created_by_name;
   return (
-    <Typography variant="bodySmall">
+    <Typography variant="bodyMedium">
       {by === undefined || by === ""
         ? when
         : t("pages.admin.scimClients.table.createdBy", "{{date}} by {{name}}", {
@@ -82,13 +83,13 @@ function ClientRow({
       <TableCell>
         {client.auth_method === "client_credentials" &&
         client.client_id !== undefined ? (
-          <Typography variant="bodySmall" sx={{ fontFamily: "monospace" }}>
+          <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
             {client.client_id}
           </Typography>
         ) : null}
       </TableCell>
       <TableCell>
-        <Typography variant="bodySmall" sx={{ fontFamily: "monospace" }}>
+        <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
           {`…${client.secret_hint}`}
         </Typography>
       </TableCell>
@@ -96,7 +97,7 @@ function ClientRow({
         <CreatedCell client={client} />
       </TableCell>
       <TableCell>
-        <Typography variant="bodySmall">
+        <Typography variant="bodyMedium">
           {formatDate(client.last_used_at) ??
             t("pages.admin.scimClients.table.never", "Never")}
         </Typography>

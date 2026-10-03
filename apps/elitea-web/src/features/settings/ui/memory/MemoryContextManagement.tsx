@@ -95,6 +95,7 @@ export const MemoryContextManagement = memo(({ onAutoSaveRequested, models = [] 
                   <Box sx={styles.fieldsRow}>
                     <Box sx={styles.field}>
                       <InfoLabelWithTooltip
+                        variant="labelMedium"
                         label={t(
                           'settings.memory.contextManagement.preserveRecentMessages',
                           'Preserve Recent Messages',

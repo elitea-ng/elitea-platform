@@ -300,7 +300,7 @@ export function CreateApplication(): ReactNode {
     <FormProvider {...form}>
       <Box sx={pageSx}>
         <Box sx={tabBarSx}>
-          <Typography variant="headingSmall">{t('pages.agents.createApplication.title', 'New Agent')}</Typography>
+          <Typography variant="headingLarge" component="h1">{t('pages.agents.createApplication.title', 'New Agent')}</Typography>
           <CreateApplicationTabBar
             onSave={handleSave}
             onCancel={handleCancel}

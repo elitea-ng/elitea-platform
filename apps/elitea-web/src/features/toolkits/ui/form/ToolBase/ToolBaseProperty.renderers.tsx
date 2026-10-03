@@ -366,7 +366,7 @@ export function DefaultTextField({
 const nameInputContainerSx = { width: '100%', display: 'flex', flexDirection: 'column' as const, position: 'relative' as const };
 const nameLengthMessageSx = (theme: Theme) => ({
   textAlign: 'right' as const,
-  fontSize: theme.typography.pxToRem(10),
+  fontSize: theme.typography.bodySmall.fontSize,
   position: 'absolute' as const,
   right: 0,
   bottom: '2.75rem',

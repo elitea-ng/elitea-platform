@@ -5,6 +5,7 @@ import Box from '@mui/material/Box';
 import Tooltip from '@mui/material/Tooltip';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 import { getInitials, stringToColor } from '@/shared/lib/string';
 
 import type { EntityListAuthor } from './model';
@@ -20,6 +21,8 @@ import type { EntityListAuthor } from './model';
 const MAX_AVATARS = 3;
 /** `UserAvatar.jsx`'s default `size` — 20px. */
 const AVATAR_SIZE = '1.25rem';
+/** The circle's size in px — what `avatarInitialsType` snaps the initials by. */
+const AVATAR_SIZE_PX = 20;
 
 export interface EntityCardAuthorsProps {
   readonly authors: readonly EntityListAuthor[];
@@ -70,7 +73,10 @@ function avatarSx(index: number, zIndex: number, initialsFor: string | undefined
   return (theme: Theme) => ({
     width: AVATAR_SIZE,
     height: AVATAR_SIZE,
-    fontSize: theme.typography.labelSmall.fontSize,
+    // Initials snap to the ladder by the circle's size (≤24px → labelSmall,
+    // weight 500): the whole variant, so MuiAvatar's 40px default
+    // (headingMedium, 600) does not leak its weight and leading in.
+    ...typeScale(theme.typography[avatarInitialsType(AVATAR_SIZE_PX)]),
     padding: 0,
     transform: `translateX(-${String(index * 5)}px)`,
     zIndex,

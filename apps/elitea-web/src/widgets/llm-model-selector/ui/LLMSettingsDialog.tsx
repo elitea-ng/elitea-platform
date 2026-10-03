@@ -80,8 +80,9 @@ export const LLMSettingsDialog = memo(
       <Modal open={open} onClose={onCancel}>
         <Box sx={paperStyle}>
           <Typography
-            variant="h6"
-            sx={{ mb: 2, fontWeight: 600 }}
+            variant="headingMedium"
+            component="h2"
+            sx={{ mb: 2 }}
           >
             {t('widgets.llmModelSelector.llmSettingsDialog.title', 'Model settings')}
           </Typography>

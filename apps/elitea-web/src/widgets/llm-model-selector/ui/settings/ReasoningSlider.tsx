@@ -42,8 +42,8 @@ export const ReasoningSlider = memo(({ value, onChange, disabled }: ReasoningSli
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="body2">{t('widgets.llmModelSelector.reasoningSlider.title', 'Reasoning effort')}</Typography>
-        <Typography variant="body2">
+        <Typography variant="bodyMedium" component="p">{t('widgets.llmModelSelector.reasoningSlider.title', 'Reasoning effort')}</Typography>
+        <Typography variant="bodyMedium" component="p">
           {REASONING_LABELS.find((l) => l.value === value)?.label ?? REASONING_LABEL_MEDIUM}
         </Typography>
       </Box>

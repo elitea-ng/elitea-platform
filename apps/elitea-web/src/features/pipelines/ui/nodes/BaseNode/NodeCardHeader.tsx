@@ -317,7 +317,7 @@ export function NodeCardHeader(props: NodeCardHeaderProps): ReactNode {
           >
             <Box sx={styles.attentionIconWrapper}>
               <AttentionIcon />
-              <Typography variant="caption">{t('pipelines.flowEditor.nodeCardHeader.deprecated', 'Deprecated!')}</Typography>
+              <Typography variant="bodySmall">{t('pipelines.flowEditor.nodeCardHeader.deprecated', 'Deprecated!')}</Typography>
             </Box>
           </Tooltip>
         )}

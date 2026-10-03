@@ -59,6 +59,10 @@ export function Markdown({
       data-testid={dataTestId}
       sx={combineSx(
         {
+          // Long-form prose (typography spec §1): `bodyMedium` size, inherited,
+          // at a 1.6 unitless leading that `p` and `li` inherit. Markdown
+          // headings keep their own variant's leading.
+          lineHeight: 1.6,
           whiteSpace: 'pre-wrap',
           '& *': { whiteSpace: 'inherit' },
           '& pre, & code': { whiteSpace: 'pre-wrap' },

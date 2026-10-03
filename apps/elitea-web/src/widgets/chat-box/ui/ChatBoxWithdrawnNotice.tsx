@@ -25,7 +25,7 @@ export function ChatBoxWithdrawnNotice({ withdrawn }: ChatBoxWithdrawnNoticeProp
     <Typography
       role="alert"
       data-testid="chat-participant-withdrawn-notice"
-      variant="caption"
+      variant="bodySmall"
       sx={{ px: 2, py: 1 }}
     >
       {t(

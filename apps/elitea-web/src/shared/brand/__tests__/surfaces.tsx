@@ -37,6 +37,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { App } from '@/app/App';
 
 import { muiOverrides } from '../mui-overrides';
+import { TYPE_SCALE_SURFACES } from './surfaces.typescale';
 import OutlinedInput from '@mui/material/OutlinedInput';
 
 /**
@@ -68,6 +69,7 @@ import OutlinedInput from '@mui/material/OutlinedInput';
  */
 
 const OVERRIDE_SURFACES: Record<string, () => React.ReactElement> = {
+  ...TYPE_SCALE_SURFACES,
   // Two siblings under one parent (no per-item wrapper) exercises the
   // `:first-of-type`/`:last-of-type` selectors `MuiAccordion.ts` overrides;
   // `expanded` on the first one also exercises `.Mui-expanded`.

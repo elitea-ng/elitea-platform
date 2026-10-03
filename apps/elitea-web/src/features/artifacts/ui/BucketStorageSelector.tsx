@@ -86,7 +86,7 @@ export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactN
                 {configuration.title}
               </Typography>
               <Typography
-                variant="caption"
+                variant="bodySmall"
                 sx={subtitleSx}
               >
                 {configuration.shared

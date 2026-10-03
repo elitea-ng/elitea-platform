@@ -187,11 +187,11 @@ export function AdminToolkitTypes() {
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
-      <Typography variant="h5" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingLarge" component="h1">
         {t('pages.admin.toolkitTypes.title', 'Toolkits')}
       </Typography>
 
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="bodyMedium" component="p" color="text.secondary">
         {t(
           'pages.admin.toolkitTypes.intro',
           'Decide which toolkit types this platform offers, and to which projects. To add a new type, catalogue an MCP server on the Configuration page or admit a provider on the Service Descriptors page.',

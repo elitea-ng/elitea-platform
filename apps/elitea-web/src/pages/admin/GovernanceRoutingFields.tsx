@@ -101,7 +101,7 @@ export function RoutingFields({
       />
 
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="bodyMedium" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingSmall" component="h3">
           {t('pages.admin.governance.field.targets', 'Weighted targets')}
         </Typography>
         <Typography

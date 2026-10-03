@@ -31,7 +31,6 @@ export type ModalVariant = 'simple' | 'complex';
 export interface ModalHeaderOptions {
   /** Rendered to the left of the title, `variant="simple"` only. */
   icon?: ReactNode;
-  titleVariant?: 'headingSmall' | 'headingMedium' | 'headingLarge';
   /** `variant="complex"` only: extra controls rendered in the header, right-aligned. */
   actions?: ReactNode;
   closeButtonDataTestId?: string;
@@ -118,21 +117,38 @@ interface ModalHeaderProps {
 
 /** The title row + close button, split out for the same reason as `ModalActions`. */
 function ModalHeader({ title, header, isSimple, onClose }: ModalHeaderProps): ReactNode {
+  // The heading is the title ALONE: `DialogTitle` renders a plain `div` row,
+  // and the `<h2>` inside it carries `base-modal-title` (the dialog's
+  // `aria-labelledby`). With `DialogTitle` itself as the `<h2>`, the close
+  // button's "Close" joined the heading's accessible name ("Delete node?
+  // Close"), so a dialog was not findable by its own title. Every dialog
+  // title is `headingMedium` (typography spec §2).
   const titleNode =
     typeof title === 'string' ? (
       <Typography
-        variant={header?.titleVariant ?? 'headingSmall'}
-        color="text.secondary"
+        id="base-modal-title"
+        variant="headingMedium"
+        component="h2"
+        sx={{ color: 'text.secondary' }}
       >
         {title}
       </Typography>
     ) : (
-      title
+      <Box
+        id="base-modal-title"
+        component="h2"
+        sx={{ m: 0, minWidth: 0, fontSize: 'inherit', fontWeight: 'inherit', lineHeight: 'inherit' }}
+      >
+        {title}
+      </Box>
     );
 
   return (
     <DialogTitle
-      id="base-modal-title"
+      component="div"
+      // Its own id: without one, MUI gives the row the Dialog's
+      // `aria-labelledby` id too, duplicating `base-modal-title`.
+      id="base-modal-header"
       sx={{
         width: '100%',
         display: 'flex',

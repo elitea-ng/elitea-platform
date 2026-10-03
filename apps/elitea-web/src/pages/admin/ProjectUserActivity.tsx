@@ -98,7 +98,7 @@ export const ProjectUserActivity = memo(function ProjectUserActivity({
 
   if (squares.length === 0) {
     return (
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="bodyMedium" color="text.secondary">
         {t('pages.admin.projects.activity.noMembers', 'This project has no members.')}
       </Typography>
     );
@@ -106,7 +106,7 @@ export const ProjectUserActivity = memo(function ProjectUserActivity({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="bodySmall" color="text.secondary">
         {`${t('pages.admin.projects.activity.title', 'User activity')} · ${activeCount} / ${squares.length} ${t('pages.admin.projects.activity.active', 'active')}`}
       </Typography>
       <Box
@@ -125,13 +125,13 @@ export const ProjectUserActivity = memo(function ProjectUserActivity({
             arrow
             title={
               <Box>
-                <Typography variant="caption" sx={{ fontWeight: 600, display: 'block' }}>
+                <Typography variant="bodySmall" sx={{ fontWeight: 600, display: 'block' }}>
                   {square.label}
                 </Typography>
-                <Typography variant="caption" sx={{ display: 'block' }}>
+                <Typography variant="bodySmall" sx={{ display: 'block' }}>
                   {square.email}
                 </Typography>
-                <Typography variant="caption" sx={{ display: 'block' }}>
+                <Typography variant="bodySmall" sx={{ display: 'block' }}>
                   {square.eventCount > 0
                     ? `${square.eventCount} ${t('pages.admin.projects.activity.events', 'events')}`
                     : t('pages.admin.projects.activity.none', 'No activity')}

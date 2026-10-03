@@ -123,7 +123,7 @@ function ChatTurns() {
           backgroundColor: theme.vars.palette.background.button.default,
         })}
       >
-        <Typography variant="bodySmall2">{t('entries.brandPreview.surface.userTurn', 'Summarise the release notes for me.')}</Typography>
+        <Typography variant="bodySmall">{t('entries.brandPreview.surface.userTurn', 'Summarise the release notes for me.')}</Typography>
       </Paper>
       <Paper
         elevation={0}
@@ -136,7 +136,7 @@ function ChatTurns() {
           border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
         })}
       >
-        <Typography variant="bodySmall2">
+        <Typography variant="bodySmall">
           {t('entries.brandPreview.surface.assistantTurn', 'Three changes landed: branded e-mail, a login page that carries the pack, and this previewer.')}
         </Typography>
       </Paper>

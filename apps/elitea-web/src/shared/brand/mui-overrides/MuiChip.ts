@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiChip` — canonical elitea-ui shape (`MainTheme.js:217-227`), token-wired.
@@ -27,6 +28,8 @@ export const MuiChip: EliteaComponents['MuiChip'] = {
       // own `sx`, which two components legitimately set (issue 841).
       borderRadius: theme.vars.shape.radiusLg,
     }),
+    // Chip text is `labelSmall` — MUI's stock 13px sat off the ladder.
+    label: ({ theme }) => typeScale(theme.typography.labelSmall),
     outlined: ({ theme }) => ({
       background: theme.vars.palette.background.eliteaDefault,
       color: theme.vars.palette.text.secondary,

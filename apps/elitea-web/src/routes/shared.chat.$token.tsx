@@ -88,10 +88,10 @@ function SharedConversationPage(): React.JSX.Element {
   if (state.status === 'unavailable' || state.status === 'error') {
     return (
       <Box sx={centeredSx} data-testid="shared-conversation-unavailable">
-        <Typography variant="h6" color="text.secondary">
+        <Typography variant="headingMedium" component="h1" color="text.secondary">
           {t('sharedConversation.unavailable.title', 'Link not available')}
         </Typography>
-        <Typography variant="body2" color="text.disabled" sx={subtitleSx}>
+        <Typography variant="bodyMedium" component="p" color="text.disabled" sx={subtitleSx}>
           {t('sharedConversation.unavailable.body', 'This shared conversation link is invalid, has been revoked, or has expired.')}
         </Typography>
       </Box>
@@ -102,10 +102,10 @@ function SharedConversationPage(): React.JSX.Element {
     return (
       <Box sx={centeredSx} data-testid="shared-conversation-locked">
         <Box sx={passwordCardSx}>
-          <Typography variant="h6" color="text.secondary">
+          <Typography variant="headingMedium" component="h1" color="text.secondary">
             {t('sharedConversation.locked.title', 'Password required')}
           </Typography>
-          <Typography variant="body2" color="text.disabled" sx={subtitleSx}>
+          <Typography variant="bodyMedium" component="p" color="text.disabled" sx={subtitleSx}>
             {t('sharedConversation.locked.body', 'This conversation is password protected.')}
           </Typography>
           <input
@@ -119,7 +119,7 @@ function SharedConversationPage(): React.JSX.Element {
             }}
           />
           {unlockError !== '' && (
-            <Typography variant="body2" color="error.main" data-testid="shared-conversation-unlock-error">
+            <Typography variant="bodyMedium" component="p" color="error.main" data-testid="shared-conversation-unlock-error">
               {unlockError}
             </Typography>
           )}
@@ -135,16 +135,16 @@ function SharedConversationPage(): React.JSX.Element {
   return (
     <Box sx={pageSx} data-testid="shared-conversation">
       <Box sx={headerSx}>
-        <Typography variant="h6" color="text.secondary">
+        <Typography variant="headingLarge" component="h1" color="text.secondary">
           {conversation.conversation_name}
         </Typography>
-        <Typography variant="caption" color="text.disabled">
+        <Typography variant="bodySmall" color="text.disabled">
           {t('sharedConversation.header.readOnly', 'Shared conversation · Read only')}
         </Typography>
       </Box>
       <Box sx={messagesSx}>
         {conversation.messages.length === 0 && (
-          <Typography variant="body2" color="text.disabled" data-testid="shared-conversation-empty">
+          <Typography variant="bodyMedium" component="p" color="text.disabled" data-testid="shared-conversation-empty">
             {t('sharedConversation.empty', 'No messages to display for this link.')}
           </Typography>
         )}
@@ -161,16 +161,16 @@ function SharedMessageGroup(props: { readonly message: SharedChatMessage }): Rea
   return (
     <Box sx={groupSx} data-testid="shared-conversation-message">
       <Box sx={authorRowSx}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="bodyMedium" component="p" color="text.secondary">
           {message.author_name ?? (message.author_type === 'user' ? t('sharedConversation.author.user', 'User') : t('sharedConversation.author.assistant', 'Assistant'))}
         </Typography>
-        <Typography variant="caption" color="text.disabled">
+        <Typography variant="bodySmall" color="text.disabled">
           {new Date(message.created_at).toLocaleString()}
         </Typography>
       </Box>
       <Box sx={bodySx}>
         {message.is_error && (
-          <Typography variant="body2" color="error.main">
+          <Typography variant="bodyMedium" component="p" color="error.main">
             {/*
              * The FLAG only. The server sends no error text, because an
              * upstream error routinely quotes the offending fragment of the
@@ -185,7 +185,7 @@ function SharedMessageGroup(props: { readonly message: SharedChatMessage }): Rea
             if (item.attachment !== undefined) {
               // Named, never linked: no anonymous byte route exists.
               return (
-                <Typography key={index} variant="body2" color="text.disabled" data-testid="shared-conversation-attachment">
+                <Typography key={index} variant="bodyMedium" component="p" color="text.disabled" data-testid="shared-conversation-attachment">
                   {t('sharedConversation.message.attachment', 'Attachment: ')}
                   {item.attachment.name}
                 </Typography>

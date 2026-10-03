@@ -120,7 +120,7 @@ export function AdminScimGroupBindingsEditor() {
       sx={{ display: "flex", flexDirection: "column", gap: "1rem" }}
       data-testid="admin-scim-group-bindings"
     >
-      <Typography variant="subtitle1">
+      <Typography variant="headingSmall" component="h2">
         {t(
           "pages.admin.scimGroups.title",
           "Directory group provisioning (SCIM)",

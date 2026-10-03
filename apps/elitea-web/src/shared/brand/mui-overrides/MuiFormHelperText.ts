@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiFormHelperText` (R-T12). Ported from `MainTheme.js:179-187`.
@@ -30,6 +31,9 @@ import type { EliteaComponents } from '../theme-types';
 export const MuiFormHelperText: EliteaComponents['MuiFormHelperText'] = {
   styleOverrides: {
     root: ({ theme }) => ({
+      // Helper and error text is `bodySmall` — MUI's stock caption carries a
+      // 0.4px tracking no other text in the app has.
+      ...typeScale(theme.typography.bodySmall),
       '&.Mui-error': {
         color: theme.vars.palette.text.warningText,
       },

@@ -331,8 +331,8 @@ function CanvasContent({
         padding: '1rem',
         overflow: 'auto',
         whiteSpace: 'pre-wrap',
-        fontSize: '0.875rem',
-        fontFamily: 'monospace',
+        fontSize: theme.typography.bodyMedium.fontSize,
+        fontFamily: theme.typography.fontFamilyMono,
       })}
     >
       {content || ' '}

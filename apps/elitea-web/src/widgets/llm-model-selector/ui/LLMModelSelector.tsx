@@ -141,7 +141,8 @@ const LLMModelSelector = memo(
                   sx={styles.modelNameWrapper}
                 >
                   <Typography
-                    variant="body2"
+                    variant="bodyMedium"
+                    component="p"
                     sx={{
                       textOverflow: 'ellipsis',
                       overflow: 'hidden',

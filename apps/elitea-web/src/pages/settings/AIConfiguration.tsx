@@ -241,10 +241,9 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
       borderBottom: `1px solid ${t.vars.palette.border.lines}`,
       flexShrink: 0,
     },
-    tab: ({ typography }: { typography: Record<string, unknown> & { headingSmall: { fontSize: number } } }) => ({
+    // Size and weight come from `MuiTab` (`labelMedium`, typography spec §2).
+    tab: {
       textTransform: 'none',
-      fontWeight: 500,
-      fontSize: typography.headingSmall.fontSize,
       color: t.vars.palette.text.secondary,
       minHeight: '2.5rem',
       flexGrow: 1,
@@ -253,7 +252,7 @@ function getStyles(theme: ReturnType<typeof useTheme>) {
         fontWeight: 600,
         borderBottom: `2px solid ${t.vars.palette.primary.main}`,
       },
-    }),
+    },
     tabPanel: {
       flex: 1,
       overflow: 'hidden',

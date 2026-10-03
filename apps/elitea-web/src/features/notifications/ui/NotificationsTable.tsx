@@ -262,12 +262,14 @@ const headerCellSx =
     ...(align === 'right' ? { justifyContent: 'flex-end' } : {}),
   });
 
+/* A table header is `labelMedium` in the dim `text.primary` token (spec §2),
+ * the same as MuiTableCell.head and the DataGrid header. */
 const headerTextSx: SxProps<Theme> = (theme) => ({
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-  color: theme.vars.palette.text.secondary,
+  color: theme.vars.palette.text.primary,
 });
 
 /* `opacity: 0.7` until the column is the sorted one — the reference's

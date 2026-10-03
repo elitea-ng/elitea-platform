@@ -193,7 +193,7 @@ export function ChatContinue({
   return (
     <>
       {authRequired && !hasAuthDetails && (
-        <Typography component="output" variant="body2">
+        <Typography component="output" variant="bodyMedium">
           Authorization details are unavailable. You can skip this tool.
         </Typography>
       )}

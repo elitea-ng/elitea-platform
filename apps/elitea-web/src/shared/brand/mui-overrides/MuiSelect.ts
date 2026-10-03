@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiSelect` (R-T12). Ported from `MainTheme.js:235-242` (the `select`
@@ -31,9 +32,9 @@ export const MuiSelect: EliteaComponents['MuiSelect'] = {
         },
         '& .MuiSelect-select': {
           color: theme.vars.palette.text.select.selected.primary,
-          // `headingMedium`'s size (`1rem`, same rung of the modular scale
-          // as the baseline's bare literal) via member expression — R-T11.
-          fontSize: theme.typography.headingMedium.fontSize,
+          // Select value text is `bodyMedium`, like every other input value
+          // (typography spec §2) — it was 16px beside 14px fields.
+          ...typeScale(theme.typography.bodyMedium),
         },
         '& .MuiSelect-select:focus': {
           backgroundColor: 'transparent',

@@ -40,6 +40,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import type { WebhookPermissions } from '../../lib/webhooks/useWebhookPermissions';
 import { MASKED_SECRET } from '../../lib/webhooks/webhookHelpers';
 import { WebhookDeliveriesPanel } from './WebhookDeliveriesPanel';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 export interface WebhookViewRow {
   readonly id: string;
@@ -64,7 +65,7 @@ const tableRootSx: SxProps<Theme> = { width: '100%' };
 const emptyMessageSx: SxProps<Theme> = { padding: '1.5rem', textAlign: 'center', color: 'text.secondary' };
 const urlCellSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem', maxWidth: '20rem' };
 const urlTextSx: SxProps<Theme> = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
-const secretCellSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem', fontFamily: 'monospace' };
+const secretCellSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem', fontFamily: monoFontFamily };
 const eventsCellSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: '0.25rem', maxWidth: '16rem' };
 const collapseCellSx: SxProps<Theme> = { paddingTop: 0, paddingBottom: 0, borderBottom: 'none' };
 
@@ -92,7 +93,7 @@ function SecretCell({ row, canReveal, isRevealed, onToggle }: SecretCellProps) {
   const displayValue = isRevealed ? row.secret : MASKED_SECRET;
   return (
     <Box sx={secretCellSx}>
-      <Typography variant="bodySmall2" data-testid={`webhook-secret-${row.id}`}>
+      <Typography variant="bodySmall" data-testid={`webhook-secret-${row.id}`}>
         {displayValue}
       </Typography>
       {canReveal && (
@@ -176,7 +177,7 @@ export function WebhooksTable({ projectId, rows, isLoading, permissions, onEdit,
                 <TableCell>
                   <Box sx={eventsCellSx}>
                     {row.events.length === 0
-                      ? <Typography variant="bodySmall2" color="text.secondary">{t('entities.webhook.table.allEvents', 'All events')}</Typography>
+                      ? <Typography variant="bodySmall" color="text.secondary">{t('entities.webhook.table.allEvents', 'All events')}</Typography>
                       : row.events.map((event) => <Chip key={event} label={event} size="small" />)}
                   </Box>
                 </TableCell>

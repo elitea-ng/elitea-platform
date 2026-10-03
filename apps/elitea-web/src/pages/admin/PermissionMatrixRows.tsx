@@ -89,7 +89,7 @@ export const PermissionGroupRow = memo(function PermissionGroupRow({
           >
             {expanded ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
           </IconButton>
-          <Typography variant="labelMedium" sx={{ fontWeight: 600 }}>
+          <Typography variant="headingSmall" component="span">
             {groupName}
           </Typography>
           <Typography variant="bodySmall" color="text.secondary">

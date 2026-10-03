@@ -100,14 +100,28 @@ describe('PageHeader — tabs shape', () => {
     }
   });
 
-  it('drops the title when tabs are present', () => {
+  /**
+   * Typography spec §2: a tabbed page still has a title. It renders as its
+   * own `headingLarge` row above the tab bar, as the page's one `<h1>`.
+   */
+  it('renders the title as a heading row above the tabs', () => {
     renderWithTheme(
       <PageHeader
         title="Agents"
+        titleComponent="h1"
         tabs={{ items: TABS, selectedIndex: 0 }}
       />,
     );
 
-    expect(screen.queryByText('Agents')).toBeNull();
+    const heading = screen.getByRole('heading', { level: 1, name: 'Agents' });
+    expect(heading).toHaveClass('MuiTypography-headingLarge');
+    const tablist = screen.getByRole('tablist');
+    expect(heading.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders no title row for an untitled tab bar', () => {
+    renderWithTheme(<PageHeader tabs={{ items: TABS, selectedIndex: 0 }} />);
+
+    expect(screen.queryByRole('heading')).toBeNull();
   });
 });

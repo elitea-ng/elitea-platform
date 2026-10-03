@@ -233,7 +233,7 @@ function AnalyticsToolsImpl({ projectId, dateFrom, dateTo }: AnalyticsToolsProps
               >
                 <XAxis
                   dataKey="toolName"
-                  tick={{ fill: theme.vars.palette.text.primary, fontSize: theme.typography.labelTiny.fontSize }}
+                  tick={{ fill: theme.vars.palette.text.primary, fontSize: theme.typography.labelSmall.fontSize }}
                   angle={-45}
                   textAnchor="end"
                   interval={0}

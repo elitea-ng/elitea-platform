@@ -90,7 +90,7 @@ export function ToolkitTypesPanel({ tagList, title = 'Types', selectedTypes, onS
       <Box sx={headerRowSx}>
         <Typography
           component="div"
-          variant="subtitle1"
+          variant="headingSmall"
           sx={titleSx}
         >
           {title}
@@ -123,7 +123,7 @@ export function ToolkitTypesPanel({ tagList, title = 'Types', selectedTypes, onS
             />
           ))
         ) : (
-          <Typography variant="body2">
+          <Typography variant="bodyMedium" component="p">
             {t('features.toolkits.toolkitTypesPanel.empty', 'No {{title}} to display.', { title: title.toLowerCase() })}
           </Typography>
         )}

@@ -74,13 +74,13 @@ export function EventTypeIcon({ eventType }: { readonly eventType: string | null
 export function StatusCodeCell({ statusCode }: { readonly statusCode: number | null }): ReactNode {
   if (statusCode === null) {
     return (
-      <Typography variant="bodySmall" color="text.secondary">
+      <Typography variant="bodyMedium" color="text.secondary">
         —
       </Typography>
     );
   }
   return (
-    <Typography variant="bodySmall" color={statusCode >= 400 ? 'error' : 'text.secondary'}>
+    <Typography variant="bodyMedium" color={statusCode >= 400 ? 'error' : 'text.secondary'}>
       {statusCode}
     </Typography>
   );
@@ -129,7 +129,7 @@ export function SortableHeaderCell({
 export function TextCell({ children }: { readonly children: ReactNode }): ReactNode {
   return (
     <Typography
-      variant="bodySmall"
+      variant="bodyMedium"
       color="text.secondary"
       sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
     >

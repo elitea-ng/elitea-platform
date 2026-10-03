@@ -28,15 +28,14 @@ export default memo(function ModelCapabilitiesSection({ capabilities }: ModelCap
 
   return (
     <Box sx={styles.capabilitiesSection}>
-      {/* `component="h4"` is load-bearing, not decoration. The row sits after
-          the configuration accordions, whose titles render at level 3, so a
-          bare `variant="h6"` emitted an <h6> straight after an <h3> and axe's
-          `heading-order` rule failed the whole AI-Configuration screen. The
-          row only appears once a model with declared capabilities resolves,
-          so the violation stayed hidden until the configurations runtime
-          started serving one. `variant` keeps the type scale; `component`
-          fixes the document outline. */}
-      <Typography variant="h6" component="h4" sx={styles.sectionTitle}>
+      {/* An <h2>, the same level as the configuration accordions' titles
+          before it (MuiAccordion's heading slot is an <h2>). The level is
+          load-bearing: a bare `variant="h6"` once emitted an <h6> after the
+          accordions' headings and axe's `heading-order` rule failed the whole
+          AI-Configuration screen — hidden until a model with declared
+          capabilities resolved. `headingSmall` is the section-title role, so
+          it renders at the same size as the "LLMs" title above it. */}
+      <Typography variant="headingSmall" component="h2" sx={styles.sectionTitle}>
         {t('ai-configuration.modelCapabilities.title', 'Model Capabilities')}
       </Typography>
       <Box sx={styles.capabilitiesContainer}>
@@ -53,8 +52,6 @@ function modelCapabilitiesSectionStyles(theme: Theme) {
     capabilitiesSection: { flexShrink: 0 },
     sectionTitle: {
       color: theme.vars.palette.text.secondary,
-      fontWeight: 600,
-      fontSize: theme.typography.headingMedium.fontSize,
       display: 'flex',
       alignItems: 'center',
       gap: '0.5rem',

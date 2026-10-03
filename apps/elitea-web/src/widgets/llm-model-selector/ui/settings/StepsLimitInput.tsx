@@ -23,7 +23,8 @@ export const StepsLimitInput = memo(({ value, onChange }: StepsLimitInputProps) 
   return (
     <Box>
       <Typography
-        variant="body2"
+        variant="bodyMedium"
+        component="p"
         sx={{ mb: 0.5 }}
       >
         {t('widgets.llmModelSelector.stepsLimitInput.label', 'Steps limit')}

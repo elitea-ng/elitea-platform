@@ -82,7 +82,7 @@ describe('AdminTasks', () => {
   it('states its title as a real heading, the landmark the nav journey reads', async () => {
     seedListing([]);
     renderAdminRoute(<AdminTasks refetchInterval={false} />);
-    expect(await screen.findByRole('heading', { name: 'Tasks', level: 2 })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Tasks', level: 1 })).toBeInTheDocument();
   });
 
   it('says the filters match nothing rather than rendering an empty table', async () => {

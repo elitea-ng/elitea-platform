@@ -122,14 +122,14 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
           )}
         </DialogContentText>
         {toolkitType === null ? null : (
-          <Typography variant="body2" color="text.secondary" sx={{ marginBottom: '1rem' }}>
+          <Typography variant="bodyMedium" component="p" color="text.secondary" sx={{ marginBottom: '1rem' }}>
             {toolkitType.label} · {toolkitType.type}
           </Typography>
         )}
 
         <div data-testid="admin-toolkit-types-grants">
           {toolkitType === null || toolkitType.project_grants.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="bodyMedium" component="p" color="text.secondary">
               {t('pages.admin.toolkitTypes.projects.none', 'No project exception is recorded.')}
             </Typography>
           ) : (
@@ -139,12 +139,12 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
                 direction="row"
                 sx={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}
               >
-                <Typography variant="body2">
+                <Typography variant="bodyMedium" component="p">
                   {t('pages.admin.toolkitTypes.projects.row', 'Project {{project}} — {{availability}}', {
                     project: grant.project_id,
                     availability: grant.availability,
                   })}
-                  <Typography variant="caption" color="text.secondary" component="div">
+                  <Typography variant="bodySmall" color="text.secondary" component="div">
                     {grant.reason} · {grant.granted_by}
                   </Typography>
                 </Typography>

@@ -108,7 +108,7 @@ export function VoiceConfigControls(props: VoiceConfigControlsProps): ReactNode 
       )}
       <Box sx={sliderRowSx}>
         <Typography
-          variant="bodySmall2"
+          variant="bodySmall"
           sx={sliderLabelSx}
         >
           {t('features.chatInput.voiceConfigControls.speedLabel', 'Speed')}
@@ -128,7 +128,7 @@ export function VoiceConfigControls(props: VoiceConfigControlsProps): ReactNode 
       </Box>
       <Box sx={sliderRowSx}>
         <Typography
-          variant="bodySmall2"
+          variant="bodySmall"
           sx={sliderLabelSx}
         >
           {t('features.chatInput.voiceConfigControls.volumeLabel', 'Volume')}

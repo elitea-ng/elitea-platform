@@ -60,6 +60,13 @@ import { AdminSecretsTable } from './AdminSecretsTable';
 import { useAdminSecretsPage, type AdminSecretsPageState } from './useAdminSecretsPage';
 
 
+/**
+ * A header action keeps its label on one line and does not give up width:
+ * the search field beside it shrinks first. Without this the 28px pill
+ * stacked "Create secret" on two lines.
+ */
+const headerActionSx = { whiteSpace: 'nowrap', flexShrink: 0 } as const;
+
 function savedText(message: string): string {
   if (message === 'created') return t('pages.admin.secrets.saved.created', 'Secret created.');
   if (message === 'updated') return t('pages.admin.secrets.saved.updated', 'Secret updated.');
@@ -109,7 +116,7 @@ export function AdminSecrets() {
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.secrets.title', 'Secrets')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -120,7 +127,7 @@ export function AdminSecrets() {
             data-testid="admin-secrets-search"
           />
           {state.onCreate ? (
-            <Button variant="elitea" color="primary" size="small" startIcon={<AddIcon />} onClick={state.onCreate}>
+            <Button variant="elitea" color="primary" size="small" startIcon={<AddIcon />} onClick={state.onCreate} sx={headerActionSx}>
               {t('pages.admin.secrets.action.create', 'Create secret')}
             </Button>
           ) : null}

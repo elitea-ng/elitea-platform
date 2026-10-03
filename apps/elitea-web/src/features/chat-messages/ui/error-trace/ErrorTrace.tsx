@@ -19,6 +19,7 @@ import Typography from '@mui/material/Typography';
 
 import { handleCopy } from '@/shared/lib/clipboard';
 import { triggerBlobDownload } from '@/shared/lib/download';
+import type { Theme } from '@mui/material/styles';
 
 /** @public Props for `ErrorTrace`. */
 export interface ErrorTraceProps {
@@ -93,7 +94,8 @@ export function ErrorTrace({ error, defaultExpanded = false }: ErrorTraceProps):
           fontSize="small"
         />
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           color="error.main"
           sx={{ flex: 1 }}
         >
@@ -114,7 +116,8 @@ export function ErrorTrace({ error, defaultExpanded = false }: ErrorTraceProps):
             onClick={() => setExpanded((prev) => !prev)}
           >
             <Typography
-              variant="body2"
+              variant="bodyMedium"
+              component="p"
               sx={{ flex: 1, color: 'text.secondary' }}
             >
               {/* eslint-disable-next-line i18next/no-literal-string — collapsible section label */}
@@ -156,8 +159,8 @@ export function ErrorTrace({ error, defaultExpanded = false }: ErrorTraceProps):
               <Box
                 component="pre"
                 sx={{
-                  fontFamily: 'monospace',
-                  fontSize: '0.8rem',
+                  fontFamily: (theme: Theme) => theme.typography.fontFamilyMono,
+                  fontSize: (theme: Theme) => theme.typography.bodySmall.fontSize,
                   color: 'error.main',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',

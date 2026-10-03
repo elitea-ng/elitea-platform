@@ -313,7 +313,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   return (
     <Box sx={pageSx}>
       <Box sx={headerSx}>
-        <Typography variant="headingSmall">{title}</Typography>
+        <Typography variant="headingLarge" component="h1">{title}</Typography>
         {toolkitId !== undefined && (
           <Box sx={actionsSx}>
             <ExportToolkitButton

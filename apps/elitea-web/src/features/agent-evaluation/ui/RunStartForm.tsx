@@ -165,7 +165,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
       </BaseBtn>
 
       {(startError ?? blockedReason) !== undefined && (
-        <Typography role="alert" variant="body2" color="error" data-testid="run-start-error">
+        <Typography role="alert" variant="bodyMedium" component="p" color="error" data-testid="run-start-error">
           {startError ?? blockedReason}
         </Typography>
       )}

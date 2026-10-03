@@ -27,7 +27,7 @@ export function BrandingSectionCard() {
         maxWidth: '36rem',
       })}
     >
-      <Typography variant="h6" component="h2">
+      <Typography variant="headingSmall" component="h2">
         {t('pages.admin.configuration.branding.title', 'Branding has a page of its own')}
       </Typography>
       <Typography variant="bodyMedium" color="text.secondary">

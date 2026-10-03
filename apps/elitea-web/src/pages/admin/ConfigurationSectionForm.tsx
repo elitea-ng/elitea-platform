@@ -71,11 +71,15 @@ function fieldLabel(field: AdminConfigField): string {
   return field.title === '' ? field.key : field.title;
 }
 
-/** Title + description above a control that cannot carry its own label. */
+/**
+ * Title + description above a control that cannot carry its own label. The
+ * title is a section title (`headingSmall`, an `<h2>` under the page `<h1>`;
+ * spec §2), not body text the same size and weight as the description.
+ */
 function FieldHeading({ field }: { readonly field: AdminConfigField }) {
   return (
     <>
-      <Typography variant="bodyMedium">{fieldLabel(field)}</Typography>
+      <Typography variant="headingSmall">{fieldLabel(field)}</Typography>
       {field.description !== undefined && field.description !== '' ? (
         <Typography variant="bodySmall" color="text.secondary" component="div">
           {field.description}

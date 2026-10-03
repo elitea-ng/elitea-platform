@@ -194,9 +194,9 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
           />
         </Box>
         <Box sx={{ maxHeight: 300, overflow: 'auto' }}>
-          {isLoading && <Typography variant="body2" color="text.disabled">{t('chat-participants.modal.loading', 'Loading...')}</Typography>}
+          {isLoading && <Typography variant="bodyMedium" component="p" color="text.disabled">{t('chat-participants.modal.loading', 'Loading...')}</Typography>}
           {!isLoading && visibleCandidates.length === 0 && (
-            <Typography variant="body2" color="text.disabled">{t('chat-participants.modal.noResults', 'No participants found')}</Typography>
+            <Typography variant="bodyMedium" component="p" color="text.disabled">{t('chat-participants.modal.noResults', 'No participants found')}</Typography>
           )}
           {visibleCandidates.map((candidate) => {
             // `candidate` is a `ParticipantEntityItem` (`label`/`data`, not
@@ -222,7 +222,7 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
                   '&:hover': { backgroundColor: 'action.hover' },
                 }}
               >
-                <Typography variant="body2">{name}</Typography>
+                <Typography variant="bodyMedium" component="p">{name}</Typography>
                 {isSelected && <CheckCircleRounded sx={{ color: 'primary.main' }} />}
               </Box>
             );
@@ -231,7 +231,7 @@ const AddNewUserModal = memo((props: AddNewUserModalProps): React.ReactElement =
         {selectedUsers.length > 0 && (
           <Box sx={{ mt: 2, p: 1, backgroundColor: 'action.selected', borderRadius: 'var(--el-shape-radiusSm, 4px)' }}>
             {/* eslint-disable-next-line i18next/no-literal-string -- placeholder for i18n interpolation */}
-            <Typography variant="body2" sx={{ mb: 0.5 }}>{`${t('chat-participants.modal.selected', 'Selected ({count}):').replace('{count}', '')} ${selectedUsers.length}`}</Typography>
+            <Typography variant="bodyMedium" component="p" sx={{ mb: 0.5 }}>{`${t('chat-participants.modal.selected', 'Selected ({count}):').replace('{count}', '')} ${selectedUsers.length}`}</Typography>
             {selectedUsers.map((u) => (
               <Typography key={u.id} variant="bodySmall" color="text.secondary">
                 • {u.name || u.entity_meta?.name || t('chat-participants.common.unknown', 'Unknown')}

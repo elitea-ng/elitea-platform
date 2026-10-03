@@ -172,7 +172,7 @@ export function AdminBranding() {
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
       <BrandingNavGuard />
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.branding.title', 'Branding')}
         </Typography>
         {state.isLoaded ? <BrandingActions state={state} pkg={pkg} /> : null}

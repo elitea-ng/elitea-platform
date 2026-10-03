@@ -89,7 +89,7 @@ function StatTile({ label, value, hint }: {
       <Typography variant="bodySmall" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingSmall" component="p">
         {value}
       </Typography>
       {hint !== undefined ? (
@@ -196,7 +196,7 @@ function UsageBreakdown({
 }): ReactNode {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: '1 1 22rem' }}>
-      <Typography variant="bodyMedium" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingSmall">
         {title}
       </Typography>
 
@@ -302,7 +302,7 @@ export function LlmProxyUsagePanel(): ReactNode {
         <>
           <UsageTotalsRow totals={data.totals} />
 
-          <Typography variant="bodyMedium" sx={{ fontWeight: 600 }}>
+          <Typography variant="headingSmall">
             {t('pages.admin.llmProxy.usage.byDay', 'By day')}
           </Typography>
           {data.daily_error !== undefined ? (

@@ -27,6 +27,7 @@ import { toolPayloadText } from '@/shared/lib/toolPayloadText';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
 import { formatRunDuration } from '../lib/formatRunDuration';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 export interface RunHistoryTraceProps {
   readonly projectId: string;
@@ -196,7 +197,7 @@ function StepToolInputs({ toolInputs }: { readonly toolInputs: unknown }): React
       variant="bodySmall"
       component="pre"
       data-testid="run-history-trace-tool-inputs"
-      sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}
+      sx={{ whiteSpace: 'pre-wrap', fontFamily: monoFontFamily }}
     >
       {formatToolInputs(toolInputs)}
     </Typography>
@@ -249,7 +250,7 @@ function StepToolOutput({
         variant="bodySmall"
         component="pre"
         data-testid="run-history-trace-tool-output"
-        sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}
+        sx={{ whiteSpace: 'pre-wrap', fontFamily: monoFontFamily }}
       >
         {toolPayloadText(value)}
       </Typography>

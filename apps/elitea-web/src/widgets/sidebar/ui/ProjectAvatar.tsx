@@ -5,6 +5,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { projectAvatarColor, projectInitial } from '../lib/projectAvatar';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 export interface ProjectAvatarProps {
   projectName: string | undefined;
@@ -47,7 +48,9 @@ export function ProjectAvatar({ projectName, size = '2rem' }: ProjectAvatarProps
           // themed surface, so it needs a fixed light colour in both
           // schemes rather than a scheme-aware text token.
           color: theme.vars.palette.common.white,
-          fontSize: `calc(${size} * 0.375)`,
+          // Initials snap to the ladder by avatar size (typography spec §3)
+          // instead of scaling continuously at 0.375 × the circle.
+          ...typeScale(theme.typography[avatarInitialsType(sizeToPx(size))]),
           fontWeight: 500,
           lineHeight: 1,
           userSelect: 'none',
@@ -57,4 +60,10 @@ export function ProjectAvatar({ projectName, size = '2rem' }: ProjectAvatarProps
       </Typography>
     </Box>
   );
+}
+
+/** `'2rem'` → 32, `'24px'` → 24, at the 16px root the app's rem values assume. */
+function sizeToPx(size: string): number {
+  const value = Number.parseFloat(size);
+  return size.trim().endsWith('rem') ? value * 16 : value;
 }

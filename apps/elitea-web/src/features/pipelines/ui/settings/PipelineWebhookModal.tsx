@@ -92,13 +92,13 @@ const descriptionSx: SxProps<Theme> = { color: 'text.secondary' };
 const rowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
 const actionRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' };
 function valueInputSx(theme: Theme) {
-  return { flex: 1, '& input': { fontSize: theme.typography.bodySmall.fontSize, fontFamily: 'monospace' } };
+  return { flex: 1, '& input': { fontSize: theme.typography.bodySmall.fontSize, fontFamily: theme.typography.fontFamilyMono } };
 }
 function codeBlockSx(theme: Theme) {
   return { backgroundColor: theme.vars.palette.background.secondary, border: `1px solid ${theme.vars.palette.border.lines}`, borderRadius: theme.vars.shape.radiusMd, padding: '0.75rem', overflow: 'auto', maxHeight: '12rem' };
 }
 function codeTextSx(theme: Theme) {
-  return { fontFamily: 'monospace', fontSize: theme.typography.bodySmall2.fontSize, color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, margin: 0 };
+  return { fontFamily: theme.typography.fontFamilyMono, fontSize: theme.typography.bodySmall.fontSize, color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, margin: 0 };
 }
 
 interface ValueRowProps {
