@@ -125,17 +125,30 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
   // auth contract (`token_endpoint_auth_methods_supported`) plus whether it
   // offers automatic registration (`registration_endpoint`) — NOT whether it
   // advertises PKCE. Asana v2 and Box advertise S256 yet accept only
-  // confidential, self-registered clients; deriving "public client" from PKCE
-  // hid the Client Secret field and made them impossible to configure.
+  // confidential, self-registered clients and have no registration endpoint;
+  // deriving "public client" from PKCE hid the Client Secret field.
+  //
+  // A registration endpoint alone selects DCR, whatever the token auth
+  // methods: Miro, Aha! and Figma list only `client_secret_*` methods, and
+  // their registration response carries the secret (`oauthFlow`'s
+  // `resolveClientCredentials`, EL-5697), so they need no client fields.
+  //
+  // RFC 8414 §2: an omitted `token_endpoint_auth_methods_supported` means
+  // `["client_secret_basic"]`, not "public clients welcome". The one
+  // exception is an operator-supplied client id (`provided_settings`) with
+  // no declared methods: the operator registered that client and knows its
+  // type, so the user is not asked for a secret the operator did not give.
   const serverMetadata = useMemo(() => {
     const metadata = oauthAuthorizationServer ?? {};
     const isActuallyOIDC = Boolean(metadata.userinfo_endpoint);
-    const authMethods = metadata.token_endpoint_auth_methods_supported ?? [];
+    const declaredAuthMethods = metadata.token_endpoint_auth_methods_supported;
+    const authMethods = declaredAuthMethods ?? ['client_secret_basic'];
     const supportsPKCE = metadata.code_challenge_methods_supported?.includes('S256') ?? false;
-    const supportsPublicClients = authMethods.length === 0 || authMethods.includes('none');
-    const requiresClientSecret = !supportsPublicClients;
+    const supportsPublicClients = authMethods.includes('none');
     const hasDCREndpoint = Boolean(metadata.registration_endpoint);
-    const canUseDCR = hasDCREndpoint && supportsPublicClients;
+    const operatorClientWithoutDeclaredMethods = hasBackendClientId && declaredAuthMethods === undefined;
+    const requiresClientSecret = !hasDCREndpoint && !supportsPublicClients && !operatorClientWithoutDeclaredMethods;
+    const canUseDCR = hasDCREndpoint;
 
     return {
       supportsPKCE,
@@ -143,7 +156,7 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
       requiresClientSecret,
       isOIDC: isActuallyOIDC,
     };
-  }, [oauthAuthorizationServer]);
+  }, [oauthAuthorizationServer, hasBackendClientId]);
 
   const authFlow = useMemo(() => {
     if (serverMetadata.supportsDCR) return 'dcr';
