@@ -54,6 +54,10 @@ type AccessToken struct {
 // admin screen needs "when was this last used", not a write per request.
 const lastUsedThrottle = time.Minute
 
+// maxLiveTokensPerClient is how many unexpired access tokens one client may
+// hold. Issuing one more deletes the oldest.
+const maxLiveTokensPerClient = 20
+
 // Store reads and writes the two SCIM credential tables.
 type Store struct {
 	pool *pgxpool.Pool
@@ -88,10 +92,20 @@ func scanClient(row pgx.Row) (Client, error) {
 
 // Create makes a client and returns its secret once. For client_credentials
 // the client identifier is minted too.
-func (s *Store) Create(ctx context.Context, name, method string, createdBy *int) (Issued, error) {
+//
+// expiresAt is optional. When it is set it must be in the future and at most
+// MaxClientLifetime away; after it the client stops authenticating, as if it
+// were revoked.
+func (s *Store) Create(ctx context.Context, name, method string, expiresAt *time.Time, createdBy *int) (Issued, error) {
 	name, err := normalizeName(name)
 	if err != nil {
 		return Issued{}, err
+	}
+	if expiresAt != nil {
+		now := s.now()
+		if !expiresAt.After(now) || expiresAt.Sub(now) > MaxClientLifetime {
+			return Issued{}, ErrInvalidExpiry
+		}
 	}
 	var secret, clientID string
 	switch method {
@@ -113,10 +127,10 @@ func (s *Store) Create(ctx context.Context, name, method string, createdBy *int)
 		clientIDValue = clientID
 	}
 	client, err := scanClient(s.pool.QueryRow(ctx, `
-		INSERT INTO elitea_auth.scim_clients (name, auth_method, client_id, secret_hash, secret_hint, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO elitea_auth.scim_clients (name, auth_method, client_id, secret_hash, secret_hint, created_by, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+clientColumns,
-		name, method, clientIDValue, HashSecret(secret), secretHint(secret), createdBy))
+		name, method, clientIDValue, HashSecret(secret), secretHint(secret), createdBy, expiresAt))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "scim_clients_name" {
@@ -308,6 +322,9 @@ func (s *Store) Authenticate(ctx context.Context, token string) (Principal, erro
 			FROM elitea_auth.scim_access_tokens t
 			JOIN elitea_auth.scim_clients c ON c.id = t.client_id
 			WHERE t.token_hash = $1 AND t.expires_at > now()
+			  -- A token minted with a secret that a rotation replaced never
+			  -- authenticates, whatever order the two transactions committed in.
+			  AND t.client_secret_hash = c.secret_hash
 			  AND c.auth_method = 'client_credentials'
 			  AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > now())`,
 			hash).Scan(&principal.ID, &principal.Name, &principal.Method, &stored)
@@ -366,14 +383,34 @@ func (s *Store) IssueAccessToken(ctx context.Context, clientID, clientSecret str
 		return AccessToken{}, Principal{}, err
 	}
 	expiresAt := s.now().Add(s.ttl)
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO elitea_auth.scim_access_tokens (token_hash, client_id, expires_at)
-		VALUES ($1, $2, $3)`, HashSecret(token), principal.ID, expiresAt); err != nil {
+	// ONE statement that inserts only while the client still holds the secret
+	// that was just verified and is still active. A rotation or a revocation
+	// that committed after the read above leaves zero rows here; one that
+	// commits after this INSERT is caught by Authenticate's secret-hash join.
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO elitea_auth.scim_access_tokens (token_hash, client_id, client_secret_hash, expires_at)
+		SELECT $1, id, secret_hash, $3
+		FROM elitea_auth.scim_clients
+		WHERE id = $2 AND secret_hash = $4 AND auth_method = 'client_credentials'
+		  AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`,
+		HashSecret(token), principal.ID, expiresAt, stored)
+	if err != nil {
 		return AccessToken{}, Principal{}, fmt.Errorf("insert scim access token: %w", err)
 	}
-	// Expired rows are removed here, on the path that creates rows, so the
-	// table stays bounded without a separate reaper. A failure only delays
-	// the cleanup to the next issue.
+	if tag.RowsAffected() == 0 {
+		return AccessToken{}, Principal{}, ErrRejected
+	}
+	// Bound the live tokens per client: an identity provider needs one, and a
+	// client that requests a token on every call must not grow the table
+	// without limit. The newest maxLiveTokensPerClient survive. Expired rows
+	// of every client go too, on the path that creates rows, so no separate
+	// reaper is needed. A failure here only delays the cleanup.
+	_, _ = s.pool.Exec(ctx, `
+		DELETE FROM elitea_auth.scim_access_tokens
+		WHERE client_id = $1 AND token_hash NOT IN (
+			SELECT token_hash FROM elitea_auth.scim_access_tokens
+			WHERE client_id = $1 ORDER BY issued_at DESC, token_hash LIMIT $2)`,
+		principal.ID, maxLiveTokensPerClient)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM elitea_auth.scim_access_tokens WHERE expires_at < now()`)
 	return AccessToken{Token: token, ExpiresIn: s.ttl}, principal, nil
 }

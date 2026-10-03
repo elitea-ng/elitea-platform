@@ -22,6 +22,7 @@ import (
 type stubSCIMClientStore struct {
 	clients   []scimclient.Client
 	createdBy *int
+	expiresAt *time.Time
 	err       error
 	minted    int
 }
@@ -35,13 +36,15 @@ func (s *stubSCIMClientStore) mint(prefix string) string {
 	return prefix + strings.Repeat("x", 40) + string(rune('A'+s.minted))
 }
 
-func (s *stubSCIMClientStore) Create(_ context.Context, name, method string, createdBy *int) (scimclient.Issued, error) {
+func (s *stubSCIMClientStore) Create(_ context.Context, name, method string, expiresAt *time.Time, createdBy *int) (scimclient.Issued, error) {
 	if s.err != nil {
 		return scimclient.Issued{}, s.err
 	}
 	s.createdBy = createdBy
+	s.expiresAt = expiresAt
 	client := scimclient.Client{
 		ID: int64(len(s.clients) + 1), Name: name, AuthMethod: method, CreatedBy: createdBy, CreatedAt: time.Now(),
+		ExpiresAt: expiresAt,
 	}
 	secret := s.mint(scimclient.PrefixBearerSecret)
 	if method == scimclient.MethodClientCredentials {
@@ -188,6 +191,8 @@ func TestSCIMClientRefusalsAreTyped(t *testing.T) {
 	}{
 		{"bad name", scimclient.ErrInvalidName, `{"name":"","auth_method":"bearer"}`, http.StatusBadRequest},
 		{"bad method", scimclient.ErrInvalidMethod, `{"name":"x","auth_method":"password"}`, http.StatusBadRequest},
+		{"bad expiry", scimclient.ErrInvalidExpiry, `{"name":"x","auth_method":"bearer","expires_at":"2000-01-01T00:00:00Z"}`, http.StatusBadRequest},
+		{"unreadable expiry", nil, `{"name":"x","auth_method":"bearer","expires_at":"next week"}`, http.StatusBadRequest},
 		{"duplicate", scimclient.ErrDuplicateName, `{"name":"x","auth_method":"bearer"}`, http.StatusConflict},
 		{"store down", errors.New("dial tcp: refused"), `{"name":"x","auth_method":"bearer"}`, http.StatusServiceUnavailable},
 		{"unknown field", nil, `{"name":"x","auth_method":"bearer","secret":"mine"}`, http.StatusBadRequest},
@@ -204,4 +209,15 @@ func TestSCIMClientRefusalsAreTyped(t *testing.T) {
 	router := scimClientRouter(NewHandler(nil))
 	require.Equal(t, http.StatusServiceUnavailable,
 		callSCIMClients(router, http.MethodGet, "/scim_clients/administration", "").Code)
+}
+
+func TestSCIMClientCreatePassesTheExpiry(t *testing.T) {
+	store := &stubSCIMClientStore{}
+	router := scimClientRouter(NewHandler(nil, WithSCIMClients(store)))
+	response := callSCIMClients(router, http.MethodPost, "/scim_clients/administration",
+		`{"name":"x","auth_method":"bearer","expires_at":"2031-05-01T00:00:00Z"}`)
+	require.Equal(t, http.StatusCreated, response.Code, response.Body.String())
+	require.NotNil(t, store.expiresAt)
+	require.Equal(t, "2031-05-01T00:00:00Z", store.expiresAt.UTC().Format(time.RFC3339))
+	require.Contains(t, response.Body.String(), `"expires_at":"2031-05-01T00:00:00Z"`)
 }

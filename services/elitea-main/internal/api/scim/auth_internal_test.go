@@ -36,7 +36,9 @@ func (f *fakeCredentials) Authenticate(_ context.Context, token string) (scimcli
 	return principal, nil
 }
 
-func (f *fakeCredentials) TouchLastUsed(_ context.Context, id int64) { f.touched = append(f.touched, id) }
+func (f *fakeCredentials) TouchLastUsed(_ context.Context, id int64) {
+	f.touched = append(f.touched, id)
+}
 
 func (f *fakeCredentials) IssueAccessToken(_ context.Context, clientID, secret string) (scimclient.AccessToken, scimclient.Principal, error) {
 	if f.fail != nil {
@@ -70,7 +72,7 @@ func serveAuthenticated(credentials Credentials, request *http.Request) (*httpte
 	})
 	ctx, slot := audit.ContextWithAnnotationSlot(request.Context())
 	recorder := httptest.NewRecorder()
-	Authenticate(credentials)(next).ServeHTTP(recorder, request.WithContext(ctx))
+	Authenticate(credentials)(AnnotateAuditActor(next)).ServeHTTP(recorder, request.WithContext(ctx))
 	annotation, _ := slot.Read()
 	return recorder, seen, annotation
 }
@@ -183,7 +185,7 @@ func oauthError(t *testing.T, recorder *httptest.ResponseRecorder) string {
 }
 
 func TestTokenEndpointIssuesWithClientSecretPostAndBasic(t *testing.T) {
-	handler := NewTokenHandler(newAuthFixture())
+	handler := NewTokenHandler(newAuthFixture(), nil)
 	for name, send := range map[string]func() *httptest.ResponseRecorder{
 		"client_secret_post": func() *httptest.ResponseRecorder {
 			return postToken(handler, url.Values{
@@ -213,7 +215,7 @@ func TestTokenEndpointIssuesWithClientSecretPostAndBasic(t *testing.T) {
 }
 
 func TestTokenEndpointRefusals(t *testing.T) {
-	handler := NewTokenHandler(newAuthFixture())
+	handler := NewTokenHandler(newAuthFixture(), nil)
 
 	recorder := postToken(handler, url.Values{
 		"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"wrong"},
@@ -265,30 +267,54 @@ func TestTokenEndpointRefusals(t *testing.T) {
 	require.Equal(t, "invalid_request", oauthError(t, recorder))
 }
 
+type fixedAddress string
+
+func (f fixedAddress) ResolveClientKey(*http.Request) (string, error) { return string(f), nil }
+
 func TestTokenEndpointLimitsFailedClientAuthentication(t *testing.T) {
-	handler := NewTokenHandler(newAuthFixture())
+	handler := NewTokenHandler(newAuthFixture(), nil)
 	wrong := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"wrong"}}
-	for i := 0; i < tokenFailureLimit; i++ {
+	for i := 0; i < tokenFailureLimit-1; i++ {
 		require.Equal(t, http.StatusUnauthorized, postToken(handler, wrong, nil).Code)
 	}
 	recorder := postToken(handler, wrong, nil)
 	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
 	require.NotEmpty(t, recorder.Header().Get("Retry-After"))
 
+	// The correct secret is verified first and is NEVER blocked: the client id
+	// is public, and failures by somebody else must not lock the real
+	// identity provider out.
+	good := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"scimcs_secret"}}
+	require.Equal(t, http.StatusOK, postToken(handler, good, nil).Code)
+
 	// Another client id is not affected.
 	other := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_other"}, "client_secret": {"wrong"}}
 	require.Equal(t, http.StatusUnauthorized, postToken(handler, other, nil).Code)
 }
 
+func TestTokenEndpointCountsFailuresPerCallerAddress(t *testing.T) {
+	credentials := newAuthFixture()
+	attacker := NewTokenHandler(credentials, fixedAddress("203.0.113.9"))
+	wrong := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"wrong"}}
+	for i := 0; i < tokenFailureLimit; i++ {
+		postToken(attacker, wrong, nil)
+	}
+	require.Equal(t, http.StatusTooManyRequests, postToken(attacker, wrong, nil).Code)
+
+	// The same handler (one limiter), another caller address: its own window.
+	attacker.resolver = fixedAddress("198.51.100.7")
+	require.Equal(t, http.StatusUnauthorized, postToken(attacker, wrong, nil).Code)
+}
+
 func TestTokenEndpointHidesStoreFailures(t *testing.T) {
 	credentials := newAuthFixture()
 	credentials.fail = errors.New("pq: connection refused")
-	recorder := postToken(NewTokenHandler(credentials), url.Values{
+	recorder := postToken(NewTokenHandler(credentials, nil), url.Values{
 		"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"scimcs_secret"},
 	}, nil)
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 	require.NotContains(t, recorder.Body.String(), "connection refused")
 
-	recorder = postToken(NewTokenHandler(nil), url.Values{"grant_type": {"client_credentials"}}, nil)
+	recorder = postToken(NewTokenHandler(nil, nil), url.Values{"grant_type": {"client_credentials"}}, nil)
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }

@@ -55,17 +55,28 @@ type TokenIssuer interface {
 	IssueAccessToken(ctx context.Context, clientID, clientSecret string) (scimclient.AccessToken, scimclient.Principal, error)
 }
 
+// ClientKeyResolver resolves the caller's address through the configured
+// trusted proxies. browserauth.TrustedProxyResolver implements it; it is the
+// same interpretation the sign-in attempt limiter uses, so X-Forwarded-For
+// from an untrusted peer is never believed.
+type ClientKeyResolver interface {
+	ResolveClientKey(*http.Request) (string, error)
+}
+
 // TokenHandler serves the token endpoint.
 type TokenHandler struct {
-	issuer  TokenIssuer
-	limiter *scimclient.FailureLimiter
+	issuer   TokenIssuer
+	resolver ClientKeyResolver
+	limiter  *scimclient.FailureLimiter
 }
 
 // NewTokenHandler builds the handler with the default failure limiter.
-func NewTokenHandler(issuer TokenIssuer) *TokenHandler {
+// resolver may be nil: the socket peer is then the caller's address.
+func NewTokenHandler(issuer TokenIssuer, resolver ClientKeyResolver) *TokenHandler {
 	return &TokenHandler{
-		issuer:  issuer,
-		limiter: scimclient.NewFailureLimiter(tokenFailureLimit, tokenFailureWindow),
+		issuer:   issuer,
+		resolver: resolver,
+		limiter:  scimclient.NewFailureLimiter(tokenFailureLimit, tokenFailureWindow),
 	}
 }
 
@@ -118,17 +129,21 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := limiterKey(r, clientID)
-	if blocked, retry := h.limiter.Blocked(key); blocked {
-		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		writeOAuthError(w, http.StatusTooManyRequests, "invalid_request",
-			"too many failed client authentications; retry later", false)
-		return
-	}
-
+	// The secret is verified FIRST, and a correct secret is always answered
+	// with a token. The failure limit applies only to failures, and it is
+	// counted per (client id, caller address): the client id is public, so a
+	// limit on it alone would let anybody who knows it lock the real identity
+	// provider out.
 	token, principal, err := h.issuer.IssueAccessToken(r.Context(), clientID, clientSecret)
 	if errors.Is(err, scimclient.ErrRejected) {
+		key := h.limiterKey(r, clientID)
 		h.limiter.Fail(key)
+		if blocked, retry := h.limiter.Blocked(key); blocked {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+			writeOAuthError(w, http.StatusTooManyRequests, "invalid_request",
+				"too many failed client authentications; retry later", false)
+			return
+		}
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed", usedBasic)
 		return
 	}
@@ -184,18 +199,29 @@ func clientCredentials(r *http.Request, form url.Values) (clientID, clientSecret
 	return decodedUser, decodedPassword, true, true
 }
 
-// limiterKey keys the failure counter by client id. The remote address is not
-// used: behind an ingress it is the proxy, and one key for every caller would
-// let one attacker block every identity provider.
-func limiterKey(r *http.Request, clientID string) string {
-	if len(clientID) > 128 {
+// limiterKey keys the failure counter by client id AND caller address. The
+// address comes from the trusted-proxy resolver when one is configured and the
+// socket peer is a trusted proxy; otherwise the socket peer IS the caller.
+// An oversized client id is replaced by a fixed marker so it cannot grow the
+// key space.
+func (h *TokenHandler) limiterKey(r *http.Request, clientID string) string {
+	address := ""
+	if h.resolver != nil {
+		if resolved, err := h.resolver.ResolveClientKey(r); err == nil {
+			address = resolved
+		}
+	}
+	if address == "" {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			host = r.RemoteAddr
 		}
-		return "oversized:" + host
+		address = host
 	}
-	return "client:" + clientID
+	if len(clientID) > 128 {
+		clientID = "<oversized>"
+	}
+	return "client:" + clientID + "|addr:" + address
 }
 
 // writeOAuthError renders RFC 6749 §5.2. A failed Basic authentication carries

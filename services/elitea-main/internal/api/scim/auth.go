@@ -72,11 +72,25 @@ func Authenticate(credentials Credentials) func(http.Handler) http.Handler {
 				return
 			}
 			credentials.TouchLastUsed(r.Context(), principal.ID)
-			audit.Annotate(r.Context(), audit.Annotation{Actor: principal.ActorLabel()})
 			ctx := context.WithValue(r.Context(), principalKey{}, principal)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// AnnotateAuditActor names the SCIM client as the actor of the audit row.
+//
+// It is mounted BELOW apimw.Audit, which is mounted BELOW Authenticate. That
+// order is the point: a request Authenticate refuses never reaches the audit
+// middleware, so an anonymous caller cannot write rows to the audit table by
+// sending bad credentials. A refusal is logged by the access log instead.
+func AnnotateAuditActor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if principal, ok := PrincipalFromContext(r.Context()); ok {
+			audit.Annotate(r.Context(), audit.Annotation{Actor: principal.ActorLabel()})
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // bearerToken reads `Authorization: Bearer <token>`. The scheme is case

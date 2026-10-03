@@ -1449,11 +1449,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// chi matches the longer static prefix first, so `/api/v2/scim/...` reaches
 	// this group and never the `/api/v2` catch-all, as `/api/v2/artifacts` does.
 	//
-	// Audit is mounted here too. The SCIM client annotates the row with
-	// `scim:<client name>` as the actor, because a client has no user id.
-	// Maintenance mode is NOT mounted: it admits only callers whose
-	// administration permissions resolve, and a SCIM client has none. A push
-	// during a maintenance window is answered as on any other day.
+	// AUDIT sits BELOW authentication on the SCIM tree, and records only
+	// successful issues on the token endpoint. Both are deliberate: the two
+	// routes are reachable without a session, and an audit middleware above
+	// the credential check would let any anonymous caller write a row to
+	// `centry.audit_events` per request. An authenticated SCIM change is
+	// recorded with the actor `scim:<client name>`, because a client has no
+	// user id.
+	//
+	// MAINTENANCE MODE is NOT mounted, and this is a decision, not an
+	// omission: it admits only callers whose administration permissions
+	// resolve, and a SCIM client has none. A push during a maintenance window
+	// is therefore answered as on any other day. The SCIM documentation
+	// (apps/elitea-web/src/entries/docs/content/admin/authentication.mdx) and
+	// the Helm values comment say so; an operator who must freeze the
+	// directory pauses provisioning in the identity provider.
 	var (
 		scimCredentials scimapi.Credentials
 		scimTokenIssuer scimapi.TokenIssuer
@@ -1465,12 +1475,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		store := scimclient.NewStore(cfg.Pool, cfg.SCIMAccessTokenTTL)
 		scimCredentials, scimTokenIssuer, scimClientStore = store, store, store
 	}
+	// The trusted-proxy resolver, when the deployment has one, gives the token
+	// endpoint's failure limiter the real caller address.
+	scimClientAddresses, _ := cfg.Auth.ForwardedIdentityVerifier.(scimapi.ClientKeyResolver)
 	r.Group(func(r chi.Router) {
-		r.Use(apimw.Audit(auditRecorder))
 		r.Use(apimw.NoStore)
-		r.Method(http.MethodPost, scimapi.TokenPath, scimapi.NewTokenHandler(scimTokenIssuer))
-		r.With(scimapi.Authenticate(scimCredentials)).Mount(scimapi.BasePath,
-			scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
+		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).
+			Method(http.MethodPost, scimapi.TokenPath, scimapi.NewTokenHandler(scimTokenIssuer, scimClientAddresses))
+		r.With(
+			scimapi.Authenticate(scimCredentials),
+			apimw.Audit(auditRecorder),
+			scimapi.AnnotateAuditActor,
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
 	})
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its

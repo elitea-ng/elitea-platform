@@ -46,7 +46,7 @@ const (
 // SCIMClientStore is the store seam.
 type SCIMClientStore interface {
 	List(ctx context.Context) ([]scimclient.Client, error)
-	Create(ctx context.Context, name, method string, createdBy *int) (scimclient.Issued, error)
+	Create(ctx context.Context, name, method string, expiresAt *time.Time, createdBy *int) (scimclient.Issued, error)
 	Rotate(ctx context.Context, id int64) (scimclient.Issued, error)
 	Revoke(ctx context.Context, id int64) (scimclient.Client, error)
 	Delete(ctx context.Context, id int64) error
@@ -157,6 +157,9 @@ func (h *Handler) SCIMClientList(w http.ResponseWriter, r *http.Request) {
 type scimClientCreateBody struct {
 	Name       string `json:"name"`
 	AuthMethod string `json:"auth_method"`
+	// ExpiresAt is optional, RFC 3339. After it the client stops
+	// authenticating. It must be in the future and at most two years away.
+	ExpiresAt *string `json:"expires_at"`
 }
 
 // issuedBody is the answer that carries a secret, once.
@@ -192,9 +195,19 @@ func (h *Handler) SCIMClientCreate(w http.ResponseWriter, r *http.Request) {
 			createdBy = &value
 		}
 	}
-	issued, err := h.scimClients.Create(r.Context(), body.Name, body.AuthMethod, createdBy)
+	var expiresAt *time.Time
+	if body.ExpiresAt != nil && *body.ExpiresAt != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, *body.ExpiresAt)
+		if parseErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "expires_at must be an RFC 3339 time"})
+			return
+		}
+		expiresAt = &parsed
+	}
+	issued, err := h.scimClients.Create(r.Context(), body.Name, body.AuthMethod, expiresAt, createdBy)
 	switch {
-	case errors.Is(err, scimclient.ErrInvalidName), errors.Is(err, scimclient.ErrInvalidMethod):
+	case errors.Is(err, scimclient.ErrInvalidName), errors.Is(err, scimclient.ErrInvalidMethod),
+		errors.Is(err, scimclient.ErrInvalidExpiry):
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	case errors.Is(err, scimclient.ErrDuplicateName):

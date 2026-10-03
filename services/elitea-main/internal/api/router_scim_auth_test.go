@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,57 @@ import (
 type discardAuditRecorder struct{}
 
 func (discardAuditRecorder) Record(context.Context, audit.Event) {}
+
+type countingAuditRecorder struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (c *countingAuditRecorder) Record(_ context.Context, event audit.Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, event)
+}
+
+func (c *countingAuditRecorder) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.events)
+}
+
+// A caller with no credential must not be able to write audit rows. Both SCIM
+// routes are reachable without a session, so an audit middleware above the
+// credential check would turn every refused request into a row.
+func TestRefusedSCIMRequestsWriteNoAuditRow(t *testing.T) {
+	recorder := &countingAuditRecorder{}
+	router := NewRouter(RouterConfig{Pool: &pgxpool.Pool{}, AuditRecorder: recorder})
+
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, scimapi.BasePath+"/Users", strings.NewReader(`{}`)),
+		httptest.NewRequest(http.MethodDelete, scimapi.BasePath+"/Users/1", nil),
+		httptest.NewRequest(http.MethodGet, scimapi.BasePath+"/Users", nil),
+		func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, scimapi.TokenPath, strings.NewReader("grant_type=client_credentials"))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			return r
+		}(),
+		func() *http.Request {
+			r := httptest.NewRequest(http.MethodPost, scimapi.TokenPath, strings.NewReader("grant_type=password"))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			return r
+		}(),
+	} {
+		request.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code < 400 {
+			t.Fatalf("%s %s = %d, want a refusal", request.Method, request.URL.Path, response.Code)
+		}
+	}
+	if got := recorder.count(); got != 0 {
+		t.Fatalf("refused SCIM requests wrote %d audit rows, want 0", got)
+	}
+}
 
 func TestSCIMRefusesPersonalAccessTokensAndSessionsThroughTheRouter(t *testing.T) {
 	router := NewRouter(RouterConfig{Pool: &pgxpool.Pool{}, AuditRecorder: discardAuditRecorder{}})

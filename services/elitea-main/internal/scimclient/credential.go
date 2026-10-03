@@ -82,6 +82,11 @@ const (
 	MaxNameLength = 100
 )
 
+// MaxClientLifetime is the furthest expiry a client may be created with. An
+// operator who wants a longer-lived credential rotates it instead; a credential
+// with no end date is still possible by leaving the expiry empty.
+const MaxClientLifetime = 2 * 365 * 24 * time.Hour
+
 // The errors the store returns. Callers map them to HTTP answers; none of them
 // carries a database cause across a trust boundary.
 var (
@@ -98,6 +103,8 @@ var (
 	ErrInvalidMethod = errors.New("the authentication method must be bearer or client_credentials")
 	// ErrRevoked means the operation needs an active client.
 	ErrRevoked = errors.New("the SCIM client is revoked")
+	// ErrInvalidExpiry refuses an expiry in the past or too far ahead.
+	ErrInvalidExpiry = errors.New("the expiry must be in the future and at most two years away")
 )
 
 // AccessTokenTTLFromEnv reads AccessTokenTTLEnv. An empty value gives

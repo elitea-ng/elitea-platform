@@ -27,7 +27,7 @@ func TestABearerSecretAuthenticatesAndIsStoredOnlyAsAHash(t *testing.T) {
 	ctx := context.Background()
 
 	creator := 7
-	issued, err := store.Create(ctx, "  Entra ID  ", MethodBearer, &creator)
+	issued, err := store.Create(ctx, "  Entra ID  ", MethodBearer, nil, &creator)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(issued.Secret, PrefixBearerSecret))
 	require.Equal(t, "Entra ID", issued.Client.Name)
@@ -70,7 +70,7 @@ func TestRotateInvalidatesTheOldSecretImmediately(t *testing.T) {
 	store := NewStore(pool, 0)
 	ctx := context.Background()
 
-	issued, err := store.Create(ctx, "okta", MethodBearer, nil)
+	issued, err := store.Create(ctx, "okta", MethodBearer, nil, nil)
 	require.NoError(t, err)
 	rotated, err := store.Rotate(ctx, issued.Client.ID)
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestClientCredentialsIssueAnAccessTokenThatAuthenticates(t *testing.T) {
 	store := NewStore(pool, 0)
 	ctx := context.Background()
 
-	issued, err := store.Create(ctx, "entra-oauth", MethodClientCredentials, nil)
+	issued, err := store.Create(ctx, "entra-oauth", MethodClientCredentials, nil, nil)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(issued.Client.ClientID, PrefixClientID))
 	require.True(t, strings.HasPrefix(issued.Secret, PrefixClientSecret))
@@ -136,9 +136,9 @@ func TestARevokedClientNoLongerAuthenticates(t *testing.T) {
 	store := NewStore(pool, 0)
 	ctx := context.Background()
 
-	bearer, err := store.Create(ctx, "bearer", MethodBearer, nil)
+	bearer, err := store.Create(ctx, "bearer", MethodBearer, nil, nil)
 	require.NoError(t, err)
-	oauth, err := store.Create(ctx, "oauth", MethodClientCredentials, nil)
+	oauth, err := store.Create(ctx, "oauth", MethodClientCredentials, nil, nil)
 	require.NoError(t, err)
 	token, _, err := store.IssueAccessToken(ctx, oauth.Client.ClientID, oauth.Secret)
 	require.NoError(t, err)
@@ -169,14 +169,86 @@ func TestClientNamesAreUniqueAndMethodsAreChecked(t *testing.T) {
 	store := NewStore(pool, 0)
 	ctx := context.Background()
 
-	_, err := store.Create(ctx, "Entra", MethodBearer, nil)
+	_, err := store.Create(ctx, "Entra", MethodBearer, nil, nil)
 	require.NoError(t, err)
-	_, err = store.Create(ctx, " entra ", MethodClientCredentials, nil)
+	_, err = store.Create(ctx, " entra ", MethodClientCredentials, nil, nil)
 	require.ErrorIs(t, err, ErrDuplicateName)
-	_, err = store.Create(ctx, "other", "password", nil)
+	_, err = store.Create(ctx, "other", "password", nil, nil)
 	require.ErrorIs(t, err, ErrInvalidMethod)
-	_, err = store.Create(ctx, "", MethodBearer, nil)
+	_, err = store.Create(ctx, "", MethodBearer, nil, nil)
 	require.ErrorIs(t, err, ErrInvalidName)
+}
+
+// A token minted with a secret that a rotation replaced must not authenticate,
+// even when its row survives the rotation. The row below is what a concurrent
+// issue leaves behind when its INSERT commits after Rotate deleted the others.
+func TestATokenBoundToARotatedSecretIsRefused(t *testing.T) {
+	pool := newClientPool(t)
+	store := NewStore(pool, 0)
+	ctx := context.Background()
+
+	issued, err := store.Create(ctx, "race", MethodClientCredentials, nil, nil)
+	require.NoError(t, err)
+	token, _, err := store.IssueAccessToken(ctx, issued.Client.ClientID, issued.Secret)
+	require.NoError(t, err)
+	_, err = store.Authenticate(ctx, token.Token)
+	require.NoError(t, err)
+
+	_, err = store.Rotate(ctx, issued.Client.ID)
+	require.NoError(t, err)
+	// Re-insert the old token as the late-committing issue would have.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO elitea_auth.scim_access_tokens (token_hash, client_id, client_secret_hash, expires_at)
+		VALUES ($1, $2, $3, now() + interval '1 hour')`,
+		HashSecret(token.Token), issued.Client.ID, HashSecret(issued.Secret))
+	require.NoError(t, err)
+	_, err = store.Authenticate(ctx, token.Token)
+	require.ErrorIs(t, err, ErrRejected, "a token bound to the old secret must not outlive the rotation")
+}
+
+func TestLiveTokensPerClientAreCapped(t *testing.T) {
+	pool := newClientPool(t)
+	store := NewStore(pool, 0)
+	ctx := context.Background()
+
+	issued, err := store.Create(ctx, "chatty", MethodClientCredentials, nil, nil)
+	require.NoError(t, err)
+	var newest AccessToken
+	for i := 0; i < maxLiveTokensPerClient+5; i++ {
+		newest, _, err = store.IssueAccessToken(ctx, issued.Client.ClientID, issued.Secret)
+		require.NoError(t, err)
+	}
+	var live int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM elitea_auth.scim_access_tokens WHERE client_id = $1`, issued.Client.ID).Scan(&live))
+	require.Equal(t, maxLiveTokensPerClient, live)
+	_, err = store.Authenticate(ctx, newest.Token)
+	require.NoError(t, err, "the newest token must survive the cap")
+}
+
+func TestClientExpiryIsValidatedAndEnforced(t *testing.T) {
+	pool := newClientPool(t)
+	store := NewStore(pool, 0)
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Minute)
+	_, err := store.Create(ctx, "past", MethodBearer, &past, nil)
+	require.ErrorIs(t, err, ErrInvalidExpiry)
+	far := time.Now().Add(MaxClientLifetime + time.Hour)
+	_, err = store.Create(ctx, "far", MethodBearer, &far, nil)
+	require.ErrorIs(t, err, ErrInvalidExpiry)
+
+	soon := time.Now().Add(24 * time.Hour)
+	issued, err := store.Create(ctx, "soon", MethodBearer, &soon, nil)
+	require.NoError(t, err)
+	require.NotNil(t, issued.Client.ExpiresAt)
+	_, err = store.Authenticate(ctx, issued.Secret)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE elitea_auth.scim_clients SET expires_at = now() - interval '1 second' WHERE id = $1`, issued.Client.ID)
+	require.NoError(t, err)
+	_, err = store.Authenticate(ctx, issued.Secret)
+	require.ErrorIs(t, err, ErrRejected, "an expired client must stop authenticating")
 }
 
 func newClientPool(t *testing.T) *pgxpool.Pool {

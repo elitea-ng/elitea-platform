@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS elitea_auth.scim_access_tokens (
     -- Deleting or revoking a client ends every access token it holds. The
     -- revoke path deletes them explicitly; the cascade covers the delete path.
     client_id  bigint      NOT NULL REFERENCES elitea_auth.scim_clients (id) ON DELETE CASCADE,
+    -- client_secret_hash is the client's secret_hash at issue time. A token
+    -- authenticates only while it still equals the client's CURRENT
+    -- secret_hash, so a token minted with a secret that a concurrent rotation
+    -- replaced never authenticates, even if its INSERT commits after the
+    -- rotation deleted the other tokens.
+    client_secret_hash text NOT NULL CHECK (client_secret_hash ~ '^[0-9a-f]{64}$'),
     issued_at  timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL
 );
