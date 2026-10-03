@@ -30,6 +30,12 @@ func withMember(req *http.Request, userID int64) *http.Request {
 	return req.WithContext(platformauth.ContextWithUser(req.Context(), user))
 }
 
+// withACLEditor marks the caller as one who may edit the access lists, as the
+// router does after it resolves `configuration.artifacts.s3_credentials.edit`.
+func withACLEditor(req *http.Request) *http.Request {
+	return req.WithContext(artifacts.WithFullACLView(req.Context()))
+}
+
 func newACLTestRouter(h *artifacts.Handler) chi.Router {
 	r := chi.NewRouter()
 	r.Get("/bucket_permissions/{projectID}", h.ListBucketPermissions)
@@ -95,7 +101,7 @@ func TestSetBucketPermissions_StoresAndListsTheException(t *testing.T) {
 	}
 
 	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 1))
+	router.ServeHTTP(rr, withACLEditor(withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 1)))
 	var body struct {
 		Total int `json:"total"`
 		Rows  []struct {
@@ -127,7 +133,7 @@ func TestSetBucketPermissions_NoAccessSurvivesAsEmptyArray(t *testing.T) {
 	}
 
 	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 1))
+	router.ServeHTTP(rr, withACLEditor(withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 1)))
 	raw := rr.Body.String()
 	if !bytes.Contains([]byte(raw), []byte(`"reports":[]`)) {
 		t.Fatalf("listing did not encode no-access as an empty array: %s", raw)
@@ -510,5 +516,80 @@ func TestObjectVerbs_PrincipalWithNoOwningUserSkipsTheCheck(t *testing.T) {
 	newObjectTestRouter(h).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/objects/1/reports", nil))
 	if rr.Code == http.StatusForbidden {
 		t.Fatalf("an unowned principal was refused by an exception naming user 7")
+	}
+}
+
+/* ── who sees which rows of the listing (#6725) ───────────────────────── */
+
+// listACLUsers answers the user ids the listing returns to one request.
+func listACLUsers(t *testing.T, router chi.Router, req *http.Request) []int64 {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Total int `json:"total"`
+		Rows  []struct {
+			UserID int64 `json:"user_id"`
+		} `json:"rows"`
+	}
+	decodeJSON(t, rr.Body, &body)
+	if body.Total != len(body.Rows) {
+		t.Fatalf("total = %d, rows = %d; the two must agree", body.Total, len(body.Rows))
+	}
+	users := make([]int64, 0, len(body.Rows))
+	for _, row := range body.Rows {
+		users = append(users, row.UserID)
+	}
+	return users
+}
+
+// A read-only member saw every colleague's exceptions through Manage
+// permissions. The listing now answers such a member their own row only.
+func TestListBucketPermissions_ReadOnlyMemberSeesOnlyTheirOwnRow(t *testing.T) {
+	h, repo, _ := newACLFixture(t)
+	repo.setException(1, 7, "reports", []string{"read"})
+	repo.setException(1, 8, "reports", nil)
+	router := newACLTestRouter(h)
+
+	users := listACLUsers(t, router, withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 7))
+	if len(users) != 1 || users[0] != 7 {
+		t.Fatalf("read-only member 7 saw rows for %v, want only [7]", users)
+	}
+
+	// A member with no exception sees nothing, not the others.
+	users = listACLUsers(t, router, withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 9))
+	if len(users) != 0 {
+		t.Fatalf("member 9 with no exception saw rows for %v, want none", users)
+	}
+}
+
+func TestListBucketPermissions_EditorAndProjectAdminSeeEveryRow(t *testing.T) {
+	h, repo, _ := newACLFixture(t)
+	repo.setException(1, 7, "reports", []string{"read"})
+	repo.setException(1, 8, "reports", nil)
+	repo.setProjectAdmin(1, 2)
+	router := newACLTestRouter(h)
+
+	editor := withACLEditor(withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 9))
+	if users := listACLUsers(t, router, editor); len(users) != 2 {
+		t.Fatalf("ACL editor saw rows for %v, want both members", users)
+	}
+	admin := withMember(httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil), 2)
+	if users := listACLUsers(t, router, admin); len(users) != 2 {
+		t.Fatalf("project admin saw rows for %v, want both members", users)
+	}
+}
+
+// A principal with no owning user names no person, so no row is its own.
+func TestListBucketPermissions_PrincipalWithoutAUserSeesNoRow(t *testing.T) {
+	h, repo, _ := newACLFixture(t)
+	repo.setException(1, 7, "reports", []string{"read"})
+	router := newACLTestRouter(h)
+
+	if users := listACLUsers(t, router, httptest.NewRequest(http.MethodGet, "/bucket_permissions/1", nil)); len(users) != 0 {
+		t.Fatalf("anonymous context saw rows for %v, want none", users)
 	}
 }

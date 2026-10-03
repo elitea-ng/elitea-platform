@@ -205,12 +205,20 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodDelete, "/api/v2/elitea_core/upload_skill_icon/prompt_lib/7/icon", "/api/v2/elitea_core/upload_skill_icon/prompt_lib/8/icon", "models.applications.skills.upload_icon.delete"},
 	{http.MethodGet, "/api/v2/elitea_core/export_import/prompt_lib/7/1", "/api/v2/elitea_core/export_import/prompt_lib/8/1", "models.applications.export_import.export"},
 	{http.MethodPost, "/api/v2/elitea_core/export_import/prompt_lib/7/1", "/api/v2/elitea_core/export_import/prompt_lib/8/1", "models.applications.export_import.import"},
-	{http.MethodPost, "/api/v2/elitea_core/mcp_oauth_proxy/7", "/api/v2/elitea_core/mcp_oauth_proxy/8", "models.applications.tool.patch"},
+	// The two MCP proxies are a connection action, so they take the agent RUN
+	// permission a viewer holds (#6885). The sync writes toolkit rows and keeps
+	// `tool.patch`.
+	{http.MethodPost, "/api/v2/elitea_core/mcp_oauth_proxy/7", "/api/v2/elitea_core/mcp_oauth_proxy/8", "models.applications.predict.post"},
+	{http.MethodPost, "/api/v2/elitea_core/mcp_dcr_proxy/7", "/api/v2/elitea_core/mcp_dcr_proxy/8", "models.applications.predict.post"},
+	{http.MethodPost, "/api/v2/elitea_core/mcp_sync_tools/prompt_lib/7", "/api/v2/elitea_core/mcp_sync_tools/prompt_lib/8", "models.applications.tool.patch"},
 	{http.MethodGet, "/api/v2/elitea_core/analytics/prompt_lib/7", "/api/v2/elitea_core/analytics/prompt_lib/8", v2analytics.ViewPermission},
 	{http.MethodGet, "/api/v2/elitea_core/users/prompt_lib/7", "/api/v2/elitea_core/users/prompt_lib/8", "configuration.users.users.view"},
 	{http.MethodGet, "/api/v2/elitea_core/roles/prompt_lib/7", "/api/v2/elitea_core/roles/prompt_lib/8", "configuration.roles.roles.view"},
 	{http.MethodGet, "/api/v2/elitea_core/project_info/prompt_lib/7/project-info", "/api/v2/elitea_core/project_info/prompt_lib/8/project-info", "models.project_context.view"},
-	{http.MethodPut, "/api/v2/elitea_core/project_info/prompt_lib/7/project-info", "/api/v2/elitea_core/project_info/prompt_lib/8/project-info", "models.project_context.edit"},
+	// The project settings writes are the project admin's (#6789).
+	{http.MethodPut, "/api/v2/elitea_core/project_info/prompt_lib/7/project-info", "/api/v2/elitea_core/project_info/prompt_lib/8/project-info", "models.project_settings.edit"},
+	{http.MethodPost, "/api/v2/elitea_core/project_icon/prompt_lib/7", "/api/v2/elitea_core/project_icon/prompt_lib/8", "models.project_settings.edit"},
+	{http.MethodDelete, "/api/v2/elitea_core/project_icon/prompt_lib/7/icon", "/api/v2/elitea_core/project_icon/prompt_lib/8/icon", "models.project_settings.edit"},
 	{http.MethodGet, "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", "/api/v2/elitea_core/project_context/prompt_lib/8/project-context", "models.project_context.view"},
 	{http.MethodPut, "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", "/api/v2/elitea_core/project_context/prompt_lib/8/project-context", "models.project_context.edit"},
 	{http.MethodDelete, "/api/v2/elitea_core/project_context/prompt_lib/7/project-context", "/api/v2/elitea_core/project_context/prompt_lib/8/project-context", "models.project_context.edit"},

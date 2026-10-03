@@ -185,14 +185,36 @@ func (h *Handler) visibleBuckets(
 	return visible, nil
 }
 
+type fullACLViewKey struct{}
+
+// WithFullACLView marks a request whose caller may EDIT the access lists. The
+// router sets it after it resolves `configuration.artifacts.s3_credentials.edit`
+// for the caller. Without the mark, ListBucketPermissions answers the caller's
+// own row only.
+func WithFullACLView(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fullACLViewKey{}, true)
+}
+
+func hasFullACLView(ctx context.Context) bool {
+	marked, _ := ctx.Value(fullACLViewKey{}).(bool)
+	return marked
+}
+
 // ListBucketPermissions serves the ACL read —
 // GET /api/v2/artifacts/bucket_permissions/{projectID}.
 //
-// It answers every exception in the project, not the exceptions for one
-// bucket, because that is what the legacy route answers
-// (api/v2/bucket_permissions.py:42-54) and what the reference page needs: it
-// renders one bucket's exceptions and must still know which members already
-// carry an exception elsewhere before it writes a replacement map.
+// For a caller who may edit the lists, it answers every exception in the
+// project, not the exceptions for one bucket, because that is what the legacy
+// route answers (api/v2/bucket_permissions.py:42-54) and what the Manage
+// permissions dialog needs: it renders one bucket's exceptions and must still
+// know which members already carry an exception elsewhere before it writes a
+// replacement map.
+//
+// Every other caller gets their OWN row only (#6725). The route is gated on
+// `.view`, which a viewer holds, and the full list told a read-only member
+// which colleagues are blocked from which bucket. The caller's own row is
+// enough to decide what the bucket menu may offer. A project admin always
+// gets the full list, for the reason authorizeBucket gives.
 func (h *Handler) ListBucketPermissions(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := parseProjectID(r)
 	if !ok {
@@ -200,6 +222,11 @@ func (h *Handler) ListBucketPermissions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	rows, err := h.repo.ListBucketPermissions(r.Context(), projectID)
+	if err != nil {
+		h.writeInternal(w, r, "list bucket permissions", err)
+		return
+	}
+	rows, err = h.visibleACLRows(r.Context(), projectID, rows)
 	if err != nil {
 		h.writeInternal(w, r, "list bucket permissions", err)
 		return
@@ -218,6 +245,35 @@ func (h *Handler) ListBucketPermissions(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": len(out), "rows": out})
+}
+
+// visibleACLRows narrows the ACL listing to the caller's own row unless the
+// caller may see every row. A principal with no owning user sees no row: an
+// exception names a person, and there is no person to match.
+func (h *Handler) visibleACLRows(
+	ctx context.Context, projectID int64, rows []repos.BucketPermissionRow,
+) ([]repos.BucketPermissionRow, error) {
+	if hasFullACLView(ctx) {
+		return rows, nil
+	}
+	userID, ok := callerUserID(ctx)
+	if !ok {
+		return []repos.BucketPermissionRow{}, nil
+	}
+	isAdmin, err := h.repo.IsProjectAdmin(ctx, projectID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if isAdmin {
+		return rows, nil
+	}
+	own := make([]repos.BucketPermissionRow, 0, 1)
+	for _, row := range rows {
+		if row.UserID == userID {
+			own = append(own, row)
+		}
+	}
+	return own, nil
 }
 
 // validateBucketPermissions reproduces the legacy validation
