@@ -134,7 +134,7 @@ test.describe('publish validation: project-specific model (ELITEA-0158)', () => 
       model: { modelName: privateModel.modelName, modelProjectId: privateModel.projectId },
     });
     try {
-      const attached = await attachSubAgent(request, parent.versionId, {
+      const attached = await attachSubAgent(request, parent, {
         applicationId: child.id,
         versionId: child.versionId,
       });

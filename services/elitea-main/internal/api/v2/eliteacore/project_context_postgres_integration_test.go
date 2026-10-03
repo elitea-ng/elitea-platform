@@ -237,3 +237,44 @@ func TestProjectContextRefusesAWriteItCannotPersist(t *testing.T) {
 		t.Errorf("refusal body leaks database detail: %s", text)
 	}
 }
+
+// TestProjectContextFirstSaveStampsUpdatedAt pins the INSERT branch's
+// updated_at. The UPDATE branch always set it; the INSERT did not, so the
+// first save of every project answered and stored "updated_at": null.
+func TestProjectContextFirstSaveStampsUpdatedAt(t *testing.T) {
+	pool := newImportCorpusPool(t)
+	provisionTenantProject(t, pool, projectContextProjectA)
+	router := projectContextRouter(eliteacore.NewHandler(pool))
+
+	if rows := countProjectContextRows(t, pool, projectContextProjectA); rows != 0 {
+		t.Fatalf("project %d already has %d project_context rows", projectContextProjectA, rows)
+	}
+	putProjectContext(t, router, projectContextProjectA,
+		projectContextBody{Content: "first save", Enabled: true})
+
+	request := httptest.NewRequest(http.MethodGet, projectContextPath(projectContextProjectA), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var body struct {
+		UpdatedAt *string `json:"updated_at"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", recorder.Body.String(), err)
+	}
+	if body.UpdatedAt == nil || *body.UpdatedAt == "" {
+		t.Fatalf("updated_at after the first save = null, want a timestamp (body %s)",
+			recorder.Body.String())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var nullCount int
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s.configuration
+		WHERE type = 'project_context' AND updated_at IS NULL`, tenantSchema(projectContextProjectA))
+	if err := pool.QueryRow(ctx, query).Scan(&nullCount); err != nil {
+		t.Fatalf("count null updated_at: %v", err)
+	}
+	if nullCount != 0 {
+		t.Fatalf("stored project_context rows with NULL updated_at = %d, want 0", nullCount)
+	}
+}

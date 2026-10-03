@@ -1,6 +1,7 @@
-// Package artifactbootstrap builds and tears down a project's system
-// buckets ("reports", "tasks") — the Go-service equivalent of what legacy
-// creates on project creation and removes on project deletion. See
+// Package artifactbootstrap builds a project's system buckets ("reports",
+// "tasks") and tears down every bucket of a deleted project — the Go-service
+// equivalent of what legacy creates on project creation and removes on
+// project deletion. See
 // docs/plans/storage-migration-plan.md S13 for why this package is not
 // called from anywhere yet.
 package artifactbootstrap
@@ -28,6 +29,7 @@ const (
 // internal/api/router.go's artifactRepoAdapter uses.
 type Repository interface {
 	GetBucket(ctx context.Context, projectID int64, name string) (repos.BucketRow, error)
+	ListBuckets(ctx context.Context, projectID int64) ([]repos.BucketRow, error)
 	CreateBucket(ctx context.Context, input repos.NewBucketInput) (repos.BucketRow, error)
 	SoftDeleteBucket(ctx context.Context, id int64) error
 	DeleteObjects(ctx context.Context, bucketID int64, keys []string) error
@@ -84,37 +86,45 @@ func (b *Bootstrapper) BootstrapProjectBuckets(ctx context.Context, projectID st
 	return nil
 }
 
-// TeardownProjectBuckets soft-deletes the project's "reports" and "tasks"
-// buckets and purges every object in them — both the physical bytes
-// (ObjectStore.DeleteBatch) and their metadata rows (Repository.
-// DeleteObjects) — idempotently: a bucket that's already gone (or was
-// never created) is silently skipped, not an error.
+// TeardownProjectBuckets soft-deletes EVERY live bucket of the project, the
+// system pair and every bucket a user created, and purges every object in
+// them: the physical bytes (ObjectStore.DeleteBatch) and their metadata rows
+// (Repository.DeleteObjects). It is idempotent: a project with no live bucket
+// is a no-op.
+//
+// It used to tear down "reports" and "tasks" only. A deleted project then
+// kept every user bucket row live and every object in it under p/<id>/ (C1).
+//
+// It tries every bucket even after one fails, so one unreachable object does
+// not strand the rest, and returns the failures joined.
 func (b *Bootstrapper) TeardownProjectBuckets(ctx context.Context, projectID string) error {
 	id, err := parseProjectID(projectID)
 	if err != nil {
 		return err
 	}
+	buckets, err := b.repo.ListBuckets(ctx, id)
+	if err != nil {
+		return fmt.Errorf("list project buckets: %w", err)
+	}
+	var failures []error
+	for _, row := range buckets {
+		if err := b.teardownBucket(ctx, projectID, row); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
 
-	for _, name := range []string{bucketReports, bucketTasks} {
-		row, err := b.repo.GetBucket(ctx, id, name)
-		if errors.Is(err, storage.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("get %s bucket: %w", name, err)
-		}
-
-		bucketRef, err := storage.NewBucketRef(projectID, name)
-		if err != nil {
-			return fmt.Errorf("build bucket ref for %s: %w", name, err)
-		}
-		if err := b.purgeObjects(ctx, bucketRef, row.ID); err != nil {
-			return fmt.Errorf("purge objects in %s: %w", name, err)
-		}
-
-		if err := b.repo.SoftDeleteBucket(ctx, row.ID); err != nil && !errors.Is(err, storage.ErrNotFound) {
-			return fmt.Errorf("delete %s bucket: %w", name, err)
-		}
+func (b *Bootstrapper) teardownBucket(ctx context.Context, projectID string, row repos.BucketRow) error {
+	bucketRef, err := storage.NewBucketRef(projectID, row.Name)
+	if err != nil {
+		return fmt.Errorf("build bucket ref for %s: %w", row.Name, err)
+	}
+	if err := b.purgeObjects(ctx, bucketRef, row.ID); err != nil {
+		return fmt.Errorf("purge objects in %s: %w", row.Name, err)
+	}
+	if err := b.repo.SoftDeleteBucket(ctx, row.ID); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return fmt.Errorf("delete %s bucket: %w", row.Name, err)
 	}
 	return nil
 }

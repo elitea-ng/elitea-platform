@@ -327,7 +327,10 @@ test('M2: an agent participant renders in the rail and the rail control removes 
   expect(applications).toHaveLength(1);
   expect(String(applications[0]?.entity_meta?.id)).toBe(agent.id);
   expect(String(applications[0]?.entity_settings?.version_id)).toBe(String(agent.versionId));
-  expect(attached.filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
+  // The attach answers with the rows of THIS request only (legacy parity,
+  // F5), so the default participants are not echoed back.
+  expect(attached).toHaveLength(1);
+  expect((await readParticipants(page.request, conversationId)).filter((participant) => participant.entity_name !== 'application')).toEqual(baseline);
   const participantId = String(applications[0]?.id);
 
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
@@ -426,11 +429,14 @@ test('M3: a cold deep link resolves a foreign participant server-side and captio
       entity_settings: { version_id: agent.versionId },
     },
   ]);
-  expect(attached.map((participant) => participant.entity_name).sort()).toEqual(['application', 'dummy', 'user', 'user']);
+  // Only the rows of THIS request, in request order (legacy parity, F5).
+  expect(attached.map((participant) => participant.entity_name)).toEqual(['user', 'application']);
   const applications = attached.filter((participant) => participant.entity_name === 'application');
   expect(String(applications[0]?.entity_meta?.id)).toBe(agent.id);
   expect(String(applications[0]?.entity_settings?.version_id)).toBe(String(agent.versionId));
-  expect(attached.filter((participant) => participant.entity_name !== 'application' && String(participant.entity_meta?.id) !== foreign.id)).toEqual(baseline);
+  const stored = await readParticipants(page.request, conversationId);
+  expect(stored.map((participant) => participant.entity_name).sort()).toEqual(['application', 'dummy', 'user', 'user']);
+  expect(stored.filter((participant) => participant.entity_name !== 'application' && String(participant.entity_meta?.id) !== foreign.id)).toEqual(baseline);
   const foreignUsers = attached.filter((participant) => participant.entity_name === 'user' && String(participant.entity_meta?.id) === foreign.id);
   expect(foreignUsers).toHaveLength(1);
   const storedUser = foreignUsers[0];

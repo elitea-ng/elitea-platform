@@ -1096,6 +1096,17 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			apierr.WriteStatus(w, http.StatusBadRequest, requiredConfigurationFieldsMessage(missing))
 			return
 		}
+		// The pairwise auth rule (F6) applies to a row of the type's own
+		// section only, like the data walk above. It runs on create alone:
+		// an edit body deliberately omits an untouched secret, so a pair
+		// with an absent password is the ordinary edit, not a broken one.
+		if depth == requiredFieldDepthData {
+			data, _ := body["data"].(map[string]any)
+			if unpaired := unpairedConfigurationFields(entry.Type, data); len(unpaired) > 0 {
+				apierr.WriteStatus(w, http.StatusBadRequest, unpairedConfigurationFieldsMessage(unpaired))
+				return
+			}
+		}
 	}
 
 	dataMap, _ := body["data"].(map[string]any)

@@ -74,7 +74,7 @@ async function seedInUseVersion(
   const inUseVersionName = 'in-use-v2';
   const inUseVersionId = await createSecondVersion(page, parent.id, inUseVersionName);
 
-  const relation = await attachSubAgent(request, dependent.versionId, {
+  const relation = await attachSubAgent(request, dependent, {
     applicationId: parent.id,
     versionId: inUseVersionId,
   });

@@ -78,7 +78,7 @@ CREATE TABLE p_1.chat_message_items(id serial PRIMARY KEY,uuid uuid UNIQUE DEFAU
 CREATE TABLE p_1.chat_messages_canvas(id integer PRIMARY KEY REFERENCES p_1.chat_message_items(id));
 CREATE SCHEMA IF NOT EXISTS centry;
 CREATE TABLE centry.social_pins(entity text,project_id integer,entity_id integer,user_id integer);
-CREATE TABLE p_1.chat_selected_conversations(conversation_id integer,user_id integer);
+CREATE TABLE p_1.chat_selected_conversations(id serial PRIMARY KEY,conversation_id integer,user_id integer);
 `)
 	if err != nil {
 		t.Fatal(err)
