@@ -135,6 +135,29 @@ function toChatBoxModel(model: ConfigModel | null | undefined): ChatBoxModel | n
 }
 
 /**
+ * Applies one re-seed to the live conversation (see `./useChatBoxData.seed.ts`).
+ * `seeded` collects every message object a seed drew, the live state's first
+ * one included, so `seedSettlesLiveTurn` can tell a turn no stream touched.
+ */
+function reseedConversation(
+  prev: ConversationForSync,
+  seed: ConversationForSync,
+  switchedConversation: boolean,
+  seeded: WeakSet<ChatMessage>,
+): ConversationForSync {
+  const live = prev.chat_history ?? [];
+  const seedHistory = seed.chat_history ?? [];
+  for (const message of seedHistory) seeded.add(message);
+  const kept = resolveSeededChatHistory(live, seedHistory, switchedConversation, (message) => seeded.has(message));
+  return kept === live ? { ...seed, chat_history: live } : seed;
+}
+
+/** The first seed's messages: the live state starts as exactly those objects. */
+function initialSeededMessages(conversation: ConversationForSync): WeakSet<ChatMessage> {
+  return new WeakSet(conversation.chat_history ?? []);
+}
+
+/**
  * Hook that provides conversation lifecycle, streaming, attachment management,
  * live socket-synced message normalisation, model resolution, and pending-HITL
  * detection for the ChatBox composition root.
@@ -239,6 +262,12 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
    */
   const seededIdentity = conversationUuid ?? (conversationId !== undefined ? String(conversationId) : undefined);
   const seededIdentityRef = useRef<string | undefined>(seededIdentity);
+  /**
+   * Every message object a seed drew. A stream always writes a COPY, so a live
+   * turn still in this set was never touched by one, and a settled refetch
+   * may replace it (#6654, `seedSettlesLiveTurn`).
+   */
+  const [seededMessages] = useState(() => initialSeededMessages(conversationForSync));
 
   /*
    * WHO WINS when the server seed and the live transcript disagree:
@@ -252,12 +281,8 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
     seededIdentityRef.current = seededIdentity;
     const seed = seedConversationForSync();
     const switchedConversation = previousIdentity !== undefined && previousIdentity !== seededIdentity;
-    setConversationForSync((prev) => {
-      const live = prev.chat_history ?? [];
-      const kept = resolveSeededChatHistory(live, seed.chat_history ?? [], switchedConversation);
-      return kept === live ? { ...seed, chat_history: live } : seed;
-    });
-  }, [seedConversationForSync, seededIdentity]);
+    setConversationForSync((prev) => reseedConversation(prev, seed, switchedConversation, seededMessages));
+  }, [seedConversationForSync, seededIdentity, seededMessages]);
 
   useSyncChatMessage({ activeConversation: conversationForSync, setActiveConversation: setConversationForSync });
 

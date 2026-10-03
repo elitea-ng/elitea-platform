@@ -1,7 +1,7 @@
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
 import { useCallback, useMemo } from "react";
 
-import { useChatStreamTransport, type ChatMessage } from "@/features/chat-messages";
+import { useChatStreamTransport, type ChatMessage, type ReattachableTurn } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
 import { getExecutionTokens } from "@/features/mcps";
 import type { useUploadAttachments } from "@/entities/conversation";
@@ -119,6 +119,11 @@ export interface UseChatBoxSendResult {
     readonly updatedItems?: readonly unknown[] | undefined;
   }) => Promise<StreamStartOutcome>;
   readonly isStreaming: boolean;
+  /**
+   * Observe a turn that was in flight when the page loaded (#6654). `false`
+   * ⇒ nothing was opened: no project or conversation, or a run is owned.
+   */
+  readonly reattachStreamedExecution: (turn: ReattachableTurn) => boolean;
   /**
    * The user pressed Stop: cancel the run server-side and close its stream.
    * A no-op when this transport does not own the current run, so it is safe to
@@ -351,10 +356,27 @@ export function useChatBoxSend(
     [deps, projectId],
   );
 
+  const { reattach } = transport;
+  const conversationUuid = params.conversationUuid;
+  const reattachStreamedExecution = useCallback(
+    (turn: ReattachableTurn): boolean => {
+      if (projectId === undefined || conversationUuid === undefined) return false;
+      return reattach({
+        projectId,
+        conversationUuid,
+        executionId: turn.executionId,
+        responseMessageId: turn.messageId,
+        questionId: turn.questionId,
+      });
+    },
+    [projectId, conversationUuid, reattach],
+  );
+
   return {
     startStreamedExecution,
     continueStreamedExecution,
     regenerateStreamedExecution,
+    reattachStreamedExecution,
     isStreaming: transport.isStreaming,
     stopStreamedExecution: transport.stop,
     createConversationForSend,

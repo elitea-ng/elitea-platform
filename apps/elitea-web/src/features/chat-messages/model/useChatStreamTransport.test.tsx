@@ -1466,3 +1466,48 @@ it('refreshes root occupancy on admission, root measurement and terminal failure
   await act(() => registry.emit('execution.failed', JSON.stringify({safe_message:'The runtime operation failed.'})));
   expect(contextRefreshes).toEqual([7,7,7]);
 });
+
+describe('reattach after a reload mid-turn (#6654)', () => {
+  it('replays the seeded in-flight turn from cursor 0 into the same message, once', async () => {
+    const seeded: ChatMessage = { ...pendingAssistant(), content: '...', taskId: 'exec-1', questionId: QUESTION_ID };
+    const { api, history, Probe } = harness([userQuestion(), seeded]);
+    render(<Probe />);
+
+    let opened: boolean | undefined;
+    act(() => {
+      opened = api.current?.reattach({
+        projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1',
+        responseMessageId: MESSAGE_ID, questionId: QUESTION_ID,
+      });
+    });
+    expect(opened).toBe(true);
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    // No cursor: the server replays the execution from its first frame.
+    expect(registry.getOpen()[0]?.url).toBe(EVENTS_URL);
+    expect(history.current[1]?.content).toBe('');
+
+    act(() => {
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_start' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', content: 'MOCK: ' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', content: 'final answer' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'pipeline_finish', content: 'MOCK: final answer' }));
+    });
+    expect(history.current).toHaveLength(2);
+    expect(history.current[1]?.content).toBe('MOCK: final answer');
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+  });
+
+  it('opens nothing while this transport already owns a run', async () => {
+    okStart();
+    const { api, Probe } = harness();
+    render(<Probe />);
+    await started(api);
+    let opened: boolean | undefined;
+    act(() => {
+      opened = api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-2', responseMessageId: 'other' });
+    });
+    expect(opened).toBe(false);
+    expect(registry.getOpen()).toHaveLength(1);
+  });
+});

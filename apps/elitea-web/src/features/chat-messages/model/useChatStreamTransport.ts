@@ -69,6 +69,7 @@ import { isRootContextFrame } from "../lib/chatStreamContextFrames";
 import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isTurnTerminalFrame } from "../lib/chatStreamTurnEnd";
+import { executionEventsPath, resetTurnForReplay } from "../lib/chatStreamReattach";
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
 import {
@@ -79,8 +80,8 @@ import {
 import { convertMessagesToChatHistory } from "../lib/convertMessagesToChatHistory";
 import type { MessageGroupWire, MessageParticipantWire } from "@/entities/message/lib/wire";
 
-import type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
-export type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
+import type { ChatStreamReattachParams, UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
+export type { ChatStreamReattachParams, UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
 
 export function useChatStreamTransport(
   params: UseChatStreamTransportParams,
@@ -355,13 +356,25 @@ export function useChatStreamTransport(
     });
   }, [ownsRun]);
 
+  // #6654: a reload mid-turn. The run exists and is durable, so observe it
+  // again from cursor 0 into the seeded message; never start anything.
+  const reattach = useCallback((target: ChatStreamReattachParams): boolean => {
+    if (ownsRun()) return false;
+    setChatHistory((prev) => resetTurnForReplay(prev, target.responseMessageId));
+    return subscribeToRun({
+      events_url: executionEventsPath(target.projectId, target.executionId),
+      response_message_id: target.responseMessageId,
+    }, target.conversationUuid, target.projectId, target.questionId);
+  }, [ownsRun, setChatHistory, subscribeToRun]);
+
   return useMemo(
     () => ({
       ...starters,
       isStreaming,
       close: detach,
       stop,
+      reattach,
     }),
-    [starters, isStreaming, detach, stop],
+    [starters, isStreaming, detach, stop, reattach],
   );
 }

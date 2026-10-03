@@ -59,4 +59,19 @@ export interface UseChatStreamTransportResult extends ChatStreamRunStarters {
    * the message. Keep reconnecting while cancellation is pending.
    */
   readonly stop: () => void;
+  /**
+   * Observe a turn that was already in flight when the page loaded (#6654).
+   * Replays the execution's durable log from cursor 0 into the seeded message.
+   * `false` ⇒ this transport already owns a run, so nothing was opened.
+   */
+  readonly reattach: (params: ChatStreamReattachParams) => boolean;
+}
+
+/** @public The in-flight turn `reattach` observes again. */
+export interface ChatStreamReattachParams {
+  readonly projectId: string | number;
+  readonly conversationUuid: string;
+  readonly executionId: string;
+  readonly responseMessageId: string;
+  readonly questionId?: string | undefined;
 }
