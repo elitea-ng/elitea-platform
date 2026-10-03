@@ -741,6 +741,9 @@ struct ContinuationOverlap {
     raw_content: String,
     removed_prefix_bytes: Option<usize>,
     injected_separator: bool,
+    /// Bytes of the projected text already returned. `project` returns only
+    /// what lies beyond them, so the caller can append it as a delta.
+    emitted_bytes: usize,
 }
 
 impl ContinuationOverlap {
@@ -750,10 +753,30 @@ impl ContinuationOverlap {
             raw_content: String::new(),
             removed_prefix_bytes: None,
             injected_separator: false,
+            emitted_bytes: 0,
         }
     }
 
+    /// Fold one model event into the continuation and return the NEW projected
+    /// text: the part of the trimmed continuation that no earlier call
+    /// returned. Returning the whole projection made every partial after the
+    /// overlap buffer flushed re-append everything streamed so far.
     fn project(
+        &mut self,
+        current: String,
+        aggregate: bool,
+        closes_turn: bool,
+    ) -> Result<String, AgentEventProjectionError> {
+        let projected = self.projection(current, aggregate, closes_turn)?;
+        let delta = projected
+            .get(self.emitted_bytes..)
+            .map(ToOwned::to_owned)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        self.emitted_bytes = projected.len();
+        Ok(delta)
+    }
+
+    fn projection(
         &mut self,
         current: String,
         aggregate: bool,
@@ -1947,22 +1970,22 @@ impl AgentEventProjector {
                 return Err(AgentEventProjectionError::invalid_state());
             }
         };
+        // A non-partial event restates the turn only when nothing streamed
+        // before it (ADK's non-streaming final event). After partial deltas,
+        // every provider's terminal event (OpenAI-compatible, Gemini,
+        // Anthropic, the output-continuation scope) carries only its own
+        // delta, so it appends like any other: stripping the text so far as a
+        // "restated prefix" lost leading characters (#6675).
+        let aggregate = model_event.aggregate && !matches!(self.state, ProjectionState::Active(_));
         let model_content = if let Some(overlap) = self.continuation_overlap.as_mut() {
-            overlap.project(
-                model_event.content,
-                model_event.aggregate,
-                model_event.closes_turn,
-            )?
+            overlap.project(model_event.content, aggregate, model_event.closes_turn)?
         } else {
             model_event.content
         };
         let (next_content, content_delta) =
-            merge_stream_value(previous_content, model_content, model_event.aggregate)?;
-        let (next_thinking, thinking_delta) = merge_stream_value(
-            previous_thinking,
-            model_event.thinking,
-            model_event.aggregate,
-        )?;
+            merge_stream_value(previous_content, model_content, aggregate)?;
+        let (next_thinking, thinking_delta) =
+            merge_stream_value(previous_thinking, model_event.thinking, aggregate)?;
         let next_timestamp_start = timestamp_start.to_owned();
 
         let mut batch = ProjectedAgentEventBatch::new();
