@@ -24,18 +24,27 @@
  * access is granted, so a refused caller never even constructs the route
  * tree.
  */
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { RouterProvider } from '@tanstack/react-router';
 
 import { AppProviders } from '@/app/providers';
-import { AdminAccessDenied } from '@/pages/admin/AdminAccessDenied';
-import { AdminAccessUnavailable } from '@/pages/admin/AdminAccessUnavailable';
-import { AdminSignInRedirect } from '@/pages/admin/AdminSignInRedirect';
 import { hasAnyAdminNavAccess } from '@/pages/admin/adminNavItems';
 import { adminUiAccess } from '@/pages/admin/adminUiConfig';
 import { createAdminRouter } from '@/pages/admin/router';
+
+// The three refusal pages are code-split: a granted operator (the common case)
+// never loads them, which keeps them out of the admin initial-bundle budget.
+const AdminAccessDenied = lazy(() =>
+  import('@/pages/admin/AdminAccessDenied').then((m) => ({ default: m.AdminAccessDenied })),
+);
+const AdminAccessUnavailable = lazy(() =>
+  import('@/pages/admin/AdminAccessUnavailable').then((m) => ({ default: m.AdminAccessUnavailable })),
+);
+const AdminSignInRedirect = lazy(() =>
+  import('@/pages/admin/AdminSignInRedirect').then((m) => ({ default: m.AdminSignInRedirect })),
+);
 
 /**
  * What the boot gate shows. The handler's `access` reason decides when it was
@@ -58,5 +67,9 @@ export function AdminApp() {
   else if (gate === 'unavailable') content = <AdminAccessUnavailable />;
   else content = <AdminAccessDenied />;
 
-  return <AppProviders>{content}</AppProviders>;
+  return (
+    <AppProviders>
+      <Suspense fallback={null}>{content}</Suspense>
+    </AppProviders>
+  );
 }
