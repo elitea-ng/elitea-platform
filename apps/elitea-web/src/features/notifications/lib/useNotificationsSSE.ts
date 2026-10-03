@@ -83,6 +83,9 @@ import { NOTIFICATIONS_QUERY_ROOT } from '../api/useNotifications';
 /** WHATWG `EventSource.CLOSED`. This constant is a literal number, because jsdom ships no `EventSource` constructor to read it from. */
 const EVENT_SOURCE_CLOSED = 2;
 
+/** The shortest gap between two revivals of a dead stream (online / tab visible). */
+const REVIVE_MIN_INTERVAL_MS = 60_000;
+
 export interface NotificationsStreamState {
   /** `true` once every reconnect attempt is spent. The caller owns the fallback. */
   readonly streamDead: boolean;
@@ -105,6 +108,7 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
   const attemptRef = useRef(0);
   const cursorRef = useRef<string | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastReviveRef = useRef(Number.NEGATIVE_INFINITY);
 
   const clearRetry = useCallback(() => {
     if (retryTimerRef.current === undefined) return;
@@ -126,17 +130,27 @@ export function useNotificationsSSE(projectId: string | undefined, onNotify: () 
   useEffect(() => clearRetry, [clearRetry]);
 
   // No url means no subscription, and so nothing to claim about it.
-  useReportRealtimeChannel(channelKey, baseUrl === null ? null : channelState);
+  // Neither does a runtime with no `EventSource` (useEventSource is a no-op
+  // there, so the state would sit at `connecting` forever).
+  const canStream = typeof EventSource !== 'undefined';
+  useReportRealtimeChannel(channelKey, baseUrl === null || !canStream ? null : channelState);
 
   // A spent ladder is not forever. The network coming back (`online`) or the
   // user returning to the tab (`visibilitychange` to visible) starts a fresh
   // budget, resuming from the last cursor. Without this a transient outage —
   // a laptop asleep, a burst of 429s from the per-principal cap — left the
   // stream dead and the connection dot red until a full reload.
+  //
+  // Throttled to one revival per REVIVE_MIN_INTERVAL_MS: a stream refused for
+  // good (403) must not turn every tab switch into another full ladder, and
+  // each revival also pauses the badge's fallback poll while it runs.
   useEffect(() => {
     if (!streamDead || baseUrl === null) return undefined;
     const revive = (): void => {
       if (document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (now - lastReviveRef.current < REVIVE_MIN_INTERVAL_MS) return;
+      lastReviveRef.current = now;
       clearRetry();
       attemptRef.current = 0;
       setStreamDead(false);

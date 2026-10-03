@@ -397,7 +397,45 @@ describe('useNotificationsSSE — connection indicator reporting', () => {
     });
     expect(registry.getSources()).toHaveLength(before + 1);
     expect(status.result.current).toBe('reconnecting');
+
+    // Spend the fresh ladder again: a second revival inside the throttle
+    // window opens nothing (a 403'd stream must not re-ladder per tab switch).
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      act(() => {
+        registry.fail();
+      });
+      act(() => {
+        vi.advanceTimersByTime(delay);
+      });
+    }
+    act(() => {
+      registry.fail();
+    });
+    const spent = registry.getSources().length;
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getSources()).toHaveLength(spent);
+
+    // After the window, it revives again.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getSources()).toHaveLength(spent + 1);
     warn.mockRestore();
+  });
+
+  it('reports nothing in a runtime without EventSource, so the dot hides instead of sticking on "Connecting…"', () => {
+    registry.restore();
+    const { status } = renderWithStatus('7');
+    expect(status.result.current).toBe('idle');
   });
 
   it('withdraws its report when there is no project to subscribe to, and on unmount', () => {
