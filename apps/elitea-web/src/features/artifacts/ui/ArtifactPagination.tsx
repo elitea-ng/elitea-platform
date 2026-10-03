@@ -117,7 +117,7 @@ const footerSx: SxProps<Theme> = (theme) => ({
   marginTop: theme.spacing(1.5),
   marginInline: theme.spacing(3),
   marginBottom: theme.spacing(2),
-  borderTop: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  borderTop: `0.0625rem solid ${theme.vars.palette.border.artifactDivider}`,
 });
 const contentSx: SxProps<Theme> = (theme) => ({
   display: 'flex',

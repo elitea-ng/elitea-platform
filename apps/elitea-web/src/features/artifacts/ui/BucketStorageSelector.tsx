@@ -125,7 +125,7 @@ const rowSx: SxProps<Theme> = (theme) => ({
   minHeight: '3.25rem',
   width: '100%',
   border: 0,
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  borderBottom: `0.0625rem solid ${theme.vars.palette.border.artifactDivider}`,
   // Full UA reset instead of `borderRadius: 0`, which R-T10 bans outright:
   // `appearance: none` drops the platform button chrome (its radius included).
   appearance: 'none',

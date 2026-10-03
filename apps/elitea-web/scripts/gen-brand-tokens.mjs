@@ -150,6 +150,10 @@ const ADDITIONS = [
   ['success.main', '#2BD48D', '#2AB37A'],
   ['success.dark', '#108D22', '#108D22'],
   ['success.contrastText', '#FFFFFF', '#FFFFFF'],
+  // #6687: every divider in the Artifacts views — Gray40 (dark) / Light40
+  // (light) in the design, the same pair as `border.table`. A role of its own
+  // so a brand pack can recolour these rules without touching tables.
+  ['border.artifactDivider', '#262B34', '#E1E5E9'],
 ];
 
 /**

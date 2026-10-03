@@ -124,7 +124,7 @@ const headerSx = (collapsed: boolean): SxProps<Theme> => (theme) => ({
   height: '3.7rem',
   boxSizing: 'border-box',
   padding: theme.spacing(3.5, 3, 3),
-  borderBottom: collapsed ? 'none' : `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  borderBottom: collapsed ? 'none' : `0.0625rem solid ${theme.vars.palette.border.artifactDivider}`,
 });
 const actionsSx: SxProps<Theme> = (theme) => ({
   display: 'flex',

@@ -155,7 +155,7 @@ const rowSx = (selected: boolean, isFolder: boolean, gridTemplateColumns: string
   flexShrink: 0,
   minHeight: '2.5rem',
   cursor: isFolder ? 'pointer' : 'default',
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.table}`,
+  borderBottom: `0.0625rem solid ${theme.vars.palette.border.artifactDivider}`,
   backgroundColor: selected ? theme.vars.palette.background.userInputBackground : 'transparent',
   transition: 'background-color 0.2s ease',
   '&:hover': { backgroundColor: theme.vars.palette.background.userInputBackground },

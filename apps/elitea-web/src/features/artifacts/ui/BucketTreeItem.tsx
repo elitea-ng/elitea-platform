@@ -106,7 +106,10 @@ const rowSx = (depth: number, active: boolean): SxProps<Theme> => (theme) => ({
     ? theme.vars.palette.background.conversation.selected
     : theme.vars.palette.background.conversation.normal,
   borderRadius: active ? theme.vars.shape.radiusSm : 0,
-  borderBottom: active ? 'none' : `0.0625rem solid ${theme.vars.palette.border.conversationItemDivider}`,
+  // #6687: the rule is always 1px; only its colour changes. Dropping it to
+  // `none` on the active row changed the row's height by 1px, and the rows
+  // below moved.
+  borderBottom: `0.0625rem solid ${active ? 'transparent' : theme.vars.palette.border.artifactDivider}`,
   '&:hover': {
     background: active
       ? theme.vars.palette.background.conversation.selected

@@ -384,7 +384,7 @@ const sidebarSx = (collapsed: boolean): SxProps<Theme> => (theme) => ({
   flexShrink: 0,
   height: '100%',
   overflow: 'hidden',
-  borderRight: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  borderRight: `0.0625rem solid ${theme.vars.palette.border.artifactDivider}`,
   backgroundColor: theme.vars.palette.background.default,
   transition: 'width 0.2s ease-in-out',
 });
