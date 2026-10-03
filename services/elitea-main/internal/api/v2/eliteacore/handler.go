@@ -22,11 +22,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
@@ -490,6 +493,12 @@ func (h *Handler) UpdateProjectInfo(w http.ResponseWriter, r *http.Request) {
 
 	// The caller's own mistake is answered before any server-side precondition,
 	// so a malformed body gets 400 rather than being blamed on the database.
+	if renaming {
+		if code, message := invalidProjectName(name); code != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": message, "code": code})
+			return
+		}
+	}
 	var iconMeta map[string]any
 	if iconRequested {
 		var err error
@@ -516,17 +525,8 @@ func (h *Handler) UpdateProjectInfo(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{"ok": true}
 
 	if renaming {
-		if _, err := h.pool.Exec(
-			ctx,
-			`UPDATE centry.project SET name = $1 WHERE id = $2`,
-			name, projectID,
-		); err != nil {
-			slog.ErrorContext(ctx, "update project info: rename failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error": projectInfoWriteFailed,
-				"code":  "project_info_write_failed",
-			})
-			return
+		if !h.renameProject(ctx, w, projectID, name) {
+			return // renameProject has already answered.
 		}
 		response["name"] = name
 	}
@@ -543,6 +543,117 @@ func (h *Handler) UpdateProjectInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 const projectInfoWriteFailed = "failed to save project info"
+
+// maxProjectNameLength is the width of centry.project.name (VARCHAR(256)).
+const maxProjectNameLength = 256
+
+// invalidProjectName checks the shape of a new project name. It returns an
+// empty code for a valid name. The reserved prefix is checked in
+// renameProject, because sending a personal project's own name back is a
+// no-op and must not be refused.
+func invalidProjectName(name string) (code, message string) {
+	switch {
+	case strings.TrimSpace(name) == "":
+		return "invalid_project_name", "the project name must not be blank"
+	case utf8.RuneCountInString(name) > maxProjectNameLength:
+		return "invalid_project_name", fmt.Sprintf(
+			"the project name must be at most %d characters", maxProjectNameLength)
+	case !utf8.ValidString(name) || strings.ContainsRune(name, 0):
+		return "invalid_project_name", "the project name must be UTF-8 text without NUL characters"
+	}
+	return "", ""
+}
+
+// reservedProjectName reports whether name is in the personal-project
+// namespace. Every resolver of a personal project (the ensurer,
+// /social/author, the project resolver and the settings-route ownership check)
+// finds the row by the exact name `project_user_<uid>`. A team project renamed
+// into that namespace could pass for somebody's personal project.
+func reservedProjectName(name string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), personalproject.NamePrefix)
+}
+
+// renameProject renames a project and answers the request itself on failure.
+// It reports whether the caller may continue.
+//
+// A PERSONAL project keeps its name. Its row is found by the exact name
+// `project_user_<owner_id>` everywhere (see invalidProjectName). A renamed
+// personal project is orphaned: the ensurer provisions a second one on the
+// next sign-in, /social/author points at that one, and the owner's
+// settings-route exception stops matching. The UPDATE refuses that row in
+// the same statement, so no read-then-write race can let a rename through.
+//
+// Zero rows changed is not success. It is an unknown project (404), a
+// personal project (409), a reserved new name (400), or a no-op rename to the
+// same name (200).
+func (h *Handler) renameProject(ctx context.Context, w http.ResponseWriter, projectID, name string) bool {
+	reserved := reservedProjectName(name)
+	if !reserved {
+		tag, err := h.pool.Exec(ctx, `
+UPDATE centry.project
+SET name = $1
+WHERE id = $2
+  AND name IS DISTINCT FROM $1
+  AND name <> $3 || owner_id::text`,
+			name, projectID, personalproject.NamePrefix)
+		if err != nil {
+			slog.ErrorContext(ctx, "update project info: rename failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": projectInfoWriteFailed,
+				"code":  "project_info_write_failed",
+			})
+			return false
+		}
+		if tag.RowsAffected() == 1 {
+			return true
+		}
+	}
+
+	var current string
+	var personal bool
+	err := h.pool.QueryRow(ctx, `
+SELECT name, name = $2 || owner_id::text
+FROM centry.project
+WHERE id = $1`, projectID, personalproject.NamePrefix).Scan(&current, &personal)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": "project not found",
+			"code":  "project_not_found",
+		})
+		return false
+	case err != nil:
+		slog.ErrorContext(ctx, "update project info: rename check failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": projectInfoWriteFailed,
+			"code":  "project_info_write_failed",
+		})
+		return false
+	case current == name:
+		return true
+	case reserved:
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "names that start with " + strconv.Quote(personalproject.NamePrefix) +
+				" are reserved for personal projects",
+			"code": "reserved_project_name",
+		})
+		return false
+	case personal:
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "a personal project cannot be renamed",
+			"code":  "personal_project_rename",
+		})
+		return false
+	default:
+		// The row changed between the two statements. Report it as a failed
+		// write rather than claim a rename that did not happen.
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "the project changed while it was renamed; retry",
+			"code":  "project_rename_conflict",
+		})
+		return false
+	}
+}
 
 // normalizeProjectIconMeta mirrors normalizeCurrentLocalProjectIcon in
 // internal/application/configurations — the create-time normalizer for
