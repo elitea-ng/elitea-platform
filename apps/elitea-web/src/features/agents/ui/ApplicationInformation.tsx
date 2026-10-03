@@ -10,6 +10,7 @@ import type { ApplicationDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { CopyToClipboardButton } from '@/shared/ui/CopyToClipboardButton';
+import { AuxiliaryTextButton } from '@/shared/ui/ShowMoreButton';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
 import { usePipelineTriggerType } from '../lib/usePipelineTriggerType';
@@ -184,13 +185,13 @@ function PipelineShowRow({ onShow }: { readonly onShow: () => void }): ReactNode
   return (
     <Box sx={pipelineLinkSx}>
       <Typography variant="bodyMedium">{t('agents.applicationInformation.pipelineLabel', 'Pipeline:')}</Typography>
-      <Typography
-        sx={showLinkSx}
-        variant="bodyMedium"
+      {/* #6640: the shared Auxiliary text button, not a clickable Typography. */}
+      <AuxiliaryTextButton
         onClick={onShow}
+        data-testid="application-information-show-pipeline"
       >
         {t('agents.applicationInformation.showLink', 'Show')}
-      </Typography>
+      </AuxiliaryTextButton>
     </Box>
   );
 }
@@ -374,9 +375,5 @@ const pipelineLinkSx: SxProps<Theme> = {
   gap: '0.75rem',
 };
 
-const showLinkSx: SxProps<Theme> = {
-  cursor: 'pointer',
-  color: (theme: Theme) => theme.vars.palette.text.button.showMore,
-};
 
 const forkedFromDisabledSx: SxProps<Theme> = { color: 'text.disabled', cursor: 'not-allowed' };

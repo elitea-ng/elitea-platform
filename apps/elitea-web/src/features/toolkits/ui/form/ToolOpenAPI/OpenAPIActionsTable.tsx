@@ -20,6 +20,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { stableSort } from '@/shared/lib/sort';
 import type { SortOrder } from '@/shared/lib/sort';
+import { ShowMoreButton } from '@/shared/ui/ShowMoreButton';
 
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/toolkits/ui/form/
@@ -304,17 +305,14 @@ export function OpenAPIActionsTable({ tools = [], selected_tools }: OpenAPIActio
         </Table>
       </TableContainer>
       {sortedActions.length > SHOW_MORE_THRESHOLD && (
-        <Box
-          sx={showMoreSx}
+        <ShowMoreButton
+          expanded={showMore}
           onClick={onClickShowMore}
-        >
-          <Typography
-            variant="bodySmall"
-            color="text.button.showMore"
-          >
-            {showMore ? t('features.toolkits.openApiActionsTable.showLess', 'Show less') : t('features.toolkits.openApiActionsTable.showMore', 'Show more')}
-          </Typography>
-        </Box>
+          moreLabel={t('features.toolkits.openApiActionsTable.showMore', 'Show more')}
+          lessLabel={t('features.toolkits.openApiActionsTable.showLess', 'Show less')}
+          data-testid="openapi-actions-show-more"
+          sx={showMoreSx}
+        />
       )}
     </>
   );
@@ -361,4 +359,4 @@ const headCellSx: SxProps<Theme> = (theme: Theme) => ({
   backgroundColor: theme.vars.palette.background.default,
 });
 const sortLabelSx: SxProps<Theme> = { flexDirection: 'row-reverse' };
-const showMoreSx: SxProps<Theme> = { marginTop: '0.625rem', cursor: 'pointer' };
+const showMoreSx: SxProps<Theme> = { marginTop: '0.625rem' };
