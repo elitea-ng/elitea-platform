@@ -186,6 +186,9 @@ export function reduceToolFrame(
       const original = history[index];
       const runId = frame.response_metadata?.tool_run_id;
       if (!original || !runId) return history;
+      // This frame created the action: its start (and maybe earlier chunks)
+      // never arrived (#6832).
+      const synthesized = findToolAction(original, runId) === undefined;
       const current = withToolAction(original, frame, runId);
       const metadata = toolMetadata(frame);
       const isError = type === SocketMessageType.AgentToolError;
@@ -211,7 +214,23 @@ export function reduceToolFrame(
           let toolOutputs = previous;
           const chunk = frame.response_metadata?.tool_output_chunk_v1;
           const assembled = chunk === undefined ? undefined : appendToolOutputChunk(previous, output, chunk, action['toolOutputChunk']);
-          if (chunk !== undefined && assembled === undefined) return action;
+          if (chunk !== undefined && assembled === undefined) {
+            // A chunk that cannot be assembled onto an action THIS frame
+            // created (the start and the earlier chunks were lost) can never
+            // complete. Settle it as a partial result rather than leave it
+            // spinning; later chunks of the run then change nothing.
+            return synthesized
+              ? {
+                ...action,
+                ...normalizeExecutionHierarchy(metadata, action, action.toolMeta),
+                toolOutputPartial: true,
+                status: isError ? ToolActionStatus.error : ToolActionStatus.complete,
+                ...(isError ? { isError: true } : {}),
+                ended_at: frame.response_metadata?.timestamp_finish ?? frame.created_at,
+                toolMeta: { ...action.toolMeta, ...metadata },
+              }
+              : action;
+          }
           if (assembled && assembled.output === previous && assembled.chunk === action['toolOutputChunk']) return action;
           // A CHUNKED result (#956) is finished from the chunks that preceded
           // this frame, never from its `tool_output` — which is the empty

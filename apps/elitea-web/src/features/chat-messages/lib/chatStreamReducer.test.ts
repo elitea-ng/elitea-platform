@@ -1641,6 +1641,53 @@ describe('a tool end whose start never arrived (#6832)', () => {
     expect(actions[0]).toMatchObject({ id: 'orphan-2', status: ToolActionStatus.error, isError: true, content: 'boom' });
   });
 
+  it('settles an orphan chunk it cannot assemble instead of leaving it spinning', () => {
+    // The start and the first chunk were dropped: this end frame is a middle
+    // chunk, so nothing can assemble it.
+    const sha256 = 'b'.repeat(64);
+    let history = applyChatStreamFrame([pendingAssistant()], frame(SocketMessageType.AgentToolEnd, {
+      response_metadata: {
+        tool_run_id: 'orphan-chunk', tool_name: 'read_file', tool_output: 'middle',
+        tool_output_chunk_v1: { offset_bytes: 6, total_bytes: 18, sha256, final: false },
+      },
+    }), CONTEXT);
+    let actions = (history[0]?.toolActions ?? []) as readonly ToolAction[];
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ id: 'orphan-chunk', status: ToolActionStatus.complete, toolOutputPartial: true });
+
+    // A later chunk of the same run changes nothing and does not re-open it.
+    const settled = history;
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolEnd, {
+      response_metadata: {
+        tool_run_id: 'orphan-chunk', tool_output: 'ending',
+        tool_output_chunk_v1: { offset_bytes: 12, total_bytes: 18, sha256, final: true },
+      },
+    }), CONTEXT);
+    actions = (history[0]?.toolActions ?? []) as readonly ToolAction[];
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.status).toBe(ToolActionStatus.complete);
+    expect(history[0]?.toolActions).toStrictEqual(settled[0]?.toolActions);
+  });
+
+  it('assembles an orphan whose first chunk did arrive', () => {
+    const sha256 = 'c'.repeat(64);
+    let history = applyChatStreamFrame([pendingAssistant()], frame(SocketMessageType.AgentToolEnd, {
+      response_metadata: {
+        tool_run_id: 'orphan-first', tool_name: 'read_file', tool_output: 'abc',
+        tool_output_chunk_v1: { offset_bytes: 0, total_bytes: 6, sha256, final: false },
+      },
+    }), CONTEXT);
+    history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolEnd, {
+      response_metadata: {
+        tool_run_id: 'orphan-first', tool_output: 'def',
+        tool_output_chunk_v1: { offset_bytes: 3, total_bytes: 6, sha256, final: true },
+      },
+    }), CONTEXT);
+    const actions = (history[0]?.toolActions ?? []) as readonly ToolAction[];
+    expect(actions[0]).toMatchObject({ status: ToolActionStatus.complete, toolOutputs: 'abcdef' });
+    expect(actions[0]?.['toolOutputPartial']).not.toBe(true);
+  });
+
   it('does not duplicate an action whose start did arrive', () => {
     let history: readonly ChatMessage[] = [pendingAssistant()];
     history = applyChatStreamFrame(history, frame(SocketMessageType.AgentToolStart, {
