@@ -220,6 +220,32 @@ describe("Admin › Authentication › SCIM clients", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps the one-time secret open on Escape; only the close button closes it", async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminScimClientsEditor />);
+    await screen.findByText("Entra production");
+
+    await user.click(screen.getByTestId("admin-scim-clients-add"));
+    await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
+    await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await screen.findByTestId("admin-scim-client-secret-dialog");
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.getByTestId("admin-scim-client-secret-dialog"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("admin-scim-client-reveal-secret")).toHaveValue(
+      BEARER_SECRET,
+    );
+
+    await user.click(screen.getByTestId("admin-scim-client-reveal-close"));
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("admin-scim-client-secret-dialog"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("creates a client-credentials client and reveals id, secret and token endpoint", async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminScimClientsEditor />);

@@ -38,10 +38,10 @@ export function AdminScimClientSecretDialog({
   return (
     <Dialog
       open={reveal !== undefined}
-      // A backdrop click must not throw the only copy of the secret away.
-      onClose={(_event, reason) => {
-        if (reason !== "backdropClick") onClose();
-      }}
+      // Neither a backdrop click nor Escape may throw the only copy of the
+      // secret away: only the explicit close button closes this dialog. The
+      // dialog keeps its focus trap.
+      onClose={() => undefined}
       maxWidth="sm"
       fullWidth
       aria-labelledby="admin-scim-client-secret-title"
