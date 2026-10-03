@@ -39,6 +39,7 @@ import {
   resolveCatalogueProjectId,
   unpublishAllVersions,
 } from '../../fixtures/api';
+import { neverOnLiveTarget } from '../../fixtures/deployment';
 
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 
@@ -350,6 +351,8 @@ test.describe('publish validation: code-based rules', () => {
      (Warning, e.g. "v1"/"v2") ARE all real, server-enforced checks — the ONE row this case documents that is
      NOT implemented (a semantic-versioning Suggestion) is noted separately and does not block this port. */
   test('version name format, uniqueness and the generic-name blocklist are all enforced', async ({ request }) => {
+    // The uniqueness probe publishes for real.
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
     const agent = await createAgentWithVersion(request, uniqueName('vername'), {
       instructions: PASSABLE_INSTRUCTIONS,
       // #913 — an untagged version is a Critical now, and the publish route
@@ -426,6 +429,7 @@ test.describe('publish validation: code-based rules', () => {
      and is out of scope for this chromium-lane file; the structural guarantee below makes that outcome
      deterministic without running it. */
   test("a published agent's catalogue twin carries no tool attachments; the author's own copy is unchanged", async ({ request }) => {
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
     const parentName = uniqueName('snapshotparent');
     const parent = await createAgentWithVersion(request, parentName, {
       instructions: PASSABLE_INSTRUCTIONS,
@@ -488,6 +492,7 @@ test.describe('publish validation: code-based rules', () => {
     page,
     request,
   }) => {
+    // live-safe: opens the wizard and stops at publish_validate; never presses Publish.
     const agent = await createAgentWithVersion(request, uniqueName('continuebtn'), {
       instructions: PASSABLE_INSTRUCTIONS,
       // #913 — an untagged version is a Critical now, and the publish route
@@ -550,6 +555,7 @@ test.describe('publish validation: code-based rules', () => {
      single-page Preparation step, not the case's literal 3-step stepper with separate instruction copy) — reached
      from a Publish control that is present and enabled for an editor in the agent's own action/lifecycle menu. */
   test('the Publish version modal opens with a version name field, terms and the agreement checkbox', async ({ page, request }) => {
+    // live-safe: only opens the modal and reads its fields.
     const agent = await createAgentWithVersion(request, uniqueName('modalfields'), { instructions: PASSABLE_INSTRUCTIONS });
     try {
       await page.goto(`${BASE_URL}/app/agents/all/${agent.id}`);

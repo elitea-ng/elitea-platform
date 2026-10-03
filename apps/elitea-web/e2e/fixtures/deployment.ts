@@ -26,8 +26,31 @@ import { test } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 
 // The rule itself is pure and unit-tested in `scripts/e2e-live-assumptions.test.mjs`.
-import { shouldSkipForDeployment } from '../../scripts/lib/e2e-live-assumptions.mjs';
+import {
+  catalogueListsModel,
+  discoveryAbsentAnswer,
+  refusedOnLiveTarget,
+  shouldSkipForDeployment,
+} from '../../scripts/lib/e2e-live-assumptions.mjs';
 import { API_BASE, DEFAULT_PROJECT_ID } from './api';
+
+/**
+ * Skip the running test (or every test of the describe whose `beforeEach`
+ * calls it) on ANY live run — triage included — because it writes state real
+ * users of a shared instance see: it publishes into the public catalogue,
+ * flips a platform flag, invites a user. Unlike `skipOnLiveTarget`,
+ * `LIVE_INCLUDE_ENV_DEPENDENT=1` does not re-admit it: that switch exists to
+ * triage cases that need the rig, never to let one harm the instance.
+ *
+ * The selection scan in `scripts/e2e-live-assumptions.test.mjs` fails when a
+ * live-selected spec writes such state outside a case guarded by this.
+ */
+export function neverOnLiveTarget(reason: string): void {
+  test.skip(refusedOnLiveTarget(process.env), `live safety: ${reason}`);
+}
+
+// Pure, so it is unit-tested beside the rest (`scripts/e2e-live-assumptions.test.mjs`).
+export { rethrowSkipAfterCleanup } from '../../scripts/lib/e2e-live-assumptions.mjs';
 
 /**
  * Skip the running test when `absent` is true on a live target. On the rig it
@@ -102,22 +125,21 @@ export async function skipWhenApplicationSkillsAbsent(
 
 /**
  * `GET /elitea_core/toolkit_available_tools/prompt_lib/{projectId}/{toolkitId}`
- * answers 503 when runtime toolkit discovery is not composed
- * (`ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED=false`).
+ * answers 503 `{error: "toolkit discovery unavailable"}` when runtime toolkit
+ * discovery is not composed (`ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED=false`).
+ * Any other answer lets the journey run and fail on its own assertion.
  */
 export async function skipWhenToolkitDiscoveryAbsent(
   request: APIRequestContext,
   toolkitId: string,
   projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<void> {
-  await skipWhenProbeFinds(
-    async () =>
-      (await probeStatus(
-        request,
-        `${API_BASE}/elitea_core/toolkit_available_tools/prompt_lib/${projectId}/${toolkitId}`,
-      )) === 503,
-    'GET toolkit_available_tools answers 503 (ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED is off)',
-  );
+  await skipWhenProbeFinds(async () => {
+    const response = await request.get(
+      `${API_BASE}/elitea_core/toolkit_available_tools/prompt_lib/${projectId}/${toolkitId}`,
+    );
+    return discoveryAbsentAnswer(response.status(), await response.text());
+  }, 'GET toolkit_available_tools answers 503 "toolkit discovery unavailable" (ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED is off)');
 }
 
 /**
@@ -138,14 +160,11 @@ export async function skipWhenProjectOwnModelsDisallowed(
     const url = `${API_BASE}/configurations/models/${projectId}?section=embedding`;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await request.get(url);
-      if (response.ok()) {
-        const body = (await response.json()) as { items?: readonly Record<string, unknown>[] };
-        const listed = (body.items ?? []).some((row) => {
-          const data = (row['data'] as Record<string, unknown> | undefined) ?? {};
-          return row['name'] === modelName || data['name'] === modelName;
-        });
-        if (listed) return false;
-      }
+      const body = await response.text();
+      // Only a SERVED catalogue that lacks the row says "disallowed"
+      // (`catalogueListsModel` throws on a 403/500 or a non-JSON body): a
+      // read fault must not read as a deployment choice.
+      if (catalogueListsModel(response.status(), body, modelName)) return false;
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     return true;

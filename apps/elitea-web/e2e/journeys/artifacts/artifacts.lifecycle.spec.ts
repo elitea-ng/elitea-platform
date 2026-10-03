@@ -42,12 +42,20 @@
  * the client's 150 MB fallback instead of the project's configured limit.
  * ─────────────────────────────────────────────────────────────────────────────
  */
+import { mkdir, truncate, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import JSZip from 'jszip';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { uploadLimitPlan } from '../../../scripts/lib/e2e-live-assumptions.mjs';
+import {
+  RIG_SEEDED_CHAT_LIMITS,
+  isLiveTarget,
+  nonDiscriminatingOutcome,
+  uploadLimitPlan,
+} from '../../../scripts/lib/e2e-live-assumptions.mjs';
 
 /**
  * Fixed, reused bucket names. `AUTOTEST_PREFIX` ('autotest_') is deliberately
@@ -509,15 +517,24 @@ test.describe('J20 artifacts lifecycle', () => {
     //    served — does not depend on which numbers those are.
     const config = await request.get(`/api/v2/elitea_core/chat_config/prompt_lib/${projectId}`);
     expect(config.status(), await config.text()).toBe(200);
-    const plan = uploadLimitPlan(await config.json());
+    const served: unknown = await config.json();
+    // On the rig the body is asserted EXACTLY, every key: all five seeded
+    // values differ from the reader's defaults (10/150/150/10/3), so a body
+    // the admin-regular fallback did not reach — on any one key — fails here.
+    if (!isLiveTarget(process.env)) expect(served).toEqual(RIG_SEEDED_CHAT_LIMITS);
+    const plan = uploadLimitPlan(served);
     if (!plan.ok) throw new Error(plan.reason);
-    // A served file limit EQUAL to the client's own 150 MB fallback cannot
-    // tell a client that read the config from one that did not, so there is
-    // nothing for steps 2-3 to prove. The rig never lands here (it seeds 1 MB,
-    // chosen for exactly this reason); a deployment on the defaults does.
+    // A served file limit the client's own 150 MB fallback would enforce just
+    // the same (150, or more) cannot tell a client that read the config from
+    // one that did not, so steps 2-3 have nothing to prove. A live deployment
+    // there is skipped, saying why; on the rig (and in live triage) it is a
+    // FAILURE — the rig seeds 1 MB for exactly this reason.
     if (!plan.discriminating) {
-      test.skip(true, `chat_config: ${plan.reason}`);
-      return;
+      if (nonDiscriminatingOutcome(process.env) === 'skip') {
+        test.skip(true, `deployment: chat_config: ${plan.reason}`);
+        return;
+      }
+      throw new Error(`chat_config cannot discriminate on this target: ${plan.reason}`);
     }
 
     // 2. The artifacts feature ACTS on it. One MiB over the served limit and
@@ -528,11 +545,21 @@ test.describe('J20 artifacts lifecycle', () => {
     await expect(page.getByRole('row').filter({ hasText: SECOND_FILE_NAME })).toBeVisible({ timeout: 15_000 });
 
     const oversizedName = 'j20f-oversized-art.bin';
-    await page.locator('input[type="file"]').setInputFiles({
-      name: oversizedName,
-      mimeType: 'application/octet-stream',
-      buffer: Buffer.alloc(plan.oversizedBytes, 7),
-    });
+    if (plan.oversizedViaFile) {
+      // Playwright refuses a buffer of 50 MiB or more; a file by path has no
+      // such cap. Sparse, so a large limit costs no real disk.
+      const oversizedPath = test.info().outputPath(oversizedName);
+      await mkdir(path.dirname(oversizedPath), { recursive: true });
+      await writeFile(oversizedPath, '');
+      await truncate(oversizedPath, plan.oversizedBytes);
+      await page.locator('input[type="file"]').setInputFiles(oversizedPath);
+    } else {
+      await page.locator('input[type="file"]').setInputFiles({
+        name: oversizedName,
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.alloc(plan.oversizedBytes, 7),
+      });
+    }
     // The upload-path dialog is the real flow: nothing is planned until it is
     // confirmed (Artifacts.tsx:278-284).
     await page.getByRole('button', { name: 'Continue', exact: true }).click();

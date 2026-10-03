@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createAgent, deleteAgent } from '../../fixtures/api';
-import { skipWhenApplicationSkillsAbsent } from '../../fixtures/deployment';
+import { rethrowSkipAfterCleanup, skipWhenApplicationSkillsAbsent } from '../../fixtures/deployment';
 
 import type { Page } from '@playwright/test';
 
@@ -30,10 +30,9 @@ test('a Skill attached to an agent survives Save As Version', async ({ page, req
   // A deployment with ELITEA_APPLICATION_SKILLS_ENABLED off has no SKILLS
   // section to attach into — skipped there (the agent removed first), never
   // on the rig.
-  await skipWhenApplicationSkillsAbsent(request, agent.versionId).catch(async (skipped: unknown) => {
-    await deleteAgent(request, agent.id);
-    throw skipped;
-  });
+  await skipWhenApplicationSkillsAbsent(request, agent.versionId).catch((skipped: unknown) =>
+    rethrowSkipAfterCleanup(skipped, () => deleteAgent(request, agent.id)),
+  );
 
   const created = await request.post(`${API_BASE}/elitea_core/skills/prompt_lib/${DEFAULT_PROJECT_ID}`, {
     data: {

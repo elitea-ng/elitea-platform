@@ -49,6 +49,7 @@ import { readsPlatformFlags } from '../../fixtures/platformFlags';
 import {
   refusedForMissingCredential,
   schemaFilledSettings,
+  toleratesCredentialOnlyCategories,
 } from '../../../scripts/lib/e2e-live-assumptions.mjs';
 
 /*
@@ -356,16 +357,23 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
         // one of the type's own credential keys moves on; anything else fails
         // here. A category in which EVERY type demands a real credential is
         // recorded as such and asserted below, not passed silently.
+        //
+        // All of that tolerance is for a DEPLOYED instance only. On the rig
+        // (and in live triage) the representative itself must answer 201: a
+        // refusal there is a backend regression, and moving past it — or
+        // counting the category as credential-only — would hide it.
+        const tolerant = toleratesCredentialOnlyCategories(process.env);
+        const candidates = tolerant ? [representative, ...representative.alternates] : [representative];
         let savedType: string | undefined;
         const credentialRefusals: string[] = [];
-        for (const candidate of [representative, ...representative.alternates]) {
+        for (const candidate of candidates) {
           if (candidate.credentialRequired.length === 0) continue;
           const created = await page.request.post(
             `${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`,
             { data: { name, type: candidate.type, settings: schemaFilledSettings(candidate.fillableRequired) } },
           );
           const body = await created.text();
-          if (refusedForMissingCredential(created.status(), body, candidate.credentialRequired)) {
+          if (tolerant && refusedForMissingCredential(created.status(), body, candidate.credentialRequired)) {
             credentialRefusals.push(`${candidate.type}: ${body.slice(0, 200)}`);
             continue;
           }
@@ -427,13 +435,16 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
      * that served nothing, in about a second, and read as a pass.
      */
     expect(uiSaved.length + apiSaved.length + credentialOnly.length).toBe(representatives.length);
-    // A credential-only category is a fact about the catalogue, but it must
-    // stay the exception: if most categories land here, the create path is
-    // what broke, and the refusals listed say how.
+    // A credential-only category is a fact about a DEPLOYED catalogue, and it
+    // must stay the exception there: if most categories land here, the create
+    // path is what broke, and the refusals listed say how. On the rig there
+    // are none at all (the loop above never records one), asserted outright.
     expect(
       credentialOnly.length,
       `categories no type of which could be created without a credential: ${credentialOnly.join(' | ')}`,
-    ).toBeLessThanOrEqual(Math.floor(representatives.length / 4));
+    ).toBeLessThanOrEqual(
+      toleratesCredentialOnlyCategories(process.env) ? Math.floor(representatives.length / 4) : 0,
+    );
     expect(
       representatives.length,
       `only ${representatives.length} categories were exercised: `

@@ -29,7 +29,12 @@ import {
   readVersion,
   resolveCatalogueProjectId,
 } from '../../fixtures/api';
-import { skipWhenApplicationSkillsAbsent, skipWhenDeploymentLacks } from '../../fixtures/deployment';
+import {
+  neverOnLiveTarget,
+  rethrowSkipAfterCleanup,
+  skipWhenApplicationSkillsAbsent,
+  skipWhenDeploymentLacks,
+} from '../../fixtures/deployment';
 
 import type { APIRequestContext, Page } from '@playwright/test';
 
@@ -143,6 +148,7 @@ test.describe('J14b: the agent publish plane', () => {
     page,
     request,
   }) => {
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
     test.setTimeout(120_000);
     const name = uniqueName('publishable');
     const agent = await createPublishableAgent(request, name);
@@ -244,6 +250,9 @@ test.describe('J14b: the agent publish plane', () => {
   // pass; rendered as a transport error, the author would be told "the request
   // failed" for the one case where it ran and said no.
   test('a sparse agent is refused by validation and never reaches publish', async ({ page, request }) => {
+    // It presses the real Publish button: should validation regress, that
+    // click would publish into the deployment's catalogue.
+    neverOnLiveTarget('presses Publish, which a validation regression would let through to the catalogue');
     const name = uniqueName('sparse');
     // The shared fixture's instructions are 28 characters. The server raises a
     // CRITICAL issue below 50, so this agent cannot be published — which is
@@ -411,10 +420,9 @@ test.describe('J14b: the agent publish plane', () => {
     // A deployment with ELITEA_APPLICATION_SKILLS_ENABLED off has no SKILLS
     // section to attach into — skipped there (the agent removed first), never
     // on the rig.
-    await skipWhenApplicationSkillsAbsent(request, agent.versionId).catch(async (skipped: unknown) => {
-      await deleteAgent(request, agent.id);
-      throw skipped;
-    });
+    await skipWhenApplicationSkillsAbsent(request, agent.versionId).catch((skipped: unknown) =>
+      rethrowSkipAfterCleanup(skipped, () => deleteAgent(request, agent.id)),
+    );
 
     const created = await request.post(`${API_BASE}/elitea_core/skills/prompt_lib/${DEFAULT_PROJECT_ID}`, {
       data: {
@@ -481,6 +489,12 @@ test.describe('J14b: the agent publish plane', () => {
  * and driving the wizard three more times would assert the dialog instead.
  */
 test.describe('the publish rules the wizard rests on', () => {
+  // Every case here publishes for real, which on a deployed instance writes a
+  // twin into the public catalogue its users browse.
+  test.beforeEach(() => {
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
+  });
+
   /** Withdraw whatever is live, then delete — a live version refuses the delete. */
   async function withdrawAndDelete(request: APIRequestContext, agentId: string): Promise<void> {
     const detail = await request.get(
@@ -656,6 +670,9 @@ test.describe('publishing inside the catalogue project', () => {
   // cross-project path the immutability file owns — so the cases are skipped
   // there. On the rig a mismatch is not skipped: the first case asserts it.
   test.beforeEach(async ({ request }) => {
+    // Never on a live run, triage included: an in-place publish there would
+    // land in the deployment's real catalogue.
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
     const catalogueProjectId = await resolveCatalogueProjectId(request);
     skipWhenDeploymentLacks(
       catalogueProjectId !== DEFAULT_PROJECT_ID,
