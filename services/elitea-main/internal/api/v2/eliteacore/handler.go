@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
@@ -57,8 +58,13 @@ type Handler struct {
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
 	httpClient         *http.Client
+	// mcpEgressGuard pins every production MCP dial (Load Tools, metadata
+	// reads) to a resolved, checked public address. It is used only when no
+	// WithHTTPClient override is configured.
+	mcpEgressGuard *webhook.DestinationGuard
 	// The egress guard of the MCP OAuth and DCR proxies (mcp_oauth_egress.go)
-	// and the client built from httpClient with the guard's dialer.
+	// and the client built from httpClient with the guard's dialer. The
+	// proxies are viewer-reachable, so they keep their own allowlist.
 	mcpAuthorizationGuard MCPAuthorizationEgressGuard
 	guardedClientOnce     sync.Once
 	guardedClient         *http.Client
@@ -177,8 +183,20 @@ func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	}
 }
 
+// WithMCPEgressGuard sets the dial-time egress guard for the MCP requests
+// this handler makes. Without it, a guard with an empty allowlist applies:
+// loopback, private, link-local and multicast destinations are refused.
+func WithMCPEgressGuard(guard *webhook.DestinationGuard) Option {
+	return func(handler *Handler) {
+		if guard != nil {
+			handler.mcpEgressGuard = guard
+		}
+	}
+}
+
 // WithHTTPClient configures the client used by the MCP OAuth and DCR proxies.
-// It is primarily useful when the service needs a custom trusted CA bundle.
+// It replaces the egress-guarded default client, so it is for tests and for a
+// deployment that supplies its own audited transport.
 func WithHTTPClient(client *http.Client) Option {
 	return func(handler *Handler) {
 		if client != nil {
@@ -222,12 +240,19 @@ func WithObjectStore(store storage.ObjectStore) Option {
 }
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
-	handler := &Handler{
-		pool:       pool,
-		httpClient: http.DefaultClient,
-	}
+	handler := &Handler{pool: pool}
 	for _, opt := range opts {
 		opt(handler)
+	}
+	if handler.httpClient == nil {
+		// MCP URLs are tenant-chosen, so the default client is never
+		// http.DefaultClient: each dial re-resolves the host and refuses
+		// internal addresses, which also closes DNS rebinding.
+		guard := handler.mcpEgressGuard
+		if guard == nil {
+			guard = webhook.NewDestinationGuard(nil)
+		}
+		handler.httpClient = &http.Client{Transport: guard.Transport()}
 	}
 	return handler
 }
@@ -5207,13 +5232,17 @@ func effectiveURLPort(endpoint *url.URL) string {
 	return "80"
 }
 
+// defaultMCPEgressClient serves a Handler built without NewHandler. It refuses
+// every internal destination, like NewHandler's default.
+var defaultMCPEgressClient = &http.Client{Transport: webhook.NewDestinationGuard(nil).Transport()}
+
 func (h *Handler) doMCPProxyRequest(req *http.Request) (*http.Response, error) {
 	return h.doMCPProxyRequestWith(h.httpClient, req)
 }
 
 func (h *Handler) doMCPProxyRequestWith(client *http.Client, req *http.Request) (*http.Response, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultMCPEgressClient
 	}
 
 	origin := req.URL
@@ -5298,6 +5327,8 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	// migration 0094); the resolution fills only fields the caller left empty,
 	// so a toolkit that carries its own URL still wins.
 	if mcpregistry.IsPrebuiltToolkitType(body.ToolkitType) {
+		callerURL := strings.TrimSpace(body.URL)
+		callerSuppliedHeaders := len(body.Headers) > 0
 		resolved, err := h.resolvePrebuiltSettings(r.Context(), map[string]any{
 			"url":     body.URL,
 			"headers": headersAsAny(body.Headers),
@@ -5316,6 +5347,23 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		body.URL = stringSetting(resolved, "url", body.URL)
 		body.Headers = headerSettings(resolved, body.Headers)
 		body.Timeout = intSetting(resolved, "timeout", body.Timeout)
+		// The catalogue's headers are the operator's credentials for the
+		// catalogue's server. A caller that keeps its own URL must not receive
+		// them at another origin: the agent runtime always dials the catalogue
+		// URL, so only Load Tools could send them elsewhere.
+		if !callerSuppliedHeaders && callerURL != "" && len(body.Headers) > 0 {
+			catalogueURL, err := h.prebuiltURLFor(r.Context(), body.ToolkitType)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+					"success": false,
+					"error":   "the pre-built MCP catalogue could not be read",
+				})
+				return
+			}
+			if !mcpCatalogueOriginMatches(catalogueURL, callerURL) {
+				body.Headers = nil
+			}
+		}
 	}
 
 	if strings.TrimSpace(body.URL) == "" {

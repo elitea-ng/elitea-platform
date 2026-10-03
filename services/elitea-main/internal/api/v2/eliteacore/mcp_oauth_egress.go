@@ -24,9 +24,12 @@ package eliteacore
 // composition root) can admit private addresses for a private identity
 // provider. Link-local and multicast stay refused whatever it says.
 //
-// The MCP tool SYNC keeps the unguarded client. It is gated on
-// `models.applications.tool.patch` (editors and admins), and it must reach
-// MCP servers on private networks.
+// The MCP tool SYNC and the metadata reads use the handler's default client,
+// which dials through a separate guard (WithMCPEgressGuard,
+// ELITEA_MCP_EGRESS_ALLOWLIST): the sync is gated on
+// `models.applications.tool.patch` (editors and admins), and an operator may
+// let it reach MCP servers on private networks without opening the
+// viewer-reachable proxies to the same ranges.
 
 import (
 	"context"
@@ -86,7 +89,7 @@ func (h *Handler) guardedMCPAuthorizationClient() *http.Client {
 	h.guardedClientOnce.Do(func() {
 		base := h.httpClient
 		if base == nil {
-			base = http.DefaultClient
+			base = defaultMCPEgressClient
 		}
 		var transport *http.Transport
 		switch configured := base.Transport.(type) {

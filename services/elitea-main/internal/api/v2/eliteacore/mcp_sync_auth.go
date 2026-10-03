@@ -99,7 +99,7 @@ func (h *Handler) mcpProtectedMetadata(ctx context.Context, endpoint *url.URL, a
 			continue
 		}
 		resource, ok := metadata["resource"].(string)
-		if !ok || resource != endpoint.String() {
+		if !ok || !equivalentMCPMetadataURL(resource, endpoint.String()) {
 			return nil, "", errMCPDiscoveryMetadata
 		}
 		return metadata, candidate, nil
@@ -122,8 +122,13 @@ func (h *Handler) mcpAuthorizationServerMetadata(ctx context.Context, rawIssuer 
 		if err != nil {
 			continue
 		}
-		if metadata["issuer"] != rawIssuer {
-			return nil, errMCPDiscoveryMetadata
+		// RFC 8414 §3.3 asks for an identical issuer, but providers differ by
+		// a trailing slash (Box advertises "https://api.box.com/" and publishes
+		// "https://api.box.com"). That is the same URL, so it is accepted. A
+		// real mismatch moves on to the next candidate document.
+		published, ok := metadata["issuer"].(string)
+		if !ok || !equivalentMCPMetadataURL(published, rawIssuer) {
+			continue
 		}
 		projected := map[string]any{"issuer": rawIssuer}
 		for _, key := range []string{"authorization_endpoint", "token_endpoint", "registration_endpoint", "revocation_endpoint"} {
@@ -178,6 +183,52 @@ func (h *Handler) readMCPPublicMetadata(ctx context.Context, address string) (ma
 		return nil, errMCPDiscoveryMetadata
 	}
 	return metadata, nil
+}
+
+// equivalentMCPMetadataURL compares two metadata URLs (an issuer or a
+// protected resource) as the same resource identifier: scheme, host and port
+// must match exactly (case-insensitive, default ports made explicit), the
+// query must match, and the paths must match once trailing slashes are
+// removed, so an empty path equals "/".
+func equivalentMCPMetadataURL(first, second string) bool {
+	if first == second {
+		return true
+	}
+	a, err := url.Parse(first)
+	if err != nil {
+		return false
+	}
+	b, err := url.Parse(second)
+	if err != nil {
+		return false
+	}
+	if a.Host == "" || b.Host == "" || a.User != nil || b.User != nil || a.Opaque != "" || b.Opaque != "" {
+		return false
+	}
+	return sameMCPProxyOrigin(a, b) &&
+		strings.TrimRight(a.EscapedPath(), "/") == strings.TrimRight(b.EscapedPath(), "/") &&
+		a.RawQuery == b.RawQuery
+}
+
+// mcpCatalogueOriginMatches reports whether a caller-chosen URL has the origin
+// of a pre-built catalogue URL template. A catalogue authority never holds a
+// placeholder (validatePrebuiltURLTemplate), so the origin of the template is
+// the origin of every URL it materializes. An empty or invalid template
+// matches nothing.
+func mcpCatalogueOriginMatches(catalogueTemplate, callerURL string) bool {
+	if strings.TrimSpace(catalogueTemplate) == "" {
+		return false
+	}
+	probe := strings.NewReplacer("{", "", "}", "").Replace(catalogueTemplate)
+	catalogue, err := url.Parse(probe)
+	if err != nil || catalogue.Host == "" {
+		return false
+	}
+	caller, err := validateMCPProxyURL(callerURL)
+	if err != nil {
+		return false
+	}
+	return sameMCPProxyOrigin(catalogue, caller)
 }
 
 func validateMCPMetadataURL(address string) (*url.URL, error) {
