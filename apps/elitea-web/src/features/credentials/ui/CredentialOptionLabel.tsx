@@ -1,8 +1,8 @@
 /**
  * ui/CredentialOptionLabel.tsx — one row's label inside `CredentialsSelect`'s
- * saved-credentials list: an owner icon, the display name, an optional
- * "invalid" attention indicator with a reload action, and an "open in a new
- * tab" action. Ported from
+ * saved-credentials list: an owner icon, the display name, the row actions
+ * ("open in a new tab", and "reload" for an invalid credential), and last an
+ * optional "invalid" attention indicator (#6632). Ported from
  * `apps/elitea-ui/src/[fsd]/features/credentials/ui/credential-option-label/CredentialOptionLabel.jsx`.
  * Manifest COPY-110.
  *
@@ -62,6 +62,63 @@ export function CredentialOptionLabel({
       >
         {label}
       </Box>
+      {/*
+        * #6632: the row actions sit BEFORE the attention icon, which is the
+        * last item in the row. The actions stay visible: a live journey
+        * (`e2e/live/toolkits.indicators.spec.ts`) and keyboard users reach
+        * "Reload" without a hover. Every action has a fixed box, so the row
+        * keeps one height whether it carries actions or not.
+        */}
+      <Box
+        component="span"
+        data-testid="credential-option-actions"
+        sx={actionsBoxSx}
+      >
+        {credentialUrl && (
+          <Tooltip
+            title={openInNewTabLabel}
+            placement="top"
+          >
+            <BaseBtn
+              aria-label={openInNewTabLabel}
+              data-testid="credential-open-in-new-tab-button"
+              variant={BUTTON_VARIANTS.tertiary}
+              size="small"
+              onMouseDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                window.open(credentialUrl, '_blank', 'noopener,noreferrer');
+              }}
+              sx={optionActionButtonSx}
+            >
+              <OpenNewIcon />
+            </BaseBtn>
+          </Tooltip>
+        )}
+        {isInvalid && (
+          <Tooltip
+            title={reloadLabel}
+            placement="top"
+          >
+            <BaseBtn
+              aria-label={reloadLabel}
+              data-testid="credential-reload-button"
+              variant={BUTTON_VARIANTS.tertiary}
+              size="small"
+              disabled={isChecking}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={onRevalidate}
+              sx={optionActionButtonSx}
+            >
+              <RefreshIcon />
+            </BaseBtn>
+          </Tooltip>
+        )}
+      </Box>
       {isInvalid && (
         <Tooltip
           title={attentionLabel}
@@ -76,50 +133,6 @@ export function CredentialOptionLabel({
           </Box>
         </Tooltip>
       )}
-      {credentialUrl && (
-        <Tooltip
-          title={openInNewTabLabel}
-          placement="top"
-        >
-          <BaseBtn
-            aria-label={openInNewTabLabel}
-            data-testid="credential-open-in-new-tab-button"
-            variant={BUTTON_VARIANTS.tertiary}
-            size="small"
-            onMouseDown={(event) => {
-              event.stopPropagation();
-            }}
-            onClick={(event) => {
-              event.stopPropagation();
-              window.open(credentialUrl, '_blank', 'noopener,noreferrer');
-            }}
-            sx={optionActionButtonSx}
-          >
-            <OpenNewIcon />
-          </BaseBtn>
-        </Tooltip>
-      )}
-      {isInvalid && (
-        <Tooltip
-          title={reloadLabel}
-          placement="top"
-        >
-          <BaseBtn
-            aria-label={reloadLabel}
-            data-testid="credential-reload-button"
-            variant={BUTTON_VARIANTS.tertiary}
-            size="small"
-            disabled={isChecking}
-            onMouseDown={(event) => {
-              event.stopPropagation();
-            }}
-            onClick={onRevalidate}
-            sx={optionActionButtonSx}
-          >
-            <RefreshIcon />
-          </BaseBtn>
-        </Tooltip>
-      )}
     </Box>
   );
 }
@@ -130,6 +143,7 @@ const labelContainerSx: SxProps<Theme> = (theme: Theme) => ({
   gap: theme.spacing(1),
   flex: 1,
   width: '100%',
+  minHeight: '1.5rem',
 });
 
 const labelTextSx: SxProps<Theme> = {
@@ -139,10 +153,19 @@ const labelTextSx: SxProps<Theme> = {
   whiteSpace: 'nowrap',
 };
 
+const actionsBoxSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: theme.spacing(0.5),
+  flexShrink: 0,
+});
+
 const optionActionButtonSx: SxProps<Theme> = {
   padding: '0.125rem',
-  marginLeft: 'auto',
   flexShrink: 0,
+  minWidth: '1.5rem',
+  width: '1.5rem',
+  height: '1.5rem',
   '& svg': { width: '0.875rem', height: '0.875rem' },
 };
 

@@ -17,16 +17,19 @@ describe('CredentialNotFoundValue', () => {
     expect(screen.queryByText('Credential not found')).not.toBeInTheDocument();
   });
 
-  it('shows the "Credential not found" tooltip once data has loaded', () => {
+  it('keeps the normal text colour and draws no attention icon once data has loaded (#6632)', () => {
     renderWithTheme(
       <CredentialNotFoundValue
         eliteaTitle="missing-cred"
         hasFetchedData
       />,
     );
-    // MUI's Tooltip clones its child with an `aria-label` when the child has
-    // no accessible name of its own — the title text itself only mounts in
-    // the DOM on hover/focus, so this is the reliable static-render assertion.
-    expect(screen.getByLabelText('Credential not found')).toBeInTheDocument();
+    // The mismatch is the footer's message under the field. The field itself
+    // shows the title in the normal colour, with no red and no icon.
+    expect(screen.queryByLabelText('Credential not found')).not.toBeInTheDocument();
+    const value = screen.getByTestId('credential-not-found-value');
+    expect(value.querySelectorAll('svg')).toHaveLength(1);
+    // The token, not the red `status.rejected` the value used to take.
+    expect(getComputedStyle(screen.getByText('missing-cred')).color).toContain('text-secondary');
   });
 });
