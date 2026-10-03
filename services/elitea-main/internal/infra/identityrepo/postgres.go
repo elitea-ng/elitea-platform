@@ -58,7 +58,7 @@ func (r *PostgresRepository) Provision(
 		return identity.ProvisionResult{}, fmt.Errorf("identityrepo: lock provider identity: %w", err)
 	}
 
-	user, created, err := resolveProvisioningUser(ctx, queries, command)
+	user, created, err := resolveProvisioningUser(ctx, tx, queries, command)
 	if err != nil {
 		return identity.ProvisionResult{}, err
 	}
@@ -124,6 +124,7 @@ func (r *PostgresRepository) Provision(
 
 func resolveProvisioningUser(
 	ctx context.Context,
+	tx pgx.Tx,
 	queries *sqlcgen.Queries,
 	command identity.ProvisionCommand,
 ) (sqlcgen.AuthCoreUser, bool, error) {
@@ -141,6 +142,19 @@ func resolveProvisioningUser(
 	}
 	if user.Suspended {
 		return user, created, nil
+	}
+	// An EXISTING row is adopted only under the shared rule (adoption.go): no
+	// other federated subject holds it, and a SCIM-provisioned row only when
+	// this plane is configured to adopt those. This path used to link any row
+	// whose address matched.
+	if !created {
+		adoptable, err := accountAdoptable(ctx, tx, user.ID, command.AdoptSCIMUsers)
+		if err != nil {
+			return sqlcgen.AuthCoreUser{}, false, err
+		}
+		if !adoptable {
+			return sqlcgen.AuthCoreUser{}, false, identity.ErrIdentityConflict
+		}
 	}
 
 	if _, err := queries.LinkAuthProviderIfMissing(ctx, sqlcgen.LinkAuthProviderIfMissingParams{

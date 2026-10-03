@@ -349,7 +349,8 @@ func (s *Service) Complete(
 		},
 	})
 	if err != nil {
-		if errors.Is(err, identity.ErrIdentitySuspended) {
+		if errors.Is(err, identity.ErrIdentitySuspended) ||
+			errors.Is(err, identity.ErrIdentityConflict) {
 			return CompleteResult{}, ErrUnauthenticated
 		}
 		return CompleteResult{}, sanitizedError(

@@ -493,6 +493,15 @@ func newIdentityTestDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, dbschema.AuthCoreBaselineSQLCProjection); err != nil {
 		t.Fatal(err)
 	}
+	// The SCIM side table the shared adoption guard reads (adoption.go), from
+	// the migration's own file.
+	migration, err := os.ReadFile("../../../migrations/shared/0096_scim_provisioning.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(migration)); err != nil {
+		t.Fatal(err)
+	}
 	return pool
 }
 

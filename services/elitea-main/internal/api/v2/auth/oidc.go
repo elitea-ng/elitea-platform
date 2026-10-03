@@ -18,6 +18,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -768,13 +769,14 @@ func reuseLinkedAccount(
 //     receipt, not a federated identity, and an invited person must be able to
 //     sign in for the first time.
 const (
-	OIDCProviderRefPrefix = "oidc:"
-	SAMLProviderRefPrefix = "saml:"
+	OIDCProviderRefPrefix = identityrepo.OIDCProviderRefPrefix
+	SAMLProviderRefPrefix = identityrepo.SAMLProviderRefPrefix
 )
 
-// federatedRefPatterns is FederatedRefPrefixes as SQL LIKE patterns.
+// federatedRefPatterns is FederatedRefPrefixes as SQL LIKE patterns. It is
+// identityrepo's list: the adoption guard is shared with the Form plane.
 func federatedRefPatterns() []string {
-	return []string{OIDCProviderRefPrefix + "%", SAMLProviderRefPrefix + "%"}
+	return identityrepo.FederatedRefPatterns()
 }
 
 // joinAccountByEmail handles a subject that has never signed in here. It is the
@@ -831,15 +833,7 @@ func joinAccountByEmail(
 		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now()
 		 ON CONFLICT (email) DO UPDATE SET last_login = now()
 		 WHERE auth_core__user.suspended = false
-		   AND NOT EXISTS (
-		       SELECT 1 FROM auth_core__user_provider AS bound
-		       WHERE bound.user_id = auth_core__user.id
-		         AND bound.provider_ref LIKE ANY ($3)
-		   )
-		   AND ($4::boolean OR NOT EXISTS (
-		       SELECT 1 FROM elitea_auth.scim_users AS scim
-		       WHERE scim.user_id = auth_core__user.id
-		   ))
+		   AND `+identityrepo.AdoptionGuard("auth_core__user.id", 3, 4)+`
 		 RETURNING id`,
 		email, name, federatedRefPatterns(), adoptSCIMUsers,
 	).Scan(&userID)
