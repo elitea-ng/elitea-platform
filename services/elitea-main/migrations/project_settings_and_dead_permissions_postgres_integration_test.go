@@ -12,6 +12,7 @@ package migrations_test
 
 import (
 	"os"
+	"regexp"
 	"slices"
 	"testing"
 
@@ -22,6 +23,31 @@ const (
 	projectSettingsMigration = "shared/0136_project_settings_permission_and_dead_permissions.sql"
 	projectSettingsEdit      = "models.project_settings.edit"
 )
+
+var deadPermissionArray = regexp.MustCompile(`(?s)dead_permission text\[\] := ARRAY\[(.*?)\];`)
+
+// retiredBy0136 reads the dead_permission array from 0136, so a test that
+// compares against the legacy matrix can leave out the strings 0136 removes
+// on purpose. Reading the file keeps one list, not a copy.
+func retiredBy0136(t *testing.T) map[string]bool {
+	t.Helper()
+	body, err := os.ReadFile(projectSettingsMigration)
+	if err != nil {
+		t.Fatalf("read %s: %v", projectSettingsMigration, err)
+	}
+	match := deadPermissionArray.FindSubmatch(body)
+	if match == nil {
+		t.Fatalf("%s carries no dead_permission array", projectSettingsMigration)
+	}
+	retired := map[string]bool{}
+	for _, literal := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(match[1], -1) {
+		retired[string(literal[1])] = true
+	}
+	if len(retired) == 0 {
+		t.Fatalf("%s retires no permission; the array shape changed", projectSettingsMigration)
+	}
+	return retired
+}
 
 func applyProjectSettingsMigration(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
