@@ -153,13 +153,11 @@ export function VersionReplacementModal({
       fullWidth
       slotProps={{ paper: { sx: paperSx } }}
     >
+      {/* Text directly in DialogTitle (the `<h2>`; MuiDialogTitle sets
+          headingMedium + text.secondary): an inner heading-variant Typography
+          would nest a second `<h2>` inside it. */}
       <DialogTitle>
-        <Typography
-          variant="headingMedium"
-          color="text.secondary"
-        >
-          {t('features.agents.versionReplacementModal.title', 'Version in use')}
-        </Typography>
+        {t('features.agents.versionReplacementModal.title', 'Version in use')}
       </DialogTitle>
       <DialogContent>
         <Typography

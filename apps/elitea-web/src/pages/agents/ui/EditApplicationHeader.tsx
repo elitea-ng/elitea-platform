@@ -40,7 +40,7 @@ export function EditApplicationHeader({ title, onBack }: EditApplicationHeaderPr
       >
         <ArrowBackIcon fontSize="small" />
       </IconButton>
-      <Typography variant="headingSmall">{title}</Typography>
+      <Typography variant="headingLarge" component="h1">{title}</Typography>
     </Box>
   );
 }

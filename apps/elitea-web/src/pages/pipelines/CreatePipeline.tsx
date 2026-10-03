@@ -344,7 +344,7 @@ export function CreatePipeline(): ReactNode {
     <FormProvider {...form}>
       <Box sx={pageSx}>
         <Box sx={tabBarSx}>
-          <Typography variant="headingSmall">{t('pages.pipelines.createPipeline.title', 'New Pipeline')}</Typography>
+          <Typography variant="headingLarge" component="h1">{t('pages.pipelines.createPipeline.title', 'New Pipeline')}</Typography>
           <CreateApplicationTabBar
             onSave={handleSave}
             onCancel={handleCancel}

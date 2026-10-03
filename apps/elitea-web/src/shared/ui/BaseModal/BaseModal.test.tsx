@@ -33,6 +33,19 @@ describe('BaseModal', () => {
     expect(getByText('Are you sure?')).toBeInTheDocument();
   });
 
+  it('names its h2 heading and the dialog by the title alone, not "title Close"', () => {
+    const { getByRole } = renderWithTheme(
+      <BaseModal
+        open
+        title="Delete node?"
+        content="c"
+        onClose={() => {}}
+      />,
+    );
+    expect(getByRole('heading', { level: 2, name: 'Delete node?' })).toBeInTheDocument();
+    expect(getByRole('dialog', { name: 'Delete node?' })).toBeInTheDocument();
+  });
+
   it('renders a node title as-is (bypassing the Typography wrapper)', () => {
     const { getByTestId } = renderWithTheme(
       <BaseModal

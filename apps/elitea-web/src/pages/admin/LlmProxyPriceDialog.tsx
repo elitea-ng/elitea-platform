@@ -157,7 +157,7 @@ export function LlmProxyPriceDialog({
 
           {priceFieldGroups.map((group) => (
             <Box key={group.id} sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <Typography variant="bodyMedium" sx={{ fontWeight: 600 }}>
+              <Typography variant="headingSmall" component="h3">
                 {group.label()}
               </Typography>
               <Box sx={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>

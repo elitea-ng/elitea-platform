@@ -40,7 +40,7 @@ const ParticipantsAccordion = memo((props: ParticipantsAccordionProps): React.Re
             expandIcon={<ExpandMoreIcon />}
             aria-label={`${section.title} participants`}
           >
-            <Typography variant="labelMedium" component="h6" sx={{ fontWeight: 600 }}>
+            <Typography variant="headingSmall" component="span">
               {section.title} ({section.participants.length})
             </Typography>
           </AccordionSummary>

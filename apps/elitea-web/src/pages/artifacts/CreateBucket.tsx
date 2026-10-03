@@ -188,7 +188,7 @@ export function CreateBucket(): ReactNode {
           submit();
         }}
       >
-        <Typography variant="headingMedium">{formTitle(isEditing)}</Typography>
+        <Typography variant="headingLarge" component="h1">{formTitle(isEditing)}</Typography>
         {error !== undefined && <Typography role="alert">{error}</Typography>}
         <TextField
           fullWidth

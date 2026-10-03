@@ -101,7 +101,7 @@ const ParticipantSection = memo((props: ParticipantSectionProps): React.ReactEle
         }}
         onClick={toggleExpand}
       >
-        <Typography variant="labelMedium" component="h6" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingSmall">
           {sectionTitle(entityType)} ({participants.length})
         </Typography>
         <IconButton

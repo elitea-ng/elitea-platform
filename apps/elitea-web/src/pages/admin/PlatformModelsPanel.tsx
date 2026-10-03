@@ -328,7 +328,7 @@ export function PlatformModelsPanel(): ReactNode {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <Typography variant="bodyMedium" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingSmall">
         {t('pages.admin.platformModels.title', 'Platform models')}
       </Typography>
       <Typography variant="bodySmall" color="text.secondary">

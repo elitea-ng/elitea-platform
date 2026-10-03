@@ -79,12 +79,17 @@ export const GeneratedTokenDialog = memo(function GeneratedTokenDialog({
       open={open}
       onKeyDown={handleKeyDown}
       onClose={onClose}
+      aria-labelledby="generated-token-dialog-title"
       sx={styles.dialog}
     >
       <DialogContent sx={styles.dialogContent}>
         <Box sx={styles.header}>
+          {/* A dialog title: headingMedium as the dialog's `<h2>` (spec §2),
+              the same role MuiDialogTitle gives every other dialog. */}
           <Typography
-            variant="headingSmall"
+            id="generated-token-dialog-title"
+            variant="headingMedium"
+            component="h2"
             sx={styles.title}
           >
             {t('entities.token.generated.title', 'New token generated!')}
@@ -199,9 +204,6 @@ const getStyles = (): {
     alignItems: 'center',
   },
   title: (theme) => ({
-    fontSize: theme.typography.headingSmall.fontSize,
-    fontWeight: 600,
-    lineHeight: '1.5rem',
     color: theme.vars.palette.text.secondary,
   }),
   closeButton: (theme) => ({

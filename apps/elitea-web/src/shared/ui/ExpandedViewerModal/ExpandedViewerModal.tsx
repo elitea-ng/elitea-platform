@@ -109,8 +109,11 @@ function ModalTitle({ title, titleRef, isTruncated }: ModalTitleProps): ReactNod
       <Typography
         ref={titleRef}
         variant="headingMedium"
+        component="span"
         color="text.secondary"
-        sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+        // A block span: the title sits inside BaseModal's `<h2>`, so it must not
+        // be a heading itself, and ellipsis needs a block box.
+        sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
       >
         {title}
       </Typography>

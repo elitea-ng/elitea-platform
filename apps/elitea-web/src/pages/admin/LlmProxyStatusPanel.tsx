@@ -68,7 +68,7 @@ function StatTile({
       <Typography variant="bodySmall" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="headingSmall" component="h6" sx={{ color }}>
+      <Typography variant="headingSmall" component="p" sx={{ color }}>
         {value}
       </Typography>
     </Box>
@@ -95,7 +95,7 @@ function DiagnosticTable({
   if (rows.length === 0) return null;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-      <Typography variant="bodyMedium" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingSmall">
         {label}
       </Typography>
       <TableContainer>
