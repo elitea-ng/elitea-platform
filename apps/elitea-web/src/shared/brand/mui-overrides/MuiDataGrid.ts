@@ -6,6 +6,7 @@
 import type {} from '@mui/x-data-grid/themeAugmentation';
 
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiDataGrid` (R-T12). Ported from
@@ -67,7 +68,7 @@ export const MuiDataGrid: EliteaComponents['MuiDataGrid'] = {
           overflow: 'hidden',
         },
         '& .MuiDataGrid-columnHeaderTitle': {
-          ...theme.typography.labelMedium,
+          ...typeScale(theme.typography.labelMedium),
           color: theme.vars.palette.text.secondary,
         },
         // The legacy divider is a SHORT, vertically centred tick (1.25rem of a

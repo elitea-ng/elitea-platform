@@ -1,4 +1,5 @@
 import type { EliteaOverrideTheme } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiTreeItem` (R-T12). Ported from `apps/elitea-ui/src/components/TreeItem.jsx`'s
@@ -34,7 +35,7 @@ export const MuiTreeItem = {
         const { palette } = theme.vars;
         return {
           '& .MuiTreeItem-label': {
-            ...theme.typography.bodyMedium,
+            ...typeScale(theme.typography.bodyMedium),
             color: palette.text.secondary,
           },
           '& .MuiTreeItem-content:hover': {

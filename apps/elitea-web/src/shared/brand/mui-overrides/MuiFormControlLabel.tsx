@@ -1,16 +1,17 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
- * `MuiFormControlLabel` (R-T12). Sets the label text size to match the
- * project context review form's requirement of `bodySmall` — the same size
- * the original inline `sx` override targeted via `.MuiFormControlLabel-label`.
+ * `MuiFormControlLabel` (R-T12). A checkbox / switch / radio label is
+ * `bodyMedium` — running text beside a control, the same size as the input
+ * text next to it (typography spec §2).
  *
  * All colours read from `theme.vars.palette.*` to support white-label branding.
  */
 export const MuiFormControlLabel: EliteaComponents['MuiFormControlLabel'] = {
   styleOverrides: {
     label: ({ theme }) => ({
-      fontSize: theme.typography.bodySmall.fontSize,
+      ...typeScale(theme.typography.bodyMedium),
     }),
   },
 };

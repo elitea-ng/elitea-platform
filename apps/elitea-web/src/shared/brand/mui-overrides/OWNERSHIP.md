@@ -22,6 +22,11 @@ The baseline's canonical `components` map is `apps/elitea-ui/src/MainTheme.js:11
 | `MuiChip` | `MuiChip.ts` | Canonical `root` + `outlined` slots, complete. Admin-ui's scheme-branching variant is deliberately NOT ported (T2 §3, class (b)). |
 | `MuiAccordion` | `MuiAccordion.ts` | Platform-parity wave, not a baseline key (the baseline never styles `Accordion` at all). Measured directly against production (`getComputedStyle` on live `next.elitea.ai` nodes): 4px corners (`radiusSm`), no border, MUI's own `:first-of-type`/`:last-of-type` partial rounding on a stacked sibling list left unchanged. This app's ambient `theme.shape.borderRadius` is `radiusMd` (8px), so the override re-declares MUI's own two rules substituting `radiusSm` — the single-token gap, nothing more. `MuiAccordionSummary` deliberately left unwired: production shows no override on it either. |
 
+| `MuiDialogTitle` | `MuiDialogTitle.ts` | Typography spec rev. 2. `headingMedium` + `text.secondary` (strong) for every dialog title. |
+| `MuiTableCell` | `MuiTableCell.ts` | Typography spec rev. 2. head `labelMedium` + `text.primary` (dim), body `bodyMedium`, footer `bodySmall`. |
+| `MuiListItemText` | `MuiListItemText.ts` | Typography spec rev. 2. `defaultProps.slotProps`: primary `bodyMedium`, secondary `bodySmall` (keeps `<p>`). |
+| `MuiInputLabel` | `MuiInputLabel.ts` | Typography spec rev. 2. root `labelMedium`; shrunk label scales by `k = rung(−1)/rung(0)` from the built ladder (the notch legend in `MuiOutlinedInput.tsx` matches). |
+
 ## Owned by unit S1 — 28 keys
 
 `MuiToggleButton`, `MuiTextField`, `MuiInput`, `MuiIconButton`, `MuiDataGrid`,
@@ -47,5 +52,7 @@ hostile-pack sweep fails §4.6 check 7.
    `filledInfo` already uses `darkBlue` → `palette.info.main`.
 
 2. **Sizes come from typography variants.** `theme.typography.labelSmall` (and the
-   nine siblings) are declared in `src/shared/brand/theme.augment.d.ts` and built by
+   seven siblings) are declared in `src/shared/brand/theme.augment.d.ts` and built by
    `typography.ts`. `labelLarge` does not exist — it was dead in the baseline (T2 §3).
+   An override copies a variant through `typeScale(theme.typography.X)` (size,
+   weight, leading, tracking — never the heading colour), not by spreading it.

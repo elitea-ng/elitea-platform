@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiAlert` (R-T12). **Re-authored, not ported** — see OWNERSHIP.md note 1.
@@ -31,6 +32,10 @@ import type { EliteaComponents } from '../theme-types';
  * every current and, per that same grep, every historical call site.
  */
 export const MuiAlert: EliteaComponents['MuiAlert'] = {
+  styleOverrides: {
+    // Alert copy is running text: `bodyMedium` (typography spec §2).
+    message: ({ theme }) => typeScale(theme.typography.bodyMedium),
+  },
   variants: [
     {
       props: { variant: 'filled', severity: 'success' },

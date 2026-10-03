@@ -4,6 +4,7 @@ import { buildEliteaTheme } from '../buildTheme';
 import { MuiButton } from '../mui-overrides/MuiButton';
 import { MuiChip } from '../mui-overrides/MuiChip';
 import { DEFAULT_BRAND_PACK } from '../tokens';
+import { typeScale } from '../typography';
 
 /**
  * MEDIUM-2 (adversarial verification, 2026-07-27): every prior test in this
@@ -345,8 +346,19 @@ describe('MuiChip — slot-to-token wiring', () => {
 
   it('covers every slot MuiChip actually wires', () => {
     const wired = Object.keys(muiChip.styleOverrides ?? {});
-    const covered = [...new Set(CHIP_CASES.map((c) => c.slot))];
+    // `label` carries type, not colour: it is pinned by the case below.
+    const covered = [...new Set([...CHIP_CASES.map((c) => c.slot), 'label'])];
     expect(covered.sort()).toEqual([...wired].sort());
+  });
+
+  it('sets the chip label in labelSmall, without colour (typography spec §2)', () => {
+    const labelStyle = muiChip.styleOverrides?.label;
+    if (typeof labelStyle !== 'function') {
+      throw new Error('MuiChip.styleOverrides.label is not a function');
+    }
+    const resolved = labelStyle({ theme } as never) as StyleObject;
+    expect(resolved).toEqual(typeScale(theme.typography.labelSmall));
+    expect(resolved).not.toHaveProperty('color');
   });
 
   /**

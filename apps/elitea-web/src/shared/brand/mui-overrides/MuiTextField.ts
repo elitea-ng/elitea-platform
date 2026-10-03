@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiTextField` (R-T12). Ported from `input/textFieldVariants.js`'s
@@ -59,10 +60,10 @@ export const MuiTextField: EliteaComponents['MuiTextField'] = {
           color: theme.vars.palette.text.warningText,
         },
         '& input, & textarea': {
-          // Baseline `textFieldVariants.js:196-207`. Without the typography
-          // spread the input kept MUI's stock 1rem body font while its label
-          // used the brand scale, so the control sat a step too large.
-          ...theme.typography.labelMedium,
+          // Input text is `bodyMedium` — the same role in every field, app
+          // and admin (typography spec §2). Without the typography spread the
+          // input kept MUI's stock 1rem body font.
+          ...typeScale(theme.typography.bodyMedium),
           boxSizing: 'border-box',
           marginBottom: theme.spacing(1),
           color: theme.vars.palette.text.secondary,

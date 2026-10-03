@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiButton`'s `defaultProps` + `styleOverrides.root` — the baseline's
@@ -53,7 +54,7 @@ export const MuiButtonStyleOverrides: NonNullable<EliteaComponents['MuiButton']>
     '&::before': { display: 'none' },
     textTransform: 'none',
     fontFamily: theme.typography.fontFamily,
-    ...theme.typography.labelSmall,
+    ...typeScale(theme.typography.labelSmall),
     borderRadius: theme.vars.shape.radiusPill,
     gap: theme.spacing(1),
     height: '1.75rem',

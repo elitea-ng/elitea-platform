@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiIconButton` (R-T12). Ported from
@@ -24,7 +25,7 @@ export const MuiIconButton: EliteaComponents['MuiIconButton'] = {
       gap: theme.spacing(0.5),
       borderRadius: theme.vars.shape.radiusLg,
       fontFamily: theme.typography.fontFamily,
-      ...theme.typography.bodySmall,
+      ...typeScale(theme.typography.bodySmall),
       textTransform: 'none',
     }),
   },

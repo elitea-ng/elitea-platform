@@ -11,12 +11,15 @@ import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
 import CssBaseline from '@mui/material/CssBaseline';
 import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
 import Drawer from '@mui/material/Drawer';
 import FormControl from '@mui/material/FormControl';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import FormHelperText from '@mui/material/FormHelperText';
 import IconButton from '@mui/material/IconButton';
 import Input from '@mui/material/Input';
+import InputLabel from '@mui/material/InputLabel';
+import ListItemText from '@mui/material/ListItemText';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import MenuList from '@mui/material/MenuList';
@@ -25,6 +28,11 @@ import Radio from '@mui/material/Radio';
 import Select from '@mui/material/Select';
 import Switch from '@mui/material/Switch';
 import Tab from '@mui/material/Tab';
+import Table from '@mui/material/Table';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
 import TablePagination from '@mui/material/TablePagination';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
@@ -192,6 +200,11 @@ const OVERRIDE_SURFACES: Record<string, () => React.ReactElement> = {
       <div style={{ padding: 8 }}>dialog</div>
     </Dialog>
   ),
+  MuiDialogTitle: () => (
+    <Dialog open>
+      <DialogTitle>dialog title</DialogTitle>
+    </Dialog>
+  ),
   MuiDrawer: () => (
     <>
       <Drawer
@@ -234,6 +247,27 @@ const OVERRIDE_SURFACES: Record<string, () => React.ReactElement> = {
     </>
   ),
   MuiInput: () => <Input defaultValue="input" />,
+  MuiInputLabel: () => (
+    <>
+      <FormControl variant="outlined">
+        <InputLabel>resting label</InputLabel>
+        <OutlinedInput label="resting label" />
+      </FormControl>
+      <FormControl variant="outlined">
+        <InputLabel shrink>shrunk label</InputLabel>
+        <OutlinedInput
+          label="shrunk label"
+          notched
+        />
+      </FormControl>
+    </>
+  ),
+  MuiListItemText: () => (
+    <ListItemText
+      primary="primary"
+      secondary="secondary"
+    />
+  ),
   MuiMenu: () => (
     <Menu
       open
@@ -283,6 +317,20 @@ const OVERRIDE_SURFACES: Record<string, () => React.ReactElement> = {
       <Tab label="two" />
       <Tab icon={<span>icon</span>} />
     </Tabs>
+  ),
+  MuiTableCell: () => (
+    <Table>
+      <TableHead>
+        <TableRow>
+          <TableCell>head</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        <TableRow>
+          <TableCell>body</TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
   ),
   MuiTablePagination: () => (
     <table>

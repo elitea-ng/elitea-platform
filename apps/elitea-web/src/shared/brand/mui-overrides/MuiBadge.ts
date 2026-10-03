@@ -1,11 +1,12 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /** `MuiBadge` (R-T12). Ported verbatim from `MainTheme.js:329-341`
  * (radiusMd ≈ the baseline's `0.5rem`). */
 export const MuiBadge: EliteaComponents['MuiBadge'] = {
   styleOverrides: {
     badge: ({ theme }) => ({
-      ...theme.typography.labelSmall,
+      ...typeScale(theme.typography.labelSmall),
       color: theme.vars.palette.text.secondary,
       height: '1rem',
       minWidth: '1rem',

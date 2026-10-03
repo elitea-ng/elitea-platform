@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiMenuItem` (R-T12). Simplified from
@@ -15,6 +16,9 @@ export const MuiMenuItem: EliteaComponents['MuiMenuItem'] = {
     {
       props: {},
       style: ({ theme }) => ({
+        // A menu item reads like the field that opened it: bodyMedium, not
+        // MUI's stock 16px body1 (typography spec §2).
+        ...typeScale(theme.typography.bodyMedium),
         paddingTop: theme.spacing(1),
         paddingBottom: theme.spacing(1),
         paddingLeft: theme.spacing(2),

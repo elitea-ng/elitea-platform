@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typography';
 
 /**
  * `MuiToggleButton` (R-T12). Ported from `MainTheme.js`'s
@@ -22,7 +23,7 @@ export const MuiToggleButton: EliteaComponents['MuiToggleButton'] = {
       padding: theme.spacing(0.75, 1),
       textTransform: 'none',
       fontFamily: theme.typography.fontFamily,
-      ...theme.typography.labelSmall,
+      ...typeScale(theme.typography.labelSmall),
       color: theme.vars.palette.text.tabButton.default,
       backgroundColor: theme.vars.palette.background.tabButton.default,
       '&&.MuiToggleButtonGroup-grouped': {
