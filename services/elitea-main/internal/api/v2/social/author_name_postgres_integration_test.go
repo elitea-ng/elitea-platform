@@ -13,10 +13,12 @@ package social_test
 // personal_project_postgres_integration_test.go.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
@@ -54,6 +56,35 @@ func TestGetAuthorNamesAnAccountWithoutASocialProfileByItsName(t *testing.T) {
 
 	if got := authorName(t, routes, userID, email); got != "Greta Named" {
 		t.Fatalf("name = %q, want the account name, not the email", got)
+	}
+}
+
+// A failed profile read is a 500, never a 200 that presents the defaults as the
+// user's stored personalization and memory settings.
+func TestGetAuthorReportsAFailedProfileReadAsAServerError(t *testing.T) {
+	pool := newPersonalProjectSocialPool(t)
+	routes := handler.NewHandler(pool).Routes()
+
+	email := "broken-profile-read@autotest.local"
+	userID := seedAuthorUser(t, pool, email, "Bea Broken")
+	if _, err := pool.Exec(t.Context(), `ALTER TABLE centry.social_users RENAME TO social_users_unavailable`); err != nil {
+		t.Fatalf("break the profile table: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `ALTER TABLE centry.social_users_unavailable RENAME TO social_users`)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/author/", nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{
+		ID: strconv.FormatInt(userID, 10), UserID: strconv.FormatInt(userID, 10), Email: email,
+	}))
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "social_users") {
+		t.Fatalf("the error body leaks the database cause: %s", recorder.Body.String())
 	}
 }
 
