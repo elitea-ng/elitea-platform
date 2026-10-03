@@ -147,6 +147,8 @@ export interface UseChatBoxStateResult {
   readonly onInputChange: (value: string) => void;
   /** Commits a picked "@" user mention into the input text (baseline: `onSelectUserMention`). */
   readonly onSelectUserMention: (user: ResolvedUserMention) => void;
+  /** Removes the typed "#query" from the input and closes the "#" picker (#6774). */
+  readonly clearHashQuery: () => void;
 }
 
 /** Closes participant recommendations once for each active-participant change. */
@@ -241,6 +243,14 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     },
     [chatInput, keyDown],
   );
+
+  const clearHashQuery = useCallback(() => {
+    const anchor = keyDown.hashAnchorRef.current;
+    if (chatInput.current && anchor !== null) {
+      chatInput.current.replaceRange(anchor, anchor + keyDown.query.length, '');
+    }
+    keyDown.stopProcessingSymbols();
+  }, [chatInput, keyDown]);
 
   // -- Computed: should show starters --
   const shouldShowStarters = useMemo(
@@ -358,5 +368,6 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     onNormalKeyDown,
     onInputChange,
     onSelectUserMention,
+    clearHashQuery,
   };
 }

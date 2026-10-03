@@ -238,7 +238,6 @@ const ChatBoxInner = memo(function ChatBox({
     isConversationSending,
     isStreaming,
     hasChatInput: !!chatInputRef.current,
-    isProcessingSymbols: state.keyDown.isProcessingSymbols,
     hasPendingHitlInterrupt: data.hasPendingHitlInterrupt,
     isActiveParticipantBroken: state.isActiveParticipantBroken,
     isActiveParticipantWithdrawn: state.isActiveParticipantWithdrawn,
@@ -326,6 +325,7 @@ const ChatBoxInner = memo(function ChatBox({
             projectId: projectIdString,
             onSelectUser: handleSelectUserMention,
             onSelectTool: handleSelectSkillTool,
+            onAddParticipant: entityParticipantActions.onSelectParticipant,
           })}
         />
         {contextIndicator}

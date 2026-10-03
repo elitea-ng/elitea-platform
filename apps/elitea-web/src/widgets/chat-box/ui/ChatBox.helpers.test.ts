@@ -254,7 +254,7 @@ describe('deriveChatBoxInputState', () => {
     isLoadingConversation: false, isFetchingParticipantDetails: false,
     isUploadingAttachments: false, isUpdatingInternalToolsConfig: false,
     isConversationSending: false, isStreaming: false,
-    hasChatInput: true, isProcessingSymbols: false,
+    hasChatInput: true,
     hasPendingHitlInterrupt: false, isActiveParticipantBroken: false,
   };
 
@@ -262,6 +262,12 @@ describe('deriveChatBoxInputState', () => {
     const r = deriveChatBoxInputState(base);
     expect(r.isInputLoading).toBe(false);
     expect(r.disabledSend).toBe(false);
+  });
+
+  it('takes no "#" picker flag, so an open picker never disables Send (#6774)', () => {
+    // The old flag kept Send disabled from the "#" keystroke until the "#"
+    // was deleted, with no picker on screen to explain it.
+    expect(deriveChatBoxInputState({ ...base, isProcessingSymbols: true } as typeof base).disabledSend).toBe(false);
   });
 
   it('loading when streaming', () => {
