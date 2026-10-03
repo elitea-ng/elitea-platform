@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -354,11 +355,8 @@ type SecretDetail struct {
 
 // ─── vault data layout ────────────────────────────────────────────────────────
 
-// vaultData is the JSON stored (after Fernet encryption) in centry.secrets_data.
-type vaultData struct {
-	Secrets       map[string]string `json:"secrets"`
-	HiddenSecrets map[string]string `json:"hidden_secrets"`
-}
+// vaultData (vault_data.go) is the JSON stored, after Fernet encryption, in
+// centry.secrets_data.
 
 func dbKey(projectID string) string {
 	return fmt.Sprintf("project-%s", projectID)
@@ -386,7 +384,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		vaultUnreadable(w)
+		vaultUnreadable(w, r, err)
 		return
 	}
 	items := make([]SecretListItem, 0, len(vault.Secrets))
@@ -486,7 +484,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		vaultSaveFailed(w, "failed to save the secret")
 		return
 	case err != nil:
-		vaultUnreadable(w)
+		vaultUnreadable(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, SecretListItem{
@@ -511,7 +509,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		vaultUnreadable(w)
+		vaultUnreadable(w, r, err)
 		return
 	}
 
@@ -605,7 +603,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		vaultSaveFailed(w, "failed to save the secret")
 		return
 	case err != nil:
-		vaultUnreadable(w)
+		vaultUnreadable(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, SecretListItem{
@@ -645,7 +643,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		vaultSaveFailed(w, "failed to delete the secret")
 		return
 	case err != nil:
-		vaultUnreadable(w)
+		vaultUnreadable(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -657,13 +655,10 @@ func (h *Handler) Hide(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	err := h.mutateVaultCtx(r.Context(), projectID, false, func(vault *vaultData) (bool, error) {
-		val, ok := vault.Secrets[name]
-		if !ok {
+		if !vault.moveToHidden(name) {
 			apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("secret %q not found", name))
 			return false, errMutationRefused
 		}
-		delete(vault.Secrets, name)
-		vault.HiddenSecrets[name] = val
 		return true, nil
 	})
 	switch {
@@ -676,7 +671,7 @@ func (h *Handler) Hide(w http.ResponseWriter, r *http.Request) {
 		vaultSaveFailed(w, "failed to hide the secret")
 		return
 	case err != nil:
-		vaultUnreadable(w)
+		vaultUnreadable(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Project secret was moved to hidden secrets"})
@@ -721,6 +716,41 @@ var errVaultWrite = errors.New("secrets: vault write failed")
 // written the HTTP answer itself.  It rolls the transaction back and tells the
 // route that the response is done.
 var errMutationRefused = errors.New("secrets: mutation refused")
+
+// The classes of an unreadable vault. openVaultContents and openVault wrap
+// each failure in one, so the log line for a 500 says WHICH part of the vault
+// would not open without carrying any of its content.
+var (
+	errVaultRows        = errors.New("secrets: vault rows could not be read")
+	errVaultHalfWritten = errors.New("secrets: vault has a key row but no data row")
+	errVaultKey         = errors.New("secrets: vault key would not decrypt")
+	errVaultCiphertext  = errors.New("secrets: vault data would not decrypt")
+	errVaultDecode      = errors.New("secrets: vault data is not the expected JSON")
+)
+
+// vaultErrorClass names the class of a vault read failure for a log line.
+func vaultErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, ErrVaultAbsent):
+		return "absent"
+	case errors.Is(err, errVaultWrite):
+		return "write"
+	case errors.Is(err, errVaultRows):
+		return "rows"
+	case errors.Is(err, errVaultHalfWritten):
+		return "half_written"
+	case errors.Is(err, errVaultKey):
+		return "key"
+	case errors.Is(err, errVaultCiphertext):
+		return "ciphertext"
+	case errors.Is(err, errVaultDecode):
+		return "decode"
+	default:
+		return "other"
+	}
+}
 
 // vaultQuerier is what the id-keyed primitives run their statements on: the
 // pool for a plain read, and a transaction for a locked read-modify-write.
@@ -781,22 +811,22 @@ FOR UPDATE OF k, d`
 		case errors.Is(err, pgx.ErrNoRows):
 			return nil, nil, ErrVaultAbsent
 		case err != nil:
-			return nil, nil, fmt.Errorf("read %s secrets_key: %w", vaultID, err)
+			return nil, nil, fmt.Errorf("%w: read %s secrets_key: %w", errVaultRows, vaultID, err)
 		default:
-			return nil, nil, fmt.Errorf("vault %s has a key row but no data row", vaultID)
+			return nil, nil, fmt.Errorf("%w: vault %s has a key row but no data row", errVaultHalfWritten, vaultID)
 		}
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("read %s vault rows: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("%w: read %s vault rows: %w", errVaultRows, vaultID, err)
 	}
 
 	fernetKey, err := h.decryptKey(keyBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decrypt %s vault key: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("%w: decrypt %s vault key: %w", errVaultKey, vaultID, err)
 	}
 	plaintext, err := fernetDecrypt(fernetKey, dataBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decrypt %s vault data: %w", vaultID, err)
+		return nil, nil, fmt.Errorf("%w: decrypt %s vault data: %w", errVaultCiphertext, vaultID, err)
 	}
 	return plaintext, fernetKey, nil
 }
@@ -808,7 +838,7 @@ func (h *Handler) openVault(ctx context.Context, q vaultQuerier, vaultID string,
 	}
 	var v vaultData
 	if err := json.Unmarshal(plaintext, &v); err != nil {
-		return vaultData{}, nil, fmt.Errorf("unmarshal %s vault data: %w", vaultID, err)
+		return vaultData{}, nil, fmt.Errorf("%w: unmarshal %s vault data: %w", errVaultDecode, vaultID, err)
 	}
 	if v.Secrets == nil {
 		v.Secrets = map[string]string{}
@@ -1016,7 +1046,16 @@ func vaultSaveFailed(w http.ResponseWriter, message string) {
 // vaultUnreadable answers the one failure every project route shares: the vault
 // exists and could not be opened.  It is a 500 and not an empty result, because
 // an empty result is what invites the write that destroys it.
-func vaultUnreadable(w http.ResponseWriter) {
+//
+// The cause is logged with its class (see vaultErrorClass), never returned: a
+// 500 with nothing in the log is what kept F1 (an integer default-model id
+// the decoder refused) invisible until a regression run hit it.
+func vaultUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	slog.ErrorContext(r.Context(), "project vault is unreadable",
+		"class", vaultErrorClass(err),
+		"project_id", chi.URLParam(r, "projectID"),
+		"error", err,
+	)
 	writeJSON(w, http.StatusInternalServerError, map[string]string{
 		"error": "project vault is unreadable",
 	})
