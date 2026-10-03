@@ -81,7 +81,7 @@ import { convertMessagesToChatHistory } from "../lib/convertMessagesToChatHistor
 import type { MessageGroupWire, MessageParticipantWire } from "@/entities/message/lib/wire";
 
 import type { ChatStreamReattachParams, UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
-export type { ChatStreamReattachParams, UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
+export type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './useChatStreamTransport.types';
 
 export function useChatStreamTransport(
   params: UseChatStreamTransportParams,
