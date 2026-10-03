@@ -72,6 +72,25 @@ export function resolveSendModelName(
   return typeof configuredName === 'string' && configuredName ? configuredName : fallbackName;
 }
 
+/**
+ * The turn's `llm_settings`, with the implied default's project filled in.
+ *
+ * A chat with no configured model runs on the saved-or-default model. That
+ * model can be shared from another project, so the turn must name ITS project.
+ * Without it the server resolves the name in the chat's own project (UI-PD-2).
+ * A configured model keeps its own `model_project_id` untouched.
+ */
+export function resolveSendLlmSettings(
+  settings: Readonly<Record<string, unknown>> | undefined,
+  model: { readonly name?: string | undefined; readonly projectId?: string | number | undefined } | null | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  const configuredName = settings?.['model_name'];
+  if (typeof configuredName === 'string' && configuredName !== '') return settings;
+  const projectId = Number(model?.projectId);
+  if (model?.name === undefined || !Number.isInteger(projectId) || projectId <= 0) return settings;
+  return { ...settings, model_project_id: projectId };
+}
+
 /** Returns the validated loop bound that belongs in conversation metadata. */
 function executionStepsLimit(
   settings: Readonly<Record<string, unknown>> | undefined,

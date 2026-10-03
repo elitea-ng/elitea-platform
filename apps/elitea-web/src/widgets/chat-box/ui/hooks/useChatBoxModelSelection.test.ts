@@ -43,6 +43,22 @@ describe('pipeline test model selection', () => {
     expect(setSelectedModel).toHaveBeenCalledWith({ name: 'pipeline-model', projectId: '1', supportsReasoning: false });
   });
 
+  it('shows a default model shared from project 1 when no model is configured (UI-PD-2)', () => {
+    const { result } = renderHook(() => useChatBoxModelSelection({
+      projectId: '9', selectedModelName: 'pipeline-model', selectedModelProjectId: '1', setSelectedModel: vi.fn(),
+      llm: { settings: { temperature: 0.6 } },
+    }));
+    expect(result.current.selectedLlmModel?.id).toBe('shared');
+  });
+
+  it('ignores a stray current-project id for the implied default (UI-PD-2)', () => {
+    const { result } = renderHook(() => useChatBoxModelSelection({
+      projectId: '9', selectedModelName: 'pipeline-model', selectedModelProjectId: '1', setSelectedModel: vi.fn(),
+      llm: { settings: { model_project_id: 9 } },
+    }));
+    expect(result.current.selectedLlmModel?.id).toBe('shared');
+  });
+
   it('refuses an object project identity without invoking its string conversion', () => {
     const toString = vi.fn(() => '1');
     const { result } = renderHook(() => useChatBoxModelSelection({

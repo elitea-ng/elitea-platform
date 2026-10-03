@@ -28,6 +28,7 @@ import {
   creationMeta,
   internalToolsSaveFailure,
   positiveParticipantId,
+  resolveSendLlmSettings,
   resolveSendModelName,
   resolveStartContract,
   resolveTargetParticipant,
@@ -59,7 +60,7 @@ export interface UseChatBoxSendParams {
    * optional chain lives here — reading it at the ChatBox call site pushed that
    * component over its complexity budget.
    */
-  readonly model?: { readonly name?: string | undefined } | null | undefined;
+  readonly model?: { readonly name?: string | undefined; readonly projectId?: string | undefined } | null | undefined;
   readonly setChatHistory: (
     updater: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
   ) => void;
@@ -143,6 +144,10 @@ export function useChatBoxSend(
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
   const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
+  const llmSettings = useMemo(
+    () => resolveSendLlmSettings(params.llmSettings, params.model),
+    [params.llmSettings, params.model],
+  );
   const target = useMemo(
     () => resolveTargetParticipant(params.activeParticipant, params.participants),
     [params.activeParticipant, params.participants],
@@ -191,7 +196,7 @@ export function useChatBoxSend(
         conversationUuid,
         projectId: projectIdString,
         payload,
-        llmSettings: params.llmSettings,
+        llmSettings,
         modelName,
         isApplicationTurn,
         participantId:
@@ -214,7 +219,7 @@ export function useChatBoxSend(
       startDetailed,
       projectId,
       projectIdString,
-      params.llmSettings,
+      llmSettings,
       getInternalToolsForSend,
       modelName,
       target,
@@ -263,7 +268,7 @@ export function useChatBoxSend(
         responseMessageId: input.messageId,
         questionId: input.questionId,
         question: input.question,
-        llmSettings: params.llmSettings,
+        llmSettings,
         modelName,
         isApplicationTurn,
         participantId: positiveParticipantId(
@@ -289,7 +294,7 @@ export function useChatBoxSend(
       projectIdString,
       params.conversationUuid,
       target,
-      params.llmSettings,
+      llmSettings,
       getInternalToolsForSend,
       modelName,
     ],
@@ -304,9 +309,9 @@ export function useChatBoxSend(
           question.slice(0, 50) ||
           t("widgets.chatBox.defaultConversationName", "New Chat"),
         isPrivate: true,
-        meta: creationMeta(params.llmSettings, internalTools),
+        meta: creationMeta(llmSettings, internalTools),
         ...(!isAgentsPage && modelName ? {
-          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings: params.llmSettings }),
+          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings }),
         } : {}),
       });
       if (!created) return undefined;
@@ -325,7 +330,7 @@ export function useChatBoxSend(
       isAgentsPage,
       modelName,
       params.userId,
-      params.llmSettings,
+      llmSettings,
       getInternalToolsForSend,
     ],
   );

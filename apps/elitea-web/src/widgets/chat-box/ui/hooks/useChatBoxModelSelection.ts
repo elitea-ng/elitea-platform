@@ -11,6 +11,8 @@ import { toLlmModel, type LLMModel } from '@/widgets/llm-model-selector';
 export interface UseChatBoxModelSelectionParams {
   readonly projectId: string | number | undefined;
   readonly selectedModelName: string | undefined;
+  /** The project of the saved-or-default model; it identifies the implied default when no model is configured. */
+  readonly selectedModelProjectId?: string | number | undefined;
   readonly llm?: { readonly settings?: Readonly<Record<string, unknown>>; readonly onSetSettings?: (settings: Readonly<Record<string, unknown>>) => void } | undefined;
   readonly setSelectedModel: (model: { readonly name?: string; readonly projectId?: string; readonly supportsReasoning?: boolean } | null) => void;
 }
@@ -31,6 +33,7 @@ function matchesModelProject(projectId: string | number, configuredProject: unkn
 export function useChatBoxModelSelection({
   projectId,
   selectedModelName,
+  selectedModelProjectId,
   setSelectedModel,
   llm,
 }: UseChatBoxModelSelectionParams): UseChatBoxModelSelectionResult {
@@ -42,11 +45,17 @@ export function useChatBoxModelSelection({
   const configuredName = llm?.settings?.['model_name'];
   const configuredProject = llm?.settings?.['model_project_id'];
   const selectedLlmModel = useMemo(() => {
-    const name = typeof configuredName === 'string' && configuredName ? configuredName : selectedModelName;
+    const hasConfiguredName = typeof configuredName === 'string' && configuredName !== '';
+    const name = hasConfiguredName ? configuredName : selectedModelName;
+    // The implied default (no configured model name) lives in ITS OWN project,
+    // which is often the shared project 1, not the chat's project (UI-PD-2).
+    // Match it on the default model's project; a stray configured project id
+    // must not hide it.
+    const project = hasConfiguredName ? configuredProject : selectedModelProjectId;
     const raw = modelsData?.items.find((m) => m.name === name &&
-      matchesModelProject(m.project_id, configuredProject));
+      matchesModelProject(m.project_id, project));
     return raw ? toLlmModel(raw) : null;
-  }, [modelsData?.items, selectedModelName, configuredName, configuredProject]);
+  }, [modelsData?.items, selectedModelName, selectedModelProjectId, configuredName, configuredProject]);
   const handleSelectModel = useCallback(
     (model: LLMModel) => {
       const raw = modelsData?.items.find((m) => toLlmModel(m).id === model.id && m.name === model.name);
