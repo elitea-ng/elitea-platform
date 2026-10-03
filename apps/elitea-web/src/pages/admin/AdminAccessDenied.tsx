@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -90,7 +91,9 @@ export function AdminAccessDenied({ redirect = assignLocation }: AdminAccessDeni
               onClick={() => {
                 // The button unmounts on cancel; hand focus to the primary link so
                 // keyboard and screen-reader users keep their place (WCAG 2.4.3).
-                setRemaining(null);
+                flushSync(() => {
+                  setRemaining(null);
+                });
                 homeLinkRef.current?.focus();
               }}
             >

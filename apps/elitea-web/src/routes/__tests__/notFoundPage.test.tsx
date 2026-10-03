@@ -17,7 +17,7 @@ describe('NotFoundPage', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'Page not found' })).toBeInTheDocument();
     expect(screen.getByText('404')).toBeInTheDocument();
-    expect(screen.getByText(/does not exist or may have been moved/)).toBeInTheDocument();
+    expect(screen.getByText(/does not exist or has moved/)).toBeInTheDocument();
     expect(screen.getByTestId('brand-logo-mark')).toBeInTheDocument();
   });
 
