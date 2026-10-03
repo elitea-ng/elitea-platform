@@ -25,7 +25,6 @@ import (
 	"errors"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -55,28 +54,27 @@ type TokenIssuer interface {
 	IssueAccessToken(ctx context.Context, clientID, clientSecret string) (scimclient.AccessToken, scimclient.Principal, error)
 }
 
-// ClientKeyResolver resolves the caller's address through the configured
-// trusted proxies. browserauth.TrustedProxyResolver implements it; it is the
-// same interpretation the sign-in attempt limiter uses, so X-Forwarded-For
-// from an untrusted peer is never believed.
-type ClientKeyResolver interface {
-	ResolveClientKey(*http.Request) (string, error)
+// ClientAddresses resolves the real caller address. ClientAddressResolver
+// (clientaddr.go) implements it. ok is false when the address cannot be known.
+type ClientAddresses interface {
+	Resolve(*http.Request) (address string, ok bool)
 }
 
 // TokenHandler serves the token endpoint.
 type TokenHandler struct {
-	issuer   TokenIssuer
-	resolver ClientKeyResolver
-	limiter  *scimclient.FailureLimiter
+	issuer    TokenIssuer
+	addresses ClientAddresses
+	limiter   *scimclient.FailureLimiter
 }
 
 // NewTokenHandler builds the handler with the default failure limiter.
-// resolver may be nil: the socket peer is then the caller's address.
-func NewTokenHandler(issuer TokenIssuer, resolver ClientKeyResolver) *TokenHandler {
+// addresses may be nil: no caller address is then known, and the handler
+// verifies every secret before it throttles anything.
+func NewTokenHandler(issuer TokenIssuer, addresses ClientAddresses) *TokenHandler {
 	return &TokenHandler{
-		issuer:   issuer,
-		resolver: resolver,
-		limiter:  scimclient.NewFailureLimiter(tokenFailureLimit, tokenFailureWindow),
+		issuer:    issuer,
+		addresses: addresses,
+		limiter:   scimclient.NewFailureLimiter(tokenFailureLimit, tokenFailureWindow),
 	}
 }
 
@@ -129,16 +127,29 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The failure limit is keyed per (client id, caller address) and is
-	// checked BEFORE the secret is verified, so a blocked caller costs no
-	// database read. The caller address is part of the key, so an attacker
-	// who knows the public client id can block only their own address: the
-	// identity provider, calling from another address, is never blocked by
-	// failures it did not make. A refusal writes no log line and no audit row.
-	key := h.limiterKey(r, clientID)
-	if blocked, retry := h.limiter.Blocked(key); blocked {
-		writeTooManyFailures(w, retry)
-		return
+	// The failure limit is keyed per (client id, caller address).
+	//
+	// When the caller address is KNOWN, the limit is checked BEFORE the
+	// secret, so a blocked caller costs no database read. The address is part
+	// of the key, so a caller can block only its own address; an identity
+	// provider at another address is never blocked by failures it did not make.
+	//
+	// When the address is NOT known (no trusted proxy CIDRs, or a proxy sent
+	// no usable X-Forwarded-For), every caller would share one key. The secret
+	// is then verified FIRST, so a correct secret always gets a token, and only
+	// failures are throttled. Nobody can lock out a correct secret.
+	//
+	// A refusal writes no log line and no audit row.
+	address, known := "", false
+	if h.addresses != nil {
+		address, known = h.addresses.Resolve(r)
+	}
+	key := limiterKey(clientID, address, known)
+	if known {
+		if blocked, retry := h.limiter.Blocked(key); blocked {
+			writeTooManyFailures(w, retry)
+			return
+		}
 	}
 	token, principal, err := h.issuer.IssueAccessToken(r.Context(), clientID, clientSecret)
 	if errors.Is(err, scimclient.ErrRejected) {
@@ -202,24 +213,12 @@ func clientCredentials(r *http.Request, form url.Values) (clientID, clientSecret
 	return decodedUser, decodedPassword, true, true
 }
 
-// limiterKey keys the failure counter by client id AND caller address. The
-// address comes from the trusted-proxy resolver when one is configured and the
-// socket peer is a trusted proxy; otherwise the socket peer IS the caller.
-// An oversized client id is replaced by a fixed marker so it cannot grow the
-// key space.
-func (h *TokenHandler) limiterKey(r *http.Request, clientID string) string {
-	address := ""
-	if h.resolver != nil {
-		if resolved, err := h.resolver.ResolveClientKey(r); err == nil {
-			address = resolved
-		}
-	}
-	if address == "" {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		address = host
+// limiterKey keys the failure counter by client id and caller address. An
+// unknown address gets one fixed marker. An oversized client id is replaced by
+// a fixed marker so it cannot grow the key space.
+func limiterKey(clientID, address string, known bool) string {
+	if !known {
+		address = "<unknown>"
 	}
 	if len(clientID) > 128 {
 		clientID = "<oversized>"

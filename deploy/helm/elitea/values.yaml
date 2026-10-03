@@ -1027,6 +1027,16 @@ main:
     # Empty means 1h. A value outside the range stops the boot.
     ELITEA_SCIM_ACCESS_TOKEN_TTL: ""
 
+    # ELITEA_TRUSTED_PROXY_CIDRS lists the proxies (ingress, gateway) whose
+    # X-Forwarded-For is believed, as comma-separated CIDRs, for example the
+    # pod network "10.42.0.0/16". The SCIM token endpoint keys its failure
+    # limit on (client id, caller address) and needs the real caller behind
+    # the ingress. It is merged with the Form document's trusted_proxy_cidrs,
+    # so set it on an OIDC-only or SAML-only install. Empty: the caller
+    # address is unknown, the endpoint verifies every secret before it
+    # throttles, and the boot logs a WARN.
+    ELITEA_TRUSTED_PROXY_CIDRS: ""
+
     # --- The first administrator, on a single-sign-on-only deployment -----------
     # Comma-separated provider references that are granted the administration
     # super_admin role the first time they sign in

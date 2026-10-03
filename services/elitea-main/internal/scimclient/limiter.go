@@ -21,9 +21,10 @@ import (
 // A success does not reset the counter: an attacker who also holds one valid
 // credential must not be able to clear the window.
 type FailureLimiter struct {
-	max    int
-	window time.Duration
-	now    func() time.Time
+	max     int
+	window  time.Duration
+	now     func() time.Time
+	maxKeys int
 
 	mu      sync.Mutex
 	windows map[string]*failureWindow
@@ -34,14 +35,26 @@ type failureWindow struct {
 	failures int
 }
 
-// maxLimiterKeys bounds the map. A flood of distinct keys resets it rather than
-// growing it without limit; that briefly forgets counters, which is the safe
+// maxLimiterKeys bounds the map. Random client ids or addresses cannot grow
+// it without limit: when it is full, Fail first sweeps every window that has
+// ended (a TTL sweep), and only if the map is still full does it start again
+// from empty. Starting again briefly forgets counters, which is the safe
 // direction for availability and costs at most one more window of guesses.
 const maxLimiterKeys = 50_000
 
 // NewFailureLimiter allows max failures per key per window.
 func NewFailureLimiter(max int, window time.Duration) *FailureLimiter {
-	return &FailureLimiter{max: max, window: window, now: time.Now, windows: map[string]*failureWindow{}}
+	return &FailureLimiter{
+		max: max, window: window, now: time.Now, maxKeys: maxLimiterKeys,
+		windows: map[string]*failureWindow{},
+	}
+}
+
+// Size is the number of keys the limiter holds.
+func (l *FailureLimiter) Size() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.windows)
 }
 
 // Blocked reports whether any of keys is over its limit, and when to retry.
@@ -66,8 +79,15 @@ func (l *FailureLimiter) Fail(keys ...string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	if len(l.windows) > maxLimiterKeys {
-		l.windows = map[string]*failureWindow{}
+	if len(l.windows) >= l.maxKeys {
+		for key, window := range l.windows {
+			if now.Sub(window.start) >= l.window {
+				delete(l.windows, key)
+			}
+		}
+		if len(l.windows) >= l.maxKeys {
+			l.windows = map[string]*failureWindow{}
+		}
 	}
 	for _, key := range keys {
 		window, ok := l.windows[key]

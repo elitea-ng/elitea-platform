@@ -171,6 +171,10 @@ type RouterConfig struct {
 	// endpoint issues. Zero selects scimclient.DefaultAccessTokenTTL (1h).
 	// cmd/elitea-main reads it from ELITEA_SCIM_ACCESS_TOKEN_TTL.
 	SCIMAccessTokenTTL time.Duration
+	// SCIMClientAddresses resolves the real caller address for the SCIM token
+	// endpoint's failure limiter, from the trusted proxy CIDRs. Nil means no
+	// address is known; see internal/api/scim/token.go for that behaviour.
+	SCIMClientAddresses *scimapi.ClientAddressResolver
 	// ArtifactPermissionResolver overrides the legacyrbac.NewPostgresResolver
 	// built from Pool for the artifact routes only (S11) — tests inject a
 	// resolver here to control RBAC outcomes without a live database. Every
@@ -1475,9 +1479,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		store := scimclient.NewStore(cfg.Pool, cfg.SCIMAccessTokenTTL)
 		scimCredentials, scimTokenIssuer, scimClientStore = store, store, store
 	}
-	// The trusted-proxy resolver, when the deployment has one, gives the token
-	// endpoint's failure limiter the real caller address.
-	scimClientAddresses, _ := cfg.Auth.ForwardedIdentityVerifier.(scimapi.ClientKeyResolver)
+	// The caller-address resolver for the token endpoint's failure limiter.
+	// cmd/elitea-main builds it from the deployment's trusted proxy CIDRs on
+	// every authentication plane. A nil resolver is valid: the endpoint then
+	// verifies every secret before it throttles (internal/api/scim/token.go).
+	var scimClientAddresses scimapi.ClientAddresses
+	if cfg.SCIMClientAddresses != nil {
+		scimClientAddresses = cfg.SCIMClientAddresses
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(apimw.NoStore)
 		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).

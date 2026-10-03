@@ -273,7 +273,7 @@ func TestTokenEndpointRefusals(t *testing.T) {
 
 type fixedAddress string
 
-func (f fixedAddress) ResolveClientKey(*http.Request) (string, error) { return string(f), nil }
+func (f fixedAddress) Resolve(*http.Request) (string, bool) { return string(f), true }
 
 func TestTokenEndpointLimitsFailedClientAuthentication(t *testing.T) {
 	credentials := newAuthFixture()
@@ -296,11 +296,11 @@ func TestTokenEndpointLimitsFailedClientAuthentication(t *testing.T) {
 
 	// The identity provider calls from another address. The attacker's
 	// failures do not block it, and its correct secret gets a token.
-	handler.resolver = fixedAddress("198.51.100.7")
+	handler.addresses = fixedAddress("198.51.100.7")
 	require.Equal(t, http.StatusOK, postToken(handler, good, nil).Code)
 
 	// Another client id from the blocked address has its own window.
-	handler.resolver = fixedAddress("203.0.113.9")
+	handler.addresses = fixedAddress("203.0.113.9")
 	other := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_other"}, "client_secret": {"wrong"}}
 	require.Equal(t, http.StatusUnauthorized, postToken(handler, other, nil).Code)
 }
@@ -315,8 +315,83 @@ func TestTokenEndpointCountsFailuresPerCallerAddress(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, postToken(attacker, wrong, nil).Code)
 
 	// The same handler (one limiter), another caller address: its own window.
-	attacker.resolver = fixedAddress("198.51.100.7")
+	attacker.addresses = fixedAddress("198.51.100.7")
 	require.Equal(t, http.StatusUnauthorized, postToken(attacker, wrong, nil).Code)
+}
+
+// Without a known caller address every caller would share one key. The
+// handler then verifies the secret FIRST, so nobody can lock out a correct
+// secret, and it throttles only failures.
+func TestTokenEndpointWithoutACallerAddressNeverRefusesACorrectSecret(t *testing.T) {
+	credentials := newAuthFixture()
+	handler := NewTokenHandler(credentials, nil)
+	wrong := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"wrong"}}
+	good := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"scimcs_secret"}}
+	for i := 0; i < 3*tokenFailureLimit; i++ {
+		postToken(handler, wrong, nil)
+	}
+	require.Equal(t, http.StatusTooManyRequests, postToken(handler, wrong, nil).Code, "failures are still throttled")
+	require.Equal(t, http.StatusOK, postToken(handler, good, nil).Code, "a correct secret is never refused")
+
+	// The same holds with a resolver that cannot tell the client apart.
+	unknown := NewTokenHandler(credentials, unresolvedAddress{})
+	for i := 0; i < 3*tokenFailureLimit; i++ {
+		postToken(unknown, wrong, nil)
+	}
+	require.Equal(t, http.StatusOK, postToken(unknown, good, nil).Code)
+}
+
+type unresolvedAddress struct{}
+
+func (unresolvedAddress) Resolve(*http.Request) (string, bool) { return "", false }
+
+/* ── caller address resolution ─────────────────────────────────────────── */
+
+func resolveFrom(t *testing.T, cidrs []string, remote, forwardedFor string) (string, bool) {
+	t.Helper()
+	resolver, err := NewClientAddressResolver(cidrs)
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, TokenPath, nil)
+	request.RemoteAddr = remote
+	if forwardedFor != "" {
+		request.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+	return resolver.Resolve(request)
+}
+
+func TestClientAddressResolution(t *testing.T) {
+	proxies := []string{"10.0.0.0/8"}
+
+	// A trusted proxy: the rightmost hop that is not a trusted proxy.
+	address, ok := resolveFrom(t, proxies, "10.1.2.3:443", "203.0.113.9, 10.9.9.9")
+	require.True(t, ok)
+	require.Equal(t, "203.0.113.9", address)
+
+	// A spoofed left-most hop does not win over the real client.
+	address, ok = resolveFrom(t, proxies, "10.1.2.3:443", "198.51.100.1, 203.0.113.9")
+	require.True(t, ok)
+	require.Equal(t, "203.0.113.9", address)
+
+	// An UNTRUSTED peer's X-Forwarded-For is ignored: the peer is the client.
+	address, ok = resolveFrom(t, proxies, "192.0.2.50:5000", "203.0.113.9")
+	require.True(t, ok)
+	require.Equal(t, "192.0.2.50", address)
+
+	// A trusted proxy with no usable X-Forwarded-For: unknown.
+	_, ok = resolveFrom(t, proxies, "10.1.2.3:443", "")
+	require.False(t, ok)
+	_, ok = resolveFrom(t, proxies, "10.1.2.3:443", "not-an-address")
+	require.False(t, ok)
+	// Every hop a trusted proxy: unknown.
+	_, ok = resolveFrom(t, proxies, "10.1.2.3:443", "10.4.4.4")
+	require.False(t, ok)
+
+	// No CIDRs configured: unknown for every request, X-Forwarded-For or not.
+	_, ok = resolveFrom(t, nil, "192.0.2.50:5000", "203.0.113.9")
+	require.False(t, ok)
+
+	_, err := NewClientAddressResolver([]string{"10.0.0.0/33"})
+	require.ErrorIs(t, err, ErrInvalidTrustedProxyCIDR)
 }
 
 func TestTokenEndpointHidesStoreFailures(t *testing.T) {

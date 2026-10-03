@@ -446,6 +446,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose outbound e-mail: %w", err)
 	}
 
+	// The Form document's trusted proxy CIDRs, kept for the SCIM token
+	// endpoint's caller-address resolver, which every plane builds below.
+	var authDocumentTrustedProxyCIDRs []string
 	if authEnabled {
 		if err := pool.Ping(ctx); err != nil {
 			return fmt.Errorf("verify authentication PostgreSQL dependency: %w", err)
@@ -454,6 +457,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if loadErr != nil {
 			return fmt.Errorf("load production Form authentication: %w", loadErr)
 		}
+		authDocumentTrustedProxyCIDRs = append([]string(nil), authConfig.TrustedProxyCIDRs...)
 		// The document is the PRIMARY source, so the list has one meaning on
 		// whichever browser plane ends up mounted.
 		firstLoginPolicy = v2auth.FirstLoginPolicy{
@@ -2155,6 +2159,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		patSigner = formGraph
 	}
 
+	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
+	if err != nil {
+		return fmt.Errorf("load SCIM caller-address settings: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
@@ -2218,6 +2227,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
 		SCIMAccessTokenTTL:         scimAccessTokenTTL,
+		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,

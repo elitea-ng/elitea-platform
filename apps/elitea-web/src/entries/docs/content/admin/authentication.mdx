@@ -89,7 +89,7 @@ The token endpoint accepts `grant_type=client_credentials` with the client ident
 Maintenance mode does not stop SCIM. A SCIM client has no administration permissions, and the maintenance gate admits only administrators, so the gate does not apply to SCIM. The identity provider continues to create, update and deactivate accounts during a maintenance window. To freeze the directory, pause provisioning in the identity provider.
 </Note>
 
-Each OAuth2 client can hold at most 20 live access tokens. A new token removes the oldest one. Failed token requests are limited per client identifier and caller address. After 20 failures in one minute, that address gets `429` until the minute ends, also with the correct secret. Failures from one address never block another address, so an attacker cannot lock out your identity provider.
+Each OAuth2 client can hold at most 20 live access tokens. A new token removes the oldest one. Failed token requests are limited per client identifier and caller address. After 20 failures in one minute, that address gets `429` until the minute ends, also with the correct secret. Failures from one address never block another address, so an attacker cannot lock out your identity provider. To know the real caller address behind an ingress, set the proxy networks in `ELITEA_TRUSTED_PROXY_CIDRS` (or `trusted_proxy_cidrs` in the Form authentication document). Without them the caller address is unknown. The endpoint then checks every secret first, so a correct secret is never refused, and it limits only failures.
 
 ### Rotate or revoke a SCIM client
 
