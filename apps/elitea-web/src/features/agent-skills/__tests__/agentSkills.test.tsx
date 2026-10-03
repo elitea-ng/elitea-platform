@@ -260,8 +260,8 @@ describe('AgentSkillsPanel', () => {
     await waitFor(() => expect(screen.queryByTestId('agent-skills-section')).not.toBeInTheDocument());
     expect(screen.queryByTestId('agent-skills-counter')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    // A missing route is not retried.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(reads).toBe(1);
+    // Not asserting "no retry" here: this client sets `retry: false`, so such
+    // an assertion could not fail. The app-wide policy that makes a 404 final
+    // is proven in `app/providers/queryClient.test.ts`.
   });
 });

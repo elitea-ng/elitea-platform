@@ -55,15 +55,13 @@ export interface AgentSkillsState {
 export function useAgentSkills(projectId: string | undefined, appVersionId: number | undefined): AgentSkillsState {
   const queryClient = useQueryClient();
   const enabled = projectId !== undefined && appVersionId !== undefined && Number.isFinite(appVersionId);
-  const defaultRetry = queryClient.getDefaultOptions().queries?.retry;
 
   const attachedQuery = useQuery({
     queryKey: agentSkillKeys.attached(projectId ?? '', appVersionId ?? 0),
     queryFn: () => fetchAttachedSkills(projectId ?? '', appVersionId ?? 0),
     enabled,
-    // A missing route stays missing; asking again only delays hiding the
-    // section. Every other failure keeps the client's own retry policy.
-    retry: (failureCount, error) => !isRouteMissing(error) && clientRetries(defaultRetry, failureCount, error),
+    // No `retry` override: the app-wide policy (`QUERY_DEFAULT_OPTIONS.retry`)
+    // already treats a 404 as final, so a missing route is asked once.
   });
 
   const invalidate = (): void => {
@@ -92,15 +90,6 @@ export function useAgentSkills(projectId: string | undefined, appVersionId: numb
     attach,
     detach,
   };
-}
-
-/** TanStack Query's `retry` option, as the client sets it (default: 3 retries). */
-type RetryOption = boolean | number | ((failureCount: number, error: Error) => boolean) | undefined;
-
-function clientRetries(retry: RetryOption, failureCount: number, error: Error): boolean {
-  if (typeof retry === 'function') return retry(failureCount, error);
-  if (typeof retry === 'boolean') return retry;
-  return failureCount < (retry ?? 3);
 }
 
 /** A 404 from the attached-skills list: the deployment does not serve skills. */
