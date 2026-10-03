@@ -181,6 +181,13 @@ func (p *userPatch) applyObject(op string, raw json.RawMessage, nested bool) *pa
 		return &patchProblem{400, "invalidValue", "a path-less operation needs an object value"}
 	}
 	for key, value := range attributes {
+		if isJSONNull(value) && isActivePath(key) {
+			// A path-less `{"active": null}` says nothing about the flag and
+			// is IGNORED, as it was before this interpreter existed. It must
+			// never read as false: that suspended the account behind a 200.
+			// An explicit `path: "active"` with null is refused instead.
+			continue
+		}
 		if problem := p.applyPath(op, key, value, nested); problem != nil {
 			return problem
 		}
@@ -412,7 +419,14 @@ func rewriteKeys(raw json.RawMessage, prefix string) json.RawMessage {
 // coerceBool reads a boolean the way identity providers send it: a JSON
 // boolean, or the string "True"/"False" in any case. Refusing the string would
 // leave an account active after the provider believed it had deactivated it.
+//
+// JSON null (or an absent value) is NOT a boolean. encoding/json leaves the
+// target untouched for null, so without this check null read as false and
+// suspended the account.
 func coerceBool(raw json.RawMessage) (value, ok bool) {
+	if isJSONNull(raw) {
+		return false, false
+	}
 	var boolean bool
 	if json.Unmarshal(raw, &boolean) == nil {
 		return boolean, true
@@ -428,6 +442,19 @@ func coerceBool(raw json.RawMessage) (value, ok bool) {
 		return false, true
 	}
 	return false, false
+}
+
+// isJSONNull reports an absent value or a JSON null.
+func isJSONNull(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed == "" || trimmed == "null"
+}
+
+// isActivePath reports whether a path-less object key names `active`, bare or
+// core-schema-prefixed.
+func isActivePath(key string) bool {
+	lowered := strings.ToLower(strings.TrimSpace(key))
+	return strings.TrimPrefix(lowered, strings.ToLower(userSchemaPrefix)) == "active"
 }
 
 func quoteForError(value string) string {

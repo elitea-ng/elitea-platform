@@ -533,6 +533,8 @@ func TestUserPatchRefusals(t *testing.T) {
 		{"non boolean active", `{"op":"Replace","path":"active","value":"maybe"}`, 400, "invalidValue"},
 		{"remove without path", `{"op":"Remove"}`, 400, "noTarget"},
 		{"non string displayName", `{"op":"Replace","path":"displayName","value":{"a":1}}`, 400, "invalidValue"},
+		// R2: an explicit `active` path with null is not a boolean.
+		{"explicit active null", `{"op":"Replace","path":"active","value":null}`, 400, "invalidValue"},
 		// L1: the core URN key is read once, at the top level, never recursively.
 		{"nested core schema URN", `{"op":"Replace","value":{
 			"urn:ietf:params:scim:schemas:core:2.0:User":{
@@ -549,6 +551,24 @@ func TestUserPatchRefusals(t *testing.T) {
 			require.Empty(t, directory.changes)
 			require.Equal(t, "Alice", directory.users[42].DisplayName)
 		})
+	}
+}
+
+// R2: encoding/json reads null into a bool as false, so a path-less
+// `{"active": null}` used to SUSPEND the account behind a 200. It is ignored.
+func TestAPathlessNullActiveIsIgnoredNotReadAsFalse(t *testing.T) {
+	for _, operations := range []string{
+		`{"op":"replace","value":{"active":null}}`,
+		`{"op":"replace","value":{"urn:ietf:params:scim:schemas:core:2.0:User:active":null}}`,
+		`{"op":"replace","value":{"urn:ietf:params:scim:schemas:core:2.0:User":{"active":null}}}`,
+	} {
+		directory := newRecordingDirectory()
+		recorder := patchUser(t, directory, operations)
+
+		require.Equal(t, http.StatusOK, recorder.Code, operations)
+		require.Empty(t, directory.changes, operations)
+		require.Empty(t, directory.activeCalls, operations)
+		require.True(t, directory.users[42].Active, operations)
 	}
 }
 
