@@ -74,6 +74,11 @@ var baseGates = map[string]int{
 	// stops reading, and the route behind it goes back to being invisible on a
 	// clean database — the exact failure the file exists to prevent.
 	"RequireResolvedMembershipPermissions": 2,
+	// #6789 added this one. Its arguments from index 3 on are permissions:
+	// the personal-project fallback, then the strict `required ...string`.
+	// Both must be granted, and the any-of check below accepts the gate when
+	// either is.
+	"RequireResolvedPermissionOrPersonalProject": 3,
 }
 
 // modeArgIndex maps a gate to the index of its permission-mode argument.
@@ -88,10 +93,11 @@ var baseGates = map[string]int{
 // RequirePermissions has no mode: it reads the caller's already-resolved
 // permission set. It is recorded under the empty mode.
 var modeArgIndex = map[string]int{
-	"RequireResolvedPermissions":           1,
-	"RequireCentralPermissions":            1,
-	"RequireResolvedPermissionsForProject": 1,
-	"RequireResolvedMembershipPermissions": 1,
+	"RequireResolvedPermissions":                 1,
+	"RequireCentralPermissions":                  1,
+	"RequireResolvedPermissionsForProject":       1,
+	"RequireResolvedMembershipPermissions":       1,
+	"RequireResolvedPermissionOrPersonalProject": 1,
 }
 
 // grantModes are the role modes a migration can grant to.

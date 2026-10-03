@@ -132,15 +132,37 @@ var roleNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // centralRoleModes are the modes a central role can be created in.
 //
-// pylon accepts any string. A role in a mode no resolver reads is invisible
-// work: `legacyrbac.PostgresResolver` resolves `default`, `administration` and
-// `developer` and nothing else, so a role in a fourth mode can never grant
-// anything to anybody. It is refused rather than stored.
+// pylon accepts any string. A role in a mode no route reads is invisible work,
+// so it is refused rather than stored.
+//
+// `developer` is refused too (#6880). No route, no UI and no worker gates on a
+// developer-mode permission, and no user holds a developer role. pylon seeded
+// the mode for every registered permission, and the admin console already
+// hides it. A role created in it could never grant anything to anybody.
 var centralRoleModes = map[string]struct{}{
 	"default":        {},
 	"administration": {},
-	"developer":      {},
 }
+
+// centralRoleModesHint is the list an error names when it refuses a mode.
+const centralRoleModesHint = "expected default or administration"
+
+// retiredRoleModes are modes in which a role can no longer be created or
+// renamed, but can still be DELETED. pylon seeded developer-mode roles on
+// every legacy database. If a delete refused them too, no API path could
+// remove those rows.
+var retiredRoleModes = map[string]struct{}{
+	"developer": {},
+}
+
+// roleModeUse tells resolveRoleTarget which write asks. Only a delete accepts
+// a retired mode.
+type roleModeUse int
+
+const (
+	roleModeWrite roleModeUse = iota
+	roleModeDelete
+)
 
 /* ── request bodies ────────────────────────────────────────────────────── */
 
@@ -203,7 +225,7 @@ func (t roleTarget) describe() string {
 	return fmt.Sprintf("the %s project (id %d)", t.scope, t.projectID)
 }
 
-func (h *Handler) resolveRoleTarget(ctx context.Context, scope, mode string) (roleTarget, error) {
+func (h *Handler) resolveRoleTarget(ctx context.Context, scope, mode string, use roleModeUse) (roleTarget, error) {
 	if !isKnownScope(scope) {
 		return roleTarget{}, matrixError{
 			status:  http.StatusNotFound,
@@ -211,11 +233,12 @@ func (h *Handler) resolveRoleTarget(ctx context.Context, scope, mode string) (ro
 		}
 	}
 	if scope == scopeAdministration {
-		if _, ok := centralRoleModes[mode]; !ok {
+		_, live := centralRoleModes[mode]
+		_, retired := retiredRoleModes[mode]
+		if !live && (!retired || use != roleModeDelete) {
 			return roleTarget{}, matrixError{
-				status: http.StatusBadRequest,
-				message: "unknown role mode " + strconv.Quote(mode) +
-					": expected default, administration or developer",
+				status:  http.StatusBadRequest,
+				message: "unknown role mode " + strconv.Quote(mode) + ": " + centralRoleModesHint,
 			}
 		}
 		return roleTarget{scope: scope, mode: mode}, nil
@@ -280,7 +303,7 @@ func refuseBuiltIn(name, what string) error {
 // behaviour too: the operator grants them on the matrix this page already
 // shows, where every grant is one auditable change.
 func (h *Handler) AdminRoleCreate(w http.ResponseWriter, r *http.Request) {
-	target, body, ok := h.beginRoleWrite(w, r)
+	target, body, ok := h.beginRoleWrite(w, r, roleModeWrite)
 	if !ok {
 		return
 	}
@@ -348,7 +371,7 @@ func (h *Handler) insertRole(ctx context.Context, target roleTarget, name string
 // deliberately kept apart. The response reports how many projects were renamed,
 // so a shortfall is visible instead of assumed.
 func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
-	target, body, ok := h.beginRoleWrite(w, r)
+	target, body, ok := h.beginRoleWrite(w, r, roleModeWrite)
 	if !ok {
 		return
 	}
@@ -466,7 +489,7 @@ WHERE stale.name = $1
 // for the reason the rename cascades: those copies exist only because the
 // central role does.
 func (h *Handler) AdminRoleDelete(w http.ResponseWriter, r *http.Request) {
-	target, body, ok := h.beginRoleWrite(w, r)
+	target, body, ok := h.beginRoleWrite(w, r, roleModeDelete)
 	if !ok {
 		return
 	}
@@ -476,9 +499,14 @@ func (h *Handler) AdminRoleDelete(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := refuseBuiltIn(body.Name, "deleted"); err != nil {
-		writeMatrixError(w, err)
-		return
+	// A built-in name is refused because this service names that role in its
+	// own SQL and Go. No code names a role in a RETIRED mode, so pylon's
+	// developer-mode `admin` or `super_admin` is a leftover and can go.
+	if _, retired := retiredRoleModes[target.mode]; !retired || !target.central() {
+		if err := refuseBuiltIn(body.Name, "deleted"); err != nil {
+			writeMatrixError(w, err)
+			return
+		}
 	}
 
 	removed, err := h.deleteRole(r.Context(), target, body.Name)
@@ -631,13 +659,13 @@ WHERE role.name = $1`, name).Scan(&copies)
 // the target and decode the body. It reports failure to the client itself and
 // returns ok=false, so a handler cannot forget one of the three.
 func (h *Handler) beginRoleWrite(
-	w http.ResponseWriter, r *http.Request,
+	w http.ResponseWriter, r *http.Request, use roleModeUse,
 ) (roleTarget, roleWriteRequest, bool) {
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "database unavailable")
 		return roleTarget{}, roleWriteRequest{}, false
 	}
-	target, err := h.resolveRoleTarget(r.Context(), chi.URLParam(r, "scope"), chi.URLParam(r, "mode"))
+	target, err := h.resolveRoleTarget(r.Context(), chi.URLParam(r, "scope"), chi.URLParam(r, "mode"), use)
 	if err != nil {
 		writeMatrixError(w, err)
 		return roleTarget{}, roleWriteRequest{}, false

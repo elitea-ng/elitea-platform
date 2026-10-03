@@ -185,6 +185,13 @@ func (g *DestinationGuard) Transport() *http.Transport {
 	return t
 }
 
+// DialContext is dialContext for a caller that builds its own transport, such
+// as the MCP authorization proxies (eliteacore/mcp_oauth_egress.go), which
+// keep their configured trust bundle and replace only the dialer.
+func (g *DestinationGuard) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return g.dialContext(ctx, network, addr)
+}
+
 // dialContext is the actual SSRF enforcement boundary: it runs once per TCP
 // connection net/http's Transport opens, which for a webhook POST is once per
 // delivery attempt.

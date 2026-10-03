@@ -25,7 +25,7 @@ import { memo, useCallback } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { useUpdateProjectInfoMutation } from '@/entities/project';
+import { isPersonalProjectName, useUpdateProjectInfoMutation } from '@/entities/project';
 import { projectContextFeature, projectGeneralFeature, type SelectedProjectIcon } from '@/features/settings';
 import { AccordionConstants } from '@/shared/lib/constants';
 import { PERMISSIONS } from '@/shared/lib/permissions';
@@ -47,7 +47,21 @@ export const ProjectGeneral = memo(function ProjectGeneral({
   projectName,
 }: ProjectGeneralProps) {
   const permissionSet = usePermissionSet(projectId);
-  const canEdit = permissionSet.has(PERMISSIONS.projectContext.edit);
+  /*
+   * The project identity (name, icon) is the project ADMIN's (#6789). The
+   * server gates `project_info` and `project_icon` writes on
+   * `models.project_settings.edit`, which only the admin role holds. In a
+   * personal project the owner is often an `editor`, and the server accepts
+   * `models.project_context.edit` there, so this mirrors that exception.
+   */
+  const canEditProject =
+    permissionSet.has(PERMISSIONS.projectSettings.edit) ||
+    (isPersonalProjectName(projectName) && permissionSet.has(PERMISSIONS.projectContext.edit));
+  /*
+   * The builder switch writes the caller's OWN profile, not the project, so
+   * it keeps the reference's `projectContext.edit` gate.
+   */
+  const canEditBuilder = permissionSet.has(PERMISSIONS.projectContext.edit);
 
   const updateProjectInfo = useUpdateProjectInfoMutation(projectId);
 
@@ -92,7 +106,7 @@ export const ProjectGeneral = memo(function ProjectGeneral({
                 <ProjectParamsHeader
                   projectId={projectId}
                   projectName={projectName}
-                  canEdit={canEdit}
+                  canEdit={canEditProject}
                   onIconChange={handleIconChange}
                 />
               ),
@@ -122,7 +136,7 @@ export const ProjectGeneral = memo(function ProjectGeneral({
                 'settings.projectGeneral.agentPipelineBuilder.section',
                 'Agent & Pipeline Builder',
               ),
-              content: <AgentPipelineBuilder canEdit={canEdit} />,
+              content: <AgentPipelineBuilder canEdit={canEditBuilder} />,
             },
           ]}
         />
