@@ -244,6 +244,21 @@ body {
   max-height: 44px;
 }
 
+/* With script, the logo waits until it has loaded (theme.js), then the text
+   wordmark steps aside but stays the accessible name. */
+:root[data-el-mode] .brand-logo:not(.is-loaded) {
+  display: none;
+}
+
+.brand-logo.is-loaded + .brand-name-fallback {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .brand-mark {
   display: block;
   width: auto;

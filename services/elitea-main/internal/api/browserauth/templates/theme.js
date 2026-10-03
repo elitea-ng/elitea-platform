@@ -43,7 +43,27 @@
     }
   });
 
+  // A pack logo replaces the text wordmark only once it has loaded, so a
+  // missing or failing asset leaves the product name, not a broken image.
+  function watchLogo() {
+    var logo = document.getElementById("brand-logo");
+    if (!logo) {
+      return;
+    }
+    function loaded() {
+      if (logo.naturalWidth > 0) {
+        logo.classList.add("is-loaded");
+      }
+    }
+    if (logo.complete) {
+      loaded();
+    } else {
+      logo.addEventListener("load", loaded);
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    watchLogo();
     var toggle = document.getElementById("theme-toggle");
     if (!toggle) {
       return;
