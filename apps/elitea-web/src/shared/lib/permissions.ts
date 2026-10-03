@@ -83,6 +83,14 @@ export const PERMISSIONS = {
     view: 'models.project_context.view',
     edit: 'models.project_context.edit',
   },
+  /**
+   * The project identity writes (name, description, icon). Admin only, from
+   * shared migration 0136 (#6789). The project context stays on
+   * `projectContext.edit`.
+   */
+  projectSettings: {
+    edit: 'models.project_settings.edit',
+  },
   secrets: {
     view: 'configuration.secrets.secret.view',
     list: 'configuration.secrets.secret.list',
