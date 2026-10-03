@@ -556,7 +556,7 @@ describe('ProjectSwitcher — request a project', () => {
     });
   });
 
-  it('#6638: the trigger is 52px tall, the height of the page section headers', () => {
+  it('issue 6638: the trigger is 52px tall, the height of the page section headers', () => {
     renderWithTheme(
       <ProjectSwitcher
         projects={projects}
@@ -567,7 +567,7 @@ describe('ProjectSwitcher — request a project', () => {
     expect(screen.getByRole('button', { expanded: false })).toHaveStyle({ minHeight: '3.25rem' });
   });
 
-  it('#6712: fades the list edges only where projects are hidden, and updates on scroll', async () => {
+  it('issue 6712: fades the list edges only where projects are hidden, and updates on scroll', async () => {
     const user = userEvent.setup();
     const many: Project[] = Array.from({ length: 30 }, (_, index) => ({ id: index + 1, name: `Project ${String(index + 1)}`, suspended: false }));
     renderWithTheme(
@@ -599,7 +599,7 @@ describe('ProjectSwitcher — request a project', () => {
     expect(screen.queryByTestId('project-switcher-fade-bottom')).not.toBeInTheDocument();
   });
 
-  it('#6712: shows no fade when every project fits', async () => {
+  it('issue 6712: shows no fade when every project fits', async () => {
     const user = userEvent.setup();
     renderWithTheme(
       <ProjectSwitcher
