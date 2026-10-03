@@ -607,6 +607,9 @@ fn unreadable_note(id: &str, name: &str, reason: &str) -> String {
         "too_large" => "it is larger than the 25 MiB limit for reading files",
         "empty" => "the file is empty",
         "timeout" => "reading it took too long",
+        "processing" => {
+            "the platform is still extracting its text (a large file takes a while), so it will be readable in a later message"
+        }
         "not_found" => "the file no longer exists",
         "not_available" => "the file is not available to this conversation",
         "turn_limit" => "the files of this turn together exceed the reading limit",

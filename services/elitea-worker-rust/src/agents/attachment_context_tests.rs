@@ -282,6 +282,7 @@ fn an_unreadable_file_gets_a_note_with_its_reason() {
         ("unsupported_format", "format is not supported"),
         ("no_text", "no text layer"),
         ("too_large", "25 MiB"),
+        ("processing", "still extracting its text"),
         ("unavailable", "could not read it"),
     ] {
         let mut reads = AttachmentReads::new();

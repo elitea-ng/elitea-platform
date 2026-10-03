@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
@@ -50,6 +51,15 @@ const (
 	// encodes to at most twice its size; the unit map adds well under 1 MiB
 	// (at most extract's unit limit of short labels).
 	maxRuntimeAttachmentObjectResponseBytes = 6 << 20
+
+	// maxConcurrentAttachmentExtractions bounds the source bytes held for
+	// extraction to 4 x 25 MiB per process.
+	maxConcurrentAttachmentExtractions = 4
+
+	// attachmentExtractionWait is below the worker's 15 s runtime-context
+	// deadline (content_timeout_millis), so the "processing" answer reaches
+	// the worker before it gives up on the request.
+	attachmentExtractionWait = 10 * time.Second
 
 	runtimeContextStageAttachmentRead         = "attachment_object_read"
 	runtimeContextStageAttachmentExtract      = "attachment_object_extract"
@@ -242,6 +252,12 @@ type RuntimeAttachmentObjectService struct {
 	cache      AttachmentExtractionCache
 	maxBytes   int64
 	maxServed  int
+	// extractions bounds the extractions that run at the same time, each
+	// holding up to maxBytes of source in memory.
+	extractions chan struct{}
+	// extractionWait is how long one request waits for an extraction before
+	// it answers "processing" and leaves the extraction to file its result.
+	extractionWait time.Duration
 }
 
 // NewRuntimeAttachmentObjectService wires the route. cache may be nil (every
@@ -262,6 +278,10 @@ func NewRuntimeAttachmentObjectService(
 		cache:      cache,
 		maxBytes:   maxRuntimeAttachmentInputBytes,
 		maxServed:  maxRuntimeAttachmentServedTextBytes,
+		extractions: make(
+			chan struct{}, maxConcurrentAttachmentExtractions,
+		),
+		extractionWait: attachmentExtractionWait,
 	}, nil
 }
 
@@ -293,7 +313,8 @@ func (service *RuntimeAttachmentObjectService) Resolve(
 	name string,
 ) (RuntimeAttachmentObjectContext, error) {
 	if service == nil || service.authorizer == nil || service.objects == nil ||
-		service.extractor == nil || service.maxBytes <= 0 || service.maxServed <= 0 {
+		service.extractor == nil || service.maxBytes <= 0 || service.maxServed <= 0 ||
+		service.extractions == nil {
 		return RuntimeAttachmentObjectContext{}, runtimeContextUnavailable(
 			runtimeContextStageAttachmentRead,
 		)
@@ -416,18 +437,83 @@ func (service *RuntimeAttachmentObjectService) extraction(
 		return AttachmentExtraction{Refused: true, Reason: extract.ReasonTooLarge}, record.MediaType, record.ByteLength, nil
 	}
 
-	document, err := service.extractor.Extract(ctx, record.Content)
-	clearContentBytes(record.Content)
+	// The extraction runs DETACHED from the request. The worker waits about
+	// 15 s for this route, and a long PDF can take longer than that to parse.
+	// Bound to the request, every turn would start the same extraction and
+	// cancel it again. Detached, the first turn starts it, and the result is
+	// filed in the sidecar store for a later turn even if this one gave up.
+	if !service.acquireExtraction(ctx) {
+		return AttachmentExtraction{}, "", 0, ctx.Err()
+	}
+	done := make(chan attachmentExtractionResult, 1)
+	go service.extractDetached(ctx, record.Content, cached, version, done)
+	wait := time.NewTimer(service.extractionWait)
+	defer wait.Stop()
+	var result attachmentExtractionResult
+	select {
+	case result = <-done:
+	case <-wait.C:
+		if !cached {
+			// Nothing would file the result, so a later turn could not use
+			// it: wait for it instead.
+			select {
+			case result = <-done:
+			case <-ctx.Done():
+				return AttachmentExtraction{}, "", 0, ctx.Err()
+			}
+			break
+		}
+		return AttachmentExtraction{Refused: true, Reason: ReasonAttachmentProcessing},
+			record.MediaType, record.ByteLength, nil
+	case <-ctx.Done():
+		return AttachmentExtraction{}, "", 0, ctx.Err()
+	}
+	if result.err != nil {
+		return AttachmentExtraction{}, "", 0, runtimeContextUnavailable(
+			runtimeContextStageAttachmentExtract,
+		)
+	}
+	return result.outcome, record.MediaType, record.ByteLength, nil
+}
+
+// ReasonAttachmentProcessing is the 422 reason for a file whose extraction
+// is still running. It is not filed: the extraction files its own result.
+const ReasonAttachmentProcessing extract.Reason = "processing"
+
+type attachmentExtractionResult struct {
+	outcome AttachmentExtraction
+	err     error
+}
+
+func (service *RuntimeAttachmentObjectService) acquireExtraction(ctx context.Context) bool {
+	select {
+	case service.extractions <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// extractDetached extracts and files one document. Its context keeps the
+// request's values but not its cancellation; the extractor's own time limit
+// bounds it.
+func (service *RuntimeAttachmentObjectService) extractDetached(
+	requestCtx context.Context,
+	content []byte,
+	cached bool,
+	version AttachmentObjectVersion,
+	done chan<- attachmentExtractionResult,
+) {
+	defer func() { <-service.extractions }()
+	ctx := context.WithoutCancel(requestCtx)
+	document, err := service.extractor.Extract(ctx, content)
+	clearContentBytes(content)
 	var outcome AttachmentExtraction
 	if err != nil {
 		reason, refused := extract.ReasonOf(err)
 		if !refused {
-			if contextErr := ctx.Err(); contextErr != nil {
-				return AttachmentExtraction{}, "", 0, contextErr
-			}
-			return AttachmentExtraction{}, "", 0, runtimeContextUnavailable(
-				runtimeContextStageAttachmentExtract,
-			)
+			done <- attachmentExtractionResult{err: err}
+			return
 		}
 		outcome = AttachmentExtraction{Refused: true, Reason: reason}
 	} else {
@@ -438,7 +524,7 @@ func (service *RuntimeAttachmentObjectService) extraction(
 	if cached && outcome.Reason != extract.ReasonTimeout {
 		_ = service.cache.SaveAttachmentExtraction(ctx, version, outcome)
 	}
-	return outcome, record.MediaType, record.ByteLength, nil
+	done <- attachmentExtractionResult{outcome: outcome}
 }
 
 // document projects an extraction onto the wire, serving at most maxServed

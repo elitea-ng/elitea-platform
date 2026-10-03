@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -244,6 +245,8 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 			cache,
 		)
 		require.NoError(t, err)
+		// The first PDF compiles the PDFium module, which is slow under -race.
+		service.extractionWait = 2 * time.Minute
 		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
 		require.Equal(t, http.StatusOK, response.Code)
 		require.Len(t, cache.saved, 1)
@@ -272,6 +275,35 @@ func TestAttachmentObjectServiceUsesTheSidecar(t *testing.T) {
 			require.Contains(t, response.Body.String(), `"reason":"`+string(reason)+`"`)
 			require.Equal(t, filed, len(cache.saved) == 1, "reason %s", reason)
 		}
+	})
+
+	t.Run("a slow extraction answers processing and still files its result", func(t *testing.T) {
+		t.Parallel()
+		cache := &fakeExtractionCache{version: version}
+		release := make(chan struct{})
+		service, err := NewRuntimeAttachmentObjectService(
+			attachmentTestAuthorizer(t, 4242, attachmentTestConversation),
+			fixtureSource("chat-attachments", key, []byte("plain words"), "text/plain"),
+			extractorFunc(func(ctx context.Context, data []byte) (extract.Document, error) {
+				<-release
+				return extract.New(extract.DefaultLimits()).Extract(ctx, data)
+			}),
+			cache,
+		)
+		require.NoError(t, err)
+		service.extractionWait = 20 * time.Millisecond
+		response := serveAttachment(t, newAttachmentObjectTestServerWithService(t, service), key)
+		require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+		require.Contains(t, response.Body.String(), `"reason":"processing"`)
+
+		// The request is gone; the extraction finishes and files its result
+		// for the next turn.
+		close(release)
+		require.Eventually(t, func() bool {
+			cache.mu.Lock()
+			defer cache.mu.Unlock()
+			return len(cache.saved) == 1 && cache.saved[0].Document.Text == "plain words"
+		}, 5*time.Second, 10*time.Millisecond)
 	})
 
 	t.Run("an extractor fault is a 503, not a property of the file", func(t *testing.T) {

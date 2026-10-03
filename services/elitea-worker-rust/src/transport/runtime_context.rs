@@ -48,7 +48,9 @@ const MAX_ATTACHMENT_UNREADABLE_BYTES: usize = 4 * 1_024;
 /// The refusal reasons main may send, as `'static` strings so that a
 /// `RuntimeContextError::Rejected` can carry one. Anything else is reported
 /// as `unreadable`.
-const ATTACHMENT_UNREADABLE_REASONS: [&str; 8] = [
+const ATTACHMENT_UNREADABLE_REASONS: [&str; 9] = [
+    // Main is still extracting a large file; a later turn reads it.
+    "processing",
     "empty",
     "too_large",
     "unsupported_format",
