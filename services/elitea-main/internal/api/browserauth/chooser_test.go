@@ -140,8 +140,10 @@ func TestTwoProvidersRenderTheBrandedPage(t *testing.T) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	if strings.Contains(body, "<script") {
-		t.Error("the page carries a script; it must work with none")
+	// The routing is links and a form; the one script only picks the colour
+	// scheme (page_test.go pins it).
+	if strings.Count(body, "<script") != 1 {
+		t.Errorf("the page carries %d scripts, want the theme script only", strings.Count(body, "<script"))
 	}
 	// The configured domains are routing data. The page never lists them.
 	if strings.Contains(body, "contoso") {
@@ -149,9 +151,11 @@ func TestTwoProvidersRenderTheBrandedPage(t *testing.T) {
 	}
 
 	csp := recorder.Header().Get("Content-Security-Policy")
-	digest := sha256.Sum256([]byte(chooserStyleSource))
+	digest := sha256.Sum256([]byte(authStyleSource))
 	styleHash := "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
-	for _, want := range []string{"default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'", styleHash} {
+	digest = sha256.Sum256([]byte(authScriptSource))
+	scriptHash := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "';"
+	for _, want := range []string{"default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self' https:;", styleHash, scriptHash} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %q", csp, want)
 		}
@@ -171,8 +175,14 @@ func TestTwoProvidersRenderTheBrandedPage(t *testing.T) {
 
 func TestTheDefaultBrandRendersWithoutAPack(t *testing.T) {
 	recorder := getLogin(newTestChooser(t, nil, gitHubProvider(), entraProvider()), "")
-	if !strings.Contains(recorder.Body.String(), `<p class="brand-name">Elitea</p>`) {
-		t.Fatalf("default brand missing:\n%s", recorder.Body.String())
+	body := recorder.Body.String()
+	// The product's own logo, inline: the page loads no image to show it.
+	if !strings.Contains(body, `<svg class="brand-mark" viewBox="0 0 99 20" fill="none" role="img" aria-label="Elitea"`) ||
+		strings.Contains(body, `class="brand-logo"`) || strings.Contains(body, "<style></style>") {
+		t.Fatalf("default brand missing:\n%s", body)
+	}
+	if strings.Count(body, "<style>") != 1 {
+		t.Fatal("a page with no pack carries a brand stylesheet")
 	}
 }
 

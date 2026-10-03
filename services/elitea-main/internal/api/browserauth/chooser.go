@@ -19,10 +19,12 @@ package browserauth
 //
 // # Progressive enhancement
 //
-// The page has no script. The buttons are links and the email field is a
-// plain form; GET and POST `/auth/login/continue` do the routing on
-// the server. The CSP is the Form login page's: `default-src 'none'`, the
-// stylesheets pinned by hash, same-origin images and fonts.
+// Sign-in needs no script. The buttons are links and the email field is a
+// plain form; GET and POST `/auth/login/continue` do the routing on the
+// server. The one inline script only picks the colour scheme (page.go), and
+// without it the page follows the OS. The CSP is the Form login page's:
+// `default-src 'none'`, the stylesheets and that script pinned by hash,
+// same-origin images and fonts.
 //
 // `form-action` admits `https:` in addition to 'self'. The email form posts
 // to this origin, and the answer is a redirect chain that ends at the identity
@@ -43,9 +45,7 @@ package browserauth
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/base64"
 	"errors"
 	"html/template"
 	"mime"
@@ -81,14 +81,6 @@ const (
 
 //go:embed templates/sso_chooser.html
 var chooserTemplateSource string
-
-//go:embed templates/sso_chooser.css
-var chooserStyleSource string
-
-var chooserStyleCSPSource = func() string {
-	digest := sha256.Sum256([]byte(chooserStyleSource))
-	return "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
-}()
 
 // SSOProvider is one usable provider on the page.
 type SSOProvider struct {
@@ -139,7 +131,7 @@ func NewSSOChooser(config SSOChooserConfig) (*SSOChooser, error) {
 	if config.Providers == nil || browserflow.ValidateReturnTarget(config.FallbackLoginPath) != nil {
 		return nil, ErrInvalidChooserConfiguration
 	}
-	page, err := template.New("sso_chooser.html").Parse(chooserTemplateSource)
+	page, err := parseAuthPage("sso_chooser.html", chooserTemplateSource)
 	if err != nil {
 		return nil, ErrInvalidChooserConfiguration
 	}
@@ -158,11 +150,15 @@ type chooserButton struct {
 	DisplayName string
 	Href        string
 	LastUsed    bool
+	// Icon picks the button's logo: "github", "microsoft", "google" or
+	// "sso" (a generic key).
+	Icon string
 }
 
 // chooserPage is the template's data.
 type chooserPage struct {
 	Style      template.CSS
+	Script     template.JS
 	Brand      loginBrand
 	Target     string
 	Providers  []chooserButton
@@ -266,8 +262,9 @@ func (c *SSOChooser) newPage(r *http.Request, providers []SSOProvider, target st
 		lastUsed = cookie.Value
 	}
 	page := chooserPage{
-		Style:  template.CSS(chooserStyleSource), //nolint:gosec // compiled into this binary
-		Brand:  loginBrand{ProductName: DefaultProductName},
+		Style:  authPageStyle(),
+		Script: authPageScript(),
+		Brand:  defaultLoginBrand(),
 		Target: target,
 	}
 	if c.brand != nil {
@@ -284,6 +281,7 @@ func (c *SSOChooser) newPage(r *http.Request, providers []SSOProvider, target st
 				"target_to": {target},
 			}.Encode(),
 			LastUsed: provider.ID == lastUsed,
+			Icon:     providerIcon(provider.DisplayName),
 		})
 		if len(provider.LoginDomains) > 0 {
 			page.ShowEmail = true
@@ -298,7 +296,7 @@ func (c *SSOChooser) render(w http.ResponseWriter, _ *http.Request, page chooser
 		writeProblem(w, http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Security-Policy", chooserContentSecurityPolicy(page.Brand.StyleSource))
+	w.Header().Set("Content-Security-Policy", authPageCSP(chooserFormAction, page.Brand.StyleSource))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body.Bytes())
@@ -354,13 +352,27 @@ func emailDomain(email string) (string, bool) {
 	return domain, true
 }
 
-func chooserContentSecurityPolicy(brandStyleSource string) string {
-	styleSources := chooserStyleCSPSource
-	if brandStyleSource != "" {
-		styleSources += " " + brandStyleSource
+// chooserFormAction is the page's `form-action`. The email form posts to this
+// origin and the answer is a redirect chain that ends at the identity
+// provider; browsers check every hop against `form-action`, so 'self' alone
+// would block the last one.
+const chooserFormAction = "'self' https:"
+
+// providerIcon picks a recognisable logo from the provider's display name.
+// The name stays the button's accessible name; the logo is decoration.
+func providerIcon(displayName string) string {
+	name := strings.ToLower(displayName)
+	switch {
+	case strings.Contains(name, "github"):
+		return "github"
+	case strings.Contains(name, "microsoft"), strings.Contains(name, "entra"),
+		strings.Contains(name, "azure"), strings.Contains(name, "office 365"):
+		return "microsoft"
+	case strings.Contains(name, "google"):
+		return "google"
+	default:
+		return "sso"
 	}
-	return "default-src 'none'; base-uri 'none'; form-action 'self' https:; frame-ancestors 'none'; " +
-		"img-src 'self'; font-src 'self'; style-src " + styleSources
 }
 
 func chooserHeaders(w http.ResponseWriter) {

@@ -47,12 +47,15 @@ func TestLoginBrandFromPack_AllowlistsEveryValue(t *testing.T) {
 	}
 	css := string(brand.Style)
 	for _, want := range []string{
-		".sign-in-button{background:#ff6600;border-color:#ff6600;color:#101010}",
+		// The hue paints both schemes; onBrand is the text on it.
+		":root{--brand-light:#ff6600;--on-brand-light:#101010;--brand-dark:#ff6600;--on-brand-dark:#101010}",
 		`@font-face{font-family:"Inter";src:url("/api/v2/branding/assets/font/`,
 		";font-weight:100 900}",
 		`:root{font-family:"Inter", Arial, sans-serif}`,
-		".card-signin{border-radius:14px}",
+		":root{--radius-md:14px;--radius-lg:12px;--radius-pill:9999px}",
 		`body{background-image:url("/api/v2/branding/assets/login-art/`,
+		// The operator's artwork replaces the generated rings.
+		".auth-backdrop{display:none}",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("brand css lacks %q:\n%s", want, css)
@@ -71,7 +74,13 @@ func TestLoginBrandFromPack_AllowlistsEveryValue(t *testing.T) {
 	hostile.Assets.LoginArt = ptr(`/art.png")}body{background:url(https://evil.example/x`)
 	hostile.Typography.FontFamily = `Inter}; body{display:none}`
 	hostile.Typography.FontFaces = []v2branding.FontFace{{Family: "x", URL: "https://fonts.example/x.woff2"}}
-	hostile.Shape.RadiusMd = -5
+	hostile.Shape = v2branding.Shape{RadiusMd: -5, RadiusLg: 1e9}
+	hostile.Schemes.Light = map[string]string{
+		"primary.main":            "red;}body{display:none",
+		"background.default":      "url(https://evil.example/x)",
+		"text.secondary":          "rgb(1,2,3);}*{color:red",
+		"background.card.default": "linear-gradient(red, blue)",
+	}
 	got := loginBrandFromPack(hostile)
 	if got.LogoURL != "" || got.FaviconURL != "" {
 		t.Errorf("hostile asset paths admitted: %+v", got)
@@ -110,13 +119,13 @@ func TestFormPageRendersTheBrandUnderTheHashedCSP(t *testing.T) {
 		`alt="Acme &lt;AI&gt;"`,
 		`<p class="brand-tagline">Ship faster &amp; safer</p>`,
 		`<link rel="icon" href="/api/v2/branding/assets/favicon/`,
-		".sign-in-button{background:#ff6600",
+		"--brand-light:#ff6600;",
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("branded login page is missing %q", marker)
 		}
 	}
-	for _, forbidden := range []string{"<script", "http://", "https://", "<AI>"} {
+	for _, forbidden := range []string{"http://", "https://", "<AI>", `class="brand-mark"`} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("branded login page contains %q", forbidden)
 		}
@@ -147,7 +156,8 @@ func TestFormPageRendersTheBrandUnderTheHashedCSP(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	mount(handler).ServeHTTP(recorder, request)
 	plain := recorder.Body.String()
-	if !strings.Contains(plain, "<title>Elitea login</title>") || strings.Contains(plain, `class="brand-logo"`) || strings.Count(plain, "<style>") != 1 {
+	if !strings.Contains(plain, "<title>Elitea login</title>") || strings.Contains(plain, `class="brand-logo"`) ||
+		!strings.Contains(plain, `class="brand-mark"`) || strings.Count(plain, "<style>") != 1 {
 		t.Fatalf("unbranded page: %s", plain)
 	}
 }

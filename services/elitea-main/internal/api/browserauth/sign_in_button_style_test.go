@@ -1,7 +1,8 @@
 package browserauth
 
 // #6628: the "Sign in" button on the form login page and the "Continue"
-// button on the SSO chooser are 40px tall with 14px text.
+// button on the SSO chooser are 40px tall with 14px text. Both pages share
+// templates/auth.css.
 
 import (
 	"regexp"
@@ -22,22 +23,15 @@ func signInButtonRule(t *testing.T, css string) string {
 }
 
 func TestSignInButtonsAre40PixelsTallWith14PixelText(t *testing.T) {
-	for name, css := range map[string]string{
-		"login.css":       loginStyleSource,
-		"sso_chooser.css": chooserStyleSource,
-	} {
-		t.Run(name, func(t *testing.T) {
-			rule := signInButtonRule(t, css)
-			for _, want := range []string{"height: 40px;", "font-size: 14px;", "padding: 0 16px;"} {
-				if !strings.Contains(rule, want) {
-					t.Errorf(".sign-in-button lacks %q; rule body:\n%s", want, rule)
-				}
-			}
-			// A min-height or a vertical padding would let the button grow
-			// past 40px again.
-			if strings.Contains(rule, "min-height") {
-				t.Errorf(".sign-in-button still sets min-height; rule body:\n%s", rule)
-			}
-		})
+	rule := signInButtonRule(t, authStyleSource)
+	for _, want := range []string{"height: 40px;", "font-size: 14px;", "padding: 0 16px;"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf(".sign-in-button lacks %q; rule body:\n%s", want, rule)
+		}
+	}
+	// A min-height or a vertical padding would let the button grow past 40px
+	// again.
+	if strings.Contains(rule, "min-height") {
+		t.Errorf(".sign-in-button still sets min-height; rule body:\n%s", rule)
 	}
 }
