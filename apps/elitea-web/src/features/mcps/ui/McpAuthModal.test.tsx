@@ -147,6 +147,83 @@ describe('McpAuthModal', () => {
     expect(screen.getByRole('button', { name: 'Authorize' })).toBeEnabled();
   });
 
+  // #6689: Asana v2 / Box advertise PKCE (S256) but accept only confidential,
+  // self-registered clients and offer no automatic registration. PKCE must
+  // not hide the Client Secret field.
+  it.each([
+    ['Asana v2 (PKCE, confidential only, no registration)', ['client_secret_basic', 'client_secret_post'], undefined],
+    ['Box (PKCE, confidential only, registration requires a secret)', ['client_secret_post'], 'https://account.box.com/register'],
+  ])('%s shows Client ID and Client Secret and requires both', async (_name, authMethods, registrationEndpoint) => {
+    const user = userEvent.setup();
+    renderWithTheme(
+      <McpAuthModal
+        {...baseProps({
+          mcpAuthMetadata: {
+            authServers: ['https://app.asana.com'],
+            oauthAuthorizationServer: {
+              authorization_endpoint: 'https://app.asana.com/-/oauth_authorize',
+              token_endpoint: 'https://app.asana.com/-/oauth_token',
+              code_challenge_methods_supported: ['S256'],
+              token_endpoint_auth_methods_supported: authMethods,
+              ...(registrationEndpoint ? { registration_endpoint: registrationEndpoint } : {}),
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText(/Client ID/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Client Secret/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires a pre-registered OAuth application/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Authorize' })).toBeDisabled();
+    await user.type(screen.getByLabelText(/Client ID/i), 'asana-app');
+    expect(screen.getByRole('button', { name: 'Authorize' })).toBeDisabled();
+    await user.type(screen.getByLabelText(/Client Secret/i), 'asana-secret');
+    expect(screen.getByRole('button', { name: 'Authorize' })).toBeEnabled();
+  });
+
+  it('a PKCE public client (token auth method "none") needs no Client Secret', () => {
+    renderWithTheme(
+      <McpAuthModal
+        {...baseProps({
+          mcpAuthMetadata: {
+            authServers: ['https://as.example.com'],
+            oauthAuthorizationServer: {
+              authorization_endpoint: 'https://as.example.com/authorize',
+              token_endpoint: 'https://as.example.com/token',
+              code_challenge_methods_supported: ['S256'],
+              token_endpoint_auth_methods_supported: ['none'],
+            },
+          },
+        })}
+      />,
+    );
+    expect(screen.getByLabelText(/Client ID/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Client Secret/i)).not.toBeInTheDocument();
+  });
+
+  it('a Stripe-shaped server with automatic registration asks for no client credentials', () => {
+    renderWithTheme(
+      <McpAuthModal
+        {...baseProps({
+          mcpAuthMetadata: {
+            authServers: ['https://access.stripe.com/mcp'],
+            oauthAuthorizationServer: {
+              authorization_endpoint: 'https://access.stripe.com/mcp/oauth2/authorize',
+              token_endpoint: 'https://access.stripe.com/mcp/oauth2/token',
+              registration_endpoint: 'https://access.stripe.com/mcp/oauth2/register',
+              code_challenge_methods_supported: ['S256'],
+              token_endpoint_auth_methods_supported: ['none'],
+            },
+          },
+        })}
+      />,
+    );
+    expect(screen.queryByLabelText(/Client ID/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Client Secret/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Authorize' })).toBeEnabled();
+  });
+
   it('clicking Authorize drives the real OAuth popup flow end-to-end, then shows success and closes', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     const user = userEvent.setup();

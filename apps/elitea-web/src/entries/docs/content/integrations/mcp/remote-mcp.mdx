@@ -17,7 +17,7 @@ Remote MCP is the other direction from the [Elitea MCP server](/integrations/mcp
 In the left navigation, open **Toolkits**, then select **New**, and choose **Remote MCP**.
 </Step>
 <Step title="Enter the server URL">
-Enter the remote server's URL and save.
+Enter the remote server's streamable HTTP endpoint (usually ending in `/mcp`) and save. A same-origin redirect, such as `/mcp` to `/mcp/`, is followed; a redirect to another host is not.
 </Step>
 <Step title="Authorize, if required">
 If the server requires OAuth, Elitea opens an authorization dialog — automatically, either now or the first time an agent tries to call one of its tools. Servers that support Dynamic Client Registration need nothing from you beyond clicking **Authorize**; a server that doesn't asks for a **Client ID** and **Client Secret** first. The flow uses PKCE or OIDC depending on what the server advertises, and you can choose to remember the credentials for the session.
@@ -33,6 +33,18 @@ Once authorized, Elitea calls the remote server's `tools/list` and shows the too
 
 <Note>
 Remote MCP is a built-in Elitea type, not part of the SDK worker-capability catalogue. Both the Rust and Python workers can call a Remote MCP toolkit's tools — the Rust worker's MCP client only speaks streamable HTTP, which is the only transport a remote server can use here anyway.
+</Note>
+
+<Note>
+The deprecated HTTP+SSE transport is not supported. A URL ending in `/sse` that the server refuses (many providers have retired these endpoints) fails with a message naming the endpoint and suggesting its `/mcp` replacement; point the toolkit at that `/mcp` URL instead.
+</Note>
+
+<Note>
+If you set an `Authorization` header (for example a personal access token) on the toolkit, it is used both when you load tools and when an agent runs, even if you have also authorized the server through the dialog. Remove the header to use the OAuth authorization instead.
+</Note>
+
+<Note>
+On the Rust worker, with caching enabled, the tool list is reused for **Cache TTL** seconds (60 to 3600, default 300) before the server is asked again. Each run still opens its own connection with its own credentials; only the list of tools is reused.
 </Note>
 
 <Note>

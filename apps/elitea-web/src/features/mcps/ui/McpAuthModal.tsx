@@ -121,13 +121,19 @@ export function McpAuthModal(props: McpAuthModalProps): ReactNode {
     return isStringArray(scopes) ? scopes : [];
   }, [resourceScopes, oauthAuthorizationServer, scopes]);
 
+  // #6689: whether a client secret is needed is the server's token-endpoint
+  // auth contract (`token_endpoint_auth_methods_supported`) plus whether it
+  // offers automatic registration (`registration_endpoint`) — NOT whether it
+  // advertises PKCE. Asana v2 and Box advertise S256 yet accept only
+  // confidential, self-registered clients; deriving "public client" from PKCE
+  // hid the Client Secret field and made them impossible to configure.
   const serverMetadata = useMemo(() => {
     const metadata = oauthAuthorizationServer ?? {};
     const isActuallyOIDC = Boolean(metadata.userinfo_endpoint);
     const authMethods = metadata.token_endpoint_auth_methods_supported ?? [];
     const supportsPKCE = metadata.code_challenge_methods_supported?.includes('S256') ?? false;
-    const supportsPublicClients = authMethods.length === 0 || authMethods.includes('none') || supportsPKCE;
-    const requiresClientSecret = authMethods.length > 0 && !authMethods.includes('none') && !supportsPKCE;
+    const supportsPublicClients = authMethods.length === 0 || authMethods.includes('none');
+    const requiresClientSecret = !supportsPublicClients;
     const hasDCREndpoint = Boolean(metadata.registration_endpoint);
     const canUseDCR = hasDCREndpoint && supportsPublicClients;
 
