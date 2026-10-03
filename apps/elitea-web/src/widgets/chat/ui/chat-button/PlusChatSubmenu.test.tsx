@@ -21,6 +21,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import DropdownFooter from '@/features/chat-participants/ui/UsersParticipantDropdown/DropdownFooter';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { remToPx } from '@/shared/ui/lib/testTheme';
 
 import { PlusChatSubmenu } from './PlusChatSubmenu';
 
@@ -103,7 +104,7 @@ describe('PlusChatSubmenu header and size (#6629)', () => {
         <PlusChatSubmenu items={[]} />
       </Harness>,
     );
-    expect(screen.getByTestId('plus-submenu-list')).toHaveStyle({ height: '20.3125rem' });
+    expect(screen.getByTestId('plus-submenu-list')).toHaveStyle({ height: remToPx('20.3125rem') });
   });
 
   it('draws the search and plus glyphs at 16px', () => {
@@ -116,8 +117,8 @@ describe('PlusChatSubmenu header and size (#6629)', () => {
         />
       </Harness>,
     );
-    expect(screen.getByTestId('plus-submenu-search-icon')).toHaveStyle({ width: '1rem', height: '1rem' });
-    expect(screen.getByTestId('plus-submenu-create-icon')).toHaveStyle({ width: '1rem', height: '1rem' });
+    expect(screen.getByTestId('plus-submenu-search-icon')).toHaveStyle({ width: remToPx('1rem'), height: remToPx('1rem') });
+    expect(screen.getByTestId('plus-submenu-create-icon')).toHaveStyle({ width: remToPx('1rem'), height: remToPx('1rem') });
   });
 });
 

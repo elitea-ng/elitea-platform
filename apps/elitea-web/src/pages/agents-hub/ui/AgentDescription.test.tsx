@@ -7,7 +7,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { AgentDescription } from './AgentDescription';
 import { AgentWelcomeMessage } from './AgentWelcomeMessage';
@@ -72,14 +72,14 @@ describe('AgentDescription', () => {
     );
     const text = screen.getByTestId('agent-modal-description');
     fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
-    expect(text).toHaveStyle({ maxHeight: '10rem', overflowY: 'auto' });
+    expect(text).toHaveStyle({ maxHeight: remToPx('10rem'), overflowY: 'auto' });
     const showLess = screen.getByRole('button', { name: 'Show less' });
     // The button is a sibling of the scroll box, never inside it.
     expect(text.contains(showLess)).toBe(false);
 
     fireEvent.click(showLess);
     await screen.findByRole('button', { name: 'Show more' });
-    expect(text).not.toHaveStyle({ maxHeight: '10rem' });
+    expect(text).not.toHaveStyle({ maxHeight: remToPx('10rem') });
   });
 
   it('leaves the description unbounded on a short window, whose content box already scrolls', () => {
@@ -89,7 +89,7 @@ describe('AgentDescription', () => {
         isSmallHeight
       />,
     );
-    expect(screen.getByTestId('agent-modal-description')).not.toHaveStyle({ maxHeight: '10rem' });
+    expect(screen.getByTestId('agent-modal-description')).not.toHaveStyle({ maxHeight: remToPx('10rem') });
   });
 
   it('offers no button when the text fits', async () => {

@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Bucket } from '@/entities/bucket';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { remToPx } from '@/shared/ui/lib/testTheme';
 
 import { BucketList } from './BucketList';
 
@@ -106,7 +107,8 @@ describe('Artifacts dividers (#6687)', () => {
     const selected = getComputedStyle(selectedRow);
     // jsdom reports `transparent` as its computed value.
     expect(selected.borderBottomColor).toMatch(/^rgba\(0, 0, 0, 0\)$/);
-    expect(selected.borderBottomWidth).toBe('0.0625rem');
+    // jsdom@30 resolves rem against the root font size before reporting it.
+    expect(selected.borderBottomWidth).toBe(remToPx('0.0625rem'));
 
     // jsdom cannot compute a colour from a CSS variable, so read the rule the
     // other row's class carries instead.

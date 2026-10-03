@@ -9,7 +9,7 @@ import type { Project } from '@/entities/project';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
 import { ProjectSwitcher } from '../ui/ProjectSwitcher';
@@ -564,7 +564,7 @@ describe('ProjectSwitcher — request a project', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button', { expanded: false })).toHaveStyle({ minHeight: '3.25rem' });
+    expect(screen.getByRole('button', { expanded: false })).toHaveStyle({ minHeight: remToPx('3.25rem') });
   });
 
   it('issue 6712: fades the list edges only where projects are hidden, and updates on scroll', async () => {

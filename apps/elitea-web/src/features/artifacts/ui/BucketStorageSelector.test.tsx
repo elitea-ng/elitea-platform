@@ -1,7 +1,7 @@
 import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { BucketStorageSelector } from './BucketStorageSelector';
 
@@ -22,7 +22,7 @@ describe('BucketStorageSelector (#6638)', () => {
     const trigger = screen.getByRole('button', { name: 'Storage integration' });
     expect(screen.getByTestId('bucket-storage-caption')).toHaveTextContent('Storage:');
     expect(trigger).toHaveTextContent('Storage:Own S3');
-    expect(trigger).toHaveStyle({ minHeight: '3.25rem' });
+    expect(trigger).toHaveStyle({ minHeight: remToPx('3.25rem') });
   });
 
   it('keeps the caption with the fallback label and still opens the menu', () => {

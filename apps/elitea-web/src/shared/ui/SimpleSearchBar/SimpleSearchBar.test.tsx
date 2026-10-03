@@ -1,7 +1,7 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithTheme } from '../lib/testTheme';
+import { remToPx, renderWithTheme } from '../lib/testTheme';
 import { SimpleSearchBar } from '.';
 
 /**
@@ -262,7 +262,8 @@ describe('SimpleSearchBar — one look for every search box (#6646)', () => {
     );
     const icon = getByTestId('simple-search-bar-icon');
     expect(icon).toHaveAttribute('aria-hidden', 'true');
-    expect(icon).toHaveStyle({ width: '1rem', height: '1rem' });
+    // jsdom@30 resolves rem against the root font size before reporting it.
+    expect(icon).toHaveStyle({ width: remToPx('1rem'), height: remToPx('1rem') });
   });
 
   it('names the input with aria-label when the caller gives one', () => {

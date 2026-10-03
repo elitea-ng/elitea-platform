@@ -31,6 +31,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { remToPx } from '@/shared/ui/lib/testTheme';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -165,7 +166,7 @@ describe('PlusChatButton — submenu position and size (#6629)', () => {
     });
     await waitFor(() => expect(submenuPopper().style.transform).not.toBe(''));
     const agentsTransform = submenuPopper().style.transform;
-    expect(screen.getByTestId('plus-submenu-paper')).toHaveStyle({ width: '17.5rem' });
+    expect(screen.getByTestId('plus-submenu-paper')).toHaveStyle({ width: remToPx('17.5rem') });
 
     act(() => {
       screen.getByTestId('plus-menu-pipelines').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
