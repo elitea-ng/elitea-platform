@@ -511,10 +511,6 @@ const attachmentTimeoutRetryAfter = 15 * time.Minute
 // queued behind work that will not finish inside its wait.
 const maxQueuedAttachmentExtractions = 16
 
-// errAttachmentExtractionBusy is a full queue: a server condition, never a
-// property of the file.
-var errAttachmentExtractionBusy = errors.New("attachment extraction queue is full")
-
 type attachmentExtractionResult struct {
 	outcome    AttachmentExtraction
 	mediaType  string

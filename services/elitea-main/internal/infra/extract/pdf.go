@@ -42,10 +42,16 @@ type pdfEngine struct {
 	slots            chan struct{}
 }
 
+// pdfCompilationCache holds the compiled PDFium module for the whole process.
+// The compilation depends only on the module, not on an engine's memory
+// ceiling, so every Extractor shares it: a second Extractor (a test, or a
+// composition that builds more than one) does not compile PDFium again.
+var pdfCompilationCache = wazero.NewCompilationCache()
+
 func newPDFEngine(memoryLimitPages uint32) *pdfEngine {
 	return &pdfEngine{
 		memoryLimitPages: memoryLimitPages,
-		cache:            wazero.NewCompilationCache(),
+		cache:            pdfCompilationCache,
 		slots:            make(chan struct{}, PDFEngineConcurrency),
 	}
 }

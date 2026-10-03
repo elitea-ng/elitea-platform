@@ -247,12 +247,12 @@ func TestXLSXCellValues(t *testing.T) {
 
 func TestXLSXSheetNameIsNormalisedAndBounded(t *testing.T) {
 	t.Parallel()
-	name := "Q3‮" + strings.Repeat("long name ", 100)
+	name := "Q3\u202e" + strings.Repeat("long name ", 100)
 	doc, err := New(DefaultLimits()).Extract(context.Background(), xlsxOf(t, name, []string{"x"}, `<row r="1"><c r="A1" t="s"><v>0</v></c></row>`))
 	require.NoError(t, err)
 	require.Len(t, doc.Units, 1)
 	label := doc.Units[0].Label
-	assert.NotContains(t, label, "‮")
+	assert.NotContains(t, label, "\u202e")
 	assert.LessOrEqual(t, len([]rune(label)), 81)
 	assert.Less(t, len(label), 512, "the worker refuses a label over 512 bytes")
 }
@@ -293,9 +293,11 @@ func TestXLSXSharedStringAmplificationIsBounded(t *testing.T) {
 	assert.LessOrEqual(t, len(doc.Text), limits.MaxTextBytes)
 	assert.Greater(t, len(doc.Text), limits.MaxTextBytes/2, "the sheet is served up to the limit")
 	// The expansion is 20,000 x 32 KiB = 640 MiB. The extraction may hold
-	// the file, the parts and a few copies of the text, nothing more.
+	// the file, the parts and a few copies of the text, nothing more. The
+	// bound leaves room for -race's allocation overhead (CI measured 12.5x
+	// the limit under -race), still a fraction of the 640 MiB expansion.
 	allocated := after.TotalAlloc - before.TotalAlloc
-	assert.Less(t, allocated, uint64(12*limits.MaxTextBytes+8*len(data)),
+	assert.Less(t, allocated, uint64(16*limits.MaxTextBytes+8*len(data)),
 		"allocated %d bytes for a %d-byte text limit", allocated, limits.MaxTextBytes)
 }
 
