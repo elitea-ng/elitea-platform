@@ -50,8 +50,8 @@ export function AdminNavFooter({ collapsed }: AdminNavFooterProps): ReactNode {
         * Hidden while collapsed, like every other label in this nav.
         */}
       {!collapsed && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', paddingBottom: '0.5rem' }}>
-          <ThemeModeToggle />
+        <Box sx={{ display: 'flex', minWidth: 0, paddingBottom: '0.5rem' }}>
+          <ThemeModeToggle fullWidth />
         </Box>
       )}
       <Box
