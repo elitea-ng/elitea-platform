@@ -36,6 +36,7 @@ import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createGithubToolkit, del
 import type { GithubToolkitFixture } from '../../fixtures/api';
 import { createConfiguration, deleteConfiguration } from '../../fixtures/configurations';
 import { BASE_URL } from '../../../playwright.config';
+import { skipOnLiveTarget } from '../../fixtures/deployment';
 
 const RUN_ID = String(Date.now()).slice(-6);
 const fixtures: GithubToolkitFixture[] = [];
@@ -275,6 +276,7 @@ test('ELITEA-2695/2696: the search filters across groups by either spelling, and
 /* onetest: ELITEA-2694 — Agent Toolkit Attachment Shows Correct (Chosen) Tool. PARTIAL, same reason and same evidence as ELITEA-2689. */
 /* onetest: ELITEA-2697 — Chat Toolkit Tool Selection with Grouping. PARTIAL, same reason: the chat surface reads the same saved array, which this asserts; the prompt-driven halves of the case need a model turn. */
 test('ELITEA-2692/2689/2694/2697: a selection made in the grouped UI saves as the same flat array every consumer already reads', async ({ page }) => {
+  skipOnLiveTarget('saving an Aha toolkit needs the stand-in Aha host, which the deployment egress allowlist refuses');
   test.setTimeout(180_000);
   const served = await readServedToolGroups(page.request, 'aha');
   const toolkitId = await makeAhaToolkit(page, 'persist');
@@ -322,6 +324,7 @@ test('ELITEA-2692/2689/2694/2697: a selection made in the grouped UI saves as th
 /* onetest: ELITEA-2687 — MCP Access Toggle Replaces Checkbox with Correct Default State. */
 /* onetest: ELITEA-2693 — MCP Toggle Preserves Existing Toolkit State. PARTIAL, ported by use case: the case's last two steps connect an MCP client and call a tool, which needs a running MCP client this stack does not have. The state half — the stored setting is what the toggle shows, both directions, across a save and a reload — is asserted in full. */
 test('ELITEA-2687/2693: the MCP control is a toggle at the END of the Tools section, off by default and persisted both ways', async ({ page }) => {
+  skipOnLiveTarget('saving an Aha toolkit needs the stand-in Aha host, which the deployment egress allowlist refuses');
   test.setTimeout(180_000);
   const toolkitId = await makeAhaToolkit(page, 'mcp');
   await openToolkitEditor(page, toolkitId);

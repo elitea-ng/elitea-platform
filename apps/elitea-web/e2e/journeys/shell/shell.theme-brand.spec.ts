@@ -8,6 +8,7 @@ import { test, expect } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import { skipOnLiveTarget } from '../../fixtures/deployment';
 
 /** `shared/brand/constants.ts:27` — the attribute MUI's colour scheme selector resolves to. */
 const SCHEME_ATTRIBUTE = 'data-el-scheme';
@@ -95,6 +96,7 @@ test('J29: theme switch persists across reload', async ({ page }) => {
 test('J30: brand pack loads logo, primary colour, and product name without rebuild', async ({
   page,
 }) => {
+  skipOnLiveTarget('the deployment serves its own brand pack, and this case needs the stack that serves none');
   // JRNY-030 end to end. Channel C is wired on BOTH halves now (issue #136 C):
   // `index.html` loads `/api/v2/branding/bootstrap.js` with a blocking script
   // tag, and `app/providers/AppProviders.tsx` feeds the validated result into
@@ -298,6 +300,7 @@ test('J30 (assets): brand pack swaps the logo <img>, the favicon and injects @fo
 test('J30 (default): with no served pack the compiled logo, favicon and font stack stay in place', async ({
   page,
 }) => {
+  skipOnLiveTarget('the deployment serves its own brand pack, and this case needs the stack that serves none');
   // The other half of JRNY-030's acceptance — "the default pack reproduces
   // the baseline appearance". This stack serves no pack (asserted in J30),
   // so nothing WP3 added may fire: the mark is the compiled SVG, the favicon

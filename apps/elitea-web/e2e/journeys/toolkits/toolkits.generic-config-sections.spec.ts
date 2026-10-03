@@ -27,6 +27,7 @@ import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent } from '../../fixtures/deployment';
 
 const RUN_ID = String(Date.now()).slice(-6);
 
@@ -233,6 +234,7 @@ test('ELITEA-2820/2822: the Tools accordion header opens and closes on click, an
 test('ELITEA-2818: the Indexes tab shows the served empty state and an Add index action', async ({ page }) => {
   /* onetest: ELITEA-2818 — no indexes: the empty-state message and the create action are both present */
   test.setTimeout(120_000);
+  await skipWhenIndexTypesAbsent(page.request);
   const id = await createConfluenceToolkit(page.request, `${AUTOTEST_PREFIX}tkidx_${RUN_ID}`, {
     selected_tools: ['index_data'],
   });

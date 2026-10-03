@@ -44,7 +44,12 @@ import {
   DEFAULT_PROJECT_ID,
   gotoAppRoute,
 } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent } from '../../fixtures/deployment';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
+import {
+  refusedForMissingCredential,
+  schemaFilledSettings,
+} from '../../../scripts/lib/e2e-live-assumptions.mjs';
 
 /*
  * The shared half of the platform-flag lock, for the reason
@@ -75,6 +80,12 @@ interface Representative {
   readonly fillableRequired: readonly string[];
   /** Required settings only a saved credential can satisfy. */
   readonly credentialRequired: readonly string[];
+  /**
+   * The category's other credential-gated types, in the same deterministic
+   * order — tried over the API, in turn, when the server refuses to create the
+   * chosen one without a real credential (see J17C.1).
+   */
+  readonly alternates: readonly Representative[];
 }
 
 /**
@@ -176,6 +187,7 @@ function chooseRepresentatives(catalogue: Record<string, ServedType>): readonly 
       label,
       fillableRequired: required.filter((key) => isFillable(properties[key])),
       credentialRequired: required.filter((key) => isCredentialProperty(properties[key])),
+      alternates: [],
     };
     const bucket = byCategory.get(candidate.category) ?? [];
     bucket.push(candidate);
@@ -186,7 +198,8 @@ function chooseRepresentatives(catalogue: Record<string, ServedType>): readonly 
   for (const category of [...byCategory.keys()].sort()) {
     const bucket = byCategory.get(category) as Representative[];
     const credentialFree = bucket.filter((entry) => entry.credentialRequired.length === 0);
-    chosen.push((credentialFree[0] ?? bucket[0]) as Representative);
+    const first = (credentialFree[0] ?? bucket[0]) as Representative;
+    chosen.push({ ...first, alternates: bucket.filter((entry) => entry !== first) });
   }
   return chosen;
 }
@@ -286,6 +299,8 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
     const representatives = chooseRepresentatives(catalogue);
     const uiSaved: string[] = [];
     const apiSaved: string[] = [];
+    /** Categories every one of whose types the server refuses without a real credential. */
+    const credentialOnly: string[] = [];
 
     for (const representative of representatives) {
       const name = toolkitName(representative.type);
@@ -326,13 +341,44 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
         // through the UI. Which types land here is data, not a decision in this
         // file — a category that gains a credential-free type moves to the UI
         // path on the next run.
-        const created = await page.request.post(
-          `${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`,
-          { data: { name, type: representative.type, settings: { selected_tools: [] } } },
-        );
-        expect(created.status(), await created.text()).toBe(201);
-        createdIds.push(((await created.json()) as { id: string }).id);
-        apiSaved.push(representative.type);
+        //
+        // The body carries the type's fillable required settings, filled from
+        // its served schema exactly as the form is typed above: a body with
+        // `selected_tools` alone was refused by every type the server checks
+        // field by field (`settings.repository is required for github
+        // toolkit`, measured on a deployment whose code category fell to
+        // github).
+        //
+        // A type the server will not create WITHOUT a real credential (github
+        // demands `github_configuration`) cannot be saved from an empty project
+        // by any client, so the category's next credential-gated type is tried
+        // instead, in the same deterministic order. Only a refusal that names
+        // one of the type's own credential keys moves on; anything else fails
+        // here. A category in which EVERY type demands a real credential is
+        // recorded as such and asserted below, not passed silently.
+        let savedType: string | undefined;
+        const credentialRefusals: string[] = [];
+        for (const candidate of [representative, ...representative.alternates]) {
+          if (candidate.credentialRequired.length === 0) continue;
+          const created = await page.request.post(
+            `${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`,
+            { data: { name, type: candidate.type, settings: schemaFilledSettings(candidate.fillableRequired) } },
+          );
+          const body = await created.text();
+          if (refusedForMissingCredential(created.status(), body, candidate.credentialRequired)) {
+            credentialRefusals.push(`${candidate.type}: ${body.slice(0, 200)}`);
+            continue;
+          }
+          expect(created.status(), `creating a ${candidate.type} over the API: ${body}`).toBe(201);
+          createdIds.push((JSON.parse(body) as { id: string }).id);
+          savedType = candidate.type;
+          break;
+        }
+        if (savedType === undefined) {
+          credentialOnly.push(`${representative.category} (${credentialRefusals.join('; ')})`);
+          continue;
+        }
+        apiSaved.push(savedType);
       } else {
         const [response] = await Promise.all([
           page.waitForResponse(
@@ -380,7 +426,14 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
      * assumed. Without this the whole test would go green against a catalogue
      * that served nothing, in about a second, and read as a pass.
      */
-    expect(uiSaved.length + apiSaved.length).toBe(representatives.length);
+    expect(uiSaved.length + apiSaved.length + credentialOnly.length).toBe(representatives.length);
+    // A credential-only category is a fact about the catalogue, but it must
+    // stay the exception: if most categories land here, the create path is
+    // what broke, and the refusals listed say how.
+    expect(
+      credentialOnly.length,
+      `categories no type of which could be created without a credential: ${credentialOnly.join(' | ')}`,
+    ).toBeLessThanOrEqual(Math.floor(representatives.length / 4));
     expect(
       representatives.length,
       `only ${representatives.length} categories were exercised: `
@@ -398,6 +451,7 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
   });
 
   test('J17C.2: an index-capable type opens the real Indexes panel', async ({ page }) => {
+    await skipWhenIndexTypesAbsent(page.request);
     // Budget, not behaviour: a catalogue read, a create POST, a page load and
     // then four waits of 20 s each (the test pane, the Indexes tab, the two
     // panel controls) plus the 20 s `waitForResponse` and `checkA11y` — the

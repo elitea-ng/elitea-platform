@@ -25,10 +25,11 @@ import {
   PUBLISHABLE_TAGS,
   readAgentList,
   readApplicationVersions,
-  readProjectModels,
+  readCatalogueModels,
   readVersion,
   resolveCatalogueProjectId,
 } from '../../fixtures/api';
+import { skipWhenApplicationSkillsAbsent, skipWhenDeploymentLacks } from '../../fixtures/deployment';
 
 import type { APIRequestContext, Page } from '@playwright/test';
 
@@ -407,6 +408,13 @@ test.describe('J14b: the agent publish plane', () => {
     const agentName = uniqueName('skilled');
     const skillName = uniqueName('skill');
     const agent = await createAgent(request, agentName);
+    // A deployment with ELITEA_APPLICATION_SKILLS_ENABLED off has no SKILLS
+    // section to attach into — skipped there (the agent removed first), never
+    // on the rig.
+    await skipWhenApplicationSkillsAbsent(request, agent.versionId).catch(async (skipped: unknown) => {
+      await deleteAgent(request, agent.id);
+      throw skipped;
+    });
 
     const created = await request.post(`${API_BASE}/elitea_core/skills/prompt_lib/${DEFAULT_PROJECT_ID}`, {
       data: {
@@ -595,7 +603,7 @@ test.describe('the publish rules the wizard rests on', () => {
     // asserting on a literal would pass on a rig where the two disagree, which
     // is the state the guard exists to refuse.
     const catalogueProjectId = await resolveCatalogueProjectId(request);
-    const models = await readProjectModels(request, catalogueProjectId);
+    const models = await readCatalogueModels(request, catalogueProjectId);
     expect(models.length, 'the catalogue project serves no model').toBeGreaterThan(0);
     const model = models[0];
 
@@ -642,6 +650,19 @@ test.describe('the publish rules the wizard rests on', () => {
  * and driving the wizard again would assert the dialog instead.
  */
 test.describe('publishing inside the catalogue project', () => {
+  // The premise of every case below is that the personas' project IS the
+  // catalogue. On the rig it is; on a deployed instance the personas work in a
+  // project of their own, where an "in-place" publish is really the
+  // cross-project path the immutability file owns — so the cases are skipped
+  // there. On the rig a mismatch is not skipped: the first case asserts it.
+  test.beforeEach(async ({ request }) => {
+    const catalogueProjectId = await resolveCatalogueProjectId(request);
+    skipWhenDeploymentLacks(
+      catalogueProjectId !== DEFAULT_PROJECT_ID,
+      `the personas' project (${DEFAULT_PROJECT_ID}) is not the catalogue (${catalogueProjectId})`,
+    );
+  });
+
   /** Withdraw whatever is live, then delete — a live version refuses the delete. */
   async function withdrawAndDeleteInPlace(
     request: APIRequestContext,
