@@ -13,19 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 
-const participantsState = vi.hoisted(() => ({
-  lastParams: undefined as unknown,
-  result: { participants: [] as unknown[], total: 0, isLoading: false, isFetching: false, isError: false, error: undefined },
-}));
-
-vi.mock('@/entities/participant', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/entities/participant')>()),
-  useParticipants: (params: unknown) => {
-    participantsState.lastParams = params;
-    return participantsState.result;
-  },
-}));
-
+import { participantsState } from './__mocks__/HashParticipantPopup.mock';
 import { HashParticipantPopup, toHashSelection } from './HashParticipantPopup';
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);

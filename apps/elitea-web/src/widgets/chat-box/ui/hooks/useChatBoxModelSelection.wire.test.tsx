@@ -36,7 +36,7 @@ describe('model selection with the Main catalogue wire shape', () => {
     const { result } = renderHook(() => {
       const llm = useChatModelSettings({ activeConversation: FRESH_CONVERSATION, projectId: '9', userId: '5' });
       return useChatBoxModelSelection({
-        projectId: '9', selectedModelName: 'E2E-MOCK-MODEL', setSelectedModel: vi.fn(), llm,
+        projectId: '9', selectedModel: { name: 'E2E-MOCK-MODEL' }, setSelectedModel: vi.fn(), llm,
       });
     }, { wrapper });
 
@@ -49,7 +49,7 @@ describe('model selection with the Main catalogue wire shape', () => {
     })));
 
     const { result } = renderHook(() => useChatBoxModelSelection({
-      projectId: '9', selectedModelName: 'E2E-MOCK-MODEL', setSelectedModel: vi.fn(),
+      projectId: '9', selectedModel: { name: 'E2E-MOCK-MODEL' }, setSelectedModel: vi.fn(),
       llm: { settings: { model_name: 'E2E-MOCK-MODEL', model_project_id: 9 } },
     }), { wrapper });
 
@@ -76,7 +76,7 @@ describe('model selection with the Main catalogue wire shape', () => {
     const { result, rerender } = renderHook(({ conversation }) => {
       const llm = useChatModelSettings({ activeConversation: conversation, projectId: '9', userId: '5' });
       return useChatBoxModelSelection({
-        projectId: '9', selectedModelName: 'default-model', setSelectedModel: vi.fn(), llm,
+        projectId: '9', selectedModel: { name: 'default-model' }, setSelectedModel: vi.fn(), llm,
       });
     }, { wrapper, initialProps: { conversation: activeConversation } });
     await waitFor(() => expect(result.current.selectedLlmModel?.name).toBe('eu.anthropic.claude-haiku'));

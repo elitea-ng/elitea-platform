@@ -10,9 +10,8 @@ import { toLlmModel, type LLMModel } from '@/widgets/llm-model-selector';
 
 export interface UseChatBoxModelSelectionParams {
   readonly projectId: string | number | undefined;
-  readonly selectedModelName: string | undefined;
-  /** The project of the saved-or-default model; it identifies the implied default when no model is configured. */
-  readonly selectedModelProjectId?: string | number | undefined;
+  /** The saved-or-default model. Its project identifies the implied default when no model is configured (UI-PD-2). */
+  readonly selectedModel: { readonly name?: string | undefined; readonly projectId?: string | number | undefined } | null | undefined;
   readonly llm?: { readonly settings?: Readonly<Record<string, unknown>>; readonly onSetSettings?: (settings: Readonly<Record<string, unknown>>) => void } | undefined;
   readonly setSelectedModel: (model: { readonly name?: string; readonly projectId?: string; readonly supportsReasoning?: boolean } | null) => void;
 }
@@ -32,8 +31,7 @@ function matchesModelProject(projectId: string | number, configuredProject: unkn
 
 export function useChatBoxModelSelection({
   projectId,
-  selectedModelName,
-  selectedModelProjectId,
+  selectedModel,
   setSelectedModel,
   llm,
 }: UseChatBoxModelSelectionParams): UseChatBoxModelSelectionResult {
@@ -44,6 +42,8 @@ export function useChatBoxModelSelection({
   const modelsList = useMemo(() => (modelsData?.items ?? []).map(toLlmModel), [modelsData?.items]);
   const configuredName = llm?.settings?.['model_name'];
   const configuredProject = llm?.settings?.['model_project_id'];
+  const selectedModelName = selectedModel?.name;
+  const selectedModelProjectId = selectedModel?.projectId;
   const selectedLlmModel = useMemo(() => {
     const hasConfiguredName = typeof configuredName === 'string' && configuredName !== '';
     const name = hasConfiguredName ? configuredName : selectedModelName;
