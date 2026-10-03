@@ -336,6 +336,53 @@ func TestNormalizeRemovesHiddenAndControlCharacters(t *testing.T) {
 	assert.Equal(t, "ab\nc\nde"+"fghi\tj\uFFFD", normalize(raw))
 }
 
+// onePagePDF is the hand-built PDF the browser journey attaches
+// (apps/elitea-web/e2e/streaming/chat.attachment-pdf.spec.ts, onePagePdf):
+// one page, Helvetica, a correct cross-reference table. Extracting the same
+// shape here keeps the journey's fixture honest.
+func onePagePDF(lines []string) []byte {
+	escape := strings.NewReplacer(`\`, `\\`, `(`, `\(`, `)`, `\)`)
+	stream := "BT\n/F1 12 Tf\n72 720 Td\n16 TL\n"
+	for _, line := range lines {
+		stream += "(" + escape.Replace(line) + ") Tj T*\n"
+	}
+	stream += "ET"
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		"<< /Length " + strconv.Itoa(len(stream)) + " >>\nstream\n" + stream + "\nendstream",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	body := "%PDF-1.4\n"
+	offsets := make([]int, 0, len(objects))
+	for index, object := range objects {
+		offsets = append(offsets, len(body))
+		body += strconv.Itoa(index+1) + " 0 obj\n" + object + "\nendobj\n"
+	}
+	xref := len(body)
+	body += "xref\n0 " + strconv.Itoa(len(objects)+1) + "\n0000000000 65535 f \n"
+	for _, offset := range offsets {
+		body += strings.Repeat("0", 10-len(strconv.Itoa(offset))) + strconv.Itoa(offset) + " 00000 n \n"
+	}
+	body += "trailer\n<< /Size " + strconv.Itoa(len(objects)+1) + " /Root 1 0 R >>\nstartxref\n" +
+		strconv.Itoa(xref) + "\n%%EOF\n"
+	return []byte(body)
+}
+
+func TestExtractTheJourneysHandBuiltPDF(t *testing.T) {
+	t.Parallel()
+	doc, err := New(DefaultLimits()).Extract(context.Background(), onePagePDF([]string{
+		"Quarterly report for the e2e attachment journey.",
+		"The secret word is PDFTOKEN123 (with parentheses).",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, FormatPDF, doc.Format)
+	assert.Equal(t, 1, doc.UnitCount)
+	assert.Contains(t, doc.Text, "PDFTOKEN123")
+	assert.Contains(t, doc.Text, "(with parentheses)")
+}
+
 func TestExtractUnitLimitIsPartialNotSilent(t *testing.T) {
 	t.Parallel()
 	limits := DefaultLimits()
