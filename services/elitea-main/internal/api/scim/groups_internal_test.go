@@ -620,6 +620,20 @@ func TestPathlessMembersAddAndReplaceAreReadWithTheirVerb(t *testing.T) {
 	require.Equal(t, [][]int{{43}}, directory.groups.replaced)
 }
 
+// A path-less REMOVE used to be read with the add/replace logic, so removing
+// the externalId SET it. It is refused, like the users one, and applies nothing.
+func TestPathlessGroupRemoveIsRefusedAndAppliesNothing(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPatch, "/Groups/7", `{"Operations":[
+		{"op":"Add","path":"members","value":[{"value":"43"}]},
+		{"op":"Remove","value":{"externalId":"grp-9","displayName":"Renamed"}}]}`)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, "noTarget", decodeBody(t, recorder)["scimType"])
+	require.Empty(t, directory.groups.externalIDs)
+	require.Empty(t, directory.groups.applied)
+}
+
 func TestEntraMemberAddThenBracketedRemoveInOneRequest(t *testing.T) {
 	directory := newRecordingDirectory()
 	recorder := serve(t, directory, http.MethodPatch, "/Groups/7", `{"Operations":[

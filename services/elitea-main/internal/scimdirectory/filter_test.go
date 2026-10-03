@@ -178,3 +178,26 @@ func TestUserNameNormalisationMatchesTheFilter(t *testing.T) {
 		t.Fatalf("NormalizeUserName did not fold the address")
 	}
 }
+
+// A conjunction is bounded: each term is one SQL predicate and one bind
+// parameter, and a machine credential must not be able to ask for thousands.
+func TestFilterTermsAndLengthAreBounded(t *testing.T) {
+	term := `userName eq "a@corp.com"`
+	ten := strings.TrimSuffix(strings.Repeat(term+" and ", 10), " and ")
+	if _, err := ParseFilter(ten); err != nil {
+		t.Fatalf("ten comparisons were refused: %v", err)
+	}
+	var unsupported UnsupportedFilterError
+	if _, err := ParseFilter(ten + " and " + term); !errors.As(err, &unsupported) ||
+		!strings.Contains(unsupported.Reason, "at most 10") {
+		t.Fatalf("eleven comparisons: err = %v, want an UnsupportedFilterError naming the bound", err)
+	}
+	long := `displayName eq "` + strings.Repeat("x", maxFilterLength) + `"`
+	if _, err := ParseFilter(long); !errors.As(err, &unsupported) ||
+		!strings.Contains(unsupported.Reason, "longer than") {
+		t.Fatalf("an oversized filter: err = %v, want an UnsupportedFilterError naming the length", err)
+	}
+	if len(unsupported.Expression) > 128 {
+		t.Fatalf("the refusal echoes %d bytes of the oversized filter", len(unsupported.Expression))
+	}
+}

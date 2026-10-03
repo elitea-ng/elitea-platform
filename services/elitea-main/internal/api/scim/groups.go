@@ -279,8 +279,8 @@ func (h *Handler) PatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	operations, problem := readGroupPatch(request.Operations)
-	if problem != "" {
-		writeError(w, http.StatusNotImplemented, "invalidPath", problem)
+	if problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
 		return
 	}
 
@@ -380,7 +380,26 @@ type groupPatch struct {
 // NOTHING is applied until every operation has been understood. A request whose
 // second operation is unsupported must not leave the first one applied: the
 // client is told the whole PATCH failed, and it will resend the whole PATCH.
-func readGroupPatch(operations []patchOperation) ([]groupPatch, string) {
+//
+// A path-less REMOVE is refused with 400 noTarget, as it is for users (RFC 7644
+// §3.5.2.2: "If "path" is unspecified, the operation fails with ... noTarget").
+// Reading its object with the add/replace logic used to SET the externalId or
+// displayName a client had asked to remove.
+func readGroupPatch(operations []patchOperation) ([]groupPatch, *patchProblem) {
+	for _, operation := range operations {
+		if strings.TrimSpace(operation.Path) == "" &&
+			strings.EqualFold(strings.TrimSpace(operation.Op), "remove") {
+			return nil, &patchProblem{http.StatusBadRequest, "noTarget", "a remove operation needs a path"}
+		}
+	}
+	parsed, problem := readGroupPatchOperations(operations)
+	if problem != "" {
+		return nil, &patchProblem{http.StatusNotImplemented, "invalidPath", problem}
+	}
+	return parsed, nil
+}
+
+func readGroupPatchOperations(operations []patchOperation) ([]groupPatch, string) {
 	parsed := make([]groupPatch, 0, len(operations))
 	for _, operation := range operations {
 		path := strings.TrimSpace(operation.Path)

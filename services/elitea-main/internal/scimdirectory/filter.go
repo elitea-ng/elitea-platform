@@ -113,6 +113,15 @@ func ParseGroupFilter(expression string) (Filter, error) {
 	return parseFilter(expression, groupAttributes)
 }
 
+// maxFilterLength and maxFilterTerms bound one expression. A provisioning client
+// sends one or two comparisons; the bounds exist so an authenticated machine
+// credential cannot ask for an arbitrarily long conjunction, which becomes one
+// SQL predicate (and one bind parameter) per term.
+const (
+	maxFilterLength = 2048
+	maxFilterTerms  = 10
+)
+
 const compoundReason = "this directory answers comparisons joined by `and`; " +
 	"grouping and the or/not operators (and/or/not beyond a plain `and`) are not implemented"
 
@@ -124,6 +133,13 @@ func parseFilter(expression string, columns map[string]string) (Filter, error) {
 
 	unsupported := func(reason string) (Filter, error) {
 		return Filter{}, UnsupportedFilterError{Expression: expression, Reason: reason}
+	}
+	if len(trimmed) > maxFilterLength {
+		// The expression is NOT echoed back: it is the oversized thing.
+		return Filter{}, UnsupportedFilterError{
+			Expression: trimmed[:64] + "…",
+			Reason:     "the filter is longer than " + strconv.Itoa(maxFilterLength) + " characters",
+		}
 	}
 
 	tokens, err := tokenizeFilter(trimmed)
@@ -146,6 +162,10 @@ func parseFilter(expression string, columns map[string]string) (Filter, error) {
 				return unsupported(compoundReason)
 			case "and":
 				groups = append(groups, current)
+				if len(groups) >= maxFilterTerms {
+					return unsupported("this directory answers at most " +
+						strconv.Itoa(maxFilterTerms) + " comparisons joined by `and`")
+				}
 				current = []filterToken{}
 				continue
 			}
