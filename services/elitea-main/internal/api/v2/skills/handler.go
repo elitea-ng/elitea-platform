@@ -184,6 +184,14 @@ const SkillEntityTypeAgent = "agent"
 // the menu. Without the same cap on the write side the counter can show 6/5.
 const MaxSkillsPerEntityVersion = 5
 
+// SkillInstructionsMaxLength is the one ceiling, in characters (runes), on a
+// skill version's instructions. elitea-web's editor already allows 50 000
+// (SKILL_INSTRUCTIONS_MAX_LENGTH in features/skills/lib/skillValidation.ts),
+// and issue #6744 asked to lift legacy's 5 000. The MCP skill tools and the
+// skill draft generator held 5 000 each, so a skill saved in the editor could
+// not be read back or edited through them. They all use this constant now.
+const SkillInstructionsMaxLength = 50000
+
 // SkillRelation is one row of entity_skill_mapping, as the relation form of
 // PATCH /skill/{mode}/{projectID}/{skillID} names it.
 //
