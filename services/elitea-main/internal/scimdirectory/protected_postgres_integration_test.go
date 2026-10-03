@@ -113,7 +113,6 @@ func TestPlatformPrincipalsAndReservedIdentitiesAreRefused(t *testing.T) {
 	for _, row := range []struct{ email, name string }{
 		{"system@centry.user", "system"},
 		{"system_user_5@centry.user", "Project 5"},
-		{"svc@corp.com", ":system:project:5:"},
 	} {
 		id := seedAccount(t, pool, row.email, row.name)
 		_, err := store.SetActive(ctx, id, false)
@@ -122,6 +121,14 @@ func TestPlatformPrincipalsAndReservedIdentitiesAreRefused(t *testing.T) {
 		_, err = store.ApplyUserChanges(ctx, id, UserChanges{UserName: &renamed})
 		require.ErrorIs(t, err, ErrProtected, row.email)
 	}
+
+	// N4: a platform account is decided by ADDRESS only. A person who named
+	// themselves ":system:..." on a social sign-in is still manageable, and so
+	// still deprovisionable.
+	selfNamed := seedAccount(t, pool, "mallory@corp.com", ":system:project:5:")
+	suspended, err := store.SetActive(ctx, selfNamed, false)
+	require.NoError(t, err)
+	require.False(t, suspended.Active)
 
 	carol := seedAccount(t, pool, "carol@corp.com", "Carol")
 	for _, address := range []string{"system_user_7@centry.user", "Carol@CENTRY.USER"} {
@@ -133,7 +140,7 @@ func TestPlatformPrincipalsAndReservedIdentitiesAreRefused(t *testing.T) {
 		require.ErrorIs(t, err, ErrProtected, address)
 	}
 	systemName := ":system:project:7:"
-	_, err := store.ApplyUserChanges(ctx, carol, UserChanges{DisplayName: &systemName})
+	_, err = store.ApplyUserChanges(ctx, carol, UserChanges{DisplayName: &systemName})
 	require.ErrorIs(t, err, ErrProtected)
 
 	email, name, _ := storedAccount(t, pool, carol)

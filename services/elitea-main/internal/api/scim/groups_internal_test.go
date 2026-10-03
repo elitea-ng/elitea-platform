@@ -227,6 +227,9 @@ func (d *recordingDirectory) ResolveMember(_ context.Context, value string) (int
 		return 42, nil
 	case "43":
 		return 43, nil
+	case "system_user_5@centry.user":
+		// The store returns a platform principal's id WITH the refusal.
+		return 77, &scimdirectory.ProtectedError{Reason: "the member is a platform principal"}
 	case "ambiguous":
 		return 0, scimdirectory.AmbiguousMemberError{Value: value}
 	default:
@@ -618,6 +621,22 @@ func TestPathlessMembersAddAndReplaceAreReadWithTheirVerb(t *testing.T) {
 		`{"Operations":[{"op":"Replace","value":{"members":[{"value":"43"}]}}]}`)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, [][]int{{43}}, directory.groups.replaced)
+}
+
+// N3: a group push may not GRANT a bound project role to a platform principal
+// (system_user_<n>@centry.user, system@centry.user), but may remove one.
+func TestAGroupCannotGrantToAPlatformPrincipalButMayRemoveIt(t *testing.T) {
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPatch, "/Groups/7",
+		`{"Operations":[{"op":"Add","path":"members","value":[{"value":"system_user_5@centry.user"}]}]}`)
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Equal(t, "mutability", decodeBody(t, recorder)["scimType"])
+	require.Empty(t, directory.groups.applied)
+
+	recorder = serve(t, directory, http.MethodPatch, "/Groups/7",
+		`{"Operations":[{"op":"Remove","path":"members","value":[{"value":"system_user_5@centry.user"}]}]}`)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Len(t, directory.groups.applied, 1)
 }
 
 // A path-less REMOVE used to be read with the add/replace logic, so removing

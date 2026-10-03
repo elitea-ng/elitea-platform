@@ -31,7 +31,9 @@ package scim
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
@@ -296,6 +298,9 @@ func (p *userPatch) setString(
 	if required && text == "" {
 		return &patchProblem{400, "invalidValue", "the " + name + " attribute needs a value"}
 	}
+	if problem := nameTooLong(name, text); problem != nil {
+		return problem
+	}
 	set(text)
 	return nil
 }
@@ -442,6 +447,26 @@ func coerceBool(raw json.RawMessage) (value, ok bool) {
 		return false, true
 	}
 	return false, false
+}
+
+// maxNameLength caps displayName and every `name` sub-attribute, in
+// characters. A person's name fits with room to spare; the cap keeps a machine
+// credential from storing (and every listing from returning) an arbitrary
+// string, and is the same on PATCH, POST and PUT.
+const maxNameLength = 256
+
+// nameTooLong refuses a display name or name part over maxNameLength. Other
+// attributes are not capped here.
+func nameTooLong(attribute, value string) *patchProblem {
+	lowered := strings.ToLower(attribute)
+	if lowered != "displayname" && !strings.HasPrefix(lowered, "name.") {
+		return nil
+	}
+	if utf8.RuneCountInString(value) <= maxNameLength {
+		return nil
+	}
+	return &patchProblem{400, "invalidValue",
+		"the " + attribute + " attribute is longer than " + strconv.Itoa(maxNameLength) + " characters"}
 }
 
 // isJSONNull reports an absent value or a JSON null.

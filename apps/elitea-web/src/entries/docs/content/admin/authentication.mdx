@@ -23,6 +23,9 @@ Authentication lives under **Configuration › Authentication** in the admin con
       </Tab>
     </Tabs>
   </Step>
+  <Step title="Decide whether it may sign in SCIM-provisioned users">
+    **Users provisioned by SCIM may sign in through this provider** is off by default. Turn it on only for the provider paired with your SCIM client (for example, Entra ID's sign-in app when Entra also provisions users). While it is off, a first sign-in through this provider cannot take over an account that SCIM created; the sign-in is refused as a conflict. A provider configured through environment variables instead of this screen uses `OIDC_ADOPT_SCIM_USERS=true` for the same setting.
+  </Step>
   <Step title="Enable it for logins">
     Turning a provider on retires any other provider of the same protocol — only one live OIDC and one live SAML definition can exist at a time, because each protocol is served on one route.
   </Step>
@@ -55,4 +58,29 @@ What the admin console does provide is the group-to-role mapping, beneath the id
 
 <Note>
 A SCIM group with no binding is refused by name; it never creates a project on its own, and it never guesses a role.
+</Note>
+
+## What SCIM may and may not change
+
+SCIM manages ordinary accounts: it creates them, renames them, changes their display name and name parts, and deactivates them. A SCIM `DELETE` deactivates (suspends) the account instead of deleting it, so the person's work stays attached if they return.
+
+Some accounts are off limits to SCIM. Any write to them is refused with `403` (`scimType: mutability`), the reason is included in the response, and the refused attempt is recorded in the **Audit Trail**:
+
+- **Accounts with an administration role** (any role on the admin console's Users page). SCIM cannot rename, suspend or deprovision them, including people who became administrators after SCIM created their account. This stops a SCIM credential from taking over or locking out the people who administer the platform.
+- **Platform accounts** — addresses in the `@centry.user` domain, such as `system@centry.user` and the per-project `system_user_<n>@centry.user`. SCIM also cannot give any account an address in that domain, and a SCIM group cannot grant a project role to a platform account.
+
+<Steps>
+  <Step title="Deprovision an administrator">
+    When your identity provider tries to deprovision someone who holds an administration role, the request is refused with "SCIM deprovisioning refused: account holds an administration role — remove the role, then let the IdP retry". Until then, the person's sessions and access tokens keep working.
+  </Step>
+  <Step title="Remove the role">
+    On the admin console's **Users** page, remove the person's administration role. You can also suspend them from that page right away.
+  </Step>
+  <Step title="Let the identity provider retry">
+    The next provisioning cycle repeats the request, and this time it succeeds.
+  </Step>
+</Steps>
+
+<Note>
+SCIM stores one address per account, and that address is the SCIM `userName`. A change to the work email alone is accepted but does not change the account's address. Only a `userName` change does.
 </Note>

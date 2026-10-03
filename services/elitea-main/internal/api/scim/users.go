@@ -37,6 +37,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -94,6 +95,25 @@ func (b userBody) resolveUserName() string {
 		}
 	}
 	return ""
+}
+
+// nameProblem applies the maxNameLength cap PATCH applies, so POST and PUT
+// cannot store what PATCH refuses.
+func (b userBody) nameProblem() *patchProblem {
+	if problem := nameTooLong("displayName", strings.TrimSpace(b.DisplayName)); problem != nil {
+		return problem
+	}
+	if b.Name == nil {
+		return nil
+	}
+	for attribute, value := range map[string]string{
+		"name.formatted": b.Name.Formatted, "name.givenName": b.Name.GivenName, "name.familyName": b.Name.FamilyName,
+	} {
+		if problem := nameTooLong(attribute, strings.TrimSpace(value)); problem != nil {
+			return problem
+		}
+	}
+	return nil
 }
 
 // resolveDisplayName picks the name to show.
@@ -242,12 +262,16 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 			"userName is required, or a primary email to use as one")
 		return
 	}
+	if problem := body.nameProblem(); problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
+		return
+	}
 	// A create with no `active` means active. An identity provider that pushes
 	// a new joiner rarely states it, and defaulting to suspended would create
 	// every account locked out.
 	user, err := h.directory.Create(r.Context(), body.toUser(true))
 	if err != nil {
-		h.writeStoreFailure(w, err, "create user")
+		h.writeWriteFailure(w, r, 0, false, err, "create user")
 		return
 	}
 	w.Header().Set("Location", BasePath+"/Users/"+strconv.Itoa(user.ID))
@@ -272,13 +296,17 @@ func (h *Handler) ReplaceUser(w http.ResponseWriter, r *http.Request) {
 			"userName is required, or a primary email to use as one")
 		return
 	}
+	if problem := body.nameProblem(); problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
+		return
+	}
 	// A PUT with no `active` means active, for the same reason: a replace is
 	// the whole resource, and an omitted flag on a person the provider is
 	// actively managing means they are there. Replace has no adoption branch,
 	// so it writes `suspended` unconditionally and needs no ActiveStated.
 	user, err := h.directory.Replace(r.Context(), id, body.toUser(true))
 	if err != nil {
-		h.writeStoreFailure(w, err, "replace user")
+		h.writeWriteFailure(w, r, id, body.Active != nil && !*body.Active, err, "replace user")
 		return
 	}
 	writeJSON(w, http.StatusOK, userResource(user))
@@ -294,7 +322,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.directory.SetActive(r.Context(), id, false); err != nil {
-		h.writeStoreFailure(w, err, "deactivate user")
+		h.writeWriteFailure(w, r, id, true, err, "deactivate user")
 		return
 	}
 	// 204, as the specification requires. The body would be ignored anyway, and
@@ -367,7 +395,7 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.directory.ApplyUserChanges(r.Context(), id, changes)
 	if err != nil {
-		h.writeStoreFailure(w, err, "patch user")
+		h.writeWriteFailure(w, r, id, changes.Active != nil && !*changes.Active, err, "patch user")
 		return
 	}
 	writeJSON(w, http.StatusOK, userResource(user))
@@ -396,6 +424,47 @@ func decodeUser(w http.ResponseWriter, r *http.Request) (userBody, bool) {
 	return body, true
 }
 
+// writeWriteFailure is writeStoreFailure for a WRITE to user `id` (0 when the
+// write names no existing account, as on a create).
+//
+// A refusal on a protected account (scimdirectory.ProtectedError) is answered
+// 403 `mutability` with a detail that says what to do, AND recorded in the
+// audit trail with the same sentence. The trail matters most for the one case
+// the refusal is by design and recurring: an identity provider deprovisioning
+// a person who has since become an administrator. The directory may not
+// suspend administrators, so the provider retries and logs 403 until an
+// operator removes the role; the trail is where that operator finds out why
+// the person still has access.
+func (h *Handler) writeWriteFailure(
+	w http.ResponseWriter, r *http.Request, id int, deprovision bool, err error, operation string,
+) {
+	if !errors.Is(err, scimdirectory.ErrProtected) {
+		h.writeStoreFailure(w, err, operation)
+		return
+	}
+	detail := protectedDetail(err, deprovision)
+	annotation := audit.Annotation{Action: detail, EntityType: "user"}
+	if id > 0 {
+		annotation.EntityID = audit.ID(int64(id))
+	}
+	audit.Annotate(r.Context(), annotation)
+	slog.Warn("SCIM: refused a write to a protected account", "operation", operation, "user_id", id,
+		"reason", detail)
+	writeError(w, http.StatusForbidden, "mutability", detail)
+}
+
+// protectedDetail is the sentence a protected-account refusal carries.
+func protectedDetail(err error, deprovision bool) string {
+	var protected *scimdirectory.ProtectedError
+	if !errors.As(err, &protected) {
+		return "SCIM write refused: this account is not managed through SCIM"
+	}
+	if deprovision {
+		return "SCIM deprovisioning refused: " + protected.Reason
+	}
+	return "SCIM write refused: " + protected.Reason
+}
+
 // writeStoreFailure maps a store outcome to a SCIM response.
 //
 // The cause is LOGGED and never returned. These responses go to an identity
@@ -406,16 +475,7 @@ func (h *Handler) writeStoreFailure(w http.ResponseWriter, err error, operation 
 	case errors.Is(err, scimdirectory.ErrNotFound):
 		writeError(w, http.StatusNotFound, "", "no such user")
 	case errors.Is(err, scimdirectory.ErrProtected):
-		// 403 with `mutability`: the request is well formed, and this
-		// credential may not make it against this account. The reason names
-		// which rule refused it, so an operator reading the identity
-		// provider's log knows to act on the admin Users page instead.
-		var protected *scimdirectory.ProtectedError
-		detail := "this account is not managed through SCIM"
-		if errors.As(err, &protected) {
-			detail = protected.Reason
-		}
-		writeError(w, http.StatusForbidden, "mutability", detail)
+		writeError(w, http.StatusForbidden, "mutability", protectedDetail(err, false))
 	case errors.Is(err, scimdirectory.ErrConflict):
 		// `uniqueness` is the code a client switches on to decide it should
 		// look the existing resource up rather than retry the create.

@@ -65,8 +65,8 @@ var ErrProtected = errors.New("scimdirectory: the account is not managed by SCIM
 //     fallback (internal/api/v2/auth/oidc.go joinAccountByEmail) adopts the
 //     row, administration role included. Suspending the same rows locks the
 //     operators out of the screen that would undo it.
-//   - The platform's own principals: `system@centry.user`, every
-//     `system_user_<n>@centry.user` and every `:system:project:<n>:` name.
+//   - The platform's own principals: `system@centry.user` and every
+//     `system_user_<n>@centry.user` — decided by ADDRESS only (guardTarget).
 //     The project resolver maps `system_user_<n>@centry.user` to project <n>
 //     with no membership check, and the admin Users list hides the
 //     `@centry.user` domain, so a row MOVED into that domain both gains a
@@ -75,7 +75,13 @@ var ErrProtected = errors.New("scimdirectory: the account is not managed by SCIM
 // So those rows are refused whatever the verb, and an address or a display
 // name in those reserved shapes is refused as a new value. The operator still
 // manages them from the admin Users page, where the consequence is on screen.
-type ProtectedError struct{ Reason string }
+type ProtectedError struct {
+	Reason string
+	// Administrator is true when the refusal is because the account holds an
+	// administration role (as opposed to being a platform principal or a
+	// reserved new value).
+	Administrator bool
+}
 
 func (e *ProtectedError) Error() string { return "scimdirectory: " + e.Reason }
 
@@ -93,8 +99,12 @@ const reservedNamePrefix = ":system:"
 
 // reservedIdentity names why an address or a display name may not be written
 // by a SCIM client, or "" when it may.
+//
+// The display-name rule applies to a NEW value a directory client writes only;
+// it never decides whether an existing account is a platform principal (see
+// guardTarget).
 func reservedIdentity(address, displayName string) string {
-	if strings.HasSuffix(NormalizeUserName(address), reservedAddressDomain) {
+	if IsReservedAddress(address) {
 		return "addresses in the " + reservedAddressDomain + " domain are reserved for platform principals"
 	}
 	if strings.HasPrefix(strings.TrimSpace(displayName), reservedNamePrefix) {
@@ -105,13 +115,26 @@ func reservedIdentity(address, displayName string) string {
 
 // guardTarget locks the account row and refuses one a SCIM client must not
 // manage. It returns ErrNotFound for a missing row.
+//
+// A PLATFORM PRINCIPAL IS DECIDED BY ITS ADDRESS ONLY. The display name is
+// not evidence: a person sets their own on a social or GitHub sign-in, and a
+// `:system:`-prefixed name would otherwise make their account immune to the
+// directory (and so impossible to deprovision through it).
+//
+// An administrator is refused too, including one who BECAME an administrator
+// after the directory provisioned them. That means the directory cannot
+// deprovision them: the identity provider's DELETE/deactivate is refused with
+// a reason that says to remove the role first (the HTTP layer also records the
+// refusal in the audit trail). Letting a SCIM credential suspend
+// administrators would let it lock the operators out of the screen that
+// undoes it.
 func guardTarget(ctx context.Context, tx pgx.Tx, id int) error {
 	var (
-		email, name   string
+		email         string
 		administrator bool
 	)
 	err := tx.QueryRow(ctx,
-		`SELECT COALESCE(account.email, ''), COALESCE(account.name, ''),
+		`SELECT COALESCE(account.email, ''),
 		        EXISTS (
 		            SELECT 1
 		              FROM auth_core__user_role AS assignment
@@ -122,7 +145,7 @@ func guardTarget(ctx context.Context, tx pgx.Tx, id int) error {
 		   FROM auth_core__user AS account
 		  WHERE account.id = $1
 		    FOR UPDATE OF account`, id,
-	).Scan(&email, &name, &administrator)
+	).Scan(&email, &administrator)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -130,13 +153,24 @@ func guardTarget(ctx context.Context, tx pgx.Tx, id int) error {
 		return err
 	}
 	if administrator {
-		return &ProtectedError{Reason: "the account holds an administration role; " +
-			"manage it from the admin Users page, not through SCIM"}
+		return &ProtectedError{
+			Reason:        "account holds an administration role — remove the role, then let the IdP retry",
+			Administrator: true,
+		}
 	}
-	if reason := reservedIdentity(email, name); reason != "" {
-		return &ProtectedError{Reason: "the account is a platform principal (" + reason + ")"}
+	if IsReservedAddress(email) {
+		return &ProtectedError{Reason: "account is a platform principal (an address in the " +
+			reservedAddressDomain + " domain); it is not managed by SCIM"}
 	}
 	return nil
+}
+
+// IsReservedAddress reports an address in the platform principals' reserved
+// domain (`system@centry.user`, `system_user_<n>@centry.user`, and the
+// `<login>@centry.user` fallback). It is the ONE definition of "platform
+// account" this package uses, for writes and for group membership alike.
+func IsReservedAddress(address string) bool {
+	return strings.HasSuffix(NormalizeUserName(address), reservedAddressDomain)
 }
 
 // refuseReservedValue refuses a NEW address or display name in a reserved shape.

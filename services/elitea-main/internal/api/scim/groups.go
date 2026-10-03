@@ -636,8 +636,16 @@ func (h *Handler) resolveMemberValues(
 		var (
 			unknown   scimdirectory.UnknownMemberError
 			ambiguous scimdirectory.AmbiguousMemberError
+			protected *scimdirectory.ProtectedError
 		)
 		switch {
+		case errors.As(err, &protected) && lenient:
+			// A platform principal may be REMOVED from a group (that only
+			// withdraws a grant); it may never be granted one. The id
+			// returned with the refusal is used as is.
+		case errors.As(err, &protected):
+			writeError(w, http.StatusForbidden, "mutability", protected.Reason)
+			return nil, false
 		case errors.As(err, &unknown):
 			if lenient {
 				slog.Info("SCIM: skipped a group member removal that names no account",

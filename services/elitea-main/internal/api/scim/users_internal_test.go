@@ -30,6 +30,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -678,20 +679,72 @@ func TestCreateAndReplaceCarryTheNamePartsAndWhereTheDisplayNameCameFrom(t *test
 // reason reaches the client so the operator knows where to act instead.
 func TestAProtectedAccountIsRefusedWithMutabilityAndTheReason(t *testing.T) {
 	directory := newRecordingDirectory()
-	directory.protected = &scimdirectory.ProtectedError{Reason: "the account holds an administration role"}
+	directory.protected = &scimdirectory.ProtectedError{
+		Reason:        "account holds an administration role — remove the role, then let the IdP retry",
+		Administrator: true,
+	}
 
-	for _, request := range []struct{ method, body string }{
-		{http.MethodPatch, `{"Operations":[{"op":"replace","path":"userName","value":"evil@corp.com"}]}`},
-		{http.MethodPut, `{"userName":"evil@corp.com"}`},
-		{http.MethodDelete, ""},
+	const deprovision = "SCIM deprovisioning refused: account holds an administration role — " +
+		"remove the role, then let the IdP retry"
+	const write = "SCIM write refused: account holds an administration role — " +
+		"remove the role, then let the IdP retry"
+	for _, request := range []struct{ method, body, detail string }{
+		{http.MethodPatch, `{"Operations":[{"op":"replace","path":"userName","value":"evil@corp.com"}]}`, write},
+		{http.MethodPatch, `{"Operations":[{"op":"replace","path":"active","value":false}]}`, deprovision},
+		{http.MethodPut, `{"userName":"evil@corp.com"}`, write},
+		{http.MethodPut, `{"userName":"alice@corp.com","active":false}`, deprovision},
+		{http.MethodDelete, "", deprovision},
 	} {
-		recorder := serve(t, directory, request.method, "/Users/42", request.body)
+		// N2: the refusal is ALSO recorded in the audit trail, with the same
+		// sentence, on the account it names.
+		request2 := httptest.NewRequest(request.method, "/Users/42", strings.NewReader(request.body))
+		ctx, slot := audit.ContextWithAnnotationSlot(request2.Context())
+		recorder := httptest.NewRecorder()
+		NewHandler(directory).Routes().ServeHTTP(recorder, request2.WithContext(ctx))
+
 		require.Equal(t, http.StatusForbidden, recorder.Code, request.method)
 		body := decodeBody(t, recorder)
 		require.Equal(t, "mutability", body["scimType"], request.method)
-		require.Equal(t, "the account holds an administration role", body["detail"], request.method)
+		require.Equal(t, request.detail, body["detail"], request.method+" "+request.body)
+
+		annotation, present := slot.Read()
+		require.True(t, present, request.method)
+		require.Equal(t, request.detail, annotation.Action)
+		require.Equal(t, "user", annotation.EntityType)
+		require.Equal(t, int64(42), *annotation.EntityID)
 	}
 	require.Equal(t, "alice@corp.com", directory.users[42].UserName)
+}
+
+// Display names and name parts are capped at 256 characters on PATCH, POST
+// and PUT alike.
+func TestNamesLongerThanTheCapAreRefused(t *testing.T) {
+	long := strings.Repeat("é", 257)
+	for _, operations := range []string{
+		`{"op":"Replace","path":"displayName","value":"` + long + `"}`,
+		`{"op":"Replace","path":"name.givenName","value":"` + long + `"}`,
+		`{"op":"Replace","value":{"name":{"familyName":"` + long + `"}}}`,
+		`{"op":"Replace","path":"name.formatted","value":"` + long + `"}`,
+	} {
+		directory := newRecordingDirectory()
+		recorder := patchUser(t, directory, operations)
+		require.Equal(t, http.StatusBadRequest, recorder.Code, operations)
+		require.Equal(t, "invalidValue", decodeBody(t, recorder)["scimType"])
+		require.Empty(t, directory.changes)
+	}
+	// Exactly at the cap is accepted.
+	require.Equal(t, http.StatusOK, patchUser(t, newRecordingDirectory(),
+		`{"op":"Replace","path":"displayName","value":"`+strings.Repeat("é", 256)+`"}`).Code)
+
+	directory := newRecordingDirectory()
+	recorder := serve(t, directory, http.MethodPost, "/Users",
+		`{"userName":"bob@corp.com","name":{"givenName":"`+long+`"}}`)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Empty(t, directory.created)
+	recorder = serve(t, directory, http.MethodPut, "/Users/42",
+		`{"userName":"alice@corp.com","displayName":"`+long+`"}`)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Empty(t, directory.replaced)
 }
 
 func TestUserPatchUniquenessConflictIsAScimConflict(t *testing.T) {

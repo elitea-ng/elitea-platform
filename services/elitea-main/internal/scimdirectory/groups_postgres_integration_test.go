@@ -462,6 +462,15 @@ func TestAMemberIsResolvedByIdExternalIdOrAddressAndRefusedOtherwise(t *testing.
 
 	_, err = store.ResolveMember(ctx, "nobody@corp.com")
 	require.ErrorAs(t, err, &UnknownMemberError{})
+
+	// N3: a platform principal resolves WITH a refusal (by address or by id),
+	// so a grant can refuse it and a removal can still name it.
+	system := seedUser(t, pool, "system_user_5@centry.user")
+	for _, value := range []string{"system_user_5@centry.user", fmt.Sprint(system)} {
+		resolved, err := store.ResolveMember(ctx, value)
+		require.ErrorIs(t, err, ErrProtected, value)
+		require.Equal(t, system, resolved)
+	}
 }
 
 // A numeric member value can name one account by id and another by external id.
