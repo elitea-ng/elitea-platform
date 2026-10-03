@@ -82,8 +82,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
-
-	skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
 // maxDraftRequestBytes bounds the body. user_description and
@@ -106,7 +104,7 @@ const NotConfiguredCode = v2predict.NotConfiguredCode
 const (
 	skillNameMaxLength         = 64
 	skillDescriptionMaxLength  = 2304
-	skillInstructionsMaxLength = skillsapi.SkillInstructionsMaxLength
+	skillInstructionsMaxLength = v2skills.SkillInstructionsMaxLength
 
 	// PROJECT_CONTEXT_MAX_LEN in legacy/plugins/elitea_core/models/pd/project_context.py.
 	projectBackgroundMaxLength = 2500
