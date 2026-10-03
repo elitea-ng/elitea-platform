@@ -39,6 +39,11 @@ func (r *WebhookDeliveriesRepo) Create(ctx context.Context, d webhook.Delivery) 
 		&created.Attempts, &created.ResponseCode, &created.LastError, &created.Payload, &created.RedeliveryOf,
 		&created.CreatedAt, &created.UpdatedAt)
 	if err != nil {
+		// The webhook was deleted while the attempt ran: its delivery log
+		// went with it (ON DELETE CASCADE), and the FK refuses the new row.
+		if isForeignKeyViolation(err) {
+			return webhook.Delivery{}, webhook.ErrWebhookGone
+		}
 		return webhook.Delivery{}, fmt.Errorf("webhook_deliveries: create: %w", err)
 	}
 	return created, nil
