@@ -23,6 +23,9 @@ type fakeCredentials struct {
 	fail    error
 	touched []int64
 	issued  map[string]string // client id -> secret
+	// issueCalls counts store lookups, so a test can prove a blocked
+	// caller reached no database read.
+	issueCalls int
 }
 
 func (f *fakeCredentials) Authenticate(_ context.Context, token string) (scimclient.Principal, error) {
@@ -41,6 +44,7 @@ func (f *fakeCredentials) TouchLastUsed(_ context.Context, id int64) {
 }
 
 func (f *fakeCredentials) IssueAccessToken(_ context.Context, clientID, secret string) (scimclient.AccessToken, scimclient.Principal, error) {
+	f.issueCalls++
 	if f.fail != nil {
 		return scimclient.AccessToken{}, scimclient.Principal{}, f.fail
 	}
@@ -272,7 +276,8 @@ type fixedAddress string
 func (f fixedAddress) ResolveClientKey(*http.Request) (string, error) { return string(f), nil }
 
 func TestTokenEndpointLimitsFailedClientAuthentication(t *testing.T) {
-	handler := NewTokenHandler(newAuthFixture(), nil)
+	credentials := newAuthFixture()
+	handler := NewTokenHandler(credentials, fixedAddress("203.0.113.9"))
 	wrong := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"wrong"}}
 	for i := 0; i < tokenFailureLimit-1; i++ {
 		require.Equal(t, http.StatusUnauthorized, postToken(handler, wrong, nil).Code)
@@ -280,14 +285,22 @@ func TestTokenEndpointLimitsFailedClientAuthentication(t *testing.T) {
 	recorder := postToken(handler, wrong, nil)
 	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
 	require.NotEmpty(t, recorder.Header().Get("Retry-After"))
+	require.Equal(t, tokenFailureLimit, credentials.issueCalls)
 
-	// The correct secret is verified first and is NEVER blocked: the client id
-	// is public, and failures by somebody else must not lock the real
-	// identity provider out.
+	// Once blocked, the address is refused BEFORE the store is read: no
+	// database lookup per request, whatever the secret.
 	good := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_id"}, "client_secret": {"scimcs_secret"}}
+	require.Equal(t, http.StatusTooManyRequests, postToken(handler, wrong, nil).Code)
+	require.Equal(t, http.StatusTooManyRequests, postToken(handler, good, nil).Code)
+	require.Equal(t, tokenFailureLimit, credentials.issueCalls, "a blocked caller must not reach the store")
+
+	// The identity provider calls from another address. The attacker's
+	// failures do not block it, and its correct secret gets a token.
+	handler.resolver = fixedAddress("198.51.100.7")
 	require.Equal(t, http.StatusOK, postToken(handler, good, nil).Code)
 
-	// Another client id is not affected.
+	// Another client id from the blocked address has its own window.
+	handler.resolver = fixedAddress("203.0.113.9")
 	other := url.Values{"grant_type": {"client_credentials"}, "client_id": {"scimc_other"}, "client_secret": {"wrong"}}
 	require.Equal(t, http.StatusUnauthorized, postToken(handler, other, nil).Code)
 }

@@ -9,9 +9,12 @@ import (
 // and refuses a key that failed too often in the current window.
 //
 // It is in memory and per replica. A client secret has 256 bits of entropy, so
-// the limiter does not protect the secret from search; it bounds the database
-// work and the log volume an attacker can cause with wrong guesses. With N
-// replicas the effective limit is N times the stated one. The browser
+// the limiter does not protect the secret from search. It bounds the database
+// work an attacker can cause with wrong guesses: the token endpoint checks it
+// BEFORE the secret lookup, so a blocked key costs no database read, and the
+// endpoint logs no line for a refused attempt. The key is (client id, caller
+// address), so a caller can block only itself. With N replicas the effective
+// limit is N times the stated one. The browser
 // attempt limiter (internal/infra/authattempt) is shared in Redis, but its
 // stages are fixed to the browser sign-in flows, so it is not reused here.
 //

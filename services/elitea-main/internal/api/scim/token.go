@@ -129,19 +129,22 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The secret is verified FIRST, and a correct secret is always answered
-	// with a token. The failure limit applies only to failures, and it is
-	// counted per (client id, caller address): the client id is public, so a
-	// limit on it alone would let anybody who knows it lock the real identity
-	// provider out.
+	// The failure limit is keyed per (client id, caller address) and is
+	// checked BEFORE the secret is verified, so a blocked caller costs no
+	// database read. The caller address is part of the key, so an attacker
+	// who knows the public client id can block only their own address: the
+	// identity provider, calling from another address, is never blocked by
+	// failures it did not make. A refusal writes no log line and no audit row.
+	key := h.limiterKey(r, clientID)
+	if blocked, retry := h.limiter.Blocked(key); blocked {
+		writeTooManyFailures(w, retry)
+		return
+	}
 	token, principal, err := h.issuer.IssueAccessToken(r.Context(), clientID, clientSecret)
 	if errors.Is(err, scimclient.ErrRejected) {
-		key := h.limiterKey(r, clientID)
 		h.limiter.Fail(key)
 		if blocked, retry := h.limiter.Blocked(key); blocked {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-			writeOAuthError(w, http.StatusTooManyRequests, "invalid_request",
-				"too many failed client authentications; retry later", false)
+			writeTooManyFailures(w, retry)
 			return
 		}
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed", usedBasic)
@@ -222,6 +225,13 @@ func (h *TokenHandler) limiterKey(r *http.Request, clientID string) string {
 		clientID = "<oversized>"
 	}
 	return "client:" + clientID + "|addr:" + address
+}
+
+// writeTooManyFailures answers a caller whose failure window is full.
+func writeTooManyFailures(w http.ResponseWriter, retry time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+	writeOAuthError(w, http.StatusTooManyRequests, "invalid_request",
+		"too many failed client authentications; retry later", false)
 }
 
 // writeOAuthError renders RFC 6749 §5.2. A failed Basic authentication carries
