@@ -138,15 +138,31 @@ const truncatedLabelSx = {
   whiteSpace: 'nowrap',
 };
 
-/** The caller's `sx` with the equal-share sizing layered underneath it. */
+/**
+ * The caller's `sx` with the equal-share sizing layered underneath it. MUI's
+ * `sx` may be an object, a function of the theme, or an ARRAY of either, so it
+ * is composed with MUI's own array form instead of being spread as an object
+ * (spreading an array silently dropped every style in it).
+ */
 function buttonSx(sx: SxProps<Theme> | undefined, fullWidth: boolean | undefined): SxProps<Theme> | undefined {
   if (!fullWidth) {
     return sx;
   }
-  return (theme: Theme) => ({
-    ...fullWidthButtonSx,
-    ...(typeof sx === 'function' ? sx(theme) : (sx as object | undefined)),
-  });
+  return [fullWidthButtonSx, ...sxEntries(sx)];
+}
+
+type SxEntry = Exclude<SxProps<Theme>, ReadonlyArray<unknown>>;
+
+/** `sx` flattened to the entries of MUI's array form (an absent `sx` adds none). */
+function sxEntries(sx: SxProps<Theme> | undefined): ReadonlyArray<boolean | SxEntry> {
+  if (sx === undefined) {
+    return [];
+  }
+  return isSxArray(sx) ? sx : [sx];
+}
+
+function isSxArray(sx: SxProps<Theme>): sx is ReadonlyArray<boolean | SxEntry> {
+  return Array.isArray(sx);
 }
 
 function labelSx(hasIcon: boolean, fullWidth: boolean | undefined): SxProps<Theme> | undefined {
