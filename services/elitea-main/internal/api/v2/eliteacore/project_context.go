@@ -188,12 +188,15 @@ func (h *Handler) writeProjectContext(
 		storedUpdatedAt *time.Time
 	)
 	if !existingFound {
+		// updated_at is set on the first save too. The column has no default,
+		// so an INSERT without it answered "updated_at": null until the
+		// second save, and the settings page showed no "last saved" time.
 		insertQuery := fmt.Sprintf(`
 			INSERT INTO %s.configuration
 				(project_id, label, elitea_title, type, section, data, meta, shared,
-				 status_ok, source, created_at)
+				 status_ok, source, created_at, updated_at)
 			VALUES ($1::integer, 'Project Context', 'project_context_' || $1::text, 'project_context',
-				'project_settings', $2, '{}'::jsonb, false, true, 'system', NOW())
+				'project_settings', $2, '{}'::jsonb, false, true, 'system', NOW(), NOW())
 			RETURNING id, data, updated_at`, schema)
 		err = tx.QueryRow(r.Context(), insertQuery, projectID, encoded).
 			Scan(&storedID, &storedData, &storedUpdatedAt)

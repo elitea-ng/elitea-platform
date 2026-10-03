@@ -307,3 +307,36 @@ VALUES ($1, 'relation child', 'application', $2)`, fixture.parentVersionID, lega
 		t.Fatalf("the legacy reference survived the detach: %d rows left", legacyLeft)
 	}
 }
+
+// TestApplicationRelationAttachAcceptsNumericStringIDs pins the legacy body
+// form. The contract and pylon accept "42" as well as 42 for both ids; the
+// typed *int64 body refused the string form with 400.
+func TestApplicationRelationAttachAcceptsNumericStringIDs(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	fixture := seedRelationFixture(t, pool)
+	router := relationRouter(eliteacore.NewHandler(pool))
+
+	attach := map[string]any{
+		"application_id": fmt.Sprintf("%d", fixture.parentAppID),
+		"version_id":     fmt.Sprintf("%d", fixture.parentVersionID),
+		"has_relation":   true,
+	}
+	if recorder := relationDo(t, router, fixture, attach); recorder.Code != http.StatusCreated {
+		t.Fatalf("string-id attach status = %d, want 201; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if mappings, _ := countRelationRows(t, pool, fixture.parentVersionID); mappings != 1 {
+		t.Fatalf("mappings after string-id attach = %d, want 1", mappings)
+	}
+
+	detach := map[string]any{
+		"application_id": fmt.Sprintf("%d", fixture.parentAppID),
+		"version_id":     fmt.Sprintf("%d", fixture.parentVersionID),
+		"has_relation":   false,
+	}
+	if recorder := relationDo(t, router, fixture, detach); recorder.Code >= 300 {
+		t.Fatalf("string-id detach status = %d; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if mappings, _ := countRelationRows(t, pool, fixture.parentVersionID); mappings != 0 {
+		t.Fatalf("mappings after string-id detach = %d, want 0", mappings)
+	}
+}
