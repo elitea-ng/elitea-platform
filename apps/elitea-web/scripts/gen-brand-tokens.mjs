@@ -288,8 +288,8 @@ const PACK_META = {
     favicon: './brand/favicon.svg',
   },
   typography: {
-    // MainTheme.js:113 verbatim; baseSize/scale reproduce the baseline's five
-    // distinct variant sizes exactly (see src/shared/brand/typography.ts).
+    // MainTheme.js:113 verbatim; baseSize/scale produce the one type scale's
+    // four sizes, 12/14/16/20 (see src/shared/brand/typography.ts).
     fontFamily: '"Montserrat", Roboto, Arial, sans-serif',
     fontFamilyMono: '"Roboto Mono", Consolas, "Courier New", monospace',
     baseSize: 14,

@@ -27,17 +27,21 @@ declare module '@mui/material/styles' {
     enabled: true;
   }
 
-  /** The ten live variants of MainTheme.js:17-89 (labelLarge excluded, T2 §3). */
+  /**
+   * The eight variants of the one type scale (`shared/brand/typography.ts`):
+   * four sizes, shared by the app and the admin console. Every MUI stock
+   * variant still exists on `theme.typography` (MUI renders them internally)
+   * but is aliased onto one of these; call sites may not name them (see
+   * `TypographyPropsVariantOverrides` below and R-T13).
+   */
   interface TypographyVariants {
     headingLarge: React.CSSProperties;
     headingMedium: React.CSSProperties;
     headingSmall: React.CSSProperties;
     labelMedium: React.CSSProperties;
     labelSmall: React.CSSProperties;
-    labelTiny: React.CSSProperties;
     bodyMedium: React.CSSProperties;
     bodySmall: React.CSSProperties;
-    bodySmall2: React.CSSProperties;
     subtitle: React.CSSProperties;
     /** Pack field `typography.fontFamilyMono`; MUI has no built-in slot. */
     fontFamilyMono: string;
@@ -49,10 +53,8 @@ declare module '@mui/material/styles' {
     headingSmall?: React.CSSProperties;
     labelMedium?: React.CSSProperties;
     labelSmall?: React.CSSProperties;
-    labelTiny?: React.CSSProperties;
     bodyMedium?: React.CSSProperties;
     bodySmall?: React.CSSProperties;
-    bodySmall2?: React.CSSProperties;
     subtitle?: React.CSSProperties;
     fontFamilyMono?: string;
   }
@@ -120,18 +122,37 @@ declare module '@mui/material/Button' {
 }
 
 declare module '@mui/material/Typography' {
-  /** `<Typography variant="labelSmall">` — the ten variants declared above. */
+  /**
+   * `<Typography variant="labelSmall">` — the eight variants declared above.
+   *
+   * Every stock variant is switched OFF, so naming one on Typography,
+   * ListItemText `slotProps`, DialogTitle, Link or DialogContentText (all of
+   * which take `TypographyProps`) is a tsc error. `body1` stays on: MUI
+   * names it internally, and bare `<Typography>` renders it (aliased to
+   * `bodyMedium`, as a `<p>`). R-T13 (`elitea/no-stock-typography-variant`)
+   * catches the explicit `variant="body1"` and the untyped paths.
+   */
   interface TypographyPropsVariantOverrides {
     headingLarge: true;
     headingMedium: true;
     headingSmall: true;
     labelMedium: true;
     labelSmall: true;
-    labelTiny: true;
     bodyMedium: true;
     bodySmall: true;
-    bodySmall2: true;
     subtitle: true;
+    body2: false;
+    caption: false;
+    h1: false;
+    h2: false;
+    h3: false;
+    h4: false;
+    h5: false;
+    h6: false;
+    subtitle1: false;
+    subtitle2: false;
+    overline: false;
+    button: false;
   }
 }
 
