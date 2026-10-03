@@ -581,7 +581,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `models.project_settings.edit` for the default-mode admin (the project
 	// name/description/icon writes, #6789) with its per-project override
 	// delivery, and the removal of permission strings no code checks (#6874).
-	require.EqualValues(t, 136, Head(shared))
+	//
+	// 137: shared/0137_attachment_extractions.sql, the sidecar for extracted
+	// chat attachment text: one row per stored object with the text, the
+	// page/section/sheet map and the extractor version, deleted with its
+	// object. No new permission: only the claim-authorized runtime content
+	// route reads or writes it.
+	require.EqualValues(t, 137, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

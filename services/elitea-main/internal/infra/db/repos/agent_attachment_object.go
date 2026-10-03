@@ -28,6 +28,7 @@ const attachmentBucketType = "system"
 // name a project, and this repository must never be able to. The project
 // arrives from the claim, and every lookup below is scoped by it.
 type CurrentAttachmentObjectRepository struct {
+	pool    *pgxpool.Pool
 	buckets *ArtifactBucketsRepository
 	objects *ArtifactObjectsRepository
 	store   storage.ObjectStore
@@ -49,6 +50,7 @@ func NewCurrentAttachmentObjectRepository(
 		return nil, err
 	}
 	return &CurrentAttachmentObjectRepository{
+		pool:    pool,
 		buckets: buckets,
 		objects: objects,
 		store:   store,
@@ -101,37 +103,9 @@ func (repository *CurrentAttachmentObjectRepository) ReadAttachmentObject(
 		return storage.AttachmentObjectRecord{}, storage.ErrContentNotFound
 	}
 
-	bucketRow, err := repository.buckets.GetBucket(ctx, projectID, bucket)
-	if errors.Is(err, storage.ErrNotFound) {
-		return storage.AttachmentObjectRecord{}, storage.ErrContentNotFound
-	}
+	record, err := repository.attachmentObjectRow(ctx, projectID, bucket, name)
 	if err != nil {
-		return storage.AttachmentObjectRecord{}, fmt.Errorf("get attachment bucket: %w", err)
-	}
-	if bucketRow.ProjectID != projectID || bucketRow.BucketType != attachmentBucketType {
-		return storage.AttachmentObjectRecord{}, storage.ErrContentNotFound
-	}
-
-	// ListObjects with the FULL key as its prefix, because this repository has
-	// no single-object query and adding one would mean regenerating sqlc for a
-	// lookup the prefix query already answers. The exact-match filter below is
-	// what makes that safe: `key LIKE $2 || '%'` treats `%` and `_` in the key
-	// as wildcards, so the prefix alone could match a neighbouring object.
-	rows, err := repository.objects.ListObjects(ctx, bucketRow.ID, name)
-	if err != nil {
-		return storage.AttachmentObjectRecord{}, fmt.Errorf("list attachment object: %w", err)
-	}
-	var record ObjectRow
-	found := false
-	for _, row := range rows {
-		if row.Key == name {
-			record = row
-			found = true
-			break
-		}
-	}
-	if !found {
-		return storage.AttachmentObjectRecord{}, storage.ErrContentNotFound
+		return storage.AttachmentObjectRecord{}, err
 	}
 	if record.ByteLength <= 0 || record.ByteLength > maxBytes {
 		return storage.AttachmentObjectRecord{}, storage.ErrContentRejected
@@ -169,6 +143,48 @@ func (repository *CurrentAttachmentObjectRepository) ReadAttachmentObject(
 		ByteLength: record.ByteLength,
 		Content:    content,
 	}, nil
+}
+
+// attachmentObjectRow resolves the metadata row under gates 1-3 of
+// ReadAttachmentObject: the bucket is the project's own, it is the reserved
+// system bucket, and a metadata row exists for exactly this key. The sidecar
+// store (attachment_extraction.go) resolves through the same function, so the
+// two paths cannot disagree about which object a reference names.
+func (repository *CurrentAttachmentObjectRepository) attachmentObjectRow(
+	ctx context.Context,
+	projectID int64,
+	bucket string,
+	name string,
+) (ObjectRow, error) {
+	if projectID <= 0 || bucket == "" || name == "" {
+		return ObjectRow{}, storage.ErrContentNotFound
+	}
+	bucketRow, err := repository.buckets.GetBucket(ctx, projectID, bucket)
+	if errors.Is(err, storage.ErrNotFound) {
+		return ObjectRow{}, storage.ErrContentNotFound
+	}
+	if err != nil {
+		return ObjectRow{}, fmt.Errorf("get attachment bucket: %w", err)
+	}
+	if bucketRow.ProjectID != projectID || bucketRow.BucketType != attachmentBucketType {
+		return ObjectRow{}, storage.ErrContentNotFound
+	}
+
+	// ListObjects with the FULL key as its prefix, because this repository has
+	// no single-object query and adding one would mean regenerating sqlc for a
+	// lookup the prefix query already answers. The exact-match filter below is
+	// what makes that safe: `key LIKE $2 || '%'` treats `%` and `_` in the key
+	// as wildcards, so the prefix alone could match a neighbouring object.
+	rows, err := repository.objects.ListObjects(ctx, bucketRow.ID, name)
+	if err != nil {
+		return ObjectRow{}, fmt.Errorf("list attachment object: %w", err)
+	}
+	for _, row := range rows {
+		if row.Key == name {
+			return row, nil
+		}
+	}
+	return ObjectRow{}, storage.ErrContentNotFound
 }
 
 var _ storage.AttachmentObjectSource = (*CurrentAttachmentObjectRepository)(nil)

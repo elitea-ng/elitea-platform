@@ -29,6 +29,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/currentcore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
@@ -1337,8 +1338,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if attachmentErr != nil {
 			return nil, fmt.Errorf("construct attachment object reader: %w", attachmentErr)
 		}
+		// One extractor per process: its PDF engine bounds how many PDFs
+		// are parsed at once, and the repository doubles as the sidecar
+		// store (elitea_storage.attachment_extractions).
 		attachmentObjects, err = storage.NewRuntimeAttachmentObjectService(
 			contentRepository,
+			attachmentSource,
+			extract.New(extract.DefaultLimits()),
 			attachmentSource,
 		)
 		if err != nil {

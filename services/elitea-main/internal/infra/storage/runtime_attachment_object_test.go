@@ -17,6 +17,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 // attachmentTestConversation is the conversation every claim below resolves.
@@ -82,7 +84,7 @@ func TestAttachmentObjectRouteServesTheClaimedConversationsFile(t *testing.T) {
 	require.EqualValues(t, 4242, sawProject, "the project must come from the claim")
 	require.Equal(t, "chat-attachments", sawBucket)
 	require.Equal(t, key, sawName)
-	require.EqualValues(t, maxRuntimeAttachmentObjectBytes, sawMaxBytes,
+	require.EqualValues(t, maxRuntimeAttachmentInputBytes, sawMaxBytes,
 		"the source must be told the same ceiling the service enforces")
 
 	var document RuntimeAttachmentObjectContext
@@ -94,6 +96,11 @@ func TestAttachmentObjectRouteServesTheClaimedConversationsFile(t *testing.T) {
 	require.Equal(t, "text/plain", document.MediaType)
 	require.EqualValues(t, 11, document.ByteLength)
 	require.Equal(t, "hello there", document.Content)
+	require.Equal(t, "text", document.Format)
+	require.Equal(t, extract.Version, document.ExtractorVersion)
+	require.True(t, document.Complete)
+	require.Equal(t, 1, document.UnitCount)
+	require.Equal(t, []RuntimeAttachmentUnit{{Kind: "part", Label: "1", Start: 0, End: 11, HasText: true}}, document.Units)
 
 	// The worker REJECTS a response whose cache policy is not exactly this
 	// (validate_cache_policy in transport/runtime_context.rs), so a missing
@@ -202,42 +209,66 @@ func TestAttachmentObjectRouteRefusesACrossConversationObject(t *testing.T) {
 	}
 }
 
-// TestAttachmentObjectRouteRefusesWhatItCannotServeAsText covers the two
-// outcomes that are neither a bad claim nor a missing file, and therefore must
-// not be reported as either.
+// TestAttachmentObjectRouteRefusesWhatItCannotServeAsText covers the outcomes
+// that are neither a bad claim nor a missing file, and therefore must not be
+// reported as either. Each 422 names its reason in the body, because the
+// worker turns that reason into the sentence the model reads.
 func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 	t.Parallel()
 
 	key := attachmentTestConversation + "/report.txt"
-	oversized := bytes.Repeat([]byte("a"), maxRuntimeAttachmentObjectBytes+1)
-	for name, record := range map[string]AttachmentObjectRecord{
+	oversized := bytes.Repeat([]byte("a"), maxRuntimeAttachmentInputBytes+1)
+	for name, testCase := range map[string]struct {
+		record AttachmentObjectRecord
+		status int
+		reason string
+	}{
 		// A source that ignored its own cap must still not get past the
 		// service: the ceiling is enforced on both sides of the interface.
-		"over the size cap": {
-			Bucket: "chat-attachments", Name: key,
-			MediaType: "text/plain",
-			// The declared length agrees with the bytes; the SIZE is the fault.
-			ByteLength: int64(len(oversized)), Content: oversized,
+		"over the input cap": {
+			record: AttachmentObjectRecord{
+				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
+				ByteLength: int64(len(oversized)), Content: oversized,
+			},
+			status: http.StatusUnprocessableEntity, reason: "too_large",
 		},
-		"not utf-8": {
-			Bucket: "chat-attachments", Name: key,
-			MediaType:  "application/pdf",
-			ByteLength: 4, Content: []byte{0xff, 0xfe, 0x00, 0x01},
+		"an image": {
+			record: AttachmentObjectRecord{
+				Bucket: "chat-attachments", Name: key, MediaType: "image/png",
+				ByteLength: 12, Content: []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00"),
+			},
+			status: http.StatusUnprocessableEntity, reason: "unsupported_format",
+		},
+		"binary": {
+			record: AttachmentObjectRecord{
+				Bucket: "chat-attachments", Name: key, MediaType: "application/octet-stream",
+				ByteLength: 4, Content: []byte{0x00, 0x01, 0x02, 0x03},
+			},
+			status: http.StatusUnprocessableEntity, reason: "unsupported_format",
 		},
 		"empty": {
-			Bucket: "chat-attachments", Name: key,
-			MediaType: "text/plain", ByteLength: 0, Content: []byte{},
+			record: AttachmentObjectRecord{
+				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
+				ByteLength: 0, Content: []byte{},
+			},
+			status: http.StatusUnprocessableEntity, reason: "empty",
 		},
 		// The metadata row and the bytes disagree: neither answer is
 		// trustworthy, so neither is sent.
 		"length disagrees with the bytes": {
-			Bucket: "chat-attachments", Name: key,
-			MediaType: "text/plain", ByteLength: 99, Content: []byte("short"),
+			record: AttachmentObjectRecord{
+				Bucket: "chat-attachments", Name: key, MediaType: "text/plain",
+				ByteLength: 99, Content: []byte("short"),
+			},
+			status: http.StatusUnprocessableEntity, reason: "too_large",
 		},
 		// A source that answered about a different object than was asked for.
 		"identity does not echo the request": {
-			Bucket: "chat-attachments", Name: attachmentTestConversation + "/other.txt",
-			MediaType: "text/plain", ByteLength: 2, Content: []byte("hi"),
+			record: AttachmentObjectRecord{
+				Bucket: "chat-attachments", Name: attachmentTestConversation + "/other.txt",
+				MediaType: "text/plain", ByteLength: 2, Content: []byte("hi"),
+			},
+			status: http.StatusNotFound,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -248,7 +279,7 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 				attachmentObjectSourceFunc(func(
 					context.Context, int64, string, string, int64,
 				) (AttachmentObjectRecord, error) {
-					return record, nil
+					return testCase.record, nil
 				}),
 			)
 			response := httptest.NewRecorder()
@@ -256,11 +287,14 @@ func TestAttachmentObjectRouteRefusesWhatItCannotServeAsText(t *testing.T) {
 				t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size),
 				"chat-attachments", key,
 			))
-			require.NotEqual(t, http.StatusOK, response.Code)
-			require.Contains(t,
-				[]int{http.StatusUnprocessableEntity, http.StatusNotFound},
-				response.Code,
-			)
+			require.Equal(t, testCase.status, response.Code, response.Body.String())
+			if testCase.reason != "" {
+				var body RuntimeAttachmentUnreadable
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+				require.Equal(t, RuntimeAttachmentUnreadableSchemaVersion, body.SchemaVersion)
+				require.Equal(t, testCase.reason, body.Reason)
+				require.Equal(t, "application/json", response.Header().Get("Content-Type"))
+			}
 		})
 	}
 }
@@ -386,10 +420,15 @@ func TestAttachmentObjectRouteIsAbsentWithoutItsService(t *testing.T) {
 func TestAttachmentObjectServiceRequiresItsDependencies(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewRuntimeAttachmentObjectService(nil, attachmentObjectSourceFunc(nil))
+	extractor := extract.New(extract.DefaultLimits())
+	_, err := NewRuntimeAttachmentObjectService(nil, attachmentObjectSourceFunc(nil), extractor, nil)
 	require.Error(t, err)
 	_, err = NewRuntimeAttachmentObjectService(
-		attachmentTestAuthorizer(t, 1, attachmentTestConversation), nil,
+		attachmentTestAuthorizer(t, 1, attachmentTestConversation), nil, extractor, nil,
+	)
+	require.Error(t, err)
+	_, err = NewRuntimeAttachmentObjectService(
+		attachmentTestAuthorizer(t, 1, attachmentTestConversation), attachmentObjectSourceFunc(nil), nil, nil,
 	)
 	require.Error(t, err)
 
@@ -438,8 +477,18 @@ func newAttachmentObjectTestServer(
 	source AttachmentObjectSource,
 ) *ContentServer {
 	t.Helper()
-	objects, err := NewRuntimeAttachmentObjectService(authorizer, source)
+	objects, err := NewRuntimeAttachmentObjectService(
+		authorizer, source, extract.New(extract.DefaultLimits()), nil,
+	)
 	require.NoError(t, err)
+	return newAttachmentObjectTestServerWithService(t, objects)
+}
+
+func newAttachmentObjectTestServerWithService(
+	t *testing.T,
+	objects *RuntimeAttachmentObjectService,
+) *ContentServer {
+	t.Helper()
 	server, err := NewAgentAttachmentRuntimeContentServerWithLimits(
 		contentAuthorizerFunc(func(context.Context, ContentClaim) (ContentAuthorization, error) {
 			t.Fatal("the attachment route must not call content-entry authorization")

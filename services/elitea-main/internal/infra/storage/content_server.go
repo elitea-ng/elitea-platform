@@ -652,13 +652,16 @@ func (s *ContentServer) PostApplicationVersion(w http.ResponseWriter, r *http.Re
 // that authorized differently would be a second, weaker contract on the same
 // connection.
 //
-// THE ONE ADDED STATUS IS 422. A stored object that cannot be served as text —
-// oversized, empty, or not UTF-8 — is neither a rejected claim nor a missing
-// file, and the difference matters operationally: 404 says the reference is
-// stale and someone should look at the row, while 422 says the file is exactly
-// what it claims to be and this route will never be able to read it. The worker
-// treats both as "unreadable" and announces the file by name either way, so
-// neither ever fails a turn.
+// THE ONE ADDED STATUS IS 422. A stored object with no text this route can
+// serve — encrypted, an image, an unsupported or malformed format, over the
+// input limit, or without a text layer — is neither a rejected claim nor a
+// missing file, and the difference matters operationally: 404 says the
+// reference is stale and someone should look at the row, while 422 says the
+// file is exactly what it claims to be and this route will never be able to
+// read it. The 422 body carries the reason
+// (elitea.runtime.attachment-unreadable.v1). The worker maps 422 to a
+// terminal "unreadable" outcome — never to dependency_unavailable — and tells
+// the model why, so neither ever fails a turn.
 func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Request) {
 	setPrivateNoCacheHeaders(w.Header())
 	if !s.acquire(w) {
@@ -693,7 +696,10 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 		case errors.Is(err, ErrContentNotFound):
 			status = http.StatusNotFound
 		case errors.Is(err, ErrContentRejected):
-			status = http.StatusUnprocessableEntity
+			// The body names the reason, so the worker can tell the model
+			// WHY the file has no text rather than only that it has none.
+			s.writeAttachmentUnreadable(w, r, err)
+			return
 		case errors.Is(err, ErrContentUnavailable):
 			s.logger.WarnContext(
 				r.Context(),
@@ -705,7 +711,7 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 		http.Error(w, http.StatusText(status), status)
 		return
 	}
-	encoded, err := json.Marshal(value)
+	encoded, err := encodeAttachmentDocument(value)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeAttachmentObjectResponseBytes {
 		// Refused, never trimmed. A truncated document is worse than an
 		// unread one: the model is shown a prefix and told it is the file.
@@ -722,6 +728,47 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(encoded); err != nil {
 		s.logger.WarnContext(r.Context(), "attachment object write failed")
+	}
+}
+
+// encodeAttachmentDocument encodes without HTML escaping. The default
+// encoder writes `<`, `>` and `&` as six-byte escapes, which would let a text
+// full of markup grow six-fold and miss the response ceiling the text limit
+// was sized for. The body is JSON for the worker, never HTML.
+func encodeAttachmentDocument(value any) ([]byte, error) {
+	var buffer strings.Builder
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimSuffix(buffer.String(), "\n")), nil
+}
+
+// writeAttachmentUnreadable answers 422 with the refusal's reason. A
+// rejection without a reason (the source refused the object from its
+// metadata row) is reported as too_large, which is the only cause the source
+// has.
+func (s *ContentServer) writeAttachmentUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	reason := "too_large"
+	var refusal *AttachmentUnreadableError
+	if errors.As(err, &refusal) && refusal.Reason != "" {
+		reason = string(refusal.Reason)
+	}
+	encoded, encodeErr := json.Marshal(RuntimeAttachmentUnreadable{
+		SchemaVersion: RuntimeAttachmentUnreadableSchemaVersion,
+		Reason:        reason,
+	})
+	if encodeErr != nil {
+		http.Error(w, http.StatusText(http.StatusUnprocessableEntity), http.StatusUnprocessableEntity)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	if _, writeErr := w.Write(encoded); writeErr != nil {
+		s.logger.WarnContext(r.Context(), "attachment unreadable write failed")
 	}
 }
 

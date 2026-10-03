@@ -6,38 +6,53 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
 )
 
 const (
 	// RuntimeAttachmentObjectSchemaVersion is the exact discriminator the
 	// worker compares before it will read the body at all
-	// (ATTACHMENT_OBJECT_SCHEMA,
+	// (ATTACHMENT_OBJECT_SCHEMA_V2,
 	// services/elitea-worker-rust/src/transport/runtime_context.rs).
-	RuntimeAttachmentObjectSchemaVersion = "elitea.runtime.attachment-object.v1"
-
-	// maxRuntimeAttachmentObjectBytes bounds the OBJECT, not the response.
 	//
-	// It is deliberately far below the 150 MiB an attachment upload accepts
-	// (internal/api/v2/conversations/attachments.go). This route exists to put
-	// a document's text in front of a model inside one turn's prompt, and the
-	// prompt — not the disk — is the real ceiling: 128 KiB of text is already
-	// ~32k tokens, more than most turns can afford, and the bytes are buffered
-	// whole so the digest can be computed before anything is sent. A larger
-	// file is REFUSED rather than truncated: half a document read as though it
-	// were the whole one is worse than a file the model is only told about,
-	// which is exactly what the worker falls back to.
-	maxRuntimeAttachmentObjectBytes = 128 * 1024
+	// v2 replaced v1 when this route started to serve EXTRACTED text: v1
+	// carried the raw bytes of a UTF-8 file up to 128 KiB and nothing else;
+	// v2 carries the extracted text plus the page/section/sheet map, the
+	// source's unit count, the low-text pages and whether the text is
+	// complete. A v1 worker rejects a v2 document by its discriminator and
+	// falls back to naming the file, which is the pre-#606 behaviour.
+	RuntimeAttachmentObjectSchemaVersion = "elitea.runtime.attachment-object.v2"
+
+	// RuntimeAttachmentUnreadableSchemaVersion is the 422 body: the reason a
+	// stored attachment has no text this route can serve.
+	RuntimeAttachmentUnreadableSchemaVersion = "elitea.runtime.attachment-unreadable.v1"
+
+	// maxRuntimeAttachmentInputBytes bounds the SOURCE OBJECT that is read
+	// for extraction. It is the extractor's own input limit
+	// (extract.DefaultLimits().MaxInputBytes, 25 MiB); a larger upload is
+	// refused with reason too_large, from the metadata row alone.
+	maxRuntimeAttachmentInputBytes = 25 << 20
+
+	// maxRuntimeAttachmentServedTextBytes bounds the TEXT one response
+	// carries: about 500k tokens, which is more than any model's attachment
+	// budget, so the worker can inline what fits and page through the rest
+	// with its read/search tools. A longer extraction is served up to this
+	// limit at a unit boundary, and the document says so (complete=false and
+	// the units it covers). It is never cut without saying so.
+	maxRuntimeAttachmentServedTextBytes = 2 << 20
 
 	// maxRuntimeAttachmentObjectResponseBytes is the envelope's own ceiling,
 	// restated here so this side REFUSES rather than sends a body the client
 	// will reject after buffering it (MAX_ATTACHMENT_OBJECT_BYTES on the worker
-	// side). It is 8x the object cap because the content travels as a JSON
-	// STRING: a text file made entirely of control characters escapes to six
-	// characters per byte, so an object at the cap can legitimately serialize
-	// to ~768 KiB plus the identity envelope.
-	maxRuntimeAttachmentObjectResponseBytes = 1024 * 1024
+	// side). The text is encoded without HTML escaping and has no control
+	// characters other than newline and tab (extract.normalize), so it
+	// encodes to at most twice its size; the unit map adds well under 1 MiB
+	// (at most extract's unit limit of short labels).
+	maxRuntimeAttachmentObjectResponseBytes = 6 << 20
 
 	runtimeContextStageAttachmentRead         = "attachment_object_read"
+	runtimeContextStageAttachmentExtract      = "attachment_object_extract"
 	runtimeContextStageAttachmentConversation = "attachment_conversation"
 
 	// canonicalUUIDLength is 8-4-4-4-12 with its four separators. The claim's
@@ -53,7 +68,7 @@ const (
 // carried for the worker's diagnostics only. It is deliberately not the gate on
 // what may be returned: it is whatever the browser put in the multipart part,
 // so a .md arrives as application/octet-stream on one client and text/markdown
-// on another. The bytes decide instead — see RuntimeAttachmentObjectService.
+// on another. The bytes decide instead — see the extract package.
 type AttachmentObjectRecord struct {
 	Bucket     string
 	Name       string
@@ -76,36 +91,129 @@ type AttachmentObjectSource interface {
 	) (AttachmentObjectRecord, error)
 }
 
+// DocumentExtractor turns an attachment's bytes into text and a unit map.
+// *extract.Extractor is the production implementation.
+type DocumentExtractor interface {
+	Extract(ctx context.Context, data []byte) (extract.Document, error)
+}
+
+// AttachmentObjectVersion identifies the exact stored object an extraction
+// was made from. A re-upload under the same key changes updated_at (the
+// upsert in queries/artifact_storage.sql sets it), so an extraction of the
+// old bytes never answers for the new ones.
+type AttachmentObjectVersion struct {
+	ObjectID   int64
+	ByteLength int64
+	UpdatedAt  int64 // Unix microseconds, PostgreSQL's own precision.
+	// MediaType is the upload's recorded media type, for diagnostics only.
+	MediaType string
+}
+
+// AttachmentExtraction is the stored outcome of one extraction: a document,
+// or the reason there is none.
+type AttachmentExtraction struct {
+	Refused  bool
+	Reason   extract.Reason
+	Document extract.Document
+}
+
+// AttachmentExtractionCache is the sidecar store. Load answers for the
+// object the (project, bucket, name) triple resolves NOW, under the same
+// project/system-bucket/metadata-row rules as AttachmentObjectSource, and
+// returns its version even on a miss so that Save can refuse to file an
+// extraction under an object that changed in between.
+type AttachmentExtractionCache interface {
+	LoadAttachmentExtraction(
+		ctx context.Context,
+		projectID int64,
+		bucket string,
+		name string,
+		extractorVersion string,
+	) (AttachmentExtraction, AttachmentObjectVersion, bool, error)
+	SaveAttachmentExtraction(
+		ctx context.Context,
+		version AttachmentObjectVersion,
+		extraction AttachmentExtraction,
+	) error
+}
+
+// AttachmentUnreadableError is ErrContentRejected with the reason. The
+// content server sends the reason in the 422 body so the worker can tell the
+// model WHY a file has no text ("encrypted", "unsupported_format", ...).
+type AttachmentUnreadableError struct {
+	Reason extract.Reason
+}
+
+func (e *AttachmentUnreadableError) Error() string {
+	return "attachment unreadable: " + string(e.Reason)
+}
+
+func (e *AttachmentUnreadableError) Is(target error) bool {
+	return target == ErrContentRejected
+}
+
+func unreadable(reason extract.Reason) error {
+	return &AttachmentUnreadableError{Reason: reason}
+}
+
+// RuntimeAttachmentUnreadable is the 422 body.
+type RuntimeAttachmentUnreadable struct {
+	SchemaVersion string `json:"schema_version"`
+	Reason        string `json:"reason"`
+}
+
+// RuntimeAttachmentUnit is one page, slide, sheet or section of the served
+// text. Start and End are byte offsets into Content.
+type RuntimeAttachmentUnit struct {
+	Kind    string `json:"kind"`
+	Label   string `json:"label"`
+	Start   int    `json:"start"`
+	End     int    `json:"end"`
+	HasText bool   `json:"has_text"`
+}
+
 // RuntimeAttachmentObjectContext is the wire document. Its fields are the
 // complete set the worker accepts: `AttachmentObjectResponse` is
 // `deny_unknown_fields`, so one extra key here fails every attachment read with
 // a malformed-response error that names nothing.
 //
-// Content is the object's bytes as TEXT. There is no base64 alternative and no
-// binary branch on purpose: the only consumer splices this into a model prompt
-// as a `{"type":"text"}` chunk, so bytes that are not text have no destination
-// here. A PDF or a .docx is refused (422) and the worker falls back to
-// announcing the file by name — the same outcome as before this route existed,
-// which is why the runtime never has to grow an extractor to stay correct.
+// Content is EXTRACTED TEXT, never raw bytes. Units cover Content in order;
+// UnitCount is how many units the SOURCE has. When Complete is false the
+// worker must say which units the model has not seen (PartialReason says
+// why: page_limit, text_limit, cell_limit, or served_limit for a text longer
+// than one response carries).
 type RuntimeAttachmentObjectContext struct {
-	SchemaVersion string `json:"schema_version"`
-	ProjectID     int64  `json:"project_id"`
-	Bucket        string `json:"bucket"`
-	Name          string `json:"name"`
-	MediaType     string `json:"media_type"`
-	ByteLength    int64  `json:"byte_length"`
-	Content       string `json:"content"`
+	SchemaVersion    string                  `json:"schema_version"`
+	ProjectID        int64                   `json:"project_id"`
+	Bucket           string                  `json:"bucket"`
+	Name             string                  `json:"name"`
+	MediaType        string                  `json:"media_type"`
+	ByteLength       int64                   `json:"byte_length"`
+	Format           string                  `json:"format"`
+	ExtractorVersion string                  `json:"extractor_version"`
+	Content          string                  `json:"content"`
+	Units            []RuntimeAttachmentUnit `json:"units"`
+	UnitCount        int                     `json:"unit_count"`
+	LowTextUnits     []int                   `json:"low_text_units"`
+	TextBytes        int64                   `json:"text_bytes"`
+	TokenEstimate    int64                   `json:"token_estimate"`
+	Complete         bool                    `json:"complete"`
+	PartialReason    string                  `json:"partial_reason"`
 }
 
-// RuntimeAttachmentObjectService serves one stored chat attachment's TEXT to
-// the native runtime, under the same durable claim that already authorized the
-// turn the file was attached to.
+// RuntimeAttachmentObjectService serves one stored chat attachment's
+// EXTRACTED TEXT to the native runtime, under the same durable claim that
+// already authorized the turn the file was attached to.
 //
 // It exists because the native runtime has no other way to read those bytes:
 // it holds no vault, materializes no `artifact` toolkit family, and its egress
-// allowlist reaches the model gateway alone. Until this route existed a
-// document chunk flagged `needs_content_extraction` reached the model as its
-// FILENAME and nothing else (services/elitea-worker-rust/src/agents/attachments.rs).
+// allowlist reaches the model gateway alone.
+//
+// EXTRACTION HAPPENS HERE, ONCE. The first read of an attachment extracts it
+// (internal/infra/extract) and files the result in the sidecar store
+// (elitea_storage.attachment_extractions, keyed by the object's identity and
+// the extractor version); every later turn reads the sidecar. A refusal is
+// filed too, except a timeout, so a broken file is not parsed on every turn.
 //
 // THE AUTHORIZATION IS THE WHOLE POINT, and it has three independent parts:
 //
@@ -123,38 +231,46 @@ type RuntimeAttachmentObjectContext struct {
 //     place (internal/application/agentexecution/attachments.go,
 //     currentTurnAttachments): the upload endpoint keys every chat object
 //     `{conversationUUID}/{filename}`, so requiring the prefix is exactly
-//     "this file was uploaded to this conversation". Without it, a live claim
-//     for one conversation could read every attachment in the project — which
-//     is the one thing a route that hands raw bytes to a model must not allow.
+//     "this file was uploaded to this conversation".
 //
 // The request selects only the (bucket, name) pair, and it selects INSIDE that
 // project and that conversation.
 type RuntimeAttachmentObjectService struct {
 	authorizer AgentRuntimeContextAuthorizer
 	objects    AttachmentObjectSource
+	extractor  DocumentExtractor
+	cache      AttachmentExtractionCache
 	maxBytes   int64
+	maxServed  int
 }
 
+// NewRuntimeAttachmentObjectService wires the route. cache may be nil (every
+// read then extracts again); the other three are required.
 func NewRuntimeAttachmentObjectService(
 	authorizer AgentRuntimeContextAuthorizer,
 	objects AttachmentObjectSource,
+	extractor DocumentExtractor,
+	cache AttachmentExtractionCache,
 ) (*RuntimeAttachmentObjectService, error) {
-	if authorizer == nil || objects == nil {
+	if authorizer == nil || objects == nil || extractor == nil {
 		return nil, errors.New("runtime attachment object dependencies are required")
 	}
 	return &RuntimeAttachmentObjectService{
 		authorizer: authorizer,
 		objects:    objects,
-		maxBytes:   maxRuntimeAttachmentObjectBytes,
+		extractor:  extractor,
+		cache:      cache,
+		maxBytes:   maxRuntimeAttachmentInputBytes,
+		maxServed:  maxRuntimeAttachmentServedTextBytes,
 	}, nil
 }
 
-// Resolve reads one stored attachment for the claimed execution.
+// Resolve reads one stored attachment's text for the claimed execution.
 //
 // The order is the security boundary: authorize first, and take the project and
 // the conversation ONLY from what the claim resolved.
 //
-// The error taxonomy is chosen so that an operator can tell the three failures
+// The error taxonomy is chosen so that an operator can tell the failures
 // apart, because they mean very different things:
 //
 //	ErrContentUnauthorized  the claim was rejected, OR it was good and named a
@@ -164,10 +280,12 @@ func NewRuntimeAttachmentObjectService(
 //	                        codes.
 //	ErrContentNotFound      the claim was good, the conversation matched, and
 //	                        there is no such object.
-//	ErrContentRejected      the object exists and cannot be served as text —
-//	                        too large, or not UTF-8. The worker treats this the
-//	                        same as "no route": it announces the file and moves
-//	                        on.
+//	*AttachmentUnreadableError (Is ErrContentRejected)
+//	                        the object exists and has no text this route can
+//	                        serve — encrypted, an image, an unsupported or
+//	                        malformed format, over the input limit, or no text
+//	                        layer. The reason travels to the worker, which
+//	                        tells the model.
 func (service *RuntimeAttachmentObjectService) Resolve(
 	ctx context.Context,
 	claim ContentClaim,
@@ -175,7 +293,7 @@ func (service *RuntimeAttachmentObjectService) Resolve(
 	name string,
 ) (RuntimeAttachmentObjectContext, error) {
 	if service == nil || service.authorizer == nil || service.objects == nil ||
-		service.maxBytes <= 0 {
+		service.extractor == nil || service.maxBytes <= 0 || service.maxServed <= 0 {
 		return RuntimeAttachmentObjectContext{}, runtimeContextUnavailable(
 			runtimeContextStageAttachmentRead,
 		)
@@ -219,55 +337,191 @@ func (service *RuntimeAttachmentObjectService) Resolve(
 		return RuntimeAttachmentObjectContext{}, ErrContentUnauthorized
 	}
 
-	record, err := service.objects.ReadAttachmentObject(
-		ctx,
-		authorization.ResourceProjectID,
-		bucket,
-		name,
-		service.maxBytes,
+	extraction, mediaType, byteLength, err := service.extraction(
+		ctx, authorization.ResourceProjectID, bucket, name,
 	)
 	if err != nil {
+		return RuntimeAttachmentObjectContext{}, err
+	}
+	if extraction.Refused {
+		return RuntimeAttachmentObjectContext{}, unreadable(extraction.Reason)
+	}
+	return service.document(
+		authorization.ResourceProjectID, bucket, name, mediaType, byteLength, extraction.Document,
+	)
+}
+
+// extraction returns the sidecar if one is filed for the object as it is
+// now, and extracts (and files) one otherwise.
+func (service *RuntimeAttachmentObjectService) extraction(
+	ctx context.Context,
+	projectID int64,
+	bucket string,
+	name string,
+) (AttachmentExtraction, string, int64, error) {
+	var version AttachmentObjectVersion
+	cached := false
+	if service.cache != nil {
+		hit, objectVersion, found, err := service.cache.LoadAttachmentExtraction(
+			ctx, projectID, bucket, name, extract.Version,
+		)
+		switch {
+		case err == nil:
+			version = objectVersion
+			if found {
+				return hit, objectVersion.MediaType, objectVersion.ByteLength, nil
+			}
+			cached = true
+		case errors.Is(err, ErrContentNotFound):
+			return AttachmentExtraction{}, "", 0, ErrContentNotFound
+		case ctx.Err() != nil:
+			return AttachmentExtraction{}, "", 0, ctx.Err()
+		default:
+			// The sidecar store is an optimisation. Reading the object
+			// directly still gives the right answer.
+		}
+	}
+
+	record, err := service.objects.ReadAttachmentObject(ctx, projectID, bucket, name, service.maxBytes)
+	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return RuntimeAttachmentObjectContext{}, contextErr
+			return AttachmentExtraction{}, "", 0, contextErr
 		}
 		switch {
 		case errors.Is(err, ErrContentNotFound):
-			return RuntimeAttachmentObjectContext{}, ErrContentNotFound
+			return AttachmentExtraction{}, "", 0, ErrContentNotFound
 		case errors.Is(err, ErrContentRejected):
-			return RuntimeAttachmentObjectContext{}, ErrContentRejected
+			// The source refuses an object over the input limit from its
+			// metadata row, or one whose bytes disagree with that row.
+			outcome := AttachmentExtraction{Refused: true, Reason: extract.ReasonTooLarge}
+			var refusal *AttachmentUnreadableError
+			if errors.As(err, &refusal) {
+				outcome.Reason = refusal.Reason
+			}
+			return outcome, "", 0, nil
 		}
-		return RuntimeAttachmentObjectContext{}, runtimeContextUnavailable(
+		return AttachmentExtraction{}, "", 0, runtimeContextUnavailable(
 			runtimeContextStageAttachmentRead,
 		)
 	}
 	// Repeated against what the URL asked for even though the source already
-	// filtered on both. The duplication is deliberate and cheap: the worker
-	// validates the same pair on its side and would reject a mismatched
-	// document as an authorization failure with no diagnosis, so a
-	// disagreement is worth naming here instead.
+	// filtered on both. The worker validates the same pair on its side and
+	// would reject a mismatched document as an authorization failure with no
+	// diagnosis, so a disagreement is worth naming here instead.
 	if record.Bucket != bucket || record.Name != name {
-		return RuntimeAttachmentObjectContext{}, ErrContentNotFound
+		return AttachmentExtraction{}, "", 0, ErrContentNotFound
 	}
 	if int64(len(record.Content)) > service.maxBytes ||
 		record.ByteLength != int64(len(record.Content)) {
-		return RuntimeAttachmentObjectContext{}, ErrContentRejected
+		return AttachmentExtraction{Refused: true, Reason: extract.ReasonTooLarge}, record.MediaType, record.ByteLength, nil
 	}
-	// THE CONTENT DISCIPLINE. An empty file has no text to add and a
-	// non-UTF-8 one has no text at all; both are refused rather than sent as an
-	// empty or lossy chunk, because a model shown an empty "file content"
-	// answers as though the file were empty, while a model shown only the
-	// header knows it was not read.
-	if len(record.Content) == 0 || !utf8.Valid(record.Content) {
-		return RuntimeAttachmentObjectContext{}, ErrContentRejected
+
+	document, err := service.extractor.Extract(ctx, record.Content)
+	clearContentBytes(record.Content)
+	var outcome AttachmentExtraction
+	if err != nil {
+		reason, refused := extract.ReasonOf(err)
+		if !refused {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return AttachmentExtraction{}, "", 0, contextErr
+			}
+			return AttachmentExtraction{}, "", 0, runtimeContextUnavailable(
+				runtimeContextStageAttachmentExtract,
+			)
+		}
+		outcome = AttachmentExtraction{Refused: true, Reason: reason}
+	} else {
+		outcome = AttachmentExtraction{Document: document}
+	}
+	// A timeout depends on load as much as on the file, so it is not filed:
+	// the next turn tries again.
+	if cached && outcome.Reason != extract.ReasonTimeout {
+		_ = service.cache.SaveAttachmentExtraction(ctx, version, outcome)
+	}
+	return outcome, record.MediaType, record.ByteLength, nil
+}
+
+// document projects an extraction onto the wire, serving at most maxServed
+// bytes of text and cutting only at a unit boundary when one fits.
+func (service *RuntimeAttachmentObjectService) document(
+	projectID int64,
+	bucket string,
+	name string,
+	mediaType string,
+	byteLength int64,
+	document extract.Document,
+) (RuntimeAttachmentObjectContext, error) {
+	text := document.Text
+	if text == "" || !utf8.ValidString(text) {
+		return RuntimeAttachmentObjectContext{}, unreadable(extract.ReasonNoText)
+	}
+	complete := !document.Partial
+	partialReason := string(document.PartialBy)
+	cut := len(text)
+	if cut > service.maxServed {
+		complete = false
+		partialReason = "served_limit"
+		cut = 0
+		for _, unit := range document.Units {
+			if unit.End <= service.maxServed {
+				cut = unit.End
+			}
+		}
+		if cut == 0 {
+			// One unit alone is longer than a response: serve its start, at
+			// a line end when there is one.
+			cut = service.maxServed
+			if newline := strings.LastIndexByte(text[:cut], '\n'); newline > cut/2 {
+				cut = newline
+			}
+			for cut > 0 && !utf8.RuneStart(text[cut]) {
+				cut--
+			}
+		}
+	}
+	units := make([]RuntimeAttachmentUnit, 0, len(document.Units))
+	for _, unit := range document.Units {
+		if unit.Start >= cut && cut < len(text) {
+			break
+		}
+		end := unit.End
+		if end > cut {
+			end = cut
+		}
+		units = append(units, RuntimeAttachmentUnit{
+			Kind:    string(unit.Kind),
+			Label:   unit.Label,
+			Start:   unit.Start,
+			End:     end,
+			HasText: unit.HasText,
+		})
+	}
+	lowText := make([]int, 0, len(document.LowTextUnits))
+	for _, number := range document.LowTextUnits {
+		if number <= len(units) {
+			lowText = append(lowText, number)
+		}
+	}
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
 	}
 	return RuntimeAttachmentObjectContext{
-		SchemaVersion: RuntimeAttachmentObjectSchemaVersion,
-		ProjectID:     authorization.ResourceProjectID,
-		Bucket:        record.Bucket,
-		Name:          record.Name,
-		MediaType:     record.MediaType,
-		ByteLength:    record.ByteLength,
-		Content:       string(record.Content),
+		SchemaVersion:    RuntimeAttachmentObjectSchemaVersion,
+		ProjectID:        projectID,
+		Bucket:           bucket,
+		Name:             name,
+		MediaType:        mediaType,
+		ByteLength:       byteLength,
+		Format:           string(document.Format),
+		ExtractorVersion: document.ExtractorVersion,
+		Content:          text[:cut],
+		Units:            units,
+		UnitCount:        max(document.UnitCount, len(units)),
+		LowTextUnits:     lowText,
+		TextBytes:        int64(len(text)),
+		TokenEstimate:    document.TokenEstimate,
+		Complete:         complete,
+		PartialReason:    partialReason,
 	}, nil
 }
 
