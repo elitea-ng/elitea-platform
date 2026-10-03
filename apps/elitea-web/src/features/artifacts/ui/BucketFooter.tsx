@@ -16,7 +16,7 @@ interface BucketFooterProps {
  *
  * Ported from `apps/elitea-ui/src/pages/Artifacts/Components/BucketFooter.jsx`.
  * Measured on next.elitea.ai: a 45px strip, `0.75rem 1.5rem`, `background.
- * tabPanel` under a divider rule, labels at `bodySmall2` in `text.primary` and
+ * tabPanel` under a divider rule, labels at `bodySmall` in `text.primary` and
  * their values in `text.secondary`.
  */
 export function BucketFooter(props: BucketFooterProps): ReactNode {
@@ -25,14 +25,14 @@ export function BucketFooter(props: BucketFooterProps): ReactNode {
       <Box sx={statSx}>
         <Typography
           component="span"
-          variant="bodySmall2"
+          variant="bodySmall"
           color="text.primary"
         >
           {t('artifacts.buckets.countLabel', 'Buckets:')}
         </Typography>
         <Typography
           component="span"
-          variant="bodySmall2"
+          variant="bodySmall"
           sx={valueSx}
         >
           {props.bucketCount}
@@ -41,14 +41,14 @@ export function BucketFooter(props: BucketFooterProps): ReactNode {
       <Box sx={statSx}>
         <Typography
           component="span"
-          variant="bodySmall2"
+          variant="bodySmall"
           color="text.primary"
         >
           {t('artifacts.buckets.sizeLabel', 'Size:')}
         </Typography>
         <Typography
           component="span"
-          variant="bodySmall2"
+          variant="bodySmall"
           sx={valueSx}
         >
           {props.totalSize}

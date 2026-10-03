@@ -68,7 +68,7 @@ function StatTile({
       <Typography variant="bodySmall" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="h6" sx={{ fontWeight: 600, color }}>
+      <Typography variant="headingSmall" component="h6" sx={{ color }}>
         {value}
       </Typography>
     </Box>

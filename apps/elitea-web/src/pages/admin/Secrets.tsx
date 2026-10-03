@@ -109,7 +109,7 @@ export function AdminSecrets() {
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.secrets.title', 'Secrets')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

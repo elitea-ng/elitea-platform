@@ -379,7 +379,7 @@ export function UserMessage({
       )}
       {attachmentError !== null && (
         <Typography
-          variant="caption"
+          variant="bodySmall"
           color="error"
           role="alert"
           data-testid="attachment-error"

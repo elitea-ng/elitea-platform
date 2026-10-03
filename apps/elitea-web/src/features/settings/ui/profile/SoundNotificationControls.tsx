@@ -73,7 +73,7 @@ export const SoundNotificationControls = memo(
         </Box>
         {config.enabled && (
           <Box sx={styles.sliderRow}>
-            <Typography variant="caption" sx={styles.sliderLabel}>
+            <Typography variant="bodySmall" sx={styles.sliderLabel}>
               {t('settings.volume', 'Volume')}
             </Typography>
             <Slider

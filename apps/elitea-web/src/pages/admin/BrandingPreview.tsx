@@ -104,7 +104,7 @@ function SwatchStrip({ swatches, scheme }: { readonly swatches: readonly Swatch[
             // A computed value, never a literal: the swatch IS the derivation's answer.
             style={{ backgroundColor: swatch.value }}
           />
-          <Typography variant="labelTiny" color="text.secondary" sx={{ textAlign: 'center' }}>
+          <Typography variant="labelSmall" color="text.secondary" sx={{ textAlign: 'center' }}>
             {swatchLabel(swatch.id)}
           </Typography>
         </Box>
@@ -224,7 +224,7 @@ export function BrandingPreview({ pack }: BrandingPreviewProps) {
       data-testid="branding-preview"
       sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
     >
-      <Typography id="branding-preview-heading" variant="h6" component="h2">
+      <Typography id="branding-preview-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.preview.title', 'Preview')}
       </Typography>
       {SCHEMES.map((scheme) => (

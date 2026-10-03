@@ -156,7 +156,7 @@ export const AuditHeatmap = memo(function AuditHeatmap({
     return (
       <Box sx={{ paddingBlock: '0.5rem' }}>
         {isFetching ? <LinearProgress /> : null}
-        <Typography variant="bodySmall" color="text.secondary">
+        <Typography variant="bodyMedium" color="text.secondary">
           {t('pages.admin.audit.heatmap.empty', 'No activity to chart for this range.')}
         </Typography>
       </Box>

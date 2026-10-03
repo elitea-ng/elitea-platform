@@ -117,7 +117,7 @@ export function AdminProjects() {
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.projects.title', 'Projects')}
         </Typography>
         {/*

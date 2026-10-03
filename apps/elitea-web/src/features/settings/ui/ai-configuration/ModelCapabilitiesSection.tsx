@@ -36,7 +36,7 @@ export default memo(function ModelCapabilitiesSection({ capabilities }: ModelCap
           so the violation stayed hidden until the configurations runtime
           started serving one. `variant` keeps the type scale; `component`
           fixes the document outline. */}
-      <Typography variant="h6" component="h4" sx={styles.sectionTitle}>
+      <Typography variant="headingSmall" component="h4" sx={styles.sectionTitle}>
         {t('ai-configuration.modelCapabilities.title', 'Model Capabilities')}
       </Typography>
       <Box sx={styles.capabilitiesContainer}>

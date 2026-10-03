@@ -122,7 +122,7 @@ export function ToolModal({ open, onClose, toolAction }: ToolModalProps): ReactN
       slotProps={{ paper: { sx: styles.paper } }}
     >
       <DialogTitle sx={styles.title}>
-        <Typography variant="h6">{toolModalTitle(toolAction.type, toolAction.name)}</Typography>
+        <Typography variant="headingMedium" component="span">{toolModalTitle(toolAction.type, toolAction.name)}</Typography>
         <IconButton
           size="small"
           aria-label={t('common.closeAriaLabel', 'Close')}

@@ -53,7 +53,7 @@ function UsageFigure({ label, value }: { readonly label: string; readonly value:
       <Typography variant="labelMedium" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="h6">{value}</Typography>
+      <Typography variant="headingSmall" component="h6">{value}</Typography>
     </Box>
   );
 }

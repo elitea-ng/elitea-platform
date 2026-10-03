@@ -72,6 +72,7 @@ export function EliteaCatalog(): ReactNode {
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, padding: '1.5rem 1.5rem 0 1.5rem' }}>
         <Typography
           variant="headingLarge"
+          component="h1"
           data-testid="catalog-page-heading"
         >
           {t('pages.eliteaCatalog.title', 'Welcome to ELITEA Catalog!')}

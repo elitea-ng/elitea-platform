@@ -172,7 +172,7 @@ export function ApplicationEditForm({
                     <CharacterCounter
                       value={localName}
                       maxLength={MAX_NAME_LENGTH}
-                      textVariant="labelTiny"
+                      textVariant="labelSmall"
                       sx={nameCharactersLabelSx}
                       data-testid="agent-name-counter"
                     />
@@ -205,7 +205,7 @@ export function ApplicationEditForm({
                 <CharacterCounter
                   value={description}
                   maxLength={MAX_DESCRIPTION_LENGTH}
-                  textVariant="labelTiny"
+                  textVariant="labelSmall"
                   visible={isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0}
                   sx={descriptionCharactersLabelSx}
                   data-testid="agent-description-counter"

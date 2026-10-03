@@ -92,7 +92,7 @@ function SecretCell({ row, canReveal, isRevealed, onToggle }: SecretCellProps) {
   const displayValue = isRevealed ? row.secret : MASKED_SECRET;
   return (
     <Box sx={secretCellSx}>
-      <Typography variant="bodySmall2" data-testid={`webhook-secret-${row.id}`}>
+      <Typography variant="bodySmall" data-testid={`webhook-secret-${row.id}`}>
         {displayValue}
       </Typography>
       {canReveal && (
@@ -176,7 +176,7 @@ export function WebhooksTable({ projectId, rows, isLoading, permissions, onEdit,
                 <TableCell>
                   <Box sx={eventsCellSx}>
                     {row.events.length === 0
-                      ? <Typography variant="bodySmall2" color="text.secondary">{t('entities.webhook.table.allEvents', 'All events')}</Typography>
+                      ? <Typography variant="bodySmall" color="text.secondary">{t('entities.webhook.table.allEvents', 'All events')}</Typography>
                       : row.events.map((event) => <Chip key={event} label={event} size="small" />)}
                   </Box>
                 </TableCell>

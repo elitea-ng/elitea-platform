@@ -110,7 +110,7 @@ function NameField({ visible, value, nameIsRequired, disabled, showValidation, h
         <CharacterCounter
           value={value}
           maxLength={MAX_NAME_LENGTH}
-          textVariant="bodySmall2"
+          textVariant="bodySmall"
           sx={nameLengthMessageSx}
           data-testid="toolkit-name-counter"
         />

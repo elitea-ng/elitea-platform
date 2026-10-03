@@ -224,7 +224,7 @@ export function BrandingAssetFields({
 }: BrandingAssetFieldsProps) {
   return (
     <Box component="section" aria-labelledby="branding-assets-heading" sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <Typography id="branding-assets-heading" variant="h6" component="h2">
+      <Typography id="branding-assets-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.group.assets', 'Logos and images')}
       </Typography>
       {assetSpecs().map((spec) => {

@@ -42,7 +42,7 @@ export function QuestionRow({ question, index, disabled, picked, text, onPick, o
     >
       {question.header && (
         <Typography
-          variant="caption"
+          variant="bodySmall"
           sx={{ fontWeight: 600, color: 'text.secondary' }}
         >
           {question.header}
@@ -50,7 +50,8 @@ export function QuestionRow({ question, index, disabled, picked, text, onPick, o
       )}
       {question.question && (
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           sx={{ color: 'text.primary' }}
         >
           {question.question}
@@ -62,7 +63,7 @@ export function QuestionRow({ question, index, disabled, picked, text, onPick, o
             <Typography
               component="span"
               data-testid={`hitl-answer-optional-${index}`}
-              variant="caption"
+              variant="bodySmall"
               sx={{ color: 'text.secondary', ml: 0.5 }}
             >
               {t('chatMessages.hitlAnswer.optional', '(optional)')}

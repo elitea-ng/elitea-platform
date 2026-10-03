@@ -91,7 +91,7 @@ export function WebhookDeliveriesPanel({ projectId, webhookId, canRedeliver }: W
   if (deliveries.length === 0) {
     return (
       <Box sx={rootSx}>
-        <Typography variant="bodySmall2" sx={emptySx}>
+        <Typography variant="bodySmall" sx={emptySx}>
           {t('entities.webhook.deliveries.empty', 'No deliveries yet. This webhook fires the next time one of its events happens.')}
         </Typography>
       </Box>
@@ -115,9 +115,9 @@ export function WebhookDeliveriesPanel({ projectId, webhookId, canRedeliver }: W
           {deliveries.map((delivery) => (
             <TableRow key={delivery.id} data-testid={`webhook-delivery-${delivery.id}`}>
               <TableCell>
-                <Typography variant="bodySmall2">{delivery.event}</Typography>
+                <Typography variant="bodySmall">{delivery.event}</Typography>
                 {delivery.redelivery_of ? (
-                  <Typography variant="bodySmall2" color="text.secondary">
+                  <Typography variant="bodySmall" color="text.secondary">
                     {t('entities.webhook.deliveries.redeliveryOf', 'Redelivery of {{id}}', { id: delivery.redelivery_of })}
                   </Typography>
                 ) : null}
@@ -134,13 +134,13 @@ export function WebhookDeliveriesPanel({ projectId, webhookId, canRedeliver }: W
               <TableCell>
                 {delivery.response_code ?? t('entities.webhook.deliveries.noResponse', 'No response')}
                 {delivery.last_error ? (
-                  <Typography variant="bodySmall2" color="error.main" title={delivery.last_error}>
+                  <Typography variant="bodySmall" color="error.main" title={delivery.last_error}>
                     {delivery.last_error}
                   </Typography>
                 ) : null}
               </TableCell>
               <TableCell>
-                <Typography variant="bodySmall2" title={delivery.created_at}>
+                <Typography variant="bodySmall" title={delivery.created_at}>
                   {new Date(delivery.created_at).toLocaleString()}
                 </Typography>
               </TableCell>

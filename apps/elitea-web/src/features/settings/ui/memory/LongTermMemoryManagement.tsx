@@ -127,7 +127,7 @@ export const LongTermMemoryManagement = memo(function LongTermMemoryManagement({
                 {memoryState.isBulkToggling && (
                   <Box sx={styles.bulkProgress}>
                     <CircularProgress size={16} />
-                    <Typography variant="bodySmall2">{t('settings.longTermMemory.bulkToggling', 'Updating all memories…')}</Typography>
+                    <Typography variant="bodySmall">{t('settings.longTermMemory.bulkToggling', 'Updating all memories…')}</Typography>
                   </Box>
                 )}
 

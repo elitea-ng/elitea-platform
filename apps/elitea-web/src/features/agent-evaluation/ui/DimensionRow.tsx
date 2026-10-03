@@ -47,9 +47,10 @@ export function DimensionRow(props: DimensionRowProps): ReactNode {
       data-testid={`evaluation-dimension-row-${dimension.id}`}
     >
       <Box sx={textSx}>
-        <Typography variant="body1">{dimension.name}</Typography>
+        <Typography variant="bodyMedium" component="p">{dimension.name}</Typography>
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           color="text.secondary"
         >
           {`${dimension.allowed_engines.join(', ')} · ${dimension.scale_min}-${dimension.scale_max} · ${dimension.polarity}`}

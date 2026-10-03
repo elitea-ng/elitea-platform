@@ -157,7 +157,7 @@ export function AdminSchedulesTasks() {
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.schedules.title', 'Schedules & Tasks')}
         </Typography>
         {/* The search box filters schedules only, so it is not rendered on the

@@ -236,7 +236,7 @@ export function ApplicationAnswer({
       }}
     >
       {isSwarmChild && swarmAgentName ? (
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+        <Typography variant="bodySmall" sx={{ color: 'text.secondary' }}>
           {swarmAgentName}
         </Typography>
       ) : (
@@ -345,7 +345,7 @@ export function ApplicationAnswer({
                     animation: 'pulse 1.5s infinite',
                   }}
                 />
-                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                <Typography variant="bodyMedium" component="p" sx={{ color: 'text.secondary' }}>
                   {isStreaming ? 'Streaming...' : 'Loading...'}
                 </Typography>
               </Box>

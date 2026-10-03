@@ -48,11 +48,11 @@ const EditorHeader = ({ title, subtitle, onCancel, onDiscard, saveButton, isPubl
           {t('widgets.editor.editorHeader.close', '✕')}
         </Box>
         <Box>
-          <Typography variant="subtitle1" color="text.secondary" noWrap sx={{ fontWeight: 600, fontSize: theme.typography.headingSmall.fontSize }}>
+          <Typography variant="headingSmall" component="h6" color="text.secondary" noWrap>
             {title}
           </Typography>
           {subtitle && (
-            <Typography variant="body2" color="text.primary" noWrap sx={{ fontSize: theme.typography.bodySmall.fontSize }}>
+            <Typography variant="bodySmall" component="p" color="text.primary" noWrap>
               {subtitle}
             </Typography>
           )}

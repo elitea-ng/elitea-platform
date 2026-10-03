@@ -172,7 +172,7 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
                 * "Preview Voice" a slider's height further down. */}
               <Box sx={styles.slidersContainer}>
                 <Box sx={styles.sliderRow}>
-                  <Typography variant="caption" sx={styles.sliderLabel}>
+                  <Typography variant="bodySmall" sx={styles.sliderLabel}>
                     {t('settings.voice.speed', 'Speed')}
                   </Typography>
                   <Slider
@@ -190,7 +190,7 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
                   />
                 </Box>
                 <Box sx={styles.sliderRow}>
-                  <Typography variant="caption" sx={styles.sliderLabel}>
+                  <Typography variant="bodySmall" sx={styles.sliderLabel}>
                     {t('settings.voice.volume', 'Volume')}
                   </Typography>
                   <Slider

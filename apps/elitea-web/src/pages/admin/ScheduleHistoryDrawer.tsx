@@ -116,7 +116,7 @@ export function ScheduleHistoryDrawer({ schedule, onClose }: ScheduleHistoryDraw
     >
       <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Box>
-          <Typography variant="h6">
+          <Typography variant="headingSmall" component="h2">
             {t('pages.admin.schedules.history.title', 'Execution history')}
           </Typography>
           <Typography variant="bodySmall" color="text.secondary">

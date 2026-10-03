@@ -77,7 +77,7 @@ export function AdminBudgetMembersDrawer({
       slotProps={{ paper: { sx: { width: 'min(40rem, 100vw)' } } }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 1.25rem' }}>
-        <Typography variant="h6" sx={{ flex: 1 }}>
+        <Typography variant="headingSmall" component="h2" sx={{ flex: 1 }}>
           {t('pages.admin.budgets.members.title', 'Member budgets — {{name}}', {
             name: projectName,
           })}

@@ -177,7 +177,7 @@ describe('Toolkits', () => {
 
     renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
 
-    expect(await screen.findByText('Toolkits')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Toolkits' })).toBeInTheDocument();
     expect(await screen.findByText('My GitHub')).toBeInTheDocument();
     expect(screen.getByTestId('toolkit-card')).toBeInTheDocument();
   });
@@ -206,7 +206,7 @@ describe('Toolkits', () => {
 
     renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
 
-    expect(await screen.findByText('MCPs')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'MCPs' })).toBeInTheDocument();
     expect(await screen.findByText('My MCP Server')).toBeInTheDocument();
     expect(screen.queryByText('My GitHub')).not.toBeInTheDocument();
   });
@@ -246,7 +246,7 @@ describe('Toolkits', () => {
 
     renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
 
-    expect(await screen.findByText('MCPs')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'MCPs' })).toBeInTheDocument();
     expect(screen.getByTestId('mcps-list-panel')).toBeInTheDocument();
   });
 

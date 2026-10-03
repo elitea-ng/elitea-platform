@@ -170,7 +170,7 @@ export function DatasetCasesPanel(props: DatasetCasesPanelProps): ReactNode {
             {t('features.agentEvaluation.cases.add', 'Add case')}
           </BaseBtn>
           {addError !== undefined && (
-            <Typography role="alert" variant="body2" color="error" data-testid="dataset-case-error">
+            <Typography role="alert" variant="bodyMedium" component="p" color="error" data-testid="dataset-case-error">
               {addError}
             </Typography>
           )}

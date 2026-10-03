@@ -89,7 +89,7 @@ function StatTile({ label, value, hint }: {
       <Typography variant="bodySmall" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingSmall" component="h6">
         {value}
       </Typography>
       {hint !== undefined ? (

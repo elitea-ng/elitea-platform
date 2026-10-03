@@ -80,7 +80,8 @@ function LibraryStatus({ isLoading, isError, isEmpty }: LibraryStatusProps): Rea
     return (
       <Typography
         role="alert"
-        variant="body2"
+        variant="bodyMedium"
+        component="p"
         data-testid="evaluation-library-error"
       >
         {t('features.agentEvaluation.loadFailed', 'Failed to load the evaluation library.')}
@@ -90,7 +91,8 @@ function LibraryStatus({ isLoading, isError, isEmpty }: LibraryStatusProps): Rea
   if (isEmpty) {
     return (
       <Typography
-        variant="body2"
+        variant="bodyMedium"
+        component="p"
         color="text.secondary"
         data-testid="evaluation-library-empty"
       >
@@ -138,7 +140,8 @@ export function EvaluationLibraryView(props: EvaluationLibraryViewProps): ReactN
         data-testid="evaluation-library-view"
       >
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           color="text.secondary"
         >
           {t(
@@ -157,9 +160,10 @@ export function EvaluationLibraryView(props: EvaluationLibraryViewProps): ReactN
     >
       <Box sx={headerSx}>
         <Box>
-          <Typography variant="h6">{t('features.agentEvaluation.title', 'Evaluation library')}</Typography>
+          <Typography variant="headingSmall" component="h2">{t('features.agentEvaluation.title', 'Evaluation library')}</Typography>
           <Typography
-            variant="body2"
+            variant="bodyMedium"
+            component="p"
             color="text.secondary"
           >
             {t('features.agentEvaluation.subtitle', 'Define reusable scoring dimensions for this project.')}

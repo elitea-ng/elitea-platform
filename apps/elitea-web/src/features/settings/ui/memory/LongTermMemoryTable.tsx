@@ -86,7 +86,7 @@ export function LongTermMemoryTable({ rows, isLoading, canWrite, onEdit, onToggl
             {rows.map((row) => (
               <TableRow key={row.id} data-testid={`long-term-memory-row-${row.id}`}>
                 <TableCell sx={contentCellSx}>
-                  <Typography variant="bodySmall" data-testid={`long-term-memory-content-${row.id}`}>
+                  <Typography variant="bodyMedium" data-testid={`long-term-memory-content-${row.id}`}>
                     {summarize(row.content)}
                   </Typography>
                 </TableCell>

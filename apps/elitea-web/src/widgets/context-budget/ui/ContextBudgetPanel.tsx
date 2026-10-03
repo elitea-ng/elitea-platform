@@ -119,7 +119,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
       <Box sx={(theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), paddingX: theme.spacing(2), paddingY: theme.spacing(1) })}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Typography
-            variant="bodySmall2"
+            variant="bodySmall"
             data-testid="context-budget-tokens"
             sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}
           >
@@ -127,7 +127,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
           </Typography>
           <Box sx={(theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) })}>
             <Typography
-              variant="bodySmall2"
+              variant="bodySmall"
               data-testid="context-budget-utilization"
               sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}
             >
@@ -148,7 +148,7 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
         {stats.usageAvailable && <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />}
       </Box>
 
-      {stats.runtime && <Typography variant="bodySmall2" sx={{ paddingX: 2, paddingBottom: 1 }}>
+      {stats.runtime && <Typography variant="bodySmall" sx={{ paddingX: 2, paddingBottom: 1 }}>
         {stats.runtime.providerUsage
           ? t('widgets.contextBudget.providerHelp', 'Provider-reported input and output for the latest model call, including cached input and reasoning. The safety margin is excluded from the available window. The next request is estimated separately for automatic compaction.')
           : stats.runtime.autoOutput
@@ -163,13 +163,13 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
           sx={(theme: Theme) => ({ display: 'flex', alignItems: 'center', paddingX: theme.spacing(2) })}
         >
           <Typography
-            variant="bodySmall2"
+            variant="bodySmall"
             sx={(theme: Theme) => ({ flex: 1, color: theme.vars.palette.text.default })}
           >
             {t('widgets.contextBudget.statLabel', '{{label}}:', { label: row.label })}
           </Typography>
           <Typography
-            variant="bodySmall2"
+            variant="bodySmall"
             sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, textTransform: 'capitalize' })}
           >
             {row.value}
@@ -277,5 +277,5 @@ function ContextPhaseNotice({ stats }: ContextBudgetPanelProps): ReactNode {
     ? t('widgets.contextBudget.compacted', 'Context compacted. The conversation history remains available.')
     : runtime.active ? t('widgets.contextBudget.compacting', 'Compacting context…')
       : t('widgets.contextBudget.compactionInterrupted', 'Compaction stopped before completion.');
-  return <Typography component="output" variant="bodySmall2" sx={{ paddingX: 2, paddingBottom: 1 }}>{text}</Typography>;
+  return <Typography component="output" variant="bodySmall" sx={{ paddingX: 2, paddingBottom: 1 }}>{text}</Typography>;
 }

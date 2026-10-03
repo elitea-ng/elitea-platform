@@ -60,7 +60,7 @@ export function RailTrendingAuthorsView({ authors, isLoading, isError, onSelect 
     <Box data-testid="entity-rail-trending-authors">
       <Typography
         component="div"
-        variant="subtitle1"
+        variant="headingSmall"
         sx={titleSx}
       >
         {t('shared.ui.entityRail.trendingAuthors.title', 'Trending Authors')}
@@ -74,9 +74,9 @@ export function RailTrendingAuthorsView({ authors, isLoading, isError, onSelect 
             sx={skeletonSx}
           />
         ))}
-      {isError && !isLoading && <Typography variant="body2">{t('shared.ui.entityRail.trendingAuthors.loadError', 'Failed to load.')}</Typography>}
+      {isError && !isLoading && <Typography variant="bodyMedium" component="p">{t('shared.ui.entityRail.trendingAuthors.loadError', 'Failed to load.')}</Typography>}
       {!isLoading && !isError && authors.length === 0 && (
-        <Typography variant="body2">{t('shared.ui.entityRail.trendingAuthors.empty', 'No authors to display.')}</Typography>
+        <Typography variant="bodyMedium" component="p">{t('shared.ui.entityRail.trendingAuthors.empty', 'No authors to display.')}</Typography>
       )}
       {!isLoading && !isError && authors.length > 0 && (
         <List dense>

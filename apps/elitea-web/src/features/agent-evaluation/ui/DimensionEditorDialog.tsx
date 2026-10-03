@@ -132,7 +132,8 @@ export function DimensionEditorDialog(props: DimensionEditorDialogProps): ReactN
           {displayedError !== undefined && (
             <Typography
               role="alert"
-              variant="body2"
+              variant="bodyMedium"
+              component="p"
               color="error"
               data-testid="dimension-editor-error"
             >

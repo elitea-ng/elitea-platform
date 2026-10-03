@@ -332,6 +332,8 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
   return (
     <Box sx={pageSx}>
       <PageHeader
+        title={title}
+        titleComponent="h1"
         tabs={{ items: [{ value: 'all', label: title }], selectedIndex: 0, ariaLabel: title, testIdPrefix: 'toolkits-tab' }}
       />
       <Box

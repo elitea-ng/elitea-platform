@@ -176,7 +176,7 @@ export function StateVariableItem(props: StateVariableItemProps): ReactNode {
       {errorMessage && (
         <Box sx={errorContainerSx}>
           <Typography
-            variant="caption"
+            variant="bodySmall"
             sx={errorTextSx}
           >
             {errorMessage}

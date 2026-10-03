@@ -31,7 +31,6 @@ export type ModalVariant = 'simple' | 'complex';
 export interface ModalHeaderOptions {
   /** Rendered to the left of the title, `variant="simple"` only. */
   icon?: ReactNode;
-  titleVariant?: 'headingSmall' | 'headingMedium' | 'headingLarge';
   /** `variant="complex"` only: extra controls rendered in the header, right-aligned. */
   actions?: ReactNode;
   closeButtonDataTestId?: string;
@@ -120,8 +119,11 @@ interface ModalHeaderProps {
 function ModalHeader({ title, header, isSimple, onClose }: ModalHeaderProps): ReactNode {
   const titleNode =
     typeof title === 'string' ? (
+      // Every dialog title is `headingMedium` (typography spec §2). It is a
+      // span: `DialogTitle` itself is the `<h2>`.
       <Typography
-        variant={header?.titleVariant ?? 'headingSmall'}
+        variant="headingMedium"
+        component="span"
         color="text.secondary"
       >
         {title}

@@ -99,14 +99,14 @@ export function ToolCardBody({ tool, toolkitName, isAttachmentToolkit, isAgentOr
         >
           <Typography
             component="span"
-            variant="bodySmall2"
+            variant="bodySmall"
             sx={variablesToggleLabelSx}
           >
             {showVariables ? t('agents.toolCard.hideVariables', 'Hide variables') : t('agents.toolCard.showVariables', 'Show variables')}
           </Typography>
           <Typography
             component="span"
-            variant="bodySmall2"
+            variant="bodySmall"
             sx={variablesToggleCountSx}
           >
             ({tool.variables?.length ?? 0})

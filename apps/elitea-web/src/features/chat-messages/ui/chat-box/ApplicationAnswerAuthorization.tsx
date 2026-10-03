@@ -30,8 +30,8 @@ export function ApplicationAnswerAuthorization({ actions, messageId, continuatio
         return (
           <Box key={requestId ?? `authorization-${index}`} component="section"
             aria-label={`${owner} authorization`} sx={{ p: 1.5, border: 1, borderColor: 'warning.main' }}>
-            <Typography variant="subtitle2">{owner} — Authorization required</Typography>
-            <Typography variant="body2">Execution is paused. The protected tool has not run.</Typography>
+            <Typography variant="labelMedium" component="h6">{owner} — Authorization required</Typography>
+            <Typography variant="bodyMedium" component="p">Execution is paused. The protected tool has not run.</Typography>
             <ChatContinue
               authRequired
               disabled={!onContinueMcpExecution || !requestId}

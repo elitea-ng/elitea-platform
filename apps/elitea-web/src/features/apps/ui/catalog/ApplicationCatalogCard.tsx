@@ -216,13 +216,13 @@ export function ApplicationCatalogCard({
           title={
             <>
               <Typography
-                variant="bodySmall2"
+                variant="bodySmall"
                 sx={{ fontWeight: 700, ...lineClamp(2) }}
               >
                 {application.name}
               </Typography>
               <Typography
-                variant="bodySmall2"
+                variant="bodySmall"
                 sx={lineClamp(4)}
               >
                 {application.description}

@@ -229,7 +229,7 @@ export function ConfigurationToolMapEditor({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       {rows.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="bodyMedium" component="p" color="text.secondary">
           {t('pages.admin.configuration.toolMap.empty', 'No toolkits are listed.')}
         </Typography>
       ) : (

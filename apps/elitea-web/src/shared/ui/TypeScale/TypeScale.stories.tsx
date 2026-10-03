@@ -126,7 +126,7 @@ export const OverridesStayOnTheLadder: Story = {
     const slots: [string, string | undefined, number][] = [
       ['dialog-title', undefined, 16],
       ['menu-item', undefined, 14],
-      ['chip', '.MuiChip-label', 12],
+      ['chip', 'span', 12],
       ['tab', undefined, 14],
       ['table-head', undefined, 14],
       ['table-body', undefined, 14],
@@ -135,9 +135,9 @@ export const OverridesStayOnTheLadder: Story = {
       ['field-shrunk', 'label', 14],
       ['field-shrunk', 'legend', 12],
       ['helper', undefined, 12],
-      ['alert', '.MuiAlert-message', 14],
-      ['list-item', '.MuiListItemText-primary', 14],
-      ['list-item', '.MuiListItemText-secondary', 12],
+      ['alert', ':scope > div:last-child', 14],
+      ['list-item', 'span', 14],
+      ['list-item', 'p', 12],
       ['avatar-40', undefined, 16],
       ['avatar-24', undefined, 12],
     ];

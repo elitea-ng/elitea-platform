@@ -207,7 +207,7 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
       {isOrphan && (
         <Box sx={agentNodeStyles.orphanWarning}>
           <WarningAmberIcon fontSize="small" />
-          <Typography variant="caption">
+          <Typography variant="bodySmall">
             {t(
               'pipelines.flowEditor.agentNode.orphanWarning',
               'Agent not found — select a replacement or delete this node',

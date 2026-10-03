@@ -21,6 +21,7 @@ import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 
 import { BrandLogoMark } from '@/shared/ui/brand-logo';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
 
 const AVATAR_SIZE = '1.5rem';
 
@@ -66,7 +67,8 @@ export function MessageAvatar({ name, avatarUrl }: MessageAvatarProps): ReactNod
         ...circleSx(theme),
         backgroundColor: theme.vars.palette.background.userInputBackgroundActive,
         color: theme.vars.palette.text.secondary,
-        fontSize: theme.typography.labelTiny.fontSize,
+        // A 1.5rem (24px) circle: initials snap to the ladder by avatar size.
+        ...typeScale(theme.typography[avatarInitialsType(24)]),
         fontWeight: 600,
       })}
     >

@@ -93,7 +93,7 @@ export function BrandingIdentityFields({
 }: BrandingFieldGroupProps) {
   return (
     <Box component="section" aria-labelledby="branding-identity-heading" sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <Typography id="branding-identity-heading" variant="h6" component="h2">
+      <Typography id="branding-identity-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.group.identity', 'Product identity')}
       </Typography>
       {identityFields().map((field) => (

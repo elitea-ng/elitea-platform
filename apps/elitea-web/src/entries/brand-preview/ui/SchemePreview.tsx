@@ -84,7 +84,7 @@ function SwatchStrip({ swatches, scheme }: { readonly swatches: readonly Swatch[
             // A computed value, never a literal: the swatch IS the derivation's answer.
             style={{ backgroundColor: swatch.value }}
           />
-          <Typography variant="labelTiny" color="text.secondary" sx={{ textAlign: 'center' }}>
+          <Typography variant="labelSmall" color="text.secondary" sx={{ textAlign: 'center' }}>
             {swatchLabel(swatch.id)}
           </Typography>
         </Box>

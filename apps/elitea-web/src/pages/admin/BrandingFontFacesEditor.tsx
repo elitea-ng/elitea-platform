@@ -168,7 +168,7 @@ export function BrandingFontFacesEditor({
 
   return (
     <Box component="section" aria-labelledby="branding-fonts-heading" sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <Typography id="branding-fonts-heading" variant="h6" component="h2">
+      <Typography id="branding-fonts-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.group.fonts', 'Self-hosted font faces')}
       </Typography>
       <Typography variant="bodySmall" color="text.secondary">

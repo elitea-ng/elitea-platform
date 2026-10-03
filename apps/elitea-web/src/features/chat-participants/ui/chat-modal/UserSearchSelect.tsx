@@ -96,7 +96,7 @@ const UserSearchSelect = memo((props: UserSearchSelectProps): React.ReactElement
             ...params.InputProps,
             endAdornment: (
               <>
-                {isLoading ? <Box sx={{ mr: 1 }}><Typography variant="body2">{t('chat-participants.modal.loading', 'Loading...')}</Typography></Box> : null}
+                {isLoading ? <Box sx={{ mr: 1 }}><Typography variant="bodyMedium" component="p">{t('chat-participants.modal.loading', 'Loading...')}</Typography></Box> : null}
                 {params.InputProps.endAdornment}
               </>
             ),
@@ -107,7 +107,7 @@ const UserSearchSelect = memo((props: UserSearchSelectProps): React.ReactElement
         const { key, ...optionProps } = props as React.HTMLProps<HTMLLIElement>;
         return (
           <li key={key ?? option.id} {...optionProps}>
-            <Typography variant="body2">{option.entity_meta?.name || option.meta?.user_name || t('chat-participants.common.unknown', 'Unknown')}</Typography>
+            <Typography variant="bodyMedium" component="p">{option.entity_meta?.name || option.meta?.user_name || t('chat-participants.common.unknown', 'Unknown')}</Typography>
           </li>
         );
       }}

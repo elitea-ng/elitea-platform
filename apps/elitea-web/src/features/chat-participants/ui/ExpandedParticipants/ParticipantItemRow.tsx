@@ -10,6 +10,7 @@ import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import type { TransformedParticipant } from '../../model/types';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
 
 // ---------------------------------------------------------------------------
 // ParticipantItemRow — internal helper for the "users" row
@@ -139,7 +140,8 @@ const ParticipantItemRow = memo(
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: theme.typography.labelTiny.fontSize,
+              // A 20px tile: initials snap to the ladder by avatar size.
+              ...typeScale(theme.typography[avatarInitialsType(20)]),
               fontWeight: 600,
             }}
           >

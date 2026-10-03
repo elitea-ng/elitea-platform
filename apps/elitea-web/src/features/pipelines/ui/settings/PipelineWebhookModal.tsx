@@ -98,7 +98,7 @@ function codeBlockSx(theme: Theme) {
   return { backgroundColor: theme.vars.palette.background.secondary, border: `1px solid ${theme.vars.palette.border.lines}`, borderRadius: theme.vars.shape.radiusMd, padding: '0.75rem', overflow: 'auto', maxHeight: '12rem' };
 }
 function codeTextSx(theme: Theme) {
-  return { fontFamily: 'monospace', fontSize: theme.typography.bodySmall2.fontSize, color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, margin: 0 };
+  return { fontFamily: 'monospace', fontSize: theme.typography.bodySmall.fontSize, color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, margin: 0 };
 }
 
 interface ValueRowProps {

@@ -4,6 +4,7 @@ import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
+import { typeScale } from '@/shared/brand/typography';
 
 /**
  * Small local stand-in for the baseline's `ComponentsLib/CircularProgress.jsx`
@@ -45,7 +46,7 @@ const circleSx: SxProps<Theme> = { position: 'absolute', zIndex: 999 };
 
 const labelSx: SxProps<Theme> = (theme: Theme) => ({
   position: 'absolute',
-  ...theme.typography.labelTiny,
+  ...typeScale(theme.typography.labelSmall),
   fontWeight: 600,
   color: theme.vars.palette.primary.main,
   lineHeight: 1,

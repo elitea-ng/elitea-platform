@@ -81,7 +81,8 @@ const LLMModelsMenu = memo(
             <Box sx={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0, width: '100%' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, overflow: 'hidden' }}>
                 <Typography
-                  variant="body2"
+                  variant="bodyMedium"
+                  component="p"
                   sx={{
                     flex: 1,
                     minWidth: 0,

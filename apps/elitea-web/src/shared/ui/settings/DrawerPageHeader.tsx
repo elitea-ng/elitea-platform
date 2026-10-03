@@ -73,8 +73,7 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
     padding: '0.375rem 0.75rem',
     border: 'none',
     outline: 'none',
-    // oxlint-disable-next-line elitea/ad-hoc-font-size — ported from baseline
-    fontSize: '0.875rem',
+    fontSize: theme.typography.bodyMedium.fontSize,
   };
 
   const handleInputChange = useCallback(
@@ -102,10 +101,12 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
             />
           </IconButton>
         )}
+        {/* The settings page's title: `headingLarge`, the one page-title size
+            the app and the admin console share (typography spec §2). */}
         <Typography
-          variant="headingSmall"
+          variant="headingLarge"
           color="text.secondary"
-          component="div"
+          component="h1"
         >
           {title}
         </Typography>

@@ -155,7 +155,7 @@ export function AdminScimClientsEditor() {
       sx={{ display: "flex", flexDirection: "column", gap: "1rem" }}
       data-testid="admin-scim-clients"
     >
-      <Typography variant="subtitle1">
+      <Typography variant="headingSmall" component="h2">
         {t("pages.admin.scimClients.title", "SCIM provisioning")}
       </Typography>
       <Typography variant="bodySmall" color="text.secondary">

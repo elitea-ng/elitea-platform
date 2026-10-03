@@ -206,7 +206,7 @@ export function AdminEmailEditor() {
       </Box>
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxWidth: '44rem' }}>
-        <Typography variant="h6" component="h2">
+        <Typography variant="headingSmall" component="h2">
           {t('pages.admin.email.test.title', 'Send a test e-mail')}
         </Typography>
         <Typography variant="bodyMedium" color="text.secondary">

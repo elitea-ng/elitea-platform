@@ -191,10 +191,7 @@ export function ToolkitEditorBody({
     if (!isCreating) {
       return (
         <Box sx={centeredSx}>
-          <Typography
-            variant="body2"
-            color="text.secondary"
-          >
+          <Typography variant="bodyMedium" component="p" color="text.secondary">
             {t('toolkits.toolkitEditor.loading', 'Loading toolkit configuration...')}
           </Typography>
         </Box>

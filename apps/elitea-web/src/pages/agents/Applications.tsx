@@ -143,6 +143,8 @@ export function Applications(): ReactNode {
   return (
     <Box sx={pageSx(railVisible)}>
       <PageHeader
+        title={t('pages.agents.applications.tabsAriaLabel', 'Agents')}
+        titleComponent="h1"
         tabs={{
           items: visibleTabs.map((tab) => ({
             value: tab.value,

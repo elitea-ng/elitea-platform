@@ -41,7 +41,7 @@ export function UsersPageHeader({
 
   return (
     <Box sx={usersPageStyles.header}>
-      <Typography variant="h5" sx={usersPageStyles.title}>
+      <Typography variant="headingLarge" component="h1" sx={usersPageStyles.title}>
         {t('shared.ui.settings.users.title', 'Users')}
       </Typography>
       <Box sx={usersPageStyles.toolbar}>
@@ -56,7 +56,7 @@ export function UsersPageHeader({
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <SearchIcon sx={{ color: 'text.disabled', fontSize: searchIconSize }} />
+                    <SearchIcon sx={{ color: 'text.disabled', width: searchIconSize, height: searchIconSize }} />
                   </InputAdornment>
                 ),
                 sx: searchInputStyles,

@@ -267,7 +267,7 @@ const AgentModal = memo(({ open, onClose, agent, onStartConversation }: AgentMod
             <Typography variant="headingMedium" color="text.secondary">
               {name}
             </Typography>
-            <Typography variant="bodySmall2" sx={descriptionSx(isSmallHeight)}>
+            <Typography variant="bodySmall" sx={descriptionSx(isSmallHeight)}>
               {description}
             </Typography>
             <Typography

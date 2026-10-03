@@ -194,7 +194,7 @@ export function DimensionEditorFields(props: DimensionEditorFieldsProps): ReactN
       )}
 
       <Box sx={fieldSx}>
-        <Typography variant="body2">{t('features.agentEvaluation.field.engines', 'Engines')}</Typography>
+        <Typography variant="bodyMedium" component="p">{t('features.agentEvaluation.field.engines', 'Engines')}</Typography>
         <Box sx={engineRowSx}>
           {engineOptions().map((option) => (
             <FormControlLabel

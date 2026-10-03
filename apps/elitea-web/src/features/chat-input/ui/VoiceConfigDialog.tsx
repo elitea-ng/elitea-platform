@@ -67,7 +67,6 @@ export function VoiceConfigDialog(props: VoiceConfigDialogProps): ReactNode {
     <BaseModal
       open={open}
       title={t('features.chatInput.voiceConfigDialog.title', 'Voice settings')}
-      header={{ titleVariant: 'headingMedium' }}
       onClose={onCancel}
       onConfirm={handleApply}
       actions={{

@@ -129,13 +129,13 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
       <Box sx={{ display: 'flex', gap: '0.5rem' }}>
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', gap: '0.5rem' }}>
           <ClockIcon />
-          <Typography variant="bodySmall2">{formatCreatedOn(createdOn)}</Typography>
+          <Typography variant="bodySmall">{formatCreatedOn(createdOn)}</Typography>
         </Box>
 
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', gap: '0.5rem' }}>
           <FileIcon />
           <Tooltip title={documents.tooltip}>
-            <Typography variant="bodySmall2">{documents.count}</Typography>
+            <Typography variant="bodySmall">{documents.count}</Typography>
           </Tooltip>
         </Box>
 
@@ -147,7 +147,7 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
             />
             <Tooltip title={t('features.toolkits.indexListItem.skippedTooltip', 'total skipped during indexing')}>
               <Typography
-                variant="bodySmall2"
+                variant="bodySmall"
                 color="warning.main"
               >
                 {documents.skipped}

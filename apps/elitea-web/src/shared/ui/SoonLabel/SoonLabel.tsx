@@ -5,6 +5,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { combineSx } from '../lib/combineSx';
 import { t } from '@/shared/i18n';
+import { typeScale } from '@/shared/brand/typography';
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
 export interface SoonLabelProps {
@@ -44,7 +45,7 @@ export function SoonLabel({ text, sx }: SoonLabelProps): ReactNode {
           borderRadius: theme.vars.shape.radiusLg,
           border: `1px solid ${theme.vars.palette.border.lines}`,
           color: theme.vars.palette.text.secondary,
-          ...theme.typography.labelTiny,
+          ...typeScale(theme.typography.labelSmall),
         })}
       >
         {t('shared.ui.soonLabel.soon', 'Soon')}

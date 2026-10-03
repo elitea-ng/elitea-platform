@@ -30,7 +30,7 @@ export type ParticipantsAccordionWithItemProps = ParticipantsAccordionProps & Ex
 const ParticipantsAccordion = memo((props: ParticipantsAccordionProps): React.ReactElement => {
   const { sections } = props;
 
-  if (!sections?.length) return <Typography variant="body2" sx={{ p: 1, color: 'text.disabled' }}>{t('chat-participants.accordion.noParticipants', 'No participants')}</Typography>;
+  if (!sections?.length) return <Typography variant="bodyMedium" component="p" sx={{ p: 1, color: 'text.disabled' }}>{t('chat-participants.accordion.noParticipants', 'No participants')}</Typography>;
 
   return (
     <>
@@ -40,14 +40,14 @@ const ParticipantsAccordion = memo((props: ParticipantsAccordionProps): React.Re
             expandIcon={<ExpandMoreIcon />}
             aria-label={`${section.title} participants`}
           >
-            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+            <Typography variant="labelMedium" component="h6" sx={{ fontWeight: 600 }}>
               {section.title} ({section.participants.length})
             </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
               {section.participants.map((participant, pIndex) => (
-                <Typography key={`${(participant.id as string) || pIndex}`} variant="body2" sx={{ px: 1 }}>
+                <Typography key={`${(participant.id as string) || pIndex}`} variant="bodyMedium" component="p" sx={{ px: 1 }}>
                   {participant.entity_meta?.name || t('chat-participants.common.unknown', 'Unknown')}
                 </Typography>
               ))}

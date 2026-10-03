@@ -229,16 +229,17 @@ function EditorShell({
           </IconButton>
           <Box sx={{ minWidth: 0 }}>
             <Typography
-              variant="subtitle1"
+              variant="headingSmall"
+              component="h6"
               color="text.secondary"
               noWrap
-              sx={{ fontWeight: 600 }}
             >
               {title}
             </Typography>
             {subtitle !== undefined && (
               <Typography
-                variant="body2"
+                variant="bodyMedium"
+                component="p"
                 color="text.primary"
                 noWrap
               >
