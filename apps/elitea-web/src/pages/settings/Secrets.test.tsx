@@ -356,6 +356,46 @@ describe('SecretsContent — a failed list shows an error state (UI-UX-1(b))', (
     expect(screen.queryByTestId(SECRETS_LOAD_ERROR_TESTID)).not.toBeInTheDocument();
   }, 30_000);
 
+  it('offers no create while the list has failed, and ?createSecret=1 opens exactly one row once it recovers', async () => {
+    useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
+    let failing = true;
+    server.use(
+      http.get(PERMISSIONS_PATH, () =>
+        HttpResponse.json([
+          { name: 'configuration.secrets.secret.list', enabled: true },
+          { name: 'configuration.secrets.secret.create', enabled: true },
+          { name: 'configuration.secrets.secret.unsecret', enabled: true },
+        ]),
+      ),
+      http.get(SECRETS_PATH, () =>
+        failing
+          ? HttpResponse.json({ error: 'project vault is unreadable' }, { status: 500 })
+          : HttpResponse.json([{ name: 'API_KEY', secret_name: 'API_KEY', is_default: false }]),
+      ),
+    );
+
+    render(
+      <AppProviders>
+        <SecretsContent shouldCreate search="" onSearchChange={noop} />
+      </AppProviders>,
+    );
+
+    const errorState = await screen.findByTestId(SECRETS_LOAD_ERROR_TESTID, undefined, { timeout: 15_000 });
+    // The failed state invites no create: the toolbar's add button is gone.
+    expect(screen.queryByRole('button', { name: 'Create new secret' })).not.toBeInTheDocument();
+
+    failing = false;
+    fireEvent.click(within(errorState).getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('API_KEY').length).toBeGreaterThan(0);
+      // Exactly ONE new row from the flag: a name and a value input.
+      expect(within(screen.getByRole('grid')).getAllByRole('textbox')).toHaveLength(2);
+    });
+    // The create control is back once the list has loaded.
+    expect(screen.getByRole('button', { name: 'Create new secret' })).toBeInTheDocument();
+  }, 30_000);
+
   it('offers no retry for a 403 — retrying cannot help', async () => {
     useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
     server.use(

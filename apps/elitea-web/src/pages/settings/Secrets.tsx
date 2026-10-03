@@ -25,7 +25,7 @@
  *    comment on `no-sideways-features`); inlining here avoids adding a new
  *    file outside this unit's file scope for a two-line computation.
  */
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -92,6 +92,11 @@ function isForbiddenError(error: unknown): boolean {
   return (failure.kind === 'http' || failure.kind === 'auth') && failure.status === 403;
 }
 
+/** A blank, editable row for a secret not saved yet. */
+function newSecretRow(): SecretRow {
+  return { id: `new-${Date.now()}`, name: '', secretName: '', isDefault: false, secretValue: '', isNew: true };
+}
+
 /** Split out purely to keep `SecretsContent`'s own `useEffect` count within the §3.5 budget (3) — syncs the memoized mutations wrapper into the actions hook whenever either reference changes. */
 function useSyncSecretMutations(setMutations: (m: SecretMutations) => void, mutationsWrapper: SecretMutations): void {
   useEffect(() => {
@@ -119,6 +124,8 @@ export const SecretsContent = memo(function SecretsContent({
     enabled: !!projectId && canList,
   });
   const secrets = data ?? EMPTY_SECRETS;
+  // A FAILED list offers no create: its error state renders no table.
+  const canAddSecret = canCreate && !isError;
 
   /* ── API mutations ────────────────────────────────────────────────── */
   const createMutation = useCreateSecretMutation(projectId);
@@ -171,21 +178,20 @@ export const SecretsContent = memo(function SecretsContent({
   // Handle ?createSecret=1 URL flag. Gated on `canCreate` (#402): the flag is
   // reachable from a bookmark and from the global create menu, and the row it
   // opens ends in a POST. Ungated, a viewer types a name and a value, presses
-  // save, and watches the row vanish while the POST answers 403.
+  // save, and watches the row vanish while the POST answers 403. It waits for
+  // a settled, non-failed list too: a row opened in the error state is
+  // invisible until recovery. `flagOpenedFor`: one row per project.
+  const flagOpenedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (shouldCreate && projectId && canCreate) {
-      const id = `new-${Date.now()}`;
-      const newRow: SecretRow = {
-        id,
-        name: '',
-        secretName: '',
-        isDefault: false,
-        secretValue: '',
-        isNew: true,
-      };
-      setRows((prev) => [newRow, ...prev]);
+    if (!shouldCreate) {
+      flagOpenedFor.current = null;
+      return;
     }
-  }, [shouldCreate, projectId, canCreate, setRows]);
+    if (projectId && canAddSecret && !isFetching && flagOpenedFor.current !== projectId) {
+      flagOpenedFor.current = projectId;
+      setRows((prev) => [newSecretRow(), ...prev]);
+    }
+  }, [shouldCreate, projectId, canAddSecret, isFetching, setRows]);
 
   // Filtered rows — client-side search filter (matches old-app pattern)
   const filteredRows = useMemo(() => {
@@ -296,7 +302,7 @@ export const SecretsContent = memo(function SecretsContent({
       <DrawerPageHeader
         title={t('entities.secret.pageTitle', 'Secrets')}
         showSearchInput
-        showAddButton={canCreate}
+        showAddButton={canAddSecret}
         slotProps={{
           searchInput: {
             search,
@@ -304,18 +310,7 @@ export const SecretsContent = memo(function SecretsContent({
             placeholder: t('entities.secret.searchPlaceholder', 'Search secrets'),
           },
           addButton: {
-            onAdd: () => {
-              const id = `new-${Date.now()}`;
-              const newRow: SecretRow = {
-                id,
-                name: '',
-                secretName: '',
-                isDefault: false,
-                secretValue: '',
-                isNew: true,
-              };
-              setRows((prev) => [newRow, ...prev]);
-            },
+            onAdd: () => setRows((prev) => [newSecretRow(), ...prev]),
             disabled: isFetching,
             tooltip: t('entities.secret.addTooltip', 'Create new secret'),
           },
