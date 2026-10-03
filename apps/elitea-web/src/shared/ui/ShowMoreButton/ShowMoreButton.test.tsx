@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
 
-import { renderWithTheme } from '../lib/testTheme';
+import { remToPx, renderWithTheme } from '../lib/testTheme';
 import { AuxiliaryTextButton, ShowMoreButton } from '.';
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
@@ -56,7 +56,7 @@ describe('ShowMoreButton (#6640)', () => {
     const button = getByRole('button', { name: 'Show more' });
     // labelSmall is the 12px rung of the type scale, at weight 500.
     expect(labelSmall.fontWeight).toBe(500);
-    expect(button).toHaveStyle({ fontSize: theme.typography.labelSmall.fontSize, fontWeight: '500', textDecoration: 'none' });
+    expect(button).toHaveStyle({ fontSize: remToPx(theme.typography.labelSmall.fontSize), fontWeight: '500', textDecoration: 'none' });
     expect(getComputedStyle(button).paddingTop).toBe(getComputedStyle(button).paddingBottom);
     expect(Number.parseFloat(getComputedStyle(button).paddingLeft)).toBe(0);
   });
@@ -65,6 +65,6 @@ describe('ShowMoreButton (#6640)', () => {
     const { getByRole } = renderWithTheme(<AuxiliaryTextButton onClick={() => {}}>Show</AuxiliaryTextButton>);
     const button = getByRole('button', { name: 'Show' });
     expect(button).not.toHaveAttribute('aria-expanded');
-    expect(button).toHaveStyle({ fontSize: theme.typography.labelSmall.fontSize, fontWeight: '500' });
+    expect(button).toHaveStyle({ fontSize: remToPx(theme.typography.labelSmall.fontSize), fontWeight: '500' });
   });
 });
