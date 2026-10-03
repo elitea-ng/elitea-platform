@@ -700,6 +700,9 @@ impl CompletedAgentBrowserOutput {
 struct OrdinaryModelEvent {
     content: String,
     thinking: String,
+    /// `false` for a provider delta (`partial`), which always appends; `true`
+    /// for the aggregated final response, which may restate the whole turn.
+    aggregate: bool,
     closes_turn: bool,
     output_limited: bool,
     timestamp: String,
@@ -753,9 +756,10 @@ impl ContinuationOverlap {
     fn project(
         &mut self,
         current: String,
+        aggregate: bool,
         closes_turn: bool,
     ) -> Result<String, AgentEventProjectionError> {
-        let (raw_content, _) = merge_stream_value(&self.raw_content, current)?;
+        let (raw_content, _) = merge_stream_value(&self.raw_content, current, aggregate)?;
         self.raw_content = raw_content;
         if self.removed_prefix_bytes.is_none() {
             if !closes_turn && self.raw_content.chars().count() <= MAX_CONTINUATION_OVERLAP_CHARS {
@@ -1858,6 +1862,7 @@ impl AgentEventProjector {
                     OrdinaryModelEvent {
                         content: text.clone(),
                         thinking: String::new(),
+                        aggregate: true,
                         closes_turn: true,
                         output_limited: false,
                         timestamp: event
@@ -1943,13 +1948,21 @@ impl AgentEventProjector {
             }
         };
         let model_content = if let Some(overlap) = self.continuation_overlap.as_mut() {
-            overlap.project(model_event.content, model_event.closes_turn)?
+            overlap.project(
+                model_event.content,
+                model_event.aggregate,
+                model_event.closes_turn,
+            )?
         } else {
             model_event.content
         };
-        let (next_content, content_delta) = merge_stream_value(previous_content, model_content)?;
-        let (next_thinking, thinking_delta) =
-            merge_stream_value(previous_thinking, model_event.thinking)?;
+        let (next_content, content_delta) =
+            merge_stream_value(previous_content, model_content, model_event.aggregate)?;
+        let (next_thinking, thinking_delta) = merge_stream_value(
+            previous_thinking,
+            model_event.thinking,
+            model_event.aggregate,
+        )?;
         let next_timestamp_start = timestamp_start.to_owned();
 
         let mut batch = ProjectedAgentEventBatch::new();
@@ -4494,6 +4507,7 @@ fn ordinary_model_event(
         return Ok(Some(OrdinaryModelEvent {
             content: String::new(),
             thinking: String::new(),
+            aggregate: false,
             closes_turn: true,
             output_limited,
             timestamp: event
@@ -4520,6 +4534,7 @@ fn ordinary_model_event(
     Ok(Some(OrdinaryModelEvent {
         content,
         thinking,
+        aggregate: !event.llm_response.partial,
         closes_turn,
         output_limited,
         timestamp: event
@@ -5087,10 +5102,24 @@ fn validate_invocation_id(value: &str) -> Result<(), AgentEventProjectionError> 
     validate_event_id(value)
 }
 
+/// Fold one model event into the turn so far, returning the new turn text and
+/// the delta to stream.
+///
+/// A partial event is a provider delta and always appends: a delta that
+/// happens to start with the text so far (`"a"`, `"a"`, `"ab"`) is new text,
+/// not a restatement, and treating it as one dropped leading characters
+/// (#6675). Only an aggregate (non-partial) event may restate the turn, and
+/// then only the part beyond the text already streamed is new.
 fn merge_stream_value(
     previous: &str,
     current: String,
+    aggregate: bool,
 ) -> Result<(String, String), AgentEventProjectionError> {
+    if !aggregate {
+        let mut accumulated = previous.to_owned();
+        extend_bounded(&mut accumulated, &current)?;
+        return Ok((accumulated, current));
+    }
     if previous.is_empty() {
         if current.len() > MAX_COMPLETED_CONTENT_BYTES {
             return Err(AgentEventProjectionError {

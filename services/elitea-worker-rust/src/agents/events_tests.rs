@@ -467,17 +467,17 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
         false,
         vec![
             Part::Thinking {
-                thinking: "why now".to_owned(),
+                thinking: " now".to_owned(),
                 signature: None,
             },
             Part::Text {
-                text: "hello".to_owned(),
+                text: "lo".to_owned(),
             },
         ],
     );
     let cumulative: Vec<_> = projector
         .project(&cumulative)
-        .expect("cumulative chunk")
+        .expect("delta chunk")
         .into_iter()
         .map(|event| current(&event))
         .collect();
@@ -666,6 +666,84 @@ fn long_escaped_model_output_uses_bounded_frames_and_a_complete_result_reference
             text.len()
         );
     }
+}
+
+/// #6675: a partial delta that starts with the text so far is new text. The
+/// old prefix test read `"a"`, `"a"`, `"ab"` as restatements and produced
+/// `"ab"` instead of `"aaab"`, for the answer and for thinking alike.
+#[test]
+fn partial_deltas_repeating_the_prefix_always_append_for_content_and_thinking() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let mut streamed_text = String::new();
+    let mut streamed_thinking = String::new();
+    for (second, delta) in [(1, "a"), (2, "a"), (3, "ab")] {
+        let projected: Vec<_> = projector
+            .project(&event(
+                "llm-repeat",
+                second,
+                true,
+                false,
+                vec![
+                    Part::Thinking {
+                        thinking: delta.to_owned(),
+                        signature: None,
+                    },
+                    Part::Text {
+                        text: delta.to_owned(),
+                    },
+                ],
+            ))
+            .expect("delta")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect();
+        let chunk = projected
+            .iter()
+            .find(|event| event["type"] == "agent_llm_chunk")
+            .expect("every delta streams a chunk");
+        assert_eq!(chunk["content"], delta);
+        assert_eq!(chunk["thinking"], delta);
+        streamed_text.push_str(chunk["content"].as_str().unwrap_or_default());
+        streamed_thinking.push_str(chunk["thinking"].as_str().unwrap_or_default());
+    }
+    assert_eq!(streamed_text, "aaab");
+    assert_eq!(streamed_thinking, "aaab");
+
+    // The aggregate completion restates the turn; nothing is duplicated.
+    let completed: Vec<_> = projector
+        .project(&event(
+            "llm-repeat",
+            4,
+            false,
+            true,
+            vec![
+                Part::Thinking {
+                    thinking: "aaab".to_owned(),
+                    signature: None,
+                },
+                Part::Text {
+                    text: "aaab".to_owned(),
+                },
+            ],
+        ))
+        .expect("aggregate")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert!(
+        completed
+            .iter()
+            .all(|event| event["type"] != "agent_llm_chunk"),
+        "an aggregate equal to the streamed text adds nothing"
+    );
+    let step = completed
+        .iter()
+        .find_map(|event| event["response_metadata"]["thinking_steps"].get(0))
+        .expect("completed step");
+    assert_eq!(step["text"], "aaab");
+    assert_eq!(step["thinking"], "aaab");
 }
 
 #[test]
