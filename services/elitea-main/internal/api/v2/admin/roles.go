@@ -238,8 +238,60 @@ ORDER BY 1`)
 // catalogueFrom composes the matrix catalogue from the names the database
 // holds a grant for. It is the whole composition, so a test can build the
 // catalogue the handler builds without a database.
+//
+// A retired name is left out even when a row still carries it. pylon re-seeds
+// some of them on every start while it shares the database, so a row can come
+// back after shared migration 0136 removed it. Leaving the name out of the
+// catalogue keeps it off the Roles matrix, and parseMatrixBody then refuses a
+// save that names it.
 func catalogueFrom(granted []string) []string {
-	return mergePermissionCatalogue(granted, declaredPermissions())
+	live := make([]string, 0, len(granted))
+	for _, name := range granted {
+		if _, retired := retiredPermissions[name]; !retired {
+			live = append(live, name)
+		}
+	}
+	return mergePermissionCatalogue(live, declaredPermissions())
+}
+
+// retiredPermissions are permission strings that no code checks (#6874).
+//
+// The resolver matches exact strings and does no prefix matching, so each of
+// these rows grants nothing. They are bare section nodes that pylon's admin
+// module registered, prefix nodes the legacy Roles matrix saved when an
+// operator clicked a group toggle, and strings a pylon migration seeded for
+// features that never checked them.
+//
+// Shared migration 0136 deletes the rows. This list MUST equal the list in that
+// file; internal/api/router_permission_retired_gate_test.go checks both that,
+// and that no route gate checks any name here.
+var retiredPermissions = map[string]struct{}{
+	"projects":                              {},
+	"configuration":                         {},
+	"runtime":                               {},
+	"modes":                                 {},
+	"migration":                             {},
+	"invites":                               {},
+	"invites.platform":                      {},
+	"admin":                                 {},
+	"configurations":                        {},
+	"models.chat.conversations.list_custom": {},
+	"models.promptlib_shared.collection.details":        {},
+	"models.promptlib_shared.collections.list":          {},
+	"models.promptlib_shared.public_collection.details": {},
+	"models.promptlib_shared.approve_collection.post":   {},
+	"models.promptlib_shared.reject_collection.delete":  {},
+}
+
+// RetiredPermissions returns the retired names, sorted. It exists for the
+// source gate in internal/api, which compares it with shared migration 0136.
+func RetiredPermissions() []string {
+	names := make([]string, 0, len(retiredPermissions))
+	for name := range retiredPermissions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // declaredPermissions lists the permission names this service enforces itself.

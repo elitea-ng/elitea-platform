@@ -576,7 +576,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// credentials. SCIM stops accepting personal access tokens; it accepts a
 	// bearer secret or an OAuth2 client-credentials access token from these
 	// two tables. Only SHA-256 hashes of the secrets are stored.
-	require.EqualValues(t, 135, Head(shared))
+	//
+	// 136: shared/0136_project_settings_permission_and_dead_permissions.sql,
+	// `models.project_settings.edit` for the default-mode admin (the project
+	// name/description/icon writes, #6789) with its per-project override
+	// delivery, and the removal of permission strings no code checks (#6874).
+	require.EqualValues(t, 136, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
