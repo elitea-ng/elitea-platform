@@ -5352,10 +5352,16 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		}
 		// The stated cause is the remote server's, not this service's, so it is
 		// reported as a failed discovery rather than a fault here. The web
-		// client renders `error` directly.
+		// client renders `error` directly. A retired `/sse` endpoint gets an
+		// actionable message naming the `/mcp` replacement (#6688).
+		message := "MCP tool discovery failed"
+		var retired *mcpregistry.RetiredSSEEndpoint
+		if errors.As(err, &retired) {
+			message = retired.Message()
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"success":    false,
-			"error":      "MCP tool discovery failed",
+			"error":      message,
 			"server_url": endpoint.String(),
 		})
 		return

@@ -19,10 +19,20 @@ type mcpDiscoveryToken struct {
 
 // A discovery preview uses the exact resource or its admitted prebuilt alias.
 // Refresh tokens and other browser metadata never enter an MCP request.
+// A configured Authorization header (a PAT) wins over a browser OAuth token,
+// matching the agent runtime, so Load Tools and a run act as the same
+// identity against the server (#6691, #6418).
 func mcpDiscoveryHeaders(headers map[string]string, tokens map[string]mcpDiscoveryToken, endpoint, toolkitType string) map[string]string {
 	result := make(map[string]string, len(headers)+2)
+	configuredAuthorization := false
 	for key, value := range headers {
 		result[key] = value
+		if strings.EqualFold(key, "Authorization") && strings.TrimSpace(value) != "" {
+			configuredAuthorization = true
+		}
+	}
+	if configuredAuthorization {
+		return result
 	}
 	token, ok := tokens[endpoint]
 	if !ok && mcpregistry.IsPrebuiltToolkitType(toolkitType) {
@@ -102,8 +112,11 @@ func (h *Handler) mcpAuthorizationServerMetadata(ctx context.Context, rawIssuer 
 	if err != nil {
 		return nil, err
 	}
+	// RFC 8414 inserts the well-known segment between host and path; a trailing
+	// slash on the issuer must not leak into the built URL ("…/server/" or "//").
 	base := issuer.Scheme + "://" + issuer.Host
-	candidates := []string{base + "/.well-known/oauth-authorization-server" + issuer.EscapedPath(), strings.TrimRight(rawIssuer, "/") + "/.well-known/openid-configuration"}
+	path := strings.TrimRight(issuer.EscapedPath(), "/")
+	candidates := []string{base + "/.well-known/oauth-authorization-server" + path, base + path + "/.well-known/openid-configuration"}
 	for _, candidate := range candidates {
 		metadata, err := h.readMCPPublicMetadata(ctx, candidate)
 		if err != nil {
