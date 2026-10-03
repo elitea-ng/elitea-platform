@@ -26,6 +26,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { expectTextSpacingSurvives, expectTypeScale } from '../../fixtures/typeScale';
 import { BASE_URL } from '../../../playwright.config';
 
 /** `STORAGE_NAMESPACE` + `collapsedPersistence.ts`'s own key (`chat.navigation.spec.ts` uses the same constant). */
@@ -194,9 +195,14 @@ test('SB03: every main-rail item navigates to its own page', async ({ page }) =>
       await expect(previous, `the previously active row must lose Mui-selected`).not.toHaveClass(/Mui-selected/);
     }
     await expect(page.getByText(ERROR_BOUNDARY_TEXT)).toHaveCount(0);
+    // Typography spec rev. 2 §4.6: every page the rail reaches paints its
+    // text on the one 12/14/16/20 ladder.
+    await expectTypeScale(page, label);
 
     previous = link;
   }
+  // …and the shell's controls survive the WCAG 1.4.12 text-spacing overrides.
+  await expectTextSpacingSurvives(page, 'app shell');
 
   // Closing the loop: the case's own steps start from Chat, and the last
   // stop above returns there — the composer must be back too.

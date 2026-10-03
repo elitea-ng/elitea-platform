@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiSelect` (R-T12). Ported from `MainTheme.js:235-242` (the `select`

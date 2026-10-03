@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiTablePagination` (R-T12). Ported from `MainTheme.js:252-273`. The

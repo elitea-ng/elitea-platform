@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiOutlinedInput` (R-T12). Provides background color and border styling

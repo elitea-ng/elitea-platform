@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { labelShrinkScale, typeScale } from '../typography';
+import { labelShrinkScale, typeScale } from '../typeScale';
 
 /**
  * `MuiInputLabel` (R-T12; typography spec §2/§3). A field label is

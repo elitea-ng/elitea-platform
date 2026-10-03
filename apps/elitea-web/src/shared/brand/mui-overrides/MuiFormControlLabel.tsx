@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiFormControlLabel` (R-T12). A checkbox / switch / radio label is

@@ -10,7 +10,7 @@ import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import type { TransformedParticipant } from '../../model/types';
-import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 // ---------------------------------------------------------------------------
 // ParticipantItemRow — internal helper for the "users" row

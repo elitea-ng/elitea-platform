@@ -1,5 +1,5 @@
 import type { EliteaOverrideTheme } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiTreeItem` (R-T12). Ported from `apps/elitea-ui/src/components/TreeItem.jsx`'s

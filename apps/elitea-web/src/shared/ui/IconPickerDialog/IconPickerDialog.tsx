@@ -38,7 +38,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { DeletableIconTile } from './DeletableIconTile';
 import { IconTile } from './IconTile';
-import { typeScale } from '@/shared/brand/typography';
+import { typeScale } from '@/shared/brand/typeScale';
 
 /** One icon in either section. `url` absent means "draw the letter fallback". */
 export interface PickableIcon {

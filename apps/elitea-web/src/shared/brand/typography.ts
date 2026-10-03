@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 
 import { CSS_VAR_PREFIX } from './constants';
 import type { BrandPack } from './schema';
+import { typeScale, type TypeScale } from './typeScale';
 
 /**
  * Typography (spec §4.2 tier 2; typography spec rev. 2). ONE type scale for
@@ -136,55 +137,6 @@ export function ladderPx(baseSize: number, scale: number): Record<Rung, number> 
 const round4 = (value: number): number => Number(value.toFixed(4));
 
 const rem = (px: number): string => `${round4(px / ROOT_FONT_SIZE)}rem`;
-
-/** The scale half of a typography variant — what an alias or override copies. */
-export interface TypeScale {
-  fontSize: CSSProperties['fontSize'];
-  fontWeight: CSSProperties['fontWeight'];
-  lineHeight: CSSProperties['lineHeight'];
-  letterSpacing: CSSProperties['letterSpacing'];
-}
-
-/**
- * The ONE copy rule: every alias and every component override spreads
- * `typeScale(theme.typography.X)`, never the variant itself. It returns the
- * size, weight, leading and tracking — and never `color`, so a heading
- * variant's `text.secondary` does not leak into a menu item, a table cell or
- * a dialog title (the Typography-`color` trap, in override form).
- */
-export function typeScale(variant: CSSProperties): TypeScale {
-  return {
-    fontSize: variant.fontSize,
-    fontWeight: variant.fontWeight,
-    lineHeight: variant.lineHeight,
-    letterSpacing: variant.letterSpacing ?? 'normal',
-  };
-}
-
-/**
- * The factor that maps a step-0 label onto the step −1 rung — what a shrunk
- * floating label (and its outline notch) scale by. Computed from the BUILT
- * ladder, never a constant, so it stays a ladder rung for every pack.
- */
-export function labelShrinkScale(typography: {
-  bodySmall: CSSProperties;
-  bodyMedium: CSSProperties;
-}): number {
-  const small = Number.parseFloat(String(typography.bodySmall.fontSize));
-  const medium = Number.parseFloat(String(typography.bodyMedium.fontSize));
-  return round4(small / medium);
-}
-
-/**
- * Avatar initials snap to the ladder by the avatar's own size instead of
- * scaling continuously with it.
- */
-export function avatarInitialsType(sizePxValue: number): EliteaTypographyVariant {
-  if (sizePxValue <= 24) return 'labelSmall';
-  if (sizePxValue <= 32) return 'labelMedium';
-  if (sizePxValue <= 48) return 'headingMedium';
-  return 'headingLarge';
-}
 
 /**
  * The one place the token layer names a CSS variable by hand. A typography

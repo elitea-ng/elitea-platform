@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /** `MuiBadge` (R-T12). Ported verbatim from `MainTheme.js:329-341`
  * (radiusMd ≈ the baseline's `0.5rem`). */

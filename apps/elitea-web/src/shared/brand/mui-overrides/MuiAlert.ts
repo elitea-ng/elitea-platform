@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiAlert` (R-T12). **Re-authored, not ported** — see OWNERSHIP.md note 1.

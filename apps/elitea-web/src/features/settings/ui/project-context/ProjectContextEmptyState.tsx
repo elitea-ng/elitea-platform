@@ -26,7 +26,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { AiSparkleIcon } from '@/shared/ui/icons/ai-sparkle-icon';
 import { ContextIcon } from '@/shared/ui/icons/context-icon';
-import { typeScale } from '@/shared/brand/typography';
+import { typeScale } from '@/shared/brand/typeScale';
 
 export interface ProjectContextEmptyStateProps {
   /** `PERMISSIONS.projectContext.edit`. Without it the copy changes and the buttons go. */

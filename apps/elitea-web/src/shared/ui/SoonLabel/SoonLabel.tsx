@@ -5,7 +5,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { combineSx } from '../lib/combineSx';
 import { t } from '@/shared/i18n';
-import { typeScale } from '@/shared/brand/typography';
+import { typeScale } from '@/shared/brand/typeScale';
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
 export interface SoonLabelProps {

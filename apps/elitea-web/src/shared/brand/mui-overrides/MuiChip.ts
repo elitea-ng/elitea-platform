@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiChip` — canonical elitea-ui shape (`MainTheme.js:217-227`), token-wired.

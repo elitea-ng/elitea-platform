@@ -4,7 +4,7 @@ import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
-import { typeScale } from '@/shared/brand/typography';
+import { typeScale } from '@/shared/brand/typeScale';
 
 /**
  * Small local stand-in for the baseline's `ComponentsLib/CircularProgress.jsx`

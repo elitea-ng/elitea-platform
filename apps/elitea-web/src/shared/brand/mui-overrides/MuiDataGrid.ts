@@ -6,7 +6,7 @@
 import type {} from '@mui/x-data-grid/themeAugmentation';
 
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiDataGrid` (R-T12). Ported from

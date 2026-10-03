@@ -97,7 +97,7 @@ import { MarkdownTableEditor } from './table/MarkdownTableEditor';
 import type { CanvasFileSource } from '../../lib/canvasFileSource';
 import type { DocumentEditorHandle } from './DocumentEditor';
 import type { Theme } from '@mui/material/styles';
-import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 /**
  * The `document` pane (issue #879), lazy-loaded — see `./DocumentEditor.tsx`'s

@@ -4,7 +4,7 @@ import { buildEliteaTheme } from '../buildTheme';
 import { MuiButton } from '../mui-overrides/MuiButton';
 import { MuiChip } from '../mui-overrides/MuiChip';
 import { DEFAULT_BRAND_PACK } from '../tokens';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * MEDIUM-2 (adversarial verification, 2026-07-27): every prior test in this

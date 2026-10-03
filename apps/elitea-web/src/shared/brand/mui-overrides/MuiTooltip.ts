@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /** `MuiTooltip` (R-T12). Ported verbatim from `MainTheme.js:342-353`. */
 export const MuiTooltip: EliteaComponents['MuiTooltip'] = {

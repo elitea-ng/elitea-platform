@@ -21,7 +21,7 @@ import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 
 import { BrandLogoMark } from '@/shared/ui/brand-logo';
-import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 const AVATAR_SIZE = '1.5rem';
 

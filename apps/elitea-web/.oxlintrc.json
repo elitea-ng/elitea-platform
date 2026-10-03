@@ -417,9 +417,9 @@
     {
       // R-T11 scope: the type scale is DEFINED here — the one file that turns
       // the brand pack's baseSize/scale into rem sizes (and MUI's own base
-      // `fontSize`) and that implements `typeScale()`. Every other file reads
-      // the sizes it builds.
-      "files": ["src/shared/brand/typography.ts"],
+      // `fontSize`), and the module that implements `typeScale()`. Every
+      // other file reads the sizes they build.
+      "files": ["src/shared/brand/typography.ts", "src/shared/brand/typeScale.ts"],
       "rules": { "elitea/ad-hoc-font-size": "off" }
     },
     {

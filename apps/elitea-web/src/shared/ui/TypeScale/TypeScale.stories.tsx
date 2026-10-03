@@ -18,7 +18,7 @@ import TextField from '@mui/material/TextField';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect } from 'storybook/test';
 
-import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 /**
  * Typography spec §4.5: the component OVERRIDES of the one type scale,

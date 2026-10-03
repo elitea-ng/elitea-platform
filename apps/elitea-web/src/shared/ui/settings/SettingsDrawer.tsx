@@ -26,7 +26,7 @@ import { ReasonIcon } from '../icons/reason-icon';
 
 import { SETTINGS_LAYOUT } from './settings.constants';
 import { t } from '@/shared/i18n';
-import { typeScale } from '@/shared/brand/typography';
+import { typeScale } from '@/shared/brand/typeScale';
 
 /** Tab definition used by `SettingsDrawer`. */
 export interface SettingsTab {

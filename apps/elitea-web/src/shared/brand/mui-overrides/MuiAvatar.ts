@@ -1,5 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
-import { typeScale } from '../typography';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiAvatar` (R-T12). Colours ported verbatim from `MainTheme.js:209-216`.

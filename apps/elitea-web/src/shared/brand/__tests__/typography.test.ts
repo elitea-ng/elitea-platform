@@ -1,15 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_BRAND_PACK } from '../tokens';
-import {
-  avatarInitialsType,
-  ladderPx,
-  labelShrinkScale,
-  MIN_FONT_PX,
-  sizePx,
-  toTypography,
-  typeScale,
-} from '../typography';
+import { avatarInitialsType, labelShrinkScale, typeScale } from '../typeScale';
+import { ladderPx, MIN_FONT_PX, sizePx, toTypography } from '../typography';
 
 /**
  * The one type scale (typography spec rev. 2): four sizes, eight variants,

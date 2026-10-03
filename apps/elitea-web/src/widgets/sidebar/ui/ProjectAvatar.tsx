@@ -5,7 +5,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { projectAvatarColor, projectInitial } from '../lib/projectAvatar';
-import { avatarInitialsType, typeScale } from '@/shared/brand/typography';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 export interface ProjectAvatarProps {
   projectName: string | undefined;
