@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { stepStateValues } from './runStateValues';
+import { isRunFinished, stepStateValues } from './runStateValues';
 
 /**
  * #6883: a pipeline whose last node is an agent. The agent's entry got no
@@ -38,5 +38,24 @@ describe('stepStateValues (#6883)', () => {
 
   it('handles an empty timeline', () => {
     expect(stepStateValues([], 0, 'answer', true)).toEqual({ before: '', after: undefined, isFinal: false });
+  });
+});
+
+describe('isRunFinished (#6883)', () => {
+  it.each(['Completed', 'Error', 'Stopped'])('calls a %s run finished', (status) => {
+    expect(isRunFinished(status)).toBe(true);
+  });
+
+  it.each(['In progress', 'Interrupt', 'Paused', '', undefined])('does not call a %s run finished', (status) => {
+    // Interrupt is a human-in-the-loop pause: the run resumes and its state changes.
+    expect(isRunFinished(status)).toBe(false);
+  });
+
+  it('keeps an interrupted run on its own last-step value instead of a scanned-back "final" one', () => {
+    expect(stepStateValues(terminalAgentTimeline, 2, 'answer', isRunFinished('Interrupt'))).toEqual({
+      before: 'draft',
+      after: undefined,
+      isFinal: false,
+    });
   });
 });

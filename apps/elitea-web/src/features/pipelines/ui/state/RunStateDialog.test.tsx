@@ -193,4 +193,32 @@ describe('RunStateDialog', () => {
     expect(screen.getByText('After')).toBeInTheDocument();
     expect(screen.queryByText('Final state')).not.toBeInTheDocument();
   });
+
+  it('keeps "After" and the step\'s own value on the last step of a paused (Interrupt) run (#6883)', () => {
+    // A human-in-the-loop pause resumes later and produces a different state:
+    // its last step is not the run's final state.
+    renderWithTheme(
+      <RunStateDialog
+        data={baseData({
+          status: 'Interrupt',
+          timeline: [
+            { id: 'start', status: 'Completed', created_at: '2024-01-01T00:00:00.000Z', state: { answer: 'none yet' } },
+            { id: 'agent', status: 'Completed', created_at: '2024-01-01T00:00:05.000Z', state: { answer: 'an interim answer' } },
+            { id: 'review', status: 'Interrupt', created_at: '2024-01-01T00:00:06.000Z', state: {} },
+          ],
+        })}
+        state={{ answer: { type: 'str' } }}
+        open
+        onClose={vi.fn()}
+        onStop={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'review' }));
+    expect(screen.getByText('After')).toBeInTheDocument();
+    expect(screen.queryByText('Final state')).not.toBeInTheDocument();
+    // "Before" shows the agent step's value; "After" does not borrow it as a final value.
+    expect(screen.getAllByText('"an interim answer"')).toHaveLength(1);
+  });
 });

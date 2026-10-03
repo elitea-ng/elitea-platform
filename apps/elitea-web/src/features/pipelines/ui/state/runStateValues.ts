@@ -13,7 +13,24 @@
  * "After", or the step before it, and never the final state the run produced.
  * For that step, "After" is the run's final state: the newest state the
  * timeline holds. The dialog labels it "Final state".
+ *
+ * Only a TERMINAL run has a final state (`isRunFinished`). `Interrupt` is a
+ * run paused at a human-in-the-loop node: it resumes later and produces a
+ * different state, so its last step keeps the plain "After" and its own
+ * value. An unknown status is treated the same way.
  */
+import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+  FlowEditorConstants.PipelineStatus.Completed,
+  FlowEditorConstants.PipelineStatus.Error,
+  FlowEditorConstants.PipelineStatus.Stopped,
+]);
+
+/** True when a run with this status has ended and will not change again. */
+export function isRunFinished(status: string | undefined): boolean {
+  return status !== undefined && TERMINAL_RUN_STATUSES.has(status);
+}
 
 export interface RunStateStep {
   readonly state?: Readonly<Record<string, unknown>>;
@@ -22,7 +39,7 @@ export interface RunStateStep {
 export interface StepStateValues {
   readonly before: unknown;
   readonly after: unknown;
-  /** True for the last step of a run that is no longer in progress. */
+  /** True for the last step of a terminal run (see `isRunFinished`). */
   readonly isFinal: boolean;
 }
 
