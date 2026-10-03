@@ -141,20 +141,6 @@ export function extractConfigAuthMetadata(authMetadata: ConfigAuthMetadataSource
   };
 }
 
-/**
- * Common OAuth endpoint conventions for authorization servers that don't
- * expose an OIDC/OAuth discovery document (e.g. GitHub's `/authorize` +
- * `/access_token`), used ONLY as a last-resort fallback.
- */
-function constructOAuthMetadataFromServer(authServerUrl: string | undefined): Pick<OAuthServerMetadata, 'authorization_endpoint' | 'token_endpoint'> | null {
-  if (!authServerUrl) return null;
-  const normalizedUrl = authServerUrl.replace(/\/+$/, '');
-  return {
-    authorization_endpoint: `${normalizedUrl}/authorize`,
-    token_endpoint: `${normalizedUrl}/access_token`,
-  };
-}
-
 interface AuthServerMetadataSource {
   oauth_authorization_server?: OAuthServerMetadata | undefined;
   authorization_server?: OAuthServerMetadata | undefined;
@@ -177,13 +163,6 @@ function hasUsableAuthEndpoints(metadata: OAuthServerMetadata | undefined): bool
   return Boolean(metadata?.authorization_endpoint && metadata?.token_endpoint);
 }
 
-/** Last-resort fallback built from `authorization_servers[0]`'s host, per `constructOAuthMetadataFromServer`'s convention-based endpoints. */
-function resolveFallbackAuthServerMetadata(metadata: AuthServerMetadataSource | null | undefined): Pick<OAuthServerMetadata, 'authorization_endpoint' | 'token_endpoint'> | undefined {
-  const authServers = metadata?.authorization_servers;
-  if (!authServers || authServers.length === 0) return undefined;
-  return constructOAuthMetadataFromServer(authServers[0]) ?? undefined;
-}
-
 /**
  * Resolves the auth-server metadata `startMcpAuthFlow` needs from whatever
  * the `mcp_authorization_required` message provided — never performs its
@@ -191,23 +170,21 @@ function resolveFallbackAuthServerMetadata(metadata: AuthServerMetadataSource | 
  * must come from the backend). Throws `MCP_OAUTH_ERRORS.NO_AUTH_SERVERS`/
  * `MISSING_ENDPOINTS` when nothing usable is present.
  *
- * Split into `resolveDirectOrNested`/`hasUsable`/`resolveFallback` helpers
- * (§3.5 complexity budget: the single-function form measured 20).
+ * #6689: there is deliberately NO endpoint fabrication. The former fallback
+ * invented GitHub-shaped `{issuer}/authorize` + `{issuer}/access_token`
+ * endpoints from `authorization_servers[0]`, which sent Stripe users to a
+ * non-existent `https://access.stripe.com/mcp/authorize`. Main now discovers
+ * the real document (RFC 8414 path-inserted, then OIDC), so an issuer with no
+ * discovered endpoints is reported, never guessed.
  */
 export function extractAuthServerMetadata(metadata: AuthServerMetadataSource | null | undefined): OAuthServerMetadata {
-  let asMetadata = resolveDirectOrNestedAuthServerMetadata(metadata);
-
-  if (!hasUsableAuthEndpoints(asMetadata)) {
-    const fallback = resolveFallbackAuthServerMetadata(metadata);
-    if (fallback) {
-      asMetadata = { ...asMetadata, ...fallback };
-    }
-  }
+  const asMetadata = resolveDirectOrNestedAuthServerMetadata(metadata);
 
   if (!asMetadata) {
-    throw new Error(MCP_OAUTH_ERRORS.NO_AUTH_SERVERS);
+    const knowsServer = (metadata?.authorization_servers?.length ?? 0) > 0;
+    throw new Error(knowsServer ? MCP_OAUTH_ERRORS.MISSING_ENDPOINTS : MCP_OAUTH_ERRORS.NO_AUTH_SERVERS);
   }
-  if (!asMetadata.authorization_endpoint || !asMetadata.token_endpoint) {
+  if (!hasUsableAuthEndpoints(asMetadata)) {
     throw new Error(MCP_OAUTH_ERRORS.MISSING_ENDPOINTS);
   }
 

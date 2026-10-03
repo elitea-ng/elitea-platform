@@ -63,6 +63,13 @@ This variable is not a named key in `values.yaml` — set it like any other elit
 --set-string main.env.ELITEA_WEBHOOK_EGRESS_ALLOWLIST="10.0.0.0/8"
 ```
 </Tab>
+<Tab title="Remote MCP — ELITEA_MCP_EGRESS_ALLOWLIST">
+Governs where elitea-main may dial for a Remote MCP server: **Load Tools**, the OAuth and client-registration proxies, and the authorization metadata those servers name. It uses the same grammar and the same split as the webhook allowlist. **Unset refuses** every loopback, RFC 1918 and ULA destination, and each connection re-resolves the host before it dials. Name a private range (for example `10.0.0.0/8`) to let users reach MCP servers on your internal network. Link-local and multicast addresses stay refused whatever this variable says.
+
+```bash
+--set-string main.env.ELITEA_MCP_EGRESS_ALLOWLIST="10.0.0.0/8"
+```
+</Tab>
 </Tabs>
 
 ## Budgets need GATEWAY_NATS_URL
