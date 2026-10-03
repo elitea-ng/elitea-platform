@@ -154,7 +154,7 @@ func loginBrandFromPack(pack *v2branding.Pack) loginBrand {
 		{"--radius-lg", pack.Shape.RadiusLg},
 		{"--radius-pill", pack.Shape.RadiusPill},
 	} {
-		if radius.value > 0 && radius.value <= 9999 {
+		if radius.value >= 0 && radius.value <= 9999 {
 			radii = append(radii, fmt.Sprintf("%s:%gpx", radius.name, radius.value))
 		}
 	}
