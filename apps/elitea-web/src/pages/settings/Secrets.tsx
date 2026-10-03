@@ -49,7 +49,7 @@ import { secretsFeature } from '@/features/settings';
 import { handleCopy } from '@/shared/lib/clipboard';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
-const { SecretsTable, useSecretPermissions } = secretsFeature;
+const { SecretsTable, SecretsLoadError, useSecretPermissions } = secretsFeature;
 import { t } from '@/shared/i18n';
 
 /**
@@ -115,7 +115,7 @@ export const SecretsContent = memo(function SecretsContent({
   const canCreate = secretPermissions.canCreate;
 
   /* ── API query ────────────────────────────────────────────────────── */
-  const { data, isFetching, isError, error } = useListSecretsQuery(projectId, {
+  const { data, isFetching, isError, error, refetch } = useListSecretsQuery(projectId, {
     enabled: !!projectId && canList,
   });
   const secrets = data ?? EMPTY_SECRETS;
@@ -198,6 +198,11 @@ export const SecretsContent = memo(function SecretsContent({
   // showing stale data (matches the baseline's `rows={isError ? [] :
   // secretRows}`, `SecretsContent.jsx:167`).
   const tableRows = isError ? [] : filteredRows;
+  // A settled FAILURE is not an empty project (UI-UX-1(b)): the grid's "No
+  // secrets" overlay invites the create the backend refuses. A retry that is
+  // in flight shows the table's loading skeletons instead.
+  const showLoadError = isError && !isFetching;
+  const retryList = useCallback(() => void refetch(), [refetch]);
 
   // Wire mutations to the hook
   const setMutations = actions.setMutations;
@@ -317,39 +322,43 @@ export const SecretsContent = memo(function SecretsContent({
         }}
       />
       <Box sx={styles.content}>
-        <SecretsTable
-          rows={tableRows}
-          setRows={setRows}
-          rowModesModel={actions.rowModesModel}
-          setRowModesModel={actions.setRowModesModel}
-          isFetching={isFetching}
-          isShowSecretMap={actions.isShowSecretMap}
-          permissions={secretPermissions}
-          validationErrors={actions.validationErrors}
-          onValidationChange={actions.onValidationChange}
-          actions={{
-            onSave: actions.onSave,
-            onCancel: actions.onCancel,
-            onShowSecret: actions.onShowSecret,
-            onHideSecret: actions.onHideSecret,
-            onCopySecretValue,
-            onActionsMenuClick: actions.onActionsMenuClick,
-            onEdit: handleEditClick,
-            onHide: actions.onHide,
-            onDelete: actions.onDelete,
-            onCloseAlert: actions.onCloseAlert,
-            onConfirmAlert: actions.onConfirmAlert,
-          }}
-          menu={{
-            anchorEl: actions.anchorEl,
-            anchorRowId: actions.anchorRowId,
-            onCloseMenu: actions.onActionsMenuClose,
-          }}
-          dialog={{
-            openAlert: actions.openAlert,
-            openAlertType: actions.openAlertType,
-          }}
-        />
+        {showLoadError ? (
+          <SecretsLoadError forbidden={isForbiddenError(error)} onRetry={retryList} />
+        ) : (
+          <SecretsTable
+            rows={tableRows}
+            setRows={setRows}
+            rowModesModel={actions.rowModesModel}
+            setRowModesModel={actions.setRowModesModel}
+            isFetching={isFetching}
+            isShowSecretMap={actions.isShowSecretMap}
+            permissions={secretPermissions}
+            validationErrors={actions.validationErrors}
+            onValidationChange={actions.onValidationChange}
+            actions={{
+              onSave: actions.onSave,
+              onCancel: actions.onCancel,
+              onShowSecret: actions.onShowSecret,
+              onHideSecret: actions.onHideSecret,
+              onCopySecretValue,
+              onActionsMenuClick: actions.onActionsMenuClick,
+              onEdit: handleEditClick,
+              onHide: actions.onHide,
+              onDelete: actions.onDelete,
+              onCloseAlert: actions.onCloseAlert,
+              onConfirmAlert: actions.onConfirmAlert,
+            }}
+            menu={{
+              anchorEl: actions.anchorEl,
+              anchorRowId: actions.anchorRowId,
+              onCloseMenu: actions.onActionsMenuClose,
+            }}
+            dialog={{
+              openAlert: actions.openAlert,
+              openAlertType: actions.openAlertType,
+            }}
+          />
+        )}
       </Box>
       <Snackbar
         open={toast !== null}

@@ -47,6 +47,7 @@ import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { server } from '@/test/setup';
 
 import { SECRETS_SKELETON_TESTID } from '@/features/settings/ui/secrets/SecretsTable';
+import { SECRETS_LOAD_ERROR_TESTID } from '@/features/settings/ui/secrets/SecretsLoadError';
 
 import { SecretsContent } from './Secrets';
 
@@ -305,4 +306,74 @@ describe('SecretsContent — a viewer lists names and writes nothing (issue 402)
     expect(within(screen.getByRole('grid')).queryAllByRole('textbox')).toHaveLength(0);
     expect(writes).toHaveLength(0);
   }, 20_000);
+});
+
+/**
+ * UI-UX-1(b): a FAILED list is not an empty project.
+ *
+ * The page handed the table `[]` on a list error, and the table showed "No
+ * secrets". F1 made that the live symptom: a project with a default model
+ * selected held an integer in its vault, the list answered 500, and the page
+ * said the project had no secrets — inviting the create the backend's
+ * unreadable-vault guard refuses. The page now shows an error state, and a
+ * retry that succeeds shows the rows.
+ */
+describe('SecretsContent — a failed list shows an error state (UI-UX-1(b))', () => {
+  it('renders the error state instead of the "No secrets" empty state, and recovers on retry', async () => {
+    useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
+    let failing = true;
+    server.use(
+      http.get(PERMISSIONS_PATH, () =>
+        HttpResponse.json([
+          { name: 'configuration.secrets.secret.list', enabled: true },
+          { name: 'configuration.secrets.secret.unsecret', enabled: true },
+        ]),
+      ),
+      http.get(SECRETS_PATH, () =>
+        failing
+          ? HttpResponse.json({ error: 'project vault is unreadable' }, { status: 500 })
+          : HttpResponse.json([{ name: 'API_KEY', secret_name: 'API_KEY', is_default: false }]),
+      ),
+    );
+
+    render(
+      <AppProviders>
+        <SecretsContent shouldCreate={false} search="" onSearchChange={noop} />
+      </AppProviders>,
+    );
+
+    const errorState = await screen.findByTestId(SECRETS_LOAD_ERROR_TESTID, undefined, { timeout: 15_000 });
+    expect(within(errorState).getByText('Failed to load secrets')).toBeInTheDocument();
+    expect(screen.queryByText('No secrets')).not.toBeInTheDocument();
+    expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+
+    failing = false;
+    fireEvent.click(within(errorState).getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('API_KEY').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByTestId(SECRETS_LOAD_ERROR_TESTID)).not.toBeInTheDocument();
+  }, 30_000);
+
+  it('offers no retry for a 403 — retrying cannot help', async () => {
+    useSelectedProjectStore.setState({ project: { id: 'proj-1', name: 'Acme' } });
+    server.use(
+      http.get(PERMISSIONS_PATH, () =>
+        HttpResponse.json([{ name: 'configuration.secrets.secret.list', enabled: true }]),
+      ),
+      http.get(SECRETS_PATH, () => HttpResponse.json({ error: 'forbidden' }, { status: 403 })),
+    );
+
+    render(
+      <AppProviders>
+        <SecretsContent shouldCreate={false} search="" onSearchChange={noop} />
+      </AppProviders>,
+    );
+
+    const errorState = await screen.findByTestId(SECRETS_LOAD_ERROR_TESTID, undefined, { timeout: 15_000 });
+    expect(within(errorState).getByText('The access is not allowed')).toBeInTheDocument();
+    expect(within(errorState).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByText('No secrets')).not.toBeInTheDocument();
+  }, 30_000);
 });
