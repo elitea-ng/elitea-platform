@@ -108,6 +108,31 @@ func TestCreateRefusesABodyMissingASchemaRequiredField(t *testing.T) {
 			},
 			field: "data.ai_credentials",
 		},
+		// F6: the pairwise auth rule. Each half is optional in the schema,
+		// so only the pairing can refuse these. The refusal runs before the
+		// password is sealed, so no vault is needed for the 400.
+		{
+			name:  "a github credential with a username and no password",
+			title: "autotest_github_username_only",
+			body: map[string]any{
+				"elitea_title": "autotest_github_username_only",
+				"label":        "autotest github",
+				"type":         "github",
+				"data":         map[string]any{"base_url": "https://autotest.invalid/api", "username": "octocat"},
+			},
+			field: "data.username+data.password",
+		},
+		{
+			name:  "a github credential with a private key and no app id",
+			title: "autotest_github_key_only",
+			body: map[string]any{
+				"elitea_title": "autotest_github_key_only",
+				"label":        "autotest github",
+				"type":         "github",
+				"data":         map[string]any{"base_url": "https://autotest.invalid/api", "app_private_key": "-----BEGIN KEY-----"},
+			},
+			field: "data.app_id+data.app_private_key",
+		},
 	}
 
 	for _, testCase := range cases {
