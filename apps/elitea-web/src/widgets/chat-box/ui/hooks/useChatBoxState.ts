@@ -24,6 +24,8 @@ import type { VersionSummary } from '@/entities/version';
 import { chatInputCompositionHooks, mentionHooks } from '@/features/chat-input';
 import type { ChatInputHandle } from '@/features/chat-input';
 
+import { triggerQueryEnd } from './triggerQueryRange';
+
 /**
  * The substring a withdrawal stamps into the reverted clone's name. The
  * server's own marker — see `isActiveParticipantWithdrawn`.
@@ -236,8 +238,9 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
   const onSelectUserMention = useCallback(
     (user: ResolvedUserMention) => {
       const anchor = keyDown.atAnchorRef.current;
-      if (chatInput.current && anchor !== null) {
-        chatInput.current.replaceRange(anchor, anchor + keyDown.atQuery.length, `@${user.name} `);
+      const input = chatInput.current;
+      if (input && anchor !== null) {
+        input.replaceRange(anchor, triggerQueryEnd(input.getInputContent(), anchor, '@', keyDown.atQuery), `@${user.name} `);
       }
       keyDown.stopProcessingAtSymbol();
     },
@@ -246,8 +249,9 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
 
   const clearHashQuery = useCallback(() => {
     const anchor = keyDown.hashAnchorRef.current;
-    if (chatInput.current && anchor !== null) {
-      chatInput.current.replaceRange(anchor, anchor + keyDown.query.length, '');
+    const input = chatInput.current;
+    if (input && anchor !== null) {
+      input.replaceRange(anchor, triggerQueryEnd(input.getInputContent(), anchor, '#', keyDown.query), '');
     }
     keyDown.stopProcessingSymbols();
   }, [chatInput, keyDown]);

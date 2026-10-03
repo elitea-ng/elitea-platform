@@ -38,6 +38,24 @@ describe('useNewInputKeyDownHandler', () => {
     expect(result.current.hashAnchorRef.current).toBeNull();
   });
 
+  it('records non-ASCII characters in the "#" and "@" queries (#6774)', () => {
+    const { result } = renderHook(() => useNewInputKeyDownHandler());
+    act(() => result.current.onKeyDown(keyEvent('#', { value: '#', selectionStart: 0, selectionEnd: 0 })));
+    for (const key of ['П', 'р', 'é', '😀']) {
+      act(() => result.current.onKeyDown(keyEvent(key, { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    }
+    expect(result.current.query).toBe('#Прé😀');
+    // Named keys are not characters.
+    act(() => result.current.onKeyDown(keyEvent('ArrowLeft', { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    act(() => result.current.onKeyDown(keyEvent('Process', { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    expect(result.current.query).toBe('#Прé😀');
+
+    act(() => result.current.stopProcessingSymbols());
+    act(() => result.current.onKeyDown(keyEvent('@', { value: '@', selectionStart: 0, selectionEnd: 0 })));
+    act(() => result.current.onKeyDown(keyEvent('Ж', { value: '@', selectionStart: 1, selectionEnd: 1 })));
+    expect(result.current.atQuery).toBe('@Ж');
+  });
+
   it('ends the "#" picker query on Enter so the message can be sent (#6774)', () => {
     const { result } = renderHook(() => useNewInputKeyDownHandler());
     act(() => result.current.onKeyDown(keyEvent('#', { value: '#', selectionStart: 1, selectionEnd: 1 })));

@@ -33,7 +33,12 @@ export interface UseNewInputKeyDownHandlerResult {
 
 const NEW_SPECIAL_SYMBOLS = '#';
 const AT_SYMBOL = '@';
-const PRINTABLE_ASCII_REGEX = /^[\x20-\x7E]*$/;
+/**
+ * One printable character of any script: a single code point that is not a
+ * control or format character. ASCII-only lost "Пров" or "é" from the query,
+ * so the picker searched for "#" while the text held "#Пров" (#6774).
+ */
+const PRINTABLE_CHARACTER_REGEX = /^\P{C}$/u;
 
 interface InputTarget {
   readonly selectionStart: number | null;
@@ -107,7 +112,7 @@ export function useNewInputKeyDownHandler(
   const handleAtSymbolMode = useCallback(
     (event: KeyboardEvent<HTMLDivElement>): void => {
       const target = eventTarget(event);
-      if (event.key.length === 1 && PRINTABLE_ASCII_REGEX.test(event.key)) {
+      if (PRINTABLE_CHARACTER_REGEX.test(event.key)) {
         if (event.key === ' ') resetAt();
         else setAtQuery((prev) => prev + event.key);
       } else if (event.key === 'Backspace' || event.key === 'Delete') {
@@ -134,7 +139,7 @@ export function useNewInputKeyDownHandler(
       const target = eventTarget(event);
       if (event.key === ' ' || event.key === 'Enter') {
         reset();
-      } else if (event.key.length === 1 && PRINTABLE_ASCII_REGEX.test(event.key)) {
+      } else if (PRINTABLE_CHARACTER_REGEX.test(event.key)) {
         setQuery((prev) => prev + event.key);
       } else if (event.key === 'Backspace' || event.key === 'Delete') {
         const willDeleteQuery = resolveDeletion(target, query, event.key === 'Backspace', '#');
@@ -216,7 +221,7 @@ export function useNewStartConversationInputKeyDownHandler(
         setIsProcessingSymbols(true);
         setQuery(event.key);
       } else if (isProcessingSymbols) {
-        if (event.key.length === 1 && PRINTABLE_ASCII_REGEX.test(event.key)) {
+        if (PRINTABLE_CHARACTER_REGEX.test(event.key)) {
           setQuery((prev) => prev + event.key);
         } else if (event.key === 'Backspace') {
           setQuery((prev) => prev.slice(0, -1));
