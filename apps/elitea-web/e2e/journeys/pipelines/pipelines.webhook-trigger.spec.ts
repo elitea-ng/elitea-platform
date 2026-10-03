@@ -51,6 +51,7 @@ import {
   revokeInboundTrigger,
   savePipelineSchedule,
   sendSignedWebhook,
+  sendStandardWebhook,
   sendWebhook,
   GITHUB_SIGNATURE_HEADER,
   TRIGGER_REFUSAL,
@@ -107,10 +108,10 @@ test('the inbound trigger refuses a missing or wrong credential, and refuses eve
     );
 
     // ── the wrong secret, in each carrier the handler reads ───────────────
-    // All three, because `presentedSecret` reads them in order and stops at
+    // All four, because `presentedSecret` reads them in order and stops at
     // the first non-empty one: a bug that ignored the header would be hidden
     // by a probe that only ever used the bearer form.
-    for (const carrier of ['bearer', 'header', 'query'] as const) {
+    for (const carrier of ['bearer', 'header', 'gitlab', 'query'] as const) {
       await expectCredentialRefused(
         await sendWebhook(sender, trigger, { carrier, secret: 'wrong-secret-value', body: '{}' }),
         `POST with a wrong secret in the ${carrier} carrier`,
@@ -176,7 +177,7 @@ test('the inbound trigger accepts the minted secret in every carrier, and takes 
   const { pipeline, trigger } = await triggeredPipeline(page.request, 'accept');
   const sender = await webhookSender();
   try {
-    for (const carrier of ['bearer', 'header', 'query'] as const) {
+    for (const carrier of ['bearer', 'header', 'gitlab', 'query'] as const) {
       await expectCredentialAccepted(
         await sendWebhook(sender, trigger, { carrier, secret: trigger.secret, body: '{"message":"webhook test input"}' }),
         `POST with the minted secret in the ${carrier} carrier`,
@@ -225,6 +226,55 @@ test('the inbound trigger accepts the minted secret in every carrier, and takes 
     // The URL is the stored row's handle and carries no project-selecting
     // input: the path names WHERE to look, and what runs comes from the row.
     expect(trigger.url).toBe(`/api/v2/pipeline_trigger/${pipeline.projectId}/${trigger.tokenId}`);
+  } finally {
+    await sender.dispose();
+  }
+});
+
+/*
+ * Legacy issue 6664 — GitLab. The secret-token preset is the bearer mode at a
+ * `/gitlab` url, read out of `X-Gitlab-Token`; the signing-token mode verifies
+ * a Standard Webhooks signature and accepts no bearer carrier at all.
+ */
+test('a GitLab-type webhook trigger accepts X-Gitlab-Token, and a signing-token one a Standard Webhooks signature', async ({ page }) => {
+  test.setTimeout(90_000);
+  const name = `${AUTOTEST_PREFIX}wh-gitlab-${String(Date.now() % 1e9)}`;
+  const pipeline = await createPipelineThroughApi(page.request, name);
+  created.push(pipeline);
+  const scope = { projectId: pipeline.projectId, versionId: pipeline.versionId };
+  const sender = await webhookSender();
+  try {
+    const tokenTrigger = await createInboundTrigger(page.request, scope, { type: 'gitlab' });
+    expect(tokenTrigger.url).toMatch(/\/gitlab$/);
+    expect(tokenTrigger.authMode).toBe('token');
+    const push = '{"object_kind":"push","ref":"refs/heads/main"}';
+    await expectCredentialAccepted(
+      await sendWebhook(sender, tokenTrigger, { carrier: 'gitlab', secret: tokenTrigger.secret, body: push }),
+      'a GitLab secret-token delivery',
+    );
+    await expectCredentialRefused(
+      await sendWebhook(sender, tokenTrigger, { carrier: 'gitlab', secret: 'not-the-secret', body: push }),
+      'a wrong GitLab secret token',
+    );
+
+    // Rotating INTO the signing mode replaces the secret with a whsec_ one.
+    const signed = await createInboundTrigger(page.request, scope, { type: 'gitlab', auth_mode: 'standard_webhooks_hmac' });
+    expect(signed.authMode).toBe('standard_webhooks_hmac');
+    expect(signed.signatureHeader).toBe('webhook-signature');
+    expect(signed.secret.startsWith('whsec_')).toBe(true);
+    expect(signed.secretUrl, 'a signing trigger is handed no secret_url').toBe('');
+    await expectCredentialAccepted(
+      await sendStandardWebhook(sender, signed, { secret: signed.secret, body: push }),
+      'a GitLab signing-token delivery',
+    );
+    await expectCredentialRefused(
+      await sendStandardWebhook(sender, signed, { secret: signed.secret, body: push, signedAt: new Date(Date.now() - 10 * 60_000) }),
+      'a signed delivery replayed after the five-minute window',
+    );
+    await expectCredentialRefused(
+      await sendWebhook(sender, signed, { carrier: 'gitlab', secret: signed.secret, body: push }),
+      'the signing secret presented as a bearer',
+    );
   } finally {
     await sender.dispose();
   }
