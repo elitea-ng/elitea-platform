@@ -16,9 +16,13 @@ use super::mcp::{
     materialize_mcp_toolsets, materialize_mcp_toolsets_with_tokens,
     materialize_mcp_toolsets_with_tokens_and_authorization, mcp_authorization_required_fixture,
     names_sse_endpoint, redirect_allowed, retired_sse_failure_for_test,
-    same_origin_redirect_policy,
+    same_origin_redirect_policy, session_client_builder, tool_list_cache_for_test,
+    tool_list_key_for_test,
 };
-use super::mcp_tool_cache::McpToolCaller;
+use super::mcp_tool_cache::{
+    MAX_CACHED_LISTING_BYTES, MAX_CACHED_LISTINGS, MAX_CACHED_TOTAL_BYTES, McpToolDescriptor,
+    McpToolListCache, McpToolListKey,
+};
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
 
@@ -665,7 +669,7 @@ async fn invalid_or_unowned_mcp_authority_fails_before_connecting() {
             "mcp",
             json!({
                 "url": "https://mcp.example.invalid/mcp",
-                "headers": {"Authorization": "Bearer secret"},
+                "headers": {"Mcp-Session-Id": "forged-session"},
                 "selected_tools": []
             }),
         ),
@@ -813,40 +817,23 @@ impl Toolset for CountingToolset {
     }
 }
 
-type RecordedCalls = Arc<Mutex<Vec<(String, Map<String, Value>)>>>;
-
-struct CountingCaller {
-    calls: RecordedCalls,
-}
-
-#[async_trait]
-impl McpToolCaller for CountingCaller {
-    async fn call_tool(
-        &self,
-        name: &str,
-        arguments: Map<String, Value>,
-    ) -> adk_rust::Result<Value> {
-        self.calls
-            .lock()
-            .expect("caller calls")
-            .push((name.to_owned(), arguments));
-        Ok(json!({"cached": true}))
-    }
-}
-
 struct CachingConnector {
     lists: Arc<AtomicUsize>,
-    calls: RecordedCalls,
+    calls: Arc<AtomicUsize>,
     tools: Vec<Arc<dyn Tool>>,
 }
 
 impl CachingConnector {
     fn new() -> Self {
-        let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+        let (lookup, calls) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+        Self::with_tools(vec![lookup], calls)
+    }
+
+    fn with_tools(tools: Vec<Arc<dyn Tool>>, calls: Arc<AtomicUsize>) -> Self {
         Self {
             lists: Arc::new(AtomicUsize::new(0)),
-            calls: Arc::new(Mutex::new(Vec::new())),
-            tools: vec![lookup],
+            calls,
+            tools,
         }
     }
 
@@ -875,9 +862,7 @@ impl McpConnector for CachingConnector {
                 lists: self.lists.clone(),
                 tools: self.tools.clone(),
             }),
-            caller: Some(Arc::new(CountingCaller {
-                calls: self.calls.clone(),
-            })),
+            reuses_listings: true,
         })
     }
 }
@@ -929,19 +914,29 @@ async fn tool_listing_is_reused_within_cache_ttl_and_refreshed_after_it() {
     );
     assert!(second[0].description().contains("release intelligence"));
     assert_eq!(second[0].parameters_schema(), first[0].parameters_schema());
+    // A call on a cached tool lists once on THIS session and then runs the
+    // session's own ADK tool, so execution never takes a second code path.
     let result = second[0]
         .execute(context(), json!({"query": "1.2"}))
         .await
         .expect("cached tool executes through the current session");
-    assert_eq!(result, json!({"cached": true}));
-    let calls = connector.calls.lock().expect("calls").clone();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "lookup_release");
-    assert_eq!(calls[0].1.get("query"), Some(&json!("1.2")));
+    assert_eq!(result, json!({"risk": "low"}));
+    assert_eq!(connector.calls.load(Ordering::Acquire), 1);
+    assert_eq!(
+        connector.lists(),
+        2,
+        "the first cached call lists on its session"
+    );
+    second[0]
+        .execute(context(), json!({"query": "1.3"}))
+        .await
+        .expect("second cached call");
+    assert_eq!(connector.calls.load(Ordering::Acquire), 2);
+    assert_eq!(connector.lists(), 2, "a session lists at most once");
 
     tokio::time::advance(Duration::from_secs(2)).await;
     materialize_once(&connector, &configured, &Map::new()).await;
-    assert_eq!(connector.lists(), 2, "a run after the TTL rediscovers");
+    assert_eq!(connector.lists(), 3, "a run after the TTL rediscovers");
 }
 
 #[tokio::test(start_paused = true)]
@@ -1200,4 +1195,312 @@ fn retired_sse_is_recognised_only_for_sse_urls_refusing_with_405_or_410() {
     assert_ne!(display, McpMaterializationErrorCode::DependencyUnavailable);
     assert!(RETIRED_SSE_MESSAGE.contains("HTTP+SSE is not supported"));
     assert!(RETIRED_SSE_MESSAGE.contains("/mcp"));
+}
+
+// ---- review: cache bounds, invalid listings, per-execution credentials ----
+
+/// A tool whose description is over the per-tool bound, so `BoundedMcpTool`
+/// refuses it and the materialization fails.
+struct OversizedDescriptionTool(String);
+
+#[async_trait]
+impl Tool for OversizedDescriptionTool {
+    fn name(&self) -> &'static str {
+        "lookup_release"
+    }
+
+    fn description(&self) -> &str {
+        &self.0
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        Ok(json!({}))
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_listing_the_run_refuses_is_never_cached() {
+    let endpoint = "https://mcp.example.invalid/refused-listing/mcp";
+    let tool: Arc<dyn Tool> = Arc::new(OversizedDescriptionTool("d".repeat(17 * 1_024)));
+    let connector = CachingConnector::with_tools(vec![tool], Arc::new(AtomicUsize::new(0)));
+    let configured = caching_settings(endpoint, true, 3_600);
+    let version = frozen("mcp", &configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot
+        .iter()
+        .find(|reference| reference.tool_type() == "mcp")
+        .expect("MCP reference");
+    let key = tool_list_key_for_test(
+        &RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("config"),
+    )
+    .expect("key");
+    for _ in 0..2 {
+        assert!(
+            materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+                .await
+                .is_err(),
+            "an oversized description fails materialization"
+        );
+    }
+    assert!(!tool_list_cache_for_test().contains(&key));
+    assert_eq!(connector.lists(), 2, "the refused listing was listed again");
+}
+
+fn descriptors(bytes: usize) -> Vec<McpToolDescriptor> {
+    vec![McpToolDescriptor::fixture("t", &"d".repeat(bytes))]
+}
+
+#[tokio::test(start_paused = true)]
+async fn cache_count_bound_evicts_the_earliest_expiring_listing() {
+    let cache = McpToolListCache::default();
+    let now = tokio::time::Instant::now();
+    let key = |index: usize| McpToolListKey::from_fields(&[&index.to_be_bytes()]);
+    for index in 0..MAX_CACHED_LISTINGS {
+        // Index 7 expires first; every other listing expires later.
+        let ttl = if index == 7 { 10 } else { 1_000 + index as u64 };
+        assert!(cache.insert(key(index), descriptors(8), now + Duration::from_secs(ttl)));
+    }
+    assert_eq!(cache.len(), MAX_CACHED_LISTINGS);
+    assert!(cache.insert(
+        key(MAX_CACHED_LISTINGS),
+        descriptors(8),
+        now + Duration::from_secs(5_000)
+    ));
+    assert_eq!(cache.len(), MAX_CACHED_LISTINGS);
+    assert!(
+        !cache.contains(&key(7)),
+        "the earliest-expiring listing is evicted"
+    );
+    assert!(cache.contains(&key(0)));
+    assert!(cache.contains(&key(MAX_CACHED_LISTINGS)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_oversized_listing_is_not_cached_and_the_total_is_bounded() {
+    let cache = McpToolListCache::default();
+    let expires = tokio::time::Instant::now() + Duration::from_mins(5);
+    let oversized = McpToolListKey::from_fields(&[b"oversized"]);
+    assert!(!cache.insert(
+        oversized,
+        descriptors(MAX_CACHED_LISTING_BYTES + 1),
+        expires
+    ));
+    assert!(!cache.contains(&oversized));
+    assert_eq!(cache.retained_bytes(), 0);
+
+    let per_listing = MAX_CACHED_LISTING_BYTES - 64;
+    let fits = MAX_CACHED_TOTAL_BYTES / per_listing;
+    for index in 0..fits + 4 {
+        let key = McpToolListKey::from_fields(&[&index.to_be_bytes()]);
+        assert!(cache.insert(
+            key,
+            descriptors(per_listing),
+            expires + Duration::from_secs(index as u64)
+        ));
+        assert!(cache.retained_bytes() <= MAX_CACHED_TOTAL_BYTES);
+    }
+    assert!(cache.len() <= fits);
+    let first = McpToolListKey::from_fields(&[&0_usize.to_be_bytes()]);
+    assert!(
+        !cache.contains(&first),
+        "the byte budget evicted the earliest listing"
+    );
+}
+
+#[test]
+fn an_internal_builder_listing_is_never_cached() {
+    let version = json!({
+        "tools": [{
+            "type": "mcp_elitea_internal_chat",
+            "toolkit_name": "Elitea Chat",
+            "name": "Elitea Chat",
+            "meta": {"mcp": true, "internal_builder": true},
+            "settings": {
+                "server_name": "mcp_elitea_internal_chat",
+                "url": "https://elitea.example.invalid/app/7/mcp/chat",
+                "headers": {"Authorization": "Bearer per-execution-actor-token"},
+                "selected_tools": [],
+                "enable_caching": true,
+                "cache_ttl": 3_600,
+                "ssl_verify": true
+            }
+        }]
+    })
+    .as_object()
+    .cloned()
+    .expect("internal builder version");
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot
+        .iter()
+        .find(|reference| reference.is_internal_builder())
+        .expect("internal builder reference");
+    let config = RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("config");
+    assert_eq!(config.tool_list_ttl(), None);
+}
+
+// ---- review: direct toolkits' own headers, PAT precedence, blank values ----
+
+fn direct_settings_with_headers(headers: Value) -> Value {
+    let mut configured = settings(&["lookup_release"]);
+    configured["headers"] = headers;
+    configured
+}
+
+fn direct_config(headers: Value, tokens: &Map<String, Value>) -> RemoteMcpConfig {
+    let version = frozen("mcp", &direct_settings_with_headers(headers));
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot
+        .iter()
+        .find(|reference| reference.tool_type() == "mcp")
+        .expect("MCP reference");
+    RemoteMcpConfig::parse_for_test(reference, tokens).expect("direct MCP config")
+}
+
+#[tokio::test]
+async fn a_direct_mcp_toolkit_with_a_pat_header_materializes() {
+    let (lookup, _) = FixtureTool::new("lookup_release", true, json!({"risk": "low"}));
+    let connector = FixtureConnector::new(vec![lookup]);
+    let version = frozen(
+        "mcp",
+        &direct_settings_with_headers(
+            json!({"Authorization": "Bearer github-pat", "X-Org": "acme"}),
+        ),
+    );
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+        .await
+        .expect("a direct toolkit's own headers are admitted");
+    assert_eq!(connector.calls.load(Ordering::Acquire), 1);
+
+    let endpoint = "https://mcp.example.invalid/v1/mcp";
+    let tokens = Map::from_iter([(endpoint.to_owned(), json!({"access_token": "oauth-token"}))]);
+    let headers = direct_config(json!({"Authorization": "Bearer github-pat"}), &tokens)
+        .request_headers_for_test()
+        .expect("headers");
+    assert_eq!(
+        headers["authorization"], "Bearer github-pat",
+        "the PAT wins"
+    );
+}
+
+#[test]
+fn a_blank_authorization_header_does_not_shadow_the_delegated_token() {
+    let endpoint = "https://mcp.example.invalid/v1/mcp";
+    let tokens = Map::from_iter([(endpoint.to_owned(), json!({"access_token": "oauth-token"}))]);
+    for blank in ["", "   "] {
+        let headers = direct_config(json!({"authorization": blank, "X-Org": "acme"}), &tokens)
+            .request_headers_for_test()
+            .expect("headers");
+        assert_eq!(headers.get_all("authorization").iter().count(), 1);
+        assert_eq!(headers["authorization"], "Bearer oauth-token");
+        assert_eq!(headers["x-org"], "acme");
+    }
+    let headers = direct_config(json!({"authorization": ""}), &Map::new())
+        .request_headers_for_test()
+        .expect("headers");
+    assert_eq!(
+        headers["authorization"], "",
+        "with no token the header is left as configured"
+    );
+}
+
+// ---- review: the production session client keeps credentials on-origin ----
+
+/// A plain-HTTP server that records each request's path and Authorization.
+async fn recording_redirect_server(
+    other_origin: String,
+) -> (String, Arc<Mutex<Vec<(String, Option<String>)>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0_u8; 8_192];
+            let read = socket.read(&mut buffer).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+            let authorization = request.lines().find_map(|line| {
+                line.split_once(':')
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                    .map(|(_, value)| value.trim().to_owned())
+            });
+            log.lock().unwrap().push((path.clone(), authorization));
+            let location = match path.as_str() {
+                "/v1/mcp" => Some("/v1/mcp/".to_owned()),
+                "/cross/mcp" => Some(format!("{other_origin}/stolen")),
+                _ => None,
+            };
+            let response = location.map_or_else(
+                || "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok".to_owned(),
+                |location| {
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    )
+                },
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+    (base, seen)
+}
+
+#[tokio::test]
+async fn the_session_client_keeps_the_bearer_on_origin_and_refuses_cross_origin_hops() {
+    let (other, other_seen) = recording_redirect_server(String::new()).await;
+    let (base, seen) = recording_redirect_server(other.clone()).await;
+    for path in ["/v1/mcp", "/cross/mcp"] {
+        // The frozen URL must be HTTPS; the test server is plain HTTP, so the
+        // parsed config is pointed at it and the client then allows plain
+        // HTTP. The redirect policy compares origins, which this keeps.
+        let config = direct_config(json!({"Authorization": "Bearer pat"}), &Map::new())
+            .with_endpoint_for_test(&format!("{base}{path}"));
+        let client = session_client_builder(&config)
+            .expect("builder")
+            .https_only(false)
+            .build()
+            .expect("client");
+        let response = client
+            .post(format!("{base}{path}"))
+            .body("{}")
+            .send()
+            .await
+            .expect("response");
+        if path == "/v1/mcp" {
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.url().path(), "/v1/mcp/");
+        } else {
+            assert_eq!(
+                response.status(),
+                307,
+                "the cross-origin hop is not followed"
+            );
+        }
+    }
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.contains(&("/v1/mcp".to_owned(), Some("Bearer pat".to_owned()))));
+    assert!(
+        seen.contains(&("/v1/mcp/".to_owned(), Some("Bearer pat".to_owned()))),
+        "the same-origin hop keeps the bearer"
+    );
+    assert!(
+        other_seen.lock().unwrap().is_empty(),
+        "the other origin got no request"
+    );
 }

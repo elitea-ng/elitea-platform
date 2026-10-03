@@ -44,7 +44,7 @@ If you set an `Authorization` header (for example a personal access token) on th
 </Note>
 
 <Note>
-On the Rust worker, with caching enabled, the tool list is reused for **Cache TTL** seconds (60 to 3600, default 300) before the server is asked again. Each run still opens its own connection with its own credentials; only the list of tools is reused.
+On the Rust worker, with caching enabled, the tool list is reused for **Cache TTL** seconds (60 to 3600, default 300) before the server is asked again. Each run still opens its own connection with its own credentials; only the list of tools is reused. When an agent first calls one of that server's tools in a run, the worker lists the tools on that run's connection once, so the call behaves exactly as an uncached one.
 </Note>
 
 <Note>

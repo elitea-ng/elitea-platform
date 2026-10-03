@@ -1,31 +1,40 @@
 //! TTL-bounded cache of remote MCP tool listings (#6691).
 //!
 //! A remote MCP toolkit's `enable_caching` / `cache_ttl` settings bound how
-//! often the worker re-runs `tools/list`. Only the tool *descriptors* are
-//! cached; connections never are. A run that hits the cache still opens its
-//! own session with its own credentials and calls tools by name through it.
+//! often the worker runs `tools/list` while it assembles an agent. Only the
+//! tool *descriptors* are cached; connections never are. A run that hits the
+//! cache still opens its own session with its own credentials.
+//!
+//! A cached tool never executes through a second code path. The first call
+//! of any cached tool lists the tools once on the run's own session and then
+//! delegates to the ADK tool of the same name, so execution is the ADK
+//! client's in every respect: argument shape, error text, task and input
+//! rounds, and the per-session `x-mcp-header` parameter promotion that rmcp
+//! learns only from a `tools/list` on that session. The cache therefore saves
+//! the listing for every server whose tools a run never calls.
 //!
 //! The key is a SHA-256 over the toolkit identity, the frozen endpoint and the
 //! exact request headers (credentials included), so a listing obtained with
-//! one identity is never served to another.
+//! one identity is never served to another. The cache is bounded by entry
+//! count, by the size of one listing and by the total size of all listings.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use adk_rust::{AdkError, Tool, ToolContext};
+use adk_rust::tool::SimpleToolContext;
+use adk_rust::{AdkError, ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
-use serde_json::{Map, Value};
+use serde_json::Value;
+use tokio::sync::OnceCell;
 use tokio::time::Instant;
 
 /// Upper bound on distinct cached listings held by one worker process.
-const MAX_CACHED_LISTINGS: usize = 512;
-
-/// Calls one MCP tool by name on an established session, without listing.
-#[async_trait]
-pub(crate) trait McpToolCaller: Send + Sync {
-    async fn call_tool(&self, name: &str, arguments: Map<String, Value>)
-    -> adk_rust::Result<Value>;
-}
+pub(crate) const MAX_CACHED_LISTINGS: usize = 512;
+/// A listing larger than this is never cached: it is listed on every run.
+pub(crate) const MAX_CACHED_LISTING_BYTES: usize = 1_024 * 1_024;
+/// Upper bound on the size of every cached listing together.
+pub(crate) const MAX_CACHED_TOTAL_BYTES: usize = 64 * 1_024 * 1_024;
 
 /// What a listing contributed to a tool, independent of the session it came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,17 +60,72 @@ impl McpToolDescriptor {
             concurrency_safe: tool.is_concurrency_safe(),
         }
     }
+
+    /// The bytes this descriptor pins while cached, measured as serialized.
+    fn retained_bytes(&self) -> usize {
+        let schema_bytes = |schema: &Option<Value>| {
+            schema.as_ref().map_or(0, |value| {
+                serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+            })
+        };
+        self.name
+            .len()
+            .saturating_add(self.description.len())
+            .saturating_add(schema_bytes(&self.parameters_schema))
+            .saturating_add(schema_bytes(&self.response_schema))
+    }
+}
+
+/// The tools of one live session, listed at most once and only on demand.
+pub(crate) struct LiveMcpTools {
+    toolset: Arc<dyn Toolset>,
+    timeout: Duration,
+    tools: OnceCell<HashMap<String, Arc<dyn Tool>>>,
+}
+
+impl LiveMcpTools {
+    pub(crate) fn new(toolset: Arc<dyn Toolset>, timeout: Duration) -> Self {
+        Self {
+            toolset,
+            timeout,
+            tools: OnceCell::new(),
+        }
+    }
+
+    async fn tool(&self, name: &str) -> adk_rust::Result<Arc<dyn Tool>> {
+        let tools = self
+            .tools
+            .get_or_try_init(|| async {
+                let context: Arc<dyn ReadonlyContext> =
+                    Arc::new(SimpleToolContext::new("elitea_mcp_cached_call"));
+                let listed = tokio::time::timeout(self.timeout, self.toolset.tools(context))
+                    .await
+                    .map_err(|_| AdkError::tool("MCP server did not list its tools in time"))??;
+                Ok::<_, AdkError>(
+                    listed
+                        .into_iter()
+                        .map(|tool| (tool.name().to_owned(), tool))
+                        .collect::<HashMap<_, _>>(),
+                )
+            })
+            .await?;
+        tools.get(name).cloned().ok_or_else(|| {
+            AdkError::tool(format!(
+                "MCP tool '{name}' is no longer offered by the server"
+            ))
+        })
+    }
 }
 
 /// A tool rebuilt from a cached descriptor and bound to the current session.
 pub(crate) struct CachedMcpTool {
     descriptor: McpToolDescriptor,
-    caller: Arc<dyn McpToolCaller>,
+    live: Arc<LiveMcpTools>,
 }
 
 impl CachedMcpTool {
-    pub(crate) fn new(descriptor: McpToolDescriptor, caller: Arc<dyn McpToolCaller>) -> Self {
-        Self { descriptor, caller }
+    pub(crate) fn new(descriptor: McpToolDescriptor, live: Arc<LiveMcpTools>) -> Self {
+        Self { descriptor, live }
     }
 }
 
@@ -97,16 +161,13 @@ impl Tool for CachedMcpTool {
 
     async fn execute(
         &self,
-        _context: Arc<dyn ToolContext>,
+        context: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_rust::Result<Value> {
-        let arguments = match arguments {
-            Value::Null => Map::new(),
-            Value::Object(map) => map,
-            _ => return Err(AdkError::tool("Tool arguments must be an object")),
-        };
-        self.caller
-            .call_tool(&self.descriptor.name, arguments)
+        self.live
+            .tool(&self.descriptor.name)
+            .await?
+            .execute(context, arguments)
             .await
     }
 }
@@ -129,11 +190,42 @@ impl McpToolListKey {
     }
 }
 
-type CachedListing = (Instant, Arc<[McpToolDescriptor]>);
+struct CachedListing {
+    expires: Instant,
+    bytes: usize,
+    descriptors: Arc<[McpToolDescriptor]>,
+}
+
+#[derive(Default)]
+struct CacheEntries {
+    listings: HashMap<McpToolListKey, CachedListing>,
+    bytes: usize,
+}
+
+impl CacheEntries {
+    fn remove(&mut self, key: &McpToolListKey) {
+        if let Some(listing) = self.listings.remove(key) {
+            self.bytes = self.bytes.saturating_sub(listing.bytes);
+        }
+    }
+
+    fn evict_earliest_expiring(&mut self) -> bool {
+        let Some(earliest) = self
+            .listings
+            .iter()
+            .min_by_key(|(_, listing)| listing.expires)
+            .map(|(key, _)| *key)
+        else {
+            return false;
+        };
+        self.remove(&earliest);
+        true
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct McpToolListCache {
-    entries: Mutex<HashMap<McpToolListKey, CachedListing>>,
+    entries: Mutex<CacheEntries>,
 }
 
 impl McpToolListCache {
@@ -144,8 +236,8 @@ impl McpToolListCache {
         now: Instant,
     ) -> Option<Arc<[McpToolDescriptor]>> {
         let mut entries = self.entries.lock().ok()?;
-        match entries.get(key) {
-            Some((expires, descriptors)) if *expires > now => Some(Arc::clone(descriptors)),
+        match entries.listings.get(key) {
+            Some(listing) if listing.expires > now => Some(Arc::clone(&listing.descriptors)),
             Some(_) => {
                 entries.remove(key);
                 None
@@ -154,32 +246,83 @@ impl McpToolListCache {
         }
     }
 
+    /// Cache a listing until `expires`. A listing over
+    /// [`MAX_CACHED_LISTING_BYTES`] is not cached (and returns `false`); room
+    /// for one that fits is made by dropping expired listings, then the
+    /// earliest-expiring ones, until both the count and byte bounds hold.
     pub(crate) fn insert(
         &self,
         key: McpToolListKey,
         descriptors: Vec<McpToolDescriptor>,
         expires: Instant,
-    ) {
-        let Ok(mut entries) = self.entries.lock() else {
-            return;
-        };
-        if entries.len() >= MAX_CACHED_LISTINGS && !entries.contains_key(&key) {
-            let now = Instant::now();
-            entries.retain(|_, (expiry, _)| *expiry > now);
-            if entries.len() >= MAX_CACHED_LISTINGS
-                && let Some(oldest) = entries
-                    .iter()
-                    .min_by_key(|(_, (expiry, _))| *expiry)
-                    .map(|(key, _)| *key)
-            {
-                entries.remove(&oldest);
-            }
+    ) -> bool {
+        let bytes = descriptors.iter().fold(0_usize, |total, descriptor| {
+            total.saturating_add(descriptor.retained_bytes())
+        });
+        if bytes > MAX_CACHED_LISTING_BYTES {
+            return false;
         }
-        entries.insert(key, (expires, descriptors.into()));
+        let Ok(mut entries) = self.entries.lock() else {
+            return false;
+        };
+        entries.remove(&key);
+        let now = Instant::now();
+        let stale = entries
+            .listings
+            .iter()
+            .filter(|(_, listing)| listing.expires <= now)
+            .map(|(stale_key, _)| *stale_key)
+            .collect::<Vec<_>>();
+        for stale_key in stale {
+            entries.remove(&stale_key);
+        }
+        while (entries.listings.len() >= MAX_CACHED_LISTINGS
+            || entries.bytes.saturating_add(bytes) > MAX_CACHED_TOTAL_BYTES)
+            && entries.evict_earliest_expiring()
+        {}
+        entries.bytes = entries.bytes.saturating_add(bytes);
+        entries.listings.insert(
+            key,
+            CachedListing {
+                expires,
+                bytes,
+                descriptors: descriptors.into(),
+            },
+        );
+        true
     }
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.entries.lock().map_or(0, |entries| entries.len())
+        self.entries
+            .lock()
+            .map_or(0, |entries| entries.listings.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.entries.lock().map_or(0, |entries| entries.bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, key: &McpToolListKey) -> bool {
+        self.entries
+            .lock()
+            .is_ok_and(|entries| entries.listings.contains_key(key))
+    }
+}
+
+#[cfg(test)]
+impl McpToolDescriptor {
+    pub(crate) fn fixture(name: &str, description: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            description: description.to_owned(),
+            parameters_schema: None,
+            response_schema: None,
+            long_running: false,
+            read_only: false,
+            concurrency_safe: false,
+        }
     }
 }
