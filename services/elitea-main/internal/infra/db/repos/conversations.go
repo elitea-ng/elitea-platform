@@ -1142,11 +1142,19 @@ func (r *ConversationsRepo) SelectConversation(ctx context.Context, projectID, c
 	// answered 500. Both statements now run in one transaction. The INSERT
 	// re-reads the conversation, so a deleted one inserts zero rows, and a
 	// foreign-key refusal (23503) also maps to 404.
+	//
+	// One transaction alone does not stop two concurrent selects from both
+	// inserting: under READ COMMITTED the second DELETE does not see the row
+	// the first INSERT committed. lockUserSelection serialises every select
+	// and deselect of one user in one tenant before the DELETE.
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("conversations: select conversation begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockUserSelection(ctx, tx, s, userID); err != nil {
+		return err
+	}
 	delQ := fmt.Sprintf(`DELETE FROM %s.chat_selected_conversations WHERE user_id = $1`, s)
 	if _, err := tx.Exec(ctx, delQ, userID); err != nil {
 		return fmt.Errorf("conversations: select conversation delete old: %w", err)
@@ -1178,11 +1186,34 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
+// lockUserSelection takes a transaction-scoped advisory lock on the
+// (tenant schema, user) selection slot. chat_selected_conversations has no
+// unique index on user_id (tenant migration 0126), so this lock is what keeps
+// a user at most one selection row.
+func lockUserSelection(ctx context.Context, tx pgx.Tx, tenantSchema, userID string) error {
+	key := tenantSchema + ":chat_selected_conversations:" + userID
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+		return fmt.Errorf("conversations: lock selection: %w", err)
+	}
+	return nil
+}
+
 func (r *ConversationsRepo) DeselectConversation(ctx context.Context, projectID, userID string) error {
 	s := schema(projectID)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("conversations: deselect conversation begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockUserSelection(ctx, tx, s, userID); err != nil {
+		return err
+	}
 	q := fmt.Sprintf(`DELETE FROM %s.chat_selected_conversations WHERE user_id = $1`, s)
-	if _, err := r.pool.Exec(ctx, q, userID); err != nil {
+	if _, err := tx.Exec(ctx, q, userID); err != nil {
 		return fmt.Errorf("conversations: deselect conversation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("conversations: deselect conversation commit: %w", err)
 	}
 	return nil
 }

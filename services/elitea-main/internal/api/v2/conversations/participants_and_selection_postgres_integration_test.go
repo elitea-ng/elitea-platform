@@ -157,3 +157,113 @@ func TestSelectConversationIsAtomicAndAnswers404ForADeletedConversation(t *testi
 		t.Fatalf("select of a deleted conversation = %v, want a typed 404", err)
 	}
 }
+
+// #6674, second half: one transaction alone let two concurrent selects both
+// insert, because under READ COMMITTED the second DELETE cannot see the row
+// the first INSERT committed. The per-user advisory lock keeps one row.
+func TestConcurrentSelectsLeaveOneSelectionRow(t *testing.T) {
+	pool := newChatAuthorityPool(t)
+	ctx := context.Background()
+	repo := repos.NewConversationsRepo(pool)
+	first, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	countSelections := func() int {
+		t.Helper()
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.chat_selected_conversations WHERE user_id=7`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	waitBoth := func(errs <-chan error, what string) {
+		t.Helper()
+		for range 2 {
+			select {
+			case err := <-errs:
+				if err != nil {
+					t.Fatalf("%s: %v", what, err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatalf("%s did not finish", what)
+			}
+		}
+	}
+	selectBoth := func() <-chan error {
+		errs := make(chan error, 2)
+		go func() { errs <- repo.SelectConversation(ctx, "1", first.ID, "7") }()
+		go func() { errs <- repo.SelectConversation(ctx, "1", second.ID, "7") }()
+		return errs
+	}
+
+	// Deterministic case. An outside transaction holds the row lock on the
+	// existing selection, so both selects reach their DELETE before either
+	// can insert. Without the advisory lock both DELETEs then skip the gone
+	// row and both INSERTs land.
+	if err := repo.SelectConversation(ctx, "1", first.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `DELETE FROM p_1.chat_selected_conversations WHERE user_id=7`); err != nil {
+		t.Fatal(err)
+	}
+	blocked := selectBoth()
+	time.Sleep(500 * time.Millisecond)
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitBoth(blocked, "select behind a held row lock")
+	if got := countSelections(); got != 1 {
+		t.Fatalf("selection rows after two blocked selects = %d, want 1", got)
+	}
+
+	// No prior row: neither DELETE locks anything. Repeat to give the race
+	// room, with a deselect between rounds.
+	for round := range 20 {
+		if err := repo.DeselectConversation(ctx, "1", "7"); err != nil {
+			t.Fatal(err)
+		}
+		waitBoth(selectBoth(), "concurrent select")
+		if got := countSelections(); got != 1 {
+			t.Fatalf("round %d: selection rows = %d, want 1", round, got)
+		}
+	}
+}
+
+// Rows that an older race duplicated must resolve to the newest selection,
+// not to whichever row a heap scan meets first.
+func TestSidebarSelectionPrefersTheNewestDuplicateRow(t *testing.T) {
+	pool := newChatAuthorityPool(t)
+	ctx := context.Background()
+	router := chatAuthorityRouter(pool)
+	repo := repos.NewConversationsRepo(pool)
+	older, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "Older"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "Newer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{older.ID, newer.ID} {
+		if _, err := pool.Exec(ctx, `INSERT INTO p_1.chat_selected_conversations(conversation_id,user_id) VALUES ($1,7)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sidebar map[string]any
+	if err := json.Unmarshal(callChatAuthority(t, router, "7", http.MethodGet, "/1/folders?grouped=true", "", http.StatusOK).Body.Bytes(), &sidebar); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(sidebar["selected_conversation_id"]); got != newer.ID {
+		t.Fatalf("selected_conversation_id = %s, want the newest row's %s", got, newer.ID)
+	}
+}
