@@ -161,11 +161,42 @@ func TestResolvedPermissionFlag_MarksOnlyAHolder(t *testing.T) {
 	if code, marked := serve(grantingUser42(contextEdit), "7"); code != http.StatusNoContent || marked {
 		t.Fatalf("non-holder: status = %d, marked = %v; want 204 and unmarked", code, marked)
 	}
-	// A resolver error never refuses and never marks.
-	if code, marked := serve(grantingUser42(settingsEdit), "8"); code != http.StatusNoContent || marked {
-		t.Fatalf("resolver error: status = %d, marked = %v; want 204 and unmarked", code, marked)
-	}
 	if code, marked := serve(nil, "7"); code != http.StatusNoContent || marked {
 		t.Fatalf("nil resolver: status = %d, marked = %v; want 204 and unmarked", code, marked)
+	}
+}
+
+// A resolver error must not degrade to the narrow scope. The ACL editor saves a
+// member's whole map from the list it was given, so a 200 with a silently
+// narrowed list would erase other members' exceptions on the next save. The
+// request fails instead, and the handler never runs.
+func TestResolvedPermissionFlag_FailsOnAResolverError(t *testing.T) {
+	mark := func(ctx context.Context) context.Context { return context.WithValue(ctx, flagKey{}, true) }
+	for name, tc := range map[string]struct {
+		err  error
+		want int
+	}{
+		"transient fault": {err: errors.New("connection reset"), want: http.StatusInternalServerError},
+		"denied":          {err: auth.ErrPermissionDenied, want: http.StatusForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolver := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+				return auth.PermissionResolution{}, tc.err
+			})
+			reached := false
+			router := chi.NewRouter()
+			router.With(middleware.ResolvedPermissionFlag(resolver, auth.PermissionModeDefault, mark, settingsEdit)).
+				Get("/{projectID}", func(w http.ResponseWriter, _ *http.Request) {
+					reached = true
+					w.WriteHeader(http.StatusOK)
+				})
+			req := httptest.NewRequest(http.MethodGet, "/7", nil)
+			req = req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: "42"}))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.want || reached {
+				t.Fatalf("status = %d, handler reached = %v; want %d and not reached", rec.Code, reached, tc.want)
+			}
+		})
 	}
 }

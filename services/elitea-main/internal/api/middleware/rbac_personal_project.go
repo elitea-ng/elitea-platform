@@ -87,12 +87,19 @@ func RequireResolvedPermissionOrPersonalProject(
 }
 
 // ResolvedPermissionFlag runs the request with a context mark when the caller
-// holds `permission` in the {projectID} project. It never refuses a request.
+// holds `permission` in the {projectID} project. It never refuses a caller for
+// lacking `permission`: the gate in front of it decides access.
 //
 // Use it after a real gate, when one handler serves two audiences with two
 // response scopes. The artifact ACL listing is the example: a member with
 // `.view` sees only their own row, and a member with `.edit` sees every row.
-// A resolver error leaves the mark unset, so the narrow scope is the default.
+//
+// A resolver ERROR fails the request (writeResolverError: 500, or 403 for a
+// denied principal). It does not fall back to the narrow scope. A narrowed
+// answer that reads as complete is worse than an error here: the ACL editor
+// saves a member's whole map from the list it was given, so a list that
+// silently lost other members' rows would erase their exceptions on the next
+// save.
 func ResolvedPermissionFlag(
 	resolver auth.PermissionResolver,
 	mode string,
@@ -105,7 +112,11 @@ func ResolvedPermissionFlag(
 			projectID := chi.URLParam(r, "projectID")
 			if ok && resolver != nil && mark != nil && projectID != "" {
 				resolution, err := resolver.ResolvePermissions(r.Context(), user, mode, projectID)
-				if err == nil && hasIntersection(permissionSet([]string{permission}), permissionSet(resolution.Permissions)) {
+				if err != nil {
+					writeResolverError(w, r, err)
+					return
+				}
+				if hasIntersection(permissionSet([]string{permission}), permissionSet(resolution.Permissions)) {
 					r = r.WithContext(mark(r.Context()))
 				}
 			}
