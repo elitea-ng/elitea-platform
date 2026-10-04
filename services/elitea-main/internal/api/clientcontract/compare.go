@@ -303,6 +303,41 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// CompareLocks checks a change's locks against the base branch's: every lock
+// the base holds (by file name) must still exist, and the change's copy may
+// only extend it. read returns the change's copy of one lock file.
+func CompareLocks(base map[string][]byte, read func(name string) ([]byte, error)) []string {
+	var out []string
+	for _, name := range sortedKeys(base) {
+		locked, err := Unmarshal(base[name])
+		if err != nil {
+			out = append(out, fmt.Sprintf("%s: the base branch's copy does not parse: %v", name, err))
+			continue
+		}
+		data, err := read(name)
+		if err != nil {
+			out = append(out, fmt.Sprintf("%s: the base branch has this lock and this change removes it (%v)", name, err))
+			continue
+		}
+		current, err := Unmarshal(data)
+		if err != nil {
+			out = append(out, fmt.Sprintf("%s: does not parse: %v", name, err))
+			continue
+		}
+		if locked.ClientContract != current.ClientContract {
+			if lockedMajor, _ := Major(locked.ClientContract); lockedMajor != "" {
+				if currentMajor, _ := Major(current.ClientContract); currentMajor != lockedMajor {
+					out = append(out, fmt.Sprintf("%s: records client_contract %q, the base has %q", name, current.ClientContract, locked.ClientContract))
+				}
+			}
+		}
+		for _, problem := range Compare(locked, current) {
+			out = append(out, name+": "+problem)
+		}
+	}
+	return out
+}
+
 // Summary is a one-line description of a surface, for test failure messages.
 func Summary(surface *Surface) string {
 	ids := make([]string, 0, len(surface.Operations))

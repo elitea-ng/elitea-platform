@@ -259,6 +259,17 @@ jobs:
       - name: Go vet (workspace)
         run: bash scripts/go/workspace-run.sh vet
 
+      # internal/api/clientcontract compares this change's client-contract
+      # locks with the BASE branch's: the other gates read the lock from the
+      # same tree as the spec, so breaking the spec and hand-editing the lock
+      # to match passed all of them. The checkout above is shallow, so fetch
+      # the base tip; ELITEA_REQUIRE_CLIENT_CONTRACT_BASE (below) makes a
+      # missing base a failure rather than a skip.
+      - name: Fetch the base branch for the client-contract lock comparison
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
       # Emulator stack for internal/infra/storage/conformance (S4). --wait
       # blocks until every service's healthcheck passes (see the compose
       # file for why each healthcheck is more involved than a bare wget).
@@ -332,6 +343,10 @@ jobs:
           # bootstrapped Centry compose profile or the Python SDK, and
           # scripts/go/declared-skips.txt names each with its reason.
           ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST: "1"
+
+          # The step above fetched it; a missing base must fail, not skip.
+          CLIENT_CONTRACT_BASE_REF: origin/${{ github.base_ref || 'main' }}
+          ELITEA_REQUIRE_CLIENT_CONTRACT_BASE: "1"
 
           # A skip that nothing declares FAILS this job. Locally the ledger
           # only reports, so a developer with no PostgreSQL or Redis can still

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"flag"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -154,8 +156,16 @@ func TestClientContractLockIsCurrent(t *testing.T) {
 	got, readErr := os.ReadFile(path)
 
 	if *update {
+		previous := got
+		if readErr != nil {
+			// A deleted lock is not a blank slate: the base branch's copy, when
+			// it has one, is still the promise -update must not break.
+			if base, ok := baseLocks(t, false)["v"+major+".lock.json"]; ok {
+				previous, readErr = base, nil
+			}
+		}
 		if readErr == nil {
-			lock, err := clientcontract.Unmarshal(got)
+			lock, err := clientcontract.Unmarshal(previous)
 			if err != nil {
 				t.Fatalf("parsing %s: %v", path, err)
 			}
@@ -175,6 +185,121 @@ func TestClientContractLockIsCurrent(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is behind v2.yaml's client subset. If TestClientContractIsAdditiveOnly passes, the change is additive: "+
 			"run `go test ./internal/api/clientcontract -run TestClientContract -update` and commit the lock with the spec.", path)
+	}
+}
+
+// baseRefEnv names the git ref whose locks are the promise a change must keep
+// (default origin/main). requireBaseEnv turns "that ref is not available" into
+// a failure: CI fetches the base branch and sets it, so the comparison below
+// can never pass by not running.
+const (
+	baseRefEnv     = "CLIENT_CONTRACT_BASE_REF"
+	requireBaseEnv = "ELITEA_REQUIRE_CLIENT_CONTRACT_BASE"
+)
+
+// baseLocks reads every v<N>.lock.json the base ref holds, by file name. It
+// answers nil when the ref is unavailable; with must, that is a failure in CI
+// (requireBaseEnv) and a skip elsewhere.
+func baseLocks(t *testing.T, must bool) map[string][]byte {
+	t.Helper()
+	ref := os.Getenv(baseRefEnv)
+	if ref == "" {
+		ref = "origin/main"
+	}
+	if err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run(); err != nil {
+		if !must {
+			return nil
+		}
+		if os.Getenv(requireBaseEnv) != "" {
+			t.Fatalf("%s is set but the base ref %q is not available (fetch it before the tests)", requireBaseEnv, ref)
+		}
+		t.Skipf("base ref %q is not available; set %s or fetch it to compare the locks with the base branch", ref, baseRefEnv)
+	}
+	prefix, err := exec.Command("git", "rev-parse", "--show-prefix").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-prefix: %v", err)
+	}
+	dir := path.Clean(path.Join(strings.TrimSpace(string(prefix)), filepath.ToSlash(lockDir)))
+	// The path must name where this tree's locks really are: a wrong path
+	// lists nothing at the base and would read as "nothing promised yet".
+	tracked, err := exec.Command("git", "ls-files", "--full-name", "--", lockDir).Output()
+	if err != nil {
+		t.Fatalf("git ls-files %s: %v", lockDir, err)
+	}
+	for _, name := range strings.Fields(string(tracked)) {
+		if path.Dir(name) != dir {
+			t.Fatalf("the lock %s is not under %s: the base-branch lookup would read the wrong directory", name, dir)
+		}
+	}
+	listing, err := exec.Command("git", "ls-tree", "--full-tree", "--name-only", ref, dir+"/").Output()
+	if err != nil {
+		t.Fatalf("git ls-tree %s %s: %v", ref, dir, err)
+	}
+	out := map[string][]byte{}
+	for _, name := range strings.Fields(string(listing)) {
+		base := path.Base(name)
+		if !lockName.MatchString(base) {
+			continue
+		}
+		data, err := exec.Command("git", "show", ref+":"+name).Output()
+		if err != nil {
+			t.Fatalf("git show %s:%s: %v", ref, name, err)
+		}
+		out[base] = data
+	}
+	return out
+}
+
+// TestClientContractLocksKeepTheBaseBranchPromise closes the hole the other
+// tests share: they read the lock from the same tree as the spec, so a change
+// that breaks the spec AND hand-edits the lock to match passes all of them.
+// Every lock the base branch holds must still exist here, and this tree's copy
+// may only extend it. A breaking change therefore needs a new v<N+1> lock.
+func TestClientContractLocksKeepTheBaseBranchPromise(t *testing.T) {
+	base := baseLocks(t, true)
+	if problems := clientcontract.CompareLocks(base, func(name string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(lockDir, name))
+	}); len(problems) > 0 {
+		t.Fatalf("this change edits a client-contract lock the base branch already promised:\n  %s\n\n"+
+			"A lock is extended by -update, never rewritten. A breaking change is a new major: keep v<N>.lock.json as the "+
+			"base has it and add v<N+1>.lock.json (API_CONTRACT.md, \"Client contract\").", strings.Join(problems, "\n  "))
+	}
+}
+
+// TestCompareLocksCatchesAHandEditedLock is the proof that the base-branch
+// comparison is not vacuous: a lock rewritten to match a breaking spec, and a
+// lock deleted outright, are both reported; an additive lock is not.
+func TestCompareLocksCatchesAHandEditedLock(t *testing.T) {
+	marshal := func(doc string) []byte {
+		data, err := clientcontract.Marshal(normalizeYAML(t, doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	base := map[string][]byte{"v1.lock.json": marshal(fixture)}
+	tree := func(files map[string][]byte) func(string) ([]byte, error) {
+		return func(name string) ([]byte, error) {
+			if data, ok := files[name]; ok {
+				return data, nil
+			}
+			return nil, os.ErrNotExist
+		}
+	}
+
+	edited := map[string][]byte{"v1.lock.json": marshal(edit(t, "            label: { type: string }\n", ""))}
+	if problems := clientcontract.CompareLocks(base, tree(edited)); !strings.Contains(strings.Join(problems, "\n"), ".label: property removed") {
+		t.Fatalf("a hand-edited lock that drops a response property passed: %v", problems)
+	}
+	if problems := clientcontract.CompareLocks(base, tree(nil)); !strings.Contains(strings.Join(problems, "\n"), "v1.lock.json") {
+		t.Fatalf("a deleted lock passed: %v", problems)
+	}
+	grown := map[string][]byte{"v1.lock.json": marshal(edit(t, "            label: { type: string }", "            label: { type: string }\n            colour: { type: string }"))}
+	if problems := clientcontract.CompareLocks(base, tree(grown)); len(problems) > 0 {
+		t.Fatalf("an additive lock was refused: %v", problems)
+	}
+	if problems := clientcontract.CompareLocks(nil, tree(edited)); len(problems) > 0 {
+		t.Fatalf("a lock the base does not have yet is not a broken promise: %v", problems)
 	}
 }
 

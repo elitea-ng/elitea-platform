@@ -254,7 +254,7 @@ cd services/elitea-main
 go test ./internal/api/clientcontract -run TestClientContract -update
 ```
 
-The lock diff is how a reviewer sees the new promise. `-update` refuses to record a breaking change.
+The lock diff is how a reviewer sees the new promise. `-update` refuses to record a breaking change, also when the lock was deleted first (it then compares with the base branch's copy). `TestClientContractLocksKeepTheBaseBranchPromise` compares every lock with the base branch's (`CLIENT_CONTRACT_BASE_REF`, default `origin/main`), so a hand-edited lock cannot carry a breaking change either; CI fetches the base and fails if it is missing.
 
 **A breaking change** is a new major version:
 1. Bump `info.x-elitea-client-contract` to `N+1.0`, and bump `discovery.ClientContract` to match. `TestClientContractVersionAgrees` ties them together.
