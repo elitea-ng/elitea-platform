@@ -54,6 +54,10 @@ var (
 	// ErrRefreshReuse: a consumed refresh token was presented outside the
 	// re-delivery window; the family was revoked in this request.
 	ErrRefreshReuse = fmt.Errorf("%w: refresh token reused", ErrFamilyRevoked)
+	// ErrClientInactive: the client is not registered or is disabled, as the
+	// database says INSIDE the exchange transaction (the registry cache may
+	// be stale on this replica).
+	ErrClientInactive = errors.New("nativeauth: client not registered or disabled")
 	// ErrUnavailable: the store did not answer.
 	ErrUnavailable = errors.New("nativeauth: store unavailable")
 )
@@ -275,6 +279,10 @@ type ExchangeRequest struct {
 	ClientID    string
 	RedirectURI string
 	Verifier    string
+	// FileClientEnabled is the FILE layer's verdict on ClientID
+	// (Registry.FileActive). The file layer is fixed for the process, so it
+	// cannot be stale; it decides only when the DB layer has no row.
+	FileClientEnabled bool
 }
 
 // ReplayInfo describes the family a replayed code revoked, for the audit row.
@@ -344,6 +352,20 @@ func (s *Store) ExchangeCode(ctx context.Context, request ExchangeRequest) (Gran
 	}
 	if !pkceMatches(request.Verifier, challenge) {
 		return Grant{}, nil, ErrInvalidGrant
+	}
+
+	// The registry the caller checked is a per-replica cache: a client
+	// disabled or deleted on another replica within its TTL still reads as
+	// active there, and the disable revoked only the families that existed
+	// when it committed. Re-check the client here, serialised against
+	// UpsertClient/DeleteClient by the client's advisory lock, so a family is
+	// either visible to the disable's revocation or never created.
+	active, err := clientActiveTx(ctx, tx, clientID, request.FileClientEnabled)
+	if err != nil {
+		return Grant{}, nil, unavailable("re-check native client", err)
+	}
+	if !active {
+		return Grant{}, nil, ErrClientInactive
 	}
 
 	grant, err := s.createFamily(ctx, tx, *userID, clientID, deviceName, platform, clientVersion, now)
@@ -809,6 +831,9 @@ func (s *Store) UpsertClient(ctx context.Context, client Client, actor int64) (i
 		return 0, unavailable("begin client save", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockClient(ctx, tx, client.ClientID, true); err != nil {
+		return 0, unavailable("lock native client", err)
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO elitea_auth.native_clients
 		    (client_id, display_name, redirect_uris, enabled, min_client_version, created_by, updated_by)
@@ -841,6 +866,9 @@ func (s *Store) DeleteClient(ctx context.Context, clientID string, actor int64) 
 		return 0, unavailable("begin client delete", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockClient(ctx, tx, clientID, true); err != nil {
+		return 0, unavailable("lock native client", err)
+	}
 	tag, err := tx.Exec(ctx, `DELETE FROM elitea_auth.native_clients WHERE client_id = $1`, clientID)
 	if err != nil {
 		return 0, unavailable("delete native client", err)
@@ -856,6 +884,40 @@ func (s *Store) DeleteClient(ctx context.Context, clientID string, actor int64) 
 		return 0, unavailable("commit client delete", err)
 	}
 	return revoked, nil
+}
+
+// clientLockClass is the first key of the per-client transaction advisory
+// lock (the second is hashtext(client_id)). Writers of the DB layer take it
+// exclusively; a code exchange takes it shared, so exchanges of one client
+// run concurrently but never interleave with a save or delete of it.
+const clientLockClass = 250025
+
+func lockClient(ctx context.Context, tx pgx.Tx, clientID string, exclusive bool) error {
+	query := `SELECT pg_advisory_xact_lock_shared($1, hashtext($2))`
+	if exclusive {
+		query = `SELECT pg_advisory_xact_lock($1, hashtext($2))`
+	}
+	_, err := tx.Exec(ctx, query, clientLockClass, clientID)
+	return err
+}
+
+// clientActiveTx reports, inside tx and under the client's shared lock,
+// whether clientID is registered and enabled: the DB row when there is one
+// (it overrides the file entry), the file layer's verdict otherwise.
+func clientActiveTx(ctx context.Context, tx pgx.Tx, clientID string, fileEnabled bool) (bool, error) {
+	if err := lockClient(ctx, tx, clientID, false); err != nil {
+		return false, err
+	}
+	var enabled bool
+	err := tx.QueryRow(ctx,
+		`SELECT enabled FROM elitea_auth.native_clients WHERE client_id = $1`, clientID).Scan(&enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fileEnabled, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return enabled, nil
 }
 
 func revokeClientFamilies(ctx context.Context, tx pgx.Tx, clientID, reason string, actor int64) (int64, error) {

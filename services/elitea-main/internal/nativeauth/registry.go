@@ -270,6 +270,21 @@ func (r *Registry) Lookup(ctx context.Context, clientID string) (Client, bool, e
 	return Client{}, false, nil
 }
 
+// FileActive reports whether the FILE layer registers clientID as enabled.
+// The file layer is fixed for the process; the code exchange uses it inside
+// its transaction when the DB layer has no row for the client.
+func (r *Registry) FileActive(clientID string) bool {
+	if r == nil {
+		return false
+	}
+	for _, client := range r.file {
+		if client.ClientID == clientID {
+			return client.Enabled
+		}
+	}
+	return false
+}
+
 // Active reports whether clientID is registered and enabled.
 func (r *Registry) Active(ctx context.Context, clientID string) (Client, bool, error) {
 	client, ok, err := r.Lookup(ctx, clientID)

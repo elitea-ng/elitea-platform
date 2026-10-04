@@ -171,6 +171,7 @@ func (h *Handler) exchangeCode(
 	}
 	grant, replay, err := h.cfg.Store.ExchangeCode(r.Context(), domain.ExchangeRequest{
 		Code: code, ClientID: clientID, RedirectURI: redirectURI, Verifier: verifier,
+		FileClientEnabled: h.cfg.Registry.FileActive(clientID),
 	})
 	switch {
 	case errors.Is(err, domain.ErrCodeReplay):
@@ -185,6 +186,9 @@ func (h *Handler) exchangeCode(
 		return
 	case errors.Is(err, domain.ErrInvalidGrant):
 		fail(http.StatusBadRequest, "invalid_grant", "the authorization code is invalid, expired or already used")
+		return
+	case errors.Is(err, domain.ErrClientInactive):
+		fail(http.StatusUnauthorized, "invalid_client", "the client is not registered or is disabled")
 		return
 	case err != nil:
 		h.unavailable(w, r, err)
