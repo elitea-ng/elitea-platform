@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -444,6 +445,60 @@ func TestUserSuspendTogglesAndIsVisibleOnReRead(t *testing.T) {
 	}
 }
 
+// ADR-0025 WP3: an admin suspension revokes the account's native devices
+// (reason user_deactivated, revoked_by the operator) and its browser sessions
+// in the SAME transaction; unsuspending resurrects neither.
+func TestUserSuspendRevokesDevicesAndBrowserSessions(t *testing.T) {
+	pool := newAdminUsersPool(t)
+	prepareAdminUsersFixture(t, pool)
+	router := adminUsersRouter(admin.NewHandler(pool), &auth.User{ID: "1", UserID: "1"})
+	id := userID(t, pool, "a14-plain@autotest.local")
+	ctx := context.Background()
+
+	var device string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO elitea_auth.native_sessions (user_id, client_id, device_name, platform, idle_timeout_seconds)
+		VALUES ($1, 'dev.elitea.test', 'Phone', 'ios', 2592000) RETURNING id::text`, id).Scan(&device); err != nil {
+		t.Fatal(err)
+	}
+	browser := "browser-session-for-the-admin-suspension-hook-test"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO elitea_auth.browser_sessions
+		    (id, user_id, email, provider, provider_session_index, created_at, last_seen_at, expires_at, idle_timeout_seconds)
+		VALUES ($1, $2, 'x@autotest.local', 'oidc', '', now(), now(), now() + interval '1 hour', 3600)`, browser, id); err != nil {
+		t.Fatal(err)
+	}
+
+	if recorder := adminDo(t, router, http.MethodPut,
+		fmt.Sprintf("/admin/user_suspend/administration/%d", id), map[string]any{"suspended": true}); recorder.Code != http.StatusOK {
+		t.Fatalf("suspend = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var reason *string
+	var revokedBy *int64
+	var browserRevoked bool
+	if err := pool.QueryRow(ctx, `SELECT revoke_reason, revoked_by FROM elitea_auth.native_sessions WHERE id = $1`,
+		device).Scan(&reason, &revokedBy); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM elitea_auth.browser_sessions WHERE id = $1`,
+		browser).Scan(&browserRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if reason == nil || *reason != "user_deactivated" || revokedBy == nil || *revokedBy != 1 || !browserRevoked {
+		t.Fatalf("after suspend: reason=%v revoked_by=%v browser revoked=%v", reason, revokedBy, browserRevoked)
+	}
+
+	if recorder := adminDo(t, router, http.MethodPut,
+		fmt.Sprintf("/admin/user_suspend/administration/%d", id), map[string]any{"suspended": false}); recorder.Code != http.StatusOK {
+		t.Fatalf("unsuspend = %d", recorder.Code)
+	}
+	var stillRevoked bool
+	_ = pool.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM elitea_auth.native_sessions WHERE id = $1`, device).Scan(&stillRevoked)
+	if !stillRevoked {
+		t.Fatal("unsuspending must not resurrect a revoked device")
+	}
+}
+
 func TestUserSuspendRejectsMissingFieldAndUnknownUser(t *testing.T) {
 	pool := newAdminUsersPool(t)
 	prepareAdminUsersFixture(t, pool)
@@ -710,6 +765,19 @@ func newAdminUsersPool(t *testing.T) *pgxpool.Pool {
 
 	if _, err := pool.Exec(ctx, dbschema.AuthCoreBaselineSQLCProjection); err != nil {
 		t.Fatalf("apply auth_core baseline projection: %v", err)
+	}
+	// A suspension revokes the account's browser sessions and native device
+	// sessions in the same transaction (ADR-0025 WP3): the real migrations,
+	// not a copy of them.
+	for _, migration := range []string{"0117_browser_sessions.sql", "0141_native_auth.sql"} {
+		file := filepath.Join("..", "..", "..", "..", "migrations", "shared", migration)
+		sql, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
 	}
 	return pool
 }

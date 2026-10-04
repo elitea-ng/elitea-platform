@@ -295,6 +295,10 @@ func newDirectoryPool(t *testing.T) *pgxpool.Pool {
 	for _, file := range []string{
 		"../../migrations/shared/0096_scim_provisioning.sql",
 		"../../migrations/shared/0134_scim_user_name_parts.sql",
+		// The deactivation hook (ADR-0025 WP3) revokes native device
+		// sessions and browser sessions in the suspension's transaction.
+		"../../migrations/shared/0117_browser_sessions.sql",
+		"../../migrations/shared/0141_native_auth.sql",
 	} {
 		migration, err := os.ReadFile(file)
 		require.NoError(t, err, "the migration file must be readable: this test proves IT, not a copy of it")

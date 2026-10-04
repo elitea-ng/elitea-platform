@@ -251,6 +251,13 @@ func newStack(t *testing.T, options ...stackOption) *stack {
 	authConfig.Validator = authsvc.NewNativeAwareValidator(nil, s.validator)
 	router := chi.NewRouter()
 	s.handler.Mount(router)
+	// The device registry as router.go mounts it (minus the admin RBAC
+	// gate, which router tests cover): behind the group's Auth.
+	authenticated := router.With(apimw.Auth(authConfig))
+	authenticated.With(s.handler.RegisteredOnly).Get(nativeapi.DevicesPath, s.handler.ListDevices)
+	authenticated.With(s.handler.RegisteredOnly).Delete(nativeapi.DevicesPath+"/{deviceID}", s.handler.RevokeDevice)
+	authenticated.Get("/api/v2/admin/native_devices/administration", s.handler.AdminListDevices)
+	authenticated.Delete("/api/v2/admin/native_devices/administration/{deviceID}", s.handler.AdminRevokeDevice)
 	router.With(apimw.Auth(authConfig)).Get("/api/v2/whoami", func(w http.ResponseWriter, r *http.Request) {
 		user, _ := auth.UserFromContext(r.Context())
 		_ = json.NewEncoder(w).Encode(user)
@@ -506,5 +513,13 @@ func doOn(router http.Handler, method, target string, form url.Values) *httptest
 	}
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func doOnWithBearer(handler http.Handler, accessToken string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodGet, nativeapi.DevicesPath, nil)
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
 	return recorder
 }

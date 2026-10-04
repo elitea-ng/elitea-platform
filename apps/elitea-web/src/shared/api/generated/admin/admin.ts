@@ -70,6 +70,7 @@ import type {
   ListAdminPublishedAgentsParams,
   ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
+  ListNativeDevicesAdministrationParams,
   MessageResponse,
   ModeRoleAssignRequest,
   ModeRoleAssignResult,
@@ -84,10 +85,12 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  NativeAdminDeviceList,
   NativeClientList,
   NativeClientSaveRequest,
   NativeClientValidationError,
   NativeClientWriteResult,
+  NativeOAuthError,
   OkResponse,
   PlatformSettings,
   ProjectRequestCreate,
@@ -132,6 +135,459 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type listNativeDevicesAdministrationResponse200 = {
+  data: NativeAdminDeviceList;
+  status: 200;
+};
+
+export type listNativeDevicesAdministrationResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listNativeDevicesAdministrationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listNativeDevicesAdministrationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listNativeDevicesAdministrationResponseSuccess =
+  listNativeDevicesAdministrationResponse200 & {
+    headers: Headers;
+  };
+export type listNativeDevicesAdministrationResponseError = (
+  | listNativeDevicesAdministrationResponse400
+  | listNativeDevicesAdministrationResponse401
+  | listNativeDevicesAdministrationResponse403
+) & {
+  headers: Headers;
+};
+
+export type listNativeDevicesAdministrationResponse =
+  | listNativeDevicesAdministrationResponseSuccess
+  | listNativeDevicesAdministrationResponseError;
+
+export const getListNativeDevicesAdministrationUrl = (
+  params?: ListNativeDevicesAdministrationParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/native_devices/administration?${stringifiedParams}`
+    : `/admin/native_devices/administration`;
+};
+
+/**
+ * Every user's device sessions, for an administrator holding
+ * `admin.auth.users` (the permission that gates user suspension).
+ * `state` is active (the default), revoked or all; `limit` defaults to
+ * 50 and is capped at 200. NOTE(W2): internal/api/nativeauth/devices.go:138.
+ * @summary List native devices across users
+ */
+export const listNativeDevicesAdministration = async (
+  params?: ListNativeDevicesAdministrationParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listNativeDevicesAdministrationResponse> => {
+  return eliteaFetch<listNativeDevicesAdministrationResponse>(
+    getListNativeDevicesAdministrationUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListNativeDevicesAdministrationQueryKey = (
+  params?: ListNativeDevicesAdministrationParams,
+) => {
+  return [
+    `/admin/native_devices/administration`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListNativeDevicesAdministrationQueryOptions = <
+  TData = Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  params?: ListNativeDevicesAdministrationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListNativeDevicesAdministrationQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listNativeDevicesAdministration>>
+  > = ({ signal }) =>
+    listNativeDevicesAdministration(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListNativeDevicesAdministrationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listNativeDevicesAdministration>>
+>;
+export type ListNativeDevicesAdministrationQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useListNativeDevicesAdministration<
+  TData = Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  params: undefined | ListNativeDevicesAdministrationParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+          TError,
+          Awaited<ReturnType<typeof listNativeDevicesAdministration>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListNativeDevicesAdministration<
+  TData = Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  params?: ListNativeDevicesAdministrationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+          TError,
+          Awaited<ReturnType<typeof listNativeDevicesAdministration>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListNativeDevicesAdministration<
+  TData = Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  params?: ListNativeDevicesAdministrationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List native devices across users
+ */
+
+export function useListNativeDevicesAdministration<
+  TData = Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  params?: ListNativeDevicesAdministrationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevicesAdministration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListNativeDevicesAdministrationQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeNativeDeviceAdministrationResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type revokeNativeDeviceAdministrationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeNativeDeviceAdministrationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type revokeNativeDeviceAdministrationResponse404 = {
+  data: NativeOAuthError;
+  status: 404;
+};
+
+export type revokeNativeDeviceAdministrationResponseSuccess =
+  revokeNativeDeviceAdministrationResponse204 & {
+    headers: Headers;
+  };
+export type revokeNativeDeviceAdministrationResponseError = (
+  | revokeNativeDeviceAdministrationResponse401
+  | revokeNativeDeviceAdministrationResponse403
+  | revokeNativeDeviceAdministrationResponse404
+) & {
+  headers: Headers;
+};
+
+export type revokeNativeDeviceAdministrationResponse =
+  | revokeNativeDeviceAdministrationResponseSuccess
+  | revokeNativeDeviceAdministrationResponseError;
+
+export const getRevokeNativeDeviceAdministrationUrl = (deviceId: string) => {
+  return `/admin/native_devices/administration/${deviceId}`;
+};
+
+/**
+ * Revokes the device session (reason `admin`) and records the operator
+ * as `revoked_by`. NOTE(W2): internal/api/nativeauth/devices.go:182.
+ * @summary Revoke any user's native device
+ */
+export const revokeNativeDeviceAdministration = async (
+  deviceId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeNativeDeviceAdministrationResponse> => {
+  return eliteaFetch<revokeNativeDeviceAdministrationResponse>(
+    getRevokeNativeDeviceAdministrationUrl(deviceId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokeNativeDeviceAdministrationQueryKey = (
+  deviceId: string,
+) => {
+  return [
+    "DELETE",
+    `/admin/native_devices/administration/${deviceId}`,
+  ] as const;
+};
+
+export const getRevokeNativeDeviceAdministrationQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+  TError = N401Response | N403Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokeNativeDeviceAdministrationQueryKey(deviceId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>
+  > = ({ signal }) =>
+    revokeNativeDeviceAdministration(deviceId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: deviceId !== null && deviceId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeNativeDeviceAdministrationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>
+>;
+export type RevokeNativeDeviceAdministrationQueryError =
+  N401Response | N403Response | NativeOAuthError;
+
+export function useRevokeNativeDeviceAdministration<
+  TData = Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+  TError = N401Response | N403Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+          TError,
+          Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeNativeDeviceAdministration<
+  TData = Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+  TError = N401Response | N403Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+          TError,
+          Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeNativeDeviceAdministration<
+  TData = Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+  TError = N401Response | N403Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke any user's native device
+ */
+
+export function useRevokeNativeDeviceAdministration<
+  TData = Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+  TError = N401Response | N403Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDeviceAdministration>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeNativeDeviceAdministrationQueryOptions(
+    deviceId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type listNativeClientsResponse200 = {
   data: NativeClientList;

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -428,4 +430,26 @@ func requireSecurityHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", got)
 	}
+}
+
+// ADR-0025 WP3: Traefik relays this endpoint's refusal to the client, so a
+// revoked native device session must read as device_revoked here too.
+func TestEdgeAuthAnswersDeviceRevokedForARevokedNativeToken(t *testing.T) {
+	forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+		return identity.User{}, fmt.Errorf("wrapped: %w", identity.ErrDeviceRevoked)
+	}))
+	req := newEdgeAuthRequest("/auth")
+	req.Header.Set("Authorization", "Bearer elnat_x")
+	rec := httptest.NewRecorder()
+	forward.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"error":"device_revoked"`) {
+		t.Fatalf("revoked = %d %s", rec.Code, rec.Body.String())
+	}
+	// A plain rejection keeps the existing answer.
+	plain := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(context.Context, string) (identity.User, error) {
+		return identity.User{}, identity.ErrCredentialRejected
+	}))
+	rec = httptest.NewRecorder()
+	plain.ServeHTTP(rec, req)
+	requireAccessDenied(t, rec)
 }

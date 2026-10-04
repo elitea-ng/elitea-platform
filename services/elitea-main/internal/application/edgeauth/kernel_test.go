@@ -3,6 +3,7 @@ package edgeauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -852,4 +853,42 @@ func traversalName(traversal TraversalPolicy) string {
 		return "direct"
 	}
 	return "main"
+}
+
+// ADR-0025 WP3: a revoked native credential is a rejection for every rule of
+// the kernel, but the deny says WHY, so the edge can answer device_revoked.
+func TestRevokedCredentialDeniesWithItsOwnReason(t *testing.T) {
+	revoked := credentialAuthenticatorFunc(func(context.Context, Source, CredentialInput) (CredentialResult, error) {
+		return CredentialResult{Resolution: CredentialRevoked}, nil
+	})
+	for _, traversal := range []TraversalPolicy{MainTraversal, DirectHTTPTraversal} {
+		kernel := newTestKernel(t, revoked, panicSessionAuthorizer(), emptyPublicPolicy(t))
+		request := validRequest(traversal)
+		request.Credentials = []CredentialInput{{Present: true, Type: "bearer", Data: "elnat_x"}}
+		decision, err := kernel.Authorize(context.Background(), request)
+		if err != nil || decision.Kind != DecisionDeny || decision.Reason != ReasonCredentialRevoked {
+			t.Fatalf("traversal %v: decision = %+v, err = %v", traversal, decision, err)
+		}
+	}
+	// A public route stays public even for a revoked bearer.
+	kernel := newTestKernel(t, revoked, panicSessionAuthorizer(), uriPublicPolicy(t, "public", `^/api/private$`))
+	request := validRequest(MainTraversal)
+	request.Credentials = []CredentialInput{{Present: true, Type: "bearer", Data: "elnat_x"}}
+	if decision, err := kernel.Authorize(context.Background(), request); err != nil || decision.Kind != DecisionAllow {
+		t.Fatalf("public route with a revoked bearer = %+v, %v", decision, err)
+	}
+}
+
+func TestCredentialAuthenticatorClassifiesDeviceRevoked(t *testing.T) {
+	authenticator, err := NewTokenCredentialAuthenticator(tokenValidatorFunc(func(context.Context, string) (auth.User, error) {
+		return auth.User{}, fmt.Errorf("wrapped: %w", auth.ErrDeviceRevoked)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := authenticator.AuthenticateCredential(context.Background(), Source{},
+		CredentialInput{Present: true, Type: "bearer", Data: "elnat_x"})
+	if err != nil || result.Resolution != CredentialRevoked {
+		t.Fatalf("result = %+v, %v; want CredentialRevoked", result, err)
+	}
 }

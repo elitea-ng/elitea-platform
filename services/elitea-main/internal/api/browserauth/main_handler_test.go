@@ -33,7 +33,9 @@ func TestMainHandlerTraversesRejectedCredentialIntoBrowserSession(t *testing.T) 
 		nil,
 	)
 	request := mainRequest("/api/v2/social/author")
-	request.Header.Set("Authorization", "Bearer rejected")
+	// A configured credential header, not an Authorization bearer: a
+	// bearer deny is a 401 (TestMainHandlerAnswersBearerDenialsWith401).
+	request.Header.Set("X-API-Key", "rejected")
 	request.Header.Set("X-Auth-Type", "user")
 	request.Header.Set("X-Auth-ID", "999999")
 	request.Header.Set(MainAvatarStateHeader, mainAvatarValue)
@@ -103,7 +105,9 @@ func TestMainHandlerRedirectsAreAbsoluteAgainstThePublicOrigin(t *testing.T) {
 		"https://elitea.example.test",
 	)
 	request := mainRequest("/api/v2/private")
-	request.Header.Set("Authorization", "Bearer rejected")
+	// A configured credential header, not an Authorization bearer: a
+	// bearer deny is a 401 (TestMainHandlerAnswersBearerDenialsWith401).
+	request.Header.Set("X-API-Key", "rejected")
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
@@ -150,7 +154,9 @@ func TestMainHandlerRedirectStaysRelativeWithoutAPublicOrigin(t *testing.T) {
 		nil,
 	)
 	request := mainRequest("/api/v2/private")
-	request.Header.Set("Authorization", "Bearer rejected")
+	// A configured credential header, not an Authorization bearer: a
+	// bearer deny is a 401 (TestMainHandlerAnswersBearerDenialsWith401).
+	request.Header.Set("X-API-Key", "rejected")
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
@@ -168,14 +174,47 @@ func TestMainHandlerRedirectsRejectedCredentialToAccessDenied(t *testing.T) {
 		panicCoreSession(t),
 		nil,
 	)
+	// A browser-shaped caller (a credential in a configured header, no
+	// Authorization bearer) still gets the access-denied page.
 	request := mainRequest("/api/v2/private")
-	request.Header.Set("Authorization", "Bearer rejected")
+	request.Header.Set("X-API-Key", "rejected")
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != "/app/access_denied" {
 		t.Fatalf("response = %d location=%q", recorder.Code, recorder.Header().Get("Location"))
+	}
+}
+
+// ADR-0025 WP3 (section 4.6): a refused BEARER caller is a program, so the
+// deny is a 401 it can read, and a revoked native device session is the ADR's
+// flat device_revoked body rather than a redirect to a page.
+func TestMainHandlerAnswersBearerDenialsWith401(t *testing.T) {
+	for name, c := range map[string]struct {
+		resolution forwardapp.CredentialResolution
+		wantBody   string
+	}{
+		"rejected": {forwardapp.CredentialRejected, `"code":"token_rejected"`},
+		"revoked":  {forwardapp.CredentialRevoked, `"error":"device_revoked"`},
+	} {
+		resolution := c.resolution
+		handler := newMainTestHandler(t,
+			coreCredentialFunc(func(context.Context, forwardapp.Source, forwardapp.CredentialInput) (forwardapp.CredentialResult, error) {
+				return forwardapp.CredentialResult{Resolution: resolution}, nil
+			}),
+			panicCoreSession(t),
+			nil,
+		)
+		request := mainRequest("/api/v2/private")
+		request.Header.Set("Authorization", "Bearer elnat_x")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized || recorder.Header().Get("Location") != "" ||
+			!strings.Contains(recorder.Body.String(), c.wantBody) ||
+			!strings.HasPrefix(recorder.Header().Get("WWW-Authenticate"), "Bearer") {
+			t.Fatalf("%s: %d %q %s", name, recorder.Code, recorder.Header().Get("Location"), recorder.Body.String())
+		}
 	}
 }
 

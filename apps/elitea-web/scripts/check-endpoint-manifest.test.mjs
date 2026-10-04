@@ -677,7 +677,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // them) and listNativeClients, saveNativeClient and deleteNativeClient (the
 // native_clients admin registry, whose web editor does not exist yet). No
 // browser caller, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 282;
+// 282 -> 286 (ADR-0025 WP3): listNativeDevices, revokeNativeDevice,
+// listNativeDevicesAdministration and revokeNativeDeviceAdministration (the
+// device registry; its Settings and admin screens are follow-up web work).
+// No browser caller yet, so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 286;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

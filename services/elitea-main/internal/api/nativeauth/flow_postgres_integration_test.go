@@ -103,14 +103,15 @@ func TestNativeFlowEndToEnd(t *testing.T) {
 		t.Fatalf("revoke = %d %q", revoke.Code, revoke.Body.String())
 	}
 	state := s.family(pair.DeviceID)
-	if reason(state) != domain.ReasonSignedOut || state.tokenID != nil || state.accessTokens != 0 || s.anchorExists(anchor) {
+	if reason(state) != domain.ReasonSignedOut || state.tokenID != nil || s.anchorExists(anchor) {
 		t.Fatalf("after revoke: %+v anchor=%v", state, s.anchorExists(anchor))
 	}
-	if code := s.whoami(next.AccessToken).Code; code != http.StatusUnauthorized {
-		t.Fatalf("whoami after revoke = %d, want 401", code)
+	if cut := s.whoami(next.AccessToken); cut.Code != http.StatusUnauthorized ||
+		!strings.Contains(cut.Body.String(), `"error":"device_revoked"`) {
+		t.Fatalf("whoami after revoke = %d %s, want 401 device_revoked", cut.Code, cut.Body.String())
 	}
-	if refused, _ := s.refresh(next.RefreshToken); refused.Code != http.StatusBadRequest {
-		t.Fatalf("refresh after revoke = %d, want 400 invalid_grant (WP2 contract)", refused.Code)
+	if refused, body := s.refresh(next.RefreshToken); refused.Code != http.StatusUnauthorized || body.Error != "device_revoked" {
+		t.Fatalf("refresh after revoke = %d %s, want 401 device_revoked", refused.Code, refused.Body.String())
 	}
 
 	// Audit: exchange recorded; a successful refresh is NOT.
@@ -160,7 +161,7 @@ func TestNativeCodeIsSingleUseAndReplayRevokesTheFamily(t *testing.T) {
 	}
 	// Row state AFTER the response: the revocation committed.
 	state := s.family(pair.DeviceID)
-	if reason(state) != domain.ReasonCodeReplay || state.accessTokens != 0 || state.tokenID != nil {
+	if reason(state) != domain.ReasonCodeReplay || state.tokenID != nil {
 		t.Fatalf("family after replay = %+v", state)
 	}
 	if s.whoami(pair.AccessToken).Code != http.StatusUnauthorized {
@@ -249,8 +250,8 @@ func TestNativeRefreshRedeliveryWithinWindowReturnsTheSameSuccessor(t *testing.T
 	}
 	// Once the successor itself was used, the old token is plain reuse.
 	reused, _ := s.refresh(pair.RefreshToken)
-	if reused.Code != http.StatusBadRequest {
-		t.Fatalf("old token after its successor was used = %d, want refused", reused.Code)
+	if reused.Code != http.StatusUnauthorized {
+		t.Fatalf("old token after its successor was used = %d, want 401 device_revoked", reused.Code)
 	}
 	if reason(s.family(pair.DeviceID)) != domain.ReasonRefreshReuse {
 		t.Fatalf("family = %+v, want revoked refresh_reuse", s.family(pair.DeviceID))
@@ -266,21 +267,26 @@ func TestNativeRefreshReuseOutsideWindowRevokesTheFamily(t *testing.T) {
 
 	s.advance(31 * time.Second)
 	reused, body := s.refresh(pair.RefreshToken)
-	if reused.Code != http.StatusBadRequest || body.Error != "invalid_grant" {
+	if reused.Code != http.StatusUnauthorized || body.Error != "device_revoked" ||
+		reused.Header().Get("WWW-Authenticate") == "" {
 		t.Fatalf("reuse = %d %s", reused.Code, reused.Body.String())
 	}
-	// Row state after the response: revoked, anchor and binding gone, every
-	// access token deleted.
+	// Row state after the response: revoked, anchor and binding gone. The
+	// access token rows stay until they expire so the next API call answers
+	// device_revoked; none of them authenticates.
 	state := s.family(pair.DeviceID)
-	if reason(state) != domain.ReasonRefreshReuse || state.tokenID != nil || state.accessTokens != 0 || s.anchorExists(anchor) {
+	if reason(state) != domain.ReasonRefreshReuse || state.tokenID != nil || s.anchorExists(anchor) {
 		t.Fatalf("family after reuse = %+v anchor=%v", state, s.anchorExists(anchor))
 	}
 	// The newest access token is cut off: the validator says device revoked.
 	if _, err := s.validator.ValidateToken(context.Background(), successor.AccessToken); !errors.Is(err, auth.ErrCredentialRejected) {
 		t.Fatalf("validate newest token after reuse = %v", err)
 	}
-	if s.whoami(successor.AccessToken).Code != http.StatusUnauthorized {
-		t.Fatal("the newest access token must stop working once reuse revoked the family")
+	// The API answers the ADR's flat device_revoked body, so the client
+	// wipes rather than refreshing.
+	cut := s.whoami(successor.AccessToken)
+	if cut.Code != http.StatusUnauthorized || !strings.Contains(cut.Body.String(), `"error":"device_revoked"`) {
+		t.Fatalf("newest access token after reuse = %d %s, want 401 device_revoked", cut.Code, cut.Body.String())
 	}
 	found := false
 	for _, action := range s.audit.actions() {
@@ -358,7 +364,7 @@ func TestNativeIdleExpiryAndAbsoluteCapRevoke(t *testing.T) {
 		userID := s.seedUser("idle@example.test")
 		pair := s.exchange(s.signIn(userID, "idle@example.test"))
 		s.advance(domain.DefaultRefreshIdleTTL + time.Second)
-		if refused, _ := s.refresh(pair.RefreshToken); refused.Code != http.StatusBadRequest {
+		if refused, _ := s.refresh(pair.RefreshToken); refused.Code != http.StatusUnauthorized {
 			t.Fatalf("idle refresh = %d", refused.Code)
 		}
 		if reason(s.family(pair.DeviceID)) != domain.ReasonExpired {
@@ -375,7 +381,7 @@ func TestNativeIdleExpiryAndAbsoluteCapRevoke(t *testing.T) {
 			t.Fatalf("refresh inside cap = %d", ok.Code)
 		}
 		s.advance(13 * time.Hour)
-		if refused, _ := s.refresh(next.RefreshToken); refused.Code != http.StatusBadRequest {
+		if refused, _ := s.refresh(next.RefreshToken); refused.Code != http.StatusUnauthorized {
 			t.Fatalf("refresh past cap = %d", refused.Code)
 		}
 		if reason(s.family(pair.DeviceID)) != domain.ReasonExpired {
@@ -421,7 +427,7 @@ func TestNativeClientDisableAndRemovalRevoke(t *testing.T) {
 		recorder := doOn(router, http.MethodPost, nativeapi.TokenPath, url.Values{
 			"grant_type": {"refresh_token"}, "refresh_token": {pair.RefreshToken}, "client_id": {testClientID},
 		})
-		if recorder.Code != http.StatusBadRequest {
+		if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"device_revoked"`) {
 			t.Fatalf("refresh of a removed client = %d %s", recorder.Code, recorder.Body.String())
 		}
 		if reason(s.family(pair.DeviceID)) != domain.ReasonClientRemoved {
@@ -444,7 +450,7 @@ func TestNativeValidatorRefusesInactiveOwners(t *testing.T) {
 		if _, err := s.validator.ValidateToken(context.Background(), pair.AccessToken); !errors.Is(err, auth.ErrDeviceRevoked) {
 			t.Fatalf("suspended owner = %v, want ErrDeviceRevoked", err)
 		}
-		if refused, _ := s.refresh(pair.RefreshToken); refused.Code != http.StatusBadRequest {
+		if refused, _ := s.refresh(pair.RefreshToken); refused.Code != http.StatusUnauthorized {
 			t.Fatalf("refresh of a suspended owner = %d", refused.Code)
 		}
 		if reason(s.family(pair.DeviceID)) != domain.ReasonUserDeactivated {

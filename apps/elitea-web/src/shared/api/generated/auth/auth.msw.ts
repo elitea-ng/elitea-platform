@@ -45,6 +45,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  NativeDeviceList,
   NativeTokenResponse,
   Permission,
   PersonalAccessToken,
@@ -59,6 +60,34 @@ export const getExchangeNativeTokenResponseMock = (
   refresh_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
   refresh_token_expires_in: faker.number.int(),
   device_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getListNativeDevicesResponseMock = (
+  overrideResponse: Partial<Extract<NativeDeviceList, object>> = {},
+): NativeDeviceList => ({
+  devices: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    client_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    device_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    platform: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    client_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    last_seen_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    revoked_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    revoke_reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    current: faker.datatype.boolean(),
+  })),
   ...overrideResponse,
 });
 
@@ -208,6 +237,54 @@ export const getRevokeNativeTokenMockHandler = (
   );
 };
 
+export const getListNativeDevicesMockHandler = (
+  overrideResponse?:
+    | NativeDeviceList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<NativeDeviceList> | NativeDeviceList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/auth/native/devices",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListNativeDevicesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeNativeDeviceMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/auth/native/devices/:deviceId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getPermissionListMockHandler = (
   overrideResponse?:
     | Permission[]
@@ -337,6 +414,8 @@ export const getAuthMock = () => [
   getAuthorizeNativeClientMockHandler(),
   getExchangeNativeTokenMockHandler(),
   getRevokeNativeTokenMockHandler(),
+  getListNativeDevicesMockHandler(),
+  getRevokeNativeDeviceMockHandler(),
   getPermissionListMockHandler(),
   getListPersonalTokensMockHandler(),
   getCreatePersonalTokenMockHandler(),

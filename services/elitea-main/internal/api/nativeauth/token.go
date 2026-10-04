@@ -9,25 +9,11 @@ import (
 	"strconv"
 	"time"
 
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 )
-
-// DeviceRevokedBody is the ADR's literal `device_revoked` answer (coordinator
-// decision 8): a FLAT object, deliberately unlike the platform's nested error
-// envelope, so a client can tell "wipe" (`error` is the string device_revoked)
-// from "refresh once" (`error` is an object).
-var DeviceRevokedBody = map[string]string{
-	"error":             "device_revoked",
-	"error_description": "This device's sign-in was revoked. Sign in again.",
-}
-
-// WriteDeviceRevoked answers 401 device_revoked with the bearer challenge.
-func WriteDeviceRevoked(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="device_revoked"`)
-	writeJSON(w, http.StatusUnauthorized, DeviceRevokedBody)
-}
 
 // formSingle parses an RFC 6749 form body: urlencoded only, bounded, and no
 // parameter repeated (§3.1). ok is false when an error was written.
@@ -198,11 +184,9 @@ func (h *Handler) refresh(
 				EntityName: outcome.DeviceName,
 			})
 		}
-		if h.cfg.DeviceRevokedContract {
-			WriteDeviceRevoked(w)
-			return
-		}
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "the device session is no longer valid")
+		// A revoked, expired, deactivated or reused family: the client wipes
+		// (ADR-0025 decision 4). The same body the API answers.
+		apimw.WriteDeviceRevoked(w)
 		return
 	case errors.Is(err, domain.ErrInvalidGrant):
 		fail(http.StatusBadRequest, "invalid_grant", "the refresh token is invalid")

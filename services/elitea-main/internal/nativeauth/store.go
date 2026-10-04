@@ -684,9 +684,15 @@ func lockFamily(ctx context.Context, tx pgx.Tx, sessionID string) (familyRow, er
 }
 
 // revokeFamily revokes one family inside the caller's transaction: the row is
-// marked revoked and its anchor cleared; the ADR-0018 binding, the anchor row
-// and every access token are deleted. It reports whether a live family was
-// revoked (false: already revoked or unknown).
+// marked revoked and its anchor cleared; the ADR-0018 binding and the anchor
+// row are deleted. It reports whether a live family was revoked (false:
+// already revoked or unknown).
+//
+// The family's ACCESS TOKENS ARE KEPT until they expire (the retention sweeper
+// removes them): they can no longer authenticate — the validator reads the
+// revoked family — but keeping the row is what lets the API answer the
+// client's next call with `device_revoked` (wipe) instead of `token_rejected`
+// (refresh once), which is the ADR-0025 decision 4 contract.
 //
 // The binding is deleted EXPLICITLY rather than through the guarded cascade
 // (auth_pat.sql's DeleteTokenProjectBinding states why). Deleting the anchor is
@@ -719,10 +725,6 @@ func revokeFamily(ctx context.Context, tx pgx.Tx, sessionID, reason string, revo
 		if _, err := tx.Exec(ctx, `DELETE FROM public.auth_core__token WHERE id = $1`, *anchor); err != nil {
 			return false, err
 		}
-	}
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM elitea_auth.native_access_tokens WHERE session_id = $1`, sessionID); err != nil {
-		return false, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE elitea_auth.native_refresh_tokens SET successor_sealed = NULL

@@ -54,9 +54,12 @@ import type {
 
 import type {
   AuthorizeNativeClientParams,
+  DeviceRevokedError,
   ErrorResponse,
+  ListNativeDevicesParams,
   N401Response,
   N403Response,
+  NativeDeviceList,
   NativeOAuthError,
   NativeRevokeRequest,
   NativeTokenRequest,
@@ -330,7 +333,7 @@ export type exchangeNativeTokenResponse400 = {
 };
 
 export type exchangeNativeTokenResponse401 = {
-  data: NativeOAuthError;
+  data: NativeOAuthError | DeviceRevokedError;
   status: 401;
 };
 
@@ -387,8 +390,10 @@ export const getExchangeNativeTokenUrl = () => {
  * other reuse revokes the whole device session.
  *
  * Errors are RFC 6749 section 5.2 JSON. A revoked, expired, deactivated
- * or reused device session is refused; clients must persist the new pair
- * before using it and serialise refreshes. Failures are rate limited per
+ * or reused device session answers 401 with the flat
+ * `{"error":"device_revoked"}` body (the client wipes its local data);
+ * clients must persist the new pair before using it and serialise
+ * refreshes. Failures are rate limited per
  * (client, address) and per address (429 with Retry-After). Answers 404
  * while no native client is registered.
  * NOTE(W2): internal/api/nativeauth/token.go:61.
@@ -457,7 +462,7 @@ export const getExchangeNativeTokenQueryKey = (
 
 export const getExchangeNativeTokenQueryOptions = <
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError,
+  TError = NativeOAuthError | DeviceRevokedError,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -492,11 +497,12 @@ export const getExchangeNativeTokenQueryOptions = <
 export type ExchangeNativeTokenQueryResult = NonNullable<
   Awaited<ReturnType<typeof exchangeNativeToken>>
 >;
-export type ExchangeNativeTokenQueryError = NativeOAuthError;
+export type ExchangeNativeTokenQueryError =
+  NativeOAuthError | DeviceRevokedError;
 
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError,
+  TError = NativeOAuthError | DeviceRevokedError,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options: {
@@ -523,7 +529,7 @@ export function useExchangeNativeToken<
 };
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError,
+  TError = NativeOAuthError | DeviceRevokedError,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -550,7 +556,7 @@ export function useExchangeNativeToken<
 };
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError,
+  TError = NativeOAuthError | DeviceRevokedError,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -573,7 +579,7 @@ export function useExchangeNativeToken<
 
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError,
+  TError = NativeOAuthError | DeviceRevokedError,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -852,6 +858,424 @@ export function useRevokeNativeToken<
     nativeRevokeRequest,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listNativeDevicesResponse200 = {
+  data: NativeDeviceList;
+  status: 200;
+};
+
+export type listNativeDevicesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listNativeDevicesResponse404 = {
+  data: NativeOAuthError;
+  status: 404;
+};
+
+export type listNativeDevicesResponseSuccess = listNativeDevicesResponse200 & {
+  headers: Headers;
+};
+export type listNativeDevicesResponseError = (
+  listNativeDevicesResponse401 | listNativeDevicesResponse404
+) & {
+  headers: Headers;
+};
+
+export type listNativeDevicesResponse =
+  listNativeDevicesResponseSuccess | listNativeDevicesResponseError;
+
+export const getListNativeDevicesUrl = (params?: ListNativeDevicesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/auth/native/devices?${stringifiedParams}`
+    : `/auth/native/devices`;
+};
+
+/**
+ * The caller's own device sessions (refresh-token families, ADR-0025
+ * decision 4), newest first. `current` marks the device whose token
+ * authenticated this request. Revoked devices are listed only with
+ * `include_revoked=true`. Answers 404 while no native client is
+ * registered. NOTE(W2): internal/api/nativeauth/devices.go:90.
+ * @summary List the caller's native devices
+ */
+export const listNativeDevices = async (
+  params?: ListNativeDevicesParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listNativeDevicesResponse> => {
+  return eliteaFetch<listNativeDevicesResponse>(
+    getListNativeDevicesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListNativeDevicesQueryKey = (
+  params?: ListNativeDevicesParams,
+) => {
+  return [`/auth/native/devices`, ...(params ? [params] : [])] as const;
+};
+
+export const getListNativeDevicesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listNativeDevices>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  params?: ListNativeDevicesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListNativeDevicesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listNativeDevices>>
+  > = ({ signal }) => listNativeDevices(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listNativeDevices>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListNativeDevicesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listNativeDevices>>
+>;
+export type ListNativeDevicesQueryError = N401Response | NativeOAuthError;
+
+export function useListNativeDevices<
+  TData = Awaited<ReturnType<typeof listNativeDevices>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  params: undefined | ListNativeDevicesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listNativeDevices>>,
+          TError,
+          Awaited<ReturnType<typeof listNativeDevices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListNativeDevices<
+  TData = Awaited<ReturnType<typeof listNativeDevices>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  params?: ListNativeDevicesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listNativeDevices>>,
+          TError,
+          Awaited<ReturnType<typeof listNativeDevices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListNativeDevices<
+  TData = Awaited<ReturnType<typeof listNativeDevices>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  params?: ListNativeDevicesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the caller's native devices
+ */
+
+export function useListNativeDevices<
+  TData = Awaited<ReturnType<typeof listNativeDevices>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  params?: ListNativeDevicesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeDevices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListNativeDevicesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeNativeDeviceResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type revokeNativeDeviceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeNativeDeviceResponse404 = {
+  data: NativeOAuthError;
+  status: 404;
+};
+
+export type revokeNativeDeviceResponseSuccess =
+  revokeNativeDeviceResponse204 & {
+    headers: Headers;
+  };
+export type revokeNativeDeviceResponseError = (
+  revokeNativeDeviceResponse401 | revokeNativeDeviceResponse404
+) & {
+  headers: Headers;
+};
+
+export type revokeNativeDeviceResponse =
+  revokeNativeDeviceResponseSuccess | revokeNativeDeviceResponseError;
+
+export const getRevokeNativeDeviceUrl = (deviceId: string) => {
+  return `/auth/native/devices/${deviceId}`;
+};
+
+/**
+ * Revokes the device session (reason `user`). Another user's device, or
+ * an unknown id, is a 404, so ownership is not disclosed. Revoking the
+ * device in use is allowed; its next call answers `device_revoked`.
+ * NOTE(W2): internal/api/nativeauth/devices.go:114.
+ * @summary Revoke one of the caller's native devices
+ */
+export const revokeNativeDevice = async (
+  deviceId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeNativeDeviceResponse> => {
+  return eliteaFetch<revokeNativeDeviceResponse>(
+    getRevokeNativeDeviceUrl(deviceId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRevokeNativeDeviceQueryKey = (deviceId: string) => {
+  return ["DELETE", `/auth/native/devices/${deviceId}`] as const;
+};
+
+export const getRevokeNativeDeviceQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDevice>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getRevokeNativeDeviceQueryKey(deviceId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeNativeDevice>>
+  > = ({ signal }) =>
+    revokeNativeDevice(deviceId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: deviceId !== null && deviceId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeNativeDevice>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeNativeDeviceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeNativeDevice>>
+>;
+export type RevokeNativeDeviceQueryError = N401Response | NativeOAuthError;
+
+export function useRevokeNativeDevice<
+  TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDevice>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeNativeDevice>>,
+          TError,
+          Awaited<ReturnType<typeof revokeNativeDevice>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeNativeDevice<
+  TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDevice>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeNativeDevice>>,
+          TError,
+          Awaited<ReturnType<typeof revokeNativeDevice>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeNativeDevice<
+  TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDevice>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke one of the caller's native devices
+ */
+
+export function useRevokeNativeDevice<
+  TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
+  TError = N401Response | NativeOAuthError,
+>(
+  deviceId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeDevice>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeNativeDeviceQueryOptions(deviceId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

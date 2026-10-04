@@ -1736,6 +1736,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			} else {
 				authOptions = append(authOptions, v2auth.WithTokenSigningKey(cfg.SessionSecret))
 			}
+			// The native device registry (ADR-0025 WP3): a user's own
+			// devices, with any credential the group accepts. Static
+			// routes, so they win over the /auth mount below; 404 while no
+			// native client is registered (coordinator decision 4).
+			if nativeHandler != nil {
+				r.With(nativeHandler.RegisteredOnly).
+					Get("/auth/native/devices", nativeHandler.ListDevices)
+				r.With(nativeHandler.RegisteredOnly).
+					Delete("/auth/native/devices/{deviceID}", nativeHandler.RevokeDevice)
+			}
 			r.Mount("/auth", v2auth.NewHandler(cfg.Pool, authOptions...).Routes())
 
 			// === Projects endpoints ===
@@ -2117,6 +2127,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/native_clients/administration/{clientID}", nativeHandler.AdminSave)
 					r.With(requireNativeClients).
 						Delete("/native_clients/administration/{clientID}", nativeHandler.AdminDelete)
+					// Every user's devices (ADR-0025 WP3), gated like user
+					// suspension and SCIM clients: whoever may suspend an
+					// account may cut off its devices.
+					r.With(requireAdminUsers).
+						Get("/native_devices/administration", nativeHandler.AdminListDevices)
+					r.With(requireAdminUsers).
+						Delete("/native_devices/administration/{deviceID}", nativeHandler.AdminRevokeDevice)
 				}
 				r.With(requireRuntimePlugins).
 					Get("/identity_providers/administration", adminHandler.IdentityProviderList)

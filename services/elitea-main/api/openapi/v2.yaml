@@ -8812,6 +8812,70 @@ components:
         token: { type: string }
         token_type_hint: { type: string, description: Ignored; the token's prefix decides. }
         client_id: { type: string }
+    NativeDevice:
+      type: object
+      description: >-
+        One native device session (refresh-token family). NOTE(W2):
+        internal/api/nativeauth/devices.go:36 (`UserDevice`).
+      required: [id, client_id, client_name, device_name, platform, client_version, created_at, last_seen_at, revoked_at, revoke_reason, current]
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string }
+        client_name: { type: string }
+        device_name: { type: string, description: The name the app claimed at sign-in. }
+        platform: { type: string, description: 'ios, android, macos, windows, linux or other.' }
+        client_version: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        revoke_reason:
+          type: string
+          nullable: true
+          description: >-
+            signed_out, user, admin, refresh_reuse, code_replay,
+            user_deactivated, client_disabled, client_removed or expired.
+        current: { type: boolean, description: The device whose token authenticated this request. }
+    NativeDeviceList:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/devices.go:108.
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/NativeDevice'
+    NativeAdminDevice:
+      description: NOTE(W2) internal/api/nativeauth/devices.go:52 (`AdminDevice`).
+      allOf:
+        - $ref: '#/components/schemas/NativeDevice'
+        - type: object
+          required: [user_id, email]
+          properties:
+            user_id: { type: integer, format: int64 }
+            email: { type: string }
+    NativeAdminDeviceList:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/devices.go:178.
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/NativeAdminDevice'
+        total: { type: integer, format: int64 }
+    DeviceRevokedError:
+      type: object
+      description: >-
+        The ADR-0025 `device_revoked` answer: FLAT, unlike the nested error
+        envelope, so a native client tells "wipe local data" (`error` is the
+        string device_revoked) from "refresh once" (`error` is an object).
+        Sent only for native credentials, with
+        `WWW-Authenticate: Bearer error="invalid_token", error_description="device_revoked"`.
+        NOTE(W2): internal/api/middleware/auth.go:453 (`DeviceRevokedBody`).
+      required: [error]
+      properties:
+        error: { type: string, description: Always device_revoked. }
+        error_description: { type: string }
     NativeClient:
       type: object
       description: >-
@@ -10352,8 +10416,10 @@ paths:
         other reuse revokes the whole device session.
 
         Errors are RFC 6749 section 5.2 JSON. A revoked, expired, deactivated
-        or reused device session is refused; clients must persist the new pair
-        before using it and serialise refreshes. Failures are rate limited per
+        or reused device session answers 401 with the flat
+        `{"error":"device_revoked"}` body (the client wipes its local data);
+        clients must persist the new pair before using it and serialise
+        refreshes. Failures are rate limited per
         (client, address) and per address (429 with Retry-After). Answers 404
         while no native client is registered.
         NOTE(W2): internal/api/nativeauth/token.go:61.
@@ -10379,11 +10445,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/NativeOAuthError'
         '401':
-          description: invalid_client (the client is unknown or disabled).
+          description: >-
+            invalid_client (the client is unknown or disabled), or
+            device_revoked: the refresh token's device session was revoked,
+            expired, deactivated or reused, and the client must wipe its
+            local data.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NativeOAuthError'
+                oneOf:
+                  - $ref: '#/components/schemas/NativeOAuthError'
+                  - $ref: '#/components/schemas/DeviceRevokedError'
         '404':
           description: No native client is registered on this deployment.
           content:
@@ -10453,6 +10525,111 @@ paths:
                 $ref: '#/components/schemas/NativeOAuthError'
         '503':
           description: temporarily_unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /auth/native/devices:
+    get:
+      operationId: listNativeDevices
+      summary: List the caller's native devices
+      description: |
+        The caller's own device sessions (refresh-token families, ADR-0025
+        decision 4), newest first. `current` marks the device whose token
+        authenticated this request. Revoked devices are listed only with
+        `include_revoked=true`. Answers 404 while no native client is
+        registered. NOTE(W2): internal/api/nativeauth/devices.go:90.
+      tags: [auth]
+      parameters:
+        - name: include_revoked
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The caller's devices.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeDeviceList'
+        '401': { $ref: '#/components/responses/401' }
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /auth/native/devices/{device_id}:
+    parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: revokeNativeDevice
+      summary: Revoke one of the caller's native devices
+      description: |
+        Revokes the device session (reason `user`). Another user's device, or
+        an unknown id, is a 404, so ownership is not disclosed. Revoking the
+        device in use is allowed; its next call answers `device_revoked`.
+        NOTE(W2): internal/api/nativeauth/devices.go:114.
+      tags: [auth]
+      responses:
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/401' }
+        '404':
+          description: Not one of the caller's devices.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /admin/native_devices/administration:
+    get:
+      operationId: listNativeDevicesAdministration
+      summary: List native devices across users
+      description: |
+        Every user's device sessions, for an administrator holding
+        `admin.auth.users` (the permission that gates user suspension).
+        `state` is active (the default), revoked or all; `limit` defaults to
+        50 and is capped at 200. NOTE(W2): internal/api/nativeauth/devices.go:138.
+      tags: [admin]
+      parameters:
+        - { name: user_id, in: query, required: false, schema: { type: integer, format: int64 } }
+        - { name: client_id, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string }, description: 'active, revoked or all.' }
+        - { name: limit, in: query, required: false, schema: { type: integer } }
+        - { name: offset, in: query, required: false, schema: { type: integer } }
+      responses:
+        '200':
+          description: One page of devices and the total.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeAdminDeviceList'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+  /admin/native_devices/administration/{device_id}:
+    parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: revokeNativeDeviceAdministration
+      summary: Revoke any user's native device
+      description: |
+        Revokes the device session (reason `admin`) and records the operator
+        as `revoked_by`. NOTE(W2): internal/api/nativeauth/devices.go:182.
+      tags: [admin]
+      responses:
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such device.
           content:
             application/json:
               schema:

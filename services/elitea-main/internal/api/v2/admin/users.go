@@ -38,6 +38,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -438,7 +439,16 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := h.pool.Exec(r.Context(),
+	// One transaction: a suspension and the revocation of the account's
+	// native devices and browser sessions (ADR-0025 WP3) commit together or
+	// not at all.
+	tx, err := h.pool.Begin(r.Context())
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	tag, err := tx.Exec(r.Context(),
 		`UPDATE public.auth_core__user SET suspended = $1 WHERE id = $2`, *body.Suspended, userID)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
@@ -446,6 +456,23 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		apierr.WriteStatus(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if *body.Suspended {
+		var revokedBy *int64
+		if caller, ok := auth.UserFromContext(r.Context()); ok {
+			if id, resolved := caller.OwningUserID(); resolved {
+				revokedBy = &id
+			}
+		}
+		if _, err := nativeauth.RevokeUserSessions(r.Context(), tx, int64(userID),
+			nativeauth.ReasonUserDeactivated, revokedBy); err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 

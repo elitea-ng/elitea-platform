@@ -440,7 +440,30 @@ const (
 	// credential was read, so it is a 503 and not a 401 (see
 	// writeTokenRefusal).
 	reasonTokenStoreUnavailable = "token_store_unavailable"
+	// reasonDeviceRevoked — a native access token whose device session was
+	// revoked, expired or deactivated (ADR-0025). 401 device_revoked.
+	reasonDeviceRevoked = "device_revoked"
 )
+
+// DeviceRevokedBody is the ADR-0025 `device_revoked` answer (coordinator
+// decision 8). It is deliberately FLAT — `{"error":"device_revoked"}` — unlike
+// the nested envelope every other refusal here uses, so a native client tells
+// "wipe local data" (`error` is the string device_revoked) from "refresh once"
+// (`error` is an object) without parsing a code.
+var DeviceRevokedBody = map[string]string{
+	"error":             "device_revoked",
+	"error_description": "This device's sign-in was revoked. Sign in again.",
+}
+
+// WriteDeviceRevoked answers 401 device_revoked with the RFC 6750 challenge.
+// The native token endpoint and the gateway edges write the same answer.
+func WriteDeviceRevoked(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="device_revoked"`)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(DeviceRevokedBody)
+}
 
 // logCredentialRefusal writes the one line the credential branches had none
 // of, and it is the whole of this change: no status, body or branch moves.
@@ -552,6 +575,12 @@ func writeTokenRefusal(w http.ResponseWriter, r *http.Request, source string, cf
 	switch {
 	case cfg.Validator == nil:
 		writeCredentialRefusal(w, r, source, reasonTokenValidatorAbsent)
+	case errors.Is(err, auth.ErrDeviceRevoked):
+		// A NATIVE credential whose device session is gone (ADR-0025
+		// decision 4). Only a validator that recognised a native token can
+		// produce this error, so no existing caller sees the new body.
+		logCredentialRefusal(r, source, reasonDeviceRevoked)
+		WriteDeviceRevoked(w)
 	case errors.Is(err, auth.ErrCredentialValidationUnavailable):
 		logCredentialRefusal(r, source, reasonTokenStoreUnavailable)
 		slog.ErrorContext(r.Context(), "the token store could not be read", "err", err)

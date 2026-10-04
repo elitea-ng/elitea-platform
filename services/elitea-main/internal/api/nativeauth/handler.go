@@ -94,9 +94,6 @@ type Config struct {
 	SecureCookies bool
 	// Decorate is the WP4 seam; nil adds nothing.
 	Decorate TokenResponseDecorator
-	// RevokedAnswer selects how the token endpoint answers a revoked family:
-	// false is WP2's `400 invalid_grant`, true is WP3's `401 device_revoked`.
-	DeviceRevokedContract bool
 }
 
 // Handler serves the native routes.
