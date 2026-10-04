@@ -29,6 +29,11 @@ type SubmitRequest struct {
 	CurrentAdhocTurn      *CurrentAdhocTurn
 	CurrentRegenerateTurn *CurrentRegenerateTurn
 	CurrentContinueTurn   *CurrentContinueTurn
+	// TriggerOrigin is how the run started (shared 0140). Empty means a
+	// person at the UI. It is NOT part of the request digest: it describes
+	// the caller, not the work, and adding it would make every replay that
+	// crosses a deployment an idempotency conflict.
+	TriggerOrigin executiondomain.TriggerOrigin
 }
 
 type Admission struct {
@@ -75,7 +80,7 @@ func (s *AdmissionService) Submit(
 	}
 	if !validAgentIdentity(request.Identity) ||
 		request.IdempotencyKey == "" || len(request.IdempotencyKey) > 200 ||
-		!agentCapability(request.CapabilityID) {
+		!agentCapability(request.CapabilityID) || !request.TriggerOrigin.Valid() {
 		return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
 	}
 	bundle, binding, err := s.factory.Build(
@@ -108,6 +113,7 @@ func (s *AdmissionService) Submit(
 			Generation:          1,
 			State:               executiondomain.JobPending,
 			CreatedAt:           createdAt,
+			TriggerOrigin:       request.TriggerOrigin,
 		},
 		Outbox: executiondomain.OutboxRecord{
 			ID:          outboxID,

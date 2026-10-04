@@ -480,6 +480,7 @@ type EliteaRuntimeExecutionJob struct {
 	AdmittedAt              pgtype.Timestamptz `db:"admitted_at" json:"admitted_at"`
 	SettledAt               pgtype.Timestamptz `db:"settled_at" json:"settled_at"`
 	TerminalErrorCode       *string            `db:"terminal_error_code" json:"terminal_error_code"`
+	TriggerOrigin           string             `db:"trigger_origin" json:"trigger_origin"`
 }
 
 type EliteaRuntimeExecutionReplayEvent struct {

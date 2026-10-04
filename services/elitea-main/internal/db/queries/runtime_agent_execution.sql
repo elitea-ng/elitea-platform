@@ -22,7 +22,8 @@ INSERT INTO elitea_runtime.execution_jobs (
     execution_id, generation, command_id, tenant_id, resource_project_id,
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest,
-    idempotency_scope, idempotency_key, state, desired_state, admitted_at
+    idempotency_scope, idempotency_key, state, desired_state, admitted_at,
+    trigger_origin
 ) VALUES (
     sqlc.arg(execution_id)::text,
     sqlc.arg(generation)::bigint,
@@ -40,7 +41,10 @@ INSERT INTO elitea_runtime.execution_jobs (
     sqlc.arg(idempotency_key)::text,
     sqlc.arg(state)::text,
     'RUNNING',
-    sqlc.arg(admitted_at)::timestamptz
+    sqlc.arg(admitted_at)::timestamptz,
+    -- shared/0140: how the run started. An empty value is a person at the
+    -- chat composer, which is the column default.
+    COALESCE(NULLIF(sqlc.arg(trigger_origin)::text, ''), 'manual')
 )
 ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
 RETURNING execution_id;

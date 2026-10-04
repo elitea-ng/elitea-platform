@@ -46,6 +46,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -440,6 +441,11 @@ func TestAWebhookWithNoBodyStartsARun(t *testing.T) {
 			if request.UserInput != "" || !request.AllowEmptyUserInput {
 				t.Fatalf("UserInput = %q, AllowEmptyUserInput = %v; want an empty, unattended start",
 					request.UserInput, request.AllowEmptyUserInput)
+			}
+			// Legacy issue 6802: the run is stamped as a webhook run, so the
+			// analytics active-user reads do not count the trigger's creator.
+			if request.TriggerOrigin != executiondomain.TriggerOriginWebhook {
+				t.Fatalf("TriggerOrigin = %q, want webhook", request.TriggerOrigin)
 			}
 		})
 	}
@@ -941,6 +947,11 @@ func TestAScheduleWithNoInputDispatches(t *testing.T) {
 	request, ok := h.start.last()
 	if !ok || request.UserInput != "" || !request.AllowEmptyUserInput {
 		t.Fatalf("dispatch = %+v (present=%v), want an empty, unattended start", request, ok)
+	}
+	// Legacy issue 6802: a scheduled run is stamped as one, so the analytics
+	// active-user reads do not count the schedule's author.
+	if request.TriggerOrigin != executiondomain.TriggerOriginSchedule {
+		t.Fatalf("TriggerOrigin = %q, want schedule", request.TriggerOrigin)
 	}
 	if after := h.readSchedule(t, versionID); after["last_result"] != "dispatched" {
 		t.Fatalf("last_result = %v, want dispatched", after["last_result"])
