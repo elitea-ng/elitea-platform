@@ -23,6 +23,31 @@ import tsconfigPaths from 'vite-tsconfig-paths';
 const resolvePath = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
 
 /**
+ * Emit the i18n catalogue (`src/shared/i18n/en.json`) with its keys sorted.
+ *
+ * The whole catalogue ships in the initial set of both the app and the
+ * admin entry (see shared/i18n/README.md — one bundle, no namespace split),
+ * so its gzip size is initial-bundle size. The file keeps the order
+ * `scripts/i18n-backfill.mjs` preserves (existing order, new keys appended),
+ * which leaves every later-added key away from its dotted-prefix neighbours.
+ * Sorted, keys sharing a prefix sit next to each other and gzip finds the
+ * repeats: measured 2026-10-04, the admin initial set drops 0.6 KiB gzip for
+ * the same 4,560 pairs. Nothing reads the catalogue's key order (i18next
+ * looks keys up by name), so this changes bytes, not behaviour — and it
+ * changes them at build time, so en.json never takes a whole-file reorder.
+ */
+const sortedI18nCatalogue = (): PluginOption => ({
+  name: 'elitea:sorted-i18n-catalogue',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!id.endsWith('/src/shared/i18n/en.json')) return null;
+    const pairs = Object.entries(JSON.parse(code) as Record<string, string>);
+    pairs.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return { code: JSON.stringify(Object.fromEntries(pairs)), map: null };
+  },
+});
+
+/**
  * Five build targets (spec §7.4), selected via `vite build --mode <target>`:
  *
  *  - (default)      main SPA        base './' (contract C4), outDir dist/app
@@ -61,6 +86,7 @@ const resolvePath = (p: string): string => fileURLToPath(new URL(p, import.meta.
  */
 export default defineConfig(({ mode }): UserConfig => {
   const basePlugins: PluginOption[] = [
+    sortedI18nCatalogue(),
     react(),
     // React Compiler (spec §2.1): plugin-react 6 removed its `babel` option, so
     // the compiler is wired via @rolldown/plugin-babel + reactCompilerPreset().
