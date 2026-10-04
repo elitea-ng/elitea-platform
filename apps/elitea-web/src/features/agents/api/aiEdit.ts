@@ -179,7 +179,7 @@ function catalogueDefaultName(catalogue: AiEditModelCatalogueWire | undefined): 
  * catalogue's first item. That item is no one's choice, so it is not
  * returned here.
  */
-export function projectDefaultModelName(catalogue: AiEditModelCatalogueWire | undefined): string {
+function projectDefaultModelName(catalogue: AiEditModelCatalogueWire | undefined): string {
   return catalogue?.default_model_configured === true ? catalogueDefaultName(catalogue) : '';
 }
 
