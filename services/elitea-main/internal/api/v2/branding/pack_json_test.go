@@ -126,9 +126,10 @@ func TestPackJSON_UnbrandedServesTheProductDefault(t *testing.T) {
 	if pack.ID != def.ID || pack.Brand.Hue != def.Brand.Hue || pack.Brand.Hue == DefaultPack().Brand.Hue {
 		t.Errorf("served id %q hue %q, want the product default's %q %q", pack.ID, pack.Brand.Hue, def.ID, def.Brand.Hue)
 	}
-	// The product default's "./brand/…" placeholders resolve against the
-	// origin root, where the web app serves them.
-	if pack.Assets.LogoFull != "https://elitea.example.com/brand/logo-full.svg" {
+	// The product default's "./brand/…" placeholders are document-relative:
+	// they resolve under the web app's /app/, where its image serves them
+	// (apps/elitea-web/nginx/spa.conf). Nothing serves /brand/ at the root.
+	if pack.Assets.LogoFull != "https://elitea.example.com/app/brand/logo-full.svg" {
 		t.Errorf("logoFull = %q", pack.Assets.LogoFull)
 	}
 	if pack.Product.DocsURL == nil || *pack.Product.DocsURL != "https://elitea.example.com/docs/" {

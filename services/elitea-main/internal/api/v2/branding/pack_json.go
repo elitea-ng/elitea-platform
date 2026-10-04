@@ -97,14 +97,24 @@ func (s Snapshot) LayerNames() []string {
 	return names
 }
 
+// spaDocumentBase is the web app's document URL path, the base a
+// document-relative reference resolves against in the browser. The product
+// default's assets are such references (`./brand/logo-full.svg`), and the
+// web image serves them under it (apps/elitea-web/nginx/spa.conf: the SPA and
+// its brand/ directory live under /app/). Nothing serves /brand/ at the
+// origin root, so resolving against the root handed native clients asset URLs
+// that answer 404 — the ADR-0025 WP7 conformance suite's first finding.
+const spaDocumentBase = "/app/"
+
 // absolutize returns a copy of p with every same-origin reference resolved
 // against origin ("scheme://host[:port]"): the five asset slots, every
 // typography.fontFaces[].url and product.docsUrl. An absolute reference —
 // an https:// URL or a data: URI — passes through unchanged; a root-relative
-// "/path" becomes origin + "/path". The copy shares the scheme token maps
-// with p; neither side modifies them.
+// "/path" becomes origin + "/path"; a document-relative "./path" resolves as
+// the web app's own document would resolve it, origin + "/app/path". The copy
+// shares the scheme token maps with p; neither side modifies them.
 func absolutize(p *Pack, origin string) *Pack {
-	base, err := url.Parse(origin + "/")
+	base, err := url.Parse(origin + spaDocumentBase)
 	if err != nil || origin == "" {
 		// Unreachable for an origin from publicorigin; serve the pack as is
 		// rather than failing the branding path.
