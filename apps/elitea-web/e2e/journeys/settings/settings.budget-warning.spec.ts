@@ -143,6 +143,26 @@ test('J40: crossing the soft-alert threshold raises the banner, and dismissing i
   // the banner, not the budget.
   expect((await readBudget(page, projectId)).warning_active).toBe(true);
 
+  // #6672: Settings › Usage "Refresh data" fetches again without a reload.
+  // The limit is changed BEHIND the open page, so the only way the new figure
+  // can appear is a fresh request — the cache still holds the old one. The
+  // PERCENTAGE is asserted, not the money: it survives the amount redaction a
+  // non-admin of the project gets, so the claim does not hang on the persona.
+  await page.goto(BASE_URL + '/app/settings/usage', { waitUntil: 'domcontentloaded' });
+  const usage = page.getByTestId('settings-usage');
+  const percentText = (state: BudgetState): string => {
+    expect(state.percent_used, 'a limited project has a percentage').not.toBeNull();
+    return `${(state.percent_used ?? 0).toFixed(1)}% of the limit used`;
+  };
+  await expect(usage).toContainText(percentText(warned), { timeout: 20_000 });
+  await setBudget(page, projectId, 1000, 80);
+  const raised = await readBudget(page, projectId);
+  const refreshButton = page.getByRole('button', { name: 'Refresh data' });
+  await refreshButton.click();
+  await expect(usage).toContainText(percentText(raised), { timeout: 20_000 });
+  await expect(refreshButton).toBeEnabled();
+  await expect(page.getByTestId('settings-usage-refresh-error')).toHaveCount(0);
+
   await clearBudget(page, projectId);
   expect((await readBudget(page, projectId)).warning_active, 'no ceiling, no warning').toBe(false);
 });

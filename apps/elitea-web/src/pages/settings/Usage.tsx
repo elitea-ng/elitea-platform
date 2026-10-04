@@ -30,6 +30,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { formatSmallUsd } from '@/shared/lib/money';
 
 import { useProjectUsage, type ProjectUsage, type UsageScope } from './api/projectUsageApi';
 
@@ -37,7 +38,9 @@ const DASH = '—';
 
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return DASH;
-  return `$${value.toFixed(2)}`;
+  // Not `toFixed(2)`: a sub-cent spend is real spend, and `$0.00` would claim
+  // none (#6682).
+  return formatSmallUsd(value);
 }
 
 /** The bar's colour: past the project's own warning threshold, then past 100%. */
@@ -158,8 +161,10 @@ const Usage = memo(({ projectId, scope = 'project' }: UsageProps) => {
       {query.isLoading ? <LinearProgress data-testid="settings-usage-loading" /> : null}
 
       {/* Reported as the failure it is. An empty panel renders identically to
-          "this project has spent nothing", which is a different claim (#130). */}
-      {query.isError ? (
+          "this project has spent nothing", which is a different claim (#130).
+          Only when there is NOTHING to show: a failed Refresh keeps the last
+          good figures and reports itself in a toast (#6672). */}
+      {query.isError && query.data === undefined ? (
         <Alert severity="error" data-testid="settings-usage-error">
           {t('settings.usage.error', 'Failed to load usage for this project.')}
         </Alert>

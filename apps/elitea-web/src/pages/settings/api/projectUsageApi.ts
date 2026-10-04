@@ -16,7 +16,9 @@
  * optional and why the page reads `can_see_amounts` instead of inferring
  * redaction from a missing number.
  */
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useCallback, useState } from 'react';
+
+import { useQueryClient, useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
@@ -69,4 +71,42 @@ export function useProjectUsage(
         ),
       ) as ProjectUsage,
   });
+}
+
+export interface UsageRefresh {
+  /** Resolves `true` when fresh data arrived, `false` when the refetch failed. */
+  readonly refresh: () => Promise<boolean>;
+  readonly isRefreshing: boolean;
+}
+
+/**
+ * Settings › Usage's Refresh action (#6672).
+ *
+ * A REFETCH of the active view's query, not an invalidation that a later
+ * render picks up and not a re-render of the cache: the request goes out now
+ * and the promise settles with its outcome. The query key is the same one
+ * `useProjectUsage` reads, so the current scope (tab) and project are what is
+ * refreshed and nothing else on the page is reset. A failed refetch leaves the
+ * previous data in the cache — TanStack Query keeps `data` on a refetch error —
+ * and reports `false` so the caller can say so.
+ */
+export function useRefreshProjectUsage(projectId: string | undefined, scope: UsageScope = 'project'): UsageRefresh {
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refresh = useCallback(async (): Promise<boolean> => {
+    if (projectId === undefined || projectId === '') return false;
+    setIsRefreshing(true);
+    try {
+      await queryClient.refetchQueries(
+        { queryKey: projectUsageKeys.project(projectId, scope), exact: true },
+        { throwOnError: true },
+      );
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [projectId, queryClient, scope]);
+  return { refresh, isRefreshing };
 }
