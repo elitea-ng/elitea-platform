@@ -5,6 +5,8 @@
  * shared by every analytics screen.
  */
 
+import { formatSmallUsd } from '@/shared/lib/money';
+
 /**
  * Formats a count as `1.2M` / `3.4K` / a plain integer string.
  * `null`/`undefined` render `'0'` (byte-for-byte baseline behaviour).
@@ -49,25 +51,17 @@ export const UNAVAILABLE_METRIC = '–';
 /**
  * Formats a USD amount for a tile or a table cell.
  *
- * Two fraction digits are not enough here. A cost estimate over a short window
- * is routinely below one cent — the reference deployment shows `$0.000189` for
- * three calls — and two digits render every such figure as `$0.00`, which reads
- * as "this project spent nothing". So an amount below one cent keeps six
- * digits, which is the precision the reference screen shows.
+ * Delegates to `formatSmallUsd` (`shared/lib/money.ts`): below one cent keeps
+ * six digits (the reference deployment shows `$0.000189` for three calls), and
+ * a non-zero amount below that prints `< $0.000001` instead of `$0.00`
+ * (#6682) — two digits read as "this project spent nothing".
  *
  * This is a DISPLAY conversion and the only place a cost becomes a float. The
  * exact decimal stays on the wire: the server computes every figure in
  * PostgreSQL NUMERIC and publishes it unrounded.
  */
 export function fmtUsd(value: number | null | undefined): string {
-  if (value == null) return '$0.00';
-  const digits = value !== 0 && Math.abs(value) < 0.01 ? 6 : 2;
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: digits,
-  }).format(value);
+  return formatSmallUsd(value ?? 0);
 }
 
 /**

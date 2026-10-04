@@ -33,6 +33,7 @@ import type { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import { DataGrid } from '@mui/x-data-grid';
 
 import { t } from '@/shared/i18n';
+import { formatSmallUsd } from '@/shared/lib/money';
 
 import type { ProjectBudgetRow } from './api/adminBudgetsApi';
 
@@ -54,7 +55,9 @@ const DASH = '—';
  */
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return DASH;
-  return `$${value.toFixed(2)}`;
+  // Not `toFixed(2)`: a sub-cent spend is real spend, and `$0.00` would claim
+  // none (#6682).
+  return formatSmallUsd(value);
 }
 
 function percent(value: number | null | undefined): string {

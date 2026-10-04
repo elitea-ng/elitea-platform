@@ -67,6 +67,12 @@ describe('fmtUsd', () => {
   it('does not print a sub-cent amount as zero', () => {
     expect(fmtUsd(0.000189).endsWith('0.00')).toBe(false);
   });
+
+  // #6682: one embedding call costs $0.00000008. Six digits still round it
+  // to zero, so it is printed as an upper bound instead.
+  it('prints a sub-micro-dollar amount as an upper bound, not zero', () => {
+    expect(fmtUsd(8e-8)).toMatch(/^< .*0\.000001$/);
+  });
 });
 
 describe('fmtShare', () => {
