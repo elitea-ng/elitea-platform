@@ -49,8 +49,19 @@ const (
 	tokenFailuresPerClientAddress = 20
 	tokenFailuresPerAddress       = 60
 	authorizePerAddress           = 30
-	revokePerAddress              = 60
-	limitWindow                   = time.Minute
+	// UnknownAuthorizationsPerWindow is the shared /authorize pool of every
+	// caller whose address cannot be known (no trusted-proxy CIDRs, the Helm
+	// default), per replica. Without it those callers had no limit at all,
+	// and a flood of anonymous requests filled pendingCeiling and refused
+	// every sign-in for AuthorizationTTL. Sized so that the pool alone stores
+	// at most a quarter of the ceiling per replica over one TTL
+	// (250/min x 10 min = 2,500): a flood now costs the anonymous callers of
+	// that replica their sign-ins only while it lasts, and never the callers
+	// whose address is known. Configure trusted-proxy CIDRs to get
+	// per-address limits instead.
+	UnknownAuthorizationsPerWindow = 250
+	revokePerAddress               = 60
+	limitWindow                    = time.Minute
 	// pendingCeiling refuses /authorize while this many unexpired pending
 	// requests exist deployment-wide.
 	pendingCeiling     = 10_000
@@ -110,7 +121,9 @@ type Handler struct {
 	// tokenAddressFailures stops one address spraying many client ids.
 	tokenAddressFailures *failurelimit.Limiter
 	authorizations       *failurelimit.Limiter
-	revocations          *failurelimit.Limiter
+	// unknownAuthorizations is the one shared bucket of unknown addresses.
+	unknownAuthorizations *failurelimit.Limiter
+	revocations           *failurelimit.Limiter
 
 	pendingMu      sync.Mutex
 	pendingCount   int64
@@ -121,12 +134,13 @@ type Handler struct {
 // New builds the handler.
 func New(cfg Config) *Handler {
 	return &Handler{
-		cfg:                  cfg,
-		tokenFailures:        failurelimit.New(tokenFailuresPerClientAddress, limitWindow),
-		tokenAddressFailures: failurelimit.New(tokenFailuresPerAddress, limitWindow),
-		authorizations:       failurelimit.New(authorizePerAddress, limitWindow),
-		revocations:          failurelimit.New(revokePerAddress, limitWindow),
-		now:                  time.Now,
+		cfg:                   cfg,
+		tokenFailures:         failurelimit.New(tokenFailuresPerClientAddress, limitWindow),
+		tokenAddressFailures:  failurelimit.New(tokenFailuresPerAddress, limitWindow),
+		authorizations:        failurelimit.New(authorizePerAddress, limitWindow),
+		unknownAuthorizations: failurelimit.New(UnknownAuthorizationsPerWindow, limitWindow),
+		revocations:           failurelimit.New(revokePerAddress, limitWindow),
+		now:                   time.Now,
 	}
 }
 

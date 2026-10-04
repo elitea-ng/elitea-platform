@@ -1,9 +1,12 @@
 package nativeauth_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
@@ -54,5 +57,74 @@ func TestAuthorizeKnownAddressIsStillRateLimited(t *testing.T) {
 	}
 	if got := authorizeOutcome(t, s); got != "temporarily_unavailable" {
 		t.Fatalf("31st authorization from one address = %q, want temporarily_unavailable", got)
+	}
+}
+
+// switchableAddress resolves to a known address while one is set, and to an
+// unknown one otherwise.
+type switchableAddress struct{ address atomic.Value }
+
+func (a *switchableAddress) Resolve(*http.Request) (string, bool) {
+	address, _ := a.address.Load().(string)
+	return address, address != ""
+}
+
+func pendingRows(t *testing.T, s *stack) int {
+	t.Helper()
+	var count int
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM elitea_auth.native_authorizations WHERE status = 'pending'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// Unknown-address callers must not have UNLIMITED inserts: before this, a
+// flood of anonymous /authorize calls (public client id, public redirect)
+// filled the deployment-wide pending ceiling and every real sign-in answered
+// temporarily_unavailable for the ten minutes the rows lived. They now share a
+// bounded per-replica pool, sized so that it alone cannot fill the ceiling,
+// and a caller whose address is known is not refused because of it.
+func TestAuthorizeUnknownAddressesShareABoundedPool(t *testing.T) {
+	addresses := &switchableAddress{}
+	s := newStack(t, withAddresses(addresses))
+	for attempt := 1; attempt <= nativeapi.UnknownAuthorizationsPerWindow; attempt++ {
+		if got := authorizeOutcome(t, s); got != "continue" {
+			t.Fatalf("authorization %d from an unknown address = %q, want continue", attempt, got)
+		}
+	}
+	if got := authorizeOutcome(t, s); got != "temporarily_unavailable" {
+		t.Fatalf("authorization %d from unknown addresses = %q, want temporarily_unavailable (unbounded anonymous inserts)",
+			nativeapi.UnknownAuthorizationsPerWindow+1, got)
+	}
+	if rows := pendingRows(t, s); rows != nativeapi.UnknownAuthorizationsPerWindow {
+		t.Fatalf("%d pending rows stored, want exactly the unknown pool (%d)", rows, nativeapi.UnknownAuthorizationsPerWindow)
+	}
+
+	addresses.address.Store("198.51.100.20")
+	if got := authorizeOutcome(t, s); got != "continue" {
+		t.Fatalf("a known caller after the anonymous flood = %q, want continue", got)
+	}
+}
+
+// The ceiling is exact: the store refuses the insert that would pass it,
+// rather than a cached count letting every replica overshoot for 5 s.
+func TestCreateAuthorizationRespectsTheCeilingExactly(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	request := domain.AuthorizationRequest{
+		ClientID: testClientID, RedirectURI: testRedirect, CodeChallenge: testChallenge, State: "s",
+		DeviceName: "d", Platform: "ios", ClientVersion: "1.0.0",
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.store.CreateAuthorizationBounded(ctx, request, 3); err != nil {
+			t.Fatalf("insert %d under the ceiling: %v", i+1, err)
+		}
+	}
+	if _, _, err := s.store.CreateAuthorizationBounded(ctx, request, 3); !errors.Is(err, domain.ErrPendingCeiling) {
+		t.Fatalf("the insert past the ceiling = %v, want ErrPendingCeiling", err)
+	}
+	if rows := pendingRows(t, s); rows != 3 {
+		t.Fatalf("%d pending rows, want 3", rows)
 	}
 }

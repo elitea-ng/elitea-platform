@@ -115,14 +115,19 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The per-address limit applies only to a KNOWN address, as on /token and
-	// /revoke: without trusted-proxy CIDRs (the Helm default) every caller
-	// resolves to the same unknown key, and one shared bucket would let any
-	// anonymous caller lock every native sign-in out. pendingCeiling still
-	// bounds what unknown callers can store.
+	// A KNOWN address gets its own per-address limit, as on /token and
+	// /revoke. Unknown addresses (no trusted-proxy CIDRs, the Helm default)
+	// share one bounded pool (UnknownAuthorizationsPerWindow): sharing the
+	// 30-per-minute per-address bucket would let one anonymous caller lock
+	// every sign-in out, and no limit at all let anonymous inserts fill the
+	// deployment-wide pendingCeiling for AuthorizationTTL.
 	address, known := h.address(r)
 	key := addressKey(address, known)
-	if blocked, _ := h.authorizations.Blocked(key); known && blocked {
+	limiter := h.authorizations
+	if !known {
+		limiter = h.unknownAuthorizations
+	}
+	if blocked, _ := limiter.Blocked(key); blocked {
 		redirectError("temporarily_unavailable", "too many sign-in requests; retry later")
 		return
 	}
@@ -136,18 +141,23 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 		redirectError("temporarily_unavailable", "too many sign-in requests are pending; retry later")
 		return
 	}
-	handle, binder, err := h.cfg.Store.CreateAuthorization(r.Context(), domain.AuthorizationRequest{
+	// The cached count above is the cheap refusal; the insert re-checks the
+	// ceiling in the same statement, so replicas cannot overshoot it while
+	// their counts are stale.
+	handle, binder, err := h.cfg.Store.CreateAuthorizationBounded(r.Context(), domain.AuthorizationRequest{
 		ClientID: client.ClientID, RedirectURI: redirectURI, CodeChallenge: challenge, State: state,
 		DeviceName: deviceName, Platform: platform, ClientVersion: clientVersion,
-	})
+	}, pendingCeiling)
+	if errors.Is(err, domain.ErrPendingCeiling) {
+		redirectError("temporarily_unavailable", "too many sign-in requests are pending; retry later")
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "native authorization: request not stored", "err", err)
 		redirectError("temporarily_unavailable", "the sign-in service is temporarily unavailable")
 		return
 	}
-	if known {
-		h.authorizations.Fail(key)
-	}
+	limiter.Fail(key)
 	h.setBinder(w, binder)
 	http.Redirect(w, r, ContinuePath+"?"+url.Values{"request": {handle}}.Encode(), http.StatusFound)
 }

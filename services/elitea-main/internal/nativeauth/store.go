@@ -130,6 +130,18 @@ func (a Authorization) Expired(now time.Time) bool { return !now.Before(a.Expire
 // CreateAuthorization stores a pending request and returns the handle (query
 // parameter) and the binder (cookie value). Neither is stored in plain text.
 func (s *Store) CreateAuthorization(ctx context.Context, request AuthorizationRequest) (handle, binder string, err error) {
+	return s.CreateAuthorizationBounded(ctx, request, 0)
+}
+
+// ErrPendingCeiling refuses a new authorization request while ceiling
+// unexpired pending requests already exist.
+var ErrPendingCeiling = errors.New("nativeauth: too many pending authorization requests")
+
+// CreateAuthorizationBounded stores a request only while fewer than ceiling
+// unexpired pending requests exist (ceiling <= 0: no bound). The count and
+// the insert are one statement, so the bound holds to within the requests in
+// flight at the same moment, not to whatever a cached count let through.
+func (s *Store) CreateAuthorizationBounded(ctx context.Context, request AuthorizationRequest, ceiling int64) (handle, binder string, err error) {
 	if handle, err = NewOpaque(); err != nil {
 		return "", "", err
 	}
@@ -137,16 +149,23 @@ func (s *Store) CreateAuthorization(ctx context.Context, request AuthorizationRe
 		return "", "", err
 	}
 	now := s.clock()
-	_, err = s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO elitea_auth.native_authorizations
 		    (handle_hash, binder_hash, client_id, redirect_uri, code_challenge, state,
 		     device_name, platform, client_version, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
+		       $7::text, $8::text, $9::text, $10::timestamptz, $11::timestamptz
+		WHERE $12::bigint <= 0
+		   OR (SELECT count(*) FROM elitea_auth.native_authorizations
+		        WHERE expires_at > $10::timestamptz AND status = 'pending') < $12::bigint`,
 		HashSecret(handle), HashSecret(binder), request.ClientID, request.RedirectURI,
 		request.CodeChallenge, request.State, request.DeviceName, request.Platform,
-		request.ClientVersion, now, now.Add(AuthorizationTTL))
+		request.ClientVersion, now, now.Add(AuthorizationTTL), ceiling)
 	if err != nil {
 		return "", "", unavailable("insert authorization", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", "", ErrPendingCeiling
 	}
 	return handle, binder, nil
 }
