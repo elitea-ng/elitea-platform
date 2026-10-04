@@ -60,6 +60,11 @@ describe('DimensionRow', () => {
 
     const name = screen.getByTestId('evaluation-dimension-name-1');
     expect(name).toHaveStyle({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+    // The three rules above do nothing on an inline box, and the Typography
+    // renders a <span>. jsdom does no layout, so the test pins the display
+    // value that makes the clip and the ellipsis apply in a real browser.
+    expect(name.tagName).toBe('SPAN');
+    expect(name).toHaveStyle({ display: 'block' });
   });
 
   it.each([

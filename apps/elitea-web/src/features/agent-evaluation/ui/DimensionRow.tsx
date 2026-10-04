@@ -49,6 +49,13 @@ const bodySx: SxProps<Theme> = {
 // `10ch` is the floor the issue asks for: the name shrinks to ten visible
 // characters, and below that the tags move to the next line.
 const nameSx: SxProps<Theme> = { flex: '1 1 10ch', minWidth: '10ch' };
+// The name's Typography renders a <span> (`bodyMedium` has no variantMapping)
+// inside the plain block `nameSx` box. An inline span ignores `overflow` and
+// `text-overflow`, so the full name would paint across the tags and the
+// buttons with no ellipsis, and with scrollWidth and clientWidth both 0 the
+// full-name tooltip would never open. `display: block` makes it a box that
+// takes the name column's width, clips there and ellipsizes.
+const nameTextSx: SxProps<Theme> = { display: 'block' };
 const tagsSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: '0.25rem' };
 
 function engineLabel(engine: EvalEngine): string {
@@ -155,6 +162,7 @@ export function DimensionRow(props: DimensionRowProps): ReactNode {
             title={dimension.name}
             placement="top"
             variant="bodyMedium"
+            sx={nameTextSx}
             data-testid={`evaluation-dimension-name-${dimension.id}`}
           >
             {dimension.name}
