@@ -163,9 +163,10 @@ export async function eliteaFetch<T>(
    * Transport-level flags that have no `RequestInit` equivalent. `background`
    * marks a peripheral poll whose 401 must not escalate into a re-auth — see
    * `HttpRequestOptions.background` in `shared/api/http.ts` for why that
-   * distinction exists.
+   * distinction exists. `originRoot` and `binary` are the `/llm` audio
+   * routes' needs (`features/chat-input/api/voiceTransport.ts`).
    */
-  transport: { readonly background?: boolean } = {},
+  transport: { readonly background?: boolean; readonly originRoot?: boolean; readonly binary?: boolean } = {},
 ): Promise<T> {
   const client = requireClient();
   const method = toHttpMethod(options.method);
@@ -180,6 +181,8 @@ export async function eliteaFetch<T>(
     ...(headers !== undefined ? { headers } : {}),
     ...(body !== undefined ? { body } : {}),
     ...(transport.background === true ? { background: true } : {}),
+    ...(transport.originRoot === true ? { originRoot: true } : {}),
+    ...(transport.binary === true ? { binary: true } : {}),
   });
   if (result.ok) {
     return { data: result.data, status: result.status, headers: result.headers } as T;

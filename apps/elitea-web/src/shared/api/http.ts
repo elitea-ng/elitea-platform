@@ -98,6 +98,10 @@ export interface HttpRequestOptions {
   query?: Readonly<Record<string, string | number | boolean | undefined>>;
   /** A peripheral poll whose 401 must NOT escalate to re-auth — see `features/notifications/api/notifications.ts` for the logout loop this exists to stop. */
   background?: boolean;
+  /** Resolve `path` against the API base's ORIGIN, not its path: the `/llm` data plane sits beside `/api/v2`, not under it. */
+  originRoot?: boolean;
+  /** Read a SUCCESSFUL body as an `ArrayBuffer` (audio). A failure body still parses as JSON or text. */
+  binary?: boolean;
 }
 
 export interface HttpClient {
@@ -200,7 +204,8 @@ interface PreparedRequest {
 }
 
 function prepare(cfg: HttpConfig, credentials: RequestCredentials, method: HttpMethod, path: string, options: HttpRequestOptions): PreparedRequest {
-  const url = buildUrl(new URL(cfg.baseUrl, window.location.origin).toString(), path, options.query);
+  const base = new URL(cfg.baseUrl, window.location.origin);
+  const url = buildUrl(options.originRoot === true ? base.origin : base.toString(), path, options.query);
   const headers = new Headers(options.headers);
   const body = serializeBody(method, options.body, url);
   if (body !== undefined && typeof options.body !== 'string' && !isPreEncodedBody(options.body) && !headers.has('Content-Type')) {
@@ -241,7 +246,10 @@ function fromException<T>(cause: unknown, url: string): HttpResult<T> {
   return failure({ kind: 'network', url, message: `http: request to ${url} failed: ${message}`, cause });
 }
 
-async function toResult<T>(response: Response): Promise<HttpResult<T>> {
+async function toResult<T>(response: Response, binary = false): Promise<HttpResult<T>> {
+  if (binary && response.ok) {
+    return { ok: true, status: response.status, data: (await response.arrayBuffer()) as T, headers: response.headers };
+  }
   const text = await response.text();
   let body: unknown = text === '' ? undefined : text;
   if (text !== '' && (response.headers.get('content-type') ?? '').includes('application/json')) {
@@ -362,7 +370,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       if (needsReauth(response)) return authRefusal<T>(response);
     }
 
-    return toResult<T>(response);
+    return toResult<T>(response, options.binary === true);
   }
 
   return {
