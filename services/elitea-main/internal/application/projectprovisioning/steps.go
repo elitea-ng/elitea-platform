@@ -750,7 +750,26 @@ func createProjectSecrets(ctx context.Context, p *Provisioner, state *provisionS
 		p.logger.InfoContext(ctx, "the project vault already holds an X-SECRET value; keeping it",
 			"project_id", state.projectIDString())
 	}
+	seedProjectDefaultModel(ctx, p, state)
 	return nil
+}
+
+// seedProjectDefaultModel copies the platform default model into the vault
+// this step just created (#6826). It is part of this step for the reason the
+// X-SECRET value is: it has no meaning without the vault, and
+// removeProjectSecrets removes it with the vault.
+//
+// A failure is logged and does not fail the step. The project still reads the
+// platform default at request time, so the seed is a convenience and not a
+// requirement; failing a whole tenant over it would be the worse outcome.
+func seedProjectDefaultModel(ctx context.Context, p *Provisioner, state *provisionState) {
+	if p.defaultModels == nil {
+		return
+	}
+	if err := p.defaultModels.SeedProjectModelDefault(ctx, state.projectID); err != nil {
+		p.logger.WarnContext(ctx, "the platform default model was not copied to the new project; it reads the platform default at request time",
+			"project_id", state.projectIDString(), "err", err)
+	}
 }
 
 // removeProjectSecrets deletes the vault, and with it the `X-SECRET` value

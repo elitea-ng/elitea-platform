@@ -281,3 +281,68 @@ func currentModelDefaultsFailure(ctx context.Context, err error) error {
 	}
 	return ErrCurrentModelDefaultsUnavailable
 }
+
+// LoadPlatformModelDefault reads the platform default model (#6826): the
+// public project's stored default, then the admin vault's regular value, per
+// field. It is the Public half of Load with no project read in front of it.
+// An absent vault is "not set".
+func (r *CurrentModelDefaultsReader) LoadPlatformModelDefault(
+	ctx context.Context,
+	publicProjectID int32,
+	section configurationapp.CurrentModelSection,
+) (configurationapp.CurrentModelDefault, error) {
+	if ctx == nil || publicProjectID <= 0 || !configurationapp.IsSupportedCurrentModelSection(section) {
+		return configurationapp.CurrentModelDefault{}, configurationapp.ErrInvalidCurrentModelCatalogRequest
+	}
+	if err := ctx.Err(); err != nil {
+		return configurationapp.CurrentModelDefault{}, err
+	}
+	publicVault, err := r.loadFallbackVault(ctx, func() (SecretVault, error) {
+		return r.vaults.LoadProjectVault(ctx, int64(publicProjectID))
+	})
+	if err != nil {
+		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
+	}
+	adminVault, err := r.loadFallbackVault(ctx, func() (SecretVault, error) {
+		return r.vaults.LoadAdminVault(ctx)
+	})
+	if err != nil {
+		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
+	}
+	var result configurationapp.CurrentModelDefault
+	if result.Name, err = lookupCurrentModelNameFromAll(publicVault, adminVault, string(section)); err != nil {
+		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
+	}
+	if result.ProjectID, err = lookupCurrentModelProjectIDFromAll(publicVault, adminVault, string(section)); err != nil {
+		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
+	}
+	return result, nil
+}
+
+// LoadProjectModelDefault reads one project's OWN stored default, with no
+// public or admin fallback. A project with no vault answers "not set".
+func (r *CurrentModelDefaultsReader) LoadProjectModelDefault(
+	ctx context.Context,
+	projectID int32,
+	section configurationapp.CurrentModelSection,
+) (configurationapp.CurrentModelDefault, error) {
+	if ctx == nil || projectID <= 0 || !configurationapp.IsSupportedCurrentModelSection(section) {
+		return configurationapp.CurrentModelDefault{}, configurationapp.ErrInvalidCurrentModelCatalogRequest
+	}
+	if err := ctx.Err(); err != nil {
+		return configurationapp.CurrentModelDefault{}, err
+	}
+	vault, err := r.loadFallbackVault(ctx, func() (SecretVault, error) {
+		return r.vaults.LoadProjectVault(ctx, int64(projectID))
+	})
+	if err != nil {
+		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
+	}
+	result, err := readCurrentProjectModelDefault(ctx, vault, string(section))
+	if err != nil {
+		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
+	}
+	return result, nil
+}
+
+var _ configurationapp.PlatformModelDefaultStore = (*CurrentModelDefaultsReader)(nil)
