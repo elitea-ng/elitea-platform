@@ -144,6 +144,7 @@ class CurrentIndexNodeEventCallback(BaseCallbackHandler):
         self._tool_started_at: str | None = None
         self._tool_finalized = False
         self._terminal_index_status_observed: str | None = None
+        self._terminal_index_status_error: str | None = None
         self._terminal_index_status_indexed = 0
         self._terminal_index_status_updated = 0
         self._terminal_index_status_reindex: bool | None = None
@@ -271,6 +272,13 @@ class CurrentIndexNodeEventCallback(BaseCallbackHandler):
         ``error_message`` is a fixed safe sentence chosen by the result
         projection (never SDK text); it lets the live status name the same
         cause as the run's terminal error.
+
+        A failed status the SDK already emitted counts as consistent only when
+        it carries that same sentence. The SDK emits its own ``failed`` status
+        with the raw provider text before it re-raises, and that text is
+        usually projected to the generic fallback (a GitHub 403 body contains
+        ``{``). Skipping the correction then would leave the live status on the
+        generic sentence while the summary names the cause (#6876).
         """
 
         if state not in {"failed", "partly_indexed"}:
@@ -284,7 +292,13 @@ class CurrentIndexNodeEventCallback(BaseCallbackHandler):
         try:
             with self._tool_lock:
                 observed = self._terminal_index_status_observed
-                if self._fallback_index_status_finalized or observed == state:
+                if self._fallback_index_status_finalized:
+                    return None
+                if observed == state and not (
+                    correct_inconsistent
+                    and error_message is not None
+                    and self._terminal_index_status_error != error_message
+                ):
                     return None
                 if observed is not None and not correct_inconsistent:
                     return None
@@ -400,6 +414,10 @@ class CurrentIndexNodeEventCallback(BaseCallbackHandler):
             ):
                 with self._tool_lock:
                     self._terminal_index_status_observed = payload.get("state")
+                    observed_error = payload.get("error")
+                    self._terminal_index_status_error = (
+                        observed_error if isinstance(observed_error, str) else None
+                    )
                     indexed = payload.get("indexed")
                     updated = payload.get("updated")
                     self._terminal_index_status_indexed = (

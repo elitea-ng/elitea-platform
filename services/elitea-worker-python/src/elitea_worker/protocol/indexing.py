@@ -23,45 +23,69 @@ RESULT_CLASSIFICATION = "tenant-confidential"
 MAX_RESULT_SUMMARY_MESSAGE_BYTES = 48 * 1024
 INDEX_INGEST_FAILURE_SAFE_MESSAGE = "Indexing failed before completion."
 
-# #6876: the SDK classifies an index failure into ``error_class`` and
-# ``retriable`` beside its free-form ``error``. The free-form text stays inside
-# the worker (it can carry endpoints and credential-adjacent data); the typed
-# pair selects one of these fixed sentences instead, so the index run's
-# terminal error names the cause and its remedy rather than one generic
-# sentence for a spent quota, a refused credential and a wrong parameter alike.
-# Unknown or malformed values keep the generic message: no label is safer than
-# a wrong one.
+# #6876: the SDK classifies an index failure into ``error_class`` (and
+# ``exception_type``) beside its free-form ``error``. The free-form text stays
+# inside the worker (it can carry endpoints and credential-adjacent data); the
+# typed fields select one of these fixed sentences instead, so the index run's
+# terminal error names the cause rather than one generic sentence for a spent
+# quota, a refused credential and a wrong parameter alike.
+#
+# The SDK's classes are broad. ``infrastructure`` covers a source's rate limit,
+# but also any timeout, 5xx or connection error, including one from the
+# embedding model or the vector store. ``policy`` covers any 401/403 and the
+# phrase "permission denied", which a vector-store privilege error also
+# matches (#6642). ``input`` covers any ValueError/TypeError. So only a quota
+# exception type selects the rate-limit sentence, and the other sentences do
+# not blame the source or the toolkit credential alone. Unknown or malformed
+# values keep the generic message: no label is safer than a wrong one.
+#
+# There is deliberately no "quota spent and this run cannot resume" sentence.
+# The SDK records that verdict (``retriable=False``) only in the index_meta
+# report. The ``test_toolkit_tool`` failure dict the worker reads always sets
+# ``retriable=retriable_for(error_class)``, which is True for every
+# infrastructure failure, and the unresumable path re-raises a
+# ``ToolException`` whose cause is the quota error. That run arrives as
+# infrastructure + ``ToolException``, so it gets the unavailable sentence,
+# which promises nothing about running again. "Run again later" would spend
+# the next quota window the same way. A dedicated sentence needs the SDK to
+# return the run-level verdict in that dict first.
 INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE = (
-    "Indexing failed because the source is temporarily unavailable or "
-    "rate-limited. Run the index again later; a credential with a higher API "
-    "quota avoids the limit."
+    "Indexing failed because a service it calls is rate-limiting requests or "
+    "its API quota is spent. Run the index again later, or use a credential "
+    "with a higher API quota."
 )
-INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE = (
-    "Indexing failed because the source is rate-limited and this run cannot "
-    "resume from its progress. Raise the API quota for the credential, or "
-    "narrow the index scope, then run the index again."
+INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE = (
+    "Indexing failed because a service it depends on was unavailable, did not "
+    "respond in time or refused further requests."
 )
-INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE = (
-    "Indexing failed because the source refused the toolkit credential. Check "
-    "that the credential is valid and can read this source."
+INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE = (
+    "Indexing failed because access was refused. Check that the toolkit "
+    "credential is valid and can read this source; if it can, the project's "
+    "index storage may be refusing access."
 )
 INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE = (
-    "Indexing failed because the source rejected the index settings. Check the "
-    "toolkit and index parameters."
+    "Indexing failed because a value it used was rejected as invalid. Check "
+    "the toolkit and index parameters."
+)
+# The SDK's quota exception names (tool_outcome._QUOTA_EXHAUSTED_NAMES). Only
+# these attribute an infrastructure failure to a rate limit.
+_SDK_QUOTA_EXCEPTION_TYPES = frozenset(
+    {"RateLimitExceededException", "TooManyRequests", "RateLimitError"}
 )
 _SDK_ERROR_CLASS_MESSAGES = {
-    "policy": INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE,
+    "infrastructure": INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE,
+    "policy": INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE,
     "input": INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE,
     "tool_internal": INDEX_INGEST_FAILURE_SAFE_MESSAGE,
 }
 # The fixed sentences that name a specific cause. Only these may replace the
-# live index status's generic error: every one is a constant of this module,
-# never SDK text, so it needs no further projection.
+# live index status's error: every one is a constant of this module, never SDK
+# text, so it needs no further projection.
 CLASSIFIED_INDEX_FAILURE_MESSAGES = frozenset(
     {
         INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
-        INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE,
-        INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE,
+        INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE,
+        INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE,
         INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE,
     }
 )
@@ -387,11 +411,13 @@ def bind_result_summary(
 def index_failure_safe_message(sdk_result: object) -> str:
     """Map the SDK's typed failure classification to one fixed safe sentence.
 
-    Reads only ``error_class`` and ``retriable``. ``retriable`` is the SDK's
-    statement about THIS run: an infrastructure failure the run cannot resume
-    from (a spent quota under Clean Index, for example) is reported as not
-    retriable, and running it again unchanged would only spend the next quota
-    window the same way.
+    Reads only ``error_class``, ``exception_type`` and the shape of
+    ``retriable``; never ``error``. The rate-limit sentence needs both
+    ``error_class == "infrastructure"`` and a quota exception type, because the
+    class alone also covers embedding-model and vector-store outages.
+    ``retriable`` selects nothing: in this dict the SDK derives it from the
+    class (see the comment above the sentences), so it is only checked for a
+    malformed classification.
     """
 
     if not isinstance(sdk_result, dict):
@@ -402,9 +428,12 @@ def index_failure_safe_message(sdk_result: object) -> str:
         retriable is not None and not isinstance(retriable, bool)
     ):
         return INDEX_INGEST_FAILURE_SAFE_MESSAGE
-    if error_class == "infrastructure":
-        if retriable is False:
-            return INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE
+    exception_type = sdk_result.get("exception_type")
+    if (
+        error_class == "infrastructure"
+        and isinstance(exception_type, str)
+        and exception_type in _SDK_QUOTA_EXCEPTION_TYPES
+    ):
         return INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
     return _SDK_ERROR_CLASS_MESSAGES.get(
         error_class, INDEX_INGEST_FAILURE_SAFE_MESSAGE

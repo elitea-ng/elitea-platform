@@ -680,6 +680,22 @@ def test_rate_limited_github_index_ends_failed_with_its_cause(
                 "exception_type": "RateLimitExceededException",
                 "toolkit_config": {"settings": {"base_url": "https://api.github.com"}},
             },
+            # The SDK's index_data except path emits its own failed status
+            # with str(e) before it re-raises; the 403 body projects to the
+            # generic fallback, so the worker must still correct it.
+            custom_events=[
+                (
+                    "index_data_status",
+                    {
+                        "index_name": "docs",
+                        "state": "failed",
+                        "error": raw.removeprefix("Tool execution failed: "),
+                        "indexed": 3,
+                        "updated": 0,
+                        "toolkit_id": 9,
+                    },
+                )
+            ],
             emit_tool_lifecycle=True,
         )
         monkeypatch.setattr(
@@ -728,8 +744,11 @@ def test_rate_limited_github_index_ends_failed_with_its_cause(
             if frame.HasField("node_event")
             and frame.node_event.type == "agent_index_data_status"
         ]
+        # The correction follows the SDK's own failed status, the same way an
+        # inconsistent terminal state is corrected.
         assert [(status["state"], status["error"]) for status in statuses] == [
-            ("failed", INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE)
+            ("failed", "Indexing reported an error."),
+            ("failed", INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE),
         ]
         wire = b"".join(
             frame.SerializeToString(deterministic=True) for frame in output.frames
