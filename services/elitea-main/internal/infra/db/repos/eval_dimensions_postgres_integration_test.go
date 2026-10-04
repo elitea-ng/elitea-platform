@@ -192,7 +192,7 @@ func TestEvalDimensionUpdateIsReadBackAndDoesNotChangeScope(t *testing.T) {
 		t.Fatalf("the rename was not persisted: got %q", rows[0].Name)
 	}
 	if rows[0].Tier != evaluation.TierAgentAdhoc {
-		t.Fatalf("the update changed the tier to %q; scope is set once, at authoring", rows[0].Tier)
+		t.Fatalf("an update without a tier changed the tier to %q; an absent tier keeps the stored scope", rows[0].Tier)
 	}
 	if rows[0].ApplicationID == nil || *rows[0].ApplicationID != 77 {
 		t.Fatalf("the update dropped the agent scope: %v", rows[0].ApplicationID)

@@ -188,13 +188,15 @@ func (r *EvalDimensionsRepo) Create(
 	return created, nil
 }
 
-// Update rewrites the authored fields of one dimension.
+// Update rewrites the authored fields of one dimension, and its tier when the
+// caller asks for a PROMOTION.
 //
-// `tier` and `application_id` are NOT in the SET list, and that is the point.
-// The editor renders the scope as a disabled field and does not send it, so an
-// update body carries no tier; writing the request's value would default an
-// agent-scoped dimension to `project` and silently publish one agent's private
-// rubric to the whole library. Scope is set once, at authoring.
+// The stored row is read and locked FIRST, in the same transaction as the
+// write, because the tier rule compares against the stored tier:
+// evaluation.ResolveTierUpdate allows `agent_adhoc` -> `project` (and clears
+// `application_id`), refuses `project` -> `agent_adhoc` with a 409, and keeps
+// the stored tier when the body carried none. A check outside the transaction
+// would race a concurrent promotion.
 //
 // A `platform` row is refused outright: those are materialised from a registry
 // this release does not serve, and the UI renders them read-only.
@@ -212,45 +214,67 @@ func (r *EvalDimensionsRepo) Update(
 		return evaluation.Dimension{}, apierr.BadRequest("dimension id must be an integer")
 	}
 
-	q := fmt.Sprintf(`
-		UPDATE %s.eval_dimensions
-		SET name = $1,
-		    description = NULLIF($2, ''),
-		    allowed_engines = $3::text[],
-		    scale_type = $4,
-		    scale_min = $5,
-		    scale_max = $6,
-		    polarity = $7,
-		    default_weight = $8,
-		    default_target = $9,
-		    default_target_operator = NULLIF($10, ''),
-		    code = NULLIF($11, ''),
-		    return_contract = NULLIF($12, ''),
-		    updated_at = now()
-		WHERE id = $13 AND tier <> $14
-		RETURNING %s`, s, dimensionColumns)
-
-	updated, err := scanDimension(r.pool.QueryRow(ctx, q,
-		dimension.Name,
-		dimension.Description,
-		dimension.AllowedEngines,
-		dimension.ScaleType,
-		dimension.ScaleMin,
-		dimension.ScaleMax,
-		dimension.Polarity,
-		dimension.DefaultWeight,
-		dimension.DefaultTarget,
-		dimension.DefaultTargetOperator,
-		dimension.Code,
-		dimension.ReturnContract,
-		id,
-		evaluation.TierPlatform,
-	))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return evaluation.Dimension{}, apierr.NotFound("dimension not found")
+	var updated evaluation.Dimension
+	err = pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		var storedTier string
+		if err := tx.QueryRow(ctx, fmt.Sprintf(
+			`SELECT tier FROM %s.eval_dimensions WHERE id = $1 AND tier <> $2 FOR UPDATE`, s),
+			id, evaluation.TierPlatform).Scan(&storedTier); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return apierr.NotFound("dimension not found")
+			}
+			return fmt.Errorf("eval dimensions: update: read tier: %w", err)
 		}
-		return evaluation.Dimension{}, wrapDimensionWrite("update", err)
+		tier, err := evaluation.ResolveTierUpdate(storedTier, dimension.Tier)
+		if err != nil {
+			return err
+		}
+
+		q := fmt.Sprintf(`
+			UPDATE %s.eval_dimensions
+			SET name = $1,
+			    description = NULLIF($2, ''),
+			    allowed_engines = $3::text[],
+			    scale_type = $4,
+			    scale_min = $5,
+			    scale_max = $6,
+			    polarity = $7,
+			    default_weight = $8,
+			    default_target = $9,
+			    default_target_operator = NULLIF($10, ''),
+			    code = NULLIF($11, ''),
+			    return_contract = NULLIF($12, ''),
+			    tier = $14::text,
+			    application_id = CASE WHEN $14::text = $15::text THEN NULL ELSE application_id END,
+			    updated_at = now()
+			WHERE id = $13
+			RETURNING %s`, s, dimensionColumns)
+
+		row, scanErr := scanDimension(tx.QueryRow(ctx, q,
+			dimension.Name,
+			dimension.Description,
+			dimension.AllowedEngines,
+			dimension.ScaleType,
+			dimension.ScaleMin,
+			dimension.ScaleMax,
+			dimension.Polarity,
+			dimension.DefaultWeight,
+			dimension.DefaultTarget,
+			dimension.DefaultTargetOperator,
+			dimension.Code,
+			dimension.ReturnContract,
+			id,
+			tier,
+			evaluation.TierProject,
+		))
+		if scanErr != nil {
+			return wrapDimensionWrite("update", scanErr)
+		}
+		updated = row
+		return nil
+	})
+	if err != nil {
+		return evaluation.Dimension{}, err
 	}
 	return updated, nil
 }

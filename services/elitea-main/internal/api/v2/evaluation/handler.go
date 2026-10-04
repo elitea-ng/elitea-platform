@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -105,18 +106,31 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The editor does not send `tier` on an edit — it renders the scope as a
-	// disabled field — so an update body has no tier at all and Normalize
-	// would default it to `project`, silently promoting an agent-scoped
-	// dimension into the whole project's library. The repository therefore
-	// never writes `tier` or `application_id` on an update; the value here is
-	// only what Validate compares against, and is reset to whatever the caller
-	// sent for the write to be validatable at all.
+	// TIER ON AN UPDATE. The body's `tier` is the scope the caller asks for,
+	// and an ABSENT tier keeps the stored scope: Normalize would otherwise
+	// default it to `project` and promote an agent-scoped dimension without
+	// the caller asking. The tier is therefore taken out before Normalize and
+	// Validate, checked on its own here, and decided against the STORED tier
+	// by ResolveTierUpdate inside the repository's write. `application_id` is
+	// never taken from an update body: a promotion clears it, and nothing
+	// else changes it.
+	requestedTier := strings.TrimSpace(dimension.Tier)
+	dimension.Tier = ""
+	dimension.ApplicationID = nil
 	dimension.Normalize()
 	if err := dimension.Validate(false); err != nil {
 		apierr.Write(w, err)
 		return
 	}
+	if requestedTier != "" && !knownTiers[requestedTier] {
+		apierr.Write(w, apierr.BadRequest("tier must be one of project, agent_adhoc, platform"))
+		return
+	}
+	if requestedTier == TierPlatform {
+		apierr.Write(w, apierr.BadRequest("the platform tier is not authorable: platform dimensions are materialised from the platform catalogue, which this release does not serve"))
+		return
+	}
+	dimension.Tier = requestedTier
 
 	updated, err := h.repo.Update(r.Context(), projectID, dimensionID, dimension)
 	if err != nil {

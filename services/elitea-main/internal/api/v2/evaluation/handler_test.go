@@ -38,12 +38,20 @@ func (r *recordingRepo) Update(_ context.Context, _, id string, d evaluation.Dim
 	d.ID = id
 	for i := range r.stored {
 		if r.stored[i].ID == id {
-			// tier and application_id are NOT taken from the request body —
-			// the repository does not write them on an update, and this fake
-			// must not be more permissive than the real one or the handler
-			// test would pass against a scope-promoting bug.
-			d.Tier = r.stored[i].Tier
+			// The tier is decided the way the real repository decides it:
+			// ResolveTierUpdate against the STORED tier. application_id is
+			// never taken from the body; a promotion clears it. This fake
+			// must not be more permissive than the real one, or the handler
+			// test would pass against a scope-moving bug.
+			tier, err := evaluation.ResolveTierUpdate(r.stored[i].Tier, d.Tier)
+			if err != nil {
+				return evaluation.Dimension{}, err
+			}
+			d.Tier = tier
 			d.ApplicationID = r.stored[i].ApplicationID
+			if tier == evaluation.TierProject {
+				d.ApplicationID = nil
+			}
 			r.stored[i] = d
 			return d, nil
 		}

@@ -234,6 +234,33 @@ func (d *Dimension) Normalize() {
 	}
 }
 
+// ResolveTierUpdate decides the tier an UPDATE writes, from the stored tier
+// and the tier the caller sent.
+//
+// An empty `requested` means the body carried no tier, and the stored tier is
+// kept. A client that does not send the scope must not move the dimension.
+//
+// PROMOTION is allowed: an `agent_adhoc` dimension may become a `project`
+// dimension, and its `application_id` is then cleared. The route that calls
+// this is gated on PermissionDimensionUpdate, which the project owner holds
+// (legacy issue 6669: a private-project owner could not change the tier).
+//
+// DEMOTION is refused with a 409. A project dimension can already be in use by
+// other agents' runs and editors; moving it to one agent would remove it from
+// them without a trace.
+func ResolveTierUpdate(stored, requested string) (string, error) {
+	if requested == "" || requested == stored {
+		return stored, nil
+	}
+	if stored == TierAgentAdhoc && requested == TierProject {
+		return TierProject, nil
+	}
+	if stored == TierProject && requested == TierAgentAdhoc {
+		return "", apierr.Conflict("a project dimension cannot be moved back to one agent: other agents can already use it")
+	}
+	return "", apierr.BadRequest(fmt.Sprintf("the tier of a %s dimension cannot change to %s", stored, requested))
+}
+
 // Validate reproduces, on the server, every rule the baseline's editor enforces
 // before it will save (DimensionEditorDialog.jsx:106-131).
 //
