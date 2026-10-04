@@ -310,7 +310,7 @@ func TestConversationDeltaRefusesForeignAndExpiredCursors(t *testing.T) {
 	}
 	expired := changesync.Encode(changesync.Cursor{
 		Stream: changesync.StreamConversations,
-		Scope:  "1/" + changesync.FilterDigest(url.Values{}, conversationFilterParams...),
+		Scope:  conversationScope("1/"+changesync.FilterDigest(url.Values{}, conversationFilterParams...), false),
 		Tombs:  changesync.Position{At: now.Add(-changesync.TombstoneRetention - time.Minute)},
 	})
 	code, body = listRaw(t, pool, url.Values{"changes_since": {expired}}, "7")
@@ -350,5 +350,90 @@ func TestConversationDeltaPrivateThenDeletedWhileOffline(t *testing.T) {
 	want := map[int64]string{int64(withdrawn): changesync.ReasonDeleted}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("member 7 tombstones = %v, want %v (and no word of the never-public conversation)", got, want)
+	}
+}
+
+// grantProjectAdmin installs the minimal role projection chatauthority reads
+// and makes user an admin of project 1 (or withdraws it).
+func setProjectAdmin(t *testing.T, pool *pgxpool.Pool, user int, admin bool) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS public.auth_core__project_role (id serial PRIMARY KEY, project_id integer, name text);
+		CREATE TABLE IF NOT EXISTS public.auth_core__project_user_role (project_id integer, user_id integer, role_id integer);
+		INSERT INTO public.auth_core__project_role (id, project_id, name)
+		VALUES (1, 1, 'admin') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM public.auth_core__project_user_role WHERE user_id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	if admin {
+		if _, err := pool.Exec(ctx, `INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
+			VALUES (1, $1, 1)`, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestConversationDeltaRoleChangeForcesAResync: an admin lists every private
+// conversation that has a user participant. Losing (or gaining) admin writes
+// no tombstone — nothing in the chat tables changed — so a cursor issued
+// under the other role must not keep advancing: it answers 410 and the client
+// resyncs, dropping the private conversations it can no longer see.
+func TestConversationDeltaRoleChangeForcesAResync(t *testing.T) {
+	pool := newChangesPool(t)
+	setProjectAdmin(t, pool, 5, true)
+	private := seedChat(t, pool, "someone else's private", true, 8, 8)
+
+	asAdmin := listChanges(t, pool, "", "5", nil)
+	if fmt.Sprint(rowIDs(asAdmin)) != fmt.Sprint([]int{private}) {
+		t.Fatalf("admin full sync rows = %v, want the private conversation", rowIDs(asAdmin))
+	}
+
+	setProjectAdmin(t, pool, 5, false)
+	code, body := listRaw(t, pool, url.Values{"changes_since": {asAdmin.NextCursor}}, "5")
+	if code != http.StatusGone || !jsonHasError(body, changesync.CodeCursorExpired) {
+		t.Fatalf("a cursor issued while admin answered %d %s after demotion, want 410 sync_cursor_expired", code, body)
+	}
+	if again := listChanges(t, pool, "", "5", nil); len(again.Rows) != 0 {
+		t.Fatalf("the resync after demotion still lists %v", rowIDs(again))
+	}
+
+	// And the reverse: a cursor from before a promotion cannot hide what the
+	// new admin can now see.
+	asMember := listChanges(t, pool, "", "5", nil).NextCursor
+	setProjectAdmin(t, pool, 5, true)
+	code, body = listRaw(t, pool, url.Values{"changes_since": {asMember}}, "5")
+	if code != http.StatusGone || !jsonHasError(body, changesync.CodeCursorExpired) {
+		t.Fatalf("a cursor issued before promotion answered %d %s, want 410", code, body)
+	}
+}
+
+// TestConversationDeltaLastParticipantLeavingTellsAdmins: an admin sees a
+// private conversation only while it has a user participant. When the last
+// one is removed, the admins who cached it are told it is gone; a member who
+// never saw it is told nothing.
+func TestConversationDeltaLastParticipantLeavingTellsAdmins(t *testing.T) {
+	pool := newChangesPool(t)
+	setProjectAdmin(t, pool, 5, true)
+	orphaned := seedChat(t, pool, "nine's private", true, 8, 9)
+
+	admin := listChanges(t, pool, "", "5", nil)
+	if fmt.Sprint(rowIDs(admin)) != fmt.Sprint([]int{orphaned}) {
+		t.Fatalf("admin full sync rows = %v, want the private conversation", rowIDs(admin))
+	}
+	member := listChanges(t, pool, "", "7", nil).NextCursor
+
+	if _, err := pool.Exec(context.Background(), `DELETE FROM p_1.chat_participant_mapping WHERE conversation_id = $1`, orphaned); err != nil {
+		t.Fatal(err)
+	}
+
+	got := tombstonesByID(listChanges(t, pool, admin.NextCursor, "5", nil))
+	if want := map[int64]string{int64(orphaned): changesync.ReasonAccessLost}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("admin tombstones = %v, want %v", got, want)
+	}
+	if got := tombstonesByID(listChanges(t, pool, member, "7", nil)); len(got) != 0 {
+		t.Fatalf("a member who never saw it is told %v", got)
 	}
 }

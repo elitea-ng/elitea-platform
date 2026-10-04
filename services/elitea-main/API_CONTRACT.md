@@ -303,7 +303,7 @@ The delta response:
 - **Settle window:** the cursor never passes the database clock minus 5 s, so recently changed rows come back again. **Upsert by id.**
 - **Paging:** while `has_more` is true, call again immediately with `next_cursor`. Rows and tombstones are each capped by `limit` (default and maximum 100).
 
-`access_lost` means the item left this list for this caller: it was made private, the caller was removed as a participant, or it no longer matches the filter. A private conversation's deletion is told only to its author, its former user participants and project admins.
+`access_lost` means the item left this list for this caller: it was made private, the caller was removed as a participant, a private conversation an admin listed lost its last user participant, or it no longer matches the filter. A private conversation's deletion is told only to its author, its former user participants and project admins, and to everyone when it was public before it was made private.
 
 Losing access to a whole project is **not** a tombstone. The client gets 403 and drops that project's cache.
 
@@ -311,7 +311,7 @@ Errors:
 - **400 `invalid_sync_cursor`:** a cursor from another list or scope.
 - **400 `invalid_limit`.**
 - **400 `invalid_sync_request`:** notifications only. `changes_since` combined with `offset`, `only_new`, `only_total`, `search`, `event_type`, `sort_by` or `sort_order`.
-- **410 `sync_cursor_expired`:** the cursor is older than tombstone retention (`offline_retention_days` cap 90 + 7 = 97 days). Discard that list's cache and resync with `changes_since=0`.
+- **410 `sync_cursor_expired`:** the cursor is older than tombstone retention (`offline_retention_days` cap 90 + 7 = 97 days), or, for conversations, it was issued before the caller gained or lost project admin (which changes what the list shows without any tombstone). Discard that list's cache and resync with `changes_since=0`.
 - **501:** a composition without the delta store.
 
 The notification SSE stream (`notifications_ready`, then `notifications_notify`) is a hint. After any reconnect gap, sync the list.

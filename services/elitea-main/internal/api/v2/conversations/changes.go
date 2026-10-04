@@ -98,14 +98,35 @@ type ConversationChanges struct {
 // cursor is bound to their values (changesync.FilterDigest).
 var conversationFilterParams = []string{"source", "entity_name", "entity_meta_id", "mine", "hidden"}
 
+// conversationScope binds a conversation cursor to the caller's role as well
+// as the project and filter: see listChanges.
+func conversationScope(base string, admin bool) string {
+	if admin {
+		return base + "/admin"
+	}
+	return base + "/member"
+}
+
 func (h *Handler) listChanges(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, q conversationChangesQuery) {
 	limit, err := changesync.Limit(r.URL.Query())
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, changesync.ErrorBody{Error: "invalid_limit", Message: "limit must be a positive integer"})
 		return
 	}
-	scope := q.projectID + "/" + changesync.FilterDigest(r.URL.Query(), conversationFilterParams...)
-	cursor, err := changesync.Decode(q.raw, changesync.StreamConversations, scope)
+	base := q.projectID + "/" + changesync.FilterDigest(r.URL.Query(), conversationFilterParams...)
+	cursor, err := changesync.Decode(q.raw, changesync.StreamConversations, conversationScope(base, q.admin))
+	if errors.Is(err, changesync.ErrInvalidCursor) {
+		// A cursor issued under the caller's OTHER project role. Admin
+		// widens what this list shows (every private conversation with a
+		// user participant), and a role change writes no tombstone: nothing
+		// in the chat tables changed. Advancing the cursor would leave a
+		// demoted admin holding conversations it can no longer see, and a
+		// promoted one missing conversations it now can. Answer 410 so the
+		// client discards the list and resyncs.
+		if _, other := changesync.Decode(q.raw, changesync.StreamConversations, conversationScope(base, !q.admin)); other == nil {
+			err = changesync.ErrCursorExpired
+		}
+	}
 	if err != nil {
 		writeSyncError(w, err)
 		return
@@ -193,6 +214,9 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	//   access_private      a conversation turned private the caller can no
 	//                       longer see;
 	//   access_participant  the caller was removed and can no longer see it;
+	//   access_orphaned     a private conversation lost its last user
+	//                       participant; admins listed it only through one,
+	//                       so an admin who can no longer see it is told;
 	//   access_filter       the caller can still see it, but it no longer
 	//                       matches this list's filter.
 	// A conversation that is visible and matching again is simply a row (the
@@ -215,6 +239,8 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 		                        AND ((a.kind = 'access_participant' AND a.user_id = $1::text)
 		                             OR a.kind = 'access_private'))))
 		   OR (t.kind = 'access_private' AND c.id IS NOT NULL AND NOT COALESCE(%[6]s, false))
+		   OR (t.kind = 'access_orphaned' AND $%[5]d::boolean
+		       AND c.id IS NOT NULL AND NOT COALESCE(%[6]s, false))
 		   OR (t.kind = 'access_participant' AND t.user_id = $1::text
 		       AND c.id IS NOT NULL AND NOT COALESCE(%[6]s, false))
 		   OR (t.kind = 'access_filter' AND c.id IS NOT NULL

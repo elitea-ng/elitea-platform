@@ -58,6 +58,16 @@
 --   access_participant  a user participant was removed (user_id = that user).
 --                       Only that user is told, and only if they can no
 --                       longer see it.
+--   access_orphaned     a PRIVATE conversation lost its last user
+--                       participant. A project admin lists a private
+--                       conversation only through some user participant, so
+--                       admins who can no longer see it are told; nobody else
+--                       could see it before.
+--
+-- A caller's project ROLE changing (admin granted or withdrawn) changes what
+-- the list shows without touching these tables. That is not a tombstone: the
+-- conversation cursor is bound to the role, and a cursor issued under the
+-- other one answers 410 and the client resyncs.
 --
 -- `access_participant` rows are also what a PRIVATE conversation's delete
 -- tombstone is shown against: the participant mappings are deleted before the
@@ -97,7 +107,8 @@ BEGIN
         id bigserial PRIMARY KEY,
         kind text NOT NULL CHECK (kind IN (
             'conversation', 'message_group',
-            'access_private', 'access_filter', 'access_participant')),
+            'access_private', 'access_filter', 'access_participant',
+            'access_orphaned')),
         -- The conversation id for every kind but message_group, whose
         -- entity_id is the group id.
         entity_id integer NOT NULL,
@@ -299,6 +310,19 @@ BEGIN
                 IF removed_user IS NOT NULL THEN
                     INSERT INTO %1$I.chat_sync_tombstones (kind, entity_id, user_id)
                     VALUES ('access_participant', OLD.conversation_id, removed_user);
+                    -- The last user participant of a private conversation:
+                    -- admins lose it too. Not during a conversation delete,
+                    -- whose own tombstone already reaches admins.
+                    IF current_setting('elitea.sync_cascade', true) IS DISTINCT FROM 'conversation' THEN
+                        INSERT INTO %1$I.chat_sync_tombstones (kind, entity_id, entity_uuid)
+                        SELECT 'access_orphaned', c.id, c.uuid
+                          FROM %1$I.chat_conversations c
+                         WHERE c.id = OLD.conversation_id AND c.is_private
+                           AND NOT EXISTS (
+                               SELECT 1 FROM %1$I.chat_participant_mapping m
+                                 JOIN %1$I.chat_participants p ON p.id = m.participant_id
+                                WHERE m.conversation_id = c.id AND p.entity_name = 'user');
+                    END IF;
                 END IF;
                 PERFORM %1$I.chat_sync_bump_conversation(OLD.conversation_id);
             ELSE
@@ -371,7 +395,9 @@ BEGIN
        AND to_regclass('chat_participants') IS NOT NULL
        AND to_regclass('chat_conversations') IS NOT NULL
        AND (SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass('chat_participants')
-              AND NOT attisdropped AND attname = ANY (ARRAY['entity_meta', 'entity_name'])) = 2 THEN
+              AND NOT attisdropped AND attname = ANY (ARRAY['entity_meta', 'entity_name'])) = 2
+       AND (SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass('chat_conversations')
+              AND NOT attisdropped AND attname = ANY (ARRAY['uuid', 'is_private'])) = 2 THEN
         DROP TRIGGER IF EXISTS chat_sync_changed ON chat_participant_mapping;
         CREATE TRIGGER chat_sync_changed AFTER INSERT OR DELETE ON chat_participant_mapping
             FOR EACH ROW EXECUTE FUNCTION chat_sync_mapping_changed();
