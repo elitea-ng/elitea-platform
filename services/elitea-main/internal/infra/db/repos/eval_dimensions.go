@@ -86,9 +86,10 @@ func scanDimension(row pgx.Row) (evaluation.Dimension, error) {
 // dimensions.
 //
 // The predicate is deliberately not "everything in this schema". `agent_adhoc`
-// rows belong to the agent named in `application_id`, so listing them without
-// the filter would put every agent's private rubrics in every other agent's
-// editor.
+// rows are scoped to the agent named in `application_id`, so listing them
+// without the filter would put every agent's rubrics in every other agent's
+// editor. The scope is a listing filter and not an access boundary: see the
+// note on the handler's List.
 //
 // An error is RETURNED rather than swallowed into an empty slice. Several
 // listings in this package answer `[]` on a query failure, and that choice is

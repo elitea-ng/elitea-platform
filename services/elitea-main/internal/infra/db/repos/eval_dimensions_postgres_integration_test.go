@@ -206,7 +206,8 @@ func TestEvalDimensionUpdateIsReadBackAndDoesNotChangeScope(t *testing.T) {
 }
 
 // An ad-hoc dimension belongs to ONE agent. Listing for another agent must not
-// return it, or every agent's editor grows every other agent's private rubrics.
+// return it, or every agent's editor grows every other agent's rubrics. (A
+// listing scope, not an access boundary: any project editor may edit any agent.)
 func TestEvalDimensionAdhocScopeIsPerAgent(t *testing.T) {
 	router := newEvalDimensionsRouter(t)
 

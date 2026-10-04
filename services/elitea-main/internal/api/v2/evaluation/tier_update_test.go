@@ -1,6 +1,7 @@
 package evaluation_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -90,6 +91,42 @@ func TestUpdateWithoutATierKeepsTheStoredScope(t *testing.T) {
 	if repo.stored[0].Tier != evaluation.TierAgentAdhoc || repo.stored[0].ApplicationID == nil {
 		t.Fatalf("stored tier %q application %v, want the agent scope kept", repo.stored[0].Tier, repo.stored[0].ApplicationID)
 	}
+}
+
+// An update body's `application_id` cannot re-bind an agent dimension to
+// another agent, with no tier or with the stored `agent_adhoc` tier. The
+// handler must hand the repository NO application id at all: the repository
+// keeps the stored one, so a refactor that forwarded the body's value would
+// move a rubric between agents silently.
+func TestUpdateCannotRebindAnAgentDimensionToAnotherAgent(t *testing.T) {
+	t.Parallel()
+
+	for _, tier := range []string{"", "agent_adhoc"} {
+		repo := &bindingRecordingRepo{recordingRepo: adhocRepo()}
+		body := strings.Replace(bodyWithTier(tier), `"code": ""`, `"application_id": 2, "code": ""`, 1)
+		response := do(t, newTestRouter(repo), http.MethodPut, "/eval_dimension/prompt_lib/1/1", body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("tier %q: expected 200, got %d: %s", tier, response.Code, response.Body.String())
+		}
+		if repo.sawApplicationID != nil {
+			t.Errorf("tier %q: the handler forwarded application_id %d to the repository", tier, *repo.sawApplicationID)
+		}
+		stored := repo.stored[0]
+		if stored.Tier != evaluation.TierAgentAdhoc || stored.ApplicationID == nil || *stored.ApplicationID != 7 {
+			t.Errorf("tier %q: stored tier %q application %v, want agent_adhoc bound to agent 7", tier, stored.Tier, stored.ApplicationID)
+		}
+	}
+}
+
+// bindingRecordingRepo records the application id the handler handed to Update.
+type bindingRecordingRepo struct {
+	*recordingRepo
+	sawApplicationID *int
+}
+
+func (r *bindingRecordingRepo) Update(ctx context.Context, projectID, id string, d evaluation.Dimension) (evaluation.Dimension, error) {
+	r.sawApplicationID = d.ApplicationID
+	return r.recordingRepo.Update(ctx, projectID, id, d)
 }
 
 // The update body may not ask for the platform tier or an unknown one.

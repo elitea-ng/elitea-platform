@@ -220,8 +220,8 @@ func TestMixedEngineSetIsRefusedBeforeStorage(t *testing.T) {
 
 // `agent_id` is the query parameter the library listing narrows on. Without it
 // the listing is the project library alone — NOT every ad-hoc dimension in the
-// project, which would put each agent's private rubrics in every other agent's
-// editor.
+// project, which would put each agent's rubrics in every other agent's editor.
+// It is a listing scope, not an access check (see Handler.List).
 func TestListPassesTheAgentFilterThrough(t *testing.T) {
 	t.Parallel()
 
