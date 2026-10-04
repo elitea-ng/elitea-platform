@@ -1,6 +1,7 @@
 package configurations
 
 import (
+	"errors"
 	"net/http"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -24,9 +25,13 @@ func applyLLMModelDescriptionRule(w http.ResponseWriter, configType string, data
 		return true
 	}
 	if err := configurationapp.NormalizeLLMModelDescription(data); err != nil {
+		message := llmModelDescriptionTooLongMessage
+		if errors.Is(err, configurationapp.ErrLLMModelDescriptionHiddenCharacters) {
+			message = err.Error()
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":   llmModelDescriptionTooLongMessage,
-			"message": llmModelDescriptionTooLongMessage,
+			"error":   message,
+			"message": message,
 			"field":   configurationapp.LLMModelDescriptionField,
 		})
 		return false

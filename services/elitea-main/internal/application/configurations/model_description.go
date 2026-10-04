@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -24,6 +25,27 @@ const MaxLLMModelDescriptionRunes = 40
 // a string or is longer than MaxLLMModelDescriptionRunes.
 var ErrLLMModelDescriptionInvalid = errors.New("description must be text of at most 40 characters")
 
+// ErrLLMModelDescriptionHiddenCharacters is the refusal for a description
+// that holds a control or format character (Unicode categories Cc and Cf).
+//
+// Every member of the project sees the description in the model picker, and
+// every user sees it for a platform model. A bidi override (U+202A to U+202E,
+// U+2066 to U+2069) or a zero-width character (U+200B to U+200F) changes what
+// the text looks like without changing what it is, so an editor could label a
+// model to read like another one. React escapes the text, so this is not a
+// script injection; it is a spoofing of the label.
+var ErrLLMModelDescriptionHiddenCharacters = errors.New(
+	"description must not contain control, text-direction or zero-width characters")
+
+// hasHiddenCharacters reports a rune of Unicode category Cc or Cf.
+func hasHiddenCharacters(text string) bool {
+	return strings.IndexFunc(text, isHiddenCharacter) >= 0
+}
+
+func isHiddenCharacter(r rune) bool {
+	return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
+}
+
 // NormalizeLLMModelDescription applies the description rules to an llm_model
 // `data` object, in place:
 //
@@ -31,7 +53,10 @@ var ErrLLMModelDescriptionInvalid = errors.New("description must be text of at m
 //   - an empty value, a value of spaces only and a JSON null remove the key,
 //     so a cleared description is not stored as "";
 //   - a value that is not a string, or is longer than 40 characters after the
-//     trim, is refused with ErrLLMModelDescriptionInvalid.
+//     trim, is refused with ErrLLMModelDescriptionInvalid;
+//   - a value that holds a control or format character (bidi controls,
+//     zero-width characters) is refused with
+//     ErrLLMModelDescriptionHiddenCharacters.
 //
 // A nil map and a map without the key are valid and unchanged.
 func NormalizeLLMModelDescription(data map[string]any) error {
@@ -55,6 +80,9 @@ func NormalizeLLMModelDescription(data map[string]any) error {
 	if utf8.RuneCountInString(text) > MaxLLMModelDescriptionRunes {
 		return ErrLLMModelDescriptionInvalid
 	}
+	if hasHiddenCharacters(text) {
+		return ErrLLMModelDescriptionHiddenCharacters
+	}
 	data[LLMModelDescriptionField] = text
 	return nil
 }
@@ -62,11 +90,21 @@ func NormalizeLLMModelDescription(data map[string]any) error {
 // ReadLLMModelDescription reads a STORED description for the model catalogue.
 // It is tolerant on purpose: a row written before the rule existed, or
 // written by a path that skipped it, keeps its place in the picker. A value
-// that is not a string is ignored, and a long value is cut to the limit.
+// that is not a string is ignored, control and format characters are removed
+// (see ErrLLMModelDescriptionHiddenCharacters), and a long value is cut to
+// the limit.
 func ReadLLMModelDescription(raw any) *string {
 	text, ok := raw.(string)
 	if !ok {
 		return nil
+	}
+	if hasHiddenCharacters(text) {
+		text = strings.Map(func(r rune) rune {
+			if isHiddenCharacter(r) {
+				return -1
+			}
+			return r
+		}, text)
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {

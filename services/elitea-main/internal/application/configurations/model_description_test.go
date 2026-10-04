@@ -48,6 +48,45 @@ func TestNormalizeLLMModelDescription(t *testing.T) {
 	}
 }
 
+func TestNormalizeLLMModelDescriptionRefusesHiddenCharacters(t *testing.T) {
+	for name, text := range map[string]string{
+		"right-to-left override":  "Cheap \u202eledom ytsirp",
+		"left-to-right embedding": "\u202aFast",
+		"pop directional format":  "Fast\u202c",
+		"first strong isolate":    "\u2068Fast\u2069",
+		"right-to-left isolate":   "Fast \u2067x",
+		"zero-width space":        "gpt\u200b-5",
+		"zero-width joiner":       "Fast\u200dfor coding",
+		"right-to-left mark":      "Fast\u200f",
+		"byte order mark":         "\ufeffFast",
+		"inner newline":           "Fast\nfor coding",
+		"escape":                  "Fast\x1b[31m",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := map[string]any{"description": text}
+			if err := NormalizeLLMModelDescription(data); !errors.Is(err, ErrLLMModelDescriptionHiddenCharacters) {
+				t.Fatalf("err = %v, want ErrLLMModelDescriptionHiddenCharacters", err)
+			}
+		})
+	}
+	// Ordinary letters of any script, and emoji without joiners, stay valid.
+	for _, text := range []string{"Быстрая модель", "最适合编码", "نموذج سريع", "Fast ⚡"} {
+		if err := NormalizeLLMModelDescription(map[string]any{"description": text}); err != nil {
+			t.Fatalf("%q refused: %v", text, err)
+		}
+	}
+}
+
+func TestReadLLMModelDescriptionRemovesHiddenCharacters(t *testing.T) {
+	got := ReadLLMModelDescription("\u202eFast\u200b for \u2066coding\u2069")
+	if got == nil || *got != "Fast for coding" {
+		t.Fatalf("read = %v, want the hidden characters removed", got)
+	}
+	if ReadLLMModelDescription("\u200b\u202e") != nil {
+		t.Fatal("a value of hidden characters only must read as no description")
+	}
+}
+
 func TestReadLLMModelDescriptionIsTolerant(t *testing.T) {
 	if ReadLLMModelDescription(42) != nil || ReadLLMModelDescription("  ") != nil || ReadLLMModelDescription(nil) != nil {
 		t.Fatal("a non-text or blank value must read as no description")

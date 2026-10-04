@@ -25,6 +25,8 @@ func TestApplyLLMModelDescriptionRule(t *testing.T) {
 		{"trimmed", "llm_model", map[string]any{"description": "  Fast for everyday tasks  "}, true, "Fast for everyday tasks", true},
 		{"spaces only", "llm_model", map[string]any{"description": "   "}, true, nil, false},
 		{"not text", "llm_model", map[string]any{"description": 7}, false, nil, true},
+		{"bidi override", "llm_model", map[string]any{"description": "Fast \u202egnidoc"}, false, nil, true},
+		{"zero-width space", "llm_model", map[string]any{"description": "gpt\u200b-5"}, false, nil, true},
 		{"other type keeps any value", "embedding_model", map[string]any{"description": strings.Repeat("a", 90)}, true, strings.Repeat("a", 90), true},
 	}
 	for _, tc := range cases {
