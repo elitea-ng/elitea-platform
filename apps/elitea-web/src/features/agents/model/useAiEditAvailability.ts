@@ -5,8 +5,10 @@ import { hasBackendCapability } from '@/shared/config';
 
 import {
   findServicePrompt,
+  getProjectModelCatalogue,
   getServicePromptTypes,
   getServicePrompts,
+  projectDefaultModelName,
   servicePromptDefaultsByKey,
 } from '../api/aiEdit';
 
@@ -33,9 +35,10 @@ import {
  *     prompt resolves. An authored project/shared configuration wins; the
  *     type descriptor's `default_by_key` is the fallback. Neither present
  *     means no prompt, which means no affordance.
- *  3. **The model.** `predict_llm` is given an explicit `llm_settings`; the
- *     agent's own `version_details.llm_settings.model_name` is it. A version
- *     with no model configured cannot be asked to generate anything.
+ *  3. **The model.** `predict_llm` is given an explicit `llm_settings`. Its
+ *     model is the project's CURRENT default model, read from the model
+ *     catalogue; the agent's own `version_details.llm_settings.model_name` is
+ *     the fallback. With neither, nothing can be asked to generate anything.
  *
  * `isAvailable` is the AND of all three. Nothing here retries: a 404 on the
  * configurations routes is a permanent property of the deployment, not a
@@ -61,15 +64,44 @@ export interface UseAiEditAvailabilityResult {
 
 const AI_EDIT_QUERY_ROOT = ['agents', 'aiEdit'] as const;
 
+/**
+ * THE MODEL is the project's CURRENT default (legacy issue 6872). The
+ * version's own `model_name` is the default that was current when the agent
+ * was created; after an admin changes the project default it is stale, and
+ * "Edit with AI" ran on the old model. The version's model is the fallback
+ * for a project with no default, or a catalogue that cannot be read.
+ */
+function useAiEditModel(
+  projectId: string | undefined,
+  modelSettings: AgentLlmSettings | null | undefined,
+  enabled: boolean,
+): { readonly modelName: string; readonly isLoading: boolean } {
+  const catalogue = useQuery({
+    queryKey: [...AI_EDIT_QUERY_ROOT, 'defaultModel', projectId],
+    queryFn: ({ signal }) => getProjectModelCatalogue(projectId ?? '', signal),
+    enabled,
+    retry: false,
+  });
+  const versionModel = modelSettings?.model_name ?? '';
+  return { modelName: projectDefaultModelName(catalogue.data) || versionModel, isLoading: catalogue.isLoading };
+}
+
+/** True for a usable project id. A function, to keep the hook's own branches in the complexity budget. */
+function isProjectId(projectId: string | undefined): projectId is string {
+  return projectId !== undefined && projectId !== '';
+}
+
 export function useAiEditAvailability(options: UseAiEditAvailabilityOptions): UseAiEditAvailabilityResult {
   const { projectId, modelSettings } = options;
 
-  const capabilityServed = hasBackendCapability('llmPredictBlocking');
-  const modelName = modelSettings?.model_name ?? '';
-  // Nothing is fetched at all until the two cheap, synchronous conditions
-  // hold — a build without the capability, or a version without a model,
-  // must not issue configuration requests it can do nothing with.
-  const enabled = capabilityServed && modelName !== '' && projectId !== undefined && projectId !== '';
+  const canRead = hasBackendCapability('llmPredictBlocking') && isProjectId(projectId);
+  const model = useAiEditModel(projectId, modelSettings, canRead);
+  const { modelName } = model;
+
+  // The prompt reads wait for a model: a build without the capability, or a
+  // project and version with no model at all, must not issue configuration
+  // requests it can do nothing with.
+  const enabled = canRead && modelName !== '';
 
   const promptTypes = useQuery({
     queryKey: [...AI_EDIT_QUERY_ROOT, 'promptTypes'],
@@ -90,9 +122,11 @@ export function useAiEditAvailability(options: UseAiEditAvailabilityOptions): Us
   const basePrompt = authored.trim() !== '' ? authored : fallback;
 
   return {
-    isAvailable: enabled && basePrompt.trim() !== '',
+    // Not while the default is still loading: a click then would run on the
+    // version's stale model, which is the defect this read exists to remove.
+    isAvailable: enabled && !model.isLoading && basePrompt.trim() !== '',
     basePrompt,
     modelName,
-    isResolving: enabled && (promptTypes.isLoading || prompts.isLoading),
+    isResolving: model.isLoading || (enabled && (promptTypes.isLoading || prompts.isLoading)),
   };
 }

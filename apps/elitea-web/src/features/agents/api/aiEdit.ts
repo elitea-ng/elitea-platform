@@ -141,6 +141,33 @@ export function findServicePrompt(page: AiEditConfigurationPageWire | undefined,
   return typeof prompt === 'string' ? prompt : '';
 }
 
+/* ── GET /configurations/models/{projectId} (the project default model) ──── */
+
+/** The part of the LLM model catalogue "Edit with AI" reads. */
+interface AiEditModelCatalogueWire {
+  readonly default_model_name?: string | null;
+}
+
+/**
+ * The project's CURRENT default LLM model, read when "Edit with AI" opens
+ * (legacy issue 6872). The agent version's own `model_name` is the default
+ * that was current when the agent was created, so it goes stale when an admin
+ * changes the project default.
+ */
+export async function getProjectModelCatalogue(
+  projectId: string | number,
+  signal?: AbortSignal,
+): Promise<AiEditModelCatalogueWire> {
+  const params = new URLSearchParams({ section: 'llm', include_shared: 'true' });
+  return fetchData<AiEditModelCatalogueWire>(`/configurations/models/${String(projectId)}?${params.toString()}`, signal ? { signal } : {});
+}
+
+/** The non-blank default model name in a catalogue answer, else `''`. */
+export function projectDefaultModelName(catalogue: AiEditModelCatalogueWire | undefined): string {
+  const name = catalogue?.default_model_name;
+  return typeof name === 'string' ? name.trim() : '';
+}
+
 /* ── POST /elitea_core/predict_llm/prompt_lib/{projectId} (blocking) ─────── */
 
 export interface AiEditLlmSettings {

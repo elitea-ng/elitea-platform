@@ -39,9 +39,19 @@ function renderButton(node: ReactNode): void {
   );
 }
 
+/** The model catalogue answers 404: the project default cannot be read. */
+const NO_CATALOGUE = Symbol('no catalogue');
+type DefaultModel = string | null | typeof NO_CATALOGUE;
+
 /** A deployment that serves the Service Prompt catalogue (ELITEA_CONFIGURATIONS_ENABLED on). */
-function serveConfigurations(options: { authored?: string; fallback?: string } = {}): void {
+function serveConfigurations(options: { authored?: string; fallback?: string; defaultModel?: DefaultModel } = {}): void {
+  const defaultModel = options.defaultModel ?? null;
   server.use(
+    http.get(`${BASE}/configurations/models/7`, () =>
+      defaultModel === NO_CATALOGUE
+        ? new HttpResponse(null, { status: 404 })
+        : HttpResponse.json({ items: [], total: 0, default_model_name: defaultModel }),
+    ),
     http.get(`${BASE}/configurations/available/`, () =>
       HttpResponse.json(
         options.fallback === undefined
@@ -70,6 +80,7 @@ function refuseConfigurations(): void {
   server.use(
     http.get(`${BASE}/configurations/available/`, () => new HttpResponse(null, { status: 404 })),
     http.get(`${BASE}/configurations/configurations/7`, () => new HttpResponse(null, { status: 404 })),
+    http.get(`${BASE}/configurations/models/7`, () => new HttpResponse(null, { status: 404 })),
   );
 }
 
@@ -120,7 +131,7 @@ describe('EditInstructionsWithAiButton — the gate', () => {
     await waitFor(() => expect(screen.queryByTestId('ai-edit-instructions-button')).not.toBeInTheDocument());
   });
 
-  it('renders nothing when the version names no model', async () => {
+  it('renders nothing when neither the project nor the version names a model', async () => {
     serveConfigurations({ fallback: 'You rewrite agent instructions.' });
     renderButton(
       <EditInstructionsWithAiButton
@@ -228,5 +239,57 @@ describe('EditInstructionsWithAiButton — generate and apply', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('returned nothing to apply');
     expect(screen.queryByTestId('text-diff-modified')).not.toBeInTheDocument();
+  });
+});
+
+/*
+ * Legacy issue 6872: "Edit with AI" ran on the model that was the project
+ * default when the agent was CREATED. It must run on the project's CURRENT
+ * default, and fall back to the version's model only when there is none.
+ */
+describe('EditInstructionsWithAiButton — the model', () => {
+  async function generateWith(defaultModel: DefaultModel, settings: AgentLlmSettings | null): Promise<Record<string, unknown>> {
+    const user = userEvent.setup();
+    serveConfigurations({ fallback: 'FALLBACK PROMPT', defaultModel });
+    let body: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ content: 'Draft.' });
+      }),
+    );
+    renderButton(
+      <EditInstructionsWithAiButton
+        projectId="7"
+        instructions="Be helpful."
+        llmSettings={settings}
+        onApply={vi.fn()}
+      />,
+    );
+    await user.click(await screen.findByTestId('ai-edit-instructions-button'));
+    await user.type(screen.getByLabelText('What should change?'), 'shorter');
+    await user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await waitFor(() => expect(screen.getByTestId('text-diff-modified')).toBeInTheDocument());
+    return body;
+  }
+
+  it('uses the project default model, not the model the version was created with', async () => {
+    const body = await generateWith('sonnet-4.5', llmSettings);
+    expect(body['llm_settings']).toMatchObject({ model_name: 'sonnet-4.5' });
+  });
+
+  it('falls back to the version model when the project has no default', async () => {
+    const body = await generateWith(null, llmSettings);
+    expect(body['llm_settings']).toMatchObject({ model_name: 'qwen3.5' });
+  });
+
+  it('falls back to the version model when the catalogue cannot be read', async () => {
+    const body = await generateWith(NO_CATALOGUE, llmSettings);
+    expect(body['llm_settings']).toMatchObject({ model_name: 'qwen3.5' });
+  });
+
+  it('edits a version with no model settings on the project default', async () => {
+    const body = await generateWith('sonnet-4.5', null);
+    expect(body['llm_settings']).toMatchObject({ model_name: 'sonnet-4.5' });
   });
 });
