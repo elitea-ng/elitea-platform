@@ -22,10 +22,27 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
+// backdateAttributionBoundary moves the ledger rows of the migrations that
+// bound a run read (0100 and the trigger-origin migration) to 2010. The
+// database under test is cloned from a template migrated moments earlier, so
+// without it a run seeded "a minute ago" can predate the migration and read
+// as before_attribution. That made the outcome depend on how long ago the
+// template was built. A run seeded in 2001 still predates 2010.
+func backdateAttributionBoundary(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+UPDATE elitea_runtime.schema_migrations
+SET applied_at = TIMESTAMPTZ '2010-01-01 00:00:00+00'
+WHERE target_kind = 'shared' AND name IN ($1, $2)`,
+		requestLogExecutionIDMigration, triggerOriginMigration)
+	require.NoError(t, err, "backdate the attribution boundary")
+}
+
 // seedOriginExecution writes one execution_jobs row with a trigger origin and
 // an admission time.
 func seedOriginExecution(t *testing.T, pool *pgxpool.Pool, projectID int64, executionID, origin string, admittedAt time.Time) {
 	t.Helper()
+	backdateAttributionBoundary(t, pool)
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `
 INSERT INTO elitea_runtime.input_bundles
@@ -311,6 +328,7 @@ VALUES (1, 7, 1), (1, 8, 1)`)
 
 func seedEvalRun(t *testing.T, pool *pgxpool.Pool, runID, applicationID int, createdAt time.Time) {
 	t.Helper()
+	backdateAttributionBoundary(t, pool)
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `
 INSERT INTO p_1.eval_datasets (id, name) VALUES (900, 'dataset') ON CONFLICT (id) DO NOTHING`)
