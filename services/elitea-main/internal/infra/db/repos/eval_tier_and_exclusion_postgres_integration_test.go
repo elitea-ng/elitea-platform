@@ -180,6 +180,50 @@ func TestEvalDatasetCaseExclusionOnlyBodyKeepsTheText(t *testing.T) {
 	}
 }
 
+// A case is reachable only through ITS dataset's path. Toggling or rewriting
+// an EXISTING case of dataset A through dataset B's URL is a 404 and changes
+// nothing: `dataset_id` is in both write predicates, and without it a
+// dataset.update holder could include or exclude (or rewrite) the cases of a
+// dataset by naming another one, changing what later runs execute.
+func TestEvalDatasetCaseWritesAreBoundToTheirDataset(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	router := newEvalDatasetsRouterOn(NewEvalDatasetsRepo(pool))
+	datasetA := createEvalDataset(t, router, `{"name":"A","description":"","application_id":null,"is_shared":false}`)
+	datasetB := createEvalDataset(t, router, `{"name":"B","description":"","application_id":null,"is_shared":false}`)
+
+	added := callEvalRoute(t, router, http.MethodPost,
+		"/eval_dataset_cases/prompt_lib/1/"+datasetA.ID, `{"input":"A's case","expected_output":"A's answer"}`)
+	if added.Code != http.StatusCreated {
+		t.Fatalf("add case: expected 201, got %d: %s", added.Code, added.Body.String())
+	}
+	var caseOfA evaluation.DatasetCase
+	if err := json.Unmarshal(added.Body.Bytes(), &caseOfA); err != nil {
+		t.Fatalf("decode case: %v", err)
+	}
+	crossPath := "/eval_dataset_case/prompt_lib/1/" + datasetB.ID + "/" + caseOfA.ID
+
+	for name, body := range map[string]string{
+		"flag-only toggle": `{"excluded":true}`,
+		"full rewrite":     `{"input":"rewritten through B","variables":{},"expected_output":null,"excluded":true}`,
+	} {
+		if code := callEvalRoute(t, router, http.MethodPut, crossPath, body).Code; code != http.StatusNotFound {
+			t.Errorf("%s through dataset B: expected 404, got %d", name, code)
+		}
+	}
+
+	stored := readEvalDataset(t, router, datasetA.ID)
+	if len(stored.Cases) != 1 {
+		t.Fatalf("dataset A cases = %+v, want its one case", stored.Cases)
+	}
+	got := stored.Cases[0]
+	if got.Excluded || got.Input != "A's case" || got.ExpectedOutput == nil || *got.ExpectedOutput != "A's answer" {
+		t.Fatalf("a write through dataset B changed dataset A's case: %+v", got)
+	}
+	if stored.ActiveCaseCount != 1 {
+		t.Fatalf("dataset A active_case_count = %d, want 1", stored.ActiveCaseCount)
+	}
+}
+
 // The case cap is enforced under CONCURRENT adds. Before the dataset row was
 // locked, two adds into a dataset holding cap-1 cases both saw cap-1 under
 // READ COMMITTED and both inserted, and they took the same order_index.
