@@ -667,6 +667,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
 		in, out := usageFromChatResponse(resp)
+		recordLoggedCacheTokens(ctx, resp.Usage)
 		h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 	}
 }
@@ -697,6 +698,7 @@ func (h *Handler) TextCompletion(w http.ResponseWriter, r *http.Request) {
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
 		in, out := usageFromTextCompletionResponse(resp)
+		recordLoggedCacheTokens(ctx, resp.Usage)
 		h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 	}
 }
@@ -776,6 +778,7 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	// FIX #3: bill the unary response after writing to the client.
 	if bErr == nil && resp != nil {
 		in, out := usageFromResponsesResponse(resp)
+		recordLoggedResponsesCacheTokens(ctx, resp.Usage)
 		h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 	}
 }
@@ -878,6 +881,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	// Write the response first, then bill asynchronously (FIX #18).
 	writeJSON(w, http.StatusOK, anthropic.ToAnthropicResponsesResponse(ctx, resp))
 	in, out := usageFromResponsesResponse(resp)
+	recordLoggedResponsesCacheTokens(ctx, resp.Usage)
 	h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 }
 
