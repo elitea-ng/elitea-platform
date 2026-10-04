@@ -120,10 +120,31 @@ func grantDatabase(ctx context.Context, connection Connection, database string, 
 // PRIVILEGES without FOR ROLE applies to objects created by the executing
 // role, which is the administrator this connection authenticates as.
 //
-// The ALL TABLES / ALL SEQUENCES grants run on every provision, including a
-// reprovision of an existing project, so checkpoint* tables an administrator
-// created before the default privileges existed are re-granted the next time
-// the project is provisioned.
+// WHAT THIS DOES AND DOES NOT REACH. It runs only when Provisioner.provision
+// runs. In production that is project creation: the one caller
+// (runtimecomposition.ProjectVectorStore) asks for ProvisionIfMissing, and
+// ProjectPgvectorService returns before any SQL when the project's vault
+// already holds complete material. Nothing calls ProvisionRepair or
+// ProvisionForceRecreate today. So:
+//
+//   - a project created from now on gets the default privileges. In the
+//     database-role mode the worker connects as the project role, which then
+//     owns the checkpoint* tables it creates; the default privileges matter
+//     for tables an administrator creates in that database (a pylon-era
+//     worker, a manual setup, or the existing-admin-user mode).
+//
+//   - an EXISTING project, including every project migrated from pylon, is
+//     NOT re-granted: there is no wired reprovision path. A deployment that
+//     already shows "permission denied for table checkpoint_migrations" must
+//     be repaired by hand, connected to the project's database
+//     ("project_<id>") as the role that owns the checkpoint* tables:
+//
+//     GRANT ALL ON ALL TABLES IN SCHEMA public TO "project_<id>_user";
+//     GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "project_<id>_user";
+//     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "project_<id>_user";
+//     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "project_<id>_user";
+//
+// They are this function's statements minus the schema grant, all idempotent.
 func grantPublicSchema(ctx context.Context, connection Connection, role string) error {
 	quotedRole := quoteIdentifier(role)
 	statements := [...]string{

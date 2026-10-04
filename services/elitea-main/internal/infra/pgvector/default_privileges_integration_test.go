@@ -146,6 +146,10 @@ SELECT 1 FROM pg_catalog.pg_available_extensions WHERE name = 'vector'
 		t.Fatalf("precondition: the legacy-state table must be refused to the project role, got %v", deniedErr)
 	}
 
+	// A second Provisioner.Provision converges the grants. Production has no
+	// caller that does this for an existing project (see grantPublicSchema),
+	// so this proves the SQL, not a repair path; existing deployments run the
+	// same statements by hand.
 	request.Password = created.Password
 	if _, err := provisioner.Provision(ctx, request); err != nil {
 		t.Fatalf("reprovision error = %v", err)
