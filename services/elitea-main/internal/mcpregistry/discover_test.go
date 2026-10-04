@@ -13,6 +13,7 @@ package mcpregistry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -203,5 +204,36 @@ func TestDiscoverTreatsANonSuccessStatusAsAFailure(t *testing.T) {
 	if _, err := NewDiscoverer(http.DefaultClient.Do).
 		Discover(context.Background(), server.URL, nil); err == nil {
 		t.Fatal("a 500 from the MCP server was accepted as a discovery")
+	}
+}
+
+// #6688: a 405/410 on a `/sse` URL is a retired HTTP+SSE endpoint. The error
+// names it and suggests the `/mcp` replacement; the same status on any other
+// path stays a plain failed discovery.
+func TestDiscoverNamesARetiredSSEEndpoint(t *testing.T) {
+	for _, status := range []int{http.StatusMethodNotAllowed, http.StatusGone} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		t.Cleanup(server.Close)
+
+		_, err := NewDiscoverer(http.DefaultClient.Do).Discover(context.Background(), server.URL+"/v1/sse?x=1", nil)
+		var retired *RetiredSSEEndpoint
+		if !errors.As(err, &retired) {
+			t.Fatalf("status %d on /sse: want RetiredSSEEndpoint, got %v", status, err)
+		}
+		if retired.Suggested != server.URL+"/v1/mcp" || retired.Status != status {
+			t.Fatalf("suggested %q status %d", retired.Suggested, retired.Status)
+		}
+		for _, want := range []string{server.URL + "/v1/sse", server.URL + "/v1/mcp", "HTTP+SSE"} {
+			if !strings.Contains(retired.Message(), want) {
+				t.Fatalf("message %q lacks %q", retired.Message(), want)
+			}
+		}
+
+		_, err = NewDiscoverer(http.DefaultClient.Do).Discover(context.Background(), server.URL+"/mcp", nil)
+		if err == nil || errors.As(err, &retired) {
+			t.Fatalf("status %d on /mcp must be a plain failure, got %v", status, err)
+		}
 	}
 }

@@ -162,14 +162,99 @@ func TestMCPSyncToolsRejectsUnboundOrInvalidMetadata(t *testing.T) {
 }
 
 func TestMCPDiscoveryHeadersReplaceCaseVariantsWithoutMutatingInput(t *testing.T) {
-	headers := map[string]string{"authorization": "old", "MCP-SESSION-ID": "old-session", "X-Private": "keep"}
+	headers := map[string]string{"authorization": "", "MCP-SESSION-ID": "old-session", "X-Private": "keep"}
 	tokens := map[string]mcpDiscoveryToken{
 		"https://example.test/mcp": {AccessToken: "bound", SessionID: "session"},
 		"mcp_prebuilt_test":        {AccessToken: "alias"},
 	}
 	result := mcpDiscoveryHeaders(headers, tokens, "https://example.test/mcp", "mcp_prebuilt_test")
 	require.Equal(t, map[string]string{"Authorization": "Bearer bound", "Mcp-Session-Id": "session", "X-Private": "keep"}, result)
-	require.Equal(t, "old", headers["authorization"])
+	require.Equal(t, "", headers["authorization"])
 	require.Equal(t, "Bearer alias", mcpDiscoveryHeaders(nil, tokens, "https://other.test/mcp", "mcp_prebuilt_test")["Authorization"])
 	require.Empty(t, mcpDiscoveryHeaders(nil, tokens, "https://other.test/mcp", "mcp")["Authorization"])
+}
+
+// #6691: Load Tools must act as the same identity as an agent run, where a
+// configured PAT header wins over the browser OAuth token.
+func TestMCPDiscoveryHeadersConfiguredPATWinsOverOAuthToken(t *testing.T) {
+	tokens := map[string]mcpDiscoveryToken{"https://example.test/mcp": {AccessToken: "oauth", SessionID: "oauth-session"}}
+	for _, key := range []string{"Authorization", "authorization", "AUTHORIZATION"} {
+		headers := map[string]string{key: "Bearer pat", "X-Private": "keep"}
+		result := mcpDiscoveryHeaders(headers, tokens, "https://example.test/mcp", "mcp")
+		require.Equal(t, map[string]string{key: "Bearer pat", "X-Private": "keep"}, result, key)
+	}
+}
+
+func TestMCPSyncToolsSendsConfiguredPATNotOAuthToken(t *testing.T) {
+	var seen []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		var rpc struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&rpc))
+		if rpc.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": rpc.ID,
+			"result": map[string]any{"tools": []any{map[string]any{"name": "echo_marker", "inputSchema": map[string]any{"type": "object"}}}}})
+	}))
+	defer server.Close()
+	body, err := json.Marshal(map[string]any{"url": server.URL + "/mcp",
+		"headers":    map[string]string{"Authorization": "Bearer configured-pat"},
+		"mcp_tokens": map[string]any{server.URL + "/mcp": map[string]any{"access_token": "oauth-access"}}})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	NewHandler(nil, WithHTTPClient(server.Client())).MCPSyncTools(recorder, syncRequest(string(body)))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotEmpty(t, seen)
+	for _, header := range seen {
+		require.Equal(t, "Bearer configured-pat", header)
+	}
+}
+
+// #6689: an issuer with a trailing slash must not produce "…/server/" or "//.well-known".
+func TestMCPAuthorizationServerMetadataStripsIssuerTrailingSlash(t *testing.T) {
+	for _, suffix := range []string{"/issuer/", "/"} {
+		t.Run(suffix, func(t *testing.T) {
+			var base string
+			var paths []string
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				want := "/.well-known/oauth-authorization-server" + strings.TrimRight(suffix, "/")
+				if r.URL.Path != want {
+					http.NotFound(w, r)
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"issuer": base + suffix, "authorization_endpoint": base + "/authorize", "token_endpoint": base + "/token"})
+			}))
+			defer server.Close()
+			base = server.URL
+			metadata, err := NewHandler(nil, WithHTTPClient(server.Client())).mcpAuthorizationServerMetadata(t.Context(), base+suffix)
+			require.NoError(t, err)
+			require.Equal(t, base+"/token", metadata["token_endpoint"])
+			for _, path := range paths {
+				require.NotContains(t, path, "//")
+				require.False(t, strings.HasSuffix(path, "/"), path)
+			}
+		})
+	}
+}
+
+// #6688: Load Tools on a retired `/sse` endpoint renders an actionable message.
+func TestMCPSyncToolsExplainsARetiredSSEEndpoint(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer server.Close()
+	recorder := httptest.NewRecorder()
+	NewHandler(nil, WithHTTPClient(server.Client())).MCPSyncTools(recorder, syncRequest(`{"url":"`+server.URL+`/sse"}`))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+	require.Equal(t, false, result["success"])
+	require.Contains(t, result["error"], server.URL+"/mcp")
+	require.Contains(t, result["error"], "HTTP+SSE is not supported")
 }

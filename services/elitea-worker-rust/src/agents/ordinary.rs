@@ -738,7 +738,8 @@ pub(super) fn mcp_materialization_error(
         McpMaterializationErrorCode::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        McpMaterializationErrorCode::UnsupportedAuthority => {
+        McpMaterializationErrorCode::UnsupportedAuthority
+        | McpMaterializationErrorCode::RetiredSseEndpoint => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         McpMaterializationErrorCode::AuthorizationRequired => {
@@ -751,8 +752,12 @@ pub(super) fn mcp_materialization_error(
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
+    let message = if error.code() == McpMaterializationErrorCode::RetiredSseEndpoint {
+        crate::toolkits::RETIRED_SSE_MESSAGE
+    } else {
+        "the native MCP toolsets could not be materialized"
+    };
     // #982: the requirement travels with the error so the lifecycle can name
     // the toolkit that challenged instead of failing the turn anonymously.
-    NativeAgentAssemblyError::new(code, "the native MCP toolsets could not be materialized")
-        .with_authorization(error.authorization().cloned())
+    NativeAgentAssemblyError::new(code, message).with_authorization(error.authorization().cloned())
 }

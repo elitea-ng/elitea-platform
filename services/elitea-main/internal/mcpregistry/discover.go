@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -161,6 +162,9 @@ func (d *Discoverer) initialize(
 	}
 	defer func() { _ = response.Body.Close() }()
 
+	if retired := retiredSSEEndpoint(endpoint, response.StatusCode); retired != nil {
+		return "", retired
+	}
 	sessionID := response.Header.Get("Mcp-Session-Id")
 	if _, err := readRPCResult(response, 1); err != nil {
 		return "", err
@@ -324,4 +328,46 @@ func decodeRPCResult(payload []byte, id int) (json.RawMessage, error) {
 		return nil, fmt.Errorf("mcpregistry: MCP server answered request %d with no result", id)
 	}
 	return response.Result, nil
+}
+
+// RetiredSSEEndpoint reports a URL that names the deprecated HTTP+SSE transport
+// (`…/sse`) on a server that refuses it with 405 or 410. Providers retired
+// these endpoints (DeepWiki, Linear, Cloudflare); this client speaks only the
+// streamable-HTTP transport, so the useful answer names the endpoint and the
+// `/mcp` URL that replaces it, not a bare status code (#6688).
+type RetiredSSEEndpoint struct {
+	Endpoint  string
+	Suggested string
+	Status    int
+}
+
+func (e *RetiredSSEEndpoint) Error() string {
+	return fmt.Sprintf("mcpregistry: %s answered %d: the legacy HTTP+SSE endpoint is retired or unsupported", e.Endpoint, e.Status)
+}
+
+// Message is safe to show the user: it carries only the configured URL.
+func (e *RetiredSSEEndpoint) Message() string {
+	return fmt.Sprintf("The MCP server no longer serves the legacy HTTP+SSE endpoint %s (HTTP %d). "+
+		"HTTP+SSE is not supported; use the streamable HTTP endpoint instead, for example %s.",
+		e.Endpoint, e.Status, e.Suggested)
+}
+
+func retiredSSEEndpoint(endpoint string, status int) *RetiredSSEEndpoint {
+	if status != http.StatusMethodNotAllowed && status != http.StatusGone {
+		return nil
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil
+	}
+	trimmed := strings.TrimRight(parsed.Path, "/")
+	if !strings.HasSuffix(strings.ToLower(trimmed), "/sse") {
+		return nil
+	}
+	suggested := *parsed
+	suggested.Path = trimmed[:len(trimmed)-len("/sse")] + "/mcp"
+	suggested.RawPath = ""
+	suggested.RawQuery = ""
+	suggested.Fragment = ""
+	return &RetiredSSEEndpoint{Endpoint: endpoint, Suggested: suggested.String(), Status: status}
 }

@@ -467,17 +467,17 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
         false,
         vec![
             Part::Thinking {
-                thinking: "why now".to_owned(),
+                thinking: " now".to_owned(),
                 signature: None,
             },
             Part::Text {
-                text: "hello".to_owned(),
+                text: "lo".to_owned(),
             },
         ],
     );
     let cumulative: Vec<_> = projector
         .project(&cumulative)
-        .expect("cumulative chunk")
+        .expect("delta chunk")
         .into_iter()
         .map(|event| current(&event))
         .collect();
@@ -485,21 +485,9 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
     assert_eq!(cumulative[0]["content"], "lo");
     assert_eq!(cumulative[0]["thinking"], " now");
 
-    let completed = event(
-        "llm-1",
-        3,
-        false,
-        true,
-        vec![
-            Part::Thinking {
-                thinking: "why now".to_owned(),
-                signature: None,
-            },
-            Part::Text {
-                text: "hello".to_owned(),
-            },
-        ],
-    );
+    // A streaming provider's terminal event carries only its own delta, here
+    // none: the turn is what the partials streamed.
+    let completed = event("llm-1", 3, false, true, Vec::new());
     let completed: Vec<_> = projector
         .project(&completed)
         .expect("completed turn")
@@ -668,6 +656,159 @@ fn long_escaped_model_output_uses_bounded_frames_and_a_complete_result_reference
     }
 }
 
+/// #6675: a partial delta that starts with the text so far is new text. The
+/// old prefix test read `"a"`, `"a"`, `"ab"` as restatements and produced
+/// `"ab"` instead of `"aaab"`, for the answer and for thinking alike.
+#[test]
+fn partial_deltas_repeating_the_prefix_always_append_for_content_and_thinking() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let mut streamed_text = String::new();
+    let mut streamed_thinking = String::new();
+    for (second, delta) in [(1, "a"), (2, "a"), (3, "ab")] {
+        let projected: Vec<_> = projector
+            .project(&event(
+                "llm-repeat",
+                second,
+                true,
+                false,
+                vec![
+                    Part::Thinking {
+                        thinking: delta.to_owned(),
+                        signature: None,
+                    },
+                    Part::Text {
+                        text: delta.to_owned(),
+                    },
+                ],
+            ))
+            .expect("delta")
+            .into_iter()
+            .map(|event| current(&event))
+            .collect();
+        let chunk = projected
+            .iter()
+            .find(|event| event["type"] == "agent_llm_chunk")
+            .expect("every delta streams a chunk");
+        assert_eq!(chunk["content"], delta);
+        assert_eq!(chunk["thinking"], delta);
+        streamed_text.push_str(chunk["content"].as_str().unwrap_or_default());
+        streamed_thinking.push_str(chunk["thinking"].as_str().unwrap_or_default());
+    }
+    assert_eq!(streamed_text, "aaab");
+    assert_eq!(streamed_thinking, "aaab");
+
+    // After partials, the terminal (non-partial) event carries only its own
+    // delta, as every streaming provider emits it. A terminal delta that
+    // starts with the text so far ("ab" after "aaab"... here "a") is still
+    // new text and appends.
+    let completed: Vec<_> = projector
+        .project(&event(
+            "llm-repeat",
+            4,
+            false,
+            true,
+            vec![
+                Part::Thinking {
+                    thinking: "aaab!".to_owned(),
+                    signature: None,
+                },
+                Part::Text {
+                    text: "aaab!".to_owned(),
+                },
+            ],
+        ))
+        .expect("terminal delta")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    let chunk = completed
+        .iter()
+        .find(|event| event["type"] == "agent_llm_chunk")
+        .expect("the terminal delta streams");
+    assert_eq!(chunk["content"], "aaab!");
+    let step = completed
+        .iter()
+        .find_map(|event| event["response_metadata"]["thinking_steps"].get(0))
+        .expect("completed step");
+    assert_eq!(step["text"], "aaabaaab!");
+    assert_eq!(step["thinking"], "aaabaaab!");
+}
+
+/// #6675 (review): an OpenAI-compatible stream ends with a non-partial chunk
+/// that carries only that chunk's delta. When the text streamed so far is a
+/// prefix of it ("a", then a final "ab"), the answer is "aab", not "ab".
+#[test]
+fn a_terminal_delta_after_partials_appends_even_when_it_repeats_the_prefix() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    projector
+        .project(&event(
+            "llm-short",
+            1,
+            true,
+            false,
+            vec![Part::Text {
+                text: "a".to_owned(),
+            }],
+        ))
+        .expect("partial");
+    let completed: Vec<_> = projector
+        .project(&event(
+            "llm-short",
+            2,
+            false,
+            true,
+            vec![Part::Text {
+                text: "ab".to_owned(),
+            }],
+        ))
+        .expect("terminal")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    let chunk = completed
+        .iter()
+        .find(|event| event["type"] == "agent_llm_chunk")
+        .expect("terminal chunk");
+    assert_eq!(chunk["content"], "ab");
+    let step = completed
+        .iter()
+        .find_map(|event| event["response_metadata"]["thinking_steps"].get(0))
+        .expect("completed step");
+    assert_eq!(step["text"], "aab");
+}
+
+/// A single non-partial event with nothing streamed before it (ADK's
+/// non-streaming mode) is the whole turn, and is projected as such.
+#[test]
+fn a_lone_aggregate_event_is_the_whole_turn() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let completed: Vec<_> = projector
+        .project(&event(
+            "llm-whole",
+            1,
+            false,
+            true,
+            vec![Part::Text {
+                text: "the whole answer".to_owned(),
+            }],
+        ))
+        .expect("aggregate")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    let step = completed
+        .iter()
+        .find_map(|event| event["response_metadata"]["thinking_steps"].get(0))
+        .expect("completed step");
+    assert_eq!(step["text"], "the whole answer");
+}
+
 #[test]
 fn delta_streaming_content_is_accumulated_without_assuming_cumulative_chunks() {
     let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
@@ -798,6 +939,8 @@ fn output_continuation_trims_one_meaningful_overlap_from_stream_and_terminal() {
     assert_eq!(first.len(), 1);
     assert_eq!(first[0]["type"], "agent_llm_start");
 
+    // The terminal event carries only its own delta, as a streaming
+    // provider emits it.
     let completed: Vec<_> = projector
         .project(&event(
             "llm-continuation",
@@ -805,7 +948,7 @@ fn output_continuation_trims_one_meaningful_overlap_from_stream_and_terminal() {
             false,
             true,
             vec![Part::Text {
-                text: "progress. It can recover safely.".to_owned(),
+                text: " It can recover safely.".to_owned(),
             }],
         ))
         .expect("trimmed continuation")
@@ -830,6 +973,67 @@ fn output_continuation_trims_one_meaningful_overlap_from_stream_and_terminal() {
         .collect();
     assert_eq!(terminal[0]["content"], " It can recover safely.");
     assert_eq!(terminal[2]["content"], " It can recover safely.");
+}
+
+/// Review of #6675: once the overlap buffer flushes, every later partial must
+/// stream only its own delta. `ContinuationOverlap::project` returned the whole
+/// projection, which the append-only merge then repeated, so a Continue after
+/// max tokens showed the answer duplicated.
+#[test]
+fn output_continuation_streams_each_partial_once_after_the_overlap_flushes() {
+    let mut projector =
+        AgentEventProjector::new(AgentEventProjectionContext::output_continuation_fixture(
+            json!({}),
+            "A durable worker stores progress.",
+        ))
+        .expect("continuation projector");
+    projector.start(timestamp(0)).expect("start");
+    let run = "x".repeat(160);
+    let mut streamed = String::new();
+    for (second, delta) in [
+        (1, format!("progress. {run}")),
+        (2, " tail".to_owned()),
+        (3, " end".to_owned()),
+    ] {
+        for projected in projector
+            .project(&event(
+                "llm-continuation",
+                second,
+                true,
+                false,
+                vec![Part::Text { text: delta }],
+            ))
+            .expect("partial")
+        {
+            let projected = current(&projected);
+            if projected["type"] == "agent_llm_chunk" {
+                streamed.push_str(projected["content"].as_str().unwrap_or_default());
+            }
+        }
+    }
+    assert_eq!(streamed, format!(" {run} tail end"));
+
+    let completed: Vec<_> = projector
+        .project(&event("llm-continuation", 4, false, true, Vec::new()))
+        .expect("terminal")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    for event in &completed {
+        if event["type"] == "agent_llm_chunk" {
+            streamed.push_str(event["content"].as_str().unwrap_or_default());
+        }
+    }
+    assert_eq!(
+        streamed,
+        format!(" {run} tail end"),
+        "the terminal adds nothing"
+    );
+    let step = completed
+        .iter()
+        .find_map(|event| event["response_metadata"]["thinking_steps"].get(0))
+        .expect("completed step");
+    assert_eq!(step["text"], format!(" {run} tail end"));
 }
 
 #[test]

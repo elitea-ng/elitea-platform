@@ -1415,6 +1415,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithMCPDCRClients(mcpOAuthClientStore(cfg.Pool)),
 		v2core.WithMCPDelegatedTokens(mcpOAuthTokenStore(cfg.Pool)),
 		v2core.WithMCPAuthorizationEgressGuard(mcpAuthorizationEgressGuard(cfg)),
+		v2core.WithMCPEgressGuard(mcpEgressGuard()),
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
