@@ -12,8 +12,8 @@ const identity = {
   displayName: 'Agent Zefir',
   slug: 'agent-zefir',
   bundleId: 'ca.zefir.agent',
-  /** Schemes accepted for connect links, e.g. `zefir://connect?server=https://...`. First is primary. */
-  connectSchemes: ['zefir', 'agentzefir'],
+  /** Schemes accepted for connect links, e.g. `agentzefir://connect?server=https://...`. */
+  connectSchemes: ['agentzefir'],
   /** RFC 8252 private-use (reverse-DNS) scheme for the OAuth redirect. */
   oauthRedirectScheme: 'ca.zefir.agent',
   oauthRedirectPath: '/oauth/callback',

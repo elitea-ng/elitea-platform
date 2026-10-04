@@ -32,8 +32,7 @@ hardcode them anywhere else.
 | Expo slug | `agent-zefir` |
 | iOS bundle identifier | `ca.zefir.agent` (permanent) |
 | Android application id | `ca.zefir.agent` (permanent) |
-| Connect-link scheme (primary) | `zefir`, as in `zefir://connect?server=https://ai.example.com` |
-| Connect-link scheme (alias) | `agentzefir` |
+| Connect-link scheme | `agentzefir`, as in `agentzefir://connect?server=https://ai.example.com` |
 | OAuth redirect (RFC 8252) | `ca.zefir.agent:/oauth/callback` |
 | Website | https://agent.zefir.ca (privacy: `/privacy`, support: `/support`) |
 

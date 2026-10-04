@@ -11,7 +11,7 @@ comes from the server at runtime.
 
 - **Connect** to a workspace in any of four ways:
   - scanning a QR code shown by the workspace (the payload is a bare `https://host` URL or a connect link)
-  - opening a connect link, `zefir://connect?server=https://...` (the alias `agentzefir://` also works)
+  - opening a connect link, `agentzefir://connect?server=https://...`
   - typing the server address
   - MDM managed app configuration, which pre-sets the server for enterprise-managed devices
     (the module is still to be chosen; see open questions)

@@ -35,7 +35,7 @@ const ERROR_TEXT: Record<ConnectLinkErrorCode, string> = {
 export default function ConnectScreen() {
   const palette = usePalette();
   const { connect } = useWorkspace();
-  // Deep links `zefir://connect?server=...` land here with `server` as a search param.
+  // Deep links `agentzefir://connect?server=...` land here with `server` as a search param.
   const params = useLocalSearchParams<{ server?: string }>();
   const incoming = typeof params.server === 'string' ? params.server : '';
   const [address, setAddress] = useState(incoming);
