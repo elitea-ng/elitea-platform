@@ -40,10 +40,12 @@ import {
   attachSubAgent,
   createAgentWithVersion,
   deleteAgent,
-  readProjectModels,
+  publishAuthorProjectDeclaredAbsent,
+  readCatalogueModels,
   resolveCatalogueProjectId,
   resolvePrivateModel,
 } from '../../fixtures/api';
+import { skipWhenDeploymentLacks } from '../../fixtures/deployment';
 
 function uniqueName(stem: string): string {
   return `${AUTOTEST_PREFIX}p13pubval-${stem}-${String(Date.now()).slice(-7)}`;
@@ -80,6 +82,17 @@ const PASSABLE_INSTRUCTIONS =
   'gives you into a short briefing that names the people involved and the decisions still open.';
 
 test.describe('publish validation: project-specific model (ELITEA-0158)', () => {
+  // Both variants need a model that is NOT shared, which only the seeded author
+  // project holds (`E2E-PRIVATE-MODEL`). A deployment that declares it has no
+  // such project (`E2E_PUBLISH_AUTHOR_PROJECT_ID=none`) cannot stage one either
+  // when it disallows project-own LLMs, so the variants are skipped there.
+  test.beforeEach(() => {
+    skipWhenDeploymentLacks(
+      publishAuthorProjectDeclaredAbsent(),
+      'no publish-author project holding a non-shared model (E2E_PUBLISH_AUTHOR_PROJECT_ID=none)',
+    );
+  });
+
   /* onetest: ELITEA-0158 — Variant A: the MAIN agent's own model is project-specific (not the shared
    * Public catalogue) — publish validation raises a critical `llm_settings` finding. */
   test('a main agent on a project-specific model is refused with a real llm_settings finding', async ({
@@ -107,7 +120,7 @@ test.describe('publish validation: project-specific model (ELITEA-0158)', () => 
    * `llm_settings` critical the MAIN agent already gets for the identical condition (Variant A, above). */
   test('a sub-agent on a project-specific model is caught by publish validation', async ({ request }) => {
     const catalogueProjectId = await resolveCatalogueProjectId(request);
-    const models = await readProjectModels(request, catalogueProjectId);
+    const models = await readCatalogueModels(request, catalogueProjectId);
     expect(models.length, 'the catalogue project serves no model').toBeGreaterThan(0);
     const publicModel = models[0];
     const privateModel = await resolvePrivateModel(request);

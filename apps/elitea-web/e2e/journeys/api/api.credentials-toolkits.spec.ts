@@ -76,6 +76,7 @@ import {
   deleteGithubToolkit,
   type GithubToolkitFixture,
 } from '../../fixtures/api';
+import { skipWhenProjectOwnModelsDisallowed } from '../../fixtures/deployment';
 import {
   createConfiguration,
   createEmbeddingModel,
@@ -437,6 +438,11 @@ test('a GitHub toolkit carries its credential, its vector store and its embeddin
   const name = autotestName('tk_full');
   let toolkitId = '';
   try {
+    // Project-own models are a deployment choice: with
+    // ELITEA_ALLOW_PROJECT_OWN_LLMS=false the model above is stored but never
+    // admitted, so no toolkit may name it. Skipped there (inside the try, so the
+    // rows are still removed), never on the rig.
+    await skipWhenProjectOwnModelsDisallowed(request, embedding.modelName);
     const { id, created } = await postToolkit(request, {
       name,
       type: 'github',

@@ -46,6 +46,8 @@ import { test, expect } from '@playwright/test';
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, deleteConversation } from '../../fixtures/api';
+import { skipOnLiveTarget } from '../../fixtures/deployment';
+import { socketServerConfigured } from '../../../scripts/lib/e2e-live-assumptions.mjs';
 
 /** Every conversation this file creates carries this suffix (concurrent-agent hygiene). */
 const SUFFIX = '-msg';
@@ -185,10 +187,25 @@ test('the copy control on a message hands that message’s own text to the clipb
 // that question is rendered beside it. The regression this guards is the one
 // that shipped: the failed turn used to drop the question unconditionally, so a
 // send that could not be delivered emptied the transcript and told nobody.
+//
+// So the case is only meaningful where BOTH halves hold. A deployment that
+// serves a socket server (`VITE_SOCKET_SERVER`, from the runner's environment
+// or the page's own `/app/config.js`) delivers the turn, and a deployed
+// instance has a runtime plane that runs it — either way there is no
+// undeliverable turn to observe, and the case is skipped rather than failed on
+// a success.
 // ─────────────────────────────────────────────────────────────────────────────
 test('a turn no transport accepted keeps the question and says so, even at 100k characters', async ({ page }) => {
+  skipOnLiveTarget('a deployed instance has a runtime plane, so no turn takes the undeliverable path');
   await page.goto(BASE_URL + '/app/chat');
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+  const uiConfig = await page.evaluate(
+    () => (window as unknown as { elitea_ui_config?: Record<string, unknown> }).elitea_ui_config ?? null,
+  );
+  test.skip(
+    socketServerConfigured(process.env, uiConfig),
+    'VITE_SOCKET_SERVER is set, so the socket transport accepts the turn',
+  );
 
   const marker = `${AUTOTEST_PREFIX}oversized${SUFFIX}-${Date.now()}`;
   // The prefix leads so the conversation the server stores is named
