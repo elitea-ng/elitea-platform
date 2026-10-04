@@ -32,12 +32,8 @@
         "into its own preloaded chunk. No route code moved into the initial set;",
         "the growth is the type scale itself."
       ],
-      "initialKB": 512,
-      "routeChunkKB": 250,
-      "initialNote2": [
-        "2026-10-04: raised to 512 KiB by owner decision to unblock the wave-2 stack (admin measured 326.3 KiB on PR #1041, app 301.8 KiB).",
-        "Split the initial bundles and restore the budget: https://github.com/elitea-ng/elitea-platform/issues/1042"
-      ]
+      "initialKB": 302,
+      "routeChunkKB": 250
     },
     "admin": {
       "html": "index.html",
@@ -80,12 +76,8 @@
         "tried (single lazy module, Paper, no brand imports) all landed within",
         "0.2 KiB of each other."
       ],
-      "initialKB": 512,
-      "routeChunkKB": 250,
-      "initialNote4": [
-        "2026-10-04: raised to 512 KiB by owner decision to unblock the wave-2 stack (admin measured 326.3 KiB on PR #1041, app 301.8 KiB).",
-        "Split the initial bundles and restore the budget: https://github.com/elitea-ng/elitea-platform/issues/1042"
-      ]
+      "initialKB": 326,
+      "routeChunkKB": 250
     },
     "maintenance": {
       "html": "maintenance.html",
