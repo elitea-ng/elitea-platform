@@ -123,7 +123,10 @@ indexing-current = [
   "langdetect==1.0.9",
   # Raised from 5.2.2 for CVE-2026-41066.
   "lxml==6.1.0",
-  "mammoth==1.9.0",
+  # Raised from 1.9.0 for the mammoth directory-traversal advisory (#6827):
+  # EliteADocxMammothLoader converts user-supplied .docx files, so the
+  # vulnerable image-path handling is reachable from an index run.
+  "mammoth==1.11.0",
   "markdownify==1.1.0",
   "msrest==0.7.1",
   "numpy==1.26.4",

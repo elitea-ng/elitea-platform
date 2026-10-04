@@ -174,7 +174,11 @@ engine = [
   "python-dateutil==2.9.0.post0",
   "gensim==4.3.3",
   "openpyxl==3.1.5",
-  "mammoth==1.9.0",
+  # Raised from 1.9.0 for the mammoth directory-traversal advisory (#6827).
+  # A leaf of the loader chain (it needs only cobble), so this one pin moves
+  # without re-resolving the rest of the set; check-engine-closures.sh proves
+  # the set still resolves.
+  "mammoth==1.11.0",
   "markdownify==1.1.0",
   "python-docx==1.1.2",
   "pandas==2.2.3",
