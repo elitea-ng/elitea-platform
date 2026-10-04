@@ -3,6 +3,7 @@ package evaluation_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -233,5 +234,82 @@ func TestEvaluationFieldCaps(t *testing.T) {
 	}
 	if len(dimensions.stored) != 0 {
 		t.Error("an over-cap dimension was stored")
+	}
+}
+
+// escapeEveryByte renders s as JSON string content with EVERY character sent
+// as a \uXXXX escape, the way Python's json.dumps(ensure_ascii=True) sends
+// non-ASCII text and every client sends control characters.
+func escapeEveryByte(s string) string {
+	var builder strings.Builder
+	for _, r := range s {
+		fmt.Fprintf(&builder, `\u%04x`, r)
+	}
+	return builder.String()
+}
+
+// A body whose fields are all within their (decoded-byte) caps is not refused
+// by the transport bound (wire bytes), however the client escapes it. Control
+// characters are the worst case: one decoded byte, six wire bytes.
+func TestEvaluationTransportBoundAdmitsEveryEscapedBodyTheFieldCapsAccept(t *testing.T) {
+	t.Parallel()
+
+	field := escapeEveryByte(strings.Repeat("\x01", evaluation.MaxCaseInputBytes))
+	// The variables cap measures the map's own encoding, in which a printable
+	// character is one byte. Sent escaped, each costs six on the wire.
+	variable := escapeEveryByte(strings.Repeat("a", evaluation.MaxCaseVariablesBytes-len(`{"v":""}`)))
+	body := `{"input":"` + field + `","expected_output":"` + field + `","variables":{"v":"` + variable + `"}}`
+	if len(body) <= 2*(256<<10) {
+		t.Fatalf("the test body is %d bytes; it must exceed the old 256 KiB bound by far to mean anything", len(body))
+	}
+
+	repo := newCaseRepo()
+	response := do(t, newDatasetTestRouter(repo), http.MethodPost, "/eval_dataset_cases/prompt_lib/1/5", body)
+	if response.Code != http.StatusOK && response.Code != http.StatusCreated {
+		t.Fatalf("escaped body within every field cap: expected success, got %d: %.200s", response.Code, response.Body.String())
+	}
+	if repo.addCaseCalls != 1 {
+		t.Fatalf("AddCase calls = %d, want 1", repo.addCaseCalls)
+	}
+
+	// The same for a dimension: rubric and code at their caps, escaped.
+	rubric := escapeEveryByte(strings.Repeat("\x01", evaluation.MaxDimensionDescriptionBytes))
+	code := escapeEveryByte(strings.Repeat("\x01", evaluation.MaxDimensionCodeBytes))
+	dimension := strings.NewReplacer(
+		`"Does the answer help?"`, `"`+rubric+`"`,
+		`"allowed_engines": ["ai"]`, `"allowed_engines": ["code"]`,
+		`"code": ""`, `"code": "`+code+`"`,
+		`"return_contract": ""`, `"return_contract": "bool"`,
+	).Replace(validBody)
+	if got := do(t, newTestRouter(&recordingRepo{}), http.MethodPost, "/eval_dimensions/prompt_lib/1", dimension).Code; got == http.StatusRequestEntityTooLarge {
+		t.Fatalf("escaped dimension within its field caps was refused with 413 (%d wire bytes)", len(dimension))
+	}
+}
+
+// The variables cap measures the map's JSON with HTML escaping OFF. Go's
+// json.Marshal sends `<` as `<`, six bytes, so a 10 KiB XML template
+// value measured that way read as ~40 KiB and was refused as "over 32 KiB".
+func TestCaseVariablesCapCountsHTMLCharactersAsOneByte(t *testing.T) {
+	t.Parallel()
+
+	markup := strings.Repeat("<a>&", 10<<10/4)
+	body, err := json.Marshal(map[string]any{"input": "q", "variables": map[string]any{"template": markup}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := newCaseRepo()
+	response := do(t, newDatasetTestRouter(repo), http.MethodPost, "/eval_dataset_cases/prompt_lib/1/5", string(body))
+	if response.Code != http.StatusOK && response.Code != http.StatusCreated {
+		t.Fatalf("10 KiB of markup in variables: expected success, got %d: %s", response.Code, response.Body.String())
+	}
+
+	// The cap still bites at its stated size in those same characters.
+	over := strings.Repeat("<", evaluation.MaxCaseVariablesBytes)
+	body, err = json.Marshal(map[string]any{"input": "q", "variables": map[string]any{"t": over}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := do(t, newDatasetTestRouter(newCaseRepo()), http.MethodPost, "/eval_dataset_cases/prompt_lib/1/5", string(body)).Code; code != http.StatusBadRequest {
+		t.Fatalf("variables over the cap in markup: expected 400, got %d", code)
 	}
 }

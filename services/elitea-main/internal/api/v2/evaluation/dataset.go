@@ -1,6 +1,7 @@
 package evaluation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -70,15 +71,36 @@ const MaxCaseInputBytes = 32 << 10 // 32 KiB
 
 // MaxCaseVariablesBytes bounds the JSON encoding of one case's template
 // variables. They are substituted into the input, so they reach the model on
-// every run just as the input does.
+// every run just as the input does. It is measured with HTML escaping OFF
+// (see encodedVariablesSize): `<`, `>` and `&` are one byte each, so a
+// template map heavy in HTML or XML is not counted at six bytes a character.
 const MaxCaseVariablesBytes = 32 << 10 // 32 KiB
+
+// jsonEscapeExpansion is the most wire bytes JSON can spend on one decoded
+// byte: a control character (or any byte a client chooses to escape) is sent
+// as `\u00XX`, six bytes. Python's json.dumps with its default
+// ensure_ascii=True sends every non-ASCII character this way, so two-byte
+// Cyrillic costs three wire bytes a decoded byte, and control characters six.
+const jsonEscapeExpansion = 6
+
+// writeBodyOverheadBytes covers the keys, quotes and the small fields
+// (names, enums, numbers) of an evaluation write body.
+const writeBodyOverheadBytes = 64 << 10 // 64 KiB
 
 // MaxWriteBodyBytes bounds every evaluation write body BEFORE it is decoded.
 // The field caps are checked only after the whole body is in memory, so
 // without this bound a caller could stream any amount into the process first.
-// It sits well above the sum of the field caps, so no body that the field caps
-// accept is refused here.
-const MaxWriteBodyBytes = 256 << 10 // 256 KiB
+//
+// The field caps count DECODED bytes and this bound counts WIRE bytes, so it
+// is sized for the worst escaping: six wire bytes for every decoded byte of
+// the largest set of capped fields one body can carry (a case's input,
+// expected output and variables, or a dimension's rubric and code), plus the
+// overhead. A body whose fields are within their caps reaches the field caps
+// unless it pads itself with insignificant whitespace past this bound.
+const MaxWriteBodyBytes = jsonEscapeExpansion*max(
+	2*MaxCaseInputBytes+MaxCaseVariablesBytes,
+	MaxDimensionDescriptionBytes+MaxDimensionCodeBytes,
+) + writeBodyOverheadBytes // 640 KiB
 
 // Dataset is one stored dataset row.
 //
@@ -230,14 +252,31 @@ func (input CaseWriteInput) Validate() error {
 	// marshalled reaches PostgreSQL as a driver error, i.e. a 500 for a caller
 	// error, and json.Marshal is the only thing that can tell the two apart
 	// before the write.
-	encoded, err := json.Marshal(input.Variables)
+	size, err := encodedVariablesSize(input.Variables)
 	if err != nil {
 		return apierr.BadRequest("variables must be a JSON object of scalar values")
 	}
-	if len(encoded) > MaxCaseVariablesBytes {
+	if size > MaxCaseVariablesBytes {
 		return apierr.BadRequest(fmt.Sprintf("variables must be at most %d bytes as JSON", MaxCaseVariablesBytes))
 	}
 	return nil
+}
+
+// encodedVariablesSize is the length of the variables' compact JSON encoding
+// with HTML escaping off.
+//
+// json.Marshal escapes `<`, `>` and `&` as `\u003c` and friends, six bytes for
+// a one-byte character, so measuring its output would refuse a 10 KiB template
+// map heavy in HTML or XML as "over 32 KiB". The encoder's trailing newline is
+// not part of the value and is not counted.
+func encodedVariablesSize(variables map[string]any) (int, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(variables); err != nil {
+		return 0, err
+	}
+	return len(bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))), nil
 }
 
 // DatasetListFilter narrows the dataset listing to one agent's datasets plus
