@@ -1151,6 +1151,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				apierr.WriteStatus(w, http.StatusBadRequest, unpairedConfigurationFieldsMessage(unpaired))
 				return
 			}
+			if failure := refuseInvalidDialProtocol(entry.Type, body); failure != nil {
+				failure.write(w)
+				return
+			}
 		}
 	}
 
@@ -1447,6 +1451,9 @@ func (h *Handler) applyConfigurationUpdate(
 	// entry. See refuseIncompleteUpdatedModelData for why it is the model rows
 	// that are held to it.
 	if failure := h.refuseIncompleteUpdatedModelData(body, configType); failure != nil {
+		return c, failure, nil
+	}
+	if failure := refuseInvalidDialProtocol(configType, body); failure != nil {
 		return c, failure, nil
 	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)

@@ -124,6 +124,17 @@ func normalizeCurrentLocalAIModel(typeName string, data map[string]any) (map[str
 				normalized[LLMModelDescriptionField] = text
 			}
 		}
+
+		// Legacy issue #6707. Written only when the caller sent it, so a row
+		// created without it stays byte-identical to the rows before the field
+		// existed; the gateway reads an absent value as the default.
+		protocol, present, err := ValidateLLMModelDialProtocol(data)
+		if err != nil {
+			return nil, currentLocalConfigurationFieldError("data." + DialProtocolField)
+		}
+		if present {
+			normalized[DialProtocolField] = protocol
+		}
 	}
 
 	credentials, err := normalizeCurrentLocalAICredentials(data)
