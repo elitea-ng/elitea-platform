@@ -188,7 +188,7 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		active = *body.Active
 	}
 
-	target, err := h.resolveRunTarget(r.Context(), schema, versionID)
+	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesOnly)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
 		writeError(w, http.StatusNotFound, "no such pipeline version in this project")

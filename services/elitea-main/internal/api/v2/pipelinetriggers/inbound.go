@@ -110,13 +110,19 @@ const refusal = "this trigger cannot be used"
 
 // inboundBody is the accepted request body. Everything else in it is ignored.
 //
-// `input` is the only field, and it is TEXT the pipeline sees. It is not a
-// place to select a project, a version or an identity: those come from the
-// stored row (package doc, rule 1). A body that carries such keys is not
-// refused, because a webhook sender's payload is not this service's to
-// validate — it is simply not read.
+// `input` is TEXT the pipeline or agent sees. `variables` re-values an
+// AGENT's declared variables (agentrun.go) and is ignored for a pipeline.
+// Neither is a place to select a project, a version or an identity: those
+// come from the stored row (package doc, rule 1). A body that carries such
+// keys is not refused, because a webhook sender's payload is not this
+// service's to validate — it is simply not read.
+//
+// `variables` is kept RAW and decoded on its own (bodyVariables), so a
+// provider payload that happens to carry a `variables` key of another shape
+// does not also lose its `input`.
 type inboundBody struct {
-	Input string `json:"input"`
+	Input     string          `json:"input"`
+	Variables json.RawMessage `json:"variables"`
 }
 
 // Trigger admits one inbound run.
@@ -286,6 +292,11 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		VersionID:   trigger.VersionID,
 		Input:       body.Input,
 		Origin:      OriginWebhook,
+		// Legacy issue 6656: a trigger may start an ordinary agent too. The
+		// raw payload and the variables are read only on that branch.
+		Kinds:     pipelinesAndAgents,
+		Payload:   raw,
+		Variables: bodyVariables(body),
 	})
 	if deliveryKey != "" {
 		if err != nil {
@@ -302,7 +313,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrVersionNotRunnable):
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
-			"the pipeline version is gone or is not a pipeline")
+			"the version is gone")
 		writeError(w, http.StatusUnauthorized, refusal)
 		return
 	case errors.Is(err, ErrInputTooLarge):
@@ -315,6 +326,15 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID, "input is not valid")
 		writeError(w, http.StatusUnprocessableEntity,
 			"`input` is not valid: it must be UTF-8 text without NUL characters")
+		return
+	case errors.Is(err, ErrAgentInputRequired):
+		// 422 and the field's name, for the reason ErrInvalidInput gives. An
+		// agent answers a message, so a call with no `input` and no payload
+		// has nothing for it to answer.
+		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID,
+			"an agent run needs input")
+		writeError(w, http.StatusUnprocessableEntity,
+			"`input` is required: this trigger starts an agent, and an agent needs text or a payload to read")
 		return
 	case errors.Is(err, ErrRuntimeUnavailable):
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
@@ -495,6 +515,19 @@ func decodeInboundBody(raw []byte) inboundBody {
 		body.Input = body.Input[:maxRunInput]
 	}
 	return body
+}
+
+// bodyVariables decodes the body's `variables` object. Anything that is not a
+// JSON object supplies no variables.
+func bodyVariables(body inboundBody) map[string]json.RawMessage {
+	if len(body.Variables) == 0 {
+		return nil
+	}
+	var variables map[string]json.RawMessage
+	if err := json.Unmarshal(body.Variables, &variables); err != nil {
+		return nil
+	}
+	return variables
 }
 
 // recordInbound writes the `centry.audit_events` row for one inbound call.

@@ -71,9 +71,13 @@ var (
 	// ErrRunForbidden is "the identity this run would use may not run agents
 	// in this project any more".
 	ErrRunForbidden = errors.New("pipelinetriggers: the run identity lacks the run permission")
-	// ErrVersionNotRunnable is "the pipeline version is gone, or is not a
-	// pipeline".
-	ErrVersionNotRunnable = errors.New("pipelinetriggers: the pipeline version cannot be run")
+	// ErrVersionNotRunnable is "the version is gone, or is not a kind this
+	// entry point may start".
+	ErrVersionNotRunnable = errors.New("pipelinetriggers: the version cannot be run")
+	// ErrAgentInputRequired is an AGENT trigger call that carries no text:
+	// no `input` and no payload. A pipeline runs from its entry node on an
+	// empty input; an agent has nothing to answer.
+	ErrAgentInputRequired = errors.New("pipelinetriggers: an agent run needs input")
 	// ErrInputTooLarge is a body this package refuses before touching storage.
 	ErrInputTooLarge = errors.New("pipelinetriggers: run input is too large")
 	// ErrInvalidInput is an `input` the run cannot carry: text that is not
@@ -90,28 +94,58 @@ type runTarget struct {
 	ApplicationID int64
 	VersionID     int64
 	Name          string
+	// IsPipeline is `agent_type = 'pipeline'`. Every other version is an
+	// ordinary AGENT (legacy issue 6656), which only the inbound trigger may
+	// start: see targetKinds.
+	IsPipeline bool
+	// DeclaredVariables are the names in the version's own
+	// `meta.variables`. An agent run may re-value these and nothing else
+	// (agentrun.go).
+	DeclaredVariables []string
 }
 
-// resolveRunTarget confirms the version is a runnable PIPELINE in this project.
+// targetKinds says which versions an entry point may start.
+type targetKinds int
+
+const (
+	// pipelinesOnly is the SCHEDULE half. A schedule is a pipeline facility,
+	// and an agent has no entry node to run from an empty input.
+	pipelinesOnly targetKinds = iota
+	// pipelinesAndAgents is the INBOUND TRIGGER (legacy issue 6656). An agent
+	// webhook was a shipped legacy capability; the trigger credential, the
+	// signature modes and the replay dedupe are the same for both kinds.
+	pipelinesAndAgents
+)
+
+// resolveRunTarget confirms the version exists in this project and is a kind
+// the entry point may start.
 //
-// The `agent_type = 'pipeline'` predicate is not decoration. Both entry points
-// are documented as pipeline entry points, and a trigger row that outlived a
-// version edited into an ordinary agent would otherwise become an unattended
-// way to run something the operator never issued a credential for.
-func (h *Handler) resolveRunTarget(ctx context.Context, schema string, versionID int64) (runTarget, error) {
+// The kind check is not decoration. A schedule row that outlived a version
+// edited from a pipeline into an ordinary agent would otherwise become an
+// unattended way to run something its author never scheduled as one.
+func (h *Handler) resolveRunTarget(
+	ctx context.Context, schema string, versionID int64, kinds targetKinds,
+) (runTarget, error) {
 	var target runTarget
+	var variables string
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-SELECT version.application_id, version.id, COALESCE(application.name, version.name)
+SELECT version.application_id, version.id, COALESCE(application.name, version.name),
+       version.agent_type = 'pipeline',
+       COALESCE(version.meta -> 'variables', '[]'::jsonb)::text
   FROM %[1]s.application_versions AS version
   JOIN %[1]s.applications AS application ON application.id = version.application_id
- WHERE version.id = $1 AND version.agent_type = 'pipeline'`, schema), versionID,
-	).Scan(&target.ApplicationID, &target.VersionID, &target.Name)
+ WHERE version.id = $1`, schema), versionID,
+	).Scan(&target.ApplicationID, &target.VersionID, &target.Name, &target.IsPipeline, &variables)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return runTarget{}, ErrVersionNotRunnable
 		}
 		return runTarget{}, err
 	}
+	if !target.IsPipeline && kinds != pipelinesAndAgents {
+		return runTarget{}, ErrVersionNotRunnable
+	}
+	target.DeclaredVariables = declaredVariableNames([]byte(variables))
 	return target, nil
 }
 
@@ -174,6 +208,15 @@ type runRequest struct {
 	// person opening the chat list can tell a webhook run from a cron run
 	// without opening either.
 	Origin string
+	// Kinds is which versions this entry point may start. The zero value is
+	// pipelinesOnly, so a new caller has to opt in to agents.
+	Kinds targetKinds
+	// Payload is the raw request body of an inbound call. It is read only
+	// for an AGENT version whose body carries no `input` (agentrun.go).
+	Payload []byte
+	// Variables are the caller's values for the agent's declared variables.
+	// Only names the version declares are used.
+	Variables map[string]json.RawMessage
 	// ScheduleID stamps the conversation with the schedule that started it, and
 	// is zero for an inbound trigger. It is what the OVERLAP check reads: "is
 	// this schedule's previous run still streaming" is answerable from the
@@ -197,12 +240,23 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
 		return runOutcome{}, err
 	}
-	target, err := h.resolveRunTarget(ctx, schema, request.VersionID)
+	target, err := h.resolveRunTarget(ctx, schema, request.VersionID, request.Kinds)
 	if err != nil {
 		return runOutcome{}, err
 	}
+	var variables []agentVariable
+	if !target.IsPipeline {
+		// An AGENT runs on the text it is given (legacy issue 6656). It has
+		// no entry node to start from, so an empty input is refused here,
+		// before any row is written.
+		request.Input, err = agentRunInput(request.Input, request.Payload)
+		if err != nil {
+			return runOutcome{}, err
+		}
+		variables = agentVariables(target.DeclaredVariables, request.Variables)
+	}
 
-	conversationUUID, participantID, err := h.prepareRunConversation(ctx, schema, request, target)
+	conversationUUID, participantID, err := h.prepareRunConversation(ctx, schema, request, target, variables)
 	if err != nil {
 		return runOutcome{}, err
 	}
@@ -214,10 +268,12 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 		TargetParticipantID: participantID,
 		QuestionID:          uuid.NewString(),
 		UserInput:           request.Input,
-		// Both origins this package serves are unattended. A webhook with
-		// no body and a schedule with no input are both ordinary, and both
-		// run the pipeline from its entry node (UI-PD-3).
-		AllowEmptyUserInput: true,
+		// Both origins this package serves are unattended. For a PIPELINE a
+		// webhook with no body and a schedule with no input are both
+		// ordinary, and both run the graph from its entry node (UI-PD-3). An
+		// AGENT's input is never empty here: agentRunInput refused it, so the
+		// use case keeps its own refusal of an empty agent turn.
+		AllowEmptyUserInput: target.IsPipeline,
 		// Stamped on the execution row (shared 0140), so the analytics
 		// active-user reads do not count ActorUserID as active because this
 		// unattended run executed under their name (legacy issue 6802).
@@ -247,7 +303,12 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	// admitted this run. Both are "admitted", not "finished" — see
 	// internal/events.EventPipelineRunSucceeded's doc comment for why this
 	// package does not also emit the run's eventual outcome.
-	if h.events != nil {
+	//
+	// An AGENT run emits neither and records no pipeline run below. Both
+	// events and the run row are the PIPELINE vocabulary of the webhook
+	// catalogue; an agent run reported as "pipeline.run.started" would be a
+	// false statement to every subscriber.
+	if h.events != nil && target.IsPipeline {
 		projectID := strconv.FormatInt(request.ProjectID, 10)
 		h.events.Emit(ctx, projectID, "pipeline.run.started", map[string]any{
 			"execution_id":      outcome.ExecutionID,
@@ -275,7 +336,7 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	// effort and independent of h.events above: a webhook subscriber only
 	// needs THIS row to exist by the time settlement happens, not for the
 	// admission events to also be wired.
-	if h.runTracker != nil {
+	if h.runTracker != nil && target.IsPipeline {
 		if err := h.runTracker.RecordRunStart(ctx, pipelineruns.Run{
 			ExecutionID:      outcome.ExecutionID,
 			ProjectID:        strconv.FormatInt(request.ProjectID, 10),
@@ -309,7 +370,7 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 }
 
 func (h *Handler) prepareRunConversation(
-	ctx context.Context, schema string, request runRequest, target runTarget,
+	ctx context.Context, schema string, request runRequest, target runTarget, variables []agentVariable,
 ) (string, int64, error) {
 	transaction, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -373,7 +434,15 @@ RETURNING id, uuid::text`, schema),
 	// belongs to this conversation. ResolveCurrentApplicationTurn reads it from
 	// exactly here, which is what makes a revoked-and-reissued trigger against
 	// a NEW version run the new one.
-	agentSettings, err := json.Marshal(map[string]any{"version_id": target.VersionID})
+	//
+	// An agent's `variables` go there too: that is the request-level list
+	// ResolveCurrentApplicationTurn reads as `application_variables_json`,
+	// and the runtime re-values the version's declared variables from it.
+	settings := map[string]any{"version_id": target.VersionID}
+	if len(variables) > 0 {
+		settings["variables"] = variables
+	}
+	agentSettings, err := json.Marshal(settings)
 	if err != nil {
 		return "", 0, err
 	}

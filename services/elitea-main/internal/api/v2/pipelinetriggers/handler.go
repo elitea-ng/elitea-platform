@@ -23,6 +23,14 @@
 // refused to build and the failure MCP refused to build; a third refusal is
 // this one.
 //
+// # AGENTS, NOT ONLY PIPELINES (legacy issue 6656)
+//
+// The inbound trigger also starts an ordinary AGENT version. The credential,
+// the signature modes, the replay dedupe, the run identity and every refusal
+// are the pipeline's. What differs — the agent's input and its variables — is
+// in agentrun.go. The schedule half stays pipeline-only. The package keeps its
+// name and its routes, because a sender's URL must not change.
+//
 // # THE AUTH STORY, WHICH IS THE WHOLE RISK
 //
 // The inbound trigger is the one shape in this service where getting

@@ -218,10 +218,10 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 				"or `auth_mode: hmac_sha256` with the header the sender signs into")
 		return
 	}
-	target, err := h.resolveRunTarget(r.Context(), schema, versionID)
+	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesAndAgents)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
-		writeError(w, http.StatusNotFound, "no such pipeline version in this project")
+		writeError(w, http.StatusNotFound, "no such pipeline or agent version in this project")
 		return
 	case err != nil:
 		h.log().Error("pipelinetriggers: resolve version", "err", err)
