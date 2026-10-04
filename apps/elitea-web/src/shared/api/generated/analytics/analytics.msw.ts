@@ -872,6 +872,14 @@ export const getGetAnalyticsCostsResponseMock = (
         evaluation: faker.helpers.arrayElement([
           {
             evaluation_dimension_available: faker.datatype.boolean(),
+            attributed_since: faker.helpers.arrayElement([
+              faker.date.past().toISOString().slice(0, 19) + "Z",
+              undefined,
+            ]),
+            partial: faker.helpers.arrayElement([
+              faker.datatype.boolean(),
+              undefined,
+            ]),
             runs: faker.helpers.arrayElement([faker.number.int(), undefined]),
             totals: faker.helpers.arrayElement([
               {
@@ -998,7 +1006,6 @@ export const getGetExecutionAnalyticsResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
-  child_attributions: faker.number.int(),
   totals: faker.helpers.arrayElement([
     {
       llm_calls: faker.number.int(),
@@ -1256,6 +1263,10 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
         ]),
       },
     })),
+    undefined,
+  ]),
+  by_case_truncated: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
     undefined,
   ]),
   by_model: faker.helpers.arrayElement([

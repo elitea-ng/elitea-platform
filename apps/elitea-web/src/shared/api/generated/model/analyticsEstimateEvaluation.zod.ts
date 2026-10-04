@@ -50,6 +50,18 @@ export const AnalyticsEstimateEvaluation = zod
       .describe(
         "False for a window that ends before evaluation calls were attributed (shared migration 0140). Every other key is then absent.\n",
       ),
+    attributed_since: zod.iso
+      .datetime({ offset: true })
+      .optional()
+      .describe(
+        "When this deployment began attributing evaluation calls. Present when evaluation_dimension_available is true.\n",
+      ),
+    partial: zod
+      .boolean()
+      .optional()
+      .describe(
+        "True when the window starts before attributed_since. The figures then cover only the attributed part of the window. Absent when the window is complete.\n",
+      ),
     runs: zod.int().optional(),
     totals: AnalyticsEstimateTotals.optional(),
     agent: AnalyticsEstimateTotals.optional(),

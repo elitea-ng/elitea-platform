@@ -73,8 +73,8 @@ type UserFigures struct {
 }
 
 // ExecutionAnalytics is one runtime execution's totals (legacy issues 6667
-// and 6816): the calls that carry its execution id, and the calls of every
-// child attribution under `<execution_id>:`.
+// and 6816): the calls that carry its execution id, inside its lifetime. A
+// nested agent signs its parent's id, so its calls are part of these totals.
 type ExecutionAnalytics struct {
 	ExecutionID  string `json:"execution_id"`
 	CapabilityID string `json:"capability_id"`
@@ -91,13 +91,10 @@ type ExecutionAnalytics struct {
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 
-	// ChildAttributions is how many distinct attribution ids under
-	// `<execution_id>:` contributed calls. They are part of Totals.
-	ChildAttributions int64            `json:"child_attributions"`
-	Totals            *UsageFigures    `json:"totals,omitempty"`
-	ByModel           []ModelFigures   `json:"by_model,omitempty"`
-	ByUser            []UserFigures    `json:"by_user,omitempty"`
-	ByErrorCode       []ErrorCodeCount `json:"by_error_code,omitempty"`
+	Totals      *UsageFigures    `json:"totals,omitempty"`
+	ByModel     []ModelFigures   `json:"by_model,omitempty"`
+	ByUser      []UserFigures    `json:"by_user,omitempty"`
+	ByErrorCode []ErrorCodeCount `json:"by_error_code,omitempty"`
 
 	// ToolsAvailable is false when this database records no tool calls
 	// (shared 0119). Tools is then absent.
@@ -130,17 +127,24 @@ type EvaluationRunAnalytics struct {
 
 	// Totals is the whole run. Agent and Judge are its two roles, and they
 	// add up to Totals.
-	Totals      *UsageFigures           `json:"totals,omitempty"`
-	Agent       *UsageFigures           `json:"agent,omitempty"`
-	Judge       *UsageFigures           `json:"judge,omitempty"`
-	ByCase      []EvaluationCaseFigures `json:"by_case,omitempty"`
-	ByModel     []ModelFigures          `json:"by_model,omitempty"`
-	ByErrorCode []ErrorCodeCount        `json:"by_error_code,omitempty"`
+	Totals *UsageFigures           `json:"totals,omitempty"`
+	Agent  *UsageFigures           `json:"agent,omitempty"`
+	Judge  *UsageFigures           `json:"judge,omitempty"`
+	ByCase []EvaluationCaseFigures `json:"by_case,omitempty"`
+	// ByCaseTruncated is true when ByCase was cut to its cap. The roles and
+	// the total still cover every case.
+	ByCaseTruncated bool             `json:"by_case_truncated,omitempty"`
+	ByModel         []ModelFigures   `json:"by_model,omitempty"`
+	ByErrorCode     []ErrorCodeCount `json:"by_error_code,omitempty"`
 }
 
 // AutomatedActivity is one unattended trigger origin's share of a window
 // (legacy issues 6802 and 6881). These calls are excluded from the
 // active-user figures and still counted in every total and in the money.
+//
+// LLMCalls, the tokens and the money count COMPLETED calls, the row set of
+// the window's call and token totals, so each row is a share of them. Errors
+// counts the failed attempts, which that row set leaves out.
 type AutomatedActivity struct {
 	TriggerOrigin string `json:"trigger_origin"`
 	Executions    int64  `json:"executions"`

@@ -68,12 +68,21 @@ export const AnalyticsEvaluationRun = zod
     totals: AnalyticsUsageFigures.optional(),
     agent: AnalyticsUsageFigures.optional(),
     judge: AnalyticsUsageFigures.optional(),
-    by_case: zod.array(AnalyticsEvaluationCase).optional(),
+    by_case: zod
+      .array(AnalyticsEvaluationCase)
+      .optional()
+      .describe("One row per case, in case id order, capped at 1000 rows."),
+    by_case_truncated: zod
+      .boolean()
+      .optional()
+      .describe(
+        "True when by_case was cut to its cap. `totals`, `agent` and `judge` still cover every case. Absent when nothing was cut.\n",
+      ),
     by_model: zod.array(AnalyticsRunModel).optional(),
     by_error_code: zod.array(AnalyticsErrorCodeCount).optional(),
   })
   .describe(
-    "One evaluation run's analytics. `agent` and `judge` add up to `totals`. Source internal/domain/analytics/runs.go.\n",
+    "One evaluation run's analytics. `agent` and `judge` read the same row set as `totals` (inference routes, inside the run's lifetime), so they add up to it. Source internal/domain/analytics/runs.go.\n",
   );
 
 export type AnalyticsEvaluationRun = zod.input<typeof AnalyticsEvaluationRun>;

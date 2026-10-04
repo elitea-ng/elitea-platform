@@ -65,7 +65,7 @@ export const ProjectAnalytics = zod
       .array(AnalyticsAutomatedActivity)
       .optional()
       .describe(
-        "The window's unattended calls, one row per trigger origin (legacy issues 6802 and 6881). kpis.ai_active_users, the adoption pair, daily_activity active users and top_ai_users EXCLUDE these calls; kpis.llm_calls and kpis.total_tokens include them. Absent when the deployment cannot tell the origins apart (shared migration 0140 has not run).\n",
+        "The window's unattended calls, one row per trigger origin (legacy issues 6802 and 6881). kpis.ai_active_users, the adoption pair, daily_activity active users and top_ai_users EXCLUDE these calls; kpis.llm_calls and kpis.total_tokens include them, and each row's llm_calls and total_tokens count the same completed calls, so kpis.llm_calls minus the rows is the people's share. Absent when the deployment cannot tell the origins apart (shared migration 0140 has not run).\n",
       ),
   })
   .describe(

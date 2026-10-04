@@ -70,11 +70,6 @@ export const AnalyticsExecution = zod
       .describe(
         "before_attribution or log_pruned. Present only when available is false.",
       ),
-    child_attributions: zod
-      .int()
-      .describe(
-        "Distinct attribution ids under `<execution_id>:` that contributed calls.",
-      ),
     totals: AnalyticsUsageFigures.optional(),
     by_model: zod.array(AnalyticsRunModel).optional(),
     by_user: zod.array(AnalyticsRunUser).optional(),

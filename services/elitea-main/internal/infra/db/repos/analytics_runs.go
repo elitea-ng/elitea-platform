@@ -12,19 +12,28 @@ package repos
 // selection by id, with no window: a run is a fixed set of calls, and a date
 // range that cut one in half would report half a run.
 //
-// "Including child executions" is a PREFIX. A nested agent in the Rust and
-// Python workers runs inside its parent's claim and signs the parent's id, so
-// its calls already carry that id. Any attribution a caller derives from an
-// execution is named `<execution_id>:<suffix>`, and the read adds those calls
-// in and reports how many such ids contributed (ChildAttributions). There is
-// no second hop: a child of a child carries the same root prefix.
+// A nested agent in the Rust and Python workers runs inside its parent's
+// claim and signs the parent's EXACT id, so the run's own id selects every
+// call it made. No producer mints a derived `<execution_id>:<suffix>` id, and
+// the /llm edge refuses an inbound id with a `:`, so the reads match the
+// exact id only. One rule for every read: the execution read, the
+// active-user filter and the automated bucket.
+//
+// # Bounded by the run's lifetime
+//
+// Each run read also bounds the calls by the run's lifetime, plus
+// attributionSlackSQL on each side. Two reasons. First, it lets 0100's
+// (project_id, occurred_at) index serve the lookup: shared 0140 builds no
+// index on the log, because the runner applies every pending migration in
+// one transaction that holds execution_jobs. Second, a call outside the
+// run's lifetime was not made by the run, whatever id it carries.
 //
 // # Unavailable is not zero
 //
 // A run that started before its calls were attributed, or whose calls the
-// gateway has since pruned, has no figures. The read says so
-// (Available=false, UnavailableReason) and omits every figure, for the rule
-// the file header of analytics.go states: zero is a measurement.
+// gateway has since pruned (in whole or in part), has no figures. The read
+// says so (Available=false, UnavailableReason) and omits every figure, for
+// the rule the file header of analytics.go states: zero is a measurement.
 //
 // # Trigger origin (legacy issues 6802 and 6881)
 //
@@ -33,6 +42,15 @@ package repos
 // (shared 0140) says how the run started, and humanCallFilter drops the calls
 // of `schedule`, `webhook` and `index` runs from every figure that claims a
 // PERSON was active. Calls, tokens and money still count them.
+//
+// # The execution id is an authorization input
+//
+// A call leaves the active-user figures when its id names an unattended run,
+// so the id must not be the caller's to choose. The /llm edge keeps an
+// inbound id only for a live execution of the caller
+// (ExecutionAttributionVerifier). The reads apply the same rule in depth, so
+// a row written before the edge check cannot hide a person either: the call
+// must be made by the execution's actor, inside the execution's lifetime.
 
 import (
 	"context"
@@ -57,23 +75,42 @@ const (
 	triggerOriginMigration         = "execution_trigger_origin"         // shared 0140
 )
 
+// requestLogRetentionSQL is the gateway's request-log retention window,
+// services/elitea-llm-gateway/internal/requestlog RetentionWindow. It is a
+// compiled constant there, not configuration, so it is mirrored here as one;
+// TestRequestLogRetentionMatchesTheGateway reads the gateway source and fails
+// when the two disagree. A row older than this can be gone.
+const requestLogRetentionSQL = `interval '92 days'`
+
 // automatedOrigins are the trigger origins no person started directly.
 // executiondomain.TriggerOrigin.Automated is the same list.
 const automatedOrigins = `('schedule', 'webhook', 'index')`
 
-// automatedCall is true for a request-log row (alias l) made from an execution
-// an unattended trigger started.
+// automatedJobMatch is the condition under which an execution_jobs row
+// (alias origin_job) makes a request-log row (alias l) an unattended call.
 //
-// The project guard is the one agentAttribution applies: the id resolves only
-// inside the project the LOG row names, so a forged id cannot borrow another
-// project's origin. EXISTS rather than a join: execution_jobs is keyed
-// (execution_id, generation), and a join on the id would multiply rows.
-const automatedCall = `(l.execution_id IS NOT NULL AND EXISTS (
-    SELECT 1 FROM elitea_runtime.execution_jobs AS origin_job
-    WHERE origin_job.execution_id = l.execution_id
+//   - The project guard is the one agentAttribution applies: the id resolves
+//     only inside the project the LOG row names, so an id cannot borrow
+//     another project's origin.
+//   - The call is the actor's: an unattended run executes as its actor, and
+//     the worker signs with the actor's token. A person's own call that names
+//     somebody else's run stays theirs.
+//   - The call falls inside that generation's lifetime.
+const automatedJobMatch = `origin_job.execution_id = l.execution_id
       AND origin_job.trigger_origin IN ` + automatedOrigins + `
       AND (origin_job.resource_project_id = l.project_id
-           OR origin_job.projection_project_id = l.project_id)))`
+           OR origin_job.projection_project_id = l.project_id)
+      AND origin_job.actor_id = l.user_id::text
+      AND l.occurred_at >= origin_job.admitted_at - ` + attributionSlackSQL + `
+      AND (origin_job.settled_at IS NULL
+           OR l.occurred_at <= origin_job.settled_at + ` + attributionSlackSQL + `)`
+
+// automatedCall is true for a request-log row (alias l) made from an execution
+// an unattended trigger started. EXISTS rather than a join: execution_jobs is
+// keyed (execution_id, generation), and a join on the id would multiply rows.
+const automatedCall = `(l.execution_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM elitea_runtime.execution_jobs AS origin_job
+    WHERE ` + automatedJobMatch + `))`
 
 // humanCallFilter is the predicate fragment that keeps only the calls a
 // person made. It is empty when the database cannot tell (shared 0140 has not
@@ -105,16 +142,21 @@ SELECT EXISTS (
 }
 
 // migrationAppliedAt is when the named shared migration ran on this database.
-// Zero when the ledger has no such row.
+// Zero when the ledger has no such row, or no ledger at all.
+//
+// The ledger is PROBED first, never caught: these reads run inside a snapshot
+// transaction, and a statement that fails on a missing relation aborts it
+// (25P02 on every later statement).
 func migrationAppliedAt(ctx context.Context, q analyticsQuerier, name string) (time.Time, error) {
+	present, err := checkRelations(ctx, q, "elitea_runtime.schema_migrations")
+	if err != nil || !present {
+		return time.Time{}, err
+	}
 	var appliedAt *time.Time
 	if err := q.QueryRow(ctx, `
 SELECT min(applied_at)
 FROM elitea_runtime.schema_migrations
 WHERE target_kind = 'shared' AND name = $1`, name).Scan(&appliedAt); err != nil {
-		if missingRelation(err) {
-			return time.Time{}, nil
-		}
 		return time.Time{}, fmt.Errorf("analytics: migration ledger probe: %w", err)
 	}
 	if appliedAt == nil {
@@ -186,6 +228,11 @@ func figuresTargets(figures *analytics.UsageFigures) ([]any, func()) {
 // runRowsLimit caps a run's per-model and per-user lists. A run is one
 // person's work, so the cap is a backstop.
 const runRowsLimit = 100
+
+// evaluationCaseRowsLimit caps an evaluation run's per-case list. A dataset
+// can hold many cases, so the cap is wider than runRowsLimit, and a cut is
+// reported (ByCaseTruncated) rather than implied.
+const evaluationCaseRowsLimit = 1000
 
 func scopeTotals(ctx context.Context, q analyticsQuerier, prices bool, scope string, args ...any) (analytics.UsageFigures, error) {
 	var figures analytics.UsageFigures
@@ -293,18 +340,51 @@ LIMIT `+strconv.Itoa(errorCodeRowsLimit), args...)
 	return out, rows.Err()
 }
 
-// likePrefix escapes a prefix for `LIKE … ESCAPE '\'`. An execution id may
-// hold `_`, which LIKE reads as "any character".
+// likePrefix escapes a prefix for `LIKE … ESCAPE '\'`. An id may hold `_`,
+// which LIKE reads as "any character".
 func likePrefix(prefix string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return replacer.Replace(prefix) + "%"
 }
 
+// lifetimeOnLog bounds the log rows (alias l) by a run's lifetime: $3 is
+// when it started, $4 when it ended or NULL while it runs.
+const lifetimeOnLog = `
+  AND l.occurred_at >= $3::timestamptz - ` + attributionSlackSQL + `
+  AND l.occurred_at <= coalesce($4::timestamptz, now()) + ` + attributionSlackSQL
+
+// logPruned reports whether the gateway may have pruned calls a run made
+// since `since`. Both must hold:
+//
+//   - since is older than the gateway's retention window, so a prune can have
+//     reached the run; and
+//   - the log, across EVERY project, holds no row as old as since. The gateway
+//     prunes by age for all projects at once (requestlog Store.Prune), so the
+//     oldest row anywhere is the horizon. A per-project oldest row would read
+//     a quiet project's fully pruned log as "no calls".
+//
+// An empty log has no horizon. With since past the retention window, it
+// reads as pruned. A run that is still inside the window is never pruned,
+// which keeps a fresh install's first run measurable.
+//
+// It is asked whatever the totals are: a run that straddles the horizon has
+// SOME calls left, and its figures cover only part of the run.
+func logPruned(ctx context.Context, q analyticsQuerier, since time.Time) (bool, error) {
+	var pruned bool
+	if err := q.QueryRow(ctx, `
+SELECT $1::timestamptz < now() - `+requestLogRetentionSQL+`
+   AND coalesce((SELECT min(occurred_at) FROM gateway.llm_request_logs) > $1::timestamptz, true)`,
+		since).Scan(&pruned); err != nil {
+		return false, fmt.Errorf("analytics: log horizon: %w", err)
+	}
+	return pruned, nil
+}
+
 /* ── one execution ───────────────────────────────────────────────────── */
 
-// executionScope selects the execution's own calls and its child
-// attributions. $2 is the id, $3 its escaped `<id>:` prefix.
-const executionScope = `(l.execution_id = $2 OR l.execution_id LIKE $3 ESCAPE '\')` + inferenceRouteOnLog
+// executionScope selects the execution's calls: $2 is the id, $3 and $4 its
+// lifetime (lifetimeOnLog).
+const executionScope = `l.execution_id = $2` + lifetimeOnLog + inferenceRouteOnLog
 
 // GetExecutionAnalytics is one runtime execution's totals.
 func (r *AnalyticsRepo) GetExecutionAnalytics(ctx context.Context, projectIDRaw, executionID string) (analytics.ExecutionAnalytics, error) {
@@ -358,35 +438,27 @@ func (r *AnalyticsRepo) GetExecutionAnalytics(ctx context.Context, projectIDRaw,
 		result.UnavailableReason = analytics.UnavailableBeforeAttribution
 		return result, nil
 	}
+	pruned, err := logPruned(ctx, tx, result.AdmittedAt)
+	if err != nil {
+		return analytics.ExecutionAnalytics{}, err
+	}
+	if pruned {
+		result.UnavailableReason = analytics.UnavailableLogPruned
+		return result, nil
+	}
 
 	prices, err := checkRelations(ctx, tx, "gateway.gateway_models")
 	if err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
-	args := []any{id, executionID, likePrefix(executionID + ":")}
+	args := []any{id, executionID, result.AdmittedAt, result.SettledAt}
 	totals, err := scopeTotals(ctx, tx, prices, executionScope, args...)
 	if err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
-	if totals.LLMCalls == 0 {
-		pruned, err := logPrunedBefore(ctx, tx, id, result.AdmittedAt)
-		if err != nil {
-			return analytics.ExecutionAnalytics{}, err
-		}
-		if pruned {
-			result.UnavailableReason = analytics.UnavailableLogPruned
-			return result, nil
-		}
-	}
 	result.Available = true
 	result.Totals = &totals
 
-	if err := tx.QueryRow(ctx, `
-SELECT count(DISTINCT l.execution_id) FILTER (WHERE l.execution_id <> $2)::bigint
-FROM gateway.llm_request_logs AS l
-WHERE l.project_id = $1 AND `+executionScope, args...).Scan(&result.ChildAttributions); err != nil {
-		return analytics.ExecutionAnalytics{}, fmt.Errorf("analytics: child attributions: %w", err)
-	}
 	if result.ByModel, err = scopeByModel(ctx, tx, prices, executionScope, args...); err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
@@ -433,23 +505,6 @@ LIMIT 1`, id, executionID).Scan(&result.CapabilityID, &result.TriggerOrigin, &re
 	return result, nil
 }
 
-// logPrunedBefore reports whether the request log no longer reaches back to
-// `since` for this project: the oldest row it holds is younger.
-//
-// It is asked only for a run with NO calls in the log, to tell "this run made
-// no model call" from "the gateway pruned its calls". The one case it reads
-// wrongly is a run that made no call before the project's first ever logged
-// call, and that run's figures are zero either way.
-func logPrunedBefore(ctx context.Context, q analyticsQuerier, id int64, since time.Time) (bool, error) {
-	var oldest *time.Time
-	if err := q.QueryRow(ctx,
-		`SELECT min(occurred_at) FROM gateway.llm_request_logs WHERE project_id = $1`, id,
-	).Scan(&oldest); err != nil {
-		return false, fmt.Errorf("analytics: log horizon: %w", err)
-	}
-	return oldest != nil && oldest.After(since), nil
-}
-
 // executionTools is the run's tool calls from elitea_runtime.tool_call_records
 // (shared 0119), which carries the execution id for an explicit tool run and,
 // from issue 875 on, for an agent turn's tool calls.
@@ -469,10 +524,10 @@ SELECT coalesce(r.toolkit_id::text, ''),
                 FILTER (WHERE r.finished_at IS NOT NULL), 0)::double precision
 FROM elitea_runtime.tool_call_records AS r
 WHERE r.project_id = $1
-  AND (r.execution_id = $2 OR r.execution_id LIKE $3 ESCAPE '\')
+  AND r.execution_id = $2
 GROUP BY r.toolkit_id, r.toolkit_name, r.tool_name
 ORDER BY count(*) DESC, r.tool_name ASC
-LIMIT $4`, id, executionID, likePrefix(executionID+":"), toolRowsLimit)
+LIMIT $3`, id, executionID, toolRowsLimit)
 	if err != nil {
 		return fmt.Errorf("analytics: execution tools: %w", err)
 	}
@@ -495,7 +550,7 @@ LIMIT $4`, id, executionID, likePrefix(executionID+":"), toolRowsLimit)
 
 // validAttributionID is the edge's execution id rule
 // (internal/llmproxy/identity.go executionIDFromHeader): nothing outside it
-// can be in the column, so it is refused as a bad request.
+// can name an execution, so it is refused as a bad request.
 func validAttributionID(value string) bool {
 	if value == "" || len(value) > 128 {
 		return false
@@ -504,7 +559,7 @@ func validAttributionID(value string) bool {
 		c := value[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '-', c == '_', c == '.', c == ':':
+		case c == '-', c == '_', c == '.':
 		default:
 			return false
 		}
@@ -514,10 +569,12 @@ func validAttributionID(value string) bool {
 
 /* ── one evaluation run ─────────────────────────────────────────────── */
 
-// evaluationScope selects every call of one evaluation run. $2 is the
-// escaped `eval:<run>:` prefix. The role segment follows it: `case` for the
-// agent turn and `judge` for a judge call.
-const evaluationScope = `l.execution_id LIKE $2 ESCAPE '\'` + inferenceRouteOnLog
+// evaluationScope selects calls of one evaluation run. $2 is an escaped
+// prefix: `eval:<run>:` for the whole run, `eval:<run>:case:` for the agent
+// role and `eval:<run>:judge:` for the judge role. $3 and $4 are the run's
+// lifetime. Every figure of the read uses this one scope, so the two roles
+// add up to the total.
+const evaluationScope = `l.execution_id LIKE $2 ESCAPE '\'` + lifetimeOnLog + inferenceRouteOnLog
 
 // GetEvaluationRunAnalytics is one evaluation run's spend.
 func (r *AnalyticsRepo) GetEvaluationRunAnalytics(ctx context.Context, projectIDRaw, runID string) (analytics.EvaluationRunAnalytics, error) {
@@ -578,43 +635,51 @@ WHERE id = $1`, run).Scan(&result.ApplicationID, &result.ApplicationVersionID, &
 		result.UnavailableReason = analytics.UnavailableBeforeAttribution
 		return result, nil
 	}
+	pruned, err := logPruned(ctx, tx, result.CreatedAt)
+	if err != nil {
+		return analytics.EvaluationRunAnalytics{}, err
+	}
+	if pruned {
+		result.UnavailableReason = analytics.UnavailableLogPruned
+		return result, nil
+	}
 
 	prices, err := checkRelations(ctx, tx, "gateway.gateway_models")
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	prefix := "eval:" + result.RunID + ":"
-	args := []any{id, likePrefix(prefix)}
+	args := []any{id, likePrefix(prefix), result.CreatedAt, result.FinishedAt}
 	totals, err := scopeTotals(ctx, tx, prices, evaluationScope, args...)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	if totals.LLMCalls == 0 {
-		pruned, err := logPrunedBefore(ctx, tx, id, result.CreatedAt)
+		unsigned, err := evaluationRunAnswered(ctx, tx, schema, run)
 		if err != nil {
 			return analytics.EvaluationRunAnalytics{}, err
 		}
-		if pruned {
-			result.UnavailableReason = analytics.UnavailableLogPruned
+		if unsigned {
+			result.UnavailableReason = analytics.UnavailableBeforeAttribution
 			return result, nil
 		}
 	}
 	result.Available = true
 	result.Totals = &totals
 
-	agent, err := scopeTotals(ctx, tx, prices, `l.execution_id LIKE $2 ESCAPE '\'`,
-		id, likePrefix(prefix+"case:"))
+	agent, err := scopeTotals(ctx, tx, prices, evaluationScope,
+		id, likePrefix(prefix+"case:"), result.CreatedAt, result.FinishedAt)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
-	judge, err := scopeTotals(ctx, tx, prices, `l.execution_id LIKE $2 ESCAPE '\'`,
-		id, likePrefix(prefix+"judge:"))
+	judge, err := scopeTotals(ctx, tx, prices, evaluationScope,
+		id, likePrefix(prefix+"judge:"), result.CreatedAt, result.FinishedAt)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	result.Agent, result.Judge = &agent, &judge
 
-	if result.ByCase, err = evaluationByCase(ctx, tx, prices, args...); err != nil {
+	if result.ByCase, result.ByCaseTruncated, err = evaluationByCase(ctx, tx, prices, args...); err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	if result.ByModel, err = scopeByModel(ctx, tx, prices, evaluationScope, args...); err != nil {
@@ -626,20 +691,47 @@ WHERE id = $1`, run).Scan(&result.ApplicationID, &result.ApplicationVersionID, &
 	return result, nil
 }
 
+// evaluationRunAnswered reports whether the run recorded an `ok` result. An
+// ok result is an agent answer the orchestrator scored, so the run made at
+// least one model call. With no attributed call in the log, those calls were
+// made UNSIGNED: by a pod of the previous release that ran the run after the
+// migration was applied but before the new release rolled out. The figures
+// are then not zero but unknown.
+func evaluationRunAnswered(ctx context.Context, q analyticsQuerier, schema string, run int64) (bool, error) {
+	present, err := checkRelations(ctx, q, schema+".eval_results")
+	if err != nil || !present {
+		return false, err
+	}
+	var answered bool
+	if err := q.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM `+schema+`.eval_results WHERE run_id = $1 AND status = 'ok')`,
+		run).Scan(&answered); err != nil {
+		return false, fmt.Errorf("analytics: evaluation results probe: %w", err)
+	}
+	return answered, nil
+}
+
 // evaluationByCase folds the run's calls into one row per case, with the
 // agent and judge roles side by side. The case id is the fourth `:` segment
 // of `eval:<run>:<role>:<case>`.
-func evaluationByCase(ctx context.Context, q analyticsQuerier, prices bool, args ...any) ([]analytics.EvaluationCaseFigures, error) {
-	rows, err := q.Query(ctx, figuresSource(prices, evaluationScope)+`
-SELECT split_part(execution_id, ':', 4) AS case_id,
-       split_part(execution_id, ':', 3) AS role,
-       `+figuresColumns+`
-FROM calls
-WHERE split_part(execution_id, ':', 3) IN ('case', 'judge')
-GROUP BY 1, 2
-ORDER BY 1, 2`, args...)
+//
+// It returns at most evaluationCaseRowsLimit cases, in case-id order, and
+// says when it cut the list.
+func evaluationByCase(ctx context.Context, q analyticsQuerier, prices bool, args ...any) ([]analytics.EvaluationCaseFigures, bool, error) {
+	rows, err := q.Query(ctx, figuresSource(prices, evaluationScope)+`, roles AS (
+    SELECT calls.*, split_part(execution_id, ':', 4) AS case_id, split_part(execution_id, ':', 3) AS role
+    FROM calls
+    WHERE split_part(execution_id, ':', 3) IN ('case', 'judge')
+), kept AS (
+    SELECT DISTINCT case_id FROM roles ORDER BY case_id LIMIT `+strconv.Itoa(evaluationCaseRowsLimit+1)+`
+)
+SELECT case_id, role, `+figuresColumns+`
+FROM roles
+WHERE case_id IN (SELECT case_id FROM kept)
+GROUP BY case_id, role
+ORDER BY case_id, role`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: evaluation cases: %w", err)
+		return nil, false, fmt.Errorf("analytics: evaluation cases: %w", err)
 	}
 	defer rows.Close()
 
@@ -652,7 +744,7 @@ ORDER BY 1, 2`, args...)
 		)
 		targets, fold := figuresTargets(&figures)
 		if err := rows.Scan(append([]any{&caseID, &role}, targets...)...); err != nil {
-			return nil, fmt.Errorf("analytics: evaluation cases scan: %w", err)
+			return nil, false, fmt.Errorf("analytics: evaluation cases scan: %w", err)
 		}
 		fold()
 		entry, ok := byCase[caseID]
@@ -668,13 +760,17 @@ ORDER BY 1, 2`, args...)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	truncated := len(order) > evaluationCaseRowsLimit
+	if truncated {
+		order = order[:evaluationCaseRowsLimit]
 	}
 	out := make([]analytics.EvaluationCaseFigures, 0, len(order))
 	for _, caseID := range order {
 		out = append(out, *byCase[caseID])
 	}
-	return out, nil
+	return out, truncated, nil
 }
 
 /* ── automated activity in a window ─────────────────────────────────── */
@@ -682,6 +778,15 @@ ORDER BY 1, 2`, args...)
 // automatedActivity is the window's unattended calls, one row per trigger
 // origin: the separate bucket legacy issue 6802 asks for. The caller asks it
 // only when trigger_origin is readable.
+//
+// A call is unattended under automatedJobMatch, the rule humanCallFilter
+// negates, so a call is in exactly one of the two sides.
+//
+// The call, token and money figures count COMPLETED calls, the row set of
+// kpis.llm_calls and kpis.total_tokens (completedCallOnLog), so each bucket
+// is a share of those totals. Errors counts the failed ATTEMPTS, which the
+// completed set leaves out by definition. Executions and users count every
+// run and person with an attempt.
 func automatedActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) ([]analytics.AutomatedActivity, error) {
 	prices, err := checkRelations(ctx, q, "gateway.gateway_models")
 	if err != nil {
@@ -695,39 +800,54 @@ func automatedActivity(ctx context.Context, q analyticsQuerier, id int64, params
       ON m.provider = l.provider AND m.model_name = l.model`
 	}
 	rows, err := q.Query(ctx, `
-WITH origin AS (
-    SELECT DISTINCT ON (j.execution_id) j.execution_id, j.trigger_origin
-    FROM elitea_runtime.execution_jobs AS j
-    WHERE j.trigger_origin IN `+automatedOrigins+`
-      AND (j.resource_project_id = $1 OR j.projection_project_id = $1)
-    ORDER BY j.execution_id, j.generation
-), calls AS (
+WITH attempts AS (
     SELECT l.*, origin.trigger_origin, `+rateSelect+`
     FROM gateway.llm_request_logs AS l
-    JOIN origin ON origin.execution_id = l.execution_id`+rateJoin+`
+    CROSS JOIN LATERAL (
+        SELECT origin_job.trigger_origin
+        FROM elitea_runtime.execution_jobs AS origin_job
+        WHERE `+automatedJobMatch+`
+        ORDER BY origin_job.generation
+        LIMIT 1
+    ) AS origin`+rateJoin+`
     WHERE l.project_id = $1
       AND l.occurred_at >= $2
-      AND l.occurred_at < $3`+inferenceRouteOnLog+`
+      AND l.occurred_at < $3
+      AND l.execution_id IS NOT NULL`+inferenceRouteOnLog+`
+), calls AS (
+    SELECT * FROM attempts WHERE `+analytics.CompletedStatusSQL+`
+), buckets AS (
+    SELECT trigger_origin,
+           count(DISTINCT execution_id)::bigint AS executions,
+           count(DISTINCT user_id)::bigint AS users,
+           count(*) FILTER (WHERE `+errorPredicate+`)::bigint AS failed
+    FROM attempts
+    GROUP BY trigger_origin
 )
-SELECT trigger_origin,
-       count(DISTINCT execution_id)::bigint,
-       count(DISTINCT user_id)::bigint,
-       `+figuresColumns+`
-FROM calls
-GROUP BY trigger_origin
-ORDER BY trigger_origin`, id, params.From, params.To)
+SELECT buckets.trigger_origin, buckets.executions, buckets.users, buckets.failed, figures.*
+FROM buckets
+CROSS JOIN LATERAL (
+    SELECT `+figuresColumns+`
+    FROM calls
+    WHERE calls.trigger_origin = buckets.trigger_origin
+) AS figures
+ORDER BY buckets.trigger_origin`, id, params.From, params.To)
 	if err != nil {
 		return nil, fmt.Errorf("analytics: automated activity: %w", err)
 	}
 	defer rows.Close()
 	out := make([]analytics.AutomatedActivity, 0)
 	for rows.Next() {
-		var row analytics.AutomatedActivity
+		var (
+			row    analytics.AutomatedActivity
+			failed int64
+		)
 		targets, fold := figuresTargets(&row.UsageFigures)
-		if err := rows.Scan(append([]any{&row.TriggerOrigin, &row.Executions, &row.Users}, targets...)...); err != nil {
+		if err := rows.Scan(append([]any{&row.TriggerOrigin, &row.Executions, &row.Users, &failed}, targets...)...); err != nil {
 			return nil, fmt.Errorf("analytics: automated activity scan: %w", err)
 		}
 		fold()
+		row.Errors = failed
 		out = append(out, row)
 	}
 	return out, rows.Err()

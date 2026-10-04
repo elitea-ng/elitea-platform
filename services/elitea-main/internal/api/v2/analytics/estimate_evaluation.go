@@ -24,6 +24,14 @@ package analytics
 // before the release that ran shared migration 0140, so a window that ENDS
 // before that migration was applied cannot speak for evaluation spend. It is
 // reported unavailable, with no figures, rather than as zero.
+//
+// A window that STARTS before that time and ends after it holds only the
+// attributed part of its evaluation spend. It is reported with partial=true
+// and attributed_since, so a client does not show a part as the whole. The
+// boundary is the migration's apply time, which is also an approximation: a
+// pod of the previous release can still run an evaluation between the
+// migration and the rollout. That gap is one more reason a window close to
+// attributed_since is partial.
 
 import (
 	"context"
@@ -52,6 +60,11 @@ type estimateEvaluation struct {
 	// Available is false for a window that ends before evaluation calls were
 	// attributed. Every other field is then absent.
 	Available bool `json:"evaluation_dimension_available"`
+	// AttributedSince is when this database began attributing evaluation
+	// calls. Partial is true when the window starts before it: the figures
+	// then cover only the attributed part of the window.
+	AttributedSince *time.Time `json:"attributed_since,omitempty"`
+	Partial         bool       `json:"partial,omitempty"`
 	// Runs is how many evaluation runs made a call in the window.
 	Runs   int64           `json:"runs,omitempty"`
 	Totals *estimateTotals `json:"totals,omitempty"`
@@ -93,6 +106,9 @@ func buildEstimateEvaluation(ctx context.Context, tx pgx.Tx, estimate *costEstim
 		return nil
 	}
 	block.Available = true
+	attributedSince := since.UTC()
+	block.AttributedSince = &attributedSince
+	block.Partial = from.Before(since)
 
 	totals, runs, err := evaluationTotals(ctx, tx, pricesPresent, priced, projectID, from, to, `'eval:%'`)
 	if err != nil {

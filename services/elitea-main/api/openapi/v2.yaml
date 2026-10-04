@@ -1454,6 +1454,9 @@ components:
         llm_calls:
           type: integer
           format: int64
+          description: >
+            Completed calls (status below 400), the row set of kpis.llm_calls.
+            This row is a share of that total.
         prompt_tokens:
           type: integer
           format: int64
@@ -1466,7 +1469,9 @@ components:
         errors:
           type: integer
           format: int64
-          description: Calls the gateway answered with status 400 or higher.
+          description: >
+            Failed attempts (status 400 or higher). llm_calls leaves them
+            out, as kpis.llm_calls does.
         avg_duration_ms:
           type: number
         unpriced_calls:
@@ -1485,13 +1490,15 @@ components:
       description: >
         One unattended trigger origin's calls in the window (legacy issues
         6802 and 6881). These calls are excluded from every active-user figure
-        and still counted in every total.
+        and still counted in every total. A call is unattended only when the
+        run's actor made it inside the run's lifetime. executions and users
+        count every run and person with an attempt.
 
     AnalyticsExecution:
       type: object
       required:
         [execution_id, capability_id, trigger_origin, actor_user_id, state,
-         admitted_at, available, child_attributions, tool_dimension_available]
+         admitted_at, available, tool_dimension_available]
       properties:
         execution_id: { type: string }
         capability_id: { type: string }
@@ -1508,10 +1515,6 @@ components:
         unavailable_reason:
           type: string
           description: before_attribution or log_pruned. Present only when available is false.
-        child_attributions:
-          type: integer
-          format: int64
-          description: Distinct attribution ids under `<execution_id>:` that contributed calls.
         totals: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
         by_model:
           type: array
@@ -1562,6 +1565,12 @@ components:
         by_case:
           type: array
           items: { $ref: '#/components/schemas/AnalyticsEvaluationCase' }
+          description: One row per case, in case id order, capped at 1000 rows.
+        by_case_truncated:
+          type: boolean
+          description: >
+            True when by_case was cut to its cap. `totals`, `agent` and
+            `judge` still cover every case. Absent when nothing was cut.
         by_model:
           type: array
           items: { $ref: '#/components/schemas/AnalyticsRunModel' }
@@ -1569,8 +1578,9 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AnalyticsErrorCodeCount' }
       description: >
-        One evaluation run's analytics. `agent` and `judge` add up to
-        `totals`. Source internal/domain/analytics/runs.go.
+        One evaluation run's analytics. `agent` and `judge` read the same row
+        set as `totals` (inference routes, inside the run's lifetime), so they
+        add up to it. Source internal/domain/analytics/runs.go.
 
     AnalyticsEstimateEvaluation:
       type: object
@@ -1582,6 +1592,18 @@ components:
             False for a window that ends before evaluation calls were
             attributed (shared migration 0140). Every other key is then
             absent.
+        attributed_since:
+          type: string
+          format: date-time
+          description: >
+            When this deployment began attributing evaluation calls. Present
+            when evaluation_dimension_available is true.
+        partial:
+          type: boolean
+          description: >
+            True when the window starts before attributed_since. The figures
+            then cover only the attributed part of the window. Absent when
+            the window is complete.
         runs:
           type: integer
           format: int64
@@ -4531,7 +4553,9 @@ components:
             The window's unattended calls, one row per trigger origin (legacy
             issues 6802 and 6881). kpis.ai_active_users, the adoption pair,
             daily_activity active users and top_ai_users EXCLUDE these calls;
-            kpis.llm_calls and kpis.total_tokens include them. Absent when the
+            kpis.llm_calls and kpis.total_tokens include them, and each row's
+            llm_calls and total_tokens count the same completed calls, so
+            kpis.llm_calls minus the rows is the people's share. Absent when the
             deployment cannot tell the origins apart (shared migration 0140
             has not run).
       description: >
@@ -11987,20 +12011,25 @@ paths:
         schema: { type: string, maxLength: 128 }
         description: >
           The runtime execution id. It is the task_id of the agent response
-          the run produced. Letters, digits and the characters - _ . : only.
+          the run produced. Letters, digits and the characters - _ . only.
     get:
       operationId: getExecutionAnalytics
       summary: One runtime execution's tokens, estimated cost, models and tools
       description: |
         Legacy issues 6667 and 6816. Reads gateway.llm_request_logs by the
         execution id, with NO date window: a run is a fixed set of calls. The
-        figures include child attributions, which are the calls signed with an
-        id of the form `<execution_id>:<suffix>`.
+        calls must carry the exact id and fall inside the run's lifetime. A
+        nested agent signs its parent's id, so its calls are included.
 
         `available: false` is not zero. A run admitted before shared migration
-        0100, or a run whose calls the gateway has pruned, answers 200 with
-        `available: false`, an `unavailable_reason` and NO figure keys. A run
-        that made no model call answers `available: true` with zero totals.
+        0100 answers 200 with `available: false`, an `unavailable_reason` and
+        NO figure keys. So does a run older than the gateway's request-log
+        retention whose start the log no longer reaches, even when some of its
+        calls are left. A run that made no model call answers
+        `available: true` with zero totals.
+
+        The /llm edge signs an inbound execution id only for a live execution
+        of the caller, so another person cannot add spend to this run.
 
         Money is an ESTIMATE at the gateway.gateway_models catalogue rate, the
         same estimate /analytics_costs publishes under `estimate`.
@@ -12055,7 +12084,11 @@ paths:
 
         A run created before the release that signs these calls (shared
         migration 0140) answers `available: false` with no figures, never
-        zero. Gated on the run read permission AND the analytics permission.
+        zero. So does a run that scored an answer but has no signed call (a
+        pod of the previous release ran it), and a run whose calls the gateway
+        has pruned. The calls must fall inside the run's lifetime. The /llm
+        edge refuses an inbound `eval:` id, so a caller cannot add spend to a
+        run. Gated on the run read permission AND the analytics permission.
       tags: [analytics]
       responses:
         '200':

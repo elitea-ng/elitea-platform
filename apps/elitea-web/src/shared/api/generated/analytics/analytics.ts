@@ -2079,13 +2079,18 @@ export const getGetExecutionAnalyticsUrl = (
 /**
  * Legacy issues 6667 and 6816. Reads gateway.llm_request_logs by the
  * execution id, with NO date window: a run is a fixed set of calls. The
- * figures include child attributions, which are the calls signed with an
- * id of the form `<execution_id>:<suffix>`.
+ * calls must carry the exact id and fall inside the run's lifetime. A
+ * nested agent signs its parent's id, so its calls are included.
  *
  * `available: false` is not zero. A run admitted before shared migration
- * 0100, or a run whose calls the gateway has pruned, answers 200 with
- * `available: false`, an `unavailable_reason` and NO figure keys. A run
- * that made no model call answers `available: true` with zero totals.
+ * 0100 answers 200 with `available: false`, an `unavailable_reason` and
+ * NO figure keys. So does a run older than the gateway's request-log
+ * retention whose start the log no longer reaches, even when some of its
+ * calls are left. A run that made no model call answers
+ * `available: true` with zero totals.
+ *
+ * The /llm edge signs an inbound execution id only for a live execution
+ * of the caller, so another person cannot add spend to this run.
  *
  * Money is an ESTIMATE at the gateway.gateway_models catalogue rate, the
  * same estimate /analytics_costs publishes under `estimate`.
@@ -2351,7 +2356,11 @@ export const getGetEvaluationRunAnalyticsUrl = (
  *
  * A run created before the release that signs these calls (shared
  * migration 0140) answers `available: false` with no figures, never
- * zero. Gated on the run read permission AND the analytics permission.
+ * zero. So does a run that scored an answer but has no signed call (a
+ * pod of the previous release ran it), and a run whose calls the gateway
+ * has pruned. The calls must fall inside the run's lifetime. The /llm
+ * edge refuses an inbound `eval:` id, so a caller cannot add spend to a
+ * run. Gated on the run read permission AND the analytics permission.
  * @summary One evaluation run's tokens and estimated cost, agent and judge apart
  */
 export const getEvaluationRunAnalytics = async (

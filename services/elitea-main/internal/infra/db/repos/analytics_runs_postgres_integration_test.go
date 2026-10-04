@@ -39,8 +39,17 @@ WHERE target_kind = 'shared' AND name IN ($1, $2)`,
 }
 
 // seedOriginExecution writes one execution_jobs row with a trigger origin and
-// an admission time.
+// an admission time. The actor is user 8, and the run has not settled.
 func seedOriginExecution(t *testing.T, pool *pgxpool.Pool, projectID int64, executionID, origin string, admittedAt time.Time) {
+	t.Helper()
+	seedOriginExecutionAs(t, pool, projectID, executionID, origin, "8", admittedAt, nil)
+}
+
+// seedOriginExecutionAs is seedOriginExecution with an explicit actor and
+// settlement time.
+func seedOriginExecutionAs(t *testing.T, pool *pgxpool.Pool, projectID int64, executionID, origin, actor string,
+	admittedAt time.Time, settledAt *time.Time,
+) {
 	t.Helper()
 	backdateAttributionBoundary(t, pool)
 	ctx := context.Background()
@@ -57,18 +66,26 @@ INSERT INTO elitea_runtime.execution_jobs (
     execution_id, generation, command_id, tenant_id, resource_project_id,
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest, idempotency_scope,
-    idempotency_key, state, desired_state, admitted_at, trigger_origin
+    idempotency_key, state, desired_state, admitted_at, trigger_origin, settled_at
 ) VALUES (
-    $1, 1, 'cmd-'||$1, $2::bigint::text, $2::integer, $2::integer, '8', '8',
+    $1, 1, 'cmd-'||$1, $2::bigint::text, $2::integer, $2::integer, $6, $6,
     'agent.execute.application.v1', 'v1', $3,
     decode(repeat('61', 32), 'hex'), 'scope-'||$1, 'key-'||$1, 'SUCCEEDED', 'RUNNING',
-    $4, $5
-)`, executionID, projectID, "bundle-"+executionID, admittedAt, origin)
+    $4, $5, $7
+)`, executionID, projectID, "bundle-"+executionID, admittedAt, origin, actor, settledAt)
 	require.NoError(t, err, "seed execution job")
 }
 
-// plantRunCall writes one request-log row.
+// plantRunCall writes one request-log row on the chat completions route.
 func plantRunCall(t *testing.T, pool *pgxpool.Pool, projectID int64, userID int, executionID string,
+	at time.Time, model string, status int, prompt, completion int64,
+) {
+	t.Helper()
+	plantRunCallOnRoute(t, pool, projectID, userID, executionID, "/llm/v1/chat/completions", at, model, status, prompt, completion)
+}
+
+// plantRunCallOnRoute writes one request-log row on route.
+func plantRunCallOnRoute(t *testing.T, pool *pgxpool.Pool, projectID int64, userID int, executionID, route string,
 	at time.Time, model string, status int, prompt, completion int64,
 ) {
 	t.Helper()
@@ -84,9 +101,9 @@ func plantRunCall(t *testing.T, pool *pgxpool.Pool, projectID int64, userID int,
 INSERT INTO gateway.llm_request_logs
     (occurred_at, project_id, user_id, route, method, status, duration_ms,
      provider, model, prompt_tokens, completion_tokens, execution_id, error_code)
-VALUES ($1, $2, $3, '/llm/v1/chat/completions', 'POST', $4::smallint, 200,
+VALUES ($1, $2, $3, $10, 'POST', $4::smallint, 200,
         'openai', $5, $6, $7, $8, $9)`,
-		at, projectID, userID, status, model, prompt, completion, execution, errorCode)
+		at, projectID, userID, status, model, prompt, completion, execution, errorCode, route)
 	require.NoError(t, err, "plant request log row")
 }
 
@@ -110,10 +127,11 @@ func numberString(t *testing.T, value *json.Number) string {
 
 /* ── one execution ─────────────────────────────────────────────────────── */
 
-// The per-execution sum includes the run's own calls and its child
-// attributions, and nothing else: not another execution, not an id that only
-// shares a prefix without the `:` separator, not another project's calls.
-func TestExecutionAnalyticsSumsTheRunAndItsChildAttributions(t *testing.T) {
+// The per-execution sum is the run's own calls inside its lifetime, and
+// nothing else: not another execution, not a derived `<id>:` attribution (no
+// producer mints one, and the edge refuses one), not a call outside the run's
+// lifetime, not another project's calls.
+func TestExecutionAnalyticsSumsTheRunsOwnCalls(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewAnalyticsRepo(pool)
 	ctx := context.Background()
@@ -124,12 +142,13 @@ func TestExecutionAnalyticsSumsTheRunAndItsChildAttributions(t *testing.T) {
 
 	plantRunCall(t, pool, 1, 7, "exec_run", now, "gpt-4o", 200, 100, 10)
 	plantRunCall(t, pool, 1, 7, "exec_run", now, "gpt-4o", 500, 50, 0)
+	// Not part of the run: a derived id, another execution, a call that names
+	// the run an hour before it was admitted, a call on a non-inference
+	// route, and an unattributed call.
 	plantRunCall(t, pool, 1, 7, "exec_run:child-1", now, "gpt-4o-mini", 200, 20, 5)
-	// Not part of the run: another execution, a look-alike id with no
-	// separator (the `_` in the id must not act as a LIKE wildcard), and the
-	// same id in another project's log.
 	plantRunCall(t, pool, 1, 7, "exec_runner", now, "gpt-4o", 200, 1000, 1000)
-	plantRunCall(t, pool, 1, 7, "execXrun:child", now, "gpt-4o", 200, 1000, 1000)
+	plantRunCall(t, pool, 1, 7, "exec_run", now.Add(-time.Hour), "gpt-4o", 200, 1000, 1000)
+	plantRunCallOnRoute(t, pool, 1, 7, "exec_run", "/llm/v1/models", now, "gpt-4o", 200, 1000, 1000)
 	plantRunCall(t, pool, 1, 7, "", now, "gpt-4o", 200, 1000, 1000)
 	recordRunToolCall(t, pool, "exec_run", false)
 	recordRunToolCall(t, pool, "exec_run:child-1", true)
@@ -143,35 +162,36 @@ func TestExecutionAnalyticsSumsTheRunAndItsChildAttributions(t *testing.T) {
 	require.NotNil(t, result.Totals)
 
 	totals := *result.Totals
-	require.EqualValues(t, 3, totals.LLMCalls, "the run's two calls and its child's one")
-	require.EqualValues(t, 170, totals.PromptTokens)
-	require.EqualValues(t, 15, totals.CompletionTokens)
-	require.EqualValues(t, 185, totals.TotalTokens)
+	require.EqualValues(t, 2, totals.LLMCalls, "the run's two calls")
+	require.EqualValues(t, 150, totals.PromptTokens)
+	require.EqualValues(t, 10, totals.CompletionTokens)
+	require.EqualValues(t, 160, totals.TotalTokens)
 	require.EqualValues(t, 1, totals.Errors)
-	require.EqualValues(t, 1, result.ChildAttributions)
-	// gpt-4o-mini has no catalogue price, so one call is unpriced and the
-	// money covers the two gpt-4o calls: (150*2 + 10*10) / 1e6.
-	require.EqualValues(t, 1, totals.UnpricedCalls)
+	require.EqualValues(t, 0, totals.UnpricedCalls)
+	// (150*2 + 10*10) / 1e6.
 	require.Equal(t, "0.000300000000", numberString(t, totals.InputCost))
 	require.Equal(t, "0.000100000000", numberString(t, totals.OutputCost))
 	require.Equal(t, "0.000400000000", numberString(t, totals.TotalCost))
 
-	require.Len(t, result.ByModel, 2)
+	require.Len(t, result.ByModel, 1)
 	require.Equal(t, "gpt-4o", result.ByModel[0].Model)
 	require.EqualValues(t, 2, result.ByModel[0].LLMCalls)
-	require.Nil(t, result.ByModel[1].TotalCost, "an unpriced model publishes no money")
 
 	require.Len(t, result.ByUser, 1)
 	require.Equal(t, "7", result.ByUser[0].UserID)
-	require.EqualValues(t, 3, result.ByUser[0].LLMCalls)
+	require.EqualValues(t, 2, result.ByUser[0].LLMCalls)
 
 	require.Len(t, result.ByErrorCode, 1)
 	require.Equal(t, "upstream_error", result.ByErrorCode[0].ErrorCode)
 
 	require.True(t, result.ToolsAvailable)
 	require.Len(t, result.Tools, 1)
-	require.EqualValues(t, 2, result.Tools[0].RunCount, "the run's tool call and its child's")
-	require.EqualValues(t, 1, result.Tools[0].ErrorCount)
+	require.EqualValues(t, 1, result.Tools[0].RunCount, "the run's own tool call")
+	require.EqualValues(t, 0, result.Tools[0].ErrorCount)
+
+	body, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "child_attributions")
 
 	_, err = repo.GetExecutionAnalytics(ctx, "2", "exec_run")
 	require.True(t, errors.Is(err, analytics.ErrNotFound), "another project must not resolve the id: %v", err)
@@ -179,6 +199,8 @@ func TestExecutionAnalyticsSumsTheRunAndItsChildAttributions(t *testing.T) {
 	require.True(t, errors.Is(err, analytics.ErrNotFound), "%v", err)
 	_, err = repo.GetExecutionAnalytics(ctx, "1", "bad id")
 	require.True(t, errors.Is(err, analytics.ErrBadID), "%v", err)
+	_, err = repo.GetExecutionAnalytics(ctx, "1", "exec_run:child-1")
+	require.True(t, errors.Is(err, analytics.ErrBadID), "a derived id names no execution: %v", err)
 }
 
 // A run admitted before shared 0100 has no attributed call. It reports
@@ -200,35 +222,76 @@ func TestExecutionAnalyticsBeforeAttributionIsUnavailable(t *testing.T) {
 	require.NotContains(t, string(body), `"llm_calls"`)
 }
 
-// A run with no call in the log is either a run that made none (zero is the
-// measurement) or a run whose calls were pruned (unavailable). The log's
-// horizon tells them apart.
-func TestExecutionAnalyticsTellsANoCallRunFromAPrunedOne(t *testing.T) {
+// The gateway prunes its log by age for every project at once. A run older
+// than the retention window whose start the log no longer reaches is
+// unavailable, whether or not some of its calls are left. A run inside the
+// window, or one the log still reaches, is measured.
+func TestExecutionAnalyticsReportsAPrunedRunAsUnavailable(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewAnalyticsRepo(pool)
 	ctx := context.Background()
 	now := time.Now().UTC()
+	day := 24 * time.Hour
 
-	// The template ran shared 0100 moments ago, so the pruned run is placed
-	// between that boundary and the oldest retained log row.
-	boundary, err := migrationAppliedAt(ctx, pool, requestLogExecutionIDMigration)
+	// (a) The whole log is empty, and the quiet run is past the window.
+	seedOriginExecution(t, pool, 1, "exec-quiet", "manual", now.Add(-100*day))
+	quiet, err := repo.GetExecutionAnalytics(ctx, "1", "exec-quiet")
 	require.NoError(t, err)
-	require.False(t, boundary.IsZero(), "the ledger has no row for shared 0100")
-	oldest := now
-	plantRunCall(t, pool, 1, 7, "", oldest, "gpt-4o", 200, 1, 1)
+	require.False(t, quiet.Available, "an empty log cannot measure a run past the retention window")
+	require.Equal(t, analytics.UnavailableLogPruned, quiet.UnavailableReason)
+	require.Nil(t, quiet.Totals)
 
-	seedOriginExecution(t, pool, 1, "exec-pruned", "manual", boundary.Add(oldest.Sub(boundary)/2))
-	pruned, err := repo.GetExecutionAnalytics(ctx, "1", "exec-pruned")
-	require.NoError(t, err)
-	require.False(t, pruned.Available)
-	require.Equal(t, analytics.UnavailableLogPruned, pruned.UnavailableReason)
-
-	seedOriginExecution(t, pool, 1, "exec-silent", "manual", oldest.Add(time.Millisecond))
+	// A run inside the window with no call is a measured zero, even on an
+	// empty log: a fresh install's first run.
+	seedOriginExecution(t, pool, 1, "exec-silent", "manual", now.Add(-time.Hour))
 	silent, err := repo.GetExecutionAnalytics(ctx, "1", "exec-silent")
 	require.NoError(t, err)
 	require.True(t, silent.Available)
 	require.NotNil(t, silent.Totals)
 	require.EqualValues(t, 0, silent.Totals.LLMCalls)
+
+	// (b) A run that straddles the horizon: some calls kept, the older ones
+	// gone. The oldest row ANYWHERE is another project's, ten days old.
+	plantRunCall(t, pool, 2, 7, "", now.Add(-10*day), "gpt-4o", 200, 1, 1)
+	seedOriginExecution(t, pool, 1, "exec-straddle", "manual", now.Add(-100*day))
+	plantRunCall(t, pool, 1, 8, "exec-straddle", now.Add(-5*day), "gpt-4o", 200, 10, 10)
+	straddle, err := repo.GetExecutionAnalytics(ctx, "1", "exec-straddle")
+	require.NoError(t, err)
+	require.False(t, straddle.Available, "a run with only part of its calls left must not report partial figures")
+	require.Equal(t, analytics.UnavailableLogPruned, straddle.UnavailableReason)
+
+	// A run past the window that the log still reaches is measured.
+	plantRunCall(t, pool, 2, 7, "", now.Add(-200*day), "gpt-4o", 200, 1, 1)
+	reached, err := repo.GetExecutionAnalytics(ctx, "1", "exec-straddle")
+	require.NoError(t, err)
+	require.True(t, reached.Available)
+	require.EqualValues(t, 1, reached.Totals.LLMCalls)
+}
+
+// The ledger probe runs inside the read's snapshot transaction. A missing
+// ledger must not abort that transaction: the read carries on as if no
+// boundary were recorded.
+func TestExecutionAnalyticsSurvivesAMissingMigrationLedger(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewAnalyticsRepo(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	seedOriginExecution(t, pool, 1, "exec-ledgerless", "manual", now.Add(-time.Minute))
+	plantRunCall(t, pool, 1, 8, "exec-ledgerless", now, "gpt-4o", 200, 3, 4)
+	seedEvalRun(t, pool, 31, 4001, now.Add(-time.Minute))
+	_, err := pool.Exec(ctx, `ALTER TABLE elitea_runtime.schema_migrations RENAME TO schema_migrations_moved`)
+	require.NoError(t, err)
+
+	result, err := repo.GetExecutionAnalytics(ctx, "1", "exec-ledgerless")
+	require.NoError(t, err, "a missing ledger aborted the snapshot transaction")
+	require.True(t, result.Available)
+	require.EqualValues(t, 1, result.Totals.LLMCalls)
+
+	run, err := repo.GetEvaluationRunAnalytics(ctx, "1", "31")
+	require.NoError(t, err, "a missing ledger aborted the snapshot transaction")
+	require.False(t, run.Available)
+	require.Equal(t, analytics.UnavailableBeforeAttribution, run.UnavailableReason)
 }
 
 /* ── automated activity (legacy issues 6802 and 6881) ──────────────────── */

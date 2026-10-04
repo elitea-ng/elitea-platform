@@ -48,13 +48,19 @@ export const AnalyticsAutomatedActivity = zod
       .describe("How the runs started. One of schedule, webhook or index."),
     executions: zod.int(),
     users: zod.int().describe("The people the unattended runs executed as."),
-    llm_calls: zod.int(),
+    llm_calls: zod
+      .int()
+      .describe(
+        "Completed calls (status below 400), the row set of kpis.llm_calls. This row is a share of that total.\n",
+      ),
     prompt_tokens: zod.int(),
     completion_tokens: zod.int(),
     total_tokens: zod.int(),
     errors: zod
       .int()
-      .describe("Calls the gateway answered with status 400 or higher."),
+      .describe(
+        "Failed attempts (status 400 or higher). llm_calls leaves them out, as kpis.llm_calls does.\n",
+      ),
     avg_duration_ms: zod.number(),
     unpriced_calls: zod
       .int()
@@ -71,7 +77,7 @@ export const AnalyticsAutomatedActivity = zod
     total_cost: zod.number().optional(),
   })
   .describe(
-    "One unattended trigger origin's calls in the window (legacy issues 6802 and 6881). These calls are excluded from every active-user figure and still counted in every total.\n",
+    "One unattended trigger origin's calls in the window (legacy issues 6802 and 6881). These calls are excluded from every active-user figure and still counted in every total. A call is unattended only when the run's actor made it inside the run's lifetime. executions and users count every run and person with an attempt.\n",
   );
 
 export type AnalyticsAutomatedActivity = zod.input<
