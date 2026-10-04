@@ -44,6 +44,42 @@ type litellmEntry struct {
 	OutputCostPerSecond    *float64 `json:"output_cost_per_second"`
 	InputCostPerCharacter  *float64 `json:"input_cost_per_character"`
 	OutputCostPerCharacter *float64 `json:"output_cost_per_character"`
+	// Image-generation models (gpt-image-1, gpt-image-2 and their azure/
+	// variants) publish the price of a generated image TOKEN here, and leave
+	// output_cost_per_token absent. The provider reports those image tokens as
+	// output_tokens. Read these through tokenRates, never directly.
+	//
+	// Issue #6719: the sync read only the chat-shaped fields. The catalog row
+	// for gpt-image-2 then held an input price and a NULL output price. The
+	// gateway priced the NULL output as input x 3 (15 USD per 1M), and the
+	// legacy runtime priced it as zero. The real rate is 30 USD per 1M.
+	InputCostPerImageToken  *float64 `json:"input_cost_per_image_token"`
+	OutputCostPerImageToken *float64 `json:"output_cost_per_image_token"`
+}
+
+// tokenRates returns the per-token input and output prices the catalog stores
+// for this entry. A per-token price wins. When it is absent, the per-image-token
+// price takes its place, because for an image model that is the price of the
+// tokens the provider reports in the same usage field.
+//
+// The fallback applies per direction. gpt-image-2 publishes a text input price
+// AND an image input price; the text one stays, because a generation request
+// sends text in. Its output has no per-token price, so the image output price
+// fills it.
+//
+// A flat per-image price (output_cost_per_image, some fal.ai models) is NOT
+// mapped here. It prices an image, not a token, and the catalog has no column
+// for that unit. Putting it into a per-1M-token column would bill it a million
+// times too low or too high, depending on the direction of the mistake.
+func (e litellmEntry) tokenRates() (in, out *float64) {
+	in, out = e.InputCostPerToken, e.OutputCostPerToken
+	if in == nil {
+		in = e.InputCostPerImageToken
+	}
+	if out == nil {
+		out = e.OutputCostPerImageToken
+	}
+	return in, out
 }
 
 // audioModes are the LiteLLM "mode" values whose per-second and per-character
@@ -90,8 +126,9 @@ func (e litellmEntry) audioRates() (inSec, outSec, inChar, outChar *float64) {
 // rather than admitted with an audio rate it does not have.
 func (e litellmEntry) hasAnyPrice() bool {
 	inSec, outSec, inChar, outChar := e.audioRates()
-	return e.InputCostPerToken != nil ||
-		e.OutputCostPerToken != nil ||
+	inTok, outTok := e.tokenRates()
+	return inTok != nil ||
+		outTok != nil ||
 		inSec != nil ||
 		outSec != nil ||
 		inChar != nil ||
@@ -204,11 +241,12 @@ func parseLiteLLM(body []byte) ([]RawModelPrice, error) {
 			continue
 		}
 		inSec, outSec, inChar, outChar := e.audioRates()
+		inTok, outTok := e.tokenRates()
 		out = append(out, RawModelPrice{
 			Provider:               normalizeProvider(e.LiteLLMProvider),
 			ModelName:              name,
-			InputCost:              e.InputCostPerToken,
-			OutputCost:             e.OutputCostPerToken,
+			InputCost:              inTok,
+			OutputCost:             outTok,
 			CacheCreationCost:      e.CacheCreationCost,
 			CacheReadCost:          e.CacheReadCost,
 			InputCostAbove128k:     e.InputCostAbove128k,
