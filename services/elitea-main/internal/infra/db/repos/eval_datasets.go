@@ -74,6 +74,7 @@ const caseColumns = `
 	expected_output,
 	source_type,
 	order_index,
+	excluded,
 	created_at,
 	updated_at`
 
@@ -89,6 +90,7 @@ func scanCase(row pgx.Row) (evaluation.DatasetCase, error) {
 		&datasetCase.ExpectedOutput,
 		&datasetCase.SourceType,
 		&datasetCase.OrderIndex,
+		&datasetCase.Excluded,
 		&createdAt,
 		&updatedAt,
 	)
@@ -386,13 +388,14 @@ func (r *EvalDatasetsRepo) AddCase(
 
 	created, err := scanCase(r.pool.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO %[1]s.eval_dataset_cases
-			(dataset_id, input, variables, expected_output, source_type, order_index)
+			(dataset_id, input, variables, expected_output, source_type, order_index, excluded)
 		SELECT $1, $2, $3::jsonb, $4, $5,
-		       COALESCE((SELECT max(order_index) + 1 FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1), 0)
+		       COALESCE((SELECT max(order_index) + 1 FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1), 0),
+		       COALESCE($7::boolean, false)
 		WHERE (SELECT count(*) FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1) < $6
 		RETURNING `+caseColumns, schema),
 		id, input.Input, string(variables), input.ExpectedOutput,
-		evaluation.CaseSourceManual, evaluation.MaxCasesPerDataset))
+		evaluation.CaseSourceManual, evaluation.MaxCasesPerDataset, input.Excluded))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return evaluation.DatasetCase{}, apierr.Conflict(fmt.Sprintf(
@@ -429,15 +432,20 @@ func (r *EvalDatasetsRepo) UpdateCase(
 	// `dataset_id = $5` is in the predicate and not only in the URL. Without
 	// it, a caller who knows any case id can edit it through any dataset's
 	// path, and the route's own 404 would never fire.
+	//
+	// `excluded` is COALESCEd: a body without the key keeps the stored flag.
+	// A client that edits the text of an excluded case must not include it
+	// again by omission.
 	updated, err := scanCase(r.pool.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE %s.eval_dataset_cases
 		SET input = $1,
 		    variables = $2::jsonb,
 		    expected_output = $3,
+		    excluded = COALESCE($6::boolean, excluded),
 		    updated_at = now()
 		WHERE id = $4 AND dataset_id = $5
 		RETURNING `+caseColumns, schema),
-		input.Input, string(variables), input.ExpectedOutput, caseKey, datasetKey))
+		input.Input, string(variables), input.ExpectedOutput, caseKey, datasetKey, input.Excluded))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return evaluation.DatasetCase{}, apierr.NotFound("case not found in this dataset")

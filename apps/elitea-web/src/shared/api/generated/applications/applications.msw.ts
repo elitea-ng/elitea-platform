@@ -189,6 +189,7 @@ export const getGetEvalDatasetResponseMock = (): EvalDatasetDetail => ({
         "conversation",
       ] as const),
       order_index: faker.number.int(),
+      excluded: faker.datatype.boolean(),
       created_at: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -243,6 +244,7 @@ export const getAddEvalDatasetCaseResponseMock = (
     "conversation",
   ] as const),
   order_index: faker.number.int(),
+  excluded: faker.datatype.boolean(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -271,6 +273,7 @@ export const getUpdateEvalDatasetCaseResponseMock = (
     "conversation",
   ] as const),
   order_index: faker.number.int(),
+  excluded: faker.datatype.boolean(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

@@ -2657,6 +2657,11 @@ export type startEvalRunResponse403 = {
   status: 403;
 };
 
+export type startEvalRunResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
 export type startEvalRunResponse500 = {
   data: N500Response;
   status: 500;
@@ -2674,6 +2679,7 @@ export type startEvalRunResponseError = (
   | startEvalRunResponse400
   | startEvalRunResponse401
   | startEvalRunResponse403
+  | startEvalRunResponse422
   | startEvalRunResponse500
   | startEvalRunResponse501
 ) & {
@@ -2761,7 +2767,7 @@ export const getStartEvalRunQueryKey = (
 export const getStartEvalRunQueryOptions = <
   TData = Awaited<ReturnType<typeof startEvalRun>>,
   TError =
-    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
 >(
   projectId: string,
   evalRunStartRequest: EvalRunStartRequest,
@@ -2799,12 +2805,12 @@ export type StartEvalRunQueryResult = NonNullable<
   Awaited<ReturnType<typeof startEvalRun>>
 >;
 export type StartEvalRunQueryError =
-  N400Response | N401Response | N403Response | N500Response | ErrorResponse;
+  N400Response | N401Response | N403Response | ErrorResponse | N500Response;
 
 export function useStartEvalRun<
   TData = Awaited<ReturnType<typeof startEvalRun>>,
   TError =
-    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
 >(
   projectId: string,
   evalRunStartRequest: EvalRunStartRequest,
@@ -2829,7 +2835,7 @@ export function useStartEvalRun<
 export function useStartEvalRun<
   TData = Awaited<ReturnType<typeof startEvalRun>>,
   TError =
-    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
 >(
   projectId: string,
   evalRunStartRequest: EvalRunStartRequest,
@@ -2854,7 +2860,7 @@ export function useStartEvalRun<
 export function useStartEvalRun<
   TData = Awaited<ReturnType<typeof startEvalRun>>,
   TError =
-    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
 >(
   projectId: string,
   evalRunStartRequest: EvalRunStartRequest,
@@ -2875,7 +2881,7 @@ export function useStartEvalRun<
 export function useStartEvalRun<
   TData = Awaited<ReturnType<typeof startEvalRun>>,
   TError =
-    N400Response | N401Response | N403Response | N500Response | ErrorResponse,
+    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
 >(
   projectId: string,
   evalRunStartRequest: EvalRunStartRequest,

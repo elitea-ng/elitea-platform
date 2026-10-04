@@ -755,7 +755,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// body), so a replay or a provider retry answers the first run instead of
 	// starting a second (PR #1027 review). A table and no permission, so no
 	// shared sibling.
-	require.EqualValues(t, 140, Head(tenant))
+	// 141: tenant/0141_eval_dataset_case_excluded.sql, an `excluded` flag on
+	// an evaluation dataset case (legacy issue 6700). A run start freezes the
+	// active cases into its snapshot. One column and no permission (the case
+	// write reuses `models.applications.evaluation.dataset.update`), so no
+	// shared sibling.
+	require.EqualValues(t, 141, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

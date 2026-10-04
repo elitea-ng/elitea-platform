@@ -255,6 +255,31 @@ func (o *Orchestrator) execute(parent context.Context, ref RunRef) {
 	}
 }
 
+// snapshotCases keeps the cases the run's snapshot froze at start, in dataset
+// order.
+//
+// The orchestrator reads the case TEXT from the dataset, but the case LIST is
+// the snapshot's. Without this filter a case excluded at start would run, and
+// a case excluded after start would vanish from a run already counted with it.
+// A snapshot with no cases is a run row written before the snapshot carried
+// them; it executes the cases that are not excluded now.
+func snapshotCases(cases []DatasetCase, snapshot RunSnapshot) []DatasetCase {
+	if len(snapshot.Cases) == 0 {
+		return activeCases(cases)
+	}
+	frozen := make(map[string]bool, len(snapshot.Cases))
+	for _, snapshotCase := range snapshot.Cases {
+		frozen[snapshotCase.ID] = true
+	}
+	kept := make([]DatasetCase, 0, len(snapshot.Cases))
+	for _, testCase := range cases {
+		if frozen[testCase.ID] {
+			kept = append(kept, testCase)
+		}
+	}
+	return kept
+}
+
 // walk scores every case, and returns the error that should make the RUN
 // errored — not the errors that make a CASE errored.
 //
@@ -270,6 +295,7 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
 	if err != nil {
 		return fmt.Errorf("the dataset could not be read: %w", err)
 	}
+	cases = snapshotCases(cases, run.Snapshot)
 	if len(cases) == 0 {
 		return errors.New("the dataset has no cases")
 	}

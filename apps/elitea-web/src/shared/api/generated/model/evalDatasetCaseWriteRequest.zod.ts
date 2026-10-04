@@ -45,6 +45,12 @@ export const EvalDatasetCaseWriteRequest = zod.object({
   input: zod.string(),
   variables: zod.record(zod.string(), zod.unknown()).optional(),
   expected_output: zod.string().nullish(),
+  excluded: zod
+    .boolean()
+    .optional()
+    .describe(
+      "Absent keeps the stored flag, so a text edit does not include an excluded case again. A new case is active unless this is `true`.\n",
+    ),
 });
 
 export type EvalDatasetCaseWriteRequest = zod.input<

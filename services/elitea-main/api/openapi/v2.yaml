@@ -9819,9 +9819,14 @@ components:
           type: string
           enum: [manual, import, conversation]
         order_index: { type: integer }
+        excluded:
+          type: boolean
+          description: >
+            `true` keeps the case in the dataset but out of every new run. A
+            run start freezes the active case ids into its snapshot.
         created_at: { type: string }
         updated_at: { type: string }
-      required: [id, dataset_id, input, variables, expected_output, source_type, order_index]
+      required: [id, dataset_id, input, variables, expected_output, source_type, order_index, excluded]
 
     EvalDatasetWriteRequest:
       type: object
@@ -9850,6 +9855,11 @@ components:
             map the author writes and the judge prompt reads verbatim
             (internal/api/v2/evaluation/dataset.go:116, Variables map[string]any).
         expected_output: { type: string, nullable: true }
+        excluded:
+          type: boolean
+          description: >
+            Absent keeps the stored flag, so a text edit does not include an
+            excluded case again. A new case is active unless this is `true`.
       required: [input]
       additionalProperties: false
 
@@ -12556,6 +12566,14 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: >
+            Every case in the dataset is excluded. The run executes the active
+            cases only, so include at least one case and start again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '501':
           description: >
             A named dimension cannot be scored by this release. The body says

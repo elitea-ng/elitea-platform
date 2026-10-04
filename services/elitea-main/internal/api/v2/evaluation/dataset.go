@@ -120,8 +120,12 @@ type DatasetCase struct {
 	ExpectedOutput *string `json:"expected_output"`
 	SourceType     string  `json:"source_type"`
 	OrderIndex     int     `json:"order_index"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	// Excluded keeps the case in the dataset but out of every NEW run. The
+	// run start freezes the active case ids into the snapshot, so a toggle
+	// after a run starts does not change that run.
+	Excluded  bool   `json:"excluded"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // DatasetWriteInput is the create/update body.
@@ -163,6 +167,9 @@ type CaseWriteInput struct {
 	Input          string         `json:"input"`
 	Variables      map[string]any `json:"variables"`
 	ExpectedOutput *string        `json:"expected_output"`
+	// Excluded is a pointer so that an absent key keeps the stored flag. A
+	// text edit that omitted it must not include an excluded case again.
+	Excluded *bool `json:"excluded,omitempty"`
 }
 
 // Normalize trims the input and replaces a nil variable map with an empty one.
