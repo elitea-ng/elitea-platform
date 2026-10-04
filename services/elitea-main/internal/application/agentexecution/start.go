@@ -641,6 +641,16 @@ func validUUID(value string) bool {
 	return err == nil && parsed.String() == value
 }
 
+// validStoredUUID is the rule for an id read back from storage rather than
+// sent by a client: any case spelling of a canonical UUID. Turns admitted
+// before validUUID became lowercase-only stored their question_id verbatim as
+// the execution generation, and a paused one must still continue. The value is
+// not normalised: downstream compares it as a string with what was stored.
+func validStoredUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == strings.ToLower(value)
+}
+
 var currentTurnNamespace = uuid.MustParse("71581f1e-fb1b-4d50-a9db-8ebd4b47db76")
 
 func currentTurnUUID(questionID, role string) string {
