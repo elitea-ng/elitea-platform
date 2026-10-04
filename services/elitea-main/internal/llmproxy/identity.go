@@ -41,7 +41,8 @@ const (
 	// Unlike the three headers above it is not resolved from this process's own
 	// middleware: the caller that knows it is the runtime worker, which sends
 	// it inbound. The edge therefore READS it off the inbound request, validates
-	// its shape, and re-emits it as part of the signed tuple — see
+	// its shape, checks that it names a live execution of the caller
+	// (ExecutionVerifier), and re-emits it as part of the signed tuple — see
 	// executionIDFromHeader.
 	HeaderExecutionID = "X-Elitea-Execution-Id"
 	// HeaderSignature carries "sha256=<hex>" over the canonical identity tuple.
