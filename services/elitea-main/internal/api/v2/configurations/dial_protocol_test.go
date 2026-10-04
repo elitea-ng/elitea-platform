@@ -52,6 +52,7 @@ func TestCreateRefusesAnInvalidDialProtocol(t *testing.T) {
 		"unknown value":    dialModelBody("gpt-5", "bedrock"),
 		"not a string":     dialModelBody("gpt-5", 3),
 		"openai on claude": dialModelBody("claude-sonnet-4-5", "openai"),
+		"anthropic on gpt": dialModelBody("gpt-4o", "anthropic"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := createWithPinnedCatalog(t, body)
@@ -62,6 +63,36 @@ func TestCreateRefusesAnInvalidDialProtocol(t *testing.T) {
 				t.Errorf("the refusal must name dial_protocol: %s", recorder.Body.String())
 			}
 		})
+	}
+}
+
+// TestCreateRefusesAnInvalidDialProtocolInAnotherSection: a row filed under a
+// section that is not llm_model's own is checked as a ROW by the schema walk,
+// but its data.dial_protocol is still stored and still read by the gateway.
+// The update path checks by type alone, so the create path must too.
+func TestCreateRefusesAnInvalidDialProtocolInAnotherSection(t *testing.T) {
+	for name, body := range map[string]map[string]any{
+		"unknown value":    dialModelBody("gpt-5", "bogus"),
+		"openai on claude": dialModelBody("claude-sonnet-4-5", "openai"),
+		"anthropic on gpt": dialModelBody("gpt-4o", "anthropic"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			body["section"] = "ai_credentials"
+			recorder := createWithPinnedCatalog(t, body)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), "dial_protocol") {
+				t.Errorf("the refusal must name dial_protocol: %s", recorder.Body.String())
+			}
+		})
+	}
+	// The control: the same cross-section row with a valid protocol reaches
+	// the store.
+	valid := dialModelBody("gpt-5", "openai")
+	valid["section"] = "ai_credentials"
+	if recorder := createWithPinnedCatalog(t, valid); recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want the 503 of the absent store; body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 

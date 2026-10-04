@@ -17,9 +17,10 @@ import (
 // still looking at the form.
 //
 // The rule is the one the create normalizer applies
-// (application/configurations/dial_protocol.go), so the two write paths cannot
-// disagree. Only an llm_model row is checked: the field is not part of any
-// other type, and a body without `data` writes no column.
+// (application/configurations/dial_protocol.go), so the write paths cannot
+// disagree. Create and update both call it by the body's `type` alone, whatever
+// section the row is filed under. Only an llm_model row is checked: the field
+// is not part of any other type, and a body without `data` writes no column.
 func refuseInvalidDialProtocol(configType string, body map[string]any) *configurationWriteFailure {
 	if configType != "llm_model" {
 		return nil

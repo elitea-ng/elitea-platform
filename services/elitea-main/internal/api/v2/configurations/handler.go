@@ -1151,10 +1151,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				apierr.WriteStatus(w, http.StatusBadRequest, unpairedConfigurationFieldsMessage(unpaired))
 				return
 			}
-			if failure := refuseInvalidDialProtocol(entry.Type, body); failure != nil {
-				failure.write(w)
-				return
-			}
 		}
 	}
 
@@ -1164,6 +1160,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateNotSelfReferential(dataMap, selfLLMOrigins()); err != nil {
 		apierr.WriteStatus(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Legacy issue #6707. Keyed by type alone, like the description rule and
+	// like the update path (applyConfigurationUpdate): a row filed under
+	// another section still stores data.dial_protocol as sent, and the gateway
+	// still reads it.
+	if failure := refuseInvalidDialProtocol(strVal(body, "type"), body); failure != nil {
+		failure.write(w)
 		return
 	}
 	if !applyLLMModelDescriptionRule(w, strVal(body, "type"), dataMap) {
