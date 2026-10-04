@@ -93,6 +93,11 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 		!strings.Contains(reason, "k8s") {
 		t.Errorf("kubernetes supported=%v reason=%q", supported, reason)
 	}
+	// UI-DC-1: the Python reason is a sentence too, with no internal terms.
+	if _, reason := python.SupportsToolkitType("kubernetes", "k8s"); reason !=
+		"This deployment's agent worker image does not include the dependencies of the k8s toolkit." {
+		t.Errorf("k8s reason = %q", reason)
+	}
 	if supported, _ := python.SupportsToolkitType("github", "github"); !supported {
 		t.Error("github is not supported by the python image")
 	}
@@ -119,6 +124,11 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	if supported, reason := rust.SupportsToolkitType("jira", "jira"); supported ||
 		!strings.Contains(reason, "jira") {
 		t.Errorf("jira supported=%v reason=%q", supported, reason)
+	}
+	// UI-DC-1: the reason is a sentence for a person, with no internal terms.
+	if _, reason := rust.SupportsToolkitType("ado_boards", "ado_boards"); reason !=
+		"This deployment's agent worker does not support the ado_boards toolkit." {
+		t.Errorf("ado_boards reason = %q", reason)
 	}
 
 	// A nil projection supports everything: a deployment that has not stated

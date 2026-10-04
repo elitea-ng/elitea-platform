@@ -248,9 +248,8 @@ describe('LongTermMemoryManagement — happy path', () => {
     mount();
     await waitFor(() => expect(screen.getByTestId('long-term-memory-search')).toBeInTheDocument());
 
-    const searchInput = screen.getByTestId('long-term-memory-search').querySelector('input');
-    if (!searchInput) throw new Error('search input not found');
-    fireEvent.change(searchInput, { target: { value: 'typescript' } });
+    // The test id sits on the input itself: the field is the shared SimpleSearchBar (#6646).
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search memories' }), { target: { value: 'typescript' } });
 
     await waitFor(() => expect(lastQuery).toBe('typescript'));
   });

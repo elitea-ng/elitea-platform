@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
 import { http, HttpResponse } from 'msw';
@@ -9,7 +9,7 @@ import type { Project } from '@/entities/project';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { remToPx, renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
 import { ProjectSwitcher } from '../ui/ProjectSwitcher';
@@ -554,5 +554,63 @@ describe('ProjectSwitcher — request a project', () => {
     await waitFor(() => {
       expect(screen.getByText("You haven't requested a project yet.")).toBeInTheDocument();
     });
+  });
+
+  it('issue 6638: the trigger is 52px tall, the height of the page section headers', () => {
+    renderWithTheme(
+      <ProjectSwitcher
+        projects={projects}
+        selectedProjectId="2"
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { expanded: false })).toHaveStyle({ minHeight: remToPx('3.25rem') });
+  });
+
+  it('issue 6712: fades the list edges only where projects are hidden, and updates on scroll', async () => {
+    const user = userEvent.setup();
+    const many: Project[] = Array.from({ length: 30 }, (_, index) => ({ id: index + 1, name: `Project ${String(index + 1)}`, suspended: false }));
+    renderWithTheme(
+      <ProjectSwitcher
+        projects={many}
+        selectedProjectId="1"
+        onSelect={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { expanded: false }));
+    const list = await screen.findByTestId('project-switcher-list');
+    // jsdom has no layout: give the list a box shorter than its content.
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 200 });
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 900 });
+
+    list.scrollTop = 0;
+    fireEvent.scroll(list);
+    expect(screen.queryByTestId('project-switcher-fade-top')).not.toBeInTheDocument();
+    expect(screen.getByTestId('project-switcher-fade-bottom')).toBeInTheDocument();
+
+    list.scrollTop = 300;
+    fireEvent.scroll(list);
+    expect(screen.getByTestId('project-switcher-fade-top')).toBeInTheDocument();
+    expect(screen.getByTestId('project-switcher-fade-bottom')).toBeInTheDocument();
+
+    list.scrollTop = 700;
+    fireEvent.scroll(list);
+    expect(screen.getByTestId('project-switcher-fade-top')).toBeInTheDocument();
+    expect(screen.queryByTestId('project-switcher-fade-bottom')).not.toBeInTheDocument();
+  });
+
+  it('issue 6712: shows no fade when every project fits', async () => {
+    const user = userEvent.setup();
+    renderWithTheme(
+      <ProjectSwitcher
+        projects={projects}
+        selectedProjectId="2"
+        onSelect={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { expanded: false }));
+    fireEvent.scroll(await screen.findByTestId('project-switcher-list'));
+    expect(screen.queryByTestId('project-switcher-fade-top')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('project-switcher-fade-bottom')).not.toBeInTheDocument();
   });
 });

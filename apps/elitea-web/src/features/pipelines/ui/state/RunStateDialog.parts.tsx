@@ -90,9 +90,14 @@ export interface StateItemViewProps {
   readonly name: string;
   readonly valueBefore: unknown;
   readonly valueAfter: unknown;
+  /** The last step of a finished run: the second value is the run's final state, and is labelled so (#6883). */
+  readonly isFinal?: boolean;
 }
 
-export function StateItemView({ onFullScreen, name, valueBefore, valueAfter }: StateItemViewProps): ReactNode {
+export function StateItemView({ onFullScreen, name, valueBefore, valueAfter, isFinal = false }: StateItemViewProps): ReactNode {
+  const afterTitle = isFinal
+    ? t('pipelines.flowEditor.state.finalState', 'Final state')
+    : t('pipelines.flowEditor.state.after', 'After');
   return (
     <Box sx={stateItemViewContainerSx}>
       <Box sx={stateItemViewSectionSx}>
@@ -104,7 +109,7 @@ export function StateItemView({ onFullScreen, name, valueBefore, valueAfter }: S
       </Box>
       <Box sx={stateItemViewSectionSx}>
         <StateItemViewHeader
-          title={t('pipelines.flowEditor.state.after', 'After')}
+          title={afterTitle}
           onFullScreen={() => onFullScreen(name, valueAfter)}
         />
         <Box sx={stateItemViewValueBoxSx}>{JSON.stringify(valueAfter)}</Box>

@@ -125,4 +125,11 @@ describe('resolveActiveSubmenuView', () => {
     });
     expect(result.items[0]!.key).toBe('agent-0');
   });
+
+  it('names the entity on the create row of each category (#6629)', () => {
+    const labels = (['agents', 'pipelines', 'toolkits', 'mcps'] as const).map(
+      (key) => resolveActiveSubmenuView(key, baseParams()).createConfig?.createLabel,
+    );
+    expect(labels).toEqual(['Create Agent', 'Create Pipeline', 'Create Toolkit', 'Create MCP']);
+  });
 });

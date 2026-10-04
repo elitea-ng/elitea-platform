@@ -184,17 +184,20 @@ h1 {
   border-color: var(--error-border);
 }
 
+/* #6628: a 40px button with 14px text, the same as the form login page. */
 .sign-in-button {
   width: 100%;
-  min-height: 48px;
+  height: 40px;
   margin-top: 8px;
-  padding: 10px 16px;
+  padding: 0 16px;
   border: 1px solid var(--accent);
   border-radius: 8px;
   background: var(--accent);
   color: var(--on-accent);
   font: inherit;
+  font-size: 14px;
   font-weight: 600;
+  line-height: 1;
   cursor: pointer;
 }
 

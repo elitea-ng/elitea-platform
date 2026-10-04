@@ -137,12 +137,15 @@ export function MainMenuList({ items, onSelectSubmenu, attachRow }: MainMenuList
  * The surface both the main menu and its submenu sit on — one component so
  * the two papers cannot drift apart in radius, border or elevation.
  */
-export function MenuPaper({ children }: { readonly children: ReactNode }): ReactNode {
+export function MenuPaper({ children, fixedWidth = false }: { readonly children: ReactNode; readonly fixedWidth?: boolean }): ReactNode {
   return (
     <Paper
       elevation={8}
+      data-testid={fixedWidth ? 'plus-submenu-paper' : 'plus-menu-paper'}
       sx={(theme: Theme) => ({
         minWidth: '17.5rem',
+        // #6629: every submenu is the same width, whatever its rows hold.
+        ...(fixedWidth ? { width: '17.5rem' } : {}),
         borderRadius: theme.vars.shape.radiusMd,
         border: '0.0625rem solid',
         borderColor: 'border.lines',

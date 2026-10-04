@@ -6,17 +6,14 @@
  */
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import InputAdornment from '@mui/material/InputAdornment';
-import SearchIcon from '@mui/icons-material/Search';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import { useTheme } from '@mui/material/styles';
 
 import type { UserRecord } from '@/shared/api/generated/model';
 import { DeleteUserButton } from '@/shared/ui/settings/DeleteUserButton';
 import { EditUsersButton } from '@/shared/ui/settings/EditUsersButton';
 import type { EditUsersButtonProps } from '@/shared/ui/settings/EditUsersButton';
 import { t } from '@/shared/i18n';
+import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 export function UsersPageHeader({
   usersPageStyles, searchText, onSearchChange,
@@ -31,14 +28,6 @@ export function UsersPageHeader({
   /** RBAC gates ported from the old app's `checkPermission(PERMISSIONS.users.*)` calls (spec §9.3). */
   permissions: { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean };
 }) {
-  const theme = useTheme();
-  const searchIconSize = 18;
-
-  const searchInputStyles: React.CSSProperties = {
-    backgroundColor: theme.vars.palette.background.paper,
-    borderRadius: 'var(--el-shape-radiusSm, 4px)',
-  };
-
   return (
     <Box sx={usersPageStyles.header}>
       <Typography variant="headingLarge" component="h1" sx={usersPageStyles.title}>
@@ -46,22 +35,16 @@ export function UsersPageHeader({
       </Typography>
       <Box sx={usersPageStyles.toolbar}>
         {permissions.canView && (
-          <TextField
-            size="small"
-            placeholder={t('shared.ui.settings.users.search', 'Search users…')}
+          // #6646: the shared search box. This was an outlined TextField with
+          // an 18px grey glyph — a third icon size and a hover unlike the rest.
+          // The handler takes a change event, so the value is wrapped in one.
+          <SimpleSearchBar
             value={searchText}
-            onChange={onSearchChange}
+            onChange={(value) => onSearchChange({ target: { value } } as React.ChangeEvent<HTMLInputElement>)}
+            debounceMs={0}
+            placeholder={t('shared.ui.settings.users.search', 'Search users…')}
+            aria-label={t('shared.ui.settings.users.search', 'Search users…')}
             sx={{ width: 260 }}
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ color: 'text.disabled', width: searchIconSize, height: searchIconSize }} />
-                  </InputAdornment>
-                ),
-                sx: searchInputStyles,
-              },
-            }}
           />
         )}
         {actions && selectedUsers.length >= 1 && (
