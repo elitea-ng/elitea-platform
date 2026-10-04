@@ -11,7 +11,7 @@ Settings › Analytics is available to any project member and requires the `anal
 
 <Screenshot id="settings-analytics" alt="Analytics overview tab with KPI cards and a daily activity chart" />
 
-Choose a date range with the quick presets (Last 24h/7d/30d/90d) or custom From/To pickers, then switch between tabs:
+Choose a date range with the quick presets (Today/Last 7d/Last 30d/Last 90d) or custom From/To pickers, then switch between tabs. Each preset covers whole calendar days, from 00:00 on its first day to 23:59 today, and the To minute is included; for the last 24 hours or another exact window, set From and To by hand. From cannot be later than To:
 
 <CardGroup cols={3}>
   <Card title="Overview" icon="chart-line">Team size, AI adoption, LLM calls, tool runs, and the top adopters.</Card>
@@ -44,7 +44,7 @@ In a personal project the project budget *is* your own budget, so there is no ta
 - **Whole project** — total spend, a usage meter against the effective limit, daily usage, usage by model, and a **Members** table showing each member's own spend against their own limit.
 - **My usage** — the same panels scoped to you alone.
 
-A warning banner appears as usage approaches its limit; once the limit is reached, requests to platform-shared models are refused until the limit increases or the period resets. Select the export button to download usage data as an Excel file.
+A warning banner appears as usage approaches its limit; once the limit is reached, requests to platform-shared models are refused until the limit increases or the period resets. Select the export button to download usage data as an Excel file, or **Refresh data** (the circular-arrow button in the header) to fetch the latest figures without reloading the page.
 
 ## Troubleshooting
 

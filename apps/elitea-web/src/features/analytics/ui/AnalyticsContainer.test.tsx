@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { RenderResult } from '@testing-library/react';
+import { waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -111,6 +112,17 @@ describe('AnalyticsContainer', () => {
       const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
       expect(await findByText('COST')).toBeInTheDocument();
       expect(await findByText(expectedUsd(12.5))).toBeInTheDocument();
+    });
+
+    // #6682: two fraction digits printed a sub-cent spend as $0.00.
+    it('does not print a sub-cent spend as zero', async () => {
+      server.use(
+        http.get(USAGE_URL, () => HttpResponse.json(usageResponse())),
+        http.get(COSTS_URL, () => HttpResponse.json(costsResponse(0.004, true))),
+      );
+      const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
+      expect(await findByText('COST')).toBeInTheDocument();
+      expect(await findByText(/^\D*0\.004$/)).toBeInTheDocument();
     });
 
     /**
@@ -247,6 +259,50 @@ describe('AnalyticsContainer', () => {
     // and the clicked user is preselected via `pendingUserId`).
     expect(getByRole('tab', { name: 'Users', selected: true })).toBeInTheDocument();
     expect(await findByText('alice@example.com')).toBeInTheDocument();
+  });
+
+  // #6791: calendar-day presets; Today replaced Last 24h and is the default.
+  it('opens on Today and sends today 00:00 .. next midnight', async () => {
+    const seen: URL[] = [];
+    server.use(
+      http.get(USAGE_URL, ({ request }) => {
+        seen.push(new URL(request.url));
+        return HttpResponse.json(usageResponse());
+      }),
+    );
+    const { getByRole, queryByRole } = renderScreen(<AnalyticsContainer projectId="7" />);
+    expect(getByRole('button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'true');
+    expect(queryByRole('button', { name: 'Last 24h' })).toBeNull();
+    expect(queryByRole('button', { name: 'Custom' })).toBeNull();
+
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    const params = seen[0]?.searchParams;
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const next = new Date(midnight);
+    next.setDate(next.getDate() + 1);
+    expect(params?.get('date_from')).toBe(midnight.toISOString());
+    expect(params?.get('date_to')).toBe(next.toISOString());
+  });
+
+  it('marks a hand-edited range Custom, and a preset click clears it', async () => {
+    server.use(http.get(USAGE_URL, () => HttpResponse.json(usageResponse())));
+    const user = userEvent.setup();
+    const { getAllByRole, getByRole, findByRole, queryByRole } = renderScreen(<AnalyticsContainer projectId="7" />);
+
+    // From's hour: 00 → 01, still before To (23:59).
+    const fromHours = getAllByRole('spinbutton', { name: 'Hours' })[0];
+    if (fromHours === undefined) throw new Error('From hours section missing');
+    await user.click(fromHours);
+    await user.keyboard('{ArrowUp}');
+
+    const custom = await findByRole('button', { name: 'Custom' });
+    expect(custom).toHaveAttribute('aria-pressed', 'true');
+    expect(getByRole('button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(getByRole('button', { name: 'Last 7d' }));
+    expect(getByRole('button', { name: 'Last 7d' })).toHaveAttribute('aria-pressed', 'true');
+    expect(queryByRole('button', { name: 'Custom' })).toBeNull();
   });
 
   it('changes the date-range preset selection', async () => {

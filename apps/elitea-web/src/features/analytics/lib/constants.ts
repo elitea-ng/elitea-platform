@@ -205,19 +205,13 @@ export const GUIDE_SECTIONS: readonly GuideSection[] = [
       {
         name: 'User Activity Table',
         description:
-          'Server-side paginated table listing all users in the project. For each user, shows: total events, active days, and per-type breakdown (LLM, Tool, Agent, Chat Msg, Errors). Click on any user row to drill down.',
+          'Server-side paginated table listing all users in the project. For each user, shows: total events and per-type breakdown (LLM, Tool, Agent, Chat Msg, Errors). Click on any user row to drill down.',
         calculation: 'Each row is aggregated from all events for that user_id within the date range.',
       },
       {
         name: 'User Detail View',
         description:
           'Drill-down view for a single user showing KPIs, daily activity chart (by event type), models used, tools called, and agents interacted with. Lists are scrollable for users with many items.',
-      },
-      {
-        name: 'Active Days',
-        description:
-          'Number of distinct calendar days on which the user had at least one event. Higher numbers indicate consistent, regular usage.',
-        calculation: 'Count of distinct dates (timestamp cast to date) for the user.',
       },
     ],
   },
@@ -259,7 +253,7 @@ export const GUIDE_SECTIONS: readonly GuideSection[] = [
       {
         name: 'Date Range',
         description:
-          'All metrics are filtered by the selected date range (From/To pickers at the top). Use the preset buttons (Last 24h, 7d, 30d, 90d) for quick selection. The default is the last 7 days.',
+          'All Analytics metrics are filtered by the selected date range. Use Today, Last 7d, Last 30d, or Last 90d for calendar-day ranges. Each preset starts at 00:00 on its first day and ends at 23:59 today, including the entire final minute. Last 7d, Last 30d, and Last 90d include today in their day count. To view the last 24 hours or another exact period, set the From and To dates and times manually. The Custom selector appears when a custom range is active.',
       },
       {
         name: 'Project Scope',
@@ -273,8 +267,9 @@ export const GUIDE_SECTIONS: readonly GuideSection[] = [
 /** One button in the Overview date-range preset row. */
 export interface DateFilterPreset {
   readonly label: string;
-  /** Days back from now; `TabGroupButtonItem.value` must be a string (spec `shared/ui`). */
+  /** `TabGroupButtonItem.value` must be a string (spec `shared/ui`). */
   readonly value: string;
+  /** Whole calendar days, today included (`model/dateRange.ts`). */
   readonly days: number;
 }
 
@@ -284,11 +279,22 @@ export interface DateFilterPreset {
  * MUI `ToggleButtonGroup` usage accepted a raw number).
  */
 export const DATE_FILTER_PRESETS: readonly DateFilterPreset[] = [
-  { label: 'Last 24h', value: '1', days: 1 },
+  // #6791: calendar days, not a rolling window — `Today` replaced `Last 24h`.
+  // The value stays '1' so the i18n key and every caller keep their shape.
+  { label: 'Today', value: '1', days: 1 },
   { label: 'Last 7d', value: '7', days: 7 },
   { label: 'Last 30d', value: '30', days: 30 },
   { label: 'Last 90d', value: '90', days: 90 },
 ];
+
+/** The preset the page opens on: `Today` (it was `Last 24h`). */
+export const DEFAULT_DATE_PRESET: DateFilterPreset = DATE_FILTER_PRESETS[0] as DateFilterPreset;
+
+/**
+ * The status shown in the preset row while a hand-picked From/To is active.
+ * Not a range: `days` is never read for it.
+ */
+export const CUSTOM_DATE_PRESET: DateFilterPreset = { label: 'Custom', value: 'custom', days: 0 };
 
 /**
  * The tab index by name.
