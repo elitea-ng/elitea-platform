@@ -1,14 +1,13 @@
 import type { ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installWebStorageShim } from '../../../../test/webstorage';
 import { server } from '../../../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { createTestSocketClient, type TestSocketClient } from '@/shared/api/socket/testing';
 
 import { useReadAloud } from './useReadAloud.hooks';
 
@@ -25,11 +24,15 @@ function createWrapper(): { wrapper: ({ children }: { children: ReactNode }) => 
 }
 
 afterEach(() => {
+  cleanup();
   resetGeneratedClient();
+  vi.unstubAllGlobals();
+  Reflect.deleteProperty(window, 'speechSynthesis');
+  Reflect.deleteProperty(window, 'SpeechSynthesisUtterance');
 });
 
 describe('useReadAloud', () => {
-  it('with a projectId + socket + a default tts model available, hasModelTTS is true and voices come from the server list', async () => {
+  it('with a projectId + a default tts model available, hasModelTTS is true and voices come from the server list', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(
       http.get(`${BASE}/configurations/models/proj-1`, () =>
@@ -37,9 +40,8 @@ describe('useReadAloud', () => {
       ),
       http.get(`${BASE}/configurations/tts_voices/proj-1`, () => HttpResponse.json({ voices: [{ id: 'v1', name: 'Voice One' }] })),
     );
-    const client: TestSocketClient = createTestSocketClient();
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', socket: client }), { wrapper });
+    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1' }), { wrapper });
 
     await waitFor(() => expect(result.current.voicePlayerProps.hasModelTTS).toBe(true));
 
@@ -48,15 +50,21 @@ describe('useReadAloud', () => {
     await waitFor(() => expect(result.current.voicePlayerProps.voices).toEqual([{ id: 'v1', name: 'Voice One' }]));
   });
 
-  it('without a socket, hasModelTTS is false even when a tts model exists — falls back to browserVoices', async () => {
+  it('with nothing able to speak (no model, no browser voice), onAutoSpeak reports it and shows no player', async () => {
     configureGeneratedClient({ baseUrl: BASE });
-    server.use(http.get(`${BASE}/configurations/models/proj-1`, () => HttpResponse.json({ items: [{ name: 'model-a', project_id: 'proj-1' }], total: 1 })));
+    server.use(http.get(`${BASE}/configurations/models/proj-1`, () => HttpResponse.json({ items: [], total: 0 })));
+    Reflect.deleteProperty(window, 'speechSynthesis');
+    const onError = vi.fn();
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', socket: null }), { wrapper });
+    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', onError }), { wrapper });
 
-    await waitFor(() => expect(result.current.voicePlayerProps.ttsModel?.name).toBe('model-a'));
-    expect(result.current.voicePlayerProps.hasModelTTS).toBe(false);
-    // jsdom has no `speechSynthesis`, so the browser voice list is empty — not the server list.
+    act(() => result.current.onAutoSpeak('**Hello** world', 'msg-1'));
+
+    expect(onError).toHaveBeenCalledWith('No speech model is configured for this project.');
+    expect(result.current.showPlayer).toBe(false);
+    expect(result.current.speakingMessageId).toBeNull();
+    // jsdom has no `speechSynthesis`, so the browser voice list is empty.
+    await waitFor(() => expect(result.current.voicePlayerProps.hasModelTTS).toBe(false));
     expect(result.current.voicePlayerProps.voices).toEqual([]);
   });
 
@@ -70,7 +78,7 @@ describe('useReadAloud', () => {
       }),
     );
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useReadAloud({ projectId: undefined, socket: null }), { wrapper });
+    const { result } = renderHook(() => useReadAloud({ projectId: undefined }), { wrapper });
 
     expect(result.current.voicePlayerProps.ttsModel).toBeNull();
     expect(hit).toBe(false);
@@ -79,8 +87,10 @@ describe('useReadAloud', () => {
   it('onAutoSpeak converts markdown to speakable text, shows the player, and records the speaking message id + segments', () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/models/proj-1`, () => HttpResponse.json({ items: [], total: 0 })));
+    vi.stubGlobal('speechSynthesis', { speak: vi.fn(), cancel: vi.fn(), getVoices: () => [], addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    vi.stubGlobal('SpeechSynthesisUtterance', class {});
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', socket: null }), { wrapper });
+    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1' }), { wrapper });
 
     act(() => result.current.onAutoSpeak('**Hello** world', 'msg-1'));
 
@@ -122,7 +132,7 @@ describe('useReadAloud', () => {
     Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: utteranceClass });
 
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', socket: null }), { wrapper });
+    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1' }), { wrapper });
 
     act(() => result.current.onAutoSpeak('**Hello** world', 'msg-1'));
 
@@ -138,7 +148,7 @@ describe('useReadAloud', () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/models/proj-1`, () => HttpResponse.json({ items: [], total: 0 })));
     const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1', socket: null }), { wrapper });
+    const { result } = renderHook(() => useReadAloud({ projectId: 'proj-1' }), { wrapper });
 
     act(() => result.current.onAutoSpeak('', 'msg-1'));
     expect(result.current.showPlayer).toBe(false);

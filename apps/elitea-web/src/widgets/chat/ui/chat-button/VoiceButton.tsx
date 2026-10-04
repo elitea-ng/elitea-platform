@@ -104,11 +104,11 @@ export interface VoiceButtonProps {
   onRecordingChange?: (isRecording: boolean) => void;
   onError?: (message: string) => void;
   inputRef?: RefObject<VoiceButtonInputHandle | null>;
-  projectId?: string;
+  projectId?: string | undefined;
 }
 
 
-/** Maps a speech-recognition error code to human-readable text — split out of `handleVoiceError` purely so each message can carry its own `t()` call. Unmapped codes (e.g. 'no-speech'/'aborted') resolve to `undefined`, same as the plain-object lookup this replaces. */
+/** Maps a speech-recognition error code to human-readable text — split out of `handleVoiceError` purely so each message can carry its own `t()` call. A server transcription failure (`model-unavailable`, `too-large`, …) gets the shared voice message. Unmapped codes (e.g. 'no-speech'/'aborted') resolve to `undefined`, same as the plain-object lookup this replaces. */
 function voiceErrorMessage(error: string): string | undefined {
   switch (error) {
     case 'not-allowed':
@@ -127,7 +127,7 @@ function voiceErrorMessage(error: string): string | undefined {
         'Voice input requires an internet connection. Please check your connection and try again.',
       );
     default:
-      return undefined;
+      return voiceHooks.voiceErrorMessage(error);
   }
 }
 

@@ -1,14 +1,17 @@
 import type { ReactNode } from 'react';
-import { useCallback, useContext, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
-import { SocketClientContext } from '@/shared/api/socket/client';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import type { TtsVoice } from '../api/ttsVoices';
 import type { TtsModel } from '../lib/hooks/useTextToSpeech.types';
 import type { VoiceConfig } from '../lib/hooks/useVoiceConfig.hooks';
 import { useVoiceConfig } from '../lib/hooks/useVoiceConfig.hooks';
+import { voiceProblemMessage } from '../lib/voiceProblems';
 
 import { VoiceConfigControls } from './VoiceConfigControls';
 
@@ -18,11 +21,11 @@ import { VoiceConfigControls } from './VoiceConfigControls';
  *
  * Stages edits in `localConfig` (Apply/Cancel), same as the baseline.
  *
- * Reads the socket via `useContext(SocketClientContext)` directly (NOT the
- * throwing `useSocketClient()`): a missing socket is this
- * component's legitimate "fall back to the preview using browser TTS"
- * state, not a programmer error. See `useTextToSpeech.hooks.ts`'s own doc
- * comment for the identical rationale.
+ * With no speech model configured the dialog SAYS so, above the controls:
+ * the voice then comes from the browser, and a user who expected the
+ * project's model would otherwise hear a different voice with no reason
+ * given. The model preview goes over HTTPS (`api/voiceTransport.ts`) and
+ * needs the selected project, which the `/llm` edge bills.
  *
  * PUBLIC SLOT for the sibling "voice-asr" cluster: `VoiceControlButton.jsx`
  * renders this dialog (`import { VoiceConfigDialog } from '@/features/
@@ -37,14 +40,15 @@ export interface VoiceConfigDialogProps {
   readonly onCancel: () => void;
   readonly ttsModel: TtsModel | null;
   readonly hasModelTTS: boolean;
+  /** The project a model voice preview bills; without it the preview uses the browser voice. */
+  readonly projectId?: string | undefined;
   readonly isPlaying?: boolean | undefined;
 }
 
 export function VoiceConfigDialog(props: VoiceConfigDialogProps): ReactNode {
-  const { config, voices, open, onApply, onCancel, ttsModel, hasModelTTS, isPlaying } = props;
+  const { config, voices, open, onApply, onCancel, ttsModel, hasModelTTS, projectId, isPlaying } = props;
   const [localConfig, setLocalConfig] = useState(config);
 
-  const socket = useContext(SocketClientContext);
   const { browserVoices } = useVoiceConfig();
 
   useEffect(() => {
@@ -72,16 +76,27 @@ export function VoiceConfigDialog(props: VoiceConfigDialogProps): ReactNode {
         cancelText: t('features.chatInput.voiceConfigDialog.cancel', 'Cancel'),
       }}
       content={
-        <VoiceConfigControls
-          config={localConfig}
-          onConfigChange={handleConfigChange}
-          hasModelTTS={hasModelTTS}
-          ttsModel={ttsModel}
-          socket={socket}
-          browserVoices={browserVoices}
-          voices={voices}
-          isPlaying={isPlaying}
-        />
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {!hasModelTTS && (
+            <Typography
+              variant="bodySmall"
+              color="text.secondary"
+              data-testid="voice-no-model-notice"
+            >
+              {voiceProblemMessage('no-model')}
+            </Typography>
+          )}
+          <VoiceConfigControls
+            config={localConfig}
+            onConfigChange={handleConfigChange}
+            hasModelTTS={hasModelTTS}
+            ttsModel={ttsModel}
+            projectId={projectId}
+            browserVoices={browserVoices}
+            voices={voices}
+            isPlaying={isPlaying}
+          />
+        </Box>
       }
     />
   );

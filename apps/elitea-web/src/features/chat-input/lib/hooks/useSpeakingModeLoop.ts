@@ -40,6 +40,7 @@ import type { RefObject } from 'react';
 import type { ModelListItem } from '../../api/models';
 import { useModelsList } from '../../api/models';
 import { useSelectedProjectId } from '../../api/useSelectedProjectId';
+import { voiceErrorMessage } from '../voiceProblems';
 import type { TranscriptEvent } from './useSpeechRecognition';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { useStreamingSpeechRecognition } from './useStreamingSpeechRecognition';
@@ -95,6 +96,8 @@ export interface UseSpeakingModeLoopParams {
   readonly inputRef: RefObject<SpeakingModeInputHandle | null>;
   readonly isStreaming: boolean;
   readonly isTTSPlaying: boolean;
+  /** Receives the readable message for a server transcription failure (`../voiceProblems.ts`). Browser-engine errors stay silent, as before. */
+  readonly onError?: ((message: string) => void) | undefined;
 }
 
 export interface UseSpeakingModeLoopResult {
@@ -110,8 +113,15 @@ const noop = (): void => {
 };
 
 export function useSpeakingModeLoop(params: UseSpeakingModeLoopParams): UseSpeakingModeLoopResult {
-  const { isSpeakingMode, inputRef, isStreaming, isTTSPlaying } = params;
+  const { isSpeakingMode, inputRef, isStreaming, isTTSPlaying, onError } = params;
   const projectId = useSelectedProjectId();
+  const handleServerError = useCallback(
+    (code: string) => {
+      const message = voiceErrorMessage(code);
+      if (message) onError?.(message);
+    },
+    [onError],
+  );
 
   const preCursorRef = useRef('');
   const postCursorRef = useRef('');
@@ -292,7 +302,7 @@ export function useSpeakingModeLoop(params: UseSpeakingModeLoopParams): UseSpeak
     onTranscriptDone: handleTranscriptDone,
     onSpeechStarted: handleSpeechStarted,
     onVadFlush: handleVadFlush,
-    onError: noop,
+    onError: handleServerError,
     projectId,
     asrModel,
   });

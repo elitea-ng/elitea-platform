@@ -41,6 +41,7 @@ function baseVoiceProps() {
     onVoiceConfigChange: vi.fn(),
     ttsModel: null,
     hasModelTTS: false,
+    projectId: '42',
   };
 }
 
@@ -109,6 +110,13 @@ describe("buildChatBoxInputSlots — the composer's left-hand control", () => {
 
     expect(typeOf(children[0])).toBe(VoiceButton);
     expect(typeOf(children[1])).toBe(VoiceControlButton);
+  });
+
+  it('hands the dictation mic the project, so a project transcription model is used (it never received one)', () => {
+    const slots = buildSlots(false);
+    const children = ((slots.voiceButton as ReactElement).props as { children: ReactElement[] }).children;
+
+    expect((children[0]?.props as { projectId?: string }).projectId).toBe('42');
   });
 });
 

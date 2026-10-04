@@ -27,7 +27,7 @@
  * swap, so the router's memoization is a non-issue.
  *
  * `useSpeakingModeLoop` unconditionally mounts BOTH
- * `useStreamingSpeechRecognition` (needs `useSocketClient()`) and
+ * `useStreamingSpeechRecognition` (microphone + HTTPS upload doubles) and
  * `useSpeechRecognition` (needs `window.SpeechRecognition`) — old-app
  * parity. Every scenario starts with `isSpeakingMode: false`, waits for the
  * harness to be ready, THEN calls `setLoopProps({isSpeakingMode: true,
@@ -44,8 +44,8 @@
  * Most scenarios below run with an EMPTY ASR model list
  * (`selectAsrModel([]) === undefined`), which selects the native-browser
  * fallback and needs no Web Audio mocking; one scenario proves model
- * availability actually switches to the server path, reusing
- * `useStreamingSpeechRecognition.test.ts`'s own Web Audio fake technique.
+ * availability actually switches to the server path, using the
+ * `__mocks__` doubles for the microphone and the transcription route.
  *
  * Fake timers: engaged only AFTER every real-time `waitFor` has already
  * settled — `@testing-library/dom`'s `waitFor` polls via real `setTimeout`,
@@ -65,94 +65,51 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { SocketClientContext, createSocketClient } from '@/shared/api/socket/client';
-import type { SocketIoFactory } from '@/shared/api/socket/client';
 import { server } from '../../../../test/setup';
+import { VoiceTransportError } from '../../api/voiceTransport';
+import { speechCaptureMock } from '../__mocks__/speechCapture.mock';
+import { voiceTransportMock } from '../__mocks__/voiceTransport.mock';
 
 import { selectAsrModel, useSpeakingModeLoop } from './useSpeakingModeLoop';
 import type { SpeakingModeInputHandle, UseSpeakingModeLoopParams, UseSpeakingModeLoopResult } from './useSpeakingModeLoop';
 
 const BASE = '/api/v2';
 
-/* ── socket double (see useStreamingSpeechRecognition.test.ts for the full rationale) ── */
-function createFakeSocket() {
-  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-  const emittedCalls: Array<{ event: string; payload: unknown }> = [];
-  const fake = {
-    on: (event: string, handler: (...args: unknown[]) => void) => {
-      let set = listeners.get(event);
-      if (!set) {
-        set = new Set();
-        listeners.set(event, set);
-      }
-      set.add(handler);
-    },
-    off: (event: string, handler: (...args: unknown[]) => void) => listeners.get(event)?.delete(handler),
-    emit: (event: string, payload: unknown) => {
-      emittedCalls.push({ event, payload });
-      return fake;
-    },
-    disconnect: vi.fn(),
-    io: { on: vi.fn(), off: vi.fn() },
-    trigger(event: string, ...args: unknown[]) {
-      for (const h of listeners.get(event) ?? []) h(...args);
-    },
-    emittedCalls,
-  };
-  return fake;
-}
-
-function makeSocketClient() {
-  const fakeSocket = createFakeSocket();
-  // `ReturnType<SocketIoFactory>`, not `import type { Socket } from
-  // 'socket.io-client'` — R-A3's `no-restricted-imports` bans that import
-  // outside `shared/api/socket/**`.
-  const ioFactory = vi.fn(() => fakeSocket as unknown as ReturnType<SocketIoFactory>) as unknown as SocketIoFactory;
-  const client = createSocketClient({ url: 'http://socket.test', ioFactory });
-  return { client, fakeSocket };
-}
-
 /**
- * Minimal Web Audio / getUserMedia fakes (see
- * useStreamingSpeechRecognition.test.ts for the fuller version and its own
- * "no established pattern" rationale) — just enough for `startRecording()`
- * to resolve without throwing, so the server-path scenarios below can drive
- * the REST of the flow through the socket double.
+ * Server-path doubles: the microphone hands the test its frame callback, and
+ * every transcription upload is a promise the test answers
+ * (`../__mocks__/speechCapture.mock.ts`, `../__mocks__/voiceTransport.mock.ts`).
+ * The segmenter, the uploader and this hook stay real.
  */
-function installServerAsrEnvironment(): { readonly getUserMedia: ReturnType<typeof vi.fn> } {
-  const getUserMedia = vi.fn(() =>
-    Promise.resolve({ getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream),
+interface ServerAsrDoubles {
+  readonly frames: { push: ((frame: Float32Array) => void) | null };
+  readonly uploads: Array<{ readonly resolve: (text: string) => void }>;
+}
+
+function installServerAsrDoubles(): ServerAsrDoubles {
+  const doubles: ServerAsrDoubles = { frames: { push: null }, uploads: [] };
+  speechCaptureMock.startSpeechCapture.mockReset();
+  speechCaptureMock.startSpeechCapture.mockImplementation((onFrame) => {
+    doubles.frames.push = onFrame;
+    return Promise.resolve({ release: vi.fn() });
+  });
+  voiceTransportMock.transcribeAudio.mockReset();
+  voiceTransportMock.transcribeAudio.mockImplementation(
+    () =>
+      new Promise<string>((resolve) => {
+        doubles.uploads.push({ resolve });
+      }),
   );
-  Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
-  class FakeAudioContext {
-    sampleRate = 44100;
-    state: 'running' | 'closed' = 'running';
-    destination = {};
-    audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
-    close = vi.fn(() => Promise.resolve());
-    createMediaStreamSource = vi.fn(() => ({ connect: vi.fn() }));
-    createGain = vi.fn(() => ({ gain: { value: 0 }, connect: vi.fn() }));
-  }
-  class FakeAudioWorkletNode {
-    port = { postMessage: vi.fn(), onmessage: null };
-    connect = vi.fn();
-    disconnect = vi.fn();
-    constructor(_ctx: unknown, _name: string) {}
-  }
-  vi.stubGlobal('AudioContext', FakeAudioContext);
-  vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
-  // Extends the REAL URL constructor (not a plain object spread of it — that
-  // silently strips constructibility and broke `shared/api/http.ts`'s own
-  // `new URL(...)` call with 'URL is not a constructor', the hard way) purely
-  // to add the two static methods Node/jsdom's URL doesn't implement.
-  vi.stubGlobal(
-    'URL',
-    class extends URL {
-      static override createObjectURL = vi.fn(() => 'blob:fake');
-      static override revokeObjectURL = vi.fn();
-    },
-  );
-  return { getUserMedia };
+  return doubles;
+}
+
+/** One spoken utterance: a loud frame, then the two silent frames that end it (the segmenter's 600 ms window). */
+function speak(doubles: ServerAsrDoubles): void {
+  act(() => {
+    doubles.frames.push?.(new Float32Array(7200).fill(0.5));
+    doubles.frames.push?.(new Float32Array(7200));
+    doubles.frames.push?.(new Float32Array(7200));
+  });
 }
 
 /** MSW handler returning a single default streaming (non-whisper) ASR model — selects the server path. */
@@ -211,12 +168,14 @@ interface HarnessApi {
 function LoopHarness({
   inputRef,
   apiRef,
+  onError,
 }: {
   inputRef: RefObject<SpeakingModeInputHandle | null>;
   apiRef: RefObject<HarnessApi | null>;
+  onError?: ((message: string) => void) | undefined;
 }) {
   const [props, setProps] = useState<LoopProps>({ isSpeakingMode: false, isStreaming: false, isTTSPlaying: false });
-  const result = useSpeakingModeLoop({ ...props, inputRef });
+  const result = useSpeakingModeLoop({ ...props, inputRef, onError });
   // oxlint-disable-next-line react/exhaustive-deps -- intentionally no deps: this must re-run on EVERY render to keep apiRef pointing at the latest `result`/`setProps` closure, not a one-time capture.
   useEffect(() => {
     apiRef.current = { result, setLoopProps: setProps };
@@ -243,13 +202,12 @@ function makeInputHandle(): SpeakingModeInputHandle & { value: string; cursor: n
   return handle;
 }
 
-function setup(projectId = 'proj-1') {
-  const { client, fakeSocket } = makeSocketClient();
+function setup(projectId = 'proj-1', onError?: (message: string) => void) {
   const inputHandle = makeInputHandle();
   const inputRef = { current: inputHandle as SpeakingModeInputHandle | null };
   const apiRef: RefObject<HarnessApi | null> = { current: null };
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const rootRoute = createRootRoute({ component: () => createElement(LoopHarness, { inputRef, apiRef }) });
+  const rootRoute = createRootRoute({ component: () => createElement(LoopHarness, { inputRef, apiRef, onError }) });
   const router = createRouter({
     routeTree: rootRoute,
     history: createMemoryHistory({ initialEntries: ['/'] }),
@@ -259,10 +217,10 @@ function setup(projectId = 'proj-1') {
     createElement(
       QueryClientProvider,
       { client: queryClient },
-      createElement(SocketClientContext.Provider, { value: client }, createElement(RouterProvider, { router })),
+      createElement(RouterProvider, { router }),
     ),
   );
-  return { apiRef, inputHandle, client, fakeSocket, queryClient, projectId };
+  return { apiRef, inputHandle, queryClient, projectId };
 }
 
 async function waitForReady(apiRef: RefObject<HarnessApi | null>): Promise<void> {
@@ -483,13 +441,13 @@ describe('useSpeakingModeLoop (native-fallback path — empty ASR model list)', 
 });
 
 describe('useSpeakingModeLoop (server path is selected once an ASR model is available)', () => {
-  it('calls getUserMedia (the server-side ASR path) instead of the native recognizer when a model resolves', async () => {
+  it('opens the microphone (the server ASR path) instead of the native recognizer when a model resolves', async () => {
     mockStreamingAsrModel();
-    const { getUserMedia } = installServerAsrEnvironment();
+    installServerAsrDoubles();
 
     await setupSpeakingWithAsrModelReady();
 
-    await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+    await waitFor(() => expect(speechCaptureMock.startSpeechCapture).toHaveBeenCalled());
     // The native recognizer must NOT have been used for this session.
     expect(FakeSpeechRecognition.instances).toHaveLength(0);
   });
@@ -498,59 +456,83 @@ describe('useSpeakingModeLoop (server path is selected once an ASR model is avai
    * `handleTranscriptDone` (this hook's own `scheduleSend` trigger) is ONLY
    * ever invoked by `useStreamingSpeechRecognition`'s `onTranscriptDone` —
    * the native `useSpeechRecognition` fallback has no equivalent "done"
-   * signal at all (old-app parity: `handleTranscript`'s own `if (final)`
-   * branch never calls `scheduleSend`). So the silence-timeout/EWMA
-   * scenarios below MUST run through the server path — asserting them
-   * against the native-fallback path (an earlier draft of this suite did)
-   * silently passed for the wrong reason, since `scheduleSend` never fires
-   * there regardless of transcript content.
+   * signal. So the silence-timeout scenarios below run through the server
+   * path: an utterance is cut on silence (`onVadFlush`), uploaded, and its
+   * transcript answered by the test (`onTranscript` + `onTranscriptDone`).
    */
-  async function setupSpeakingServer(): Promise<ReturnType<typeof setup>> {
+  async function setupSpeakingServer(): Promise<ReturnType<typeof setup> & { readonly doubles: ServerAsrDoubles }> {
     mockStreamingAsrModel();
-    installServerAsrEnvironment();
+    const doubles = installServerAsrDoubles();
     const rendered = await setupSpeakingWithAsrModelReady();
-    // acceptEventsRef flips true (and asr_start is emitted) once
-    // getUserMedia/audioWorklet.addModule's mocked promises resolve —
-    // wait for that real async settling before driving fake-socket events.
-    await waitFor(() => expect(rendered.fakeSocket.emittedCalls.some((c) => c.event === 'asr_start')).toBe(true));
-    return rendered;
+    await waitFor(() => expect(doubles.frames.push).not.toBeNull());
+    return { ...rendered, doubles };
   }
 
-  it('auto-sends after SILENCE_TIMEOUT_MS + the EWMA latency estimate once transcript_done fires, then stops recording', async () => {
-    const { inputHandle, fakeSocket } = await setupSpeakingServer();
+  async function answer(doubles: ServerAsrDoubles, index: number, text: string): Promise<void> {
+    await act(async () => {
+      doubles.uploads[index]?.resolve(text);
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+  }
+
+  it('auto-sends SILENCE_TIMEOUT_MS after the user stopped speaking, once the transcript arrives, then stops recording', async () => {
+    const { inputHandle, doubles } = await setupSpeakingServer();
 
     vi.useFakeTimers();
-    act(() => fakeSocket.trigger('asr_transcript_done', { transcript: 'hello world' }));
-    // SILENCE_TIMEOUT_MS (3000) + latency estimate (500 initial, no vad_flush was fired).
-    void act(() => vi.advanceTimersByTime(3500));
+    speak(doubles);
+    expect(doubles.uploads).toHaveLength(1);
+    await answer(doubles, 0, 'hello world');
+    expect(inputHandle.value).toBe('hello world');
+
+    // The flush back-dates "stopped speaking" by VAD_SILENCE_MS (600), so the
+    // send fires about 2400 ms after the transcript, not 3000.
+    void act(() => vi.advanceTimersByTime(2300));
+    expect(inputHandle.sendQuestion).not.toHaveBeenCalled();
+    void act(() => vi.advanceTimersByTime(200));
 
     expect(inputHandle.sendQuestion).toHaveBeenCalledOnce();
     expect(inputHandle.reset).toHaveBeenCalledOnce();
   });
 
   it('does not auto-send when the accumulated content is only whitespace', async () => {
-    const { inputHandle, fakeSocket } = await setupSpeakingServer();
+    const { inputHandle, doubles } = await setupSpeakingServer();
 
     vi.useFakeTimers();
-    act(() => fakeSocket.trigger('asr_transcript_done', { transcript: '   ' }));
+    speak(doubles);
+    await answer(doubles, 0, '   ');
     void act(() => vi.advanceTimersByTime(3600));
 
     expect(inputHandle.sendQuestion).not.toHaveBeenCalled();
   });
 
-  it('backdates the silence timer by VAD_SILENCE_MS when a vad_flush preceded transcript_done (Whisper/VAD path)', async () => {
-    const { inputHandle, fakeSocket } = await setupSpeakingServer();
+  it('backdates the silence timer by the time the transcription took (Whisper/VAD path)', async () => {
+    const { inputHandle, doubles } = await setupSpeakingServer();
 
     vi.useFakeTimers();
-    act(() => fakeSocket.trigger('asr_vad_flush', {}));
-    // Simulate 1000ms of processing time between the flush and the transcript arriving.
+    speak(doubles);
+    // 1000 ms of transcription time between the flush and the transcript.
     void act(() => vi.advanceTimersByTime(1000));
-    act(() => fakeSocket.trigger('asr_transcript_done', { transcript: 'hello world' }));
+    await answer(doubles, 0, 'hello world');
 
-    // adjustedDelay = max(200, SILENCE_TIMEOUT_MS(3000) - elapsed(~1000)) ≈ 2000ms,
-    // NOT the realtime-path's 3500ms — advancing only 2100ms must already fire it.
-    void act(() => vi.advanceTimersByTime(2100));
+    // adjustedDelay = max(200, 3000 - (1000 + 600)) = 1400 ms.
+    void act(() => vi.advanceTimersByTime(1500));
 
     expect(inputHandle.sendQuestion).toHaveBeenCalledOnce();
+  });
+
+  it('a server transcription failure reaches onError as a readable message', async () => {
+    mockStreamingAsrModel();
+    const doubles = installServerAsrDoubles();
+    voiceTransportMock.transcribeAudio.mockImplementation(() => Promise.reject(new VoiceTransportError('model-unavailable')));
+    const onError = vi.fn();
+    const rendered = setup('proj-1', onError);
+    await waitForReady(rendered.apiRef);
+    await waitFor(() => expect(rendered.queryClient.getQueryState(ASR_MODELS_QUERY_KEY('proj-1'))?.status).toBe('success'));
+    act(() => rendered.apiRef.current?.setLoopProps({ isSpeakingMode: true, isStreaming: false, isTTSPlaying: false }));
+    await waitFor(() => expect(doubles.frames.push).not.toBeNull());
+
+    speak(doubles);
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('The speech model is not available. Check the AI configuration.'));
   });
 });

@@ -3,10 +3,25 @@ import { useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createTestSocketClient, type TestSocketClient } from '@/shared/api/socket/testing';
+import { voiceTransportMock } from '../__mocks__/voiceTransport.mock';
+
+import { VoiceTransportError } from '../../api/voiceTransport';
+import type { SpeechRequest } from '../../api/voiceTransport';
 
 import { useModelTtsEngine, type UseModelTtsEngineParams } from './useModelTtsEngine.hooks';
 import type { TtsModel, TtsSpokenRange, TtsStatus } from './useTextToSpeech.types';
+
+/* ── the HTTPS speech route — each call answers when the test says so ── */
+
+interface PendingSpeech {
+  readonly request: SpeechRequest;
+  readonly signal: AbortSignal | undefined;
+  readonly resolve: (audio: ArrayBuffer) => void;
+  readonly reject: (err: unknown) => void;
+}
+
+const speechCalls: PendingSpeech[] = [];
+const synthesizeSpeech = voiceTransportMock.synthesizeSpeech;
 
 /* ── FakeAudioContext — controllable currentTime, no real audio hardware ── */
 
@@ -35,6 +50,12 @@ class FakeAudioBuffer {
   copyToChannel = vi.fn();
 }
 
+/** What `decodeAudioData` answers: `byteLength` samples of a constant tone, at the context's rate. */
+function decodedBuffer(byteLength: number): AudioBuffer {
+  const samples = new Float32Array(byteLength).fill(0.5);
+  return { length: samples.length, sampleRate: 24000, getChannelData: () => samples } as unknown as AudioBuffer;
+}
+
 let lastCreatedContext: FakeAudioContext | undefined;
 
 class FakeAudioContext {
@@ -45,6 +66,7 @@ class FakeAudioContext {
   createGain = (): FakeGainNode => new FakeGainNode();
   createBuffer = (channels: number, length: number, sampleRate: number): FakeAudioBuffer => new FakeAudioBuffer(channels, length, sampleRate);
   createBufferSource = (): FakeBufferSource => new FakeBufferSource();
+  decodeAudioData = vi.fn((audio: ArrayBuffer) => Promise.resolve(decodedBuffer(audio.byteLength)));
   resume = vi.fn(() => {
     this.state = 'running';
     return Promise.resolve();
@@ -74,8 +96,7 @@ function stubRaf(): void {
   // `vi.stubGlobal` (not a bare `window.foo =` assignment): the hook under
   // test calls the UNQUALIFIED `requestAnimationFrame`/`cancelAnimationFrame`
   // identifiers, which resolve through Node's global scope in vitest's jsdom
-  // project rather than always aliasing `window`'s own property — matches
-  // this codebase's own established global-stubbing idiom.
+  // project rather than always aliasing `window`'s own property.
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback): number => {
     const id = rafNextId++;
     rafQueue.set(id, cb);
@@ -93,13 +114,6 @@ function flushRaf(): void {
   for (const [, cb] of due) cb(0);
 }
 
-function int16LEBuffer(samples: readonly number[]): ArrayBuffer {
-  const buf = new ArrayBuffer(samples.length * 2);
-  const view = new DataView(buf);
-  samples.forEach((s, i) => view.setInt16(i * 2, s, true));
-  return buf;
-}
-
 const TTS_MODEL: TtsModel = { id: 'p1_voice-model', name: 'voice-model', project_id: 'p1', default: true };
 
 interface Harness {
@@ -111,11 +125,17 @@ interface Harness {
   readonly spokenRange: TtsSpokenRange | null;
 }
 
-function useHarness(params: Omit<UseModelTtsEngineParams, 'status' | 'setStatus' | 'setSpokenRange' | 'onFinished'> & { onFinished?: (s: 'done' | 'error' | 'idle') => void }): Harness {
+type HarnessParams = Omit<UseModelTtsEngineParams, 'status' | 'setStatus' | 'setSpokenRange' | 'onFinished' | 'projectId'> & {
+  readonly projectId?: string | number | undefined;
+  readonly onFinished?: (s: 'done' | 'error' | 'idle') => void;
+};
+
+function useHarness(params: HarnessParams): Harness {
   const [status, setStatus] = useState<TtsStatus>('idle');
   const [spokenRange, setSpokenRange] = useState<TtsSpokenRange | null>(null);
   const engine = useModelTtsEngine({
     ...params,
+    projectId: 'projectId' in params ? params.projectId : '7',
     status,
     setStatus,
     setSpokenRange,
@@ -124,9 +144,15 @@ function useHarness(params: Omit<UseModelTtsEngineParams, 'status' | 'setStatus'
   return { ...engine, status, spokenRange };
 }
 
+/** Lets the speech/decoding promise chain run. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+}
+
 describe('useModelTtsEngine', () => {
   let originalAudioContext: typeof window.AudioContext | undefined;
-  let client: TestSocketClient;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -134,8 +160,15 @@ describe('useModelTtsEngine', () => {
     // @ts-expect-error -- test double, not the real DOM constructor shape.
     window.AudioContext = FakeAudioContext;
     stubRaf();
-    client = createTestSocketClient();
     lastCreatedContext = undefined;
+    speechCalls.length = 0;
+    synthesizeSpeech.mockReset();
+    synthesizeSpeech.mockImplementation(
+      (request: SpeechRequest, signal?: AbortSignal) =>
+        new Promise<ArrayBuffer>((resolve, reject) => {
+          speechCalls.push({ request, signal, resolve, reject });
+        }),
+    );
   });
 
   afterEach(() => {
@@ -145,73 +178,76 @@ describe('useModelTtsEngine', () => {
   });
 
   it('when disabled, speak/pause/resume/stop are no-ops', () => {
-    const { result } = renderHook(() => useHarness({ enabled: false, ttsModel: TTS_MODEL, socket: client, voiceConfig: {} }));
+    const { result } = renderHook(() => useHarness({ enabled: false, ttsModel: TTS_MODEL, voiceConfig: {} }));
     act(() => result.current.speak('hello'));
-    expect(client.getEmitted()).toEqual([]);
+    expect(synthesizeSpeech).not.toHaveBeenCalled();
     expect(result.current.status).toBe('idle');
   });
 
-  it('speak() emits tts_stop then tts_start with the model/voice/text payload, and sets status to playing', () => {
+  it('speak() requests the first sentence with the project, model, voice and speed, and sets status to playing', () => {
     const { result } = renderHook(() =>
-      useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: { voiceId: 'v-1', rate: 1.5, volume: 0.8 } }),
+      useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: { voiceId: 'v-1', rate: 1.5, volume: 0.8 } }),
     );
-    act(() => result.current.speak('Hello world'));
+    act(() => result.current.speak('Hello world. Bye.'));
 
-    expect(client.getEmitted('tts_stop')).toHaveLength(1);
-    expect(client.getEmitted('tts_start')).toEqual([
-      {
-        event: 'tts_start',
-        payload: {
-          project_id: 'p1',
-          model_name: 'voice-model',
-          model_project_id: 'p1',
-          text: 'Hello world',
-          voice: 'v-1',
-          speed: 1.5,
-        },
-      },
-    ]);
+    // One sentence at a time: the second is requested once the first answers.
+    expect(speechCalls).toHaveLength(1);
+    expect(speechCalls[0]?.request).toEqual({
+      projectId: '7',
+      model: 'voice-model',
+      input: 'Hello world.',
+      voice: 'v-1',
+      speed: 1.5,
+      instructions: undefined,
+    });
     expect(result.current.status).toBe('playing');
   });
 
-  it('an empty text or a missing ttsModel/socket does not emit or change status', () => {
-    const { result: noText } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: {} }));
-    act(() => noText.current.speak(''));
-    expect(client.getEmitted()).toEqual([]);
+  it("defaults the voice to 'alloy' and pins the gpt-4o TTS persona instructions", () => {
+    const model: TtsModel = { id: 'p1_gpt', name: 'gpt-4o-mini-tts', project_id: 'p1' };
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: model, voiceConfig: {} }));
+    act(() => result.current.speak('Hi'));
 
-    const { result: noModel } = renderHook(() => useHarness({ enabled: true, ttsModel: null, socket: client, voiceConfig: {} }));
-    act(() => noModel.current.speak('hi'));
-    expect(client.getEmitted()).toEqual([]);
+    expect(speechCalls[0]?.request.voice).toBe('alloy');
+    expect(speechCalls[0]?.request.instructions).toContain('calm and warm');
   });
 
-  it('drives a full chunk -> final done -> scheduler -> RAF playback to the done status', () => {
+  it('an empty text, a missing ttsModel, or a missing project sends no request and keeps status idle', () => {
+    const { result: noText } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {} }));
+    act(() => noText.current.speak(''));
+
+    const { result: noModel } = renderHook(() => useHarness({ enabled: true, ttsModel: null, voiceConfig: {} }));
+    act(() => noModel.current.speak('hi'));
+
+    const { result: noProject } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, projectId: undefined, voiceConfig: {} }));
+    act(() => noProject.current.speak('hi'));
+
+    expect(synthesizeSpeech).not.toHaveBeenCalled();
+    expect(noProject.current.status).toBe('idle');
+  });
+
+  it('plays every sentence in order: request -> decode -> queue -> scheduler -> RAF to the done status', async () => {
     const onFinished = vi.fn();
-    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: {}, onFinished }));
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {}, onFinished }));
 
-    act(() => result.current.speak('Hi'));
-    expect(lastCreatedContext).toBeDefined();
+    act(() => result.current.speak('One. Two.'));
+    speechCalls[0]?.resolve(new ArrayBuffer(240));
+    await settle();
+    // The first answer prefetched the second sentence.
+    expect(speechCalls).toHaveLength(2);
+    expect(speechCalls[1]?.request.input).toBe('Two.');
+    speechCalls[1]?.resolve(new ArrayBuffer(240));
+    await settle();
+    expect(lastCreatedContext?.decodeAudioData).toHaveBeenCalledTimes(2);
 
-    // One small audio chunk, then the final tts_done (no char_end).
-    act(() =>
-      client.simulateServerEvent('tts_audio_chunk', { audio: int16LEBuffer(Array.from({ length: 240 }, () => 1000)), sample_rate: 24000 }),
-    );
-    act(() => client.simulateServerEvent('tts_done', {}));
-
-    // Scheduler tick (setInterval 25ms): finalTtsDone bypasses the pre-roll
-    // wait, so the single buffered segment is scheduled immediately.
+    // Scheduler tick: the final sentence is queued, so the pre-roll wait is skipped.
     act(() => {
       vi.advanceTimersByTime(25);
     });
-
-    // First RAF frame: still "before" totalDuration has elapsed (currentTime
-    // is still 0, same as playStartTime) — reports playing, not done yet.
     act(() => flushRaf());
     expect(result.current.status).toBe('playing');
 
-    // Advance the fake clock well past any real duration this tiny chunk
-    // could have, then let the next frame observe it.
     const ctx = lastCreatedContext;
-    expect(ctx).toBeDefined();
     if (ctx) ctx.currentTime = 999;
     act(() => flushRaf());
 
@@ -222,7 +258,7 @@ describe('useModelTtsEngine', () => {
   });
 
   it('pause() suspends the AudioContext and sets status to paused; resume() resumes it and sets status back to playing', () => {
-    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: {} }));
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {} }));
     act(() => result.current.speak('Hi'));
 
     act(() => result.current.pause());
@@ -235,39 +271,58 @@ describe('useModelTtsEngine', () => {
   });
 
   it('pause() while not playing, and resume() while not paused, are no-ops', () => {
-    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: {} }));
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {} }));
     act(() => result.current.pause());
     expect(result.current.status).toBe('idle');
     act(() => result.current.resume());
     expect(result.current.status).toBe('idle');
   });
 
-  it('stop() emits tts_stop, closes the AudioContext, resets status to idle, and calls onFinished("idle") to reset the player UI', () => {
+  it('stop() aborts the request in flight, closes the AudioContext, resets status to idle, and calls onFinished("idle")', async () => {
     const onFinished = vi.fn();
-    const { result } = renderHook(() =>
-      useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: {}, onFinished }),
-    );
+    const onError = vi.fn();
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {}, onFinished, onError }));
     act(() => result.current.speak('Hi'));
-    client.clearEmitted();
+    const ctx = lastCreatedContext;
 
     act(() => result.current.stop());
 
-    expect(client.getEmitted('tts_stop')).toHaveLength(1);
-    expect(lastCreatedContext?.close).toHaveBeenCalled();
+    expect(speechCalls[0]?.signal?.aborted).toBe(true);
+    expect(ctx?.close).toHaveBeenCalled();
     expect(result.current.status).toBe('idle');
     expect(result.current.spokenRange).toBeNull();
     expect(onFinished).toHaveBeenCalledWith('idle');
+
+    // A late answer for the stopped run is neither decoded nor reported.
+    speechCalls[0]?.resolve(new ArrayBuffer(240));
+    await settle();
+    expect(ctx?.decodeAudioData).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
   });
 
-  it('a tts_error event stops playback, sets status to error, and calls onFinished("error")', () => {
+  it('a refused speech request stops playback, sets status to error, and reports why', async () => {
     const onFinished = vi.fn();
-    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, socket: client, voiceConfig: {}, onFinished }));
+    const onError = vi.fn();
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {}, onFinished, onError }));
     act(() => result.current.speak('Hi'));
 
-    act(() => client.simulateServerEvent('tts_error', { error: 'synthesis failed' }));
+    speechCalls[0]?.reject(new VoiceTransportError('model-unavailable'));
+    await settle();
 
     expect(result.current.status).toBe('error');
     expect(result.current.spokenRange).toBeNull();
     expect(onFinished).toHaveBeenCalledWith('error');
+    expect(onError).toHaveBeenCalledWith('model-unavailable');
+  });
+
+  it("an unexpected failure is reported as 'failed'", async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() => useHarness({ enabled: true, ttsModel: TTS_MODEL, voiceConfig: {}, onError }));
+    act(() => result.current.speak('Hi'));
+
+    speechCalls[0]?.reject(new Error('decoder crashed'));
+    await settle();
+
+    expect(onError).toHaveBeenCalledWith('failed');
   });
 });

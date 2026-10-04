@@ -51,8 +51,6 @@ export function stopModelAudio(refs: ModelTtsRefs): void {
   refs.allChunksReceived.current = false;
   refs.charTimeline.current = null;
   refs.sentenceWaypoints.current = [];
-  refs.pendingChunk.current = null;
-  refs.newSentence.current = true;
   if (refs.schedulerTimer.current !== null) clearInterval(refs.schedulerTimer.current);
   refs.schedulerTimer.current = null;
   refs.pcmQueue.current = [];

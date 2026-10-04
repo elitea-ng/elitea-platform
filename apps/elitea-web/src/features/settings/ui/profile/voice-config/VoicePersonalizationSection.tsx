@@ -1,7 +1,7 @@
 /**
  * VoicePersonalizationSection — local port of the voice personalization panel.
  */
-import { memo, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 import Box from '@mui/material/Box';
@@ -12,7 +12,6 @@ import { AccordionConstants } from '@/shared/lib/constants';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
-import { SocketClientContext } from '@/shared/api/socket/client';
 import { t } from '@/shared/i18n';
 
 import {
@@ -40,8 +39,6 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
   const [config, setConfigState] = useState<VoiceConfig>(loadStored);
   const [browserVoices, setBrowserVoices] = useState<Array<{ name: string; localService: boolean }>>([]);
 
-  const socket = useContext(SocketClientContext);
-
   const { data: ttsModels } = useQuery({
     // `section` and `include_shared` are part of the key on purpose: the
     // shared `['models', projectId]` key this panel used to share carries
@@ -66,11 +63,11 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
     [ttsModels],
   );
 
-  // Matches the old app / the sibling `features/chat-input` port
-  // (`hasModelTTS = !!(ttsModel && socket)`): model-backed TTS needs a live
-  // socket connection, not just a resolved model — otherwise there is
-  // nothing to actually stream audio back from.
-  const hasModelTTS = !!(ttsModel && socket);
+  // A resolved model is enough: model speech goes over HTTPS to
+  // `/llm/v1/audio/speech` (`features/chat-input/api/voiceTransport.ts`). The
+  // old app also required a live socket.io connection, and elitea-main runs
+  // no socket.io server.
+  const hasModelTTS = !!ttsModel;
 
   const ttsVoicesQuery = useQuery({
     queryKey: ['settings', 'tts-voices', ttsModel?.project_id ?? projectId, ttsModel?.name],
@@ -132,11 +129,11 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
   const [isPlaying, setIsPlaying] = useState(false);
   const handlePreview = useCallback(() => {
     if (useModelVoices) {
-      // Model-backed preview needs the socket + Web Audio TTS engine
+      // Model-backed preview needs the HTTPS + Web Audio TTS engine
       // (`features/chat-input/lib/hooks/useTextToSpeech.hooks.ts` +
       // `useModelTtsEngine.hooks.ts`). That engine is feature-private to
       // `features/chat-input`; `no-sideways-features` forbids importing it
-      // from here, and duplicating its socket protocol / audio scheduling
+      // from here, and duplicating its request pipeline / audio scheduling
       // is out of this fix's scope — it needs a shared-home promotion first
       // (the same path `ThemeModeToggle` took to `shared/ui` for this exact
       // page). No-op rather than silently playing the wrong (browser) voice
