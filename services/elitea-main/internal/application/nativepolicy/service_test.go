@@ -147,3 +147,40 @@ func TestDecorateResolvesTheClientsMinimum(t *testing.T) {
 		t.Fatal("no policy may be invented when none could be read")
 	}
 }
+
+// TestInvalidateDuringRefreshIsNotOverwritten pins the refresh/Invalidate race:
+// a refresh that read the store BEFORE an admin save must not store its stale
+// result with a fresh TTL after the save's Invalidate; the next read goes to
+// the store again.
+func TestInvalidateDuringRefreshIsNotOverwritten(t *testing.T) {
+	stale := platformconfig.DefaultNativeClientPolicy()
+	saved := platformconfig.DefaultNativeClientPolicy()
+	saved.MinClientVersion = "9.0.0"
+
+	var svc *Service
+	calls := 0
+	svc = NewWithLoader(func(context.Context) (platformconfig.NativeClientPolicy, error) {
+		calls++
+		if calls == 1 {
+			// The read happened; the admin save commits and invalidates
+			// before this refresh stores its result.
+			svc.Invalidate()
+			return stale, nil
+		}
+		return saved, nil
+	}, nil)
+	now := time.Unix(1_000, 0)
+	svc.SetClock(func() time.Time { return now })
+	ctx := context.Background()
+
+	if _, err := svc.Policy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Policy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MinClientVersion != "9.0.0" || calls != 2 {
+		t.Fatalf("a refresh racing Invalidate must not arm the TTL over the stale value: got %q after %d loads", got.MinClientVersion, calls)
+	}
+}

@@ -48,6 +48,11 @@ type Service struct {
 	policy    platformconfig.NativeClientPolicy
 	loaded    bool
 	expiresAt time.Time
+	// generation counts Invalidate calls. A refresh records it before its
+	// query and arms the TTL only if no Invalidate happened meanwhile, so a
+	// read that started before an admin save cannot pin the pre-save policy
+	// for another CacheTTL.
+	generation uint64
 }
 
 // New builds the service over the platform_config store. A nil pool serves the
@@ -73,6 +78,7 @@ func (s *Service) Invalidate() {
 	}
 	s.mu.Lock()
 	s.expiresAt = time.Time{}
+	s.generation++
 	s.mu.Unlock()
 }
 
@@ -94,6 +100,7 @@ func (s *Service) Policy(ctx context.Context) (platformconfig.NativeClientPolicy
 		return policy, nil
 	}
 	previous, hadPrevious := s.policy, s.loaded
+	generation := s.generation
 	if hadPrevious {
 		s.expiresAt = now.Add(CacheTTL)
 	}
@@ -110,7 +117,13 @@ func (s *Service) Policy(ctx context.Context) (platformconfig.NativeClientPolicy
 		return platformconfig.NativeClientPolicy{}, err
 	}
 	s.mu.Lock()
-	s.policy, s.loaded, s.expiresAt = policy, true, s.now().Add(CacheTTL)
+	if s.generation == generation {
+		s.policy, s.loaded, s.expiresAt = policy, true, s.now().Add(CacheTTL)
+	} else if !s.loaded {
+		// Invalidated mid-refresh: keep the value only as a cold-cache
+		// fallback, already expired, so the next request reads the store.
+		s.policy, s.loaded, s.expiresAt = policy, true, time.Time{}
+	}
 	s.mu.Unlock()
 	return policy, nil
 }
