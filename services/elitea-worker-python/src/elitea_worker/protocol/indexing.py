@@ -23,6 +23,49 @@ RESULT_CLASSIFICATION = "tenant-confidential"
 MAX_RESULT_SUMMARY_MESSAGE_BYTES = 48 * 1024
 INDEX_INGEST_FAILURE_SAFE_MESSAGE = "Indexing failed before completion."
 
+# #6876: the SDK classifies an index failure into ``error_class`` and
+# ``retriable`` beside its free-form ``error``. The free-form text stays inside
+# the worker (it can carry endpoints and credential-adjacent data); the typed
+# pair selects one of these fixed sentences instead, so the index run's
+# terminal error names the cause and its remedy rather than one generic
+# sentence for a spent quota, a refused credential and a wrong parameter alike.
+# Unknown or malformed values keep the generic message: no label is safer than
+# a wrong one.
+INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE = (
+    "Indexing failed because the source is temporarily unavailable or "
+    "rate-limited. Run the index again later; a credential with a higher API "
+    "quota avoids the limit."
+)
+INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE = (
+    "Indexing failed because the source is rate-limited and this run cannot "
+    "resume from its progress. Raise the API quota for the credential, or "
+    "narrow the index scope, then run the index again."
+)
+INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE = (
+    "Indexing failed because the source refused the toolkit credential. Check "
+    "that the credential is valid and can read this source."
+)
+INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE = (
+    "Indexing failed because the source rejected the index settings. Check the "
+    "toolkit and index parameters."
+)
+_SDK_ERROR_CLASS_MESSAGES = {
+    "policy": INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE,
+    "input": INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE,
+    "tool_internal": INDEX_INGEST_FAILURE_SAFE_MESSAGE,
+}
+# The fixed sentences that name a specific cause. Only these may replace the
+# live index status's generic error: every one is a constant of this module,
+# never SDK text, so it needs no further projection.
+CLASSIFIED_INDEX_FAILURE_MESSAGES = frozenset(
+    {
+        INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+        INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE,
+        INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE,
+        INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE,
+    }
+)
+
 _SUMMARY_STATUS = {
     "ok": indexing_pb2.INDEX_INGEST_STATUS_V1_OK,
     "partly_indexed": indexing_pb2.INDEX_INGEST_STATUS_V1_PARTLY_INDEXED,
@@ -267,7 +310,7 @@ def bind_result_summary(
         if not isinstance(error, str) or not error:
             raise InternalFailure()
         status = indexing_pb2.INDEX_INGEST_STATUS_V1_ERROR
-        message = INDEX_INGEST_FAILURE_SAFE_MESSAGE
+        message = index_failure_safe_message(sdk_result)
     else:
         if success is not True:
             raise InternalFailure()
@@ -339,6 +382,33 @@ def bind_result_summary(
     _copy_optional(bound.mcp_tokens, result.mcp_tokens)
     _copy_optional(bound.embedding_binding, result.embedding_binding)
     return bound
+
+
+def index_failure_safe_message(sdk_result: object) -> str:
+    """Map the SDK's typed failure classification to one fixed safe sentence.
+
+    Reads only ``error_class`` and ``retriable``. ``retriable`` is the SDK's
+    statement about THIS run: an infrastructure failure the run cannot resume
+    from (a spent quota under Clean Index, for example) is reported as not
+    retriable, and running it again unchanged would only spend the next quota
+    window the same way.
+    """
+
+    if not isinstance(sdk_result, dict):
+        return INDEX_INGEST_FAILURE_SAFE_MESSAGE
+    error_class = sdk_result.get("error_class")
+    retriable = sdk_result.get("retriable")
+    if not isinstance(error_class, str) or (
+        retriable is not None and not isinstance(retriable, bool)
+    ):
+        return INDEX_INGEST_FAILURE_SAFE_MESSAGE
+    if error_class == "infrastructure":
+        if retriable is False:
+            return INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE
+        return INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+    return _SDK_ERROR_CLASS_MESSAGES.get(
+        error_class, INDEX_INGEST_FAILURE_SAFE_MESSAGE
+    )
 
 
 def _normalize_current_sdk_summary(status: int, message: str) -> tuple[int, str]:

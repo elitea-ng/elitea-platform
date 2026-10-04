@@ -264,11 +264,23 @@ class CurrentIndexNodeEventCallback(BaseCallbackHandler):
         state: str,
         *,
         correct_inconsistent: bool = False,
+        error_message: str | None = None,
     ) -> node_event_pb2.NodeEventV1 | None:
-        """Build a terminal correction for the reviewed result summary."""
+        """Build a terminal correction for the reviewed result summary.
+
+        ``error_message`` is a fixed safe sentence chosen by the result
+        projection (never SDK text); it lets the live status name the same
+        cause as the run's terminal error.
+        """
 
         if state not in {"failed", "partly_indexed"}:
             raise ValueError("unsupported terminal index correction")
+        if error_message is not None and (
+            state != "failed"
+            or not isinstance(error_message, str)
+            or not error_message
+        ):
+            raise ValueError("unsupported terminal index error message")
         try:
             with self._tool_lock:
                 observed = self._terminal_index_status_observed
@@ -293,7 +305,7 @@ class CurrentIndexNodeEventCallback(BaseCallbackHandler):
                 "index_name": self._context.index_name,
                 "state": state,
                 "error": (
-                    _SAFE_INDEX_ERROR_FALLBACK
+                    (error_message or _SAFE_INDEX_ERROR_FALLBACK)
                     if state == "failed"
                     else _SAFE_INDEX_PARTIAL_FALLBACK
                 ),

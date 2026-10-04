@@ -41,7 +41,11 @@ from elitea_worker.protocol.codec import (
     build_node_event_output_frame,
 )
 from elitea_worker.protocol.indexing import (
+    INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE,
     INDEX_INGEST_FAILURE_SAFE_MESSAGE,
+    INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE,
+    INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE,
+    INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
     bind_result_artifact,
     bind_result_summary,
     request_from,
@@ -1206,6 +1210,105 @@ def test_outer_sdk_failure_becomes_fixed_safe_error_summary() -> None:
     assert bound.result_summary.status == indexing_pb2.INDEX_INGEST_STATUS_V1_ERROR
     assert bound.result_summary.message == INDEX_INGEST_FAILURE_SAFE_MESSAGE
     assert canary.encode() not in bound.SerializeToString(deterministic=True)
+
+
+def _index_callback() -> CurrentIndexNodeEventCallback:
+    return CurrentIndexNodeEventCallback(
+        CurrentIndexNodeEventContext(
+            stream_id="conversation-1",
+            task_id="execution-1",
+            initiator="user",
+            project_id=42,
+            user_id=7,
+            toolkit_id=9,
+            index_name="knowledge",
+        ),
+        lambda event: None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("error_class", "retriable", "expected"),
+    [
+        # #6876: a spent GitHub quota is classified infrastructure/retriable.
+        ("infrastructure", True, INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE),
+        # Absent retriable follows the SDK's own default for the class.
+        ("infrastructure", None, INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE),
+        # The SDK says THIS run cannot resume (Clean Index, adoption off, ...).
+        ("infrastructure", False, INDEX_INGEST_QUOTA_UNRESUMABLE_SAFE_MESSAGE),
+        ("policy", False, INDEX_INGEST_CREDENTIAL_REFUSED_SAFE_MESSAGE),
+        ("input", False, INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE),
+        ("tool_internal", False, INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+        # Unknown or malformed classifications never pick a specific remedy.
+        ("brand_new_class", True, INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+        (7, True, INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+        ("infrastructure", "yes", INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+    ],
+)
+def test_sdk_error_class_and_retriable_select_the_terminal_error(
+    error_class: object,
+    retriable: object,
+    expected: str,
+) -> None:
+    canary = (
+        "Tool execution failed: 403 {'message': 'API rate limit exceeded for "
+        "203.0.113.7', 'documentation_url': 'https://docs.github.com/rest'}"
+    )
+    sdk_result: dict[str, Any] = {
+        "success": False,
+        "error": canary,
+        "error_class": error_class,
+        "exception_type": "RateLimitExceededException",
+        "toolkit_config": {"access_token": "secret"},
+    }
+    if retriable is not None:
+        sdk_result["retriable"] = retriable
+
+    bound = bind_result_summary(_index_result(sdk_result))
+
+    summary = bound.result_summary
+    assert summary.status == indexing_pb2.INDEX_INGEST_STATUS_V1_ERROR
+    assert (
+        summary.terminal_state
+        == indexing_pb2.INDEX_INGEST_TERMINAL_STATE_V1_FAILED
+    )
+    assert summary.message == expected
+    serialized = bound.SerializeToString(deterministic=True)
+    assert canary.encode() not in serialized
+    assert b"203.0.113.7" not in serialized
+    assert b"RateLimitExceededException" not in serialized
+
+
+def test_failed_summary_correction_carries_the_classified_error() -> None:
+    callback = _index_callback()
+
+    event = callback.finish_index_status_for_summary(
+        "failed",
+        correct_inconsistent=True,
+        error_message=INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+    )
+
+    assert event is not None
+    current = json.loads(encode_current_node_event_json(event))
+    assert current["type"] == "agent_index_data_status"
+    assert current["response_metadata"]["state"] == "failed"
+    assert (
+        current["response_metadata"]["error"]
+        == INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "error_message"),
+    [("partly_indexed", "Indexing failed."), ("failed", "")],
+)
+def test_summary_correction_refuses_a_misplaced_error_message(
+    state: str, error_message: str
+) -> None:
+    with pytest.raises(ValueError):
+        _index_callback().finish_index_status_for_summary(
+            state, error_message=error_message
+        )
 
 
 @pytest.mark.parametrize("error", [None, "", 7, {"message": "failure"}])

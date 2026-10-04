@@ -54,6 +54,7 @@ from elitea_worker.protocol.codec import (
 )
 from elitea_worker.protocol.indexing import (
     INDEX_INGEST_FAILURE_SAFE_MESSAGE,
+    INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
     bind_result_summary,
 )
 from elitea_worker.protocol.node_event import encode_current_node_event_json
@@ -644,6 +645,100 @@ def test_index_delivery_invokes_sdk_once_and_emits_only_safe_terminal_fields(
     asyncio.run(run())
     captured = capsys.readouterr()
     assert captured.err == ""
+
+
+def test_rate_limited_github_index_ends_failed_with_its_cause(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#6876: a GitHub 403 rate limit ends the run FAILED, naming the cause.
+
+    The stub returns what the SDK's ``test_toolkit_tool`` returns once PyGithub
+    raises ``RateLimitExceededException`` instead of sleeping out the reset:
+    the flattened failure plus the typed ``error_class``/``retriable`` pair.
+    The run must settle as a terminal failure (not stay pending), and both the
+    terminal summary and the live index status must carry the rate-limit
+    sentence while the raw provider text stays in the worker.
+    """
+
+    case = _case()
+    raw = (
+        "Tool execution failed: 403 {'message': \"API rate limit exceeded for "
+        "198.51.100.23. (But here's the good news: Authenticated requests get "
+        "a higher rate limit.)\", 'documentation_url': "
+        "'https://docs.github.com/rest/overview/resources-in-the-rest-api"
+        "#rate-limiting'}"
+    )
+
+    async def run() -> None:
+        sdk = RecordingSdk(
+            {
+                "success": False,
+                "error": raw,
+                "error_class": "infrastructure",
+                "retriable": True,
+                "exception_type": "RateLimitExceededException",
+                "toolkit_config": {"settings": {"base_url": "https://api.github.com"}},
+            },
+            emit_tool_lifecycle=True,
+        )
+        monkeypatch.setattr(
+            EliteaSdkIndexingAdapter,
+            "from_context",
+            classmethod(lambda cls, context: sdk),
+        )
+
+        async def context_factory(claim: IndexExecutionClaim) -> EliteaClientContext:
+            return EliteaClientContext(42, "https://elitea.internal", "actor-pat")
+
+        output = Output()
+        control = Control(case)
+        acker = Acker()
+        processor = _processor(
+            case,
+            control=control,
+            input_client=InputClient(case.values, []),
+            output=output,
+            acker=acker,
+            context_factory=context_factory,
+        )
+
+        result = await processor.process(case.delivery)
+
+        assert result.disposition is DeliveryDisposition.EXECUTED_SETTLED_ACKED
+        assert len(sdk.calls) == 1
+        assert control.settlements == 1
+        assert result.output_frame is not None
+        assert (
+            result.output_frame.settlement_proposal.requested_outcome
+            == common_pb2.EXECUTION_OUTCOME_V1_FAILED
+        )
+        summary = result.output_frame.index_ingest.result_summary
+        assert summary.status == indexing_pb2.INDEX_INGEST_STATUS_V1_ERROR
+        assert (
+            summary.terminal_state
+            == indexing_pb2.INDEX_INGEST_TERMINAL_STATE_V1_FAILED
+        )
+        assert summary.message == INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+        statuses = [
+            json.loads(encode_current_node_event_json(frame.node_event))[
+                "response_metadata"
+            ]
+            for frame in output.frames
+            if frame.HasField("node_event")
+            and frame.node_event.type == "agent_index_data_status"
+        ]
+        assert [(status["state"], status["error"]) for status in statuses] == [
+            ("failed", INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE)
+        ]
+        wire = b"".join(
+            frame.SerializeToString(deterministic=True) for frame in output.frames
+        )
+        assert b"198.51.100.23" not in wire
+        assert b"RateLimitExceededException" not in wire
+
+    asyncio.run(run())
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize(
