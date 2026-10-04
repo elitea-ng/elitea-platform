@@ -19,6 +19,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use super::assembly::OrdinaryNoToolProfile;
+use super::attachment_context::{AttachmentBudget, render_attachment_reads};
+use super::attachment_tools::AttachmentLibrary;
 use super::attachments;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecisionSet, DirectHitlError,
@@ -224,6 +226,10 @@ pub(crate) struct AuthorizedNativeAssembly<'a> {
     /// that fails before any credential is issued, so the one IO this needs
     /// happens before it and hands its result forward.
     attachments: Vec<serde_json::Value>,
+    /// The documents this turn showed only as an overview, for the
+    /// `read_attachment` / `search_attachment` tools. `None` when every
+    /// document fit, or when nothing was read.
+    attachment_library: Option<Arc<AttachmentLibrary>>,
 }
 
 impl<'a> AuthorizedNativeAssembly<'a> {
@@ -260,6 +266,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         Self {
             sandbox: None,
             attachments: request.payload.input_attachments.clone(),
+            attachment_library: None,
             request,
             runtime_context,
             session,
@@ -271,27 +278,45 @@ impl<'a> AuthorizedNativeAssembly<'a> {
     /// Read this turn's attached documents before admission builds the message.
     ///
     /// It is deliberately INFALLIBLE. Every failure this can meet — a file
-    /// elitea-main will not serve as text, a stale reference, a refused
-    /// conversation, a transport error — leaves the attachment rendered by its
-    /// header alone, which is pylon's own rule for a file the platform cannot
-    /// read (`rpc/chat_all.py:384-386`) and the property the e2e pins. A turn
-    /// must never die because of a file the question may not even be about.
+    /// elitea-main has no text for, a stale reference, a refused conversation,
+    /// a transport error — leaves the attachment rendered by its header and a
+    /// note that says it was not read and why, which is pylon's own rule for a
+    /// file the platform cannot read (`rpc/chat_all.py:384-386`). A turn must
+    /// never die because of a file the question may not even be about.
+    ///
+    /// What is read is rendered within the turn's attachment budget
+    /// (`attachment_context`): whole when it fits, an overview otherwise.
+    /// `tools_available` must be true only when the caller registers the
+    /// attachment tools, because the overview note offers them.
     ///
     /// It runs BEFORE `admit_*` rather than after: the plan owns the human
     /// message, and rebuilding that message later would mean keeping a second
     /// copy of the user's own text just to re-splice around it.
     #[must_use]
-    pub(crate) async fn resolve_attachment_contents(mut self, platform: &PlatformClient) -> Self {
+    pub(crate) async fn resolve_attachment_contents(
+        mut self,
+        platform: &PlatformClient,
+        tools_available: bool,
+    ) -> Self {
         let pending = attachments::pending_attachment_reads(&self.attachments);
         if pending.is_empty() {
             return self;
         }
-        let extracted =
+        let reads =
             attachments::read_attachment_documents(platform, &self.runtime_context, &pending).await;
-        if extracted.is_empty() {
-            return self;
-        }
-        self.attachments = attachments::resolved_attachment_chunks(&self.attachments, &extracted);
+        let budget = AttachmentBudget::for_request(self.request);
+        let rendered = render_attachment_reads(&pending, reads, &budget, tools_available);
+        tracing::info!(
+            event = "agent_input_attachment_rendered",
+            documents = pending.len(),
+            attachment_budget_tokens = budget.attachment_tokens(),
+            input_limit = budget.input_limit(),
+            tools = rendered.library.is_some(),
+            "attachment documents rendered within the turn's budget"
+        );
+        self.attachments =
+            attachments::resolved_attachment_chunks(&self.attachments, &rendered.texts);
+        self.attachment_library = rendered.library;
         self
     }
 
@@ -328,6 +353,7 @@ impl<'a> AuthorizedNativeAssembly<'a> {
             .map_err(tool_snapshot_error)?
             .apply_policy(policy);
         Ok(AdmittedOrdinaryNativeAssembly {
+            attachment_library: self.attachment_library,
             sandbox_authority: self.sandbox,
             request: self.request,
             runtime_context: self.runtime_context,
@@ -537,6 +563,7 @@ impl AdmittedNativeStart {
 
 /// Strict ordinary/no-tool profile admitted before ephemeral PAT redemption.
 pub(crate) struct AdmittedOrdinaryNativeAssembly<'a> {
+    attachment_library: Option<Arc<AttachmentLibrary>>,
     sandbox_authority: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
     request: &'a AgentExecutionRequest,
     runtime_context: ClaimBoundRuntimeContextAuthority,
@@ -575,6 +602,7 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         client: &PlatformClient,
     ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, RuntimeContextError> {
         let Self {
+            attachment_library,
             sandbox_authority,
             runtime_context,
             session,
@@ -588,6 +616,7 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         } = self;
         let context = client.redeem_elitea_context(&runtime_context).await?;
         Ok(RedeemedOrdinaryNativeAssembly {
+            attachment_library,
             sandbox_authority,
             profile,
             plan,
@@ -604,6 +633,7 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
 
 /// Admitted ordinary assembly after its sole claim-scoped PAT redemption.
 pub(crate) struct RedeemedOrdinaryNativeAssembly<'a> {
+    pub(super) attachment_library: Option<Arc<AttachmentLibrary>>,
     pub(super) sandbox_authority: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
     pub(super) profile: OrdinaryNoToolProfile,
     pub(super) plan: OrdinaryNativeAgentPlan,

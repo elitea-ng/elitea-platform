@@ -37,16 +37,18 @@
 //! exactly the shape pylon's extraction step leaves behind, and exactly what the
 //! Python worker builds (`sdk_adapter.py:529-624`, `_read_attachment_documents`).
 //!
-//! WHAT MAIN WILL NOT SERVE, AND WHY THE SKIP PATH REMAINS. The route answers
-//! text and nothing else: a file over its cap, an empty one, or one that is not
-//! valid UTF-8 (a pdf, a docx, a png) is refused there, because this runtime has
-//! no extractor and half a document is worse than none. A conversation that does
-//! not own the object is refused too. Every one of those — and every transport
-//! failure — is treated here as "unreadable": the file's NAME still reaches the
-//! model through its header chunk, the read is SKIPPED with a data-free log
-//! event, and the TURN IS NEVER REFUSED. That is pylon's own rule for a file the
-//! platform cannot read (`rpc/chat_all.py:384-386`): the question may not even be
-//! about the file, and the header still tells the model it exists.
+//! WHAT MAIN SERVES, AND WHAT HAPPENS WHEN IT CANNOT. Main extracts the file
+//! (PDF, DOCX, PPTX, XLSX or text) and serves its text with a page, slide,
+//! sheet or section map; `attachment_context` decides how much of it the
+//! model sees within the turn's budget and says so in a note. A file main has
+//! no text for (encrypted, an image, damaged, no text layer, too large) comes
+//! back as 422 with a reason, which the transport maps to a terminal
+//! `Rejected` — never to the retryable `dependency_unavailable` — and the
+//! model gets a note that says the file could not be read and why. A
+//! transport failure gets the same kind of note. The TURN IS NEVER REFUSED:
+//! that is pylon's own rule for a file the platform cannot read
+//! (`rpc/chat_all.py:384-386`), because the question may not even be about
+//! the file.
 //!
 //! A header chunk IMMEDIATELY FOLLOWED by a plain text chunk (one with no marker
 //! of its own) is already extracted and is NOT read again. That is the storage
@@ -84,9 +86,11 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value};
 
 use super::assembly::invalid_profile;
+use super::attachment_context::AttachmentDocument;
 use super::runtime::NativeAgentAssemblyError;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::transport::platform_client::PlatformClient;
+use crate::transport::runtime_context::RuntimeContextError;
 
 /// The namespaced marker object. Its name and contents are fixed by the
 /// admission path (attachments.go, `attachmentExtractionMarkerKey`); this module
@@ -359,12 +363,46 @@ pub(crate) struct AttachmentReference {
     name: String,
 }
 
-/// The documents this turn managed to read, by reference.
+impl AttachmentReference {
+    /// The bucket the object is stored in.
+    #[must_use]
+    pub(crate) fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    /// The object key, conversation prefix included.
+    #[must_use]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// The text chunk to splice in after each header, by reference: a rendered
+/// document (whole, or an overview) or the note that says why it has none.
 ///
 /// A `BTreeMap` rather than a hash map so a turn's reads are deterministic in
 /// order — the same input produces the same prompt, which is what makes a
 /// replay comparable.
 pub(crate) type AttachmentContents = BTreeMap<AttachmentReference, String>;
+
+/// What one read produced.
+pub(crate) enum AttachmentRead {
+    /// Main served text for the file.
+    Document(AttachmentDocument),
+    /// The file has no text this turn can show. The reason is a stable code
+    /// (`encrypted`, `unsupported_format`, `not_found`, `unavailable`, ...)
+    /// that `attachment_context` turns into a sentence for the model.
+    Unreadable(&'static str),
+}
+
+/// Every read of this turn, by reference.
+pub(crate) type AttachmentReads = BTreeMap<AttachmentReference, AttachmentRead>;
+
+/// The text one turn may hold in memory for all its attachments together.
+/// Main serves at most 2 MiB per file and admission allows 64 files; this cap
+/// keeps one turn's worst case far below that product. A file past it gets
+/// the `turn_limit` note.
+const MAX_TURN_ATTACHMENT_TEXT_BYTES: usize = 16 * 1_024 * 1_024;
 
 /// The references whose text still has to be read, deduplicated and in
 /// first-seen order.
@@ -390,10 +428,10 @@ pub(crate) fn pending_attachment_reads(input_attachments: &[Value]) -> Vec<Attac
 /// Read this turn's pending attachments through the live claim.
 ///
 /// NOTHING HERE MAY FAIL THE TURN, and that is the whole contract. A refused
-/// conversation, a file main will not serve as text, a stale reference, a
-/// transport failure — each contributes no text and is counted, never raised.
-/// The caller renders the header either way, so the model is told the file
-/// exists and is not shown a half-read version of it.
+/// conversation, a file main has no text for, a stale reference, a transport
+/// failure — each becomes an `Unreadable` outcome with a reason, never an
+/// error. The caller renders a note for it, so the model is told the file
+/// exists, that it was not read, and why.
 ///
 /// Reads are issued ONE AT A TIME on purpose. The Python worker batches per
 /// bucket because its SDK call takes a file list; this route takes one object,
@@ -404,34 +442,54 @@ pub(crate) async fn read_attachment_documents(
     platform: &PlatformClient,
     authority: &ClaimBoundRuntimeContextAuthority,
     pending: &[AttachmentReference],
-) -> AttachmentContents {
-    let mut contents = AttachmentContents::new();
+) -> AttachmentReads {
+    let mut reads = AttachmentReads::new();
+    let mut held = 0_usize;
     let mut failures = 0_usize;
     for reference in pending {
-        match platform
+        let outcome = match platform
             .read_attachment_object(authority, &reference.bucket, &reference.name)
             .await
         {
             Ok(object) => {
-                let text = object.into_content();
-                if text.is_empty() {
-                    failures += 1;
+                let (content, layout) = object.into_parts();
+                if content.is_empty() {
+                    AttachmentRead::Unreadable("no_text")
+                } else if held + content.len() > MAX_TURN_ATTACHMENT_TEXT_BYTES {
+                    AttachmentRead::Unreadable("turn_limit")
                 } else {
-                    contents.insert(reference.clone(), text);
+                    held += content.len();
+                    AttachmentRead::Document(AttachmentDocument { content, layout })
                 }
             }
             Err(error) => {
                 failures += 1;
-                // The CODE only. Bucket, key and filename are tenant data and
-                // stay out of worker logs, in line with the data-free
-                // diagnostics the rest of this worker keeps.
-                tracing::info!(
-                    event = "agent_input_attachment_read_failed",
-                    error_code = error.code(),
-                    "an attached document could not be read; its header still names it to the model"
-                );
+                // The CODE and the reason only. Bucket, key and filename are
+                // tenant data and stay out of worker logs, in line with the
+                // data-free diagnostics the rest of this worker keeps.
+                if let Some(reason) = error.rejection_reason() {
+                    tracing::info!(
+                        event = "agent_input_attachment_unreadable",
+                        reason,
+                        "an attached document has no text the platform can serve; \
+                         the model is told why"
+                    );
+                    AttachmentRead::Unreadable(reason)
+                } else {
+                    tracing::info!(
+                        event = "agent_input_attachment_read_failed",
+                        error_code = error.code(),
+                        "an attached document could not be read; the model is told so"
+                    );
+                    AttachmentRead::Unreadable(match error {
+                        RuntimeContextError::NotFound(_) => "not_found",
+                        RuntimeContextError::AuthorizationFailed(_) => "not_available",
+                        _ => "unavailable",
+                    })
+                }
             }
-        }
+        };
+        reads.insert(reference.clone(), outcome);
     }
     if failures > 0 {
         tracing::info!(
@@ -441,7 +499,7 @@ pub(crate) async fn read_attachment_documents(
              the turn continues and each file is still named to the model"
         );
     }
-    contents
+    reads
 }
 
 /// Project the admitted chunks with this turn's reads spliced in.
@@ -1009,7 +1067,7 @@ mod tests {
                 deadline: Duration::from_secs(1),
                 max_response_bytes: 32 * 1_024,
                 max_application_response_bytes: 1_024 * 1_024,
-                max_attachment_response_bytes: 1_024 * 1_024,
+                max_attachment_response_bytes: 6 * 1_024 * 1_024,
                 max_artifact_response_bytes: 2 * 1_024 * 1_024,
             },
         )
@@ -1017,12 +1075,70 @@ mod tests {
         (PlatformClient::new(Arc::new(client)), targets)
     }
 
+    /// Read and render exactly as `resolve_attachment_contents` does, with a
+    /// large window so a small document is inlined whole.
+    async fn read_and_render(platform: &PlatformClient, attachments: &[Value]) -> Vec<Value> {
+        let pending = pending_attachment_reads(attachments);
+        let reads =
+            read_attachment_documents(platform, &test_runtime_context_authority(), &pending).await;
+        let budget = crate::agents::attachment_context::AttachmentBudget::new(258_499, false, 0);
+        let rendered = crate::agents::attachment_context::render_attachment_reads(
+            &pending, reads, &budget, true,
+        );
+        resolved_attachment_chunks(attachments, &rendered.texts)
+    }
+
+    fn v2_document(content: &str) -> Value {
+        json!({
+            "schema_version": "elitea.runtime.attachment-object.v2",
+            "project_id": 17,
+            "bucket": "chat-attachments",
+            "name": "conv/report.pdf",
+            "media_type": "application/pdf",
+            "byte_length": 582_299,
+            "format": "pdf",
+            "extractor_version": "elitea-extract/1",
+            "content": content,
+            "units": [
+                {"kind": "page", "label": "1", "start": 0, "end": 12, "has_text": true},
+                {"kind": "page", "label": "2", "start": 14, "end": content.len(), "has_text": true}
+            ],
+            "unit_count": 2,
+            "low_text_units": [],
+            "text_bytes": content.len(),
+            "token_estimate": content.len().div_ceil(4),
+            "complete": true,
+            "partial_reason": ""
+        })
+    }
+
     #[tokio::test(flavor = "current_thread")]
-    async fn a_served_document_reaches_the_model_beside_its_header() {
-        // The whole path, end to end: the marker names the object, the claim
-        // authorizes it, main answers the envelope, and the text lands in the
-        // prompt. `project_id` is 17 because that is what the claim binds —
-        // a document naming any other project is refused by the transport.
+    async fn an_extracted_pdf_reaches_the_model_whole_and_marked_complete() {
+        // The v2 document main serves for a PDF: the text and its page map.
+        let attachments = vec![header("conv/report.pdf")];
+        let content = "first page 1\n\nsecond SPLICEDOK page";
+        let (platform, _) = platform_with(vec![attachment_response(
+            StatusCode::OK,
+            &v2_document(content).to_string(),
+        )]);
+        let resolved = read_and_render(&platform, &attachments).await;
+        let parts = text_parts(&append_attachment_parts(user_message(), &resolved));
+        assert_eq!(parts.len(), 3);
+        assert!(
+            parts[1].contains("report.pdf"),
+            "the file is still announced"
+        );
+        assert!(
+            parts[2].contains("SPLICEDOK"),
+            "the token inside the file reaches the model"
+        );
+        assert!(parts[2].contains("COMPLETE"));
+        assert!(parts[2].contains("--- page 2 ---"));
+        assert!(parts[2].contains("| pdf | 2 pages | complete]"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_v1_document_from_an_older_main_still_reads() {
         let attachments = vec![header("conv/report.txt")];
         let (platform, _) = platform_with(vec![attachment_response(
             StatusCode::OK,
@@ -1037,80 +1153,193 @@ mod tests {
             })
             .to_string(),
         )]);
-
-        let pending = pending_attachment_reads(&attachments);
-        let extracted =
-            read_attachment_documents(&platform, &test_runtime_context_authority(), &pending).await;
-        assert_eq!(extracted.len(), 1);
-
-        let resolved = resolved_attachment_chunks(&attachments, &extracted);
+        let resolved = read_and_render(&platform, &attachments).await;
         let parts = text_parts(&append_attachment_parts(user_message(), &resolved));
         assert_eq!(parts.len(), 3);
-        assert!(
-            parts[1].contains("report.txt"),
-            "the file is still announced"
-        );
-        assert!(
-            parts[2].contains("SPLICEDOK"),
-            "the token that lives only inside the file must reach the model"
-        );
+        assert!(parts[2].contains("SPLICEDOK"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn an_unreadable_document_is_announced_and_never_refuses_the_turn() {
+    async fn a_422_is_a_terminal_rejection_with_its_reason_not_an_outage() {
+        let body = json!({
+            "schema_version": "elitea.runtime.attachment-unreadable.v1",
+            "reason": "encrypted"
+        })
+        .to_string();
+        let (platform, _) = platform_with(vec![attachment_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &body,
+        )]);
+        let Err(error) = platform
+            .read_attachment_object(
+                &test_runtime_context_authority(),
+                "chat-attachments",
+                "conv/x.pdf",
+            )
+            .await
+        else {
+            panic!("a 422 must not read as success");
+        };
+        assert_eq!(error.code(), "runtime_context.rejected");
+        assert_eq!(error.rejection_reason(), Some("encrypted"));
+        assert!(!error.retryable(), "a file with no text is not retried");
+
+        // A 422 with an odd body is still a rejection, never an outage.
+        for odd in [
+            "{}",
+            "not json",
+            r#"{"schema_version":"elitea.runtime.attachment-unreadable.v1","reason":"made-up"}"#,
+        ] {
+            let (platform, _) = platform_with(vec![attachment_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                odd,
+            )]);
+            let Err(error) = platform
+                .read_attachment_object(
+                    &test_runtime_context_authority(),
+                    "chat-attachments",
+                    "conv/x.pdf",
+                )
+                .await
+            else {
+                panic!("a 422 must not read as success");
+            };
+            assert_eq!(error.rejection_reason(), Some("unreadable"), "body {odd}");
+            assert!(!error.retryable());
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_unreadable_document_is_named_explained_and_never_refuses_the_turn() {
         // Every refusal main can answer, plus a transport failure. Each must
-        // produce NO text, NO error, and a turn that still renders the header —
-        // the property the e2e's rust leg pinned before this route existed and
-        // that a pdf still relies on today.
-        for response in [
-            Some(attachment_response(StatusCode::FORBIDDEN, "{}")),
-            Some(attachment_response(StatusCode::NOT_FOUND, "{}")),
-            Some(attachment_response(StatusCode::UNPROCESSABLE_ENTITY, "{}")),
-            Some(attachment_response(StatusCode::SERVICE_UNAVAILABLE, "{}")),
+        // produce NO document text, NO error, and a turn that renders the
+        // header AND a note that says the file was not read and why.
+        let unreadable = |reason: &str| {
+            json!({"schema_version": "elitea.runtime.attachment-unreadable.v1", "reason": reason})
+                .to_string()
+        };
+        for (response, phrase) in [
+            (
+                Some(attachment_response(StatusCode::FORBIDDEN, "{}")),
+                "not available to this conversation",
+            ),
+            // Main's 404 for a missing OBJECT carries the reason document.
+            (
+                Some(attachment_response(
+                    StatusCode::NOT_FOUND,
+                    &unreadable("not_found"),
+                )),
+                "no longer exists",
+            ),
+            // A 404 without it is the ROUTE: a deployment with no Go object
+            // store has no attachment route. The file exists.
+            (
+                Some(attachment_response(StatusCode::NOT_FOUND, "{}")),
+                "cannot read attached files",
+            ),
+            (
+                Some(attachment_response(
+                    StatusCode::NOT_FOUND,
+                    "404 page not found\n",
+                )),
+                "cannot read attached files",
+            ),
+            // An empty upload is "empty", never "too large".
+            (
+                Some(attachment_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &unreadable("empty"),
+                )),
+                "the file is empty",
+            ),
+            (
+                Some(attachment_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &unreadable("encrypted"),
+                )),
+                "password-protected",
+            ),
+            (
+                Some(attachment_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &unreadable("no_text"),
+                )),
+                "no text layer",
+            ),
+            (
+                Some(attachment_response(StatusCode::SERVICE_UNAVAILABLE, "{}")),
+                "could not read it",
+            ),
             // A 200 whose document names a project the claim did not bind.
-            Some(attachment_response(
-                StatusCode::OK,
-                &json!({
-                    "schema_version": "elitea.runtime.attachment-object.v1",
-                    "project_id": 999,
-                    "bucket": "chat-attachments",
-                    "name": "conv/report.txt",
-                    "media_type": "text/plain",
-                    "byte_length": 5,
-                    "content": "leak!",
-                })
-                .to_string(),
-            )),
+            (
+                Some(attachment_response(
+                    StatusCode::OK,
+                    &json!({
+                        "schema_version": "elitea.runtime.attachment-object.v1",
+                        "project_id": 999,
+                        "bucket": "chat-attachments",
+                        "name": "conv/report.txt",
+                        "media_type": "text/plain",
+                        "byte_length": 5,
+                        "content": "leak!",
+                    })
+                    .to_string(),
+                )),
+                "not available to this conversation",
+            ),
             // A 200 answering about a DIFFERENT object than was asked for.
-            Some(attachment_response(
-                StatusCode::OK,
-                &json!({
-                    "schema_version": "elitea.runtime.attachment-object.v1",
-                    "project_id": 17,
-                    "bucket": "chat-attachments",
-                    "name": "other-conversation/secret.txt",
-                    "media_type": "text/plain",
-                    "byte_length": 6,
-                    "content": "secret",
-                })
-                .to_string(),
-            )),
+            (
+                Some(attachment_response(
+                    StatusCode::OK,
+                    &json!({
+                        "schema_version": "elitea.runtime.attachment-object.v1",
+                        "project_id": 17,
+                        "bucket": "chat-attachments",
+                        "name": "other-conversation/secret.txt",
+                        "media_type": "text/plain",
+                        "byte_length": 6,
+                        "content": "secret",
+                    })
+                    .to_string(),
+                )),
+                "not available to this conversation",
+            ),
             // No response at all: the transport is down.
-            None,
+            (None, "could not read it"),
         ] {
             let attachments = vec![header("conv/report.txt")];
             let (platform, _) = platform_with(response.into_iter().collect());
-            let pending = pending_attachment_reads(&attachments);
-            let extracted =
-                read_attachment_documents(&platform, &test_runtime_context_authority(), &pending)
-                    .await;
-            assert!(extracted.is_empty(), "no text may be produced");
-
-            let resolved = resolved_attachment_chunks(&attachments, &extracted);
+            let resolved = read_and_render(&platform, &attachments).await;
             let parts = text_parts(&append_attachment_parts(user_message(), &resolved));
-            assert_eq!(parts.len(), 2, "the header still reaches the model");
+            assert_eq!(parts.len(), 3, "the header and the note reach the model");
             assert!(parts[1].contains("report.txt"));
+            assert!(parts[2].contains("could not be read"), "{}", parts[2]);
+            assert!(parts[2].contains(phrase), "{phrase}: {}", parts[2]);
+            assert!(!parts[2].contains("leak!") && !parts[2].contains("secret\n"));
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_unit_map_that_does_not_fit_the_text_is_refused() {
+        let content = "first page 1\n\nsecond page";
+        let mut document = v2_document(content);
+        // A unit that ends past the text.
+        document["units"][1]["end"] = json!(content.len() + 5);
+        let (platform, _) = platform_with(vec![attachment_response(
+            StatusCode::OK,
+            &document.to_string(),
+        )]);
+        let Err(error) = platform
+            .read_attachment_object(
+                &test_runtime_context_authority(),
+                "chat-attachments",
+                "conv/report.pdf",
+            )
+            .await
+        else {
+            panic!("a unit map past the text must be refused");
+        };
+        assert_eq!(error.code(), "runtime_context.invalid_response");
     }
 
     #[tokio::test(flavor = "current_thread")]

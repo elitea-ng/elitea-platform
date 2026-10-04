@@ -196,6 +196,7 @@ impl OrdinaryNativeAgentAssembler {
         checkpoint_recovery: bool,
     ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
         let RedeemedOrdinaryNativeAssembly {
+            attachment_library,
             sandbox_authority,
             profile,
             plan,
@@ -233,6 +234,7 @@ impl OrdinaryNativeAgentAssembler {
                     .as_ref()
                     .zip(sandbox_authority)
                     .map(|(factory, authority)| factory.bind(authority)),
+                attachment_library,
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
@@ -277,6 +279,7 @@ impl OrdinaryNativeAgentAssembler {
         model_scopes: super::model_scope::ModelScopeSessions,
         conversation_thread_id: String,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
+        attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -312,6 +315,12 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(runtime_context),
         ))));
         toolsets.extend(profile.instruction_plan().toolsets());
+        // The attachment tools exist only when a document of this turn was
+        // shown as an overview; the note in the prompt offers them by name.
+        let has_attachment_tools = attachment_library.is_some();
+        if let Some(library) = &attachment_library {
+            toolsets.push(library.toolset());
+        }
         let mut application_runtime = ApplicationRuntimeProjection::default();
         // #973: read BEFORE materialization, off the same snapshot it reads.
         // A saved PIPELINE child IS built here now, so the reference scan only
@@ -353,6 +362,7 @@ impl OrdinaryNativeAgentAssembler {
         let reserved_toolsets = BTreeSet::from([
             ASK_USER_TOOLSET_NAME.to_owned(),
             super::instruction_authority::TOOLSET_NAME.to_owned(),
+            super::attachment_tools::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
         ]);
         let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
@@ -384,6 +394,7 @@ impl OrdinaryNativeAgentAssembler {
             && delegated_authorization.is_empty()
             && internal_tools.is_empty()
             && profile.instruction_plan().is_empty()
+            && !has_attachment_tools
         {
             NativeToolExecutionMode::ParallelApplications
         } else {
@@ -544,7 +555,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             // alone rather than failing the turn.
             tracing::Span::current().record("stage", "attachments");
             let assembly = assembly
-                .resolve_attachment_contents(self.platform.as_ref())
+                .resolve_attachment_contents(self.platform.as_ref(), true)
                 .await;
             tracing::Span::current().record("stage", "admission");
             let redeemed = self

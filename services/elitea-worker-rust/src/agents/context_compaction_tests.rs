@@ -1638,3 +1638,42 @@ async fn completed_tool_batch_larger_than_recent_budget_can_be_compacted_whole()
     let source = serde_json::to_string(&requests[0]).unwrap();
     assert!(source.contains("call-one") && source.contains("batch-11"));
 }
+
+/// An attachment block is pinned, not summarised: what compaction hands the
+/// summary model keeps the note around a document and drops the document's
+/// text — in a user message and in a `read_attachment` tool result alike.
+#[test]
+fn compaction_never_hands_attachment_text_to_the_summary_model() {
+    let tag = crate::agents::attachment_context::block_tag("SECRETDOCTEXT body");
+    let block = crate::agents::attachment_context::untrusted_block(
+        &tag,
+        "id=\"att1\"",
+        "SECRETDOCTEXT body",
+    );
+    let mut content = Content::new("user").with_text(format!("question\n{block}"));
+    content.parts.push(Part::FunctionResponse {
+        function_response: adk_rust::FunctionResponseData {
+            name: "read_attachment".to_owned(),
+            response: json!({"content": block, "shown": "pages 1-2"}),
+            inline_data: Vec::new(),
+            file_data: Vec::new(),
+        },
+        id: Some("call-1".to_owned()),
+        annotations: None,
+    });
+    let withheld = withhold_attachments(&content);
+    let encoded = serde_json::to_string(&withheld).unwrap();
+    assert!(!encoded.contains("SECRETDOCTEXT"), "{encoded}");
+    assert!(encoded.contains("attachment content withheld from this summary"));
+    assert!(
+        encoded.contains("pages 1-2"),
+        "the rest of the tool result survives"
+    );
+    assert!(encoded.contains("question"));
+    // The original is untouched: only the summary input is rewritten.
+    assert!(
+        serde_json::to_string(&content)
+            .unwrap()
+            .contains("SECRETDOCTEXT")
+    );
+}

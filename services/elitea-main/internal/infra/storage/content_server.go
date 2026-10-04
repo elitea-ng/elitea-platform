@@ -112,7 +112,12 @@ type ContentServer struct {
 	sandboxBundles   *SandboxBundleContentService
 	maxBytes         int64
 	requests         chan struct{}
-	logger           *slog.Logger
+	// attachmentRequests is the attachment route's OWN pool. One attachment
+	// read can wait up to attachmentExtractionWait for an extraction, so in
+	// the shared pool a burst of first-time PDFs would answer 503 to every
+	// token, version and artifact request on the listener.
+	attachmentRequests chan struct{}
+	logger             *slog.Logger
 }
 
 func NewContentServer(authorizer ContentAuthorizer, store ContentStore, maxBytes int64) (*ContentServer, error) {
@@ -276,15 +281,16 @@ func newContentServer(
 		return nil, errors.New("content size and concurrency limits must be positive and bounded")
 	}
 	return &ContentServer{
-		authorizer:      authorizer,
-		store:           store,
-		materializer:    materializer,
-		runtimeToken:    runtimeToken,
-		runtimeVersions: runtimeVersions,
-		runtimeObjects:  runtimeObjects,
-		maxBytes:        maxBytes,
-		requests:        make(chan struct{}, maxConcurrentRequests),
-		logger:          slog.Default(),
+		authorizer:         authorizer,
+		store:              store,
+		materializer:       materializer,
+		runtimeToken:       runtimeToken,
+		runtimeVersions:    runtimeVersions,
+		runtimeObjects:     runtimeObjects,
+		maxBytes:           maxBytes,
+		requests:           make(chan struct{}, maxConcurrentRequests),
+		attachmentRequests: make(chan struct{}, maxConcurrentRequests),
+		logger:             slog.Default(),
 	}, nil
 }
 
@@ -652,19 +658,22 @@ func (s *ContentServer) PostApplicationVersion(w http.ResponseWriter, r *http.Re
 // that authorized differently would be a second, weaker contract on the same
 // connection.
 //
-// THE ONE ADDED STATUS IS 422. A stored object that cannot be served as text —
-// oversized, empty, or not UTF-8 — is neither a rejected claim nor a missing
-// file, and the difference matters operationally: 404 says the reference is
-// stale and someone should look at the row, while 422 says the file is exactly
-// what it claims to be and this route will never be able to read it. The worker
-// treats both as "unreadable" and announces the file by name either way, so
-// neither ever fails a turn.
+// THE ONE ADDED STATUS IS 422. A stored object with no text this route can
+// serve — encrypted, an image, an unsupported or malformed format, over the
+// input limit, or without a text layer — is neither a rejected claim nor a
+// missing file, and the difference matters operationally: 404 says the
+// reference is stale and someone should look at the row, while 422 says the
+// file is exactly what it claims to be and this route will never be able to
+// read it. The 422 body carries the reason
+// (elitea.runtime.attachment-unreadable.v1). The worker maps 422 to a
+// terminal "unreadable" outcome — never to dependency_unavailable — and tells
+// the model why, so neither ever fails a turn.
 func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Request) {
 	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
+	if !acquireSlot(w, s.attachmentRequests) {
 		return
 	}
-	defer s.release()
+	defer func() { <-s.attachmentRequests }()
 	if s.runtimeObjects == nil || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
@@ -691,9 +700,17 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 			// conversation it does not hold a claim for.
 			status = http.StatusForbidden
 		case errors.Is(err, ErrContentNotFound):
-			status = http.StatusNotFound
+			// A JSON body, so the worker can tell "this object is gone"
+			// from a 404 for the ROUTE: a listener built without a Go
+			// object store has no attachment route at all, and that file
+			// still exists.
+			s.writeAttachmentReason(w, r, http.StatusNotFound, attachmentReasonNotFound)
+			return
 		case errors.Is(err, ErrContentRejected):
-			status = http.StatusUnprocessableEntity
+			// The body names the reason, so the worker can tell the model
+			// WHY the file has no text rather than only that it has none.
+			s.writeAttachmentUnreadable(w, r, err)
+			return
 		case errors.Is(err, ErrContentUnavailable):
 			s.logger.WarnContext(
 				r.Context(),
@@ -705,7 +722,7 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 		http.Error(w, http.StatusText(status), status)
 		return
 	}
-	encoded, err := json.Marshal(value)
+	encoded, err := encodeAttachmentDocument(value)
 	if err != nil || len(encoded) == 0 || len(encoded) > maxRuntimeAttachmentObjectResponseBytes {
 		// Refused, never trimmed. A truncated document is worse than an
 		// unread one: the model is shown a prefix and told it is the file.
@@ -722,6 +739,56 @@ func (s *ContentServer) PostAttachmentObject(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(encoded); err != nil {
 		s.logger.WarnContext(r.Context(), "attachment object write failed")
+	}
+}
+
+// encodeAttachmentDocument encodes without HTML escaping. The default
+// encoder writes `<`, `>` and `&` as six-byte escapes, which would let a text
+// full of markup grow six-fold and miss the response ceiling the text limit
+// was sized for. The body is JSON for the worker, never HTML.
+func encodeAttachmentDocument(value any) ([]byte, error) {
+	var buffer strings.Builder
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimSuffix(buffer.String(), "\n")), nil
+}
+
+// attachmentReasonNotFound is the 404 body's reason: the claim and the
+// conversation were accepted, and there is no such object.
+const attachmentReasonNotFound = "not_found"
+
+// writeAttachmentUnreadable answers 422 with the refusal's reason. A
+// rejection that names no reason is reported as "unreadable", which claims
+// nothing about the file.
+func (s *ContentServer) writeAttachmentUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	reason := string(ReasonAttachmentUnreadable)
+	var refusal *AttachmentUnreadableError
+	if errors.As(err, &refusal) && refusal.Reason != "" {
+		reason = string(refusal.Reason)
+	}
+	s.writeAttachmentReason(w, r, http.StatusUnprocessableEntity, reason)
+}
+
+// writeAttachmentReason answers status with the small reason document
+// (elitea.runtime.attachment-unreadable.v1).
+func (s *ContentServer) writeAttachmentReason(w http.ResponseWriter, r *http.Request, status int, reason string) {
+	encoded, encodeErr := json.Marshal(RuntimeAttachmentUnreadable{
+		SchemaVersion: RuntimeAttachmentUnreadableSchemaVersion,
+		Reason:        reason,
+	})
+	if encodeErr != nil {
+		http.Error(w, http.StatusText(status), status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	if _, writeErr := w.Write(encoded); writeErr != nil {
+		s.logger.WarnContext(r.Context(), "attachment reason write failed")
 	}
 }
 
@@ -979,8 +1046,12 @@ func (s *ContentServer) writeRuntimeResponse(
 }
 
 func (s *ContentServer) acquire(w http.ResponseWriter) bool {
+	return acquireSlot(w, s.requests)
+}
+
+func acquireSlot(w http.ResponseWriter, slots chan struct{}) bool {
 	select {
-	case s.requests <- struct{}{}:
+	case slots <- struct{}{}:
 		return true
 	default:
 		w.Header().Set("Retry-After", "1")

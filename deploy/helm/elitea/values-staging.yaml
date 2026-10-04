@@ -6,13 +6,14 @@ main:
   image:
     tag: "shadow-v0.1"
 
+  # The memory limit covers attachment text extraction; see values.yaml.
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
     limits:
       cpu: 500m
-      memory: 256Mi
+      memory: 1Gi
 
   env:
     DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
