@@ -9,18 +9,27 @@
  * `expected_output` is sent as `null` when the author left it blank, and NOT as
  * `""`. The two are different instructions to a judge: an expected answer of
  * empty string tells it to mark every non-empty answer wrong.
+ *
+ * INCLUDE / EXCLUDE (legacy issue 6700). Each case has a checkbox. A cleared
+ * checkbox EXCLUDES the case: it stays in the dataset, a run leaves it out,
+ * and its text takes the disabled colour. The "N active" chip counts the
+ * cases a run will execute. There is no confirmation: the toggle is
+ * reversible and deletes nothing.
  */
 import { useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import IconButton from '@mui/material/IconButton';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import type { EvalDatasetCase } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
 import { datasetErrorMessage } from '../lib/evaluationError';
 import { useEvalDataset, useEvalDatasetMutations } from '../model/useEvalRuns';
@@ -36,7 +45,72 @@ const panelSx: SxProps<Theme> = {
   borderRadius: 'var(--el-shape-radiusSm, 4px)',
 };
 const caseRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'flex-start', gap: '0.5rem' };
+// The checkbox has no padding of its own, so its box lines up with the first
+// line of the case input and not with the space above it.
+const caseCheckboxSx: SxProps<Theme> = { padding: 0, marginTop: '0.125rem' };
+const headerSx: SxProps<Theme> = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' };
+const titleSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
+const caseTextSx: SxProps<Theme> = { flexGrow: 1, minWidth: 0 };
+const excludedTextSx: SxProps<Theme> = (theme: Theme) => ({
+  flexGrow: 1,
+  minWidth: 0,
+  color: theme.vars.palette.text.button.disabled,
+});
 const formSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
+
+interface DatasetCaseRowProps {
+  readonly datasetCase: EvalDatasetCase;
+  readonly canEdit: boolean;
+  readonly isToggling: boolean;
+  /** `true` excludes the case, `false` includes it again. */
+  readonly onToggle: (excluded: boolean) => void;
+  readonly onRemove: () => void;
+}
+
+function DatasetCaseRow(props: DatasetCaseRowProps): ReactNode {
+  const { datasetCase, canEdit, isToggling, onToggle, onRemove } = props;
+  const isExcluded = datasetCase.excluded;
+  return (
+    <Box sx={caseRowSx} data-testid={`dataset-case-${datasetCase.id}`}>
+      <BaseCheckbox
+        sx={caseCheckboxSx}
+        checked={!isExcluded}
+        disabled={!canEdit || isToggling}
+        data-testid={`dataset-case-include-${datasetCase.id}`}
+        aria-label={t('features.agentEvaluation.cases.include', 'Include this case in runs')}
+        onChange={(event) => onToggle(!event.target.checked)}
+      />
+      <Box sx={isExcluded ? excludedTextSx : caseTextSx} data-excluded={isExcluded ? 'true' : undefined}>
+        <Typography variant="bodyMedium" color={isExcluded ? 'inherit' : undefined}>
+          {datasetCase.input}
+        </Typography>
+        {/*
+          An absent expected answer is SAID so, rather than left blank. A
+          blank cell reads as "the author wrote nothing here", which is the
+          same thing an empty expected answer would look like — and the two
+          mean different things to the judge.
+        */}
+        <Typography variant="bodySmall" color={isExcluded ? 'inherit' : 'text.secondary'}>
+          {datasetCase.expected_output === null || datasetCase.expected_output === undefined
+            ? t('features.agentEvaluation.cases.noExpected', 'No expected answer stated')
+            : t('features.agentEvaluation.cases.expected', 'Expected: {{answer}}', {
+                answer: datasetCase.expected_output,
+              })}
+        </Typography>
+      </Box>
+      {canEdit && (
+        <IconButton
+          size="small"
+          data-testid={`dataset-case-remove-${datasetCase.id}`}
+          aria-label={t('features.agentEvaluation.cases.remove', 'Remove case')}
+          onClick={onRemove}
+        >
+          ×
+        </IconButton>
+      )}
+    </Box>
+  );
+}
 
 export interface DatasetCasesPanelProps {
   readonly projectId: string | undefined;
@@ -56,6 +130,7 @@ export function DatasetCasesPanel(props: DatasetCasesPanelProps): ReactNode {
 
   const detail = detailQuery.data;
   const cases = detail?.cases ?? [];
+  const activeCount = cases.filter((datasetCase) => !datasetCase.excluded).length;
   const addError = datasetErrorMessage(mutations.addCase.error);
 
   const handleAdd = (): void => {
@@ -82,10 +157,21 @@ export function DatasetCasesPanel(props: DatasetCasesPanelProps): ReactNode {
 
   return (
     <Box sx={panelSx} data-testid="dataset-cases-panel">
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="labelMedium">
-          {t('features.agentEvaluation.cases.title', 'Cases')}
-        </Typography>
+      <Box sx={headerSx}>
+        <Box sx={titleSx}>
+          <Typography variant="labelMedium">
+            {t('features.agentEvaluation.cases.title', 'Cases')}
+          </Typography>
+          {cases.length > 0 && (
+            <Chip
+              size="small"
+              data-testid="dataset-cases-active-count"
+              label={t('features.agentEvaluation.cases.activeCount', '{{count}} active', {
+                count: activeCount,
+              })}
+            />
+          )}
+        </Box>
         {canDelete && (
           <BaseBtn
             variant="text"
@@ -113,34 +199,14 @@ export function DatasetCasesPanel(props: DatasetCasesPanelProps): ReactNode {
       )}
 
       {cases.map((datasetCase) => (
-        <Box key={datasetCase.id} sx={caseRowSx} data-testid={`dataset-case-${datasetCase.id}`}>
-          <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="bodyMedium">{datasetCase.input}</Typography>
-            {/*
-              An absent expected answer is SAID so, rather than left blank. A
-              blank cell reads as "the author wrote nothing here", which is the
-              same thing an empty expected answer would look like — and the two
-              mean different things to the judge.
-            */}
-            <Typography variant="bodySmall" color="text.secondary">
-              {datasetCase.expected_output === null || datasetCase.expected_output === undefined
-                ? t('features.agentEvaluation.cases.noExpected', 'No expected answer stated')
-                : t('features.agentEvaluation.cases.expected', 'Expected: {{answer}}', {
-                    answer: datasetCase.expected_output,
-                  })}
-            </Typography>
-          </Box>
-          {canEdit && (
-            <IconButton
-              size="small"
-              data-testid={`dataset-case-remove-${datasetCase.id}`}
-              aria-label={t('features.agentEvaluation.cases.remove', 'Remove case')}
-              onClick={() => mutations.removeCase.mutate({ datasetId, caseId: datasetCase.id })}
-            >
-              ×
-            </IconButton>
-          )}
-        </Box>
+        <DatasetCaseRow
+          key={datasetCase.id}
+          datasetCase={datasetCase}
+          canEdit={canEdit}
+          isToggling={mutations.setCaseExcluded.isPending}
+          onToggle={(excluded) => mutations.setCaseExcluded.mutate({ datasetId, datasetCase, excluded })}
+          onRemove={() => mutations.removeCase.mutate({ datasetId, caseId: datasetCase.id })}
+        />
       ))}
 
       {canEdit && (

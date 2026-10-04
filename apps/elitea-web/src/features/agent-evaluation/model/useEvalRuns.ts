@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 
 import type {
   EvalDataset,
+  EvalDatasetCase,
   EvalDatasetCaseWriteRequest,
   EvalDatasetDetail,
   EvalDatasetWriteRequest,
@@ -30,6 +31,7 @@ import {
   addCase,
   cancelRun,
   createDataset,
+  editCase,
   fetchEvalDataset,
   fetchEvalDatasets,
   fetchEvalRun,
@@ -143,6 +145,12 @@ interface AddCaseArgs {
   readonly input: EvalDatasetCaseWriteRequest;
 }
 
+interface SetCaseExcludedArgs {
+  readonly datasetId: string;
+  readonly datasetCase: EvalDatasetCase;
+  readonly excluded: boolean;
+}
+
 interface RemoveCaseArgs {
   readonly datasetId: string;
   readonly caseId: string;
@@ -169,6 +177,21 @@ export function useEvalDatasetMutations(projectId: string | undefined) {
       // The DETAIL and the LIST both change: the detail gains a row and the
       // list's `case_count` badge moves. Invalidating the whole dataset
       // namespace covers both, which is why the keys are nested under one root.
+      onSuccess: invalidateDatasets,
+    }),
+    /*
+     * Include or exclude ONE case (legacy issue 6700). The case route is a
+     * full PUT, so the case's own text is sent back unchanged with the flag.
+     * An excluded case stays in the dataset; a run start leaves it out.
+     */
+    setCaseExcluded: useMutation({
+      mutationFn: (args: SetCaseExcludedArgs) =>
+        editCase(projectId ?? '', args.datasetId, args.datasetCase.id, {
+          input: args.datasetCase.input,
+          variables: args.datasetCase.variables,
+          expected_output: args.datasetCase.expected_output ?? null,
+          excluded: args.excluded,
+        }),
       onSuccess: invalidateDatasets,
     }),
     removeCase: useMutation({
