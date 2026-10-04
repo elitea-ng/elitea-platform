@@ -88,8 +88,11 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   const sections = page.getByRole('navigation', { name: 'Configuration sections' });
   const marks = sections.getByText('Not available here');
   await expect(marks.first()).toBeVisible();
-  await expect(marks).toHaveCount(2);
-  for (const section of ['LLM Governance', 'Service Descriptors']) {
+  // `Native clients` (ADR-0025 WP2) is the third: it points at its managed
+  // surface (`/admin/native_clients/administration`), and this build has no
+  // editor for that surface yet, so it falls through to its reason.
+  await expect(marks).toHaveCount(3);
+  for (const section of ['LLM Governance', 'Service Descriptors', 'Native clients']) {
     await expect(
       sections.getByRole('button', { name: new RegExp(section) }).getByText('Not available here'),
       `${section} is still not configurable here`,
