@@ -66,6 +66,8 @@ func TestProvisionDatabaseRoleCreatesCurrentProjectResources(t *testing.T) {
 	})
 	assertStatements(t, project.execStatements, []string{
 		`GRANT ALL ON SCHEMA public TO "project_42_user"`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "project_42_user"`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "project_42_user"`,
 		`GRANT ALL ON ALL TABLES IN SCHEMA public TO "project_42_user"`,
 		`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "project_42_user"`,
 		createVectorExtensionSQL,
@@ -235,9 +237,13 @@ func TestProvisionExistingAdminUserGrantsBothUsersAndEscapesURL(t *testing.T) {
 	})
 	assertStatements(t, project.execStatements, []string{
 		`GRANT ALL ON SCHEMA public TO "project_101_user"`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "project_101_user"`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "project_101_user"`,
 		`GRANT ALL ON ALL TABLES IN SCHEMA public TO "project_101_user"`,
 		`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "project_101_user"`,
 		`GRANT ALL ON SCHEMA public TO ` + quotedAdmin,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ` + quotedAdmin,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ` + quotedAdmin,
 		`GRANT ALL ON ALL TABLES IN SCHEMA public TO ` + quotedAdmin,
 		`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO ` + quotedAdmin,
 		createVectorExtensionSQL,

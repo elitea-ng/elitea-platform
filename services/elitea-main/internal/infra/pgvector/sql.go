@@ -105,10 +105,31 @@ func grantDatabase(ctx context.Context, connection Connection, database string, 
 	return exec(ctx, connection, "grant project database", statement)
 }
 
+// grantPublicSchema gives role full use of the project database's public
+// schema, for the objects that exist now AND for the ones the provisioning
+// administrator creates later.
+//
+// #6642: "GRANT ... ON ALL TABLES" covers only tables that already exist. When
+// LangGraph's PostgresSaver.setup() later ran as the administrator, it created
+// checkpoint_migrations, checkpoints, checkpoint_blobs and checkpoint_writes
+// with no grant to the project role, and every prediction in that project then
+// failed with "permission denied for table checkpoint_migrations".
+//
+// The default privileges are set FIRST, so a table the administrator creates
+// between these statements is covered by one or the other. ALTER DEFAULT
+// PRIVILEGES without FOR ROLE applies to objects created by the executing
+// role, which is the administrator this connection authenticates as.
+//
+// The ALL TABLES / ALL SEQUENCES grants run on every provision, including a
+// reprovision of an existing project, so checkpoint* tables an administrator
+// created before the default privileges existed are re-granted the next time
+// the project is provisioned.
 func grantPublicSchema(ctx context.Context, connection Connection, role string) error {
 	quotedRole := quoteIdentifier(role)
 	statements := [...]string{
 		"GRANT ALL ON SCHEMA public TO " + quotedRole,
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO " + quotedRole,
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO " + quotedRole,
 		"GRANT ALL ON ALL TABLES IN SCHEMA public TO " + quotedRole,
 		"GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO " + quotedRole,
 	}
