@@ -171,7 +171,9 @@ const rowSx = (selected: boolean): SxProps<Theme> => (theme) => ({
     ? theme.vars.palette.background.conversation.selected
     : theme.vars.palette.background.conversation.normal,
   borderRadius: selected ? theme.vars.shape.radiusSm : 0,
-  borderBottom: selected ? 'none' : `0.0625rem solid ${theme.vars.palette.border.conversationItemDivider}`,
+  // #6687: the rule is always 1px; only its colour changes. Dropping it to
+  // `none` moved the row content by half a pixel when a row was selected.
+  borderBottom: `0.0625rem solid ${selected ? 'transparent' : theme.vars.palette.border.artifactDivider}`,
   '&:hover': {
     background: selected
       ? theme.vars.palette.background.conversation.selected

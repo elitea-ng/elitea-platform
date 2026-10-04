@@ -271,15 +271,21 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 			return true, ""
 		}
 		if _, unsupported := c.unsupportedImportKeys[importKey]; unsupported {
-			return false, "the admitted Python worker image does not carry the " +
-				"dependencies of the " + importKey + " toolkit"
+			// A sentence, like the Rust arm below: the catalogue shows it
+			// verbatim and the run surfaces place it between two sentences.
+			return false, "This deployment's agent worker image does not include the " +
+				"dependencies of the " + importKey + " toolkit."
 		}
 		return true, ""
 	case RustWorkerImplementation:
 		if _, supported := c.supportedToolTypes[toolkitType]; supported {
 			return true, ""
 		}
-		return false, "the native worker has no toolkit family for " + toolkitType
+		// A sentence for the person reading it in the UI (the Indexes tab
+		// and the toolkit catalogue show it verbatim). "Native worker" and
+		// "toolkit family" are internal terms (UI-DC-1).
+		return false, "This deployment's agent worker does not support the " +
+			toolkitType + " toolkit."
 	default:
 		return true, ""
 	}

@@ -4,31 +4,63 @@
  *
  * Ported from `apps/elitea-ui/src/[fsd]/features/agent-hub/ui/AgentWelcomeMessage.jsx`.
  */
-import { memo } from 'react';
+import { memo, useId, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
+
+import { useLineClampOverflow } from '@/shared/ui/lib/useLineClampOverflow';
+import { ShowMoreButton } from '@/shared/ui/ShowMoreButton';
 
 export interface AgentWelcomeMessageProps {
   welcome_message?: string;
 }
 
-export const AgentWelcomeMessage = memo(({ welcome_message }: AgentWelcomeMessageProps) => (
-  <Box sx={styles.container}>
-    <Typography variant="subtitle" sx={styles.header}>
-      Welcome Message
-    </Typography>
-    {welcome_message?.trim() ? (
-      <Typography variant="bodyMedium" sx={styles.text}>
-        {welcome_message}
+/**
+ * #6861: a long welcome message is clamped to 8 lines. When the clamp cuts
+ * it, a "Show more" button opens the full text in place, and "Show less"
+ * clamps it again. A message that fits gets no button.
+ */
+export const AgentWelcomeMessage = memo(({ welcome_message }: AgentWelcomeMessageProps) => {
+  const [expanded, setExpanded] = useState(false);
+  const { textRef, isOverflowing } = useLineClampOverflow<HTMLSpanElement>(welcome_message);
+  const textId = useId();
+  const hasMessage = Boolean(welcome_message?.trim());
+
+  return (
+    <Box sx={expanded ? styles.containerExpanded : styles.container}>
+      <Typography variant="subtitle" sx={styles.header}>
+        Welcome Message
       </Typography>
-    ) : (
-      <Typography variant="bodySmall" sx={styles.empty}>
-        No welcome message set – the agent will start without a greeting.
-      </Typography>
-    )}
-  </Box>
-));
+      {hasMessage ? (
+        <>
+          <Typography
+            ref={textRef}
+            id={textId}
+            variant="bodyMedium"
+            sx={expanded ? styles.textExpanded : styles.text}
+            data-testid="agent-welcome-message-text"
+          >
+            {welcome_message}
+          </Typography>
+          {(isOverflowing || expanded) && (
+            <ShowMoreButton
+              expanded={expanded}
+              controls={textId}
+              onClick={() => setExpanded((value) => !value)}
+              data-testid="agent-welcome-message-show-more"
+              sx={styles.showMore}
+            />
+          )}
+        </>
+      ) : (
+        <Typography variant="bodySmall" sx={styles.empty}>
+          No welcome message set – the agent will start without a greeting.
+        </Typography>
+      )}
+    </Box>
+  );
+});
 
 AgentWelcomeMessage.displayName = 'AgentWelcomeMessage';
 
@@ -42,6 +74,14 @@ const styles = {
     alignItems: 'center',
     maxHeight: '12.5rem',
   },
+  containerExpanded: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem',
+    width: '100%',
+    flex: '0 0 auto',
+    alignItems: 'center',
+  },
   header: { color: 'text.tertiary', flexShrink: 0 },
   text: {
     color: 'text.secondary',
@@ -53,5 +93,12 @@ const styles = {
     wordBreak: 'break-word',
     WebkitLineClamp: 8,
   },
+  textExpanded: {
+    color: 'text.secondary',
+    width: '100%',
+    wordBreak: 'break-word',
+    whiteSpace: 'pre-wrap',
+  },
+  showMore: { alignSelf: 'flex-end', flexShrink: 0 },
   empty: { color: 'text.tertiary', textAlign: 'center' },
 };

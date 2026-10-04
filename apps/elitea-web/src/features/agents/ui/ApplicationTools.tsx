@@ -8,6 +8,7 @@ import Typography from '@mui/material/Typography';
 import { markAllDuplicatesByMultipleKeys } from '@/shared/lib/array';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
+import { ShowMoreButton } from '@/shared/ui/ShowMoreButton';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
 import { useToolkitTypeSchemas } from '../api/useToolkitTypeSchemas';
@@ -226,16 +227,13 @@ export function ApplicationTools({
                   </Box>
                   {!isPipeline && canToggleTools && (
                     <Box sx={showMoreContainerSx}>
-                      <Typography
-                        component="button"
-                        variant="bodySmall"
+                      <ShowMoreButton
+                        expanded={showAllInternalTools}
                         onClick={() => setShowAllInternalTools(!showAllInternalTools)}
-                        sx={showMoreButtonSx}
-                      >
-                        {showAllInternalTools
-                          ? t('features.agents.applicationTools.showLess', 'Show less')
-                          : t('features.agents.applicationTools.showAll', 'Show all')}
-                      </Typography>
+                        moreLabel={t('features.agents.applicationTools.showAll', 'Show all')}
+                        lessLabel={t('features.agents.applicationTools.showLess', 'Show less')}
+                        data-testid="application-tools-show-more"
+                      />
                     </Box>
                   )}
                 </Box>
@@ -284,14 +282,3 @@ const showMoreContainerSx: SxProps<Theme> = {
   marginTop: '0.75rem',
 };
 
-const showMoreButtonSx: SxProps<Theme> = (theme: Theme) => ({
-  border: 'none',
-  background: 'none',
-  color: theme.vars.palette.primary.main,
-  padding: '0.375rem 0',
-  cursor: 'pointer',
-  '&:hover': {
-    backgroundColor: 'transparent',
-    opacity: 0.8,
-  },
-});

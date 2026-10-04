@@ -334,9 +334,9 @@ func (s *RunService) RunTool(ctx context.Context, request RunRequest) (RunOutcom
 	// ToolkitTypeVerdict for why it belongs here and not after dispatch.
 	if supported, reason := s.verdict.SupportsToolkitType(inputs.ToolkitType); !supported {
 		if reason == "" {
-			reason = "this deployment cannot build a toolkit of this type"
+			reason = "This deployment cannot run the " + inputs.ToolkitType + " toolkit."
 		}
-		return RunOutcome{}, fmt.Errorf("%w: %s: %s", ErrUnsupportedToolkitType, inputs.ToolkitType, reason)
+		return RunOutcome{}, &UnsupportedToolkitTypeError{ToolkitType: inputs.ToolkitType, Reason: reason}
 	}
 	inputs.ToolName = request.ToolName
 	inputs.Arguments = append(json.RawMessage(nil), request.Arguments...)

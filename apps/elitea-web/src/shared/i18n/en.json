@@ -4544,5 +4544,13 @@
   "chatMessages.error.budgetUsageProject": "View project usage",
   "entities.author.deletedUser": "Deleted user",
   "settings.usage.memberScope": "Your own usage against your budget in this project.",
-  "settings.usage.noMemberCeiling": "You have no enforced spend ceiling in this project this period."
+  "settings.usage.noMemberCeiling": "You have no enforced spend ceiling in this project this period.",
+  "artifacts.buckets.storageCaption": "Storage:",
+  "pipelines.flowEditor.state.finalState": "Final state",
+  "shared.ui.showMoreButton.less": "Show less",
+  "shared.ui.showMoreButton.more": "Show more",
+  "widgets.chat.plusChatButton.createAgent": "Create Agent",
+  "widgets.chat.plusChatButton.createMcp": "Create MCP",
+  "widgets.chat.plusChatButton.createPipeline": "Create Pipeline",
+  "widgets.chat.plusChatButton.createToolkit": "Create Toolkit"
 }

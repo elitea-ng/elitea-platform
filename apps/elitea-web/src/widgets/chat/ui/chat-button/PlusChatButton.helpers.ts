@@ -145,6 +145,28 @@ function buildSubmenuItems(input: {
 interface SubmenuCreateConfig {
   readonly showCreateNew: boolean;
   readonly onCreateNew: (() => void) | undefined;
+  /** "Create Agent", "Create Pipeline", … — the row names what it creates (#6629). */
+  readonly createLabel: string;
+}
+
+/**
+ * The create row's label per category (#6629). The design names the entity
+ * ("Create Agent") instead of the generic "Create new".
+ */
+function submenuCreateLabel(activeSubmenu: SubmenuKey): string {
+  switch (activeSubmenu) {
+    case 'agents':
+      return t('widgets.chat.plusChatButton.createAgent', 'Create Agent');
+    case 'pipelines':
+      return t('widgets.chat.plusChatButton.createPipeline', 'Create Pipeline');
+    case 'toolkits':
+      return t('widgets.chat.plusChatButton.createToolkit', 'Create Toolkit');
+    case 'mcps':
+      return t('widgets.chat.plusChatButton.createMcp', 'Create MCP');
+    case 'tools':
+    case 'attachments':
+      return t('widgets.chat.plusChatButton.createNewLabel', 'Create new');
+  }
 }
 
 const CREATABLE_SUBMENUS = new Set<SubmenuKey>(['agents', 'pipelines', 'toolkits', 'mcps']);
@@ -163,7 +185,16 @@ function resolveSubmenuCreateConfig(
   onCreate: Readonly<Partial<Record<'agents' | 'pipelines' | 'toolkits' | 'mcps', () => void>>>,
 ): SubmenuCreateConfig {
   const onCreateNew = activeSubmenu === 'attachments' || activeSubmenu === 'tools' ? undefined : onCreate[activeSubmenu];
-  return { showCreateNew: CREATABLE_SUBMENUS.has(activeSubmenu) && onCreateNew !== undefined, onCreateNew };
+  return {
+    showCreateNew: CREATABLE_SUBMENUS.has(activeSubmenu) && onCreateNew !== undefined,
+    onCreateNew,
+    createLabel: submenuCreateLabel(activeSubmenu),
+  };
+}
+
+/** The create row's label, or the generic one when no submenu is open. Kept out of the component for its complexity budget. */
+export function createRowLabel(createConfig: SubmenuCreateConfig | undefined): string {
+  return createConfig?.createLabel ?? t('widgets.chat.plusChatButton.createNewLabel', 'Create new');
 }
 
 interface ActiveSubmenuView {

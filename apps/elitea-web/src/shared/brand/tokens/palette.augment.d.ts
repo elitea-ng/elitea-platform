@@ -29,6 +29,7 @@ declare module '@mui/material/styles' {
     };
     border: {
       aiProviderAccordion: string;
+      artifactDivider: string;
       attention: string;
       cardsOutlines: string;
       cardsOutlinesGradient: string;

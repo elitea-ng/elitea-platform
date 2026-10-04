@@ -11,6 +11,16 @@
     "app": {
       "html": "index.html",
       "initialNote": [
+        "302, not 301: measured 2026-10-03 on fix/ui-search-showmore-sidebar",
+        "(PR #1032, top of the regression stack). CI measured 300.7 KiB gzip on",
+        "the PR below the stack's UI layers (#1029) and 301.1 KiB here. A local",
+        "per-chunk diff of #1029 against #1032 attributes it: the i18n chunk",
+        "(t) +0.25 KiB, the new strings of #1031 and #1032 (budget-refusal",
+        "scope, Show more/less, composer create rows, storage caption, final",
+        "state); the app shell chunk (index) +0.17 KiB, the project selector's",
+        "list split and edge fades and the one shared search box, all rendered",
+        "by the sidebar on every page; the theme chunk +0.03 KiB. No route code",
+        "moved into the initial set.",
         "301, not 300: measured 2026-10-03 on fix/typography-scale (one type scale",
         "for the app and the admin console). main (d49b4c9ac) measures 299.7 KiB",
         "gzip; the branch 300.4. Attribution, per initial chunk: the theme chunk",
@@ -22,7 +32,7 @@
         "into its own preloaded chunk. No route code moved into the initial set;",
         "the growth is the type scale itself."
       ],
-      "initialKB": 301,
+      "initialKB": 302,
       "routeChunkKB": 250
     },
     "admin": {

@@ -21,8 +21,9 @@ describe('the default pack', () => {
     expect(light).toEqual(dark);
     // 406 at baseline 20b23c42 (was 362 at a55f36cf): the baseline added 44
     // tokens, and both new asymmetric ones carry a SYMMETRY_FILLS entry, which
-    // is why the light/dark equality above still holds.
-    expect(light.length).toBe(406);
+    // is why the light/dark equality above still holds. 407 with #6687's
+    // `border.artifactDivider` (an ADDITIONS row in gen-brand-tokens.mjs).
+    expect(light.length).toBe(407);
   });
 
   it('states the mandatory §4.2 roles in both schemes', () => {

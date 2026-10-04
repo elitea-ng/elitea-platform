@@ -298,7 +298,9 @@ describe('EditPipeline', () => {
   it('skips the not-found check when isFromCreation=true', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
-    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument());
+    // A loaded CI shard took over the default 1 s to settle the first route
+    // (EditPipeline flake on PR #1029); the outcome, not the speed, is the point.
+    expect(await screen.findByText('Version not found', {}, { timeout: 10_000 })).toBeInTheDocument();
 
     await router.navigate({
       to: '/pipelines/$tab/$agentId/$version',
@@ -307,7 +309,7 @@ describe('EditPipeline', () => {
       replace: true,
     });
 
-    await waitFor(() => expect(screen.getByText('My Pipeline')).toBeInTheDocument());
+    expect(await screen.findByText('My Pipeline', {}, { timeout: 10_000 })).toBeInTheDocument();
     expect(screen.queryByText('Version not found')).not.toBeInTheDocument();
   });
 

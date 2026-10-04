@@ -101,9 +101,13 @@ func (h *Handler) runToolkitTool(
 		return errorResult(fmt.Sprintf("'%s' failed (execution %s): %s",
 			tool.Name, outcome.ExecutionID, outcome.ErrorMessage))
 	case toolkitcalltoolapp.RunStatusUnsupportedToolkit:
-		return errorResult(fmt.Sprintf(
-			"'%s' cannot run on this deployment: %s. Nothing was executed and nothing was changed.",
-			tool.Name, outcome.ErrorMessage))
+		// The worker's own refusal. It may already end in a full stop, so it
+		// is placed as its own sentence (AsSentence) and never followed by ". ".
+		reason := toolkitcalltoolapp.AsSentence(outcome.ErrorMessage)
+		if reason == "" {
+			reason = "The agent worker refused this toolkit."
+		}
+		return unsupportedToolkitResult(tool, reason)
 	case toolkitcalltoolapp.RunStatusUnknownTool:
 		return errorResult(fmt.Sprintf(
 			"the toolkit behind '%s' has no tool by that name, so nothing was executed.", tool.Name))
@@ -133,9 +137,9 @@ func toolkitRunError(tool Tool, err error) map[string]any {
 		return errorResult(fmt.Sprintf(
 			"the toolkit behind '%s' is no longer visible in this project, so nothing was executed.", tool.Name))
 	case errors.Is(err, toolkitcalltoolapp.ErrUnsupportedToolkitType):
-		return errorResult(fmt.Sprintf(
-			"'%s' cannot run on this deployment: %s. Nothing was executed and nothing was changed.",
-			tool.Name, err.Error()))
+		// The capability reason as a sentence, not err.Error(): that is the
+		// operator form, with the sentinel prefix and the type in front (UI-DC-1).
+		return unsupportedToolkitResult(tool, toolkitcalltoolapp.UnsupportedToolkitTypeSentence(err))
 	case errors.Is(err, toolkitcalltoolapp.ErrInvalidToolRun):
 		return errorResult(fmt.Sprintf(
 			"the arguments given to '%s' were not a JSON object this service can pass on, "+
@@ -146,4 +150,13 @@ func toolkitRunError(tool Tool, err error) map[string]any {
 		return errorResult(fmt.Sprintf(
 			"'%s' could not be run on this deployment; nothing was executed.", tool.Name))
 	}
+}
+
+// unsupportedToolkitResult is the one wording for a toolkit this deployment
+// cannot run, whether elitea-main refused it before admission or the worker
+// refused it after. reason is a whole sentence (toolkitcalltoolapp.AsSentence).
+func unsupportedToolkitResult(tool Tool, reason string) map[string]any {
+	return errorResult(fmt.Sprintf(
+		"'%s' cannot run on this deployment. %s Nothing was executed and nothing was changed.",
+		tool.Name, reason))
 }

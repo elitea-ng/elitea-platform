@@ -41,7 +41,10 @@ export function conversationItemStyles(params: ConversationItemStylesParams) {
 
   return {
     conversationContentWrapper: (theme: Theme) => ({
-      borderBottom: isActive || isHovering || isNextItemHovered ? 'none' : `1px solid ${theme.vars.palette.border.conversationItemDivider}`,
+      // #6687: the rule is always 1px; only its colour changes. With `none` on
+      // hover, the fixed 2.5rem row gained 1px of content box, so its text
+      // moved down half a pixel under the pointer.
+      borderBottom: `1px solid ${isActive || isHovering || isNextItemHovered ? 'transparent' : theme.vars.palette.border.conversationItemDivider}`,
       padding: theme.spacing(0.625, 1.5),
       gap: theme.spacing(0.5),
       display: 'flex',

@@ -31,6 +31,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { remToPx } from '@/shared/ui/lib/testTheme';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -120,5 +121,59 @@ describe('PlusChatButton — drop/paste attachment handle', () => {
     expect(container.querySelector('input[type="file"]')).toBeNull();
     // …and the handle it exists for is live anyway.
     expect(ref.current).not.toBeNull();
+  });
+});
+
+/**
+ * #6629: every submenu opens beside the main menu, aligned with its top edge,
+ * and has one width — whichever category row opened it. jsdom has no layout,
+ * so the rows and the menu paper get fake boxes at different heights: a
+ * submenu anchored to the hovered ROW would move between the two categories.
+ */
+describe('PlusChatButton — submenu position and size (#6629)', () => {
+  const realRect = Object.getOwnPropertyDescriptor(Element.prototype, 'getBoundingClientRect');
+  const TOPS: Record<string, number> = { 'plus-menu-tools': 90, 'plus-menu-agents': 134, 'plus-menu-pipelines': 178 };
+
+  afterEach(() => {
+    if (realRect) Object.defineProperty(Element.prototype, 'getBoundingClientRect', realRect);
+  });
+
+  function fakeLayout(): void {
+    Element.prototype.getBoundingClientRect = function fakeRect(this: Element): DOMRect {
+      const owner = this.closest('[data-testid]');
+      const top = TOPS[owner?.getAttribute('data-testid') ?? ''] ?? 0;
+      return DOMRect.fromRect({ x: 20, y: top, width: 280, height: 40 });
+    };
+  }
+
+  function submenuPopper(): HTMLElement {
+    // MUI's Popper root carries role="tooltip".
+    const popper = screen.getByTestId('plus-submenu-paper').closest<HTMLElement>('[role="tooltip"]');
+    if (!popper) throw new Error('the submenu is not in a Popper');
+    return popper;
+  }
+
+  it('opens every category at the same place, at one fixed width', async () => {
+    await renderPlusButton({ attachmentButtonRef: createRef<AttachmentButtonHandle | null>(), onAttachFiles: vi.fn() });
+    fakeLayout();
+    act(() => {
+      screen.getByTestId('plus-menu-button').click();
+    });
+    await waitFor(() => expect(screen.getByTestId('plus-menu-agents')).toBeInTheDocument());
+
+    act(() => {
+      screen.getByTestId('plus-menu-agents').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    await waitFor(() => expect(submenuPopper().style.transform).not.toBe(''));
+    const agentsTransform = submenuPopper().style.transform;
+    expect(screen.getByTestId('plus-submenu-paper')).toHaveStyle({ width: remToPx('17.5rem') });
+
+    act(() => {
+      screen.getByTestId('plus-menu-pipelines').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    await waitFor(() => expect(submenuPopper().style.transform).not.toBe(''));
+    expect(submenuPopper().style.transform).toBe(agentsTransform);
+    // Not a row top (134 or 178): the submenu follows the menu, not the row.
+    expect(agentsTransform).not.toMatch(/134px|178px/);
   });
 });
