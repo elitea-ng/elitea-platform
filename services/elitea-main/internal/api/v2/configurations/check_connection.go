@@ -156,11 +156,14 @@ type checkConnectionRequestBody struct {
 	// gateway accepts both shapes (its jsonTextField).
 	VertexCredentials any `json:"vertex_credentials,omitempty"`
 
-	// Model and APIProtocol are set by the llm_model check only
-	// (model_connection_check.go). A set Model makes the gateway send one
-	// real completion instead of the credential listing.
-	Model       string `json:"model,omitempty"`
-	APIProtocol string `json:"api_protocol,omitempty"`
+	// Model is set by the llm_model check only (model_connection_check.go).
+	// A set Model makes the gateway send one real completion instead of the
+	// credential listing.
+	Model string `json:"model,omitempty"`
+	// UseAnthropicEndpoints is the credential's use_anthropic_endpoints flag.
+	// The runtime then speaks the Anthropic dialect to a vLLM-class upstream,
+	// so the gateway's model probe does too.
+	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints,omitempty"`
 }
 
 // checkConnectionResponseBody is the gateway's reply (mirrors

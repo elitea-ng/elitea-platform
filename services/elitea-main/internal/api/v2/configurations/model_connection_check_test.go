@@ -114,8 +114,8 @@ func TestLLMModelCheck_SuccessTestsTheUnsavedModelWithTheResolvedCredential(t *t
 		t.Fatalf("gateway calls = %d", len(stub.requests))
 	}
 	sent := stub.requests[0]
-	if sent.Model != "gpt-5" || sent.APIProtocol != "openai" || sent.Type != "open_ai" {
-		t.Fatalf("gateway request = %+v, want the trimmed model, the protocol and the credential type", sent)
+	if sent.Model != "gpt-5" || sent.Type != "open_ai" || sent.UseAnthropicEndpoints {
+		t.Fatalf("gateway request = %+v, want the trimmed model and the credential type", sent)
 	}
 	if sent.APIBase != "https://api.openai.com/v1" || sent.APIKey != "sk-resolved-on-the-server" {
 		t.Fatalf("gateway request = %+v, want the RESOLVED credential", sent)
@@ -160,6 +160,15 @@ func TestLLMModelCheck_GatewayWithoutTheModelProbeIsNotSuccess(t *testing.T) {
 		modelCheckHandler(stub, &recordingStoredResolver{resolved: resolvedOpenAICredential()}), modelCheckForm)
 	if recorder.Code != http.StatusBadRequest || body["success"] != false {
 		t.Fatalf("status %d body %v, want a refusal", recorder.Code, body)
+	}
+	// It is a permanent property of the deployed gateway. The answer says so,
+	// and the web shows it as "unsupported", not as a failure to retry.
+	if body["message"] != modelProbeUnsupportedByGatewayMessage || body["unsupported"] != true ||
+		body["reason"] != ToolkitCheckReasonUnsupportedType {
+		t.Fatalf("body %v, want the unsupported gateway-version answer", body)
+	}
+	if strings.Contains(body["message"].(string), "try again") {
+		t.Fatal("the message asks for a retry that cannot help")
 	}
 }
 

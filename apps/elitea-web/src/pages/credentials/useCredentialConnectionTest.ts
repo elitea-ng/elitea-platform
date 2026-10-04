@@ -45,7 +45,7 @@ import { CredentialConnectionChecks, SchemaField } from '@/features/credentials'
 import { t } from '@/shared/i18n';
 import type { ConfigSchemaNode } from '@/features/credentials';
 
-import { clearsTestResult, missingForConnectionTest, testsFormValues } from './llmModelConnectionTest';
+import { clearsTestResult, missingForConnectionTest, modelTestBody, testsFormValues } from './llmModelConnectionTest';
 
 /**
  * `unsupported` is its own outcome, not a failure. A credential type this
@@ -183,7 +183,8 @@ function startConnectionTest(
     return performStoredTest(checks.stored, request.projectId, request.configId);
   }
   if (request.configType === undefined) return undefined;
-  return performUnsavedTest(checks.unsaved, request.projectId, request.configType, request.data);
+  const body = testsFormValues(request.configType) ? modelTestBody(request.data, request.configId) : request.data;
+  return performUnsavedTest(checks.unsaved, request.projectId, request.configType, body);
 }
 
 export function useCredentialConnectionTest(params: CredentialConnectionTestParams): CredentialConnectionTestResult {

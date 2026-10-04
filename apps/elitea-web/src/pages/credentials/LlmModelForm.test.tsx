@@ -141,7 +141,25 @@ describe('LLM model form — Test connection', () => {
     expect(await screen.findByText(/^Connected in \d+\.\d s$/)).toBeInTheDocument();
     expect(body?.['name']).toBe('gpt-5-mini');
     expect(body?.['ai_credentials']).toEqual({ elitea_title: 'openai_creds', private: false });
+    // The saved row is named, so a private reference resolves for its author.
+    expect(body?.['configuration_id']).toBe('abc');
     expect(storedCalls).toBe(0);
+  });
+
+  it('shows a gateway without the model probe as unsupported, not as a failure to retry', async () => {
+    serveType();
+    const message = 'Model testing is not supported by this LLM gateway version. Update the LLM gateway to test a model.';
+    server.use(
+      http.post(`${BASE}/configurations/check_connection/7/llm_model`, () =>
+        HttpResponse.json({ success: false, unsupported: true, reason: 'unsupported_type', message }, { status: 400 }),
+      ),
+    );
+    renderEdit();
+    const modelName = await screen.findByLabelText('Model name');
+    await waitFor(() => expect(modelName).toHaveValue('gpt-5'));
+    fireEvent.click(screen.getByTestId('credential-test-connection'));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
   });
 
   it('shows the categorised failure and clears it when the model name changes', async () => {

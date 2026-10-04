@@ -8,22 +8,39 @@
  *
  *  1. It always sends the FORM, never the stored row. An llm_model carries no
  *     secret: the server resolves the referenced credential itself, so the
- *     form is complete, and the edited model name is the one to test.
+ *     form is complete, and the edited model name is the one to test. On the
+ *     edit screen the body also names the saved row (`configuration_id`): a
+ *     private credential reference resolves for the row's AUTHOR, as it does
+ *     when the saved model runs, not for whoever clicks Test.
  *  2. It needs AI credentials and a model name before it can run. The button
  *     says which is missing.
- *  3. A result describes one combination of credentials, model name and API
- *     protocol. Changing any of the three clears it.
+ *  3. A result describes one combination of credentials and model name.
+ *     Changing either clears it. (The llm_model form has no API protocol
+ *     field yet; the per-model DIAL protocol adds it to this set.)
  */
 import { t } from '@/shared/i18n';
 
 export const LLM_MODEL_TYPE = 'llm_model';
 
 /** The form fields whose change makes a shown result stale. */
-const RESULT_FIELDS: ReadonlySet<string> = new Set(['name', 'ai_credentials', 'api_protocol', 'dial_protocol']);
+const RESULT_FIELDS: ReadonlySet<string> = new Set(['name', 'ai_credentials']);
+
+/** The body key that names the saved row the edit screen tests. The server reads it; it is not a form field. */
+const CONFIGURATION_ID_KEY = 'configuration_id';
 
 /** True when the test must send the form values even on the edit screen. */
 export function testsFormValues(configType: string | undefined): boolean {
   return configType === LLM_MODEL_TYPE;
+}
+
+/**
+ * The body of an llm_model test: the form values, plus the saved row's id on
+ * the edit screen. `undefined` configId (the create screen) sends the form
+ * alone; the caller then becomes the author the server resolves for.
+ */
+export function modelTestBody(data: Readonly<Record<string, unknown>>, configId: string | undefined): Record<string, unknown> {
+  if (configId === undefined || configId === '') return { ...data };
+  return { ...data, [CONFIGURATION_ID_KEY]: configId };
 }
 
 /** True when editing `fieldKey` makes the shown test result stale. */
