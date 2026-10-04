@@ -144,7 +144,9 @@ describe('AnalyticsContainer', () => {
         month: 'short',
         year: 'numeric',
       }).formatRange(new Date('2026-10-01T00:00:00Z'), new Date('2026-10-31T23:59:59.999Z'));
-      expect(await findByText(`billed ${period}, USD`)).toBeInTheDocument();
+      // The label waits on both the usage and the costs reads; under the
+      // coverage shard's load that outran findByText's 1s default in CI.
+      expect(await findByText(`billed ${period}, USD`, {}, { timeout: 5000 })).toBeInTheDocument();
       expect(queryByText('billed spend, USD')).not.toBeInTheDocument();
     });
 
@@ -154,7 +156,7 @@ describe('AnalyticsContainer', () => {
         http.get(COSTS_URL, () => HttpResponse.json(costsResponse(12.5, true))),
       );
       const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
-      expect(await findByText('billing period to date, USD')).toBeInTheDocument();
+      expect(await findByText('billing period to date, USD', {}, { timeout: 5000 })).toBeInTheDocument();
     });
 
     // #6682: two fraction digits printed a sub-cent spend as $0.00.
