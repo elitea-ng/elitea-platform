@@ -36,6 +36,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
@@ -190,6 +191,7 @@ type stack struct {
 	store     *domain.Store
 	registry  *domain.Registry
 	validator *domain.AccessValidator
+	policy    *nativepolicy.Service
 	handler   *nativeapi.Handler
 	audit     *recordingAudit
 	router    http.Handler
@@ -244,6 +246,10 @@ func newStack(t *testing.T, options ...stackOption) *stack {
 	s.validator = domain.NewAccessValidator(pool)
 	s.validator.SetClock(s.clock)
 	handlerConfig.Registry, handlerConfig.Store = s.registry, s.store
+	// The native client policy as router.go composes it (ADR-0025 WP4).
+	s.policy = nativepolicy.New(pool, s.registry)
+	handlerConfig.Decorate = s.policy.Decorate
+	handlerConfig.MinimumClientVersion = s.policy.MinimumFor
 	s.handler = nativeapi.New(handlerConfig)
 
 	// The protected route a native client calls: the REAL Auth middleware
@@ -258,6 +264,15 @@ func newStack(t *testing.T, options ...stackOption) *stack {
 	authenticated.With(s.handler.RegisteredOnly).Delete(nativeapi.DevicesPath+"/{deviceID}", s.handler.RevokeDevice)
 	authenticated.Get("/api/v2/admin/native_devices/administration", s.handler.AdminListDevices)
 	authenticated.Delete("/api/v2/admin/native_devices/administration/{deviceID}", s.handler.AdminRevokeDevice)
+	// A project route behind the group's minimum-version gate, composed as
+	// router.go composes it: Auth, then ClientVersion.
+	router.With(apimw.Auth(authConfig), apimw.ClientVersion(apimw.ClientVersionConfig{
+		MinimumFor:           s.policy.MinimumFor,
+		NativeClientForToken: s.validator.ClientID,
+	})).Get("/api/v2/gated", func(w http.ResponseWriter, r *http.Request) {
+		user, _ := auth.UserFromContext(r.Context())
+		_ = json.NewEncoder(w).Encode(map[string]string{"native_client_id": user.NativeClientID})
+	})
 	router.With(apimw.Auth(authConfig)).Get("/api/v2/whoami", func(w http.ResponseWriter, r *http.Request) {
 		user, _ := auth.UserFromContext(r.Context())
 		_ = json.NewEncoder(w).Encode(user)

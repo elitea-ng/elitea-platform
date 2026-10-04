@@ -64,6 +64,7 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
@@ -175,9 +176,18 @@ type RouterConfig struct {
 	// NativeSecureCookies selects the `__Host-` binder cookie
 	// (COOKIE_SECURE != "false").
 	NativeSecureCookies bool
-	// NativeTokenDecorator adds fields to every native token response
-	// (WP4's client_policy). Nil adds nothing.
+	// NativeTokenDecorator adds fields to every native token response. Nil
+	// uses the native client policy's: `client_policy` (WP4).
 	NativeTokenDecorator nativeapi.TokenResponseDecorator
+	// NativePolicy is the one cached reader of the `native_client_policy`
+	// section (ADR-0025 WP4), shared by discovery, the token response, the
+	// 426 gate and the admin save that invalidates it. Nil builds one here
+	// from Pool and NativeClients — the shape every test uses.
+	NativePolicy *nativepolicy.Service
+	// NativeAccess resolves the client of a native bearer token for the 426
+	// gate when the principal came from the edge's forwarded identity (which
+	// carries no client id). Nil skips that fallback.
+	NativeAccess *nativeauth.AccessValidator
 	// Mailer is outbound e-mail (ADR-0024 WP7): invitations, moderation
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
@@ -1268,6 +1278,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// through apimw.BrowserSignInRequired. Each route answers 404 while no
 	// client is registered.
 	nativeDiscovery := cfg.NativeAuth
+	nativePolicy := cfg.NativePolicy
+	if nativePolicy == nil {
+		var registered nativepolicy.Clients
+		if cfg.NativeClients != nil {
+			registered = cfg.NativeClients
+		}
+		nativePolicy = nativepolicy.New(cfg.Pool, registered)
+	}
+	nativeTokenDecorator := cfg.NativeTokenDecorator
+	if nativeTokenDecorator == nil {
+		nativeTokenDecorator = nativePolicy.Decorate
+	}
+	clientPolicySource := cfg.ClientPolicy
+	if clientPolicySource == nil {
+		clientPolicySource = nativePolicyDiscovery{policy: nativePolicy}
+	}
 	var nativeHandler *nativeapi.Handler
 	if cfg.NativeClients != nil && cfg.NativeStore != nil {
 		var nativeAddresses nativeapi.ClientAddresses
@@ -1290,7 +1316,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			Addresses:     nativeAddresses,
 			Audit:         auditRecorder,
 			SecureCookies: cfg.NativeSecureCookies,
-			Decorate:      cfg.NativeTokenDecorator,
+			Decorate:      nativeTokenDecorator,
+			// The same rule the API group's ClientVersion gate applies.
+			MinimumClientVersion: nativePolicy.MinimumFor,
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(apimw.NoStore)
@@ -1306,7 +1334,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		PublicOrigin:   cfg.PublicOrigin,
 		Brand:          brandingResolver,
 		NativeAuth:     nativeDiscovery,
-		ClientPolicy:   cfg.ClientPolicy,
+		ClientPolicy:   clientPolicySource,
 	})
 	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
 	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
@@ -1638,6 +1666,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			Resolver: permissionResolver,
 		}))
 
+		// The minimum client version (ADR-0025 WP4), directly AFTER
+		// Maintenance: a 503 ("come back later") is the truer answer during a
+		// window than a 426 ("upgrade"). After Auth, because only a caller
+		// authenticated by a NATIVE access token is gated (coordinator
+		// decision 13); PAT and cookie callers pass whatever they send.
+		var nativeClientForToken func(context.Context, string) (string, bool, error)
+		if cfg.NativeAccess != nil {
+			nativeClientForToken = cfg.NativeAccess.ClientID
+		}
+		r.Use(apimw.ClientVersion(apimw.ClientVersionConfig{
+			MinimumFor:           nativePolicy.MinimumFor,
+			NativeClientForToken: nativeClientForToken,
+		}))
+
 		// The audit-trail emitter for `centry.audit_events` — the producer the
 		// admin Audit Trail page never had (internal/api/middleware/audit.go
 		// carries the four decisions: level, scope, failure policy, retention).
@@ -1810,6 +1852,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
 					admin.WithBranding(brandingResolver),
+					// A save of the native_client_policy section drops the
+					// one cached policy discovery, the token response and the
+					// 426 gate read.
+					admin.WithNativeClientPolicy(nativePolicy),
 					admin.WithBrandingAssets(brandingAssets),
 					admin.WithMailer(adminMailer),
 					admin.WithEmailSettings(emailResolver.Store(), emailResolver),

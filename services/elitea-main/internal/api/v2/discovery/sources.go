@@ -15,8 +15,8 @@ type NativeAuthSource interface {
 }
 
 // ClientPolicySource reports the public policy subset and the per-client
-// minimum versions (ADR-0025 WP4, plus WP2's per-client rows). The map may
-// be nil.
+// minimum versions (ADR-0025 WP4: internal/api/native_policy.go adapts the
+// one nativepolicy.Service). The map may be nil.
 type ClientPolicySource interface {
 	PublicPolicy(ctx context.Context) (PublicPolicy, map[string]string, error)
 }

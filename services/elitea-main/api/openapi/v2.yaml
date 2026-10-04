@@ -136,6 +136,18 @@ components:
       name: elitea_session
 
   parameters:
+    XClientVersion:
+      name: X-Client-Version
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        The native client's version, MAJOR.MINOR.PATCH with an optional
+        -prerelease (ADR-0025 decision 5). Judged only for a caller
+        authenticated by a native access token (and on the native token
+        endpoint): below the minimum answers 426, a value that does not parse
+        answers 400. Ignored for every other caller.
     ProjectId:
       name: project_id
       in: path
@@ -8715,8 +8727,12 @@ components:
         min_client_version:
           type: object
           description: >-
-            Registered client id → the lowest client version this deployment
-            serves. Always an object; empty when no minimum is set.
+            Registered, enabled client id → the effective minimum version
+            this deployment serves that client: the higher of
+            `client_policy.min_client_version` and the client's own minimum.
+            A client with no effective minimum is absent, so a client reads
+            its own entry and falls back to `client_policy.min_client_version`.
+            Always an object.
           additionalProperties: { type: string }
     NativeAuthEndpoints:
       type: object
@@ -8759,13 +8775,14 @@ components:
         min_client_version:
           type: string
           description: >-
-            Deployment-wide minimum client version; empty means none. A
-            per-client entry in `min_client_version` of the document wins.
+            Deployment-wide minimum client version; empty means none. The
+            document's per-client `min_client_version` entry, when present,
+            is never lower than this.
     NativeOAuthError:
       type: object
       description: >-
         RFC 6749 section 5.2 error of the native authorization endpoints.
-        NOTE(W2): internal/api/nativeauth/token.go:246 (`writeOAuthError`).
+        NOTE(W2): internal/api/nativeauth/token.go:271 (`writeOAuthError`).
       required: [error]
       properties:
         error:
@@ -8778,7 +8795,7 @@ components:
     NativeTokenRequest:
       type: object
       description: >-
-        The token request form. NOTE(W2): internal/api/nativeauth/token.go:55
+        The token request form. NOTE(W2): internal/api/nativeauth/token.go:40
         (`tokenParameters`).
       required: [grant_type, client_id]
       properties:
@@ -8795,7 +8812,7 @@ components:
       type: object
       description: >-
         A native token pair. Both tokens are opaque. NOTE(W2):
-        internal/api/nativeauth/token.go:217 (`writeGrant`).
+        internal/api/nativeauth/token.go:242 (`writeGrant`).
       required: [access_token, token_type, expires_in, refresh_token, refresh_token_expires_in, device_id]
       properties:
         access_token: { type: string, description: 'Opaque bearer token, prefix elnat_.' }
@@ -8804,9 +8821,76 @@ components:
         refresh_token: { type: string, description: 'Opaque refresh token, prefix elnrt_; rotated on every use.' }
         refresh_token_expires_in: { type: integer, format: int64, description: Seconds of idle time before the device must sign in again. }
         device_id: { type: string, description: The device session (refresh-token family) id. }
+        client_policy:
+          description: >-
+            The full native client policy, with `min_client_version` resolved
+            for this client. Present on every token response; absent only if
+            the policy could not be read since this server started, in which
+            case the client keeps the policy it last received.
+          allOf:
+            - $ref: '#/components/schemas/NativeClientPolicy'
+    NativeClientPolicy:
+      type: object
+      description: >-
+        The server-driven native client policy (ADR-0025 decision 5), the
+        `native_client_policy` admin Configuration section. The device-side
+        fields are enforced by the client; the server refuses versions below
+        `min_client_version` with 426. Adding a field is additive; renaming or
+        removing one bumps `client_contract`. NOTE(W2):
+        internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`).
+      required:
+        - require_device_lock
+        - idle_lock_seconds
+        - allow_screenshots
+        - offline_retention_days
+        - offline_max_mb
+        - offline_attachments
+        - min_client_version
+      properties:
+        require_device_lock:
+          type: boolean
+          description: Refuse to run on a device without a passcode or biometric lock.
+        idle_lock_seconds:
+          type: integer
+          format: int64
+          description: Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.
+        allow_screenshots:
+          type: boolean
+          description: When false, block screenshots and screen recording where the platform allows it.
+        offline_retention_days:
+          type: integer
+          format: int64
+          description: >-
+            How long data may stay on the device without reaching the server;
+            0 disables offline storage. 0 to 90.
+        offline_max_mb:
+          type: integer
+          format: int64
+          description: The most the app may store for offline use, in megabytes.
+        offline_attachments:
+          type: boolean
+          description: Whether attachments may be stored offline, or only messages.
+        min_client_version:
+          type: string
+          description: >-
+            The lowest version this deployment serves this client; empty means
+            none. MAJOR.MINOR.PATCH with an optional -prerelease.
+    ClientUpgradeRequiredError:
+      type: object
+      description: >-
+        The 426 answer to a native client whose `X-Client-Version` is below
+        the minimum (ADR-0025 decision 5). Only callers authenticated by a
+        native access token, and the native token endpoint, are judged.
+        NOTE(W2): internal/api/middleware/client_version.go:176
+        (`WriteClientUpgradeRequired`).
+      required: [error, min_client_version]
+      properties:
+        error: { type: string, description: Always client_upgrade_required. }
+        error_description: { type: string }
+        min_client_version: { type: string, description: The minimum this client must update to. }
     NativeRevokeRequest:
       type: object
-      description: The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:252.
+      description: The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:277.
       required: [token, client_id]
       properties:
         token: { type: string }
@@ -8882,7 +8966,7 @@ components:
         One registered native client, merged from the file and database
         layers. NOTE(W2): internal/nativeauth/registry.go:38 (`Client`) and
         internal/api/nativeauth/admin.go:28 (`AdminClientRow`).
-      required: [client_id, display_name, redirect_uris, enabled, source, overridden_file, active_devices]
+      required: [client_id, display_name, redirect_uris, enabled, min_client_version, source, overridden_file, active_devices]
       properties:
         client_id: { type: string }
         display_name: { type: string }
@@ -8890,6 +8974,11 @@ components:
           type: array
           items: { type: string }
         enabled: { type: boolean }
+        min_client_version:
+          type: string
+          description: >-
+            This client's own minimum version, empty for none. It can only
+            raise the native_client_policy minimum, never lower it.
         source: { type: string, description: 'Which layer decides the client: db or file.' }
         overridden_file: { type: boolean, description: A database row that shadows a file entry. }
         active_devices: { type: integer, format: int64 }
@@ -8912,6 +9001,11 @@ components:
           type: array
           items: { type: string }
         enabled: { type: boolean, description: Defaults to true. }
+        min_client_version:
+          type: string
+          description: >-
+            Optional per-client minimum version (MAJOR.MINOR.PATCH with an
+            optional -prerelease); empty or absent sets none.
     NativeClientWriteResult:
       type: object
       description: NOTE(W2) internal/api/nativeauth/admin.go:107.
@@ -8929,7 +9023,7 @@ components:
           type: object
           description: >-
             One reason per invalid field, keyed client_id, display_name,
-            redirect_uris or redirect_uris[N].
+            redirect_uris, redirect_uris[N] or min_client_version.
           additionalProperties: { type: string }
     BrandPack:
       type: object
@@ -10223,6 +10317,19 @@ components:
 
 
   responses:
+    ClientUpgradeRequired:
+      description: >-
+        426 Upgrade Required: the native client's `X-Client-Version` is below
+        the minimum this deployment serves it; `X-Min-Client-Version` repeats
+        the minimum. Deliberately WITHOUT the `Upgrade` header RFC 9110
+        requires on a 426: the upgrade is of the app, not of a protocol.
+      headers:
+        X-Min-Client-Version:
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ClientUpgradeRequiredError'
     400:
       description: Bad request
       content:
@@ -10422,9 +10529,17 @@ paths:
         refreshes. Failures are rate limited per
         (client, address) and per address (429 with Retry-After). Answers 404
         while no native client is registered.
-        NOTE(W2): internal/api/nativeauth/token.go:61.
+
+        A client states its version in `X-Client-Version` (a refresh grant's
+        `client_version` is used when the header is absent and it parses).
+        Below the minimum for `client_id` the endpoint answers 426 BEFORE the
+        code or refresh token is consumed, so the same credential works once
+        the app is updated. Every 200 carries the full `client_policy`.
+        NOTE(W2): internal/api/nativeauth/token.go:47.
       tags: [auth]
       security: []
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       requestBody:
         required: true
         content:
@@ -10439,7 +10554,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/NativeTokenResponse'
         '400':
-          description: invalid_request, unsupported_grant_type or invalid_grant.
+          description: invalid_request (including an X-Client-Version that does not parse), unsupported_grant_type or invalid_grant.
           content:
             application/json:
               schema:
@@ -10456,6 +10571,8 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/NativeOAuthError'
                   - $ref: '#/components/schemas/DeviceRevokedError'
+        '426':
+          $ref: '#/components/responses/ClientUpgradeRequired'
         '404':
           description: No native client is registered on this deployment.
           content:
@@ -10487,7 +10604,7 @@ paths:
         already-revoked token, or one for another client, also answers 200 with
         no body, so the answer reveals nothing. Form body: `token`,
         `client_id`, optional `token_type_hint`. Answers 404 while no native
-        client is registered. NOTE(W2): internal/api/nativeauth/token.go:252.
+        client is registered. NOTE(W2): internal/api/nativeauth/token.go:277.
       tags: [auth]
       security: []
       requestBody:

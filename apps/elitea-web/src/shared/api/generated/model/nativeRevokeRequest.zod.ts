@@ -51,7 +51,7 @@ export const NativeRevokeRequest = zod
     client_id: zod.string(),
   })
   .describe(
-    "The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:252.",
+    "The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:277.",
   );
 
 export type NativeRevokeRequest = zod.input<typeof NativeRevokeRequest>;

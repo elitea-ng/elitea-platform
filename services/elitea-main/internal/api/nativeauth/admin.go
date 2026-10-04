@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -53,6 +54,8 @@ type adminClientBody struct {
 	DisplayName  *string  `json:"display_name"`
 	RedirectURIs []string `json:"redirect_uris"`
 	Enabled      *bool    `json:"enabled"`
+	// MinClientVersion is optional; absent or "" sets no per-client minimum.
+	MinClientVersion *string `json:"min_client_version"`
 }
 
 // AdminSave upserts a DB-layer client. Invalid input is a 422 with a reason per
@@ -82,6 +85,9 @@ func (h *Handler) AdminSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Enabled != nil {
 		client.Enabled = *body.Enabled
+	}
+	if body.MinClientVersion != nil {
+		client.MinClientVersion = strings.TrimSpace(*body.MinClientVersion)
 	}
 	actor := callerID(r)
 	revoked, err := h.cfg.Store.UpsertClient(r.Context(), client, actor)

@@ -15,6 +15,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gopkg.in/yaml.v3"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/clientversion"
 )
 
 // NativeClientsPathEnv names the file layer of the client registry: a JSON or
@@ -40,6 +42,11 @@ type Client struct {
 	DisplayName  string   `json:"display_name"`
 	RedirectURIs []string `json:"redirect_uris"`
 	Enabled      bool     `json:"enabled"`
+	// MinClientVersion is this client's own minimum version (ADR-0025 WP4),
+	// "" for none. It can only RAISE the deployment-wide minimum of the
+	// native_client_policy section, never lower it: the effective minimum is
+	// the higher of the two (internal/application/nativepolicy).
+	MinClientVersion string `json:"min_client_version"`
 	// Source is SourceFile or SourceDB.
 	Source string `json:"source"`
 	// OverriddenFile is true on a DB row that shadows a file entry.
@@ -96,6 +103,9 @@ func ValidateClient(client Client) error {
 			seen[uri] = true
 		}
 	}
+	if client.MinClientVersion != "" && !clientversion.Valid(client.MinClientVersion) {
+		reasons["min_client_version"] = "empty, or a version MAJOR.MINOR.PATCH with an optional -prerelease"
+	}
 	if len(reasons) > 0 {
 		return &ClientValidationError{Reasons: reasons}
 	}
@@ -107,6 +117,8 @@ type fileClient struct {
 	DisplayName  string   `yaml:"display_name"`
 	RedirectURIs []string `yaml:"redirect_uris"`
 	Enabled      *bool    `yaml:"enabled"`
+	// MinClientVersion is optional (ADR-0025 WP4).
+	MinClientVersion string `yaml:"min_client_version"`
 }
 
 // ParseClientsFile parses the file layer. JSON is valid YAML, so one decoder
@@ -126,11 +138,12 @@ func ParseClientsFile(content []byte) ([]Client, error) {
 	seen := map[string]bool{}
 	for index, entry := range entries {
 		client := Client{
-			ClientID:     entry.ClientID,
-			DisplayName:  strings.TrimSpace(entry.DisplayName),
-			RedirectURIs: entry.RedirectURIs,
-			Enabled:      entry.Enabled == nil || *entry.Enabled,
-			Source:       SourceFile,
+			ClientID:         entry.ClientID,
+			DisplayName:      strings.TrimSpace(entry.DisplayName),
+			RedirectURIs:     entry.RedirectURIs,
+			Enabled:          entry.Enabled == nil || *entry.Enabled,
+			MinClientVersion: strings.TrimSpace(entry.MinClientVersion),
+			Source:           SourceFile,
 		}
 		if err := ValidateClient(client); err != nil {
 			return nil, fmt.Errorf("native clients file entry %d: %w", index, err)
@@ -215,7 +228,7 @@ func (r *Registry) load(ctx context.Context) ([]Client, error) {
 	}
 	if r.pool != nil {
 		rows, err := r.pool.Query(ctx, `
-			SELECT client_id, display_name, redirect_uris, enabled
+			SELECT client_id, display_name, redirect_uris, enabled, min_client_version
 			FROM elitea_auth.native_clients`)
 		if err != nil {
 			return nil, fmt.Errorf("nativeauth: read native clients: %w", err)
@@ -223,7 +236,8 @@ func (r *Registry) load(ctx context.Context) ([]Client, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var client Client
-			if err := rows.Scan(&client.ClientID, &client.DisplayName, &client.RedirectURIs, &client.Enabled); err != nil {
+			if err := rows.Scan(&client.ClientID, &client.DisplayName, &client.RedirectURIs, &client.Enabled,
+				&client.MinClientVersion); err != nil {
 				return nil, fmt.Errorf("nativeauth: scan native client: %w", err)
 			}
 			client.Source = SourceDB

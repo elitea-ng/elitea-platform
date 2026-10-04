@@ -75,7 +75,7 @@ export const DiscoveryDocument = zod
     min_client_version: zod
       .record(zod.string(), zod.string())
       .describe(
-        "Registered client id → the lowest client version this deployment serves. Always an object; empty when no minimum is set.",
+        "Registered, enabled client id → the effective minimum version this deployment serves that client: the higher of `client_policy.min_client_version` and the client's own minimum. A client with no effective minimum is absent, so a client reads its own entry and falls back to `client_policy.min_client_version`. Always an object.",
       ),
   })
   .describe(

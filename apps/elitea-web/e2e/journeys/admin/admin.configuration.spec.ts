@@ -100,7 +100,10 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   // two above would pass on a build where Banner and Maintenance had silently
   // reverted to refusing, since the count would still be right if something
   // else had also changed.
-  for (const section of ['Banner', 'Maintenance', 'Guardrails', 'LLM Proxy', 'Authentication']) {
+  // `Native client policy` (ADR-0025 WP4) is live from the start: discovery,
+  // the native token response and the 426 gate all read it.
+  const live = ['Banner', 'Maintenance', 'Guardrails', 'LLM Proxy', 'Authentication', 'Native client policy'];
+  for (const section of live) {
     await expect(
       sections.getByRole('button', { name: new RegExp(section) }).getByText('Not available here'),
       `${section} is available and must not be marked`,

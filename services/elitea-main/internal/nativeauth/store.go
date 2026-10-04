@@ -811,12 +811,14 @@ func (s *Store) UpsertClient(ctx context.Context, client Client, actor int64) (i
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO elitea_auth.native_clients
-		    (client_id, display_name, redirect_uris, enabled, created_by, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $5)
+		    (client_id, display_name, redirect_uris, enabled, min_client_version, created_by, updated_by)
+		VALUES ($1, $2, $3, $4, $6, $5, $5)
 		ON CONFLICT (client_id) DO UPDATE
 		SET display_name = EXCLUDED.display_name, redirect_uris = EXCLUDED.redirect_uris,
-		    enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-		client.ClientID, client.DisplayName, client.RedirectURIs, client.Enabled, actor); err != nil {
+		    enabled = EXCLUDED.enabled, min_client_version = EXCLUDED.min_client_version,
+		    updated_by = EXCLUDED.updated_by, updated_at = now()`,
+		client.ClientID, client.DisplayName, client.RedirectURIs, client.Enabled, actor,
+		client.MinClientVersion); err != nil {
 		return 0, unavailable("save native client", err)
 	}
 	var revoked int64

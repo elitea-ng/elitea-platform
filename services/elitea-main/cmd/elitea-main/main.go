@@ -2204,6 +2204,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PublicOrigin:                 publicOrigin,
 		NativeClients:                native.registry,
 		NativeStore:                  native.store,
+		NativePolicy:                 native.policy(pool),
+		NativeAccess:                 native.validator,
 		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                       mailComposer,
 		EmailSettings:                emailResolver,

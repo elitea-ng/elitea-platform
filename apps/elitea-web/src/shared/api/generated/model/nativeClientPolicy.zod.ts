@@ -41,40 +41,43 @@
  */
 import * as zod from "zod";
 
-export const NativeTokenRequest = zod
+export const NativeClientPolicy = zod
   .object({
-    grant_type: zod.string().describe("authorization_code or refresh_token."),
-    client_id: zod.string(),
-    code: zod
-      .string()
-      .optional()
-      .describe("The authorization code (authorization_code grant)."),
-    redirect_uri: zod
-      .string()
-      .optional()
+    require_device_lock: zod
+      .boolean()
       .describe(
-        "The redirect URI the code was issued to (authorization_code grant).",
+        "Refuse to run on a device without a passcode or biometric lock.",
       ),
-    code_verifier: zod
-      .string()
-      .optional()
+    idle_lock_seconds: zod
+      .int()
       .describe(
-        "The PKCE verifier, 43 to 128 unreserved characters (authorization_code grant).",
+        "Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.",
       ),
-    refresh_token: zod
-      .string()
-      .optional()
-      .describe("The current refresh token (refresh_token grant)."),
-    client_version: zod
-      .string()
-      .optional()
+    allow_screenshots: zod
+      .boolean()
       .describe(
-        "The client's version, recorded on the device (refresh_token grant).",
+        "When false, block screenshots and screen recording where the platform allows it.",
+      ),
+    offline_retention_days: zod
+      .int()
+      .describe(
+        "How long data may stay on the device without reaching the server; 0 disables offline storage. 0 to 90.",
+      ),
+    offline_max_mb: zod
+      .int()
+      .describe("The most the app may store for offline use, in megabytes."),
+    offline_attachments: zod
+      .boolean()
+      .describe("Whether attachments may be stored offline, or only messages."),
+    min_client_version: zod
+      .string()
+      .describe(
+        "The lowest version this deployment serves this client; empty means none. MAJOR.MINOR.PATCH with an optional -prerelease.",
       ),
   })
   .describe(
-    "The token request form. NOTE(W2): internal/api/nativeauth/token.go:40 (`tokenParameters`).",
+    "The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`).",
   );
 
-export type NativeTokenRequest = zod.input<typeof NativeTokenRequest>;
-export type NativeTokenRequestOutput = zod.output<typeof NativeTokenRequest>;
+export type NativeClientPolicy = zod.input<typeof NativeClientPolicy>;
+export type NativeClientPolicyOutput = zod.output<typeof NativeClientPolicy>;

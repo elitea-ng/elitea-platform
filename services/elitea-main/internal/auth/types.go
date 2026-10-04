@@ -80,6 +80,14 @@ type User struct {
 	// here at resolution time. Only a credential validator that read the
 	// project row from storage may set this field.
 	TokenProjectActive *bool `json:"token_project_active,omitempty"`
+	// NativeClientID is the registered native client (ADR-0025) whose access
+	// token authenticated this request, "" for every other credential. Only
+	// the native access-token validator (internal/nativeauth) sets it, from the
+	// device session row it read; it is what makes a caller subject to the
+	// minimum client version (`426`, coordinator decision 13) — a PAT or a
+	// cookie caller is exempt. Never serialised: no forwarded or cached
+	// principal can claim it.
+	NativeClientID string `json:"-"`
 }
 
 // BoundProjectRefused reports a binding whose project is no longer usable.

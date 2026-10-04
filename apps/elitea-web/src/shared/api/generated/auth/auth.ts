@@ -54,6 +54,7 @@ import type {
 
 import type {
   AuthorizeNativeClientParams,
+  ClientUpgradeRequiredResponse,
   DeviceRevokedError,
   ErrorResponse,
   ListNativeDevicesParams,
@@ -342,6 +343,11 @@ export type exchangeNativeTokenResponse404 = {
   status: 404;
 };
 
+export type exchangeNativeTokenResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type exchangeNativeTokenResponse429 = {
   data: NativeOAuthError;
   status: 429;
@@ -360,6 +366,7 @@ export type exchangeNativeTokenResponseError = (
   | exchangeNativeTokenResponse400
   | exchangeNativeTokenResponse401
   | exchangeNativeTokenResponse404
+  | exchangeNativeTokenResponse426
   | exchangeNativeTokenResponse429
   | exchangeNativeTokenResponse503
 ) & {
@@ -396,7 +403,13 @@ export const getExchangeNativeTokenUrl = () => {
  * refreshes. Failures are rate limited per
  * (client, address) and per address (429 with Retry-After). Answers 404
  * while no native client is registered.
- * NOTE(W2): internal/api/nativeauth/token.go:61.
+ *
+ * A client states its version in `X-Client-Version` (a refresh grant's
+ * `client_version` is used when the header is absent and it parses).
+ * Below the minimum for `client_id` the endpoint answers 426 BEFORE the
+ * code or refresh token is consumed, so the same credential works once
+ * the app is updated. Every 200 carries the full `client_policy`.
+ * NOTE(W2): internal/api/nativeauth/token.go:47.
  * @summary Exchange a native authorization code or refresh token
  */
 export const exchangeNativeToken = async (
@@ -462,7 +475,8 @@ export const getExchangeNativeTokenQueryKey = (
 
 export const getExchangeNativeTokenQueryOptions = <
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError | DeviceRevokedError,
+  TError =
+    NativeOAuthError | DeviceRevokedError | ClientUpgradeRequiredResponse,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -498,11 +512,12 @@ export type ExchangeNativeTokenQueryResult = NonNullable<
   Awaited<ReturnType<typeof exchangeNativeToken>>
 >;
 export type ExchangeNativeTokenQueryError =
-  NativeOAuthError | DeviceRevokedError;
+  NativeOAuthError | DeviceRevokedError | ClientUpgradeRequiredResponse;
 
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError | DeviceRevokedError,
+  TError =
+    NativeOAuthError | DeviceRevokedError | ClientUpgradeRequiredResponse,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options: {
@@ -529,7 +544,8 @@ export function useExchangeNativeToken<
 };
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError | DeviceRevokedError,
+  TError =
+    NativeOAuthError | DeviceRevokedError | ClientUpgradeRequiredResponse,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -556,7 +572,8 @@ export function useExchangeNativeToken<
 };
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError | DeviceRevokedError,
+  TError =
+    NativeOAuthError | DeviceRevokedError | ClientUpgradeRequiredResponse,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -579,7 +596,8 @@ export function useExchangeNativeToken<
 
 export function useExchangeNativeToken<
   TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
-  TError = NativeOAuthError | DeviceRevokedError,
+  TError =
+    NativeOAuthError | DeviceRevokedError | ClientUpgradeRequiredResponse,
 >(
   nativeTokenRequest: NativeTokenRequest,
   options?: {
@@ -665,7 +683,7 @@ export const getRevokeNativeTokenUrl = () => {
  * already-revoked token, or one for another client, also answers 200 with
  * no body, so the answer reveals nothing. Form body: `token`,
  * `client_id`, optional `token_type_hint`. Answers 404 while no native
- * client is registered. NOTE(W2): internal/api/nativeauth/token.go:252.
+ * client is registered. NOTE(W2): internal/api/nativeauth/token.go:277.
  * @summary Revoke a native device session (RFC 7009)
  */
 export const revokeNativeToken = async (

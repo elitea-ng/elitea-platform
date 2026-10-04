@@ -51,7 +51,7 @@ export const NativeOAuthError = zod
     error_description: zod.string().optional(),
   })
   .describe(
-    "RFC 6749 section 5.2 error of the native authorization endpoints. NOTE(W2): internal/api/nativeauth/token.go:246 (`writeOAuthError`).",
+    "RFC 6749 section 5.2 error of the native authorization endpoints. NOTE(W2): internal/api/nativeauth/token.go:271 (`writeOAuthError`).",
   );
 
 export type NativeOAuthError = zod.input<typeof NativeOAuthError>;

@@ -52,7 +52,7 @@ export const ClientPublicPolicy = zod
     min_client_version: zod
       .string()
       .describe(
-        "Deployment-wide minimum client version; empty means none. A per-client entry in `min_client_version` of the document wins.",
+        "Deployment-wide minimum client version; empty means none. The document's per-client `min_client_version` entry, when present, is never lower than this.",
       ),
   })
   .describe(

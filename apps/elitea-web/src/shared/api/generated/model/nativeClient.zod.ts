@@ -47,6 +47,11 @@ export const NativeClient = zod
     display_name: zod.string(),
     redirect_uris: zod.array(zod.string()),
     enabled: zod.boolean(),
+    min_client_version: zod
+      .string()
+      .describe(
+        "This client's own minimum version, empty for none. It can only raise the native_client_policy minimum, never lower it.",
+      ),
     source: zod
       .string()
       .describe("Which layer decides the client: db or file."),

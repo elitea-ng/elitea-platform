@@ -41,40 +41,13 @@
  */
 import * as zod from "zod";
 
-export const NativeTokenRequest = zod
-  .object({
-    grant_type: zod.string().describe("authorization_code or refresh_token."),
-    client_id: zod.string(),
-    code: zod
-      .string()
-      .optional()
-      .describe("The authorization code (authorization_code grant)."),
-    redirect_uri: zod
-      .string()
-      .optional()
-      .describe(
-        "The redirect URI the code was issued to (authorization_code grant).",
-      ),
-    code_verifier: zod
-      .string()
-      .optional()
-      .describe(
-        "The PKCE verifier, 43 to 128 unreserved characters (authorization_code grant).",
-      ),
-    refresh_token: zod
-      .string()
-      .optional()
-      .describe("The current refresh token (refresh_token grant)."),
-    client_version: zod
-      .string()
-      .optional()
-      .describe(
-        "The client's version, recorded on the device (refresh_token grant).",
-      ),
-  })
-  .describe(
-    "The token request form. NOTE(W2): internal/api/nativeauth/token.go:40 (`tokenParameters`).",
-  );
+export const ExchangeNativeTokenHeaders = zod.object({
+  "X-Client-Version": zod.string().optional(),
+});
 
-export type NativeTokenRequest = zod.input<typeof NativeTokenRequest>;
-export type NativeTokenRequestOutput = zod.output<typeof NativeTokenRequest>;
+export type ExchangeNativeTokenHeaders = zod.input<
+  typeof ExchangeNativeTokenHeaders
+>;
+export type ExchangeNativeTokenHeadersOutput = zod.output<
+  typeof ExchangeNativeTokenHeaders
+>;

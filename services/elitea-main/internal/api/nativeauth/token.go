@@ -88,11 +88,52 @@ func (h *Handler) token(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, status, code, description)
 	}
 
+	if !h.clientVersionAccepted(w, r, form, clientID) {
+		return
+	}
+
 	if grantType == "authorization_code" {
 		h.exchangeCode(w, r, form, clientID, fail)
 		return
 	}
 	h.refresh(w, r, form, clientID, fail)
+}
+
+// clientVersionAccepted applies the minimum client version (ADR-0025 WP4)
+// before any grant is consumed. The stated version is the X-Client-Version
+// header (coordinator decision 13); without it, a refresh grant's
+// `client_version` form field is used when it parses as a version (the field
+// predates the header and is recorded on the device). A malformed HEADER is a
+// 400; a form field that is not a version is not judged — the device registry
+// accepts free-form build strings there. A policy that cannot be read passes,
+// as the API gate does. Not a failure for the rate limiter: an outdated app is
+// not guessing credentials.
+func (h *Handler) clientVersionAccepted(w http.ResponseWriter, r *http.Request, form url.Values, clientID string) bool {
+	if h.cfg.MinimumClientVersion == nil {
+		return true
+	}
+	version := r.Header.Get(apimw.ClientVersionHeader)
+	if version == "" {
+		version = form.Get("client_version")
+		if version == "" || apimw.EvaluateClientVersion(version, "") == apimw.ClientVersionMalformed {
+			return true
+		}
+	}
+	minimum, err := h.cfg.MinimumClientVersion(r.Context(), clientID)
+	if err != nil {
+		slog.WarnContext(r.Context(), "native token: client policy unreadable; version not checked", "err", err)
+		return true
+	}
+	switch apimw.EvaluateClientVersion(version, minimum) {
+	case apimw.ClientVersionMalformed:
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request",
+			apimw.ClientVersionHeader+" must be MAJOR.MINOR.PATCH with an optional -prerelease")
+		return false
+	case apimw.ClientVersionTooOld:
+		apimw.WriteClientUpgradeRequired(w, minimum)
+		return false
+	}
+	return true
 }
 
 func (h *Handler) tokenBlocked(keys []string) (bool, time.Duration) {

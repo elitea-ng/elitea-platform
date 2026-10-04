@@ -41,40 +41,21 @@
  */
 import * as zod from "zod";
 
-export const NativeTokenRequest = zod
+export const ClientUpgradeRequiredError = zod
   .object({
-    grant_type: zod.string().describe("authorization_code or refresh_token."),
-    client_id: zod.string(),
-    code: zod
+    error: zod.string().describe("Always client_upgrade_required."),
+    error_description: zod.string().optional(),
+    min_client_version: zod
       .string()
-      .optional()
-      .describe("The authorization code (authorization_code grant)."),
-    redirect_uri: zod
-      .string()
-      .optional()
-      .describe(
-        "The redirect URI the code was issued to (authorization_code grant).",
-      ),
-    code_verifier: zod
-      .string()
-      .optional()
-      .describe(
-        "The PKCE verifier, 43 to 128 unreserved characters (authorization_code grant).",
-      ),
-    refresh_token: zod
-      .string()
-      .optional()
-      .describe("The current refresh token (refresh_token grant)."),
-    client_version: zod
-      .string()
-      .optional()
-      .describe(
-        "The client's version, recorded on the device (refresh_token grant).",
-      ),
+      .describe("The minimum this client must update to."),
   })
   .describe(
-    "The token request form. NOTE(W2): internal/api/nativeauth/token.go:40 (`tokenParameters`).",
+    "The 426 answer to a native client whose `X-Client-Version` is below the minimum (ADR-0025 decision 5). Only callers authenticated by a native access token, and the native token endpoint, are judged. NOTE(W2): internal/api/middleware/client_version.go:176 (`WriteClientUpgradeRequired`).",
   );
 
-export type NativeTokenRequest = zod.input<typeof NativeTokenRequest>;
-export type NativeTokenRequestOutput = zod.output<typeof NativeTokenRequest>;
+export type ClientUpgradeRequiredError = zod.input<
+  typeof ClientUpgradeRequiredError
+>;
+export type ClientUpgradeRequiredErrorOutput = zod.output<
+  typeof ClientUpgradeRequiredError
+>;

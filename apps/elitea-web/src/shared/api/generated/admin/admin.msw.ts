@@ -122,6 +122,7 @@ export const getListNativeClientsResponseMock = (
       (_, i) => i + 1,
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
     enabled: faker.datatype.boolean(),
+    min_client_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
     source: faker.string.alpha({ length: { min: 10, max: 20 } }),
     overridden_file: faker.datatype.boolean(),
     active_devices: faker.number.int(),

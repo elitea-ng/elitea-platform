@@ -60,6 +60,22 @@ export const getExchangeNativeTokenResponseMock = (
   refresh_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
   refresh_token_expires_in: faker.number.int(),
   device_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  client_policy: faker.helpers.arrayElement([
+    {
+      ...{
+        require_device_lock: faker.datatype.boolean(),
+        idle_lock_seconds: faker.number.int(),
+        allow_screenshots: faker.datatype.boolean(),
+        offline_retention_days: faker.number.int(),
+        offline_max_mb: faker.number.int(),
+        offline_attachments: faker.datatype.boolean(),
+        min_client_version: faker.string.alpha({
+          length: { min: 10, max: 20 },
+        }),
+      },
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 

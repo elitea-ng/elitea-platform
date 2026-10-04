@@ -284,6 +284,7 @@ func configSections() []map[string]any {
 		governanceSection(),
 		authSection(),
 		nativeClientsSection(),
+		nativeClientPolicySection(),
 		resourcesSection(),
 		dedicatedBannerSection(),
 		brandingSection(),

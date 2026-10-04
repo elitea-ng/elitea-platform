@@ -600,7 +600,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// refresh and access tokens with the sealed re-delivery successor, and the
 	// `configuration.native_clients` administration grant. 139 and 140 are
 	// claimed on open branches; the number is renumbered at merge if needed.
-	require.EqualValues(t, 141, Head(shared))
+	//
+	// 143: shared/0143_native_client_min_version.sql, a registered native
+	// client's own minimum version (ADR-0025 WP4), which can only raise the
+	// `native_client_policy` section's deployment-wide minimum. No new
+	// permission: `configuration.native_clients` (0141) guards both. 142 is
+	// unused (reserved for a device-registry file WP3 folded into 0141).
+	require.EqualValues(t, 143, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { NativeClientPolicy } from "./nativeClientPolicy.zod";
 
 export const NativeTokenResponse = zod
   .object({
@@ -55,9 +56,12 @@ export const NativeTokenResponse = zod
     device_id: zod
       .string()
       .describe("The device session (refresh-token family) id."),
+    client_policy: NativeClientPolicy.optional().describe(
+      "The full native client policy, with `min_client_version` resolved for this client. Present on every token response; absent only if the policy could not be read since this server started, in which case the client keeps the policy it last received.",
+    ),
   })
   .describe(
-    "A native token pair. Both tokens are opaque. NOTE(W2): internal/api/nativeauth/token.go:217 (`writeGrant`).",
+    "A native token pair. Both tokens are opaque. NOTE(W2): internal/api/nativeauth/token.go:242 (`writeGrant`).",
   );
 
 export type NativeTokenResponse = zod.input<typeof NativeTokenResponse>;

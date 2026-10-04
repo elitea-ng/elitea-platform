@@ -47,7 +47,7 @@ export const NativeClientValidationError = zod
     reasons: zod
       .record(zod.string(), zod.string())
       .describe(
-        "One reason per invalid field, keyed client_id, display_name, redirect_uris or redirect_uris[N].",
+        "One reason per invalid field, keyed client_id, display_name, redirect_uris, redirect_uris[N] or min_client_version.",
       ),
   })
   .describe("NOTE(W2) internal/api/nativeauth/admin.go:91.");

@@ -94,6 +94,12 @@ type Config struct {
 	SecureCookies bool
 	// Decorate is the WP4 seam; nil adds nothing.
 	Decorate TokenResponseDecorator
+	// MinimumClientVersion is the effective minimum version for a client id
+	// (ADR-0025 WP4, internal/application/nativepolicy). The token endpoint
+	// answers 426 to a client whose X-Client-Version is below it, BEFORE a
+	// code or refresh token is consumed, so the same credential still works
+	// once the app is updated. Nil gates nothing.
+	MinimumClientVersion func(ctx context.Context, clientID string) (string, error)
 }
 
 // Handler serves the native routes.

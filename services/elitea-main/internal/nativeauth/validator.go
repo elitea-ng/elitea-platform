@@ -52,6 +52,7 @@ func (v *AccessValidator) ValidateToken(ctx context.Context, token string) (auth
 	}
 	var (
 		sessionID          string
+		clientID           string
 		userID             int64
 		tokenID            *int64
 		revokedAt          *time.Time
@@ -64,7 +65,7 @@ func (v *AccessValidator) ValidateToken(ctx context.Context, token string) (auth
 		boundProjectActive *bool
 	)
 	err := v.pool.QueryRow(ctx, `
-		SELECT s.id::text, s.user_id, s.token_id, s.revoked_at, s.expires_at, s.last_seen_at,
+		SELECT s.id::text, s.client_id, s.user_id, s.token_id, s.revoked_at, s.expires_at, s.last_seen_at,
 		       a.expires_at,
 		       (owner.id IS NOT NULL AND owner.suspended = false),
 		       COALESCE(owner.email, ''),
@@ -76,7 +77,7 @@ func (v *AccessValidator) ValidateToken(ctx context.Context, token string) (auth
 		LEFT JOIN elitea_identity.token_project_binding AS binding ON binding.token_id = s.token_id
 		LEFT JOIN centry.project AS bound_project ON bound_project.id = binding.project_id
 		WHERE a.token_hash = $1`, HashSecret(token)).Scan(
-		&sessionID, &userID, &tokenID, &revokedAt, &expiresAt, &lastSeenAt,
+		&sessionID, &clientID, &userID, &tokenID, &revokedAt, &expiresAt, &lastSeenAt,
 		&accessExpiresAt, &ownerActive, &email, &projectID, &boundProjectActive)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -111,6 +112,8 @@ func (v *AccessValidator) ValidateToken(ctx context.Context, token string) (auth
 		TokenID:  formatID(*tokenID),
 		Email:    email,
 		AuthType: "token",
+		// The one producer of NativeClientID: read from the session row.
+		NativeClientID: clientID,
 	}
 	if projectID != nil && *projectID > 0 {
 		bound := int64(*projectID)
@@ -119,4 +122,30 @@ func (v *AccessValidator) ValidateToken(ctx context.Context, token string) (auth
 		user.TokenProjectActive = &active
 	}
 	return user, nil
+}
+
+// ClientID resolves the registered client of an `elnat_` access token without
+// authenticating it: no revocation, expiry or owner check and no last-seen
+// write. It exists for one caller, the minimum-version gate
+// (apimw.ClientVersion), on a request whose principal was established by the
+// edge's forwarded identity rather than by this validator, so the principal
+// carries no NativeClientID although the bearer is a native token. ok is
+// false for an unknown or malformed token.
+func (v *AccessValidator) ClientID(ctx context.Context, token string) (string, bool, error) {
+	if v == nil || v.pool == nil || !WellFormed(token, PrefixAccessToken) {
+		return "", false, nil
+	}
+	var clientID string
+	err := v.pool.QueryRow(ctx, `
+		SELECT s.client_id
+		FROM elitea_auth.native_access_tokens AS a
+		JOIN elitea_auth.native_sessions AS s ON s.id = a.session_id
+		WHERE a.token_hash = $1`, HashSecret(token)).Scan(&clientID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("nativeauth: resolve access token client: %w", err)
+	}
+	return clientID, true, nil
 }

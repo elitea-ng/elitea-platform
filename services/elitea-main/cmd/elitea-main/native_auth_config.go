@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicorigin"
@@ -38,6 +39,18 @@ func (n nativeAuthComposition) graphTokens() authsvc.TokenValidator {
 		return nil
 	}
 	return n.validator
+}
+
+// policy is the ONE cached native client policy (ADR-0025 WP4) the router
+// shares between discovery, the token response, the 426 gate and the admin
+// save that invalidates it. Built here, once, like the brand resolver. The
+// registry is passed as a nil INTERFACE when absent (#86).
+func (n nativeAuthComposition) policy(pool *pgxpool.Pool) *nativepolicy.Service {
+	var clients nativepolicy.Clients
+	if n.registry != nil {
+		clients = n.registry
+	}
+	return nativepolicy.New(pool, clients)
 }
 
 // errNativeNeedsPublicOrigin is coordinator decision 9: once any native client

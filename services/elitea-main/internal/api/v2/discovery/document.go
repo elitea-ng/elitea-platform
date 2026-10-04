@@ -43,8 +43,10 @@ type Document struct {
 	// NativeAuth is null while no native client is registered.
 	NativeAuth   *NativeAuth  `json:"native_auth"`
 	ClientPolicy PublicPolicy `json:"client_policy"`
-	// MinClientVersion maps a registered client id to the lowest client
-	// version this deployment serves. Always an object, never null.
+	// MinClientVersion maps a registered, enabled client id to the lowest
+	// client version this deployment serves it (the higher of the policy's and
+	// the client's own minimum; absent when neither sets one). Always an
+	// object, never null.
 	MinClientVersion map[string]string `json:"min_client_version"`
 }
 
@@ -69,7 +71,8 @@ type PublicPolicy struct {
 	// OfflineEnabled: offline storage is allowed (offline_retention_days > 0).
 	OfflineEnabled bool `json:"offline_enabled"`
 	// MinClientVersion is the deployment-wide minimum client version; empty
-	// means none. A per-client minimum in Document.MinClientVersion wins.
+	// means none. A client's entry in Document.MinClientVersion, when present,
+	// is its effective minimum and is never lower than this.
 	MinClientVersion string `json:"min_client_version"`
 }
 

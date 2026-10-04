@@ -46,6 +46,12 @@ export const NativeClientSaveRequest = zod
     display_name: zod.string(),
     redirect_uris: zod.array(zod.string()),
     enabled: zod.boolean().optional().describe("Defaults to true."),
+    min_client_version: zod
+      .string()
+      .optional()
+      .describe(
+        "Optional per-client minimum version (MAJOR.MINOR.PATCH with an optional -prerelease); empty or absent sets none.",
+      ),
   })
   .describe(
     "NOTE(W2) internal/api/nativeauth/admin.go:52 (`adminClientBody`); unknown fields are refused.",
