@@ -36,6 +36,24 @@ describe('EntityCard', () => {
     expect(getAllByTestId('entity-card-tag-chip').map((chip) => chip.textContent)).toEqual(['tag', 'no1tag']);
   });
 
+  it('draws a placeholder avatar, not initials, for a deleted author (#6702)', () => {
+    const { getAllByTestId, queryAllByTestId } = renderWithTheme(
+      <EntityCard
+        item={{
+          id: '1',
+          name: 'orphaned agent',
+          authors: [{ id: 'gone', name: 'Deleted user', deleted: true }, { id: 'blank', name: '' }, { id: 'a', name: 'Ann Lee' }],
+        }}
+      />,
+    );
+    const avatars = getAllByTestId('entity-card-author-avatar');
+    expect(avatars).toHaveLength(3);
+    // The deleted author and a blank name both get the placeholder; no initials from "Deleted user".
+    expect(queryAllByTestId('entity-card-deleted-author-avatar')).toHaveLength(2);
+    expect(avatars[0]).not.toHaveTextContent('DU');
+    expect(avatars[2]).toHaveTextContent('AL');
+  });
+
   /* elitea_issues: #6062 — a long unbroken name wraps within the card instead of overflowing its boundary */
   it('wraps a long unbroken name instead of letting it overflow the card', () => {
     const { getByTestId } = renderWithTheme(

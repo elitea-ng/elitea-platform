@@ -23,6 +23,8 @@ export interface UseNewInputKeyDownHandlerResult {
   readonly isProcessingSymbols: boolean;
   readonly query: string;
   readonly stopProcessingSymbols: () => void;
+  /** Caret offset of the "#" that opened the agent/pipeline picker, or `null` when no picker is open. */
+  readonly hashAnchorRef: RefObject<number | null>;
   readonly isProcessingAtSymbol: boolean;
   readonly atQuery: string;
   readonly stopProcessingAtSymbol: () => void;
@@ -31,7 +33,12 @@ export interface UseNewInputKeyDownHandlerResult {
 
 const NEW_SPECIAL_SYMBOLS = '#';
 const AT_SYMBOL = '@';
-const PRINTABLE_ASCII_REGEX = /^[\x20-\x7E]*$/;
+/**
+ * One printable character of any script: a single code point that is not a
+ * control or format character. ASCII-only lost "Пров" or "é" from the query,
+ * so the picker searched for "#" while the text held "#Пров" (#6774).
+ */
+const PRINTABLE_CHARACTER_REGEX = /^\P{C}$/u;
 
 interface InputTarget {
   readonly selectionStart: number | null;
@@ -84,6 +91,7 @@ export function useNewInputKeyDownHandler(
 
   const [isProcessingSymbols, setIsProcessingSymbols] = useState(false);
   const [query, setQuery] = useState('');
+  const hashAnchorRef = useRef<number | null>(null);
 
   const [isProcessingAtSymbol, setIsProcessingAtSymbol] = useState(false);
   const [atQuery, setAtQuery] = useState('');
@@ -92,6 +100,7 @@ export function useNewInputKeyDownHandler(
   const reset = useCallback(() => {
     setIsProcessingSymbols(false);
     setQuery('');
+    hashAnchorRef.current = null;
   }, []);
 
   const resetAt = useCallback(() => {
@@ -103,7 +112,7 @@ export function useNewInputKeyDownHandler(
   const handleAtSymbolMode = useCallback(
     (event: KeyboardEvent<HTMLDivElement>): void => {
       const target = eventTarget(event);
-      if (event.key.length === 1 && PRINTABLE_ASCII_REGEX.test(event.key)) {
+      if (PRINTABLE_CHARACTER_REGEX.test(event.key)) {
         if (event.key === ' ') resetAt();
         else setAtQuery((prev) => prev + event.key);
       } else if (event.key === 'Backspace' || event.key === 'Delete') {
@@ -120,10 +129,17 @@ export function useNewInputKeyDownHandler(
     [atQuery, resetAt],
   );
 
+  /*
+   * "#" opens the agent/pipeline picker. It must never trap the composer
+   * (#6774): a space or Enter ends the picker query, the same way a space
+   * ends an "@" query, so "issue #12 is fixed" stays an ordinary message.
+   */
   const handleHashSymbolMode = useCallback(
     (event: KeyboardEvent<HTMLDivElement>): void => {
       const target = eventTarget(event);
-      if (event.key.length === 1 && PRINTABLE_ASCII_REGEX.test(event.key)) {
+      if (event.key === ' ' || event.key === 'Enter') {
+        reset();
+      } else if (PRINTABLE_CHARACTER_REGEX.test(event.key)) {
         setQuery((prev) => prev + event.key);
       } else if (event.key === 'Backspace' || event.key === 'Delete') {
         const willDeleteQuery = resolveDeletion(target, query, event.key === 'Backspace', '#');
@@ -159,6 +175,7 @@ export function useNewInputKeyDownHandler(
       } else if (event.key.length === 1 && NEW_SPECIAL_SYMBOLS.includes(event.key)) {
         setIsProcessingSymbols(true);
         setQuery(event.key);
+        hashAnchorRef.current = eventTarget(event).selectionStart ?? null;
       }
     },
     [disableHashtagDetection, isProcessingAtSymbol, isProcessingSymbols, handleAtSymbolMode, handleHashSymbolMode],
@@ -169,6 +186,7 @@ export function useNewInputKeyDownHandler(
     isProcessingSymbols,
     query,
     stopProcessingSymbols: reset,
+    hashAnchorRef,
     isProcessingAtSymbol,
     atQuery,
     stopProcessingAtSymbol: resetAt,
@@ -203,7 +221,7 @@ export function useNewStartConversationInputKeyDownHandler(
         setIsProcessingSymbols(true);
         setQuery(event.key);
       } else if (isProcessingSymbols) {
-        if (event.key.length === 1 && PRINTABLE_ASCII_REGEX.test(event.key)) {
+        if (PRINTABLE_CHARACTER_REGEX.test(event.key)) {
           setQuery((prev) => prev + event.key);
         } else if (event.key === 'Backspace') {
           setQuery((prev) => prev.slice(0, -1));

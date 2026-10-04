@@ -579,6 +579,10 @@ def test_agent_execution_reports_a_budget_rejection_as_a_policy_outcome(
     # worker's public diagnostics must not carry it.
     assert str(caught.value) == ""
     assert canary not in str(caught.value)
+    # Only the refusing scope crosses (#6732), so the chat can say whose
+    # budget ran out. With no gateway error.scope on a chained provider error,
+    # a non-member refusal names no ceiling (it can be provider billing).
+    assert caught.value.scope == ("member" if scope == "member_budget_exceeded" else "unknown")
 
 
 def test_sdk_adapter_preserves_constructor_split_without_forwarding_authority() -> None:

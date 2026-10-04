@@ -42,21 +42,30 @@ export interface ProjectUsage {
   readonly resets_at?: string;
 }
 
+/**
+ * `project` reads the project's shared budget; `user` reads the CALLER's own
+ * member budget in that project (the server filters by the caller, never by a
+ * parameter). A member budget refusal links to the `user` view (#6732).
+ */
+export type UsageScope = 'project' | 'user';
+
 const projectUsageKeys = {
   all: ['settings', 'usage'] as const,
-  project: (projectId: string) => ['settings', 'usage', 'project', projectId] as const,
+  project: (projectId: string, scope: UsageScope) =>
+    ['settings', 'usage', scope, projectId] as const,
 };
 
 export function useProjectUsage(
   projectId: string | undefined,
+  scope: UsageScope = 'project',
 ): UseQueryResult<ProjectUsage, Error> {
   return useQuery({
-    queryKey: projectUsageKeys.project(projectId ?? ''),
+    queryKey: projectUsageKeys.project(projectId ?? '', scope),
     enabled: projectId !== undefined && projectId !== '',
     queryFn: async (): Promise<ProjectUsage> =>
       unwrapBody(
         await eliteaFetch<unknown>(
-          `/elitea_core/usage/prompt_lib/${projectId ?? ''}/usage?scope=project`,
+          `/elitea_core/usage/prompt_lib/${projectId ?? ''}/usage?scope=${scope}`,
         ),
       ) as ProjectUsage,
   });

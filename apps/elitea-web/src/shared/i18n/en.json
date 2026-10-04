@@ -4538,5 +4538,11 @@
   "pages.admin.signIn.button": "Sign in",
   "pages.admin.unavailable.title": "We couldn't check your permissions",
   "pages.admin.unavailable.retry": "Try again",
-  "pages.admin.unavailable.explanation": "Something went wrong on our side. Try again in a moment."
+  "pages.admin.unavailable.explanation": "Something went wrong on our side. Try again in a moment.",
+  "widgets.chatBox.hashPicker.title": "Agents and pipelines",
+  "chatMessages.error.budgetUsageMember": "View my usage",
+  "chatMessages.error.budgetUsageProject": "View project usage",
+  "entities.author.deletedUser": "Deleted user",
+  "settings.usage.memberScope": "Your own usage against your budget in this project.",
+  "settings.usage.noMemberCeiling": "You have no enforced spend ceiling in this project this period."
 }

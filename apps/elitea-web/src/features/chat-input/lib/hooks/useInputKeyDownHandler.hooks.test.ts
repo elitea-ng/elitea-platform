@@ -27,6 +27,42 @@ describe('useNewInputKeyDownHandler', () => {
     expect(result.current.query).toBe('');
   });
 
+  it('records the "#" anchor and ends the picker query on a space (#6774)', () => {
+    const { result } = renderHook(() => useNewInputKeyDownHandler());
+    act(() => result.current.onKeyDown(keyEvent('#', { value: 'see #', selectionStart: 4, selectionEnd: 4 })));
+    expect(result.current.hashAnchorRef.current).toBe(4);
+    act(() => result.current.onKeyDown(keyEvent('1', { value: 'see #1', selectionStart: 6, selectionEnd: 6 })));
+    act(() => result.current.onKeyDown(keyEvent(' ', { value: 'see #1 ', selectionStart: 7, selectionEnd: 7 })));
+    expect(result.current.isProcessingSymbols).toBe(false);
+    expect(result.current.query).toBe('');
+    expect(result.current.hashAnchorRef.current).toBeNull();
+  });
+
+  it('records non-ASCII characters in the "#" and "@" queries (#6774)', () => {
+    const { result } = renderHook(() => useNewInputKeyDownHandler());
+    act(() => result.current.onKeyDown(keyEvent('#', { value: '#', selectionStart: 0, selectionEnd: 0 })));
+    for (const key of ['П', 'р', 'é', '😀']) {
+      act(() => result.current.onKeyDown(keyEvent(key, { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    }
+    expect(result.current.query).toBe('#Прé😀');
+    // Named keys are not characters.
+    act(() => result.current.onKeyDown(keyEvent('ArrowLeft', { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    act(() => result.current.onKeyDown(keyEvent('Process', { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    expect(result.current.query).toBe('#Прé😀');
+
+    act(() => result.current.stopProcessingSymbols());
+    act(() => result.current.onKeyDown(keyEvent('@', { value: '@', selectionStart: 0, selectionEnd: 0 })));
+    act(() => result.current.onKeyDown(keyEvent('Ж', { value: '@', selectionStart: 1, selectionEnd: 1 })));
+    expect(result.current.atQuery).toBe('@Ж');
+  });
+
+  it('ends the "#" picker query on Enter so the message can be sent (#6774)', () => {
+    const { result } = renderHook(() => useNewInputKeyDownHandler());
+    act(() => result.current.onKeyDown(keyEvent('#', { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    act(() => result.current.onKeyDown(keyEvent('Enter', { value: '#', selectionStart: 1, selectionEnd: 1 })));
+    expect(result.current.isProcessingSymbols).toBe(false);
+  });
+
   it('starts @-mention processing on "@" and tracks the anchor position', () => {
     const { result } = renderHook(() => useNewInputKeyDownHandler());
     act(() => result.current.onKeyDown(keyEvent('@', { value: 'hi @', selectionStart: 4, selectionEnd: 4 })));

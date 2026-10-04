@@ -1062,10 +1062,37 @@ type runtimeFailurePolicy struct {
 
 const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."
 
+// The budget scope that refused a model call (#6732). The gateway names the
+// scope in its 402 refusal (error.code insufficient_quota for the project
+// ceiling, member_budget_exceeded for the member ceiling). A worker that read it
+// sends one of these registered messages under MODEL_BUDGET_EXHAUSTED, and Main
+// maps the pair to a public code the chat keys its copy and Usage link on. The
+// unscoped message stays registered for a worker that cannot tell the scope.
+const (
+	projectBudgetExhaustedSafeMessage = "The shared model budget of this project is exhausted. Requests are unavailable until the budget resets or an administrator raises the limit."
+	memberBudgetExhaustedSafeMessage  = "Your budget in this project is exhausted. Requests are unavailable until the budget resets or an administrator raises your limit."
+)
+
+func budgetScopePolicy(safeMessage string) (runtimeFailurePolicy, bool) {
+	switch safeMessage {
+	case projectBudgetExhaustedSafeMessage:
+		return runtimeFailurePolicy{Code: "PROJECT_BUDGET_EXHAUSTED", SafeMessage: projectBudgetExhaustedSafeMessage}, true
+	case memberBudgetExhaustedSafeMessage:
+		return runtimeFailurePolicy{Code: "MEMBER_BUDGET_EXHAUSTED", SafeMessage: memberBudgetExhaustedSafeMessage}, true
+	default:
+		return runtimeFailurePolicy{}, false
+	}
+}
+
 // Input sections use fixed public messages. Never accept an arbitrary worker reason.
 func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED {
+		if policy, ok := budgetScopePolicy(payload.GetSafeMessage()); ok {
+			return policy, true
+		}
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT {
 		switch payload.GetSafeMessage() {

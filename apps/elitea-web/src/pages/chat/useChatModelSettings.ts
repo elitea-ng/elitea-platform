@@ -63,12 +63,22 @@ function positiveProjectId(value: unknown): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/**
+ * The modal's starting values.
+ *
+ * `model_project_id` comes from the saved settings ONLY. A chat with no saved
+ * model runs on the implied default, and that default is often a model SHARED
+ * from another project (project 1). Defaulting the id to the CURRENT project
+ * made the picker look for the shared default in the wrong project: it showed
+ * "None", and the turn asked the current project for a model it does not have
+ * (UI-PD-2). The send path now takes the project from the resolved default
+ * model instead (`resolveSendLlmSettings`).
+ */
 function initialSettings(
   persisted: Readonly<Record<string, unknown>>,
-  projectId: string | number | undefined,
   conversationMeta: Readonly<Record<string, unknown>> | undefined,
 ): Readonly<Record<string, unknown>> {
-  const modelProjectId = positiveProjectId(persisted['model_project_id']) ?? positiveProjectId(projectId);
+  const modelProjectId = positiveProjectId(persisted['model_project_id']);
   const stepsLimit = conversationMeta?.['steps_limit'];
   return {
     ...persisted,
@@ -93,8 +103,8 @@ export function useChatModelSettings({
   const persisted = savedModelSettings(activeConversation, userId);
   const conversationMeta = activeConversation?.meta;
   const seeded = useMemo(
-    () => initialSettings(persisted, projectId, conversationMeta),
-    [persisted, projectId, conversationMeta],
+    () => initialSettings(persisted, conversationMeta),
+    [persisted, conversationMeta],
   );
   const [settings, setSettings] = useState<Readonly<Record<string, unknown>>>(seeded);
   const { mutateAsync: updateParticipantSettings } = useUpdateParticipantSettingsMutation();

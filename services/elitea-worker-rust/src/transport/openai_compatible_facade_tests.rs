@@ -2012,3 +2012,133 @@ async fn an_image_part_this_runtime_will_not_send_refuses_the_request() {
         "nothing may reach the provider"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn budget_refusal_names_the_refusing_scope_without_leaking_the_body() {
+    // #6732: the gateway's gate names the refusing budget in error.scope. The
+    // worker keeps only the scope, so the chat can say whose budget ran out.
+    for (body, expected_code) in [
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","scope":"member","message":"secret member text"}}"#[..],
+            "model_gateway.member_budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","message":"secret member text"}}"#[..],
+            "model_gateway.member_budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","scope":"project","message":"secret project text"}}"#[..],
+            "model_gateway.project_budget_exhausted",
+        ),
+        // A provider's own quota/billing refusal, rewritten by the gateway to
+        // the shared type and code but with no scope: no Elitea ceiling refused.
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","message":"secret provider text"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","scope":"provider","message":"secret provider text"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"insufficient_quota","message":"secret provider text"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+    ] {
+        let response = Response::builder()
+            .status(StatusCode::PAYMENT_REQUIRED)
+            .version(Version::HTTP_2)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::new(Full::new(Bytes::from_static(body))))
+            .expect("status response");
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(response)],
+            test_model_gateway_config(),
+        )
+        .expect("model gateway client");
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                test_model_facade_invocation(),
+            )
+            .expect("bound model");
+        let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+            panic!("a budget refusal must fail")
+        };
+        assert_eq!(error.category, ErrorCategory::InvalidInput);
+        assert_eq!(error.code, expected_code);
+        assert!(!error.retry.should_retry);
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains(TOKEN));
+    }
+}
+
+fn budget_refusal_response(body: Body) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::PAYMENT_REQUIRED)
+        .version(Version::HTTP_2)
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .expect("budget refusal response")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_budget_refusal_body_keeps_the_unscoped_refusal() {
+    // The 402 body is read through a 4 KiB limit. A valid member body padded
+    // past the limit must not parse, so the refusal stays unscoped.
+    let mut body = String::from(
+        r#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","scope":"member","message":""#,
+    );
+    body.push_str(&"x".repeat(8 * 1024));
+    body.push_str(r#""}}"#);
+    assert!(serde_json::from_str::<serde_json::Value>(&body).is_ok());
+    let response = budget_refusal_response(Body::new(Full::new(Bytes::from(body))));
+    let (client, _) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+        panic!("a budget refusal must fail")
+    };
+    assert_eq!(error.code, "model_gateway.budget_exhausted");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time() {
+    // A 402 body that never completes must not hang the turn: the read is
+    // bounded by response_header_timeout.
+    let pending = tokio_stream::pending::<Result<Frame<Bytes>, Infallible>>();
+    let response = budget_refusal_response(Body::new(StreamBody::new(pending)));
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_millis(20);
+    let (client, _) =
+        test_model_gateway_client(vec![TestModelGatewayOutcome::Response(response)], config)
+            .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        bound.generate_for_test(test_model_request("request")),
+    )
+    .await
+    .expect("the 402 body read must be bounded by the response header timeout");
+    let Err(error) = outcome else {
+        panic!("a budget refusal must fail")
+    };
+    assert_eq!(error.code, "model_gateway.budget_exhausted");
+}

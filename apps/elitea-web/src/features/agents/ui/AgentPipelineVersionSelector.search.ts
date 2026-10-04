@@ -14,6 +14,8 @@
  * renders the dropdown body off the same rows. Both depend on this leaf
  * module; this module depends on neither.
  */
+import { authorDisplayName } from '@/entities/author';
+
 import type { AgentPipelineVersionOption } from '../lib/types';
 
 /** `apps/elitea-ui/src/pages/Applications/Components/Tools/AgentPipelineVersionSelector.jsx`'s own literal — the version whose `name` marks it as the always-latest/unnamed one. */
@@ -105,10 +107,8 @@ export function formatVersionTimestamp(createdAt: string | undefined): string | 
 
 /** The creator label the row's secondary line names — the name when the join resolved one, the email otherwise, absent when neither is known. */
 export function versionCreatorLabel(version: SearchableVersion): string | undefined {
-  const name = version.author?.name;
-  if (name) return name;
-  const email = version.author?.email;
-  return email || undefined;
+  // An author whose account was deleted reads "Deleted user", not nothing (#6702).
+  return version.author ? authorDisplayName(version.author) : undefined;
 }
 
 /** ELITEA-3279 — the row's secondary "creator · timestamp" line, or `undefined` when there is nothing to show (the `base` row, or a version with neither field known). */

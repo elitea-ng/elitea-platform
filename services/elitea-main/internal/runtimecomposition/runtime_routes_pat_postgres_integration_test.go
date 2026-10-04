@@ -31,6 +31,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
@@ -74,7 +75,11 @@ func (spy *patRoutesSubmitSpy) Submit(
 func newPATRuntimeRouter(t *testing.T, pool *pgxpool.Pool) (http.Handler, *indexRBACReplaySpy, *patRoutesSubmitSpy) {
 	t.Helper()
 	resolver := legacyrbac.NewPostgresResolver(pool)
-	authorizer, err := newPostgresPublicAuthorizer(sqlcgen.New(pool), sqlcgen.New(pool), resolver)
+	observers, err := repos.NewExecutionObserverAuthority(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := newPostgresPublicAuthorizer(sqlcgen.New(pool), sqlcgen.New(pool), resolver, observers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +128,21 @@ INSERT INTO public.auth_core__token (id, user_id, expires) VALUES
 INSERT INTO public.auth_core__role_permission (id, role_id, permission) VALUES
     (190, 10, 'models.chat.messages.create');
 
+-- An agent execution's stream is also bound to the execution: only its
+-- starter (job.actor_id) or a reader of its conversation may observe it. The
+-- project admin (3) started this one; it has no conversation.
+ALTER TABLE elitea_runtime.execution_jobs ADD COLUMN actor_id TEXT NOT NULL DEFAULT '';
+CREATE TABLE elitea_runtime.agent_execution_jobs (
+    execution_id TEXT NOT NULL,
+    generation BIGINT NOT NULL,
+    client_stream_id TEXT
+);
+
 INSERT INTO elitea_runtime.execution_jobs (
     execution_id, generation, tenant_id, resource_project_id, projection_project_id,
-    capability_id, desired_state, state
+    capability_id, desired_state, state, actor_id
 ) VALUES
-    ('agent-project-1', 1, '1', 1, 1, '`+executiondomain.AgentApplicationCapability+`', 'RUNNING', 'RUNNING');
+    ('agent-project-1', 1, '1', 1, 1, '`+executiondomain.AgentApplicationCapability+`', 'RUNNING', 'RUNNING', '3');
 `); err != nil {
 		t.Fatal(err)
 	}

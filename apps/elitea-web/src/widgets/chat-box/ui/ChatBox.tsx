@@ -60,6 +60,7 @@ import { useAddEntityParticipant } from './hooks/useAddEntityParticipant';
 import { useActiveParticipantSelection } from './hooks/useActiveParticipantSelection';
 import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizationRefs';
 import { useChatBoxSend } from './hooks/useChatBoxSend';
+import { useReattachSeededTurn } from './hooks/useReattachSeededTurn';
 import { useStableRef } from './hooks/useStableRef';
 
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
@@ -150,12 +151,18 @@ const ChatBoxInner = memo(function ChatBox({
   // create-conversation-first and upload-attachments-first adapters.
   // `startStreamedExecution` reports whether the transport took the run, so
   // `sendQuestion` knows not to ALSO emit `chat_predict`.
-  const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, stopStreamedExecution, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
+  // LLM model list + selection. Before the send: a configured model saved with
+  // no project id runs in the project the picker resolved.
+  const { modelsList, selectedLlmModel, handleSelectModel, configuredModelProjectId } = useChatBoxModelSelection({
+    projectId, selectedModel: data.selectedModel, llm, setSelectedModel: data.setSelectedModel,
+  });
+  const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, reattachStreamedExecution, stopStreamedExecution, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend,
+    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend,
   });
+  useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution }); // #6654: a reload mid-turn observes the run again
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
   // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
@@ -203,13 +210,6 @@ const ChatBoxInner = memo(function ChatBox({
     },
   });
 
-  // LLM model list + selection
-  const { modelsList, selectedLlmModel, handleSelectModel } = useChatBoxModelSelection({
-    projectId,
-    selectedModelName: data.selectedModel?.name,
-    llm,
-    setSelectedModel: data.setSelectedModel,
-  });
 
 
   // Version selection (real fetch + persist) + auto-recovery
@@ -237,7 +237,6 @@ const ChatBoxInner = memo(function ChatBox({
     isConversationSending,
     isStreaming,
     hasChatInput: !!chatInputRef.current,
-    isProcessingSymbols: state.keyDown.isProcessingSymbols,
     hasPendingHitlInterrupt: data.hasPendingHitlInterrupt,
     isActiveParticipantBroken: state.isActiveParticipantBroken,
     isActiveParticipantWithdrawn: state.isActiveParticipantWithdrawn,
@@ -325,6 +324,7 @@ const ChatBoxInner = memo(function ChatBox({
             projectId: projectIdString,
             onSelectUser: handleSelectUserMention,
             onSelectTool: handleSelectSkillTool,
+            onAddParticipant: entityParticipantActions.onSelectParticipant,
           })}
         />
         {contextIndicator}

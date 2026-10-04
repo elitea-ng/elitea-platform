@@ -9,13 +9,14 @@ import { server } from '@/test/setup';
 import { PrivateAgentsList } from './PrivateAgentsList';
 import { renderAgentsRoute } from './__tests__/testRouter';
 
-function applications(rows: { id: string; name: string; status: string; tags?: string[] }[]) {
+function applications(rows: { id: string; name: string; status: string; tags?: string[]; authors?: { id: string; name: string; email: string }[] }[]) {
   return {
     rows: rows.map((row) => ({
       id: row.id,
       name: row.name,
       status: row.status,
       tags: row.tags ?? [],
+      ...(row.authors === undefined ? {} : { authors: row.authors }),
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
       owner_id: 'user-1',
@@ -39,6 +40,25 @@ afterEach(() => {
 });
 
 describe('PrivateAgentsList', () => {
+  it('shows a deleted author as "Deleted user" with a placeholder avatar (#6702)', async () => {
+    server.use(
+      getListApplicationsMockHandler(
+        applications([
+          { id: '1', name: 'Orphaned App', status: 'draft', authors: [{ id: '31', name: '', email: '' }] },
+        ]),
+      ),
+    );
+    renderAgentsRoute(
+      <PrivateAgentsList statuses={undefined} cardContentType="all" />,
+      '/agents/all',
+      { projectId: 'proj-1' },
+    );
+
+    expect(await screen.findByText('Orphaned App')).toBeInTheDocument();
+    expect(await screen.findByTestId('entity-card-deleted-author-avatar')).toBeInTheDocument();
+    expect(screen.getByLabelText('Deleted user')).toBeInTheDocument();
+  });
+
   it('shows every row on the "All" tab (statuses=undefined)', async () => {
     server.use(
       getListApplicationsMockHandler(

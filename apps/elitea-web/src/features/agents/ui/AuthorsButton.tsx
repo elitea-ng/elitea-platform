@@ -1,9 +1,11 @@
 import { type ReactNode, useMemo } from 'react';
 
+import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined';
 import Avatar from '@mui/material/Avatar';
 import Tooltip from '@mui/material/Tooltip';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { authorDisplayName, isDeletedAuthor } from '@/entities/author';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 
 /**
@@ -75,8 +77,8 @@ export function dedupeAuthors(versions: readonly AuthorsButtonVersion[]): Author
 }
 
 /** First letter of `name`, upper-cased — MUI's documented monogram-avatar fallback shape. */
-export function authorInitial(name: string): string {
-  const trimmed = name.trim();
+export function authorInitial(name: string | undefined): string {
+  const trimmed = (name ?? '').trim();
   return trimmed === '' ? '?' : trimmed.charAt(0).toUpperCase();
 }
 
@@ -88,14 +90,16 @@ export function AuthorsButton({ versions, onSelectAuthor, sx }: AuthorsButtonPro
       {authors.map((author) => (
         <Tooltip
           key={`${author.id}-${author.name}`}
-          title={author.name}
+          title={authorDisplayName(author)}
           placement="top"
         >
           <Avatar
             onClick={onSelectAuthor ? () => onSelectAuthor(author) : undefined}
             sx={combineSx(avatarSx(Boolean(onSelectAuthor)), sx)}
           >
-            {authorInitial(author.name)}
+            {isDeletedAuthor(author)
+              ? <PersonOffOutlinedIcon fontSize="small" data-testid="deleted-author-avatar" />
+              : authorInitial(author.name)}
           </Avatar>
         </Tooltip>
       ))}

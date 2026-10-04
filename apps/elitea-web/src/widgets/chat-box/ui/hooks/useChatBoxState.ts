@@ -24,6 +24,8 @@ import type { VersionSummary } from '@/entities/version';
 import { chatInputCompositionHooks, mentionHooks } from '@/features/chat-input';
 import type { ChatInputHandle } from '@/features/chat-input';
 
+import { triggerQueryEnd } from './triggerQueryRange';
+
 /**
  * The substring a withdrawal stamps into the reverted clone's name. The
  * server's own marker — see `isActiveParticipantWithdrawn`.
@@ -147,6 +149,8 @@ export interface UseChatBoxStateResult {
   readonly onInputChange: (value: string) => void;
   /** Commits a picked "@" user mention into the input text (baseline: `onSelectUserMention`). */
   readonly onSelectUserMention: (user: ResolvedUserMention) => void;
+  /** Removes the typed "#query" from the input and closes the "#" picker (#6774). */
+  readonly clearHashQuery: () => void;
 }
 
 /** Closes participant recommendations once for each active-participant change. */
@@ -234,13 +238,23 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
   const onSelectUserMention = useCallback(
     (user: ResolvedUserMention) => {
       const anchor = keyDown.atAnchorRef.current;
-      if (chatInput.current && anchor !== null) {
-        chatInput.current.replaceRange(anchor, anchor + keyDown.atQuery.length, `@${user.name} `);
+      const input = chatInput.current;
+      if (input && anchor !== null) {
+        input.replaceRange(anchor, triggerQueryEnd(input.getInputContent(), anchor, '@', keyDown.atQuery), `@${user.name} `);
       }
       keyDown.stopProcessingAtSymbol();
     },
     [chatInput, keyDown],
   );
+
+  const clearHashQuery = useCallback(() => {
+    const anchor = keyDown.hashAnchorRef.current;
+    const input = chatInput.current;
+    if (input && anchor !== null) {
+      input.replaceRange(anchor, triggerQueryEnd(input.getInputContent(), anchor, '#', keyDown.query), '');
+    }
+    keyDown.stopProcessingSymbols();
+  }, [chatInput, keyDown]);
 
   // -- Computed: should show starters --
   const shouldShowStarters = useMemo(
@@ -358,5 +372,6 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     onNormalKeyDown,
     onInputChange,
     onSelectUserMention,
+    clearHashQuery,
   };
 }

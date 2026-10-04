@@ -550,6 +550,11 @@ impl Llm for EliteaOpenAiCompatibleModel {
                     "the model gateway transport is unavailable",
                 )
             })?;
+            if response.status() == StatusCode::PAYMENT_REQUIRED
+                && response.version() == Version::HTTP_2
+            {
+                return Err(budget_refusal(response, self.config.response_header_timeout).await);
+            }
             validate_response_head(&response)?;
             Ok(model_response_stream(
                 response,
@@ -1153,6 +1158,74 @@ fn build_http_request(
     authorization.set_sensitive(true);
     headers.insert(AUTHORIZATION, authorization);
     Ok(request)
+}
+
+/// The most of a 402 body the worker reads to learn the refusing budget.
+const MAX_BUDGET_REFUSAL_BYTES: usize = 4096;
+
+/// Classify a 402 budget refusal by the scope the gateway names (#6732).
+///
+/// The gateway's own gate writes
+/// `{"error":{"type":"budget_exceeded","code":...,"scope":"project"|"member"}}`
+/// (`budget_gate.go`). A provider's quota or billing refusal reaches the worker
+/// as the same type and `insufficient_quota` code, but with no `scope`, so only
+/// `scope` (or the gate-only member code) names a ceiling. Every other budget
+/// body keeps the unscoped refusal, which points at provider billing too.
+/// Only the scope leaves this function; the body itself is never logged or
+/// forwarded. A body that cannot be read in time, is larger than
+/// `MAX_BUDGET_REFUSAL_BYTES`, or does not have that shape keeps the unscoped
+/// refusal. Both facades (OpenAI-compatible and native Anthropic) call it.
+pub(super) async fn budget_refusal(response: Response<Body>, read_timeout: Duration) -> AdkError {
+    let body = http_body_util::Limited::new(response.into_body(), MAX_BUDGET_REFUSAL_BYTES);
+    let bytes = match timeout(read_timeout, body.collect()).await {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        _ => Bytes::new(),
+    };
+    budget_refusal_error(&bytes)
+}
+
+pub(super) fn budget_refusal_error(body: &[u8]) -> AdkError {
+    match budget_refusal_scope(body) {
+        Some(BudgetRefusalScope::Member) => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.member_budget_exhausted",
+            "the member model budget is exhausted",
+        ),
+        Some(BudgetRefusalScope::Project) => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.project_budget_exhausted",
+            "the project model budget is exhausted",
+        ),
+        None => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.budget_exhausted",
+            "the model budget is exhausted",
+        ),
+    }
+}
+
+enum BudgetRefusalScope {
+    Project,
+    Member,
+}
+
+fn budget_refusal_scope(body: &[u8]) -> Option<BudgetRefusalScope> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    if error.get("type")?.as_str()? != "budget_exceeded" {
+        return None;
+    }
+    match (
+        error.get("scope").and_then(serde_json::Value::as_str),
+        error.get("code").and_then(serde_json::Value::as_str),
+    ) {
+        (Some("member"), _) | (None, Some("member_budget_exceeded")) => {
+            Some(BudgetRefusalScope::Member)
+        }
+        (Some("project"), _) => Some(BudgetRefusalScope::Project),
+        // A provider's own quota refusal: no ceiling of this platform refused.
+        _ => None,
+    }
 }
 
 pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), AdkError> {

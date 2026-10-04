@@ -69,8 +69,10 @@ import { isRootContextFrame } from "../lib/chatStreamContextFrames";
 import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isTurnTerminalFrame } from "../lib/chatStreamTurnEnd";
+import { resetTurnForReplay } from "../lib/chatStreamReattach";
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
+import { usePendingReplay, useReattach } from "./usePendingReplay";
 import {
   nonEmptyString,
   useChatStreamRunStarters,
@@ -132,6 +134,10 @@ export function useChatStreamTransport(
    */
   const questionIdRef = useRef<string | undefined>(undefined);
 
+  /** The seeded message a reattach replays into, until its first frame (#6654). */
+  const pendingReplay = usePendingReplay();
+  const { take: takePendingReplay, clear: clearPendingReplay } = pendingReplay;
+
   /**
    * The connection's own `close`, held in a ref because the two sides need
    * each other: `useChatStreamConnection` is handed the frame handlers below,
@@ -157,8 +163,9 @@ export function useChatStreamTransport(
     ownerRef.current = undefined;
     cancelRef.current = null;
     questionIdRef.current = undefined;
+    clearPendingReplay();
     closeStreamRef.current();
-  }, []);
+  }, [clearPendingReplay]);
 
   const onNodeEvent = useCallback(
     (frame: ExecutionEventData) => {
@@ -174,8 +181,13 @@ export function useChatStreamTransport(
         ...frame,
         question_id: frameQuestionId ?? questionIdRef.current,
       };
+      const replayInto = takePendingReplay();
       setChatHistory((prev) =>
-        applyChatStreamFrame(prev, identifiedFrame, contextRef.current ?? {}),
+        applyChatStreamFrame(
+          replayInto === undefined ? prev : resetTurnForReplay(prev, replayInto),
+          identifiedFrame,
+          contextRef.current ?? {},
+        ),
       );
       // A terminal frame ENDS the turn, so the transport stops owning a run
       // right here — it does not wait for the connection to close, because
@@ -194,7 +206,7 @@ export function useChatStreamTransport(
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach, refreshContext],
+    [setChatHistory, detach, refreshContext, takePendingReplay],
   );
 
   /**
@@ -225,10 +237,20 @@ export function useChatStreamTransport(
       // assume a message exists to carry it; `recordStreamFailure` appends one
       // when nothing is in flight.
       refreshContext();
+      const replayInto = takePendingReplay();
+      if (replayInto !== undefined) setChatHistory((prev) => resetTurnForReplay(prev, replayInto));
       failWith(runtimeFailureReason(frame), typeof frame['code'] === 'string' ? frame['code'] : undefined);
     },
-    [failWith, refreshContext],
+    [failWith, refreshContext, setChatHistory, takePendingReplay],
   );
+
+  // A reattach that never opened (see PendingReplay.isArmed) is given up:
+  // drop ownership so the composer is released; the seeded row is untouched.
+  const onNeverOpened = useCallback((): boolean => {
+    if (!pendingReplay.isArmed()) return false;
+    detach();
+    return true;
+  }, [detach, pendingReplay]);
 
   const connection = useChatStreamConnection({
     onNodeEvent,
@@ -236,6 +258,7 @@ export function useChatStreamTransport(
     // A disconnected observer cannot declare the durable execution failed.
     // Retain ownership and Stop while the connection keeps retrying.
     onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
+    onNeverOpened,
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;
@@ -355,13 +378,16 @@ export function useChatStreamTransport(
     });
   }, [ownsRun]);
 
+  const reattach = useReattach(ownsRun, subscribeToRun, pendingReplay);
+
   return useMemo(
     () => ({
       ...starters,
       isStreaming,
       close: detach,
       stop,
+      reattach,
     }),
-    [starters, isStreaming, detach, stop],
+    [starters, isStreaming, detach, stop, reattach],
   );
 }

@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 
 import { conversationApi } from '@/entities/conversation';
 
-import { buildRegenerateBody, buildStartBody, resolveSendModelName, resolveStartContract, resolveTargetParticipant } from './useChatBoxSend.helpers';
+import { buildRegenerateBody, buildStartBody, resolveSendLlmSettings, resolveSendModelName, resolveStartContract, resolveTargetParticipant } from './useChatBoxSend.helpers';
 
 const agent = { id: 42, entity_name: 'application' };
 const pipeline = { id: 43, entity_name: 'pipeline' };
@@ -40,6 +40,38 @@ describe('resolveSendModelName', () => {
     expect(resolveSendModelName(undefined, 'default-model')).toBe('default-model');
     expect(resolveSendModelName({ model_name: '' }, 'default-model')).toBe('default-model');
     expect(resolveSendModelName({ model_name: 7 }, 'default-model')).toBe('default-model');
+  });
+});
+
+describe('resolveSendLlmSettings (UI-PD-2)', () => {
+  it('names the project of a default model shared from project 1', () => {
+    expect(resolveSendLlmSettings({ temperature: 0.6 }, { name: 'gpt-shared', projectId: '1' }))
+      .toStrictEqual({ temperature: 0.6, model_project_id: 1 });
+  });
+
+  it('keeps a configured model and its project unchanged', () => {
+    const settings = { model_name: 'mine', model_project_id: 77 };
+    expect(resolveSendLlmSettings(settings, { name: 'gpt-shared', projectId: '1' })).toBe(settings);
+  });
+
+  it('adds nothing when no default model is resolved', () => {
+    const settings = { temperature: 0.6 };
+    expect(resolveSendLlmSettings(settings, null)).toBe(settings);
+    expect(resolveSendLlmSettings(settings, { name: 'x' })).toBe(settings);
+    expect(resolveSendLlmSettings(undefined, { name: 'x', projectId: 'abc' })).toBeUndefined();
+  });
+
+  it('sends the picker project for a configured model saved with no project id', () => {
+    expect(resolveSendLlmSettings({ model_name: 'gpt-4o' }, null, 1))
+      .toStrictEqual({ model_name: 'gpt-4o', model_project_id: 1 });
+  });
+
+  it('never overrides a configured model project id', () => {
+    const settings = { model_name: 'gpt-4o', model_project_id: 3 };
+    expect(resolveSendLlmSettings(settings, null, 1)).toBe(settings);
+    const bare = { model_name: 'gpt-4o' };
+    expect(resolveSendLlmSettings(bare, null, undefined)).toBe(bare);
+    expect(resolveSendLlmSettings(bare, null, 0)).toBe(bare);
   });
 });
 

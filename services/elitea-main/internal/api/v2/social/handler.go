@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -150,7 +152,7 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
 		writeJSON(w, http.StatusOK, AuthorResponse{
 			ID:    user.ID,
-			Name:  user.Email,
+			Name:  principalDisplayName(user, ""),
 			Email: user.Email,
 		})
 		return
@@ -185,14 +187,28 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 		&summarization,
 	)
 
-	if err == nil {
+	switch {
+	case err == nil:
 		resp.DefaultContextManagement, resp.DefaultSummarization =
 			readMemoryDefaults(contextManagement, summarization, resp.Personalization)
-	} else {
-		// No social_users row: fall back to what the auth context knows. The
+	case errors.Is(err, pgx.ErrNoRows):
+		// No social_users row: fall back to the account itself. The
 		// personal project is resolved below either way — it does not depend
 		// on the social profile existing.
-		resp = AuthorResponse{Name: user.Email, Email: user.Email}
+		resp = AuthorResponse{Email: user.Email}
+	default:
+		// A failed read is not "no profile". Answering 200 with the defaults
+		// made the SPA treat empty personalization and memory settings as the
+		// user's stored ones for the whole session.
+		slog.ErrorContext(ctx, "social: read author profile", "err", err, "user_id", user.ID)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read the author profile")
+		return
+	}
+	if strings.TrimSpace(resp.Name) == "" {
+		// The account's own name before the email (UI-UX-1a). An account with
+		// no social profile yet used to be greeted as "Hello, <email>!" even
+		// though auth_core__user held the person's name.
+		resp.Name = principalDisplayName(user, h.accountName(ctx, user))
 	}
 
 	// The identity always comes from the authenticated principal, never from
@@ -211,6 +227,40 @@ func (h *Handler) GetAuthor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// accountName reads auth_core__user.name for the caller's own account, or ""
+// when it has none or the read fails. Keyed on the owning user id, never on the
+// email, for the same reason the provider references are.
+func (h *Handler) accountName(ctx context.Context, user auth.User) string {
+	id, ok := user.OwningUserID()
+	if !ok {
+		return ""
+	}
+	var name string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT COALESCE(name, '') FROM auth_core__user WHERE id = $1`, id,
+	).Scan(&name); err != nil {
+		// Only a display name rides on this read, and the principal's own
+		// name or email is a correct fallback. A real failure is still
+		// logged rather than read as "the account has no name".
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.WarnContext(ctx, "social: read account name", "err", err, "user_id", id)
+		}
+		return ""
+	}
+	return strings.TrimSpace(name)
+}
+
+// principalDisplayName is the first non-blank of the account's stored name,
+// the authenticated principal's name and its email.
+func principalDisplayName(user auth.User, accountName string) string {
+	for _, candidate := range []string{accountName, user.Name} {
+		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+			return trimmed
+		}
+	}
+	return user.Email
 }
 
 // startedEnsurer is the completion-aware half of *personalproject.Ensurer,

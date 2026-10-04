@@ -54,6 +54,7 @@ from elitea_worker.constants import (
     TOOLKIT_CALL_TOOL_CAPABILITY_VERSION,
 )
 from elitea_worker.execution.errors import (
+    BUDGET_EXHAUSTED_MESSAGES,
     AuthorizationFailure,
     IncompatibleVersion,
     InvalidInput,
@@ -503,6 +504,7 @@ _ERROR_CODES = {
     "INCOMPATIBLE_VERSION": errors_pb2.RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION,
     "INVALID_INPUT": errors_pb2.RUNTIME_ERROR_CODE_V1_INVALID_INPUT,
     "RESOURCE_EXHAUSTED": errors_pb2.RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED,
+    "MODEL_BUDGET_EXHAUSTED": errors_pb2.RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED,
     "DEPENDENCY_UNAVAILABLE": errors_pb2.RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE,
     "DEADLINE_EXCEEDED": errors_pb2.RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED,
     "AUTHORIZATION_FAILED": errors_pb2.RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED,
@@ -515,6 +517,10 @@ _SAFE_RUNTIME_ERRORS: dict[str, tuple[str, bool]] = {
     "INCOMPATIBLE_VERSION": ("The requested contract version is not compatible.", False),
     "INVALID_INPUT": ("The execution input is invalid.", False),
     "RESOURCE_EXHAUSTED": ("The execution exceeded an approved resource limit.", False),
+    "MODEL_BUDGET_EXHAUSTED": (
+        "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.",
+        False,
+    ),
     "DEPENDENCY_UNAVAILABLE": ("A required runtime dependency is unavailable.", True),
     "DEADLINE_EXCEEDED": ("The execution deadline was exceeded.", True),
     "AUTHORIZATION_FAILED": ("Execution authorization failed.", False),
@@ -524,6 +530,14 @@ _SAFE_RUNTIME_ERRORS: dict[str, tuple[str, bool]] = {
 
 
 def _runtime_error_message(error: WorkerError) -> errors_pb2.RuntimeErrorV1:
+    if error.code == "MODEL_BUDGET_EXHAUSTED" and error.safe_message in BUDGET_EXHAUSTED_MESSAGES:
+        # The one code with more than one registered message: the scope that
+        # refused the call (#6732). Any other text falls back to INTERNAL.
+        return errors_pb2.RuntimeErrorV1(
+            code=errors_pb2.RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED,
+            safe_message=error.safe_message,
+            retryable=False,
+        )
     safe_message, retryable = _SAFE_RUNTIME_ERRORS.get(
         error.code,
         ("The runtime operation failed.", False),
