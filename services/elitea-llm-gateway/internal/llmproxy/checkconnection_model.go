@@ -20,6 +20,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // checkconnection_model.go is the MODEL half of POST /llm/v1/check_connection
@@ -522,23 +524,47 @@ func probeAzureChatCompletion(ctx context.Context, client *http.Client, req chec
 		apiKeyHeader(req.APIKey), body, first, second, "choices")
 }
 
-// probeDialCompletion sends a DIAL model probe to DIAL's Azure-compatible
-// deployment route. That is the route the runtime dispatches every ai_dial
-// credential on (account/credentials.go maps ai_dial to Bifrost's Azure
-// provider). The llm_model has no API protocol field yet, so the probe has no
-// other route to choose. The per-model DIAL protocol must add its routes to
-// the runtime and to this probe together. The probe sends max_tokens, because
-// DIAL forwards the request to adapters that predate max_completion_tokens,
-// and it falls back to max_completion_tokens when a model refuses max_tokens.
-// DIAL authenticates with the api-key header.
+// probeDialCompletion sends a DIAL model probe to the route the runtime sends
+// the same model to (legacy issue #6707). account.DialRouteFor decides the
+// route for both, from the model's dial_protocol and its name:
+//
+//   - deployment: {api_base}/openai/deployments/{model}/chat/completions with
+//     the api-version and the api-key header. It sends max_tokens, because
+//     DIAL forwards the request to adapters that predate
+//     max_completion_tokens, and it falls back to max_completion_tokens when a
+//     model refuses max_tokens.
+//   - responses (the openai protocol): {api_base}/openai/v1/responses with the
+//     api-key header and no api-version. DIAL answers 503 there for a model
+//     that is not gpt, so the probe reports that model as failing, as a chat
+//     would.
+//   - messages (the anthropic protocol, or a Claude name on the default):
+//     {api_base}/anthropic/v1/messages with the x-api-key header and no
+//     api-version.
+//
+// An unknown protocol value is read as the default, as the runtime reads it.
 func probeDialCompletion(ctx context.Context, client *http.Client, req checkConnectionRequest) error {
-	apiVersion := strings.TrimSpace(req.APIVersion)
-	if apiVersion == "" {
-		apiVersion = defaultAzureAPIVersion
+	protocol, _ := account.ParseDialProtocol(req.DialProtocol)
+	messages := []map[string]string{{"role": "user", "content": checkModelPrompt}}
+	base := strings.TrimRight(strings.TrimSpace(req.APIBase), "/")
+	switch account.DialRouteFor(protocol, req.Model) {
+	case account.DialRouteResponses:
+		headers := apiKeyHeader(req.APIKey)
+		// 16 is the smallest max_output_tokens the Responses API accepts.
+		body := map[string]any{"model": req.Model, "input": checkModelPrompt, "max_output_tokens": 16}
+		return modelProbePOST(ctx, client, base+"/openai/v1/responses", headers, body, "output")
+	case account.DialRouteMessages:
+		headers := map[string]string{"anthropic-version": anthropicAPIVersion}
+		if req.APIKey != "" {
+			headers["x-api-key"] = req.APIKey
+		}
+		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
+		return modelProbePOST(ctx, client, base+"/anthropic/v1/messages", headers, body, "content")
+	default:
+		body := map[string]any{"messages": messages}
+		return postCompletionWithTokenField(ctx, client,
+			account.DialDeploymentURL(req.APIBase, req.Model, "chat/completions", req.APIVersion),
+			apiKeyHeader(req.APIKey), body, "max_tokens", "max_completion_tokens", "choices")
 	}
-	body := map[string]any{"messages": []map[string]string{{"role": "user", "content": checkModelPrompt}}}
-	return postCompletionWithTokenField(ctx, client, azureDeploymentCompletionURL(req.APIBase, req.Model, apiVersion),
-		apiKeyHeader(req.APIKey), body, "max_tokens", "max_completion_tokens", "choices")
 }
 
 // probeOllamaChat sends Ollama's native POST {api_base}/api/chat with a

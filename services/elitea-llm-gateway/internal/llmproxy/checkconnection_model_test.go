@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 // fakeModelProvider stands in for a provider's completion route. It records
@@ -301,7 +303,7 @@ func TestProbeDialCompletion_UsesTheRuntimeAzureRoute(t *testing.T) {
 		t.Fatalf("probe: %v", err)
 	}
 	path, query, headers, request := fp.last()
-	if path != "/openai/deployments/m/chat/completions" || query != "api-version="+defaultAzureAPIVersion {
+	if path != "/openai/deployments/m/chat/completions" || query != "api-version="+account.DialDefaultAPIVersion {
 		t.Fatalf("route = %q?%q, want the deployment route", path, query)
 	}
 	if headers.Get("api-key") != "dial-key" || headers.Get("anthropic-version") != "" {
@@ -309,6 +311,91 @@ func TestProbeDialCompletion_UsesTheRuntimeAzureRoute(t *testing.T) {
 	}
 	if request["max_tokens"] != float64(1) {
 		t.Fatalf("request = %v, want max_tokens", request)
+	}
+}
+
+// TestProbeDialCompletion_FollowsTheModelProtocol pins the probe to the route
+// the runtime dispatches for each DIAL protocol (account.DialRouteFor). A
+// probe that always used the deployment route reported "Connected" for an
+// openai-protocol Gemini model whose real chat DIAL refuses with 503.
+func TestProbeDialCompletion_FollowsTheModelProtocol(t *testing.T) {
+	const responsesBody = `{"id":"resp_1","object":"response","status":"completed","output":[]}`
+	const messagesBody = `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"p"}]}`
+	for _, tc := range []struct {
+		name, protocol, model, body string
+		wantPath, wantQuery         string
+		wantHeader, wantNoHeader    string
+	}{
+		{name: "default gpt", protocol: "", model: "gpt-4o", body: openAICompletionBody,
+			wantPath: "/openai/deployments/gpt-4o/chat/completions", wantQuery: "api-version=2024-02-01",
+			wantHeader: "api-key", wantNoHeader: "x-api-key"},
+		{name: "azure gemini", protocol: "azure", model: "gemini-2.5-pro", body: openAICompletionBody,
+			wantPath: "/openai/deployments/gemini-2.5-pro/chat/completions", wantQuery: "api-version=2024-02-01",
+			wantHeader: "api-key", wantNoHeader: "x-api-key"},
+		{name: "default claude", protocol: "", model: "claude-sonnet-4-5", body: messagesBody,
+			wantPath: "/anthropic/v1/messages", wantHeader: "x-api-key", wantNoHeader: "api-key"},
+		{name: "openai", protocol: "openai", model: "gpt-5", body: responsesBody,
+			wantPath: "/openai/v1/responses", wantHeader: "api-key", wantNoHeader: "x-api-key"},
+		{name: "anthropic", protocol: "anthropic", model: "dial-sonnet", body: messagesBody,
+			wantPath: "/anthropic/v1/messages", wantHeader: "x-api-key", wantNoHeader: "api-key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := newFakeModelProvider(http.StatusOK, tc.body)
+			defer fp.Close()
+			err := probeDialCompletion(context.Background(), fp.Client(), checkConnectionRequest{
+				Type: "ai_dial", APIBase: fp.URL + "/", APIKey: "dial-key", APIVersion: "2024-02-01",
+				Model: tc.model, DialProtocol: tc.protocol,
+			})
+			if err != nil {
+				t.Fatalf("probe: %v", err)
+			}
+			path, query, headers, request := fp.last()
+			if path != tc.wantPath || query != tc.wantQuery {
+				t.Fatalf("route = %q?%q, want %q?%q", path, query, tc.wantPath, tc.wantQuery)
+			}
+			if headers.Get(tc.wantHeader) != "dial-key" || headers.Get(tc.wantNoHeader) != "" {
+				t.Fatalf("headers = %v, want the key in %s only", headers, tc.wantHeader)
+			}
+			if tc.wantPath == "/anthropic/v1/messages" && headers.Get("anthropic-version") == "" {
+				t.Error("the Messages probe sent no anthropic-version")
+			}
+			if tc.wantPath != "/openai/deployments/"+tc.model+"/chat/completions" && request["model"] != tc.model {
+				t.Errorf("request model = %v, want %q in the body", request["model"], tc.model)
+			}
+		})
+	}
+}
+
+// TestProbeDialCompletion_ReportsTheProtocolRouteFailure is the case the
+// finding names: DIAL serves the deployment route for a Gemini model, and
+// answers 503 on /openai/v1/responses. The probe must fail like the chat.
+func TestProbeDialCompletion_ReportsTheProtocolRouteFailure(t *testing.T) {
+	fp := newFakeModelProvider(http.StatusServiceUnavailable,
+		`{"error":{"message":"OpenAI responses not supported for this deployment type"}}`)
+	defer fp.Close()
+	err := probeDialCompletion(context.Background(), fp.Client(), checkConnectionRequest{
+		Type: "ai_dial", APIBase: fp.URL, APIKey: "dial-key", Model: "gemini-2.5-pro", DialProtocol: "openai",
+	})
+	if err == nil {
+		t.Fatal("the probe reported success for a route that answered 503")
+	}
+	if path, _, _, _ := fp.last(); path != "/openai/v1/responses" {
+		t.Fatalf("path = %q, want the runtime's Responses route", path)
+	}
+}
+
+// TestCheckConnectionRequest_CarriesTheDialProtocol pins the wire field name
+// elitea-main sends.
+func TestCheckConnectionRequest_CarriesTheDialProtocol(t *testing.T) {
+	var req checkConnectionRequest
+	if err := json.Unmarshal([]byte(`{"type":"ai_dial","model":"m","dial_protocol":"anthropic"}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.DialProtocol != "anthropic" {
+		t.Fatalf("DialProtocol = %q, want anthropic", req.DialProtocol)
+	}
+	if account.DialRouteFor(account.DialProtocol(req.DialProtocol), req.Model) != account.DialRouteMessages {
+		t.Fatal("the decoded protocol does not select the Messages route")
 	}
 }
 

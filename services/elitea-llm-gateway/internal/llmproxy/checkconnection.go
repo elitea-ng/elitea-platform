@@ -116,6 +116,11 @@ type checkConnectionRequest struct {
 	// speaks the Anthropic dialect to /v1/messages, so the model probe does
 	// too. The credential probe and every other type ignore it.
 	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints,omitempty"`
+	// DialProtocol is the llm_model's data.dial_protocol (legacy issue #6707,
+	// account/dial_protocol.go). The ai_dial MODEL probe sends the request to
+	// the route this protocol selects, which is the route the runtime uses.
+	// The credential probe and every other type ignore it.
+	DialProtocol string `json:"dial_protocol,omitempty"`
 }
 
 // jsonTextField decodes a field that arrives either as a JSON string or as a
@@ -315,7 +320,8 @@ var checkConnectionProviders = map[string]checkConnectionProvider{
 	// The per-model DIAL protocol (legacy issue #6707, account/dial_protocol.go)
 	// does NOT change this probe. The protocol is a field of the MODEL, and a
 	// credential test has no model. GET /openai/deployments validates the key
-	// itself, so it stays the ai_dial probe for every protocol.
+	// itself, so it stays the ai_dial probe for every protocol. The MODEL
+	// probe (probeDialCompletion) does follow the protocol.
 	"azure_open_ai": {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	"ai_dial":       {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	// open_ai_azure is the third name providerConfigTypes maps to schemas.Azure
