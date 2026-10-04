@@ -31,6 +31,15 @@
 #                and its SSE stream can be driven (#93). It creates the
 #                embedding model row only when no row exists yet, so it can
 #                never overwrite the name seed-llm wrote (#468)
+#   seed-native  NATIVE-CLIENT CONFORMANCE CONVENIENCE (ADR-0025 WP7), not
+#                required for a working stack: gives the chat persona
+#                (NATIVE_CONFORMANCE_USER, default e2e-chat@autotest.local) the
+#                notification update grant inside its personal project and
+#                one fresh unseen notification there, so the suite's
+#                notification delta has a row to change. It registers no
+#                native client: the suite does that itself through the admin
+#                API, after it has proved the "no client, no endpoints" leg.
+#                deploy/scripts/native-conformance.sh calls it
 #   check        verify the gateway mTLS hop, the runtime plane and the chat
 #                critical path (delegates the last to chat-smoke.py), plus the
 #                embedding path (embedding-path-check.sh) and a REAL elitea-sdk
@@ -1292,6 +1301,52 @@ SQL
     echo "   Measured separately, and working: POST /llm/v1/embeddings answers"
     echo "   200 with a 1536-wide vector from the offline mock, so the embedding"
     echo "   hop itself is NOT the blocker."
+    ;;
+
+  seed-native)
+    # The chat persona's personal project (90100 + its user id, the E2E seed's
+    # rule) carries HAND-LISTED grants, not the central corpus (see the seed's
+    # comment on why: shared/0090's backfill skips any pair a project already
+    # overrides). The list grants the notification LIST but not the UPDATE a
+    # client needs to mark one seen, so the grant is added here, beside the
+    # list, rather than widening the E2E seed every journey shares.
+    #
+    # The notification is inserted per run: the suite marks it seen, so a
+    # re-run against the same stack needs a fresh unseen row. Fails loudly
+    # when the persona or its personal project is missing — a suite that
+    # found no row would otherwise report the seed's absence as a product
+    # defect (memory absence-reads-as-correctness).
+    NATIVE_USER="${NATIVE_CONFORMANCE_USER:-e2e-chat@autotest.local}"
+    echo "→ Seeding the native-client conformance fixtures for ${NATIVE_USER}…"
+    # The persona travels as a psql variable (:'native_user' quotes it as a
+    # literal), never spliced into the SQL text by the shell.
+    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+      psql -v ON_ERROR_STOP=1 -v native_user="$NATIVE_USER" -U elitea -d elitea <<'SQL'
+SELECT set_config('native.user', :'native_user', false);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+      SELECT 1 FROM public.auth_core__user u
+      JOIN centry.project p ON p.id = 90100 + u.id
+      JOIN public.auth_core__project_role r ON r.project_id = p.id AND r.name = 'admin'
+      WHERE u.email = current_setting('native.user')) THEN
+    RAISE EXCEPTION 'seed-native: % has no personal project 90100+id with an admin role; run seed first',
+      current_setting('native.user');
+  END IF;
+END $$;
+INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
+SELECT r.project_id, r.id, 'models.notifications.notification.update'
+FROM public.auth_core__user u
+JOIN public.auth_core__project_role r ON r.project_id = 90100 + u.id AND r.name = 'admin'
+WHERE u.email = current_setting('native.user')
+ON CONFLICT DO NOTHING;
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
+SELECT gen_random_uuid(), false, 90100 + u.id, u.id,
+       jsonb_build_object('source', 'native-conformance', 'seeded_at', now()),
+       'native_conformance'
+FROM public.auth_core__user u
+WHERE u.email = current_setting('native.user');
+SQL
     ;;
 
   check)

@@ -1,6 +1,7 @@
 go 1.25.8
 
 use (
+	./conformance/nativeclient
 	./gen/go
 	./libs/go/authlib
 	./libs/go/egresslib
