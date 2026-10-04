@@ -84,6 +84,8 @@ import type {
   SupportConversationList,
   SupportPredictRequest,
   SupportPredictResponse,
+  SyncCursorExpiredResponse,
+  SyncCursorInvalidResponse,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -1874,6 +1876,11 @@ export type listConversationsResponse200 = {
   status: 200;
 };
 
+export type listConversationsResponse400 = {
+  data: SyncCursorInvalidResponse;
+  status: 400;
+};
+
 export type listConversationsResponse401 = {
   data: N401Response;
   status: 401;
@@ -1882,6 +1889,11 @@ export type listConversationsResponse401 = {
 export type listConversationsResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type listConversationsResponse410 = {
+  data: SyncCursorExpiredResponse;
+  status: 410;
 };
 
 export type listConversationsResponse500 = {
@@ -1893,8 +1905,10 @@ export type listConversationsResponseSuccess = listConversationsResponse200 & {
   headers: Headers;
 };
 export type listConversationsResponseError = (
+  | listConversationsResponse400
   | listConversationsResponse401
   | listConversationsResponse403
+  | listConversationsResponse410
   | listConversationsResponse500
 ) & {
   headers: Headers;
@@ -1966,7 +1980,12 @@ export const getListConversationsQueryKey = (
 
 export const getListConversationsQueryOptions = <
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorInvalidResponse
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2007,11 +2026,20 @@ export type ListConversationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listConversations>>
 >;
 export type ListConversationsQueryError =
-  N401Response | N403Response | N500Response;
+  | SyncCursorInvalidResponse
+  | N401Response
+  | N403Response
+  | SyncCursorExpiredResponse
+  | N500Response;
 
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorInvalidResponse
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | N500Response,
 >(
   projectId: string,
   params: undefined | ListConversationsParams,
@@ -2039,7 +2067,12 @@ export function useListConversations<
 };
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorInvalidResponse
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2067,7 +2100,12 @@ export function useListConversations<
 };
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorInvalidResponse
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2091,7 +2129,12 @@ export function useListConversations<
 
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorInvalidResponse
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,

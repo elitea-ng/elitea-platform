@@ -51,6 +51,12 @@ type Config struct {
 	AuditRetentionInterval   time.Duration
 	AuditRetentionBatchSize  int
 	AuditRetentionMaxBatches int
+
+	// SyncTombstoneRetentionDays is how long the incremental-sync tombstones
+	// (ADR-0025 WP6) are kept. It can only be RAISED above
+	// syncretention.MinimumRetentionDays (97), the window elitea-main still
+	// serves a cursor for; a lower value is raised with a warning.
+	SyncTombstoneRetentionDays int
 }
 
 // FromEnv reads configuration from environment variables.
@@ -92,6 +98,8 @@ func FromEnv() Config {
 		AuditRetentionInterval:   durationEnv("AUDIT_RETENTION_INTERVAL", time.Hour),
 		AuditRetentionBatchSize:  intEnv("AUDIT_RETENTION_BATCH_SIZE", 1000),
 		AuditRetentionMaxBatches: intEnv("AUDIT_RETENTION_MAX_BATCHES", 50),
+
+		SyncTombstoneRetentionDays: intEnv("SYNC_TOMBSTONE_RETENTION_DAYS", 97),
 	}
 }
 

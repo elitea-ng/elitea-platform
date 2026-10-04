@@ -316,6 +316,26 @@ export const getListConversationsResponseMock = (
       undefined,
     ]),
   })),
+  tombstones: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.number.int(),
+      uuid: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      reason: faker.helpers.arrayElement(["deleted", "access_lost"] as const),
+      deleted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    })),
+    undefined,
+  ]),
+  next_cursor: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  has_more: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
   ...overrideResponse,
 });
 

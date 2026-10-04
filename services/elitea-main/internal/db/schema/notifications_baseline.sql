@@ -15,5 +15,18 @@ CREATE TABLE centry.notifications (
     meta jsonb NOT NULL,
     event_type varchar NOT NULL,
     created_at timestamp NOT NULL DEFAULT now(),
-    updated_at timestamp
+    updated_at timestamp,
+    -- shared/0144_notification_sync.sql: the trigger-maintained change stamp
+    -- the `changes_since` delta reads (ADR-0025 WP6). Never on the wire.
+    sync_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+-- shared/0144_notification_sync.sql: one row per deleted notification,
+-- written by an AFTER DELETE trigger.
+CREATE TABLE centry.notification_tombstones (
+    id bigserial PRIMARY KEY,
+    notification_id integer NOT NULL,
+    notification_uuid uuid,
+    user_id integer NOT NULL,
+    deleted_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );

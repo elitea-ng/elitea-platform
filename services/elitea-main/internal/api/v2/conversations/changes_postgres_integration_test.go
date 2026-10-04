@@ -1,0 +1,325 @@
+package conversations
+
+// The conversation-list delta (`changes_since`, ADR-0025 WP6) through the real
+// List handler, against chat tables built by the tenant migrations themselves
+// (0123, which declares them, and 0142, which installs the sync triggers) in a
+// private database. What is under test is per-caller: which rows and which
+// tombstones a given user is told about.
+//
+// Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sort"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+)
+
+func newChangesPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := newListFiltersPool(t) // private database with a hand-cut p_1
+	ctx := context.Background()
+	// Replace the hand-cut tables with the corpus's own declarations.
+	if _, err := pool.Exec(ctx, `DROP SCHEMA p_1 CASCADE; CREATE SCHEMA p_1`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"tenant/0123_agent_chat_message_tables.sql", "tenant/0142_chat_sync.sql"} {
+		sql, err := platformmigrations.Files.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('search_path', 'p_1', true)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, string(sql)); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("apply %s: %v", path, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return pool
+}
+
+// seedChat creates a conversation authored by `author` with each of `users` as
+// a user participant, and returns its id.
+func seedChat(t *testing.T, pool *pgxpool.Pool, name string, private bool, author int, users ...int) int {
+	t.Helper()
+	ctx := context.Background()
+	var id int
+	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_conversations (name, is_private, author_id)
+		VALUES ($1, $2, $3) RETURNING id`, name, private, author).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if _, err := pool.Exec(ctx, `WITH participant AS (
+			INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
+			VALUES (gen_random_uuid(), 'user', jsonb_build_object('id', $1::integer)) RETURNING id)
+			INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
+			SELECT $2, id FROM participant`, user, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+// deleteChat deletes a conversation the way ConversationsRepo.Delete does:
+// mappings first, under the sync cascade, in one transaction.
+func deleteChat(t *testing.T, pool *pgxpool.Pool, id int) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, statement := range []string{
+		`SELECT set_config('elitea.sync_cascade', 'conversation', true)`,
+		`DELETE FROM p_1.chat_participant_mapping WHERE conversation_id = $1`,
+		`DELETE FROM p_1.chat_message_group WHERE conversation_id = $1`,
+		`DELETE FROM p_1.chat_conversations WHERE id = $1`,
+	} {
+		args := []any{id}
+		if statement[0] == 'S' {
+			args = nil
+		}
+		if _, err := tx.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type changesPage struct {
+	Total      int                    `json:"total"`
+	Rows       []map[string]any       `json:"rows"`
+	Tombstones []changesync.Tombstone `json:"tombstones"`
+	NextCursor string                 `json:"next_cursor"`
+	HasMore    bool                   `json:"has_more"`
+}
+
+func listRaw(t *testing.T, pool *pgxpool.Pool, query url.Values, caller string) (int, []byte) {
+	t.Helper()
+	handler := NewHandler(nil).WithPool(pool)
+	router := chi.NewRouter()
+	router.Get("/{projectID}", handler.List)
+	request := httptest.NewRequest(http.MethodGet, "/1?"+query.Encode(), nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{UserID: caller}))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder.Code, recorder.Body.Bytes()
+}
+
+func listChanges(t *testing.T, pool *pgxpool.Pool, cursor string, caller string, extra url.Values) changesPage {
+	t.Helper()
+	query := url.Values{"changes_since": {cursor}}
+	for key, values := range extra {
+		query[key] = values
+	}
+	code, body := listRaw(t, pool, query, caller)
+	if code != http.StatusOK {
+		t.Fatalf("delta answered %d: %s", code, body)
+	}
+	var page changesPage
+	if err := json.Unmarshal(body, &page); err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
+func rowIDs(page changesPage) []int {
+	ids := []int{}
+	for _, row := range page.Rows {
+		ids = append(ids, int(row["id"].(float64)))
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+func tombstonesByID(page changesPage) map[int64]string {
+	reasons := map[int64]string{}
+	for _, tomb := range page.Tombstones {
+		reasons[tomb.ID] = tomb.Reason
+	}
+	return reasons
+}
+
+func TestConversationDeltaLegacyResponseIsUnchanged(t *testing.T) {
+	pool := newChangesPool(t)
+	seedChat(t, pool, "mine", true, 7, 7)
+	code, body := listRaw(t, pool, url.Values{}, "7")
+	if code != http.StatusOK {
+		t.Fatalf("legacy list answered %d", code)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys["total"] == nil || keys["rows"] == nil {
+		t.Fatalf("legacy envelope keys changed: %s", body)
+	}
+	var rows []map[string]json.RawMessage
+	_ = json.Unmarshal(keys["rows"], &rows)
+	if len(rows) != 1 || len(rows[0]) != 7 || rows[0]["sync_at"] != nil {
+		t.Fatalf("legacy row shape changed: %s", body)
+	}
+}
+
+func TestConversationDeltaVisibilityParityAndPaging(t *testing.T) {
+	pool := newChangesPool(t)
+	ids := []int{
+		seedChat(t, pool, "public", false, 8, 8),
+		seedChat(t, pool, "mine", true, 7, 7),
+		seedChat(t, pool, "theirs private", true, 8, 8),
+		seedChat(t, pool, "shared with me", true, 8, 8, 7),
+	}
+	// Settle every row so a one-row page can walk them.
+	if _, err := pool.Exec(context.Background(), `SET session_replication_role = replica;
+		UPDATE p_1.chat_conversations SET sync_at = clock_timestamp() - interval '1 hour' * (10 - id);
+		RESET session_replication_role`); err != nil {
+		t.Fatal(err)
+	}
+
+	var all []int
+	cursor := ""
+	for i := 0; i < 10; i++ {
+		page := listChanges(t, pool, cursor, "7", url.Values{"limit": {"1"}})
+		all = append(all, rowIDs(page)...)
+		cursor = page.NextCursor
+		if page.Total != 3 {
+			t.Fatalf("total = %d, want the 3 conversations user 7 can list", page.Total)
+		}
+		if !page.HasMore {
+			break
+		}
+	}
+	sort.Ints(all)
+	want := []int{ids[0], ids[1], ids[3]}
+	if fmt.Sprint(all) != fmt.Sprint(want) {
+		t.Fatalf("paged delta = %v, want %v (never the private conversation user 7 is not in)", all, want)
+	}
+
+	// Every delta row is also in the legacy list for the same caller.
+	code, body := listRaw(t, pool, url.Values{"limit": {"100"}}, "7")
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	var legacy changesPage
+	_ = json.Unmarshal(body, &legacy)
+	if fmt.Sprint(rowIDs(legacy)) != fmt.Sprint(want) {
+		t.Fatalf("legacy list %v and delta %v disagree", rowIDs(legacy), want)
+	}
+}
+
+func TestConversationDeltaTombstonesArePerCaller(t *testing.T) {
+	pool := newChangesPool(t)
+	public := seedChat(t, pool, "public", false, 8, 8)
+	private := seedChat(t, pool, "private", true, 8, 8, 9)
+	turnedPrivate := seedChat(t, pool, "turned private", false, 8, 8)
+	hidden := seedChat(t, pool, "to hide", true, 7, 7)
+	leftBy9 := seedChat(t, pool, "nine leaves", true, 8, 8, 9)
+
+	start7 := listChanges(t, pool, "", "7", nil).NextCursor
+	start9 := listChanges(t, pool, "", "9", nil).NextCursor
+	startHiddenOnly := listChanges(t, pool, "", "7", url.Values{"hidden": {"only"}}).NextCursor
+
+	deleteChat(t, pool, public)
+	deleteChat(t, pool, private)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET is_private = true WHERE id = $1`, turnedPrivate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET meta = '{"is_hidden": true}' WHERE id = $1`, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM p_1.chat_participant_mapping m USING p_1.chat_participants p
+		WHERE m.participant_id = p.id AND m.conversation_id = $1 AND p.entity_meta->>'id' = '9'`, leftBy9); err != nil {
+		t.Fatal(err)
+	}
+
+	got7 := tombstonesByID(listChanges(t, pool, start7, "7", nil))
+	want7 := map[int64]string{
+		int64(public):        changesync.ReasonDeleted,
+		int64(turnedPrivate): changesync.ReasonAccessLost,
+		int64(hidden):        changesync.ReasonAccessLost,
+	}
+	if fmt.Sprint(got7) != fmt.Sprint(want7) {
+		t.Fatalf("user 7 tombstones = %v, want %v (no word of the private conversation it was never in)", got7, want7)
+	}
+
+	page9 := listChanges(t, pool, start9, "9", nil)
+	got9 := tombstonesByID(page9)
+	want9 := map[int64]string{
+		int64(public):        changesync.ReasonDeleted,
+		int64(private):       changesync.ReasonDeleted,
+		int64(turnedPrivate): changesync.ReasonAccessLost,
+		int64(leftBy9):       changesync.ReasonAccessLost,
+	}
+	if fmt.Sprint(got9) != fmt.Sprint(want9) {
+		t.Fatalf("user 9 tombstones = %v, want %v", got9, want9)
+	}
+
+	// The author of the conversation turned private still sees it as a row,
+	// and a conversation that left the default list entered `hidden=only`.
+	onlyHidden := listChanges(t, pool, startHiddenOnly, "7", url.Values{"hidden": {"only"}})
+	if ids := rowIDs(onlyHidden); fmt.Sprint(ids) != fmt.Sprint([]int{hidden}) {
+		t.Fatalf("hidden=only delta rows = %v, want the newly hidden conversation", ids)
+	}
+	author := listChanges(t, pool, "", "8", nil)
+	found := false
+	for _, id := range rowIDs(author) {
+		found = found || id == turnedPrivate
+	}
+	if !found || tombstonesByID(author)[int64(turnedPrivate)] != "" {
+		t.Fatalf("the author of the private conversation must keep it as a row: %+v", author)
+	}
+}
+
+func TestConversationDeltaRefusesForeignAndExpiredCursors(t *testing.T) {
+	pool := newChangesPool(t)
+	seedChat(t, pool, "mine", true, 7, 7)
+	page := listChanges(t, pool, "", "7", nil)
+
+	code, body := listRaw(t, pool, url.Values{"changes_since": {page.NextCursor}, "hidden": {"only"}}, "7")
+	if code != http.StatusBadRequest || !jsonHasError(body, changesync.CodeInvalidCursor) {
+		t.Fatalf("a cursor under another filter answered %d %s, want 400 invalid_sync_cursor", code, body)
+	}
+
+	var now time.Time
+	if err := pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	expired := changesync.Encode(changesync.Cursor{
+		Stream: changesync.StreamConversations,
+		Scope:  "1/" + changesync.FilterDigest(url.Values{}, conversationFilterParams...),
+		Tombs:  changesync.Position{At: now.Add(-changesync.TombstoneRetention - time.Minute)},
+	})
+	code, body = listRaw(t, pool, url.Values{"changes_since": {expired}}, "7")
+	if code != http.StatusGone || !jsonHasError(body, changesync.CodeCursorExpired) {
+		t.Fatalf("a back-dated cursor answered %d %s, want 410 sync_cursor_expired", code, body)
+	}
+}
+
+func jsonHasError(body []byte, code string) bool {
+	var payload changesync.ErrorBody
+	return json.Unmarshal(body, &payload) == nil && payload.Error == code
+}

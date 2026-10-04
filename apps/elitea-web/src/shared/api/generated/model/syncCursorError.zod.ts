@@ -41,25 +41,14 @@
  */
 import * as zod from "zod";
 
-export const listConversationsParamsLimitDefault = 10;
-export const listConversationsParamsLimitMax = 100;
+export const SyncCursorError = zod
+  .object({
+    error: zod.string(),
+    message: zod.string(),
+  })
+  .describe(
+    "A refused `changes_since` request (ADR-0025 WP6). `error` is `invalid_sync_cursor` (400: the cursor does not decode, or was issued for another list, scope or filter), `invalid_limit` (400) or `sync_cursor_expired` (410: the cursor is older than the tombstone retention, 97 days; resync with `changes_since=0`). NOTE(W2): internal/application/changesync/changesync.go (`ErrorBody`).\n",
+  );
 
-export const listConversationsParamsOffsetDefault = 0;
-export const ListConversationsParams = zod.object({
-  source: zod.string().optional(),
-  entity_name: zod.string().optional(),
-  entity_meta_id: zod.string().optional(),
-  mine: zod.boolean().optional(),
-  hidden: zod.string().optional(),
-  limit: zod
-    .int()
-    .max(listConversationsParamsLimitMax)
-    .default(listConversationsParamsLimitDefault),
-  offset: zod.int().default(listConversationsParamsOffsetDefault),
-  changes_since: zod.string().optional(),
-});
-
-export type ListConversationsParams = zod.input<typeof ListConversationsParams>;
-export type ListConversationsParamsOutput = zod.output<
-  typeof ListConversationsParams
->;
+export type SyncCursorError = zod.input<typeof SyncCursorError>;
+export type SyncCursorErrorOutput = zod.output<typeof SyncCursorError>;

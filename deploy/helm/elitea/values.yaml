@@ -2148,6 +2148,12 @@ scheduler:
     # keeps repeating with the ceiling raised, the next step is monthly RANGE
     # partitioning of the table on `timestamp` — not a bigger number here.
     AUDIT_RETENTION_MAX_BATCHES: "50"
+    # Incremental-sync tombstone retention (ADR-0025 WP6): how long the
+    # deletion and lost-access records behind `changes_since` are kept. 97 is
+    # the FLOOR — the longest offline_retention_days (90) plus a week, the
+    # window elitea-main still serves a cursor for — and a lower value is
+    # raised to it with a warning. Raise it only to keep tombstones longer.
+    SYNC_TOMBSTONE_RETENTION_DAYS: "97"
 
     # Tracing (issue #250): same OTLP collector endpoint and kill switch as
     # the `main.env` map — see that chart's values.yaml for the

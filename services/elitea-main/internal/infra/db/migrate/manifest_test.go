@@ -606,7 +606,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// `native_client_policy` section's deployment-wide minimum. No new
 	// permission: `configuration.native_clients` (0141) guards both. 142 is
 	// unused (reserved for a device-registry file WP3 folded into 0141).
-	require.EqualValues(t, 143, Head(shared))
+	//
+	// 144: shared/0144_notification_sync.sql, incremental sync for
+	// notifications (ADR-0025 WP6): a trigger-maintained `sync_at` stamp on
+	// centry.notifications (backfilled from updated_at/created_at, never on
+	// the wire) with a (user_id, sync_at, id) index, and
+	// centry.notification_tombstones filled by an AFTER DELETE trigger. No
+	// permission. Guarded on centry.notifications for bare databases.
+	require.EqualValues(t, 144, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -757,7 +764,16 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// body), so a replay or a provider retry answers the first run instead of
 	// starting a second (PR #1027 review). A table and no permission, so no
 	// shared sibling.
-	require.EqualValues(t, 140, Head(tenant))
+	// 142: tenant/0142_chat_sync.sql, incremental sync for conversations and
+	// messages (ADR-0025 WP6): a trigger-maintained `sync_at` stamp on
+	// chat_conversations and chat_message_group (internal; `updated_at` keeps
+	// its wire meaning), throttled child -> parent bumps from groups, items,
+	// text and participant mappings, and chat_sync_tombstones for deletions
+	// and lost access. No permission, so no shared sibling (0144 is the
+	// notification half, not a grant). 141 is claimed on an open branch
+	// (tenant/0141_eval_dataset_case_excluded.sql); renumbering is the merge
+	// queue's job.
+	require.EqualValues(t, 142, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

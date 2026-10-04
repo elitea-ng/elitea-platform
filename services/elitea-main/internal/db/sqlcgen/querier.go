@@ -126,6 +126,10 @@ type Querier interface {
 	// without their dependencies, which the repository refuses.
 	CurrentFolderAccessState(ctx context.Context) (int32, error)
 	CurrentNotificationHighWater(ctx context.Context, userID int32) (int64, error)
+	// The database clock a `changes_since` page is computed against (ADR-0025
+	// WP6): the stamps are written by triggers on this clock, so the settle
+	// bound and the expiry check must read it too, not the application's.
+	CurrentNotificationSyncClock(ctx context.Context) (pgtype.Timestamptz, error)
 	// entity_skill_mapping is polymorphic and has no version FK. Remove only the
 	// bindings of the version actually deleted, including on create compensation.
 	DeleteApplicationVersionWithSkills(ctx context.Context, arg DeleteApplicationVersionWithSkillsParams) (int64, error)
@@ -420,7 +424,12 @@ type Querier interface {
 	ListCurrentIndexScheduleProjects(ctx context.Context, arg ListCurrentIndexScheduleProjectsParams) ([]int32, error)
 	ListCurrentIndexScheduleToolkits(ctx context.Context, arg ListCurrentIndexScheduleToolkitsParams) ([]ListCurrentIndexScheduleToolkitsRow, error)
 	ListCurrentModelConfigurations(ctx context.Context, arg ListCurrentModelConfigurationsParams) ([]ListCurrentModelConfigurationsRow, error)
+	// The caller's notifications whose sync_at stamp (shared 0144) is after the
+	// cursor position, oldest change first.
+	ListCurrentNotificationChanges(ctx context.Context, arg ListCurrentNotificationChangesParams) ([]ListCurrentNotificationChangesRow, error)
 	ListCurrentNotificationEventsAfter(ctx context.Context, arg ListCurrentNotificationEventsAfterParams) ([]ListCurrentNotificationEventsAfterRow, error)
+	// The caller's notification deletions after the cursor position.
+	ListCurrentNotificationTombstones(ctx context.Context, arg ListCurrentNotificationTombstonesParams) ([]ListCurrentNotificationTombstonesRow, error)
 	ListCurrentNotifications(ctx context.Context, arg ListCurrentNotificationsParams) ([]ListCurrentNotificationsRow, error)
 	ListCurrentProjectAuthors(ctx context.Context, projectID int32) ([]ListCurrentProjectAuthorsRow, error)
 	ListCurrentSharedConfigurations(ctx context.Context, arg ListCurrentSharedConfigurationsParams) ([]ListCurrentSharedConfigurationsRow, error)

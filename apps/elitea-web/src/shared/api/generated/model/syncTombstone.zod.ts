@@ -41,25 +41,23 @@
  */
 import * as zod from "zod";
 
-export const listConversationsParamsLimitDefault = 10;
-export const listConversationsParamsLimitMax = 100;
+export const SyncTombstone = zod
+  .object({
+    id: zod
+      .int()
+      .describe(
+        "The removed item's integer id (for a message, the message group id).",
+      ),
+    uuid: zod
+      .string()
+      .nullable()
+      .describe("The removed item's uuid; null only where none was stored."),
+    reason: zod.enum(["deleted", "access_lost"]),
+    deleted_at: zod.iso.datetime({ offset: true }),
+  })
+  .describe(
+    "One removal in a `changes_since` delta (ADR-0025 WP6). NOTE(W2): internal/application/changesync/changesync.go (`Tombstone`).\n",
+  );
 
-export const listConversationsParamsOffsetDefault = 0;
-export const ListConversationsParams = zod.object({
-  source: zod.string().optional(),
-  entity_name: zod.string().optional(),
-  entity_meta_id: zod.string().optional(),
-  mine: zod.boolean().optional(),
-  hidden: zod.string().optional(),
-  limit: zod
-    .int()
-    .max(listConversationsParamsLimitMax)
-    .default(listConversationsParamsLimitDefault),
-  offset: zod.int().default(listConversationsParamsOffsetDefault),
-  changes_since: zod.string().optional(),
-});
-
-export type ListConversationsParams = zod.input<typeof ListConversationsParams>;
-export type ListConversationsParamsOutput = zod.output<
-  typeof ListConversationsParams
->;
+export type SyncTombstone = zod.input<typeof SyncTombstone>;
+export type SyncTombstoneOutput = zod.output<typeof SyncTombstone>;

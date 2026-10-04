@@ -18,13 +18,14 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/auditretention"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/pricesync"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/rpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/scheduler"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
 
 func main() {
@@ -149,6 +150,23 @@ func main() {
 		slog.Info("starting audit retention sweeper",
 			"window_days", cfg.AuditRetentionDays, "interval", cfg.AuditRetentionInterval)
 		go auditSweeper.Run(ctx)
+	}
+
+	// Incremental-sync tombstone retention (ADR-0025 WP6, elitea-main tenant
+	// 0142 and shared 0144): bounded batched deletes of tombstones older than
+	// the window elitea-main still serves a `changes_since` cursor for. The
+	// window can only be raised above that floor. Gated on maintenance like
+	// the audit sweep, since it writes to every tenant schema.
+	if syncSweeper, raised, syncErr := syncretention.New(pool, sched.MaintenanceActive, syncretention.Config{
+		RetentionDays: cfg.SyncTombstoneRetentionDays,
+	}, logger); syncErr != nil {
+		slog.Error("sync tombstone retention sweep did not start; tombstone tables grow without bound", "err", syncErr)
+	} else {
+		if raised {
+			slog.Warn("SYNC_TOMBSTONE_RETENTION_DAYS is below the cursor window elitea-main serves; raised to the floor",
+				"configured_days", cfg.SyncTombstoneRetentionDays, "floor_days", syncretention.MinimumRetentionDays)
+		}
+		go syncSweeper.Run(ctx)
 	}
 
 	// Native authorization retention (ADR-0025 WP2, elitea-main shared 0141):
