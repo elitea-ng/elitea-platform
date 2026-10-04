@@ -15,14 +15,11 @@
  * own signature, sourced there from `useContext(SocketContext)` at each
  * call site) rather than this hook calling `useSocketClient()` itself: as
  * of this unit, no `app/` file mounts a `SocketClientContext.Provider` yet
- * (`shared/api/socket/client.ts`'s own doc comment, and
- * `widgets/sidebar/ui/SidebarConnectionDot.tsx`'s identical gap — see that
- * file's doc comment) AND `hasModelTTS`'s `socket` operand is a legitimately
+ * (`shared/api/socket/client.ts`'s own doc comment) AND `hasModelTTS`'s `socket` operand is a legitimately
  * optional, "gracefully degrade to browser TTS" input in the baseline
  * itself, not a programmer error `useSocketClient()`'s throw-if-absent
  * contract would be correct for. Callers read the client via
- * `useContext(SocketClientContext)` (degrading to `null`) and pass it down
- * — same posture as `SidebarConnectionDot`.
+ * `useContext(SocketClientContext)` (degrading to `null`) and pass it down.
  */
 import { useCallback, useState } from 'react';
 

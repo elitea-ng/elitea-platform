@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createRealtimeStatusStore, RealtimeStatusContext, useRealtimeStatus } from '@/shared/api/sse/realtimeStatus';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 
@@ -257,5 +258,197 @@ describe('useNotificationsSSE — reconnect', () => {
 
     expect(result.current.streamDead).toBe(false);
     expect(registry.getSources()).toHaveLength(5);
+  });
+});
+
+/*
+ * The app shell's connection dot reads this stream's health. It used to read
+ * the socket.io client, which is a permanently-`disconnected` noop on every
+ * deployment, so the dot said "Disconnected" on a working app.
+ */
+describe('useNotificationsSSE — connection indicator reporting', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderWithStatus(projectId: string | undefined) {
+    const queryClient = new QueryClient();
+    const store = createRealtimeStatusStore();
+    const Query = wrapper(queryClient);
+    function Wrapper({ children }: { readonly children: ReactNode }): ReactNode {
+      return (
+        <RealtimeStatusContext.Provider value={store}>
+          <Query>{children}</Query>
+        </RealtimeStatusContext.Provider>
+      );
+    }
+    const stream = renderHook(({ id }: { id: string | undefined }) => useNotificationsSSE(id, vi.fn()), {
+      wrapper: Wrapper,
+      initialProps: { id: projectId },
+    });
+    const status = renderHook(() => useRealtimeStatus(), { wrapper: Wrapper });
+    return { stream, status };
+  }
+
+  it('reports connecting, then connected once the stream opens', () => {
+    const { status } = renderWithStatus('7');
+    expect(status.result.current).toBe('connecting');
+    act(() => {
+      registry.emit('open');
+    });
+    expect(status.result.current).toBe('connected');
+  });
+
+  it('reports reconnecting on a browser-driven drop, and connected again on reopen', () => {
+    const { status } = renderWithStatus('7');
+    act(() => {
+      registry.emit('open');
+      registry.drop();
+    });
+    expect(status.result.current).toBe('reconnecting');
+    act(() => {
+      registry.emit('open');
+    });
+    expect(status.result.current).toBe('connected');
+  });
+
+  it('reports reconnecting while a failed stream waits for its scheduled reopen', () => {
+    const { status } = renderWithStatus('7');
+    act(() => {
+      registry.emit('open');
+      registry.fail();
+    });
+    expect(status.result.current).toBe('reconnecting');
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    act(() => {
+      registry.emit('open');
+    });
+    expect(status.result.current).toBe('connected');
+  });
+
+  it('reports offline once every reconnect attempt is spent', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { status } = renderWithStatus('7');
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      act(() => {
+        registry.fail();
+      });
+      act(() => {
+        vi.advanceTimersByTime(delay);
+      });
+    }
+    act(() => {
+      registry.fail();
+    });
+    expect(status.result.current).toBe('offline');
+
+    // The network coming back revives a dead stream with a fresh budget, so
+    // a transient outage does not leave the dot red until a reload.
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(status.result.current).toBe('reconnecting');
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getOpen()).toHaveLength(1);
+    act(() => {
+      registry.emit('open');
+    });
+    expect(status.result.current).toBe('connected');
+    warn.mockRestore();
+  });
+
+  it('revives a dead stream when the tab becomes visible again, and ignores events while it is alive', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { status } = renderWithStatus('7');
+    act(() => {
+      registry.emit('open');
+      window.dispatchEvent(new Event('online'));
+    });
+    // Alive: no extra stream opened.
+    expect(registry.getSources()).toHaveLength(1);
+
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      act(() => {
+        registry.fail();
+      });
+      act(() => {
+        vi.advanceTimersByTime(delay);
+      });
+    }
+    act(() => {
+      registry.fail();
+    });
+    expect(status.result.current).toBe('offline');
+    const before = registry.getSources().length;
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getSources()).toHaveLength(before + 1);
+    expect(status.result.current).toBe('reconnecting');
+
+    // Spend the fresh ladder again: a second revival inside the throttle
+    // window opens nothing (a 403'd stream must not re-ladder per tab switch).
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      act(() => {
+        registry.fail();
+      });
+      act(() => {
+        vi.advanceTimersByTime(delay);
+      });
+    }
+    act(() => {
+      registry.fail();
+    });
+    const spent = registry.getSources().length;
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getSources()).toHaveLength(spent);
+
+    // After the window, it revives again.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(registry.getSources()).toHaveLength(spent + 1);
+    warn.mockRestore();
+  });
+
+  it('reports nothing in a runtime without EventSource, so the dot hides instead of sticking on "Connecting…"', () => {
+    registry.restore();
+    const { status } = renderWithStatus('7');
+    expect(status.result.current).toBe('idle');
+  });
+
+  it('withdraws its report when there is no project to subscribe to, and on unmount', () => {
+    const { stream, status } = renderWithStatus(undefined);
+    expect(status.result.current).toBe('idle');
+
+    stream.rerender({ id: '7' });
+    act(() => {
+      registry.emit('open');
+    });
+    expect(status.result.current).toBe('connected');
+
+    stream.unmount();
+    expect(status.result.current).toBe('idle');
   });
 });
