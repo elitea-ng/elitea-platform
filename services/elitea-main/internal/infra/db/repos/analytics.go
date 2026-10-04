@@ -311,11 +311,22 @@ func (r *AnalyticsRepo) GetUsageSummary(ctx context.Context, params analytics.Qu
 
 	summary := analytics.UsageSummary{ProjectID: params.ProjectID, Period: params.Period}
 
-	const totalsQuery = `
+	// Asked FIRST, for the reason agentExecutionColumn is: a statement that
+	// names an absent column fails at parse time and aborts this snapshot.
+	origins, err := triggerOriginReadable(ctx, tx)
+	if err != nil {
+		return analytics.UsageSummary{}, err
+	}
+	human := humanCallFilter(origins)
+
+	// The CALL and TOKEN totals count every row, unattended runs included:
+	// they are what the project used. Only the CALLER count is a statement
+	// about people, so only it drops the unattended rows (legacy issue 6802).
+	totalsQuery := `
 SELECT count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
-       count(DISTINCT user_id)::bigint
-FROM gateway.llm_request_logs` + completedCallWindow
+       count(DISTINCT user_id) FILTER (WHERE TRUE` + human + `)::bigint
+FROM gateway.llm_request_logs AS l` + completedCallWindow
 
 	if err := tx.QueryRow(ctx, totalsQuery, id, params.From, params.To).
 		Scan(&summary.TotalRuns, &summary.TotalTokens, &summary.ActiveUsers); err != nil {
@@ -329,11 +340,16 @@ FROM gateway.llm_request_logs` + completedCallWindow
 	if summary.ByModel, summary.ModelsTruncated, err = modelUsage(ctx, tx, id, params); err != nil {
 		return analytics.UsageSummary{}, err
 	}
-	if summary.DailyActivity, err = dailyActivity(ctx, tx, id, params); err != nil {
+	if summary.DailyActivity, err = dailyActivity(ctx, tx, id, params, human); err != nil {
 		return analytics.UsageSummary{}, err
 	}
-	if summary.TopUsers, err = userActivity(ctx, tx, id, params, topUsersLimit); err != nil {
+	if summary.TopUsers, err = userActivity(ctx, tx, id, params, topUsersLimit, human); err != nil {
 		return analytics.UsageSummary{}, err
+	}
+	if origins {
+		if summary.Automated, err = automatedActivity(ctx, tx, id, params); err != nil {
+			return analytics.UsageSummary{}, err
+		}
 	}
 	health, err := projectHealth(ctx, tx, id, params)
 	if err != nil {
@@ -341,7 +357,7 @@ FROM gateway.llm_request_logs` + completedCallWindow
 	}
 	summary.Health = health
 
-	members, activeMembers, ok, err := projectAdoption(ctx, tx, id, params)
+	members, activeMembers, ok, err := projectAdoption(ctx, tx, id, params, human)
 	if err != nil {
 		return analytics.UsageSummary{}, err
 	}
@@ -370,10 +386,15 @@ func (r *AnalyticsRepo) GetUserActivity(ctx context.Context, params analytics.Qu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	origins, err := triggerOriginReadable(ctx, tx)
+	if err != nil {
+		return nil, false, err
+	}
+
 	// One row OVER the cap is requested, so "there is more" is a fact about the
 	// result set rather than a guess from `len(rows) == limit` — which cannot
 	// tell a project with exactly 500 callers from one with 5,000.
-	users, err := userActivity(ctx, tx, id, params, userRowsLimit+1)
+	users, err := userActivity(ctx, tx, id, params, userRowsLimit+1, humanCallFilter(origins))
 	if err != nil {
 		return nil, false, err
 	}
@@ -961,13 +982,16 @@ LIMIT $4`
 // is whatever the connection happened to inherit. Without the cast, the same
 // window bucketed on a server set to a different zone yields a different first
 // and last day, and the chart shifts by one column with nothing to show for it.
-func dailyActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) ([]analytics.DailyPoint, error) {
-	const query = `
+//
+// The day's active users drop the calls of unattended runs (human); its
+// calls and tokens keep them, like the window totals.
+func dailyActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, human string) ([]analytics.DailyPoint, error) {
+	query := `
 SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
        count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
-       count(DISTINCT user_id)::bigint
-FROM gateway.llm_request_logs` + completedCallWindow + `
+       count(DISTINCT user_id) FILTER (WHERE TRUE` + human + `)::bigint
+FROM gateway.llm_request_logs AS l` + completedCallWindow + `
 GROUP BY 1
 ORDER BY 1`
 
@@ -992,14 +1016,20 @@ ORDER BY 1`
 //
 // Rows whose user_id is NULL are excluded: 0099 stores NULL for a request that
 // resolved no member, and "no member" is not a user to put on a leaderboard.
-func userActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, limit int) ([]analytics.UserActivity, error) {
-	const query = `
+//
+// The calls of unattended runs are excluded too (human, legacy issue 6802). A
+// pipeline schedule runs as its author, so without the filter the author
+// appears here — and on the Overview leaderboard — for calls a cron job made.
+// Their figures here are the calls they made themselves; the unattended calls
+// are reported under UsageSummary.Automated.
+func userActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, limit int, human string) ([]analytics.UserActivity, error) {
+	query := `
 SELECT user_id,
        count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
        max(occurred_at)
-FROM gateway.llm_request_logs` + completedCallWindow + `
-  AND user_id IS NOT NULL
+FROM gateway.llm_request_logs AS l` + completedCallWindow + `
+  AND user_id IS NOT NULL` + human + `
 GROUP BY user_id
 ORDER BY count(*) DESC, coalesce(sum(prompt_tokens + completion_tokens), 0) DESC, user_id ASC
 LIMIT $4`
@@ -1233,7 +1263,7 @@ WHERE u.id = ANY($1)`
 // a different corpus. When it is absent the caller omits total_project_users
 // and adoption_rate entirely rather than reporting a rate over a denominator it
 // invented.
-func projectAdoption(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) (members, active int64, ok bool, err error) {
+func projectAdoption(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, human string) (members, active int64, ok bool, err error) {
 	// The two variants differ only in the SYSTEM-USER filter.
 	//
 	// Every project provisions a system account of its own and grants it a
@@ -1261,14 +1291,16 @@ WITH project_members AS (
     FROM public.auth_core__project_user_role AS pur
     WHERE pur.project_id = $1
 )`
-	const tail = `
+	// The active side drops the calls of unattended runs (human): a member
+	// whose only calls came from their pipeline schedule did not use AI.
+	tail := `
 SELECT (SELECT count(*)::bigint FROM project_members),
        (SELECT count(DISTINCT l.user_id)::bigint
         FROM gateway.llm_request_logs AS l
         WHERE l.project_id = $1
           AND l.occurred_at >= $2
           AND l.occurred_at < $3` + completedCallOnLog + `
-          AND l.user_id IN (SELECT user_id FROM project_members))`
+          AND l.user_id IN (SELECT user_id FROM project_members)` + human + `)`
 
 	// Asked BEFORE the statement below, for the reason userIdentities gives at
 	// length: the query names the table in its FROM clause, so a missing one
