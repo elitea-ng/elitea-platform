@@ -67,11 +67,12 @@ export const UsageRefreshButton = memo(({ projectId, scope = 'project' }: UsageR
         onClose={closeToast}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        {failed ? (
-          <Alert onClose={closeToast} severity="error" variant="filled" data-testid="settings-usage-refresh-error">
-            {t('settings.usage.refreshFailed', 'Unable to refresh usage data. Please try again.')}
-          </Alert>
-        ) : undefined}
+        {/* Always mounted: `open` drives visibility. Unmounting the Alert on
+            close made MUI's Snackbar fall back to an empty SnackbarContent bar
+            for the exit transition (same pattern as McpLogoutButton). */}
+        <Alert onClose={closeToast} severity="error" variant="filled" data-testid="settings-usage-refresh-error">
+          {t('settings.usage.refreshFailed', 'Unable to refresh usage data. Please try again.')}
+        </Alert>
       </Snackbar>
     </>
   );

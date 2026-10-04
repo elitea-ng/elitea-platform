@@ -20,7 +20,7 @@ import { useCallback, useState } from 'react';
 
 import { useQueryClient, useQuery, type UseQueryResult } from '@tanstack/react-query';
 
-import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 export interface ProjectUsage {
@@ -57,6 +57,12 @@ const projectUsageKeys = {
     ['settings', 'usage', scope, projectId] as const,
 };
 
+async function fetchProjectUsage(projectId: string, scope: UsageScope): Promise<ProjectUsage> {
+  return unwrapBody(
+    await eliteaFetch<unknown>(`/elitea_core/usage/prompt_lib/${projectId}/usage?scope=${scope}`),
+  ) as ProjectUsage;
+}
+
 export function useProjectUsage(
   projectId: string | undefined,
   scope: UsageScope = 'project',
@@ -64,13 +70,18 @@ export function useProjectUsage(
   return useQuery({
     queryKey: projectUsageKeys.project(projectId ?? '', scope),
     enabled: projectId !== undefined && projectId !== '',
-    queryFn: async (): Promise<ProjectUsage> =>
-      unwrapBody(
-        await eliteaFetch<unknown>(
-          `/elitea_core/usage/prompt_lib/${projectId ?? ''}/usage?scope=${scope}`,
-        ),
-      ) as ProjectUsage,
+    queryFn: () => fetchProjectUsage(projectId ?? '', scope),
   });
+}
+
+/**
+ * The refresh's retry rule: only a SESSION failure (`kind: 'auth'`, the
+ * re-auth race `app/providers/queryClient.ts` documents) is tried once more.
+ * The app default also retries a 5xx after a 1s backoff, which for a click
+ * the user is watching only delays the failure toast; the user can click again.
+ */
+function retryRefresh(failureCount: number, error: unknown): boolean {
+  return failureCount < 1 && error instanceof EliteaApiError && error.failure.kind === 'auth';
 }
 
 export interface UsageRefresh {
@@ -82,7 +93,7 @@ export interface UsageRefresh {
 /**
  * Settings › Usage's Refresh action (#6672).
  *
- * A REFETCH of the active view's query, not an invalidation that a later
+ * A FETCH of the active view's query, not an invalidation that a later
  * render picks up and not a re-render of the cache: the request goes out now
  * and the promise settles with its outcome. The query key is the same one
  * `useProjectUsage` reads, so the current scope (tab) and project are what is
@@ -97,10 +108,15 @@ export function useRefreshProjectUsage(projectId: string | undefined, scope: Usa
     if (projectId === undefined || projectId === '') return false;
     setIsRefreshing(true);
     try {
-      await queryClient.refetchQueries(
-        { queryKey: projectUsageKeys.project(projectId, scope), exact: true },
-        { throwOnError: true },
-      );
+      // `query` with `staleTime: 0` always goes to the network, and it
+      // writes the same cache entry `useProjectUsage` reads — so the page
+      // re-renders from it, and a failure leaves the previous `data` in place.
+      await queryClient.query({
+        queryKey: projectUsageKeys.project(projectId, scope),
+        queryFn: () => fetchProjectUsage(projectId, scope),
+        staleTime: 0,
+        retry: retryRefresh,
+      });
       return true;
     } catch {
       return false;

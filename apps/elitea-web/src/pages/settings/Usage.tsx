@@ -162,11 +162,18 @@ const Usage = memo(({ projectId, scope = 'project' }: UsageProps) => {
 
       {/* Reported as the failure it is. An empty panel renders identically to
           "this project has spent nothing", which is a different claim (#130).
-          Only when there is NOTHING to show: a failed Refresh keeps the last
-          good figures and reports itself in a toast (#6672). */}
+          The blocking panel is for when there is NOTHING to show. A refetch
+          that fails over figures already on screen (a Refresh click, a window
+          refocus, a remount past the stale time) keeps those figures and says
+          they are stale; a Refresh click also raises its toast (#6672). */}
       {query.isError && query.data === undefined ? (
         <Alert severity="error" data-testid="settings-usage-error">
           {t('settings.usage.error', 'Failed to load usage for this project.')}
+        </Alert>
+      ) : null}
+      {query.isError && query.data !== undefined ? (
+        <Alert severity="warning" data-testid="settings-usage-stale">
+          {t('settings.usage.stale', 'Showing the last loaded figures; they could not be updated.')}
         </Alert>
       ) : null}
 

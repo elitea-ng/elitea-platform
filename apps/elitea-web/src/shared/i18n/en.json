@@ -4550,5 +4550,6 @@
   "analytics.dateRange.fromAfterTo": "From must not be later than To.",
   "analytics.dateRange.invalid": "Enter a valid date and time.",
   "settings.usage.refresh": "Refresh data",
-  "settings.usage.refreshFailed": "Unable to refresh usage data. Please try again."
+  "settings.usage.refreshFailed": "Unable to refresh usage data. Please try again.",
+  "settings.usage.stale": "Showing the last loaded figures; they could not be updated."
 }
