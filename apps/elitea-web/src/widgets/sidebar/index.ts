@@ -2,7 +2,7 @@
  * Public API — spec §3.3 (named exports only). Unit W-shell (spec §9.3).
  *
  * Owns: the app's left-hand navigation sidebar — 3 permission-gated nav
- * groups (SHELL-001..010), the project switcher, the socket connectivity
+ * groups (SHELL-001..010), the project switcher, the live-connection
  * dot (SHELL-012), settings/help-center footer links. Ported from
  * `[fsd]/widgets/sidebar-root/**`, `[fsd]/app/layout/{MainSidebar,
  * MainPanel}.jsx`.
@@ -19,11 +19,6 @@
  *    old app branched on `personal_project_id`
  *    (`useDisablePersonalSpace`, "no personal project yet -> redirect to
  *    Onboarding on nav click") has no equivalent here.
- *  - `SidebarConnectionDot` (SHELL-012) needs a `SocketClientContext.
- *    Provider` that no landed `app/` unit mounts yet (`shared/api/socket/
- *    client.ts`'s own doc comment names this exact gap) — render it only
- *    once that provider exists; until then, omit the prop rather than
- *    force a throw.
  *  - The Feedback FAB (SHELL-027, PERM-051, ACT-087; waiver W-007 "ship
  *    dormant feature") is NOT implemented: its submit action
  *    (`useFeedbackMutation`, old app's `api/social.js`) has no generated or

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { getConfig, MissingEnvPage } from '@/shared/config';
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
 import { createAuthPopupController } from '@/shared/api/auth';
+import { createRealtimeStatusStore, RealtimeStatusContext } from '@/shared/api/sse';
 import { authPlaneFromProbeStatus, buildLoginUrl, loginPathForPlane } from '@/shared/api/auth/login-redirect';
 
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -67,6 +68,14 @@ export function App() {
   const config = getConfig();
   const [router] = useState(() => createAppRouter());
   const fetchSession = useSessionStore((state) => state.fetchSession);
+  /**
+   * The live-channel health store the sidebar connection dot reads (SSE
+   * subscriptions report into it; see shared/api/sse/realtimeStatus.ts).
+   * Mounted here, not in `AppProviders`: the admin, maintenance and
+   * brand-preview entries share `AppProviders` but subscribe to no live
+   * channel, so they would ship the store for nothing.
+   */
+  const [realtimeStatus] = useState(createRealtimeStatusStore);
   /**
    * ONE controller for the whole app lifetime (issue #136 B). A controller
    * created per render would defeat its single-flight slot — `flight` is
@@ -232,7 +241,9 @@ export function App() {
 
   return (
     <AppProviders>
-      <RouterProvider router={router} context={{ auth: sessionAuthContext }} />
+      <RealtimeStatusContext.Provider value={realtimeStatus}>
+        <RouterProvider router={router} context={{ auth: sessionAuthContext }} />
+      </RealtimeStatusContext.Provider>
     </AppProviders>
   );
 }

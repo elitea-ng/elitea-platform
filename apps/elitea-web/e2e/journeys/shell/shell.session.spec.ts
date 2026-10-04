@@ -8,9 +8,10 @@
  * below: `deploy/docker-compose.e2e.yml:38` sets `VITE_SOCKET_SERVER: ""`,
  * so the app installs the noop socket client whose connection state is the
  * hardcoded literal `disconnected`. Any assertion about live socket
- * connection/reconnect behaviour (the sidebar's `sidebar-connection-dot`
- * included) would be asserting against a constant, not against the product.
- * Neither journey in this file depends on it.
+ * connection/reconnect behaviour would be asserting against a constant, not
+ * against the product. (The sidebar's `sidebar-connection-dot` no longer reads
+ * socket.io — it reports the SSE channel; chat.attachments.spec.ts J26.3 covers
+ * it.) Neither journey in this file depends on it.
  */
 import { test, expect } from '@playwright/test';
 

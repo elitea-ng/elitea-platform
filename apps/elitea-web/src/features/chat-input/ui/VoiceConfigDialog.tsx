@@ -19,9 +19,7 @@ import { VoiceConfigControls } from './VoiceConfigControls';
  * Stages edits in `localConfig` (Apply/Cancel), same as the baseline.
  *
  * Reads the socket via `useContext(SocketClientContext)` directly (NOT the
- * throwing `useSocketClient()`) — same posture as
- * `widgets/sidebar/ui/SidebarConnectionDot.tsx`: no `app/` file mounts a
- * `SocketClientContext.Provider` yet, and a missing socket is this
+ * throwing `useSocketClient()`): a missing socket is this
  * component's legitimate "fall back to the preview using browser TTS"
  * state, not a programmer error. See `useTextToSpeech.hooks.ts`'s own doc
  * comment for the identical rationale.

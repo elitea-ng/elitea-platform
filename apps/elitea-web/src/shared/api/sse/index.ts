@@ -25,3 +25,9 @@ export { useExecutionEventStream, useExecutionEvents } from './executionEvents';
  * the frames this client missed.
  */
 export { streamReconnectDelayMs, withResumeCursor } from './resume';
+/**
+ * Health of the always-on real-time channels, aggregated for the app shell's
+ * connection indicator. Subscriptions report into it; the indicator reads it.
+ */
+export { createRealtimeStatusStore, RealtimeStatusContext, useRealtimeStatus, useReportRealtimeChannel } from './realtimeStatus';
+export type { RealtimeChannelState, RealtimeStatus, RealtimeStatusStore } from './realtimeStatus';
