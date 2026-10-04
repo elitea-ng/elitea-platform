@@ -91,8 +91,13 @@ const (
 // routes in analytics.InferenceRouteSQLList are model calls. Without it the
 // Costs tab counts the model listing and the token counter as calls while the
 // Overview tab does not.
+//
+// It also includes the status predicate: the estimate counts COMPLETED calls
+// (analytics.CompletedStatusSQL), like the Overview tab's call figures. A
+// refused or failed call is not billed, so it has no place in a cost view. The
+// agent attribution below is the exception, for the reason it gives.
 const requestLogWindow = ` WHERE l.project_id = $1 AND l.occurred_at >= $2 AND l.occurred_at < $3` +
-	inferenceRouteOnLog
+	inferenceRouteOnLog + ` AND l.` + analytics.CompletedStatusSQL
 
 // inferenceRouteOnLog limits a read of the log under the alias `l` to the
 // inference routes.
@@ -690,7 +695,9 @@ SELECT EXISTS (
 // that carry a usable execution id and those that do not — the same split
 // GetAgentAnalytics' agentAttribution reports as AttributedCalls /
 // UnattributedCalls, so the two numbers can be compared across the Overview
-// and Agents tabs without reading two different predicates.
+// and Agents tabs without reading two different predicates. For that reason it
+// counts every inference-route ATTEMPT, as the Agents tab does, and not only
+// the completed calls the rest of the estimate counts.
 func estimateAgentAttribution(
 	ctx context.Context, tx pgx.Tx, projectID int64, from, to time.Time,
 ) (attributed, unattributed int64, err error) {

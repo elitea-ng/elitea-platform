@@ -205,8 +205,8 @@ func NewAnalyticsRepo(pool *pgxpool.Pool) *AnalyticsRepo {
 	return &AnalyticsRepo{pool: pool}
 }
 
-// requestLogWindow is the row set every query below reads, written once so no
-// two of them can describe different rows.
+// requestLogWindow is the row set of every model-call ATTEMPT, written once so
+// no two reads can describe different rows.
 //
 // Half-open at the top: a window ending at midnight must not also claim the
 // first instant of the next day, or two adjacent windows both count it.
@@ -216,16 +216,41 @@ func NewAnalyticsRepo(pool *pgxpool.Pool) *AnalyticsRepo {
 // counting those as LLM calls made this page disagree with the Usage page.
 // analytics.InferenceRouteSQLList is the one definition of a model call, and
 // inferenceRouteOnLog below applies the same one to the aliased reads.
-const requestLogWindow = `
-WHERE project_id = $1
-  AND occurred_at >= $2
-  AND occurred_at < $3
+//
+// This file uses three row sets. Each read names the one it uses:
+//
+//   - completedCallWindow: completed model calls. The call, token, user and
+//     model figures of the Overview and Users tabs use it. They sit beside the
+//     Usage page, which reads the billing ledger, and the ledger has no
+//     refused or failed call. See analytics.CompletedStatusSQL.
+//   - requestLogWindow: every model-call attempt. The Agents tab uses it,
+//     because it shows requests AND errors and must see the failures.
+//   - healthWindow: every request on every route. The Health tab uses it. The
+//     tab exists to show what failed, and a failure on /llm/v1/models, on
+//     count_tokens or on an unmatched path is a failure an operator must see.
+const requestLogWindow = healthWindow + `
   AND route IN (` + analytics.InferenceRouteSQLList + `)`
 
-// inferenceRouteOnLog is the same route predicate for a statement that reads
-// the log under the alias `l`.
+// completedCallWindow is requestLogWindow limited to completed calls.
+const completedCallWindow = requestLogWindow + `
+  AND ` + analytics.CompletedStatusSQL
+
+// healthWindow is the project and time predicate with NO route or status
+// filter. Only the Health reads use it.
+const healthWindow = `
+WHERE project_id = $1
+  AND occurred_at >= $2
+  AND occurred_at < $3`
+
+// inferenceRouteOnLog is the route predicate for a statement that reads the
+// log under the alias `l`.
 const inferenceRouteOnLog = `
   AND l.route IN (` + analytics.InferenceRouteSQLList + `)`
+
+// completedCallOnLog is completedCallWindow's predicate for a statement that
+// reads the log under the alias `l`.
+const completedCallOnLog = inferenceRouteOnLog + `
+  AND l.` + analytics.CompletedStatusSQL
 
 // missingRelation reports whether err is PostgreSQL's undefined_table (42P01)
 // or undefined_schema (3F000).
@@ -290,7 +315,7 @@ func (r *AnalyticsRepo) GetUsageSummary(ctx context.Context, params analytics.Qu
 SELECT count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
        count(DISTINCT user_id)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow
+FROM gateway.llm_request_logs` + completedCallWindow
 
 	if err := tx.QueryRow(ctx, totalsQuery, id, params.From, params.To).
 		Scan(&summary.TotalRuns, &summary.TotalTokens, &summary.ActiveUsers); err != nil {
@@ -882,12 +907,12 @@ type analyticsQuerier interface {
 
 // modelUsage splits the window by (provider, model).
 //
-// Rows with an empty model are EXCLUDED. An empty model means the request never
-// got far enough to resolve one — a 404, an auth refusal, a malformed body —
-// and those are real traffic but they are not a model's usage; folding them
-// into a nameless row would put a blank bar on the chart that no operator can
-// act on. They are still in the totals, which is where "we served N requests"
-// belongs.
+// Rows with an empty model are EXCLUDED. A completed call with no model is rare
+// (the gateway answered below 400 and resolved nothing), but a nameless bar on
+// the chart is not something an operator can act on, so it stays in the
+// totals only. The usual empty-model row is a refusal (a 404, an auth refusal,
+// a malformed body). completedCallWindow already drops those, and the Health
+// tab reports them.
 //
 // The cap is REPORTED. The client sums this array to normalise its share
 // column, so a silent cut makes every share a percentage of the busiest N
@@ -901,7 +926,7 @@ SELECT model,
        coalesce(sum(prompt_tokens), 0)::bigint,
        coalesce(sum(completion_tokens), 0)::bigint,
        count(*)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + completedCallWindow + `
   AND model <> ''
 GROUP BY model, provider
 ORDER BY count(*) DESC, model ASC
@@ -942,7 +967,7 @@ SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
        count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
        count(DISTINCT user_id)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + completedCallWindow + `
 GROUP BY 1
 ORDER BY 1`
 
@@ -973,7 +998,7 @@ SELECT user_id,
        count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
        max(occurred_at)
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + completedCallWindow + `
   AND user_id IS NOT NULL
 GROUP BY user_id
 ORDER BY count(*) DESC, coalesce(sum(prompt_tokens + completion_tokens), 0) DESC, user_id ASC
@@ -1242,7 +1267,7 @@ SELECT (SELECT count(*)::bigint FROM project_members),
         FROM gateway.llm_request_logs AS l
         WHERE l.project_id = $1
           AND l.occurred_at >= $2
-          AND l.occurred_at < $3` + inferenceRouteOnLog + `
+          AND l.occurred_at < $3` + completedCallOnLog + `
           AND l.user_id IN (SELECT user_id FROM project_members))`
 
 	// Asked BEFORE the statement below, for the reason userIdentities gives at
@@ -1317,6 +1342,11 @@ func checkRelations(ctx context.Context, q analyticsQuerier, names ...string) (b
 // It runs on the caller's snapshot, so the totals, the breakdown and the trend
 // are three views of one row set rather than three reads of a table the gateway
 // is committing into continuously.
+//
+// ALL ROUTES, ALL STATUSES (healthWindow). The inference-route filter of issue
+// 6879 is for the call figures, and this tab is not a call figure. A client
+// that sends every request to a wrong path, or whose /llm/v1/models or
+// count_tokens calls fail, has a real fault, and this is the only view of it.
 func projectHealth(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) (*analytics.Health, error) {
 	health := &analytics.Health{
 		ByErrorCode: []analytics.ErrorCodeCount{},
@@ -1327,7 +1357,7 @@ func projectHealth(ctx context.Context, q analyticsQuerier, id int64, params ana
 	const totalsQuery = `
 SELECT count(*)::bigint,
        count(*) FILTER (WHERE ` + errorPredicate + `)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow
+FROM gateway.llm_request_logs` + healthWindow
 
 	if err := q.QueryRow(ctx, totalsQuery, id, params.From, params.To).
 		Scan(&health.Requests, &health.Errors); err != nil {
@@ -1385,7 +1415,7 @@ func healthByErrorCode(ctx context.Context, q analyticsQuerier, id int64, params
 	const query = `
 SELECT CASE WHEN error_code = '' THEN 'unclassified' ELSE error_code END,
        count(*)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + healthWindow + `
   AND ` + errorPredicate + `
 GROUP BY 1
 ORDER BY count(*) DESC, 1 ASC
@@ -1440,7 +1470,7 @@ SELECT provider,
        count(*) FILTER (WHERE ` + errorPredicate + `)::bigint,
        coalesce(avg(duration_ms), 0)::float8,
        coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::float8
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + healthWindow + `
   AND model <> ''
 GROUP BY provider, model, streaming
 ORDER BY count(*) DESC, model ASC, streaming ASC
@@ -1481,7 +1511,7 @@ func healthDaily(ctx context.Context, q analyticsQuerier, id int64, params analy
 SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
        count(*)::bigint,
        count(*) FILTER (WHERE ` + errorPredicate + `)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + healthWindow + `
 GROUP BY 1
 ORDER BY 1`
 
