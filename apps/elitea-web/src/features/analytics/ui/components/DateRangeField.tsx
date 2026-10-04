@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
@@ -97,25 +97,43 @@ const rootSx = { position: 'relative' as const };
 /** Enough for `dd/MM/yyyy HH:mm` plus the calendar button at the field's font size. */
 const textFieldSx = { minWidth: '10.5rem' };
 
+// Helper/error text is the `bodySmall` role (#1023); only placement here.
 const errorSx = (theme: Theme) => ({
   position: 'absolute' as const,
   top: '100%',
   left: theme.spacing(1.5),
   marginTop: theme.spacing(0.25),
-  color: theme.vars.palette.error.main,
-  fontSize: theme.typography.labelSmall.fontSize,
   whiteSpace: 'nowrap' as const,
 });
 
-/** The message for a validation error, or `null` when the value is usable. */
-const BOUND_ERRORS: ReadonlySet<DateTimeValidationError> = new Set(['minDate', 'minTime', 'maxDate', 'maxTime']);
+const MIN_BOUND_ERRORS: ReadonlySet<DateTimeValidationError> = new Set(['minDate', 'minTime']);
+const MAX_BOUND_ERRORS: ReadonlySet<DateTimeValidationError> = new Set(['maxDate', 'maxTime']);
 
-function dateRangeFieldErrorMessage(error: DateTimeValidationError): string | null {
+/**
+ * The message for a validation error, or `null` when the value is usable.
+ *
+ * A min/max error means "From later than To" only when this field was given
+ * that bound — the other field's value. Without it the error can only come from
+ * the picker's default 1900/2099 limits, which is an invalid date.
+ */
+export function dateRangeFieldErrorMessage(
+  error: DateTimeValidationError,
+  bounds: { readonly hasMin: boolean; readonly hasMax: boolean },
+): string | null {
   if (error === null) return null;
-  // The only bounds this field is given are the OTHER field's value, so a
-  // bound error always means From would be later than To.
-  if (BOUND_ERRORS.has(error)) return t('analytics.dateRange.fromAfterTo', 'From must not be later than To.');
+  if ((bounds.hasMin && MIN_BOUND_ERRORS.has(error)) || (bounds.hasMax && MAX_BOUND_ERRORS.has(error))) {
+    return t('analytics.dateRange.fromAfterTo', 'From must not be later than To.');
+  }
   return t('analytics.dateRange.invalid', 'Enter a valid date and time.');
+}
+
+interface RejectedEdit {
+  readonly error: DateTimeValidationError;
+  /** The value shown after the rejection (the restored one). */
+  readonly against: number;
+  /** The bounds the edit was checked against. */
+  readonly min: number | undefined;
+  readonly max: number | undefined;
 }
 
 const labelSx = (theme: Theme) => ({
@@ -139,20 +157,35 @@ function DateRangeFieldImpl({
 }: DateRangeFieldProps): ReactNode {
   // Two sources of error. `onError` reports the CURRENT value against the
   // bounds (an already-backwards pair). A rejected edit never becomes the
-  // value — the controlled field snaps back — so it is remembered here,
-  // tagged with the value it was rejected against: once the value changes
-  // (another edit, a preset) the stale message goes with it.
+  // value, so it is remembered here, tagged with the value and bounds it was
+  // rejected against: once any of them changes the stale message goes.
   const [validationError, setValidationError] = useState<DateTimeValidationError>(null);
-  const [rejected, setRejected] = useState<{ error: DateTimeValidationError; against: number } | null>(null);
-  const rejectedError = rejected !== null && rejected.against === value.getTime() ? rejected.error : null;
-  const errorMessage = dateRangeFieldErrorMessage(rejectedError ?? validationError);
+  const [rejected, setRejected] = useState<RejectedEdit | null>(null);
+  // The value as it was when the current edit began; `null` between edits.
+  const editStart = useRef<Date | null>(null);
+  const minTime = minDateTime?.getTime();
+  const maxTime = maxDateTime?.getTime();
+  const rejectedError =
+    rejected !== null && rejected.against === value.getTime() && rejected.min === minTime && rejected.max === maxTime
+      ? rejected.error
+      : null;
+  const errorMessage = dateRangeFieldErrorMessage(rejectedError ?? validationError, {
+    hasMin: minDateTime !== undefined,
+    hasMax: maxDateTime !== undefined,
+  });
   return (
     // The testid is what the @visual suite masks. The value is a wall-clock
     // range derived from `Date.now()` (`Today` → today 00:00 .. 23:59), so the
     // rendered text changes from day to day; it is volatile in exactly the
     // sense `volatileRegions()` exists for, and masking it is what lets the
     // rest of this screen be asserted at all (issue #159).
-    <Box sx={rootSx}>
+    <Box
+      sx={rootSx}
+      onBlur={(event) => {
+        // Focus leaving the field (not moving between its sections) ends the edit.
+        if (!event.currentTarget.contains(event.relatedTarget)) editStart.current = null;
+      }}
+    >
       <Box sx={(theme: Theme) => fieldSx(theme, open)} data-testid="analytics-date-range">
         <Typography sx={labelSx}>{label}</Typography>
         <DateTimePicker
@@ -162,10 +195,14 @@ function DateRangeFieldImpl({
               onClear?.();
               return;
             }
-            // #6738: keep the last valid value rather than query a backwards
-            // or half-typed window, and say why.
+            editStart.current ??= value;
+            // #6738: never query a backwards or half-typed window. Put back
+            // the value the edit started from (not a keystroke intermediate)
+            // and say why.
             if (context.validationError !== null) {
-              setRejected({ error: context.validationError, against: value.getTime() });
+              const restored = editStart.current;
+              setRejected({ error: context.validationError, against: restored.getTime(), min: minTime, max: maxTime });
+              if (restored.getTime() !== value.getTime()) onChange(restored);
               return;
             }
             setRejected(null);
@@ -196,7 +233,7 @@ function DateRangeFieldImpl({
         />
       </Box>
       {errorMessage !== null ? (
-        <Typography sx={errorSx} role="alert" data-testid="analytics-date-range-error">
+        <Typography variant="bodySmall" color="error" sx={errorSx} role="alert" data-testid="analytics-date-range-error">
           {errorMessage}
         </Typography>
       ) : null}
@@ -205,3 +242,4 @@ function DateRangeFieldImpl({
 }
 
 export const DateRangeField = memo(DateRangeFieldImpl);
+
