@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { load } from 'js-yaml';
 
-import type { PipelineInboundTriggerModeRequest } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { buildErrorMessage } from '@/shared/lib/http-error';
@@ -11,6 +10,7 @@ import type { SingleSelectOption } from '@/shared/ui/SingleSelect';
 import type { UsePipelineTriggersResult } from '../../api/usePipelineTriggers';
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
 import { pipelineErrorMessage } from '../../lib/hooks/pipelineErrorMessage';
+import { modeRequest, type WebhookMode } from './pipelineWebhookModal.lib';
 
 /**
  * Split out of `TriggerTypeSelector.tsx` -- constants, pure functions, and
@@ -185,7 +185,7 @@ export interface TriggerActions {
    * the backend writes it on this route and nowhere else (#970): a rotate
    * without one moves a signing trigger back to the bearer mode.
    */
-  readonly handleRotateWebhook: (mode?: PipelineInboundTriggerModeRequest['type']) => Promise<void>;
+  readonly handleRotateWebhook: (mode?: WebhookMode) => Promise<void>;
   readonly handleRevealWebhook: () => Promise<void>;
   readonly removeAll: () => Promise<void>;
 }
@@ -228,8 +228,8 @@ export function useTriggerActions(args: TriggerActionsArgs): TriggerActions {
   );
 
   const handleRotateWebhook = useCallback(
-    (mode?: PipelineInboundTriggerModeRequest['type']) => run(async () => {
-      const rotated = await triggers.rotateWebhook(mode === undefined ? undefined : { type: mode });
+    (mode?: WebhookMode) => run(async () => {
+      const rotated = await triggers.rotateWebhook(mode === undefined ? undefined : modeRequest(mode));
       setRevealedSecret(rotated.secret);
       setIsWebhookModalOpen(true);
       onNotifySuccess?.(t('pipelines.triggerTypeSelector.webhookConfigured', 'Webhook configured successfully'));

@@ -257,4 +257,69 @@ describe('PipelineWebhookModal', () => {
     await user.click(getByTestId('pipeline-webhook-rotate'));
     expect(onRotate).toHaveBeenCalledWith('github');
   });
+
+  /* ── legacy issue 6664: GitLab ─────────────────────────────────────── */
+
+  /** A bearer row with the `gitlab` provider is the GitLab secret-token entry, and it names GitLab's own header. */
+  it('shows a GitLab secret-token trigger as GitLab, with X-Gitlab-Token', () => {
+    const { getByTestId, queryByTestId, getByRole } = renderWithTheme(
+      <PipelineWebhookModal
+        open
+        onClose={noop}
+        webhookUrl={`${URL_PATH}/gitlab`}
+        authMode="token"
+        provider="gitlab"
+        secretValue="s3cret"
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
+      />,
+    );
+    expect(getByRole('combobox').textContent).toContain('GitLab (secret token)');
+    expect(getByTestId('pipeline-webhook-mode-hint').textContent).toContain('X-Gitlab-Token');
+    expect(queryByTestId('pipeline-webhook-signature-header')).toBeNull();
+  });
+
+  /** A Standard Webhooks row is the GitLab signing-token entry, and its header is fixed. */
+  it('shows a GitLab signing-token trigger with the webhook-signature header', () => {
+    const { getByTestId, getByRole } = renderWithTheme(
+      <PipelineWebhookModal
+        open
+        onClose={noop}
+        webhookUrl={`${URL_PATH}/gitlab`}
+        authMode="standard_webhooks_hmac"
+        provider="gitlab"
+        signatureHeader="webhook-signature"
+        onReveal={noop}
+        onRotate={noop}
+        onRevoke={noop}
+      />,
+    );
+    expect(getByRole('combobox').textContent).toContain('GitLab (signing token)');
+    expect(getByTestId('pipeline-webhook-signature-header')).toHaveValue('webhook-signature');
+    expect(getByTestId('pipeline-webhook-mode-hint').textContent).toContain('five minutes');
+  });
+
+  it.each([
+    ['GitLab (secret token)', 'gitlab'],
+    ['GitLab (signing token)', 'gitlab_signing'],
+  ])('applies the %s type by rotating with it', async (label, mode) => {
+    const onRotate = vi.fn();
+    const user = userEvent.setup();
+    const { getByTestId, getByRole } = renderWithTheme(
+      <PipelineWebhookModal
+        open
+        onClose={noop}
+        webhookUrl={URL_PATH}
+        authMode="token"
+        onReveal={noop}
+        onRotate={onRotate}
+        onRevoke={noop}
+      />,
+    );
+    await user.click(getByRole('combobox'));
+    await user.click(getByRole('option', { name: label }));
+    await user.click(getByTestId('pipeline-webhook-apply-mode'));
+    expect(onRotate).toHaveBeenCalledWith(mode);
+  });
 });

@@ -4406,6 +4406,8 @@
   "pipelines.pipelineWebhookModal.modeLabel": "Webhook type",
   "pipelines.pipelineWebhookModal.modeCustomHint": "The sender presents the secret itself, as an Authorization: Bearer header, as X-Elitea-Trigger-Token, or as a token query parameter.",
   "pipelines.pipelineWebhookModal.modeGithubHint": "GitHub signs the request body with the secret and sends the digest in {{header}}. Configure that secret in the repository’s webhook settings; no Authorization header is sent or accepted.",
+  "pipelines.pipelineWebhookModal.modeGitlabHint": "GitLab sends the secret token verbatim in {{header}}. Paste the secret into the webhook’s Secret token field in GitLab.",
+  "pipelines.pipelineWebhookModal.modeGitlabSigningHint": "GitLab signs webhook-id, webhook-timestamp and the request body with the signing token and sends it in webhook-signature. Deliveries older than five minutes are refused.",
   "pipelines.pipelineWebhookModal.modePending": "Applying this type rotates the credential: the current secret stops working and the sender has to be given the new one.",
   "pipelines.pipelineWebhookModal.applyMode": "Apply and rotate",
   "pipelines.pipelineWebhookModal.signatureHeader": "Signature header",

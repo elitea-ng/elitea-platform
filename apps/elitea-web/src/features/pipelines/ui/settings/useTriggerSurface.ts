@@ -51,6 +51,8 @@ export interface TriggerSurface {
   /** The stored authentication mode and signature header (#970) — what the dialog shows and seeds its selector from. */
   readonly webhookAuthMode: string | undefined;
   readonly webhookSignatureHeader: string | undefined;
+  /** The stored provider — what tells a GitLab bearer trigger from a Custom one. */
+  readonly webhookProvider: string | undefined;
   readonly revealedSecret: string | undefined;
   readonly isScheduleModalOpen: boolean;
   readonly isWebhookModalOpen: boolean;
@@ -122,6 +124,7 @@ export function useTriggerSurface(input: TriggerSurfaceInput): TriggerSurface {
     webhookUrl: triggers.webhook?.url,
     webhookAuthMode: triggers.webhook?.auth_mode,
     webhookSignatureHeader: triggers.webhook?.signature_header,
+    webhookProvider: triggers.webhook?.provider,
     revealedSecret,
     isScheduleModalOpen,
     isWebhookModalOpen,

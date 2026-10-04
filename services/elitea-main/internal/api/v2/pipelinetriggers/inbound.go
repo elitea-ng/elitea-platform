@@ -57,8 +57,8 @@ const InboundProviderPath = InboundPath + "/{provider}"
 
 // TriggerTokenHeader is the preferred way to present the secret.
 //
-// Three carriers are accepted, in this order: `Authorization: Bearer`, this
-// header, then `?token=`. The query parameter is LAST and is documented as the
+// Four carriers are accepted, in this order: `Authorization: Bearer`, this
+// header, GitLab's `X-Gitlab-Token` (GitLabTokenHeader), then `?token=`. The query parameter is LAST and is documented as the
 // least safe: a URL is written to proxy and browser logs, and a credential in
 // one outlives the request. It is accepted at all because a large share of
 // webhook senders cannot set a header, and a trigger nobody can call is not a
@@ -68,7 +68,9 @@ const TriggerTokenHeader = "X-Elitea-Trigger-Token" //nolint:gosec // header NAM
 // TriggerTokenQueryParam is the last-resort carrier.
 const TriggerTokenQueryParam = "token" //nolint:gosec // parameter NAME, not a credential
 
-// maxInboundBody bounds a BEARER call's body, and every settings body.
+// maxInboundBody bounds a custom BEARER call's body, and every settings body.
+// A provider trigger's body is the provider's payload and gets the larger cap
+// (inboundBodyWithinCap).
 //
 // 64 KiB is generous for what this route reads out of a body: one `input`
 // string the pipeline sees. A bearer sender is writing to an endpoint of ours
@@ -236,6 +238,48 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ONE RUN PER SIGNED DELIVERY (deliveries.go). Claimed only now, after
+	// the signature and the revocation check: an unauthenticated request
+	// must not be able to write a row, and a refused one must not occupy a
+	// key a genuine delivery will need.
+	deliveryKey := signedDeliveryKey(trigger, r.Header, raw)
+	if deliveryKey != "" {
+		state, previous, claimErr := h.claimDelivery(r.Context(), schema, trigger.TokenID, deliveryKey)
+		switch {
+		case claimErr != nil:
+			// Fail CLOSED. Admitting without the claim is exactly the
+			// replay this check exists to stop, and 503 asks the sender to
+			// retry, which a provider does.
+			h.log().Error("pipelinetriggers: inbound delivery claim failed", "err", claimErr)
+			record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
+				"delivery log unavailable")
+			writeError(w, http.StatusServiceUnavailable, "this trigger could not be checked")
+			return
+		case state == deliveryInFlight:
+			record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
+				"this delivery is already being admitted")
+			w.Header().Set("Retry-After", deliveryRetryAfterSeconds)
+			writeError(w, http.StatusServiceUnavailable, "this delivery is already being admitted; retry it shortly")
+			return
+		case state == deliveryAdmitted:
+			// The SAME answer the first copy got, and no second run. The
+			// caller has proved it holds this exact signed delivery, so
+			// handing back the run it started is no disclosure.
+			versionID := previous.VersionID
+			if versionID == 0 {
+				versionID = trigger.VersionID
+			}
+			record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID,
+				"a repeated delivery; answered with the run it already started")
+			writeAccepted(w, projectID, runOutcome{
+				ExecutionID:      previous.ExecutionID,
+				ConversationUUID: previous.ConversationUUID,
+				VersionID:        versionID,
+			})
+			return
+		}
+	}
+
 	outcome, err := h.admit(r.Context(), schema, runRequest{
 		ProjectID:   projectID,
 		ActorUserID: trigger.CreatedBy,
@@ -243,6 +287,13 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		Input:       body.Input,
 		Origin:      OriginWebhook,
 	})
+	if deliveryKey != "" {
+		if err != nil {
+			h.releaseDelivery(r.Context(), schema, trigger.TokenID, deliveryKey)
+		} else {
+			h.completeDelivery(r.Context(), schema, trigger.TokenID, deliveryKey, outcome)
+		}
+	}
 	switch {
 	case errors.Is(err, ErrRunForbidden):
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
@@ -257,6 +308,13 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrInputTooLarge):
 		record(http.StatusBadRequest, projectID, trigger.CreatedBy, trigger.VersionID, "input too large")
 		writeError(w, http.StatusBadRequest, "the run input is too large")
+		return
+	case errors.Is(err, ErrInvalidInput):
+		// 422 and the field's name. The credential was accepted, so this is
+		// a statement about the BODY the caller chose, and it is no oracle.
+		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID, "input is not valid")
+		writeError(w, http.StatusUnprocessableEntity,
+			"`input` is not valid: it must be UTF-8 text without NUL characters")
 		return
 	case errors.Is(err, ErrRuntimeUnavailable):
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
@@ -279,6 +337,12 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 	// finished, and it will not finish inside this request. The events URL is
 	// how the caller follows it, which is what issue 192 asks the response to
 	// return.
+	writeAccepted(w, projectID, outcome)
+}
+
+// writeAccepted is the 202 body, for an admitted run and for a repeated
+// delivery answered with the run its first copy admitted.
+func writeAccepted(w http.ResponseWriter, projectID int64, outcome runOutcome) {
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"execution_id":    outcome.ExecutionID,
 		"conversation_id": outcome.ConversationUUID,
@@ -296,7 +360,13 @@ func EventsURL(projectID int64, executionID string) string {
 	return fmt.Sprintf("/api/v2/executions/%d/%s/events", projectID, executionID)
 }
 
-// presentedSecret reads the credential from the three accepted carriers.
+// presentedSecret reads the credential from the four accepted carriers.
+//
+// `X-Gitlab-Token` is GitLab's: a GitLab webhook's SECRET TOKEN is sent
+// verbatim in it, and GitLab cannot be made to send it anywhere else. Before
+// legacy issue 6664 a GitLab sender therefore had no way to present the
+// secret except the query string. It is a carrier for a bearer trigger only;
+// a signing trigger reads no carrier at all (inboundCredentialAccepted).
 func presentedSecret(r *http.Request) string {
 	if header := r.Header.Get("Authorization"); header != "" {
 		if value, found := strings.CutPrefix(header, "Bearer "); found {
@@ -304,6 +374,9 @@ func presentedSecret(r *http.Request) string {
 		}
 	}
 	if header := strings.TrimSpace(r.Header.Get(TriggerTokenHeader)); header != "" {
+		return header
+	}
+	if header := strings.TrimSpace(r.Header.Get(GitLabTokenHeader)); header != "" {
 		return header
 	}
 	return strings.TrimSpace(r.URL.Query().Get(TriggerTokenQueryParam))
@@ -319,7 +392,7 @@ func presentedSecret(r *http.Request) string {
 func (h *Handler) inboundCredentialAccepted(
 	r *http.Request, trigger triggerRow, raw []byte,
 ) (accepted bool, unavailable string) {
-	if trigger.AuthMode != AuthModeHMACSHA256 {
+	if !modeSigns(trigger.AuthMode) {
 		presented := presentedSecret(r)
 		if presented == "" {
 			return false, ""
@@ -349,6 +422,9 @@ func (h *Handler) inboundCredentialAccepted(
 	if err != nil {
 		return false, "the stored credential for this trigger could not be read"
 	}
+	if trigger.AuthMode == AuthModeStandardWebhooks {
+		return standardWebhooksSignatureMatches(r.Header, raw, secret, time.Now()), ""
+	}
 	return signatureMatches(presented, raw, secret), ""
 }
 
@@ -373,16 +449,32 @@ func readInboundRaw(r *http.Request) ([]byte, error) {
 	return io.ReadAll(limited)
 }
 
-// inboundBodyWithinCap applies the cap the STORED row's mode calls for.
+// inboundBodyWithinCap applies the cap the STORED row calls for.
 //
-// Signing triggers keep everything `readInboundRaw` was willing to read;
-// everything else is held to the 64 KiB a decorative body has no reason to
+// The question is not "does this mode sign" but "who shapes the body". A
+// signing trigger's body is the sender's own payload, and so is a GitLab
+// SECRET-TOKEN trigger's: its mode is `token`, but what arrives is GitLab's
+// event JSON — a push listing up to twenty commits with their file lists, a
+// merge request carrying its description and changes — which passes 64 KiB as
+// easily as the GitHub payloads `maxSignedInboundBody` describes. Holding it to
+// the bearer cap answered those deliveries 413 after the lookup, GitLab marked
+// the webhook failed, and the pipeline never ran: #970's defect again, on the
+// preset meant for GitLab.
+//
+// Everything else — a custom bearer trigger, whose body a person or a script
+// of ours writes — is held to the 64 KiB a decorative body has no reason to
 // exceed.
 func inboundBodyWithinCap(trigger triggerRow, raw []byte) bool {
-	if trigger.AuthMode == AuthModeHMACSHA256 {
+	if senderShapesBody(trigger) {
 		return true
 	}
 	return int64(len(raw)) <= maxInboundBody
+}
+
+// senderShapesBody reports whether the trigger's body is a provider's own
+// event payload rather than one written for this route.
+func senderShapesBody(trigger triggerRow) bool {
+	return modeSigns(trigger.AuthMode) || trigger.Provider == ProviderGitLab || trigger.Provider == ProviderGitHub
 }
 
 // decodeInboundBody reads the accepted fields out of the raw bytes.
