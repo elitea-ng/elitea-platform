@@ -104,7 +104,7 @@ const NotConfiguredCode = v2predict.NotConfiguredCode
 const (
 	skillNameMaxLength         = 64
 	skillDescriptionMaxLength  = 2304
-	skillInstructionsMaxLength = 5000
+	skillInstructionsMaxLength = v2skills.SkillInstructionsMaxLength
 
 	// PROJECT_CONTEXT_MAX_LEN in legacy/plugins/elitea_core/models/pd/project_context.py.
 	projectBackgroundMaxLength = 2500

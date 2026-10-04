@@ -19,7 +19,7 @@ Reply with ONE JSON object and nothing else. No markdown code fences, no comment
 Keys, all required:
   "name"          string. Lowercase letters, digits and hyphens only, no leading or trailing hyphen, at most 64 characters. It must not contain "claude" or "anthropic".
   "description"   string. One or two sentences saying what the skill is for. At most 2304 characters.
-  "instructions"  string. Markdown. The instructions the agent follows: what to do, in what order, what to produce, and what to avoid. Write them for the agent, addressed to the agent. At most 5000 characters.
+  "instructions"  string. Markdown. The instructions the agent follows: what to do, in what order, what to produce, and what to avoid. Write them for the agent, addressed to the agent. At most 50000 characters.
   "tags"          array of short lowercase topical strings. May be empty.
 
 Base every field on the request that follows. Do not invent capabilities the request does not ask for.`

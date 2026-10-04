@@ -77,12 +77,14 @@ VALUES ($1, 'base', 'draft', 1, $2, 'agent') RETURNING id`,
 	return agent
 }
 
-// attachCascadeChild links child as a sub-agent of parentVersionID through the
-// route that writes the reference, so the fixture is the shape production makes.
-func attachCascadeChild(t *testing.T, router chi.Router, parentVersionID int, child cascadeAgent) {
+// attachCascadeChild links child as a sub-agent of parent's version through
+// the route that writes the reference, so the fixture is the shape production
+// makes. The body names the PARENT (application_id + version_id) and the path
+// names the child, as legacy application_relation.py and the web client do.
+func attachCascadeChild(t *testing.T, router chi.Router, parent, child cascadeAgent) {
 	t.Helper()
 	body := fmt.Sprintf(`{"application_id":%d,"version_id":%d,"has_relation":true}`,
-		child.applicationID, parentVersionID)
+		parent.applicationID, parent.versionID)
 	target := fmt.Sprintf("/elitea_core/application_relation/prompt_lib/1/%d/%d",
 		child.applicationID, child.versionID)
 	request := httptest.NewRequest(http.MethodPatch, target, jsonBodyReader(body))
@@ -99,7 +101,7 @@ func TestWithdrawingAParentKeepsTheAuthorsOwnSubAgent(t *testing.T) {
 	router := cascadeRouter(pool)
 	parent := seedCascadeAgent(t, pool, "the parent")
 	child := seedCascadeAgent(t, pool, "the sub-agent")
-	attachCascadeChild(t, router, parent.versionID, child)
+	attachCascadeChild(t, router, parent, child)
 
 	recorder := publishCopyDo(t, router, parent.versionID, map[string]any{
 		"version_name":     "v-one",

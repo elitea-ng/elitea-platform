@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
@@ -183,6 +184,28 @@ const SkillEntityTypeAgent = "agent"
 // which the old skill picker renders as "n/5 skills added" and uses to disable
 // the menu. Without the same cap on the write side the counter can show 6/5.
 const MaxSkillsPerEntityVersion = 5
+
+// SkillInstructionsMaxLength is the one ceiling, in characters (runes), on a
+// skill version's instructions. elitea-web's editor already allows 50 000
+// (SKILL_INSTRUCTIONS_MAX_LENGTH in features/skills/lib/skillValidation.ts),
+// and issue #6744 asked to lift legacy's 5 000. The MCP skill tools and the
+// skill draft generator held 5 000 each, so a skill saved in the editor could
+// not be read back or edited through them. They all use this constant now,
+// and so do the REST writes here (create, version create, update, import)
+// through checkInstructionsLength. A REST write could otherwise store a skill
+// that the MCP tools then refuse to read back.
+const SkillInstructionsMaxLength = 50000
+
+// checkInstructionsLength refuses instructions longer than
+// SkillInstructionsMaxLength characters (runes) with a 400. An empty value is
+// not checked here: each write path keeps its own rule for that.
+func checkInstructionsLength(instructions string) error {
+	if utf8.RuneCountInString(instructions) > SkillInstructionsMaxLength {
+		return apierr.BadRequest(fmt.Sprintf(
+			"instructions must contain at most %d characters", SkillInstructionsMaxLength))
+	}
+	return nil
+}
 
 // SkillRelation is one row of entity_skill_mapping, as the relation form of
 // PATCH /skill/{mode}/{projectID}/{skillID} names it.
@@ -400,6 +423,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skill := req.toSkill()
+	if err := checkInstructionsLength(skill.Instructions); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	skill.AuthorID = authorID
 	created, err := h.repo.Create(r.Context(), projectID, skill)
 	if err != nil {
@@ -440,6 +467,10 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	if name == "base" {
 		apierr.Write(w, apierr.BadRequest(`"base" is reserved and cannot be used as a version name`))
+		return
+	}
+	if err := checkInstructionsLength(req.Instructions); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 
@@ -563,6 +594,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	if err := checkInstructionsLength(req.toSkill().Instructions); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 
@@ -852,6 +887,10 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	name, description, instructions, tags, err := parseSkillMarkdown(content)
 	if err != nil {
 		apierr.Write(w, apierr.BadRequest(err.Error()))
+		return
+	}
+	if err := checkInstructionsLength(instructions); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 

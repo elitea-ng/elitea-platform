@@ -78,7 +78,7 @@ export interface AddParticipantParams {
   readonly participants: readonly ParticipantAddInput[];
 }
 
-/** Response: the conversation's full, refreshed participant list (handler.go:569-571). */
+/** Response: the participants of THIS request only, in request order (added or already present; legacy parity, F5). */
 export async function addParticipantIntoConversation(params: AddParticipantParams): Promise<Participant[]> {
   const { projectId, conversationId, participants } = params;
   const wire = await fetchData<readonly ParticipantWire[]>(

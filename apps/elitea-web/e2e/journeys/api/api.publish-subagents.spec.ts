@@ -274,7 +274,7 @@ test('publishing snapshots each sub-agent into a private copy that records where
   try {
     const linked = await attachSubAgent(
       request,
-      parent.versionId,
+      parent,
       { applicationId: child.id, versionId: child.versionId },
       projectId,
     );
@@ -327,13 +327,13 @@ test('a two-level sub-agent chain is embedded at every level', async ({ request 
   const grandchild = await createPublishableAgent(request, autotestName('sa2_grand'), projectId);
 
   try {
-    for (const [parentVersionId, node] of [
-      [parent.versionId, child],
-      [child.versionId, grandchild],
+    for (const [owner, node] of [
+      [parent, child],
+      [child, grandchild],
     ] as const) {
       const linked = await attachSubAgent(
         request,
-        parentVersionId,
+        owner,
         { applicationId: node.id, versionId: node.versionId },
         projectId,
       );
@@ -410,7 +410,7 @@ test('a parent that names a sub-agent version other than base embeds exactly tha
 
     const linked = await attachSubAgent(
       request,
-      parent.versionId,
+      parent,
       { applicationId: child.id, versionId: altVersionId },
       projectId,
     );
@@ -448,7 +448,7 @@ test('withdrawing a parent removes its embedded copies and leaves the author the
   try {
     const linked = await attachSubAgent(
       request,
-      parent.versionId,
+      parent,
       { applicationId: child.id, versionId: child.versionId },
       projectId,
     );
@@ -505,7 +505,7 @@ test('re-publishing after a withdrawal makes the embedded copies again', async (
   try {
     const linked = await attachSubAgent(
       request,
-      parent.versionId,
+      parent,
       { applicationId: child.id, versionId: child.versionId },
       projectId,
     );
@@ -569,7 +569,7 @@ test('two parents can each publish while sharing one sub-agent', async ({ reques
     for (const parent of [first, second]) {
       const linked = await attachSubAgent(
         request,
-        parent.versionId,
+        parent,
         { applicationId: shared.id, versionId: shared.versionId },
         projectId,
       );
@@ -626,7 +626,7 @@ test('deleting a sub-agent detaches it from every parent that used it', async ({
     for (const parent of [first, second]) {
       const linked = await attachSubAgent(
         request,
-        parent.versionId,
+        parent,
         { applicationId: child.id, versionId: child.versionId },
         projectId,
       );
@@ -676,7 +676,7 @@ test('a circular sub-agent graph cannot be published', async ({ request }) => {
   try {
     const forward = await attachSubAgent(
       request,
-      first.versionId,
+      first,
       { applicationId: second.id, versionId: second.versionId },
       projectId,
     );
@@ -688,7 +688,7 @@ test('a circular sub-agent graph cannot be published', async ({ request }) => {
     // itself here rather than leaving the case silently unbuildable.
     const backward = await attachSubAgent(
       request,
-      second.versionId,
+      second,
       { applicationId: first.id, versionId: first.versionId },
       projectId,
     );
@@ -743,7 +743,7 @@ test('a sub-agent chain deeper than three tiers is refused with one structural f
     for (let tier = 0; tier < chain.length - 1; tier += 1) {
       const linked = await attachSubAgent(
         request,
-        chain[tier]!.versionId,
+        chain[tier]!,
         { applicationId: chain[tier + 1]!.id, versionId: chain[tier + 1]!.versionId },
         projectId,
       );
@@ -812,7 +812,7 @@ test('an attached pipeline is neither checked nor embedded as a sub-agent', asyn
       { applicationId: agentChild.id, versionId: agentChild.versionId },
       { applicationId: pipeline.id, versionId: pipeline.versionId },
     ]) {
-      const linked = await attachSubAgent(request, parent.versionId, node, projectId);
+      const linked = await attachSubAgent(request, parent, node, projectId);
       expect(linked.status(), await refusal(linked)).toBe(201);
     }
 
@@ -917,7 +917,7 @@ test('a moderator publishing inside the catalogue embeds the sub-agents and keep
   try {
     const linked = await attachSubAgent(
       request,
-      parent.versionId,
+      parent,
       { applicationId: child.id, versionId: child.versionId },
       projectId,
     );
@@ -982,13 +982,13 @@ test('the public agent detail names the project of every sub-agent tool, at each
   const grandchild = await createPublishableAgent(request, autotestName('sa13_grand'), projectId);
 
   try {
-    for (const [parentVersionId, node] of [
-      [parent.versionId, child],
-      [child.versionId, grandchild],
+    for (const [owner, node] of [
+      [parent, child],
+      [child, grandchild],
     ] as const) {
       const linked = await attachSubAgent(
         request,
-        parentVersionId,
+        owner,
         { applicationId: node.id, versionId: node.versionId },
         projectId,
       );

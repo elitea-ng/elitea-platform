@@ -315,7 +315,7 @@ func (executor *repositoryInternalSkillExecutor) update(
 			changed = true
 		}
 		if raw, present := version["instructions"]; present {
-			current.Instructions, err = boundedRequiredString(map[string]any{"instructions": raw}, "instructions", 5000)
+			current.Instructions, err = boundedRequiredString(map[string]any{"instructions": raw}, "instructions", skillsapi.SkillInstructionsMaxLength)
 			if err != nil {
 				return internalSkillBadRequest(err.Error())
 			}
@@ -467,7 +467,7 @@ func createSkillVersion(raw any) (parsedSkillVersion, error) {
 	if !ok || stringArgument(version["name"]) != "base" {
 		return parsedSkillVersion{}, errors.New("the initial skill version must be named base")
 	}
-	instructions, err := boundedRequiredString(version, "instructions", 5000)
+	instructions, err := boundedRequiredString(version, "instructions", skillsapi.SkillInstructionsMaxLength)
 	if err != nil {
 		return parsedSkillVersion{}, err
 	}

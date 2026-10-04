@@ -1057,12 +1057,13 @@ export async function readVersionExpanded(
 /**
  * The route that links one agent version into another as a SUB-AGENT.
  *
- * The URL names the CHILD and the body names the PARENT version — an order no
- * reader guesses, and the reason this is a helper rather than a line repeated
- * in each case: `internal/api/v2/eliteacore/application_relation.go` reads the
- * child's application and version out of the path and takes only
- * `version_id` from the body. `application_id` is sent because the route
- * refuses a body without it, and it is the CHILD's id there too.
+ * The URL names the CHILD and the body names the PARENT — an order no reader
+ * guesses, and the reason this is a helper rather than a line repeated in each
+ * case. The body's `application_id` and `version_id` are BOTH the parent's:
+ * `internal/api/v2/eliteacore/application_relation.go` refuses a body whose
+ * `application_id` does not own `version_id` (400 "the parent version does not
+ * belong to application_id"), as pylon's `entity_id`/`entity_version_id` check
+ * did, and the app's own association call sends the parent's ids.
  *
  * The response is returned rather than asserted, because the refusal cases need
  * it: a published parent refuses the change, and a pair already linked refuses
@@ -1070,37 +1071,44 @@ export async function readVersionExpanded(
  */
 export function attachSubAgent(
   request: APIRequestContext,
-  parentVersionId: string,
+  parent: SubAgentParent,
   child: { readonly applicationId: string; readonly versionId: string },
   projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<APIResponse> {
-  const url =
-    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
-    `${child.applicationId}/${child.versionId}`;
-  return request.patch(url, {
-    data: {
-      application_id: Number(child.applicationId),
-      version_id: Number(parentVersionId),
-      has_relation: true,
-    },
-  });
+  return changeSubAgentRelation(request, parent, child, projectId, true);
 }
 
 /** The same route with `has_relation: false` — the detach half. */
 export function detachSubAgent(
   request: APIRequestContext,
-  parentVersionId: string,
+  parent: SubAgentParent,
   child: { readonly applicationId: string; readonly versionId: string },
   projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  return changeSubAgentRelation(request, parent, child, projectId, false);
+}
+
+/** The parent agent and the version a sub-agent is linked into. */
+export interface SubAgentParent {
+  readonly id: string;
+  readonly versionId: string;
+}
+
+function changeSubAgentRelation(
+  request: APIRequestContext,
+  parent: SubAgentParent,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string,
+  hasRelation: boolean,
 ): Promise<APIResponse> {
   const url =
     `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
     `${child.applicationId}/${child.versionId}`;
   return request.patch(url, {
     data: {
-      application_id: Number(child.applicationId),
-      version_id: Number(parentVersionId),
-      has_relation: false,
+      application_id: Number(parent.id),
+      version_id: Number(parent.versionId),
+      has_relation: hasRelation,
     },
   });
 }

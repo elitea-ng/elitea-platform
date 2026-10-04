@@ -236,10 +236,13 @@ func (r *CurrentRuntimeEntityBuilderRepository) WriteRuntimeProjectContext(
 	if tag.RowsAffected() > 0 {
 		return nil
 	}
+	// updated_at is named on the first save too (UI-PD-4). The column has no
+	// default, so a context first written from chat stored updated_at NULL
+	// and the settings page showed no "last saved" time.
 	if _, err := r.pool.Exec(ctx, fmt.Sprintf(`
 		INSERT INTO %s.configuration
-			(project_id, label, elitea_title, type, section, data, status_ok, created_at)
-		VALUES ($1, 'Project Context', $2, 'project_context', 'project_context', $3, true, NOW())
+			(project_id, label, elitea_title, type, section, data, status_ok, created_at, updated_at)
+		VALUES ($1, 'Project Context', $2, 'project_context', 'project_context', $3, true, NOW(), NOW())
 		ON CONFLICT (elitea_title) DO UPDATE
 			SET data = EXCLUDED.data, updated_at = NOW()`, tenantSchema),
 		projectID, fmt.Sprintf("project_context_%d", projectID), data,

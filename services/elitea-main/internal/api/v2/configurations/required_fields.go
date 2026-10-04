@@ -397,3 +397,65 @@ func requiredUpdatedDataFieldsMessage(missing []string) string {
 		strings.Join(missing, ", ") +
 		". The data column is replaced whole, so a field this body omits is removed from the stored row."
 }
+
+// configurationFieldPair names two `data` fields that one auth method needs
+// together. The registry schema cannot state this rule: each field is
+// optional on its own, and the pairing lives in a Pydantic model validator
+// (elitea_sdk/configurations/github.py validate_auth_sections). So the pairs
+// are stated here, per type, as a table that another type can join.
+type configurationFieldPair struct {
+	first  string
+	second string
+}
+
+// configurationPairedFields lists, per configuration type, the field pairs
+// that must be set together or not at all. A type that is not listed has no
+// pairing rule.
+var configurationPairedFields = map[string][]configurationFieldPair{
+	"github": {
+		{first: "username", second: "password"},
+		{first: "app_id", second: "app_private_key"},
+	},
+}
+
+// unpairedConfigurationFields returns the pairs of `data` that carry one half
+// only, as "data.first+data.second" labels in table order. Legacy refuses such
+// a body with 400 ("Authentication is misconfigured"); this route stored it,
+// and the toolkit then failed at the first call with a provider error.
+//
+// A field counts as set when its value is truthy, the same test the legacy
+// validator applies: a non-blank string, or any other non-null value. Leaving
+// every field of a pair blank stays valid (anonymous or another method).
+func unpairedConfigurationFields(configType string, data map[string]any) []string {
+	pairs := configurationPairedFields[configType]
+	if len(pairs) == 0 || data == nil {
+		return nil
+	}
+	var unpaired []string
+	for _, pair := range pairs {
+		if configurationFieldSet(data[pair.first]) != configurationFieldSet(data[pair.second]) {
+			unpaired = append(unpaired, "data."+pair.first+"+data."+pair.second)
+		}
+	}
+	return unpaired
+}
+
+func configurationFieldSet(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case bool:
+		return typed
+	default:
+		return true
+	}
+}
+
+// unpairedConfigurationFieldsMessage keeps the legacy wording, so a client
+// that matched it still matches, and names the pairs that failed.
+func unpairedConfigurationFieldsMessage(unpaired []string) string {
+	return "Authentication is misconfigured: these fields must be provided together: " +
+		strings.Join(unpaired, ", ")
+}

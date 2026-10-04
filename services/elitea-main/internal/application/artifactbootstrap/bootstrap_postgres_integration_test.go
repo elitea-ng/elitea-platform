@@ -526,3 +526,53 @@ func (s *fakeObjectStore) Capabilities() storage.Capabilities { return storage.C
 
 var _ storage.ObjectStore = (*fakeObjectStore)(nil)
 var _ artifactbootstrap.Repository = (*bootstrapRepoAdapter)(nil)
+
+// TestArtifactTeardownRemovesUserBucketsToo pins C1. Teardown used to touch
+// "reports" and "tasks" only, so a deleted project kept every bucket a user
+// created, live, with its objects under p/<id>/. A bystander project's
+// bucket proves the teardown is scoped.
+func TestArtifactTeardownRemovesUserBucketsToo(t *testing.T) {
+	b, repo, store := newTestBootstrapper(t)
+	const projectID = "9010"
+	const bystanderID = "9011"
+
+	if err := b.BootstrapProjectBuckets(t.Context(), projectID); err != nil {
+		t.Fatalf("BootstrapProjectBuckets: %v", err)
+	}
+	for _, seed := range []struct {
+		project string
+		id      int64
+	}{{projectID, 9010}, {bystanderID, 9011}} {
+		bucket, err := repo.CreateBucket(t.Context(), repos.NewBucketInput{
+			ProjectID: seed.id, Name: "user-files", DisplayName: "User files", BucketType: "local",
+		})
+		if err != nil {
+			t.Fatalf("CreateBucket(%s): %v", seed.project, err)
+		}
+		store.seed(seed.project, "user-files", "notes.txt")
+		if _, err := repo.UpsertObject(t.Context(), repos.NewObjectInput{
+			BucketID: bucket.ID, Key: "notes.txt", ByteLength: 10, MediaType: "text/plain",
+		}); err != nil {
+			t.Fatalf("UpsertObject(%s): %v", seed.project, err)
+		}
+	}
+
+	if err := b.TeardownProjectBuckets(t.Context(), projectID); err != nil {
+		t.Fatalf("TeardownProjectBuckets: %v", err)
+	}
+
+	live, err := repo.ListBuckets(t.Context(), 9010)
+	if err != nil {
+		t.Fatalf("ListBuckets: %v", err)
+	}
+	if len(live) != 0 {
+		t.Errorf("live buckets after teardown = %d, want 0 (%+v)", len(live), live)
+	}
+	if store.objectCount() != 1 {
+		t.Errorf("objects left in the store = %d, want only the bystander's 1", store.objectCount())
+	}
+	bystander, err := repo.ListBuckets(t.Context(), 9011)
+	if err != nil || len(bystander) != 1 {
+		t.Fatalf("bystander buckets = %v (err %v), want its 1 bucket untouched", bystander, err)
+	}
+}
