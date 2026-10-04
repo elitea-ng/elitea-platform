@@ -829,6 +829,25 @@ func TestUpdateProjectInfo_EmptyName(t *testing.T) {
 	}
 }
 
+// A malformed name is the caller's mistake, so it is answered 400 before the
+// pool is consulted. The reserved personal-project prefix needs the current
+// row (a same-name PUT is a no-op), so the Postgres test covers it.
+func TestUpdateProjectInfo_RefusesAnInvalidName(t *testing.T) {
+	for body, code := range map[string]string{
+		`{"name":"   "}`: "invalid_project_name",
+		`{"name":"` + strings.Repeat("a", 257) + `"}`: "invalid_project_name",
+	} {
+		req := newRequest(http.MethodPut, "/", map[string]string{"projectID": "7"}, strings.NewReader(body))
+		w := httptest.NewRecorder()
+		newHandler().UpdateProjectInfo(w, req)
+
+		assertStatus(t, w, http.StatusBadRequest)
+		if got, _ := decodeObj(t, w)["code"].(string); got != code {
+			t.Errorf("body %.40s: code = %q, want %q", body, got, code)
+		}
+	}
+}
+
 // ---- DB-dependent methods: compile-time existence check --------------------
 //
 // Handlers below require a live pgxpool.Pool. Calling them with a nil pool

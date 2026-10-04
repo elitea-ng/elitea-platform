@@ -319,6 +319,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	webhookDestinationGuard := webhook.NewDestinationGuard(webhookAllowlist)
 
+	// The MCP OAuth and DCR proxies POST to a URL from the request body, and
+	// a project viewer may call them (#6885). The same DNS-aware, dial-time
+	// guard applies. ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST is unset by default,
+	// which refuses every private, loopback and link-local identity provider.
+	// An operator with a private IdP names it there. A malformed entry fails
+	// startup, as for the webhook allowlist above.
+	mcpOAuthAllowlist, err := webhook.ParseDestinationAllowlist(
+		splitEnvList(os.Getenv("ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST")))
+	if err != nil {
+		return fmt.Errorf("parse ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: %w", err)
+	}
+	mcpAuthorizationEgressGuard := webhook.NewDestinationGuard(mcpOAuthAllowlist)
+
 	webhookDeliveries := webhookDeliveriesRepository(pool)
 	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
 	domainEvents := events.NewPublisher(events.NoopBus{}, webhookDispatcher)
@@ -2300,10 +2313,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// #876's second half — see this variable's own composition comment,
 		// above, for why its Bus is a no-op and its one Sink is the webhook
 		// Dispatcher.
-		DomainEvents:            domainEvents,
-		WebhookDeliveries:       webhookDeliveries,
-		WebhookDispatcher:       webhookDispatcher,
-		WebhookDestinationGuard: webhookDestinationGuard,
+		DomainEvents:                domainEvents,
+		WebhookDeliveries:           webhookDeliveries,
+		WebhookDispatcher:           webhookDispatcher,
+		WebhookDestinationGuard:     webhookDestinationGuard,
+		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
 	})
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is

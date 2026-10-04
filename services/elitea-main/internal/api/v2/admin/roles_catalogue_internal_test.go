@@ -121,3 +121,40 @@ func TestMatrixSaveAcceptsADeclaredPermissionNobodyHolds(t *testing.T) {
 		t.Fatalf("the grant was not recorded: %+v", submission.desired)
 	}
 }
+
+// TestPermissionCatalogueHidesRetiredNames covers #6874's recurrence guard. A
+// retired string can still sit in a row: pylon re-seeds some on every start.
+// The matrix must not show it, and a save that names it must fail, so the
+// legacy group toggle can no longer write a prefix node back as a row.
+func TestPermissionCatalogueHidesRetiredNames(t *testing.T) {
+	granted := append([]string{"projects.projects.projects.view"}, RetiredPermissions()...)
+	catalogue := catalogueFrom(granted)
+	present := make(map[string]bool, len(catalogue))
+	for _, name := range catalogue {
+		present[name] = true
+	}
+	for _, name := range RetiredPermissions() {
+		if present[name] {
+			t.Errorf("retired permission %q is still in the catalogue", name)
+		}
+	}
+	// The exact-match child of a retired prefix is a real permission.
+	if !present["projects.projects.projects.view"] {
+		t.Error("a live child of a retired prefix disappeared from the catalogue")
+	}
+	// No declared section gate may be retired: that would hide a real gate.
+	for _, name := range declaredPermissions() {
+		if _, retired := retiredPermissions[name]; retired {
+			t.Errorf("declared permission %q is also retired", name)
+		}
+	}
+
+	current := permissionMatrix{roles: []string{"admin"}, catalogue: catalogue}
+	body := []map[string]json.RawMessage{{
+		"name":  json.RawMessage(`"admin"`),
+		"admin": json.RawMessage(`true`),
+	}}
+	if _, err := parseMatrixBody(body, current); err == nil {
+		t.Fatal("a save that names the retired prefix node \"admin\" was accepted")
+	}
+}

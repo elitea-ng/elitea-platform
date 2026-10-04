@@ -316,6 +316,13 @@ type RouterConfig struct {
 	// webhook.Handler's destinationGuard field for why that direction is
 	// fail-closed unlike WebhookDispatcher's own nil-gated degrade above.
 	WebhookDestinationGuard *webhook.DestinationGuard
+	// MCPAuthorizationEgressGuard is the SSRF guard of the MCP OAuth and DCR
+	// proxies (eliteacore/mcp_oauth_egress.go). main.go builds it from
+	// ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST. Nil does NOT disable the guard: the
+	// router then builds one with an empty allowlist, which refuses every
+	// private, loopback and link-local destination. A viewer may call these
+	// proxies (#6885), so they are never composed unguarded.
+	MCPAuthorizationEgressGuard *webhook.DestinationGuard
 	// EvalDimensionsRepo backs the Agent Evaluation DIMENSION LIBRARY — the
 	// first and, for now, only slice of that feature. Unassigned, the four
 	// routes are not registered at all, which answers 404: a stubbed 200 with
@@ -699,6 +706,8 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
 	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
 	aclEdit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLEdit)
+	aclListScope := apimw.ResolvedPermissionFlag(deps.Resolver, platformauth.PermissionModeDefault,
+		v2artifacts.WithFullACLView, artifactPermissionACLEdit)
 	create := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionCreate)
 	edit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionEdit)
 	del := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionDelete)
@@ -821,7 +830,12 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			// on every other artifact route above: this surface resolves
 			// PermissionModeDefault unconditionally, so a mode in the path
 			// would name something the router does not read.
-			r.With(aclView).Get("/bucket_permissions/{projectID}", listBucketPermissions)
+			//
+			// The GET stays at the `.view` tier, because a member needs their
+			// own row to know what a bucket allows them. The full list is for
+			// a caller who may EDIT it (#6725): aclListScope marks that
+			// caller, and the handler answers everyone else their own row.
+			r.With(aclView, aclListScope).Get("/bucket_permissions/{projectID}", listBucketPermissions)
 			r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
 			r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
 		})
@@ -1400,6 +1414,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
 		v2core.WithMCPDCRClients(mcpOAuthClientStore(cfg.Pool)),
 		v2core.WithMCPDelegatedTokens(mcpOAuthTokenStore(cfg.Pool)),
+		v2core.WithMCPAuthorizationEgressGuard(mcpAuthorizationEgressGuard(cfg)),
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
@@ -3643,17 +3658,34 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `models.project_context.view` for the reads and `.edit` for the
 				// writes. `.view` is 0062's grant, already in the history; `.edit`
 				// arrives with 0068.
+				//
+				// The project SETTINGS writes — the name, the description and
+				// the icon — take `models.project_settings.edit` instead (#6789).
+				// Under `.edit` an editor could rename a team project and change
+				// its icon; the settings are the project admin's. Shared
+				// migration 0136 grants the string to `admin` only. The project
+				// CONTEXT writes below keep `models.project_context.edit`: the
+				// context is content an editor maintains.
+				//
+				// In the caller's OWN personal project the settings writes accept
+				// `models.project_context.edit` too. A personal project has one
+				// member, and pylon made that member an `editor`.
 				requireProjectContextView := projectPermission("models.project_context.view")
 				requireProjectContextEdit := projectPermission("models.project_context.edit")
+				requireProjectSettingsEdit := apimw.RequireResolvedPermissionOrPersonalProject(
+					coreResolver, platformauth.PermissionModeDefault,
+					personalproject.NewOwnershipCheck(cfg.Pool).IsOwnPersonalProject,
+					"models.project_context.edit",
+					"models.project_settings.edit")
 				r.With(requireProjectContextView).
 					Get("/project_info/prompt_lib/{projectID}/project-info", coreHandler.ProjectInfo)
-				r.With(requireProjectContextEdit).
+				r.With(requireProjectSettingsEdit).
 					Put("/project_info/prompt_lib/{projectID}/project-info", coreHandler.UpdateProjectInfo)
 				r.With(requireProjectContextView).
 					Get("/project_icon/prompt_lib/{projectID}", coreHandler.ListProjectIcons)
-				r.With(requireProjectContextEdit).
+				r.With(requireProjectSettingsEdit).
 					Post("/project_icon/prompt_lib/{projectID}", coreHandler.CreateProjectIcon)
-				r.With(requireProjectContextEdit).
+				r.With(requireProjectSettingsEdit).
 					Delete("/project_icon/prompt_lib/{projectID}/{name}", coreHandler.DeleteProjectIcon)
 				// Registered unconditionally: this is the ONLY registration
 				// source for project-context GET/PUT/DELETE in the router every real
@@ -3705,13 +3737,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/search_options/prompt_lib/{projectID}", coreHandler.SearchOptions)
 
 				// MCP OAuth & sync. All three pylon modules declare
-				// `models.applications.tool.patch`: each one writes a project's
-				// toolkit rows, whatever the transport in front of it looks like.
+				// `models.applications.tool.patch`. Only the sync writes a
+				// project's toolkit rows, so only the sync keeps that string.
+				//
+				// The two proxies (#6885) are a CONNECTION action, not a
+				// configuration edit. eliteacore/mcp_oauth_proxy.go and
+				// mcp_dcr_clients.go/mcp_delegated_tokens.go relay one
+				// token or registration exchange and store the result bound to
+				// (project, CALLER, toolkit). They never write a toolkit row and
+				// never read or replace another member's token or client. A
+				// viewer who may run an agent must be able to authorize the MCP
+				// server that agent calls, so the proxies take the agent RUN
+				// permission, `models.applications.predict.post`. Under
+				// `tool.patch` the chat "Authorize" button failed for every
+				// viewer with "Dynamic client registration failed: access_denied".
+				//
 				// The two proxies are mode-less ProjectAPI paths in pylon, which
 				// is why they carry no `prompt_lib` segment here either.
+				requireMCPConnect := projectPermission("models.applications.predict.post")
 				requireMCPToolWrite := projectPermission("models.applications.tool.patch")
-				r.With(requireMCPToolWrite).Post("/mcp_oauth_proxy/{projectID}", coreHandler.MCPOAuthProxy)
-				r.With(requireMCPToolWrite).Post("/mcp_dcr_proxy/{projectID}", coreHandler.MCPDCRProxy)
+				r.With(requireMCPConnect).Post("/mcp_oauth_proxy/{projectID}", coreHandler.MCPOAuthProxy)
+				r.With(requireMCPConnect).Post("/mcp_dcr_proxy/{projectID}", coreHandler.MCPDCRProxy)
 				r.With(requireMCPToolWrite).Post("/mcp_sync_tools/prompt_lib/{projectID}", coreHandler.MCPSyncTools)
 
 				// The MCP REST surface (issue 252 P1). All three stay at the

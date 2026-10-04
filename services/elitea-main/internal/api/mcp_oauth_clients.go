@@ -7,8 +7,20 @@ import (
 
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
+
+// mcpAuthorizationEgressGuard returns the guard the MCP OAuth and DCR proxies
+// dial through. A nil config field gets a guard with an empty allowlist, so a
+// composition that forgets the field refuses private destinations instead of
+// reaching them.
+func mcpAuthorizationEgressGuard(cfg RouterConfig) *webhook.DestinationGuard {
+	if cfg.MCPAuthorizationEgressGuard != nil {
+		return cfg.MCPAuthorizationEgressGuard
+	}
+	return webhook.NewDestinationGuard(nil)
+}
 
 // Public DCR remains available without a master key. Confidential DCR fails closed.
 func mcpOAuthClientStore(pool *pgxpool.Pool) v2core.MCPDCRClients {

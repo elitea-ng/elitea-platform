@@ -1312,3 +1312,29 @@ describe('a sharded lane must carry one weight per shard', () => {
     expect(shardWeightMismatches(twoJobs)).toEqual([]);
   });
 });
+
+/**
+ * Project 1 carries per-project permission rows, written by the seed AFTER
+ * the migrations ran. Those rows suppress the central default-mode fallback,
+ * so a route gated on a string the seed does not list answers 403 to every
+ * persona. #1028 moved two gates to strings the seed did not list: the MCP
+ * OAuth/DCR proxies (`models.applications.predict.post`) and the project
+ * settings writes (`models.project_settings.edit`, admin only).
+ */
+describe('#1028 — project 1 grants the strings the new gates check', () => {
+  const seed = () => read(SEED_SCRIPT);
+
+  it('lists the agent run permission the MCP proxies check', () => {
+    expect(seed()).toContain("('models.applications.predict.post')");
+  });
+
+  it('grants the project settings permission to the admin role only', () => {
+    const grant = seed().match(
+      /SELECT 1, r\.id, 'models\.project_settings\.edit'[\s\S]*?WHERE r\.project_id = 1 AND r\.name = '([a-z]+)'/,
+    );
+    expect(grant, 'no admin-only grant of models.project_settings.edit to project 1').not.toBeNull();
+    expect(grant?.[1]).toBe('admin');
+    // A grant inside the broad VALUES list would reach the editor and viewer.
+    expect(seed()).not.toContain("('models.project_settings.edit')");
+  });
+});
