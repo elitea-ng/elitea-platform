@@ -20,6 +20,10 @@ type recordedRelease struct {
 	name    string
 }
 
+func recordedFrom(row configurationapp.PlatformModelDefaultModelRow) recordedRelease {
+	return recordedRelease{row.OwnerProjectID, row.Section, row.Name}
+}
+
 type fakeModelDefaults struct {
 	view     configurationapp.PlatformModelDefaultView
 	getErr   error
@@ -28,8 +32,11 @@ type fakeModelDefaults struct {
 	clears   []configurationapp.CurrentModelSection
 	usage    configurationapp.PlatformModelDefaultUsage
 	usageErr error
-	usages   []recordedRelease
-	releases []recordedRelease
+	usages   []configurationapp.PlatformModelDefaultModelRow
+	// fanOut is what the first release step answers.
+	fanOut   bool
+	releases []configurationapp.PlatformModelDefaultModelRow
+	fanOuts  []configurationapp.PlatformModelDefaultModelRow
 	sections []configurationapp.CurrentModelSection
 }
 
@@ -49,16 +56,23 @@ func (f *fakeModelDefaults) Clear(_ context.Context, section configurationapp.Cu
 }
 
 func (f *fakeModelDefaults) Usage(
-	_ context.Context, owner int32, section configurationapp.CurrentModelSection, name string,
+	_ context.Context, row configurationapp.PlatformModelDefaultModelRow,
 ) (configurationapp.PlatformModelDefaultUsage, error) {
-	f.usages = append(f.usages, recordedRelease{owner, section, name})
+	f.usages = append(f.usages, row)
 	return f.usage, f.usageErr
 }
 
-func (f *fakeModelDefaults) ReleaseDeletedModelDefault(
-	_ context.Context, owner int32, section configurationapp.CurrentModelSection, name string,
+func (f *fakeModelDefaults) ReleaseDeletedPlatformModelDefault(
+	_ context.Context, row configurationapp.PlatformModelDefaultModelRow,
+) (bool, error) {
+	f.releases = append(f.releases, row)
+	return f.fanOut, nil
+}
+
+func (f *fakeModelDefaults) ReleaseDeletedProjectModelDefaults(
+	_ context.Context, row configurationapp.PlatformModelDefaultModelRow,
 ) error {
-	f.releases = append(f.releases, recordedRelease{owner, section, name})
+	f.fanOuts = append(f.fanOuts, row)
 	return nil
 }
 
@@ -193,9 +207,9 @@ func TestGlobalModelDefaultUsageCountsThePlatformModel(t *testing.T) {
 		}
 		switch configID {
 		case "5":
-			return deletedModelRowFrom("llm", "GPT all", "gpt-all", true), true, nil
+			return deletedModelRowFrom(5, "llm", "GPT all", "gpt-all", true), true, nil
 		case "6":
-			return deletedModelRowFrom("llm", "own", "own", false), true, nil
+			return deletedModelRowFrom(6, "llm", "own", "own", false), true, nil
 		default:
 			return deletedModelRow{}, false, nil
 		}
@@ -213,7 +227,10 @@ func TestGlobalModelDefaultUsageCountsThePlatformModel(t *testing.T) {
 	if body != manager.usage {
 		t.Fatalf("usage body = %+v", body)
 	}
-	if len(manager.usages) != 1 || manager.usages[0] != (recordedRelease{1, configurationapp.CurrentModelSectionLLM, "gpt-all"}) {
+	wantRow := configurationapp.PlatformModelDefaultModelRow{
+		OwnerProjectID: 1, RowID: 5, Section: configurationapp.CurrentModelSectionLLM, Name: "gpt-all", Shared: true,
+	}
+	if len(manager.usages) != 1 || manager.usages[0] != wantRow {
 		t.Fatalf("usage request = %+v; it must count the provider model name, not the title", manager.usages)
 	}
 
@@ -227,28 +244,83 @@ func TestGlobalModelDefaultUsageCountsThePlatformModel(t *testing.T) {
 
 func TestReleaseDeletedModelDefaultCallsTheServiceForModelRows(t *testing.T) {
 	manager := &fakeModelDefaults{}
-	handler := NewHandler(nil, WithModelDefaults(manager))
+	handler := NewHandler(nil, WithPublicProjectID(1), WithModelDefaults(manager))
+	admin := withPlatformModelDelete(context.Background())
 
-	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom("llm", "Title", "gpt-own", false))
-	handler.releaseDeletedModelDefault(context.Background(), "1", deletedModelRowFrom("vectorstorage", "pgvector", "", true))
+	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom(3, "llm", "Title", "gpt-own", false))
+	handler.releaseDeletedModelDefault(admin, "1", deletedModelRowFrom(4, "vectorstorage", "pgvector", "", true))
 	// Not a model section, no name, or a malformed project: nothing to release.
-	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom("ai_credentials", "openai", "", false))
-	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom("llm", "Title", "", false))
-	handler.releaseDeletedModelDefault(context.Background(), "x", deletedModelRowFrom("llm", "Title", "gpt", false))
+	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom(5, "ai_credentials", "openai", "", false))
+	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom(6, "llm", "Title", "", false))
+	handler.releaseDeletedModelDefault(context.Background(), "x", deletedModelRowFrom(7, "llm", "Title", "gpt", false))
 
-	want := []recordedRelease{
-		{7, configurationapp.CurrentModelSectionLLM, "gpt-own"},
-		{1, configurationapp.CurrentModelSectionVectorStorage, "pgvector"},
+	want := []configurationapp.PlatformModelDefaultModelRow{
+		{OwnerProjectID: 7, Section: configurationapp.CurrentModelSectionLLM, Name: "gpt-own"},
+		{OwnerProjectID: 1, Section: configurationapp.CurrentModelSectionVectorStorage, Name: "pgvector", Shared: true},
 	}
 	if len(manager.releases) != len(want) {
 		t.Fatalf("releases = %+v, want %+v", manager.releases, want)
 	}
 	for index := range want {
+		// RowID is 0: the row is gone, so the survivor check leaves no row out.
 		if manager.releases[index] != want[index] {
 			t.Fatalf("release %d = %+v, want %+v", index, manager.releases[index], want[index])
 		}
 	}
 
 	// Without a service the hook is a no-op rather than a panic.
-	NewHandler(nil).releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom("llm", "T", "gpt", false))
+	NewHandler(nil).releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom(1, "llm", "T", "gpt", false))
+}
+
+func TestReleaseDeletedModelDefaultRunsTheFanOutAfterThePlatformStep(t *testing.T) {
+	manager := &fakeModelDefaults{fanOut: true}
+	handler := NewHandler(nil, WithPublicProjectID(1), WithModelDefaults(manager))
+	var deferred []func()
+	handler.modelDefaultRelease = func(release func()) { deferred = append(deferred, release) }
+
+	handler.releaseDeletedModelDefault(withPlatformModelDelete(context.Background()), "1",
+		deletedModelRowFrom(9, "llm", "GPT", "gpt-all", true))
+	if len(manager.releases) != 1 || len(manager.fanOuts) != 0 || len(deferred) != 1 {
+		t.Fatalf("releases=%d fanOuts=%d deferred=%d; the fan-out must not run inside the request",
+			len(manager.releases), len(manager.fanOuts), len(deferred))
+	}
+	deferred[0]()
+	if len(manager.fanOuts) != 1 || recordedFrom(manager.fanOuts[0]) != (recordedRelease{1, configurationapp.CurrentModelSectionLLM, "gpt-all"}) {
+		t.Fatalf("fanOuts = %+v", manager.fanOuts)
+	}
+
+	// No fan-out is scheduled when the first step says there is none.
+	manager = &fakeModelDefaults{}
+	handler = NewHandler(nil, WithPublicProjectID(1), WithModelDefaults(manager))
+	handler.modelDefaultRelease = func(func()) { t.Fatal("a fan-out was scheduled") }
+	handler.releaseDeletedModelDefault(context.Background(), "7", deletedModelRowFrom(9, "llm", "GPT", "own", false))
+}
+
+func TestProjectRouteDeleteOfAPublicRowReleasesNoPlatformDefault(t *testing.T) {
+	manager := &fakeModelDefaults{fanOut: true}
+	handler := NewHandler(nil, WithPublicProjectID(1), WithModelDefaults(manager))
+	handler.modelDefaultRelease = func(func()) { t.Fatal("a fan-out was scheduled") }
+
+	// The project-scoped DELETE /configuration/{public}/{id} carries no mark:
+	// it is gated by the project permission, not configuration.governance.
+	handler.releaseDeletedModelDefault(context.Background(), "1", deletedModelRowFrom(9, "llm", "GPT", "gpt-all", true))
+	if len(manager.releases) != 0 {
+		t.Fatalf("a project-route delete released platform-wide defaults: %+v", manager.releases)
+	}
+}
+
+func TestGlobalModelDefaultUsageAnswers404ForAnOutOfRangeID(t *testing.T) {
+	manager := &fakeModelDefaults{}
+	handler := NewHandler(nil, WithPublicProjectID(1), WithModelDefaults(manager))
+	handler.modelRowLookup = func(_ context.Context, _ int, configID string) (deletedModelRow, bool, error) {
+		if configurationIDColumn(configID) != "uuid::text" {
+			t.Fatalf("an out-of-range id %q was bound to the integer id column", configID)
+		}
+		return deletedModelRow{}, false, nil
+	}
+	recorder := servePlatformDefault(t, platformDefaultRouter(handler), http.MethodGet,
+		"/gateway/platform_models/99999999999/default_usage", "")
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("usage of an out-of-range id = %d, want 404", recorder.Code)
+	}
 }

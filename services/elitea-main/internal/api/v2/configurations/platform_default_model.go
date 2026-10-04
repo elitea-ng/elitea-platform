@@ -41,8 +41,9 @@ type ModelDefaultsManager interface {
 	Get(context.Context, configurationapp.CurrentModelSection) (configurationapp.PlatformModelDefaultView, error)
 	Set(context.Context, configurationapp.CurrentModelSection, string) error
 	Clear(context.Context, configurationapp.CurrentModelSection) error
-	Usage(context.Context, int32, configurationapp.CurrentModelSection, string) (configurationapp.PlatformModelDefaultUsage, error)
-	ReleaseDeletedModelDefault(context.Context, int32, configurationapp.CurrentModelSection, string) error
+	Usage(context.Context, configurationapp.PlatformModelDefaultModelRow) (configurationapp.PlatformModelDefaultUsage, error)
+	ReleaseDeletedPlatformModelDefault(context.Context, configurationapp.PlatformModelDefaultModelRow) (bool, error)
+	ReleaseDeletedProjectModelDefaults(context.Context, configurationapp.PlatformModelDefaultModelRow) error
 }
 
 var _ ModelDefaultsManager = (*configurationapp.PlatformModelDefaultService)(nil)
@@ -135,7 +136,7 @@ func (h *Handler) GlobalModelDefaultUsage(w http.ResponseWriter, r *http.Request
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
 		return
 	}
-	usage, err := h.modelDefaults.Usage(r.Context(), int32(h.publicProjectID), identity.section, identity.name)
+	usage, err := h.modelDefaults.Usage(r.Context(), identity.modelRow(int32(h.publicProjectID)))
 	if err != nil {
 		writePlatformDefaultModelFailure(r.Context(), w, "count platform model default usage failed", err)
 		return
@@ -146,6 +147,16 @@ func (h *Handler) GlobalModelDefaultUsage(w http.ResponseWriter, r *http.Request
 // releaseDeletedModelDefault clears the stored defaults that name a deleted
 // model. It runs after the delete committed, so a failure is logged and does
 // not change the response: the catalogue precedence skips the stored id.
+//
+// The first step is short and runs before the response: it clears the
+// platform-level defaults, or the owning project's default. The per-project
+// fan-out of a platform model runs after the response, in the background, so
+// the delete does not wait for every project vault.
+//
+// A public-project row is released only when the delete came through the
+// governance-gated admin route (DeleteGlobalModel). A delete through the
+// project route changes no platform-wide default: the admin console then
+// reports the platform default as no longer available.
 func (h *Handler) releaseDeletedModelDefault(ctx context.Context, projectID string, deleted deletedModelRow) {
 	if h.modelDefaults == nil || deleted.name == "" ||
 		!configurationapp.IsSupportedCurrentModelSection(deleted.section) {
@@ -155,24 +166,80 @@ func (h *Handler) releaseDeletedModelDefault(ctx context.Context, projectID stri
 	if err != nil || owner <= 0 {
 		return
 	}
+	if h.publicProjectID > 0 && owner == int64(h.publicProjectID) && !isPlatformModelDelete(ctx) {
+		return
+	}
+	row := deleted.modelRow(int32(owner))
+	// After a delete the row is gone, so no row is left out of the survivor
+	// check.
+	row.RowID = 0
 	// Detached from the request: the row is already gone, so a client that
 	// disconnects must not leave half of the release undone. Bounded, so a
 	// stuck vault cannot hold the handler.
-	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseDeletedModelDefaultTimeout)
-	defer cancel()
-	if err := h.modelDefaults.ReleaseDeletedModelDefault(
-		releaseCtx, int32(owner), deleted.section, deleted.name,
-	); err != nil {
+	platformCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseDeletedPlatformDefaultTimeout)
+	fanOut, err := h.modelDefaults.ReleaseDeletedPlatformModelDefault(platformCtx, row)
+	cancel()
+	if err != nil {
 		slog.WarnContext(ctx, "the deleted model is still named as a stored default; the catalogue skips it",
 			"project_id", projectID, "section", string(deleted.section), "err", err)
 	}
+	if !fanOut {
+		return
+	}
+	background := context.WithoutCancel(ctx)
+	h.runModelDefaultRelease(func() {
+		releaseCtx, cancel := context.WithTimeout(background, releaseDeletedModelDefaultTimeout)
+		defer cancel()
+		if err := h.modelDefaults.ReleaseDeletedProjectModelDefaults(releaseCtx, row); err != nil {
+			slog.WarnContext(releaseCtx, "some projects still name the deleted model as their default; the catalogue skips it",
+				"project_id", projectID, "section", string(deleted.section), "err", err)
+		}
+	})
 }
 
-// releaseDeletedModelDefaultTimeout bounds the release fan-out of one delete.
-const releaseDeletedModelDefaultTimeout = 2 * time.Minute
+// runModelDefaultRelease runs one background fan-out. A test replaces it
+// through modelDefaultRelease to run the fan-out inline. At most
+// maxModelDefaultReleases run at the same time; the others wait.
+func (h *Handler) runModelDefaultRelease(release func()) {
+	if h.modelDefaultRelease != nil {
+		h.modelDefaultRelease(release)
+		return
+	}
+	go func() {
+		modelDefaultReleaseSlots <- struct{}{}
+		defer func() { <-modelDefaultReleaseSlots }()
+		release()
+	}()
+}
+
+const (
+	// releaseDeletedPlatformDefaultTimeout bounds the short first step of a
+	// release, which runs before the response.
+	releaseDeletedPlatformDefaultTimeout = 15 * time.Second
+	// releaseDeletedModelDefaultTimeout bounds the background fan-out of one
+	// delete.
+	releaseDeletedModelDefaultTimeout = 10 * time.Minute
+	// maxModelDefaultReleases bounds the background fan-outs of this process.
+	maxModelDefaultReleases = 2
+)
+
+var modelDefaultReleaseSlots = make(chan struct{}, maxModelDefaultReleases)
+
+// platformModelDeleteKey marks a delete that came through DeleteGlobalModel.
+type platformModelDeleteKey struct{}
+
+func withPlatformModelDelete(ctx context.Context) context.Context {
+	return context.WithValue(ctx, platformModelDeleteKey{}, true)
+}
+
+func isPlatformModelDelete(ctx context.Context) bool {
+	marked, _ := ctx.Value(platformModelDeleteKey{}).(bool)
+	return marked
+}
 
 // deletedModelRow is what a configuration delete reports about its row.
 type deletedModelRow struct {
+	id      int32
 	section configurationapp.CurrentModelSection
 	// name is the value a stored default names: data.name for a model, and
 	// elitea_title for a vector storage row (repos/models.go reads the same).
@@ -180,12 +247,18 @@ type deletedModelRow struct {
 	shared bool
 }
 
-func deletedModelRowFrom(section, title, dataName string, shared bool) deletedModelRow {
-	row := deletedModelRow{section: configurationapp.CurrentModelSection(section), name: dataName, shared: shared}
+func deletedModelRowFrom(id int32, section, title, dataName string, shared bool) deletedModelRow {
+	row := deletedModelRow{id: id, section: configurationapp.CurrentModelSection(section), name: dataName, shared: shared}
 	if row.section == configurationapp.CurrentModelSectionVectorStorage {
 		row.name = title
 	}
 	return row
+}
+
+func (row deletedModelRow) modelRow(owner int32) configurationapp.PlatformModelDefaultModelRow {
+	return configurationapp.PlatformModelDefaultModelRow{
+		OwnerProjectID: owner, RowID: row.id, Section: row.section, Name: row.name, Shared: row.shared,
+	}
 }
 
 // lookupModelRow reads the identity of one configuration row. A test replaces
@@ -201,20 +274,21 @@ func (h *Handler) lookupModelRow(ctx context.Context, projectID int, configID st
 		return deletedModelRow{}, false, nil
 	}
 	schema := pgx.Identifier{fmt.Sprintf("p_%d", projectID)}.Sanitize()
+	var id int32
 	var section, title, dataName string
 	var shared bool
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-		SELECT section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)
+		SELECT id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)
 		  FROM %s.configuration
 		 WHERE %s = $1`, schema, configurationIDColumn(configID)), configID,
-	).Scan(&section, &title, &dataName, &shared)
+	).Scan(&id, &section, &title, &dataName, &shared)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return deletedModelRow{}, false, nil
 	}
 	if err != nil {
 		return deletedModelRow{}, false, err
 	}
-	return deletedModelRowFrom(section, title, dataName, shared), true, nil
+	return deletedModelRowFrom(id, section, title, dataName, shared), true, nil
 }
 
 // platformDefaultModelRequest checks the composition and reads ?section=.

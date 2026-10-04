@@ -319,14 +319,15 @@ func (r *CurrentModelDefaultsReader) LoadPlatformModelDefault(
 	return result, nil
 }
 
-// LoadProjectModelDefault reads one project's OWN stored default, with no
-// public or admin fallback. A project with no vault answers "not set".
+// LoadProjectModelDefault reads one project's OWN stored default for one key
+// prefix (configurationapp.CurrentModelDefaultKeys), with no public or admin
+// fallback and no lock. A project with no vault answers "not set".
 func (r *CurrentModelDefaultsReader) LoadProjectModelDefault(
 	ctx context.Context,
 	projectID int32,
-	section configurationapp.CurrentModelSection,
+	key string,
 ) (configurationapp.CurrentModelDefault, error) {
-	if ctx == nil || projectID <= 0 || !configurationapp.IsSupportedCurrentModelSection(section) {
+	if ctx == nil || projectID <= 0 || !configurationapp.IsCurrentModelDefaultKey(key) {
 		return configurationapp.CurrentModelDefault{}, configurationapp.ErrInvalidCurrentModelCatalogRequest
 	}
 	if err := ctx.Err(); err != nil {
@@ -338,7 +339,7 @@ func (r *CurrentModelDefaultsReader) LoadProjectModelDefault(
 	if err != nil {
 		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
 	}
-	result, err := readCurrentProjectModelDefault(ctx, vault, string(section))
+	result, err := readCurrentProjectModelDefault(ctx, vault, key)
 	if err != nil {
 		return configurationapp.CurrentModelDefault{}, currentModelDefaultsFailure(ctx, err)
 	}

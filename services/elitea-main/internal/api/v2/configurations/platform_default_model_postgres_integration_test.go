@@ -45,20 +45,26 @@ func (*recordingModelDefaults) Clear(context.Context, configurationapp.CurrentMo
 }
 
 func (r *recordingModelDefaults) Usage(
-	_ context.Context, owner int32, section configurationapp.CurrentModelSection, name string,
+	_ context.Context, row configurationapp.PlatformModelDefaultModelRow,
 ) (configurationapp.PlatformModelDefaultUsage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.usages = append(r.usages, recordedModelDefaultCall{owner, section, name})
-	return configurationapp.PlatformModelDefaultUsage{ModelName: name, Projects: 2}, nil
+	r.usages = append(r.usages, recordedModelDefaultCall{row.OwnerProjectID, row.Section, row.Name})
+	return configurationapp.PlatformModelDefaultUsage{ModelName: row.Name, Projects: 2}, nil
 }
 
-func (r *recordingModelDefaults) ReleaseDeletedModelDefault(
-	_ context.Context, owner int32, section configurationapp.CurrentModelSection, name string,
-) error {
+func (r *recordingModelDefaults) ReleaseDeletedPlatformModelDefault(
+	_ context.Context, row configurationapp.PlatformModelDefaultModelRow,
+) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.releases = append(r.releases, recordedModelDefaultCall{owner, section, name})
+	r.releases = append(r.releases, recordedModelDefaultCall{row.OwnerProjectID, row.Section, row.Name})
+	return false, nil
+}
+
+func (*recordingModelDefaults) ReleaseDeletedProjectModelDefaults(
+	context.Context, configurationapp.PlatformModelDefaultModelRow,
+) error {
 	return nil
 }
 
@@ -123,5 +129,17 @@ func TestPlatformModelDeleteReleasesItsStoredDefaults(t *testing.T) {
 		"/gateway/platform_models/"+strconv.Itoa(id)+"/default_usage", nil)
 	if gone.Code != http.StatusNotFound {
 		t.Fatalf("default_usage of a deleted model = %d, want 404", gone.Code)
+	}
+
+	// An id outside the 32-bit id column is no row: 404, not a PostgreSQL
+	// range error answered as 500.
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		target := "/gateway/platform_models/99999999999"
+		if method == http.MethodGet {
+			target += "/default_usage"
+		}
+		if out := platformLinkSend(t, router, method, target, nil); out.Code != http.StatusNotFound {
+			t.Fatalf("%s %s = %d, want 404; body = %s", method, target, out.Code, out.Body.String())
+		}
 	}
 }

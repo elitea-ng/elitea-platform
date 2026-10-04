@@ -363,7 +363,8 @@ func decodeFernetMasterKey(encoded []byte) ([]byte, bool) {
 // key source (#399).
 //
 // vaults creates the public project's vault when a fresh install has none.
-// main.go passes the secrets handler, which is the one vault creator.
+// main.go passes the secrets handler, which is the one vault creator. The
+// lifecycle reconciler passes nil: it only releases defaults.
 func (runtime *CurrentConfigurationsRuntime) NewPlatformModelDefaults(
 	pool *pgxpool.Pool,
 	vaults configurationapp.PlatformModelDefaultVaultCreator,
@@ -379,11 +380,11 @@ func (runtime *CurrentConfigurationsRuntime) NewPlatformModelDefaults(
 	if err != nil {
 		return nil, fmt.Errorf("construct platform default model reader: %w", err)
 	}
-	projects, err := repos.NewCurrentConfigurationLifecycleEffectsRepository(pool)
+	rows, err := repos.NewPlatformModelDefaultRowsRepository(pool)
 	if err != nil {
-		return nil, fmt.Errorf("construct platform default model project list: %w", err)
+		return nil, fmt.Errorf("construct platform default model rows: %w", err)
 	}
 	return configurationapp.NewPlatformModelDefaultService(
-		candidates, store, runtime.vaultWriter, projects, vaults, runtime.publicProjectID,
+		candidates, store, runtime.vaultWriter, rows, rows, vaults, runtime.publicProjectID,
 	)
 }

@@ -100,6 +100,9 @@ type Handler struct {
 	// modelRowLookup replaces the database read of one row's identity in a
 	// test. nil reads the pool.
 	modelRowLookup func(context.Context, int, string) (deletedModelRow, bool, error)
+	// modelDefaultRelease runs the background default fan-out of a delete in
+	// a test. nil runs it on a goroutine.
+	modelDefaultRelease func(func())
 }
 
 type Option func(*Handler)
@@ -1654,11 +1657,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	// its default can be released below (#6826). The id column is unique, so
 	// the statement deletes one row or none.
 	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1
-		RETURNING section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)`,
+		RETURNING id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)`,
 		schema, configurationIDColumn(configID))
+	var id int32
 	var section, title, dataName string
 	var shared bool
-	err := h.pool.QueryRow(ctx, q, configID).Scan(&section, &title, &dataName, &shared)
+	err := h.pool.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared)
 	if errors.Is(err, pgx.ErrNoRows) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
 		return
@@ -1671,7 +1675,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.releaseDeletedModelDefault(ctx, projectID, deletedModelRowFrom(section, title, dataName, shared))
+	h.releaseDeletedModelDefault(ctx, projectID, deletedModelRowFrom(id, section, title, dataName, shared))
 	w.WriteHeader(http.StatusNoContent)
 }
 

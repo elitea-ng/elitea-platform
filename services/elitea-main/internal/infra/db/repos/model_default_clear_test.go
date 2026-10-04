@@ -151,3 +151,97 @@ func TestClearCurrentModelDefaultRefusesAnInvalidRequest(t *testing.T) {
 		}
 	}
 }
+
+// vaultWithHiddenModelDefault returns the encrypted test vault with an LLM
+// default in the HIDDEN collection only: a legacy vault the public read
+// (storage.LoadPlatformModelDefault) still falls back to.
+func vaultWithHiddenModelDefault(t *testing.T, name string, targetProjectID int64) []byte {
+	t.Helper()
+	store := &currentVaultSharedStore{
+		key: []byte(currentVaultProjectKey), vault: []byte(currentVaultToken),
+		updateTag: pgconn.NewCommandTag("UPDATE 1"),
+	}
+	repository, err := newCurrentSecretVaultRepository(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MutateProject(context.Background(), 1, []centrysecrets.Mutation{
+		{Collection: centrysecrets.HiddenSecrets, Name: "default_llm_model_name", Value: name},
+		{Collection: centrysecrets.HiddenSecrets, Name: "default_llm_model_project_id", IntegerValue: &targetProjectID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, ok := store.execArgs[1].([]byte)
+	if !ok {
+		t.Fatalf("rewritten argument=%T", store.execArgs[1])
+	}
+	return rewritten
+}
+
+func TestClearCurrentModelDefaultRemovesAHiddenProjectDefault(t *testing.T) {
+	for _, match := range []*configurationapp.CurrentModelDefault{nil, {Name: "gpt-all", ProjectID: "1"}} {
+		store := &currentVaultSharedStore{
+			key: []byte(currentVaultProjectKey), vault: vaultWithHiddenModelDefault(t, "gpt-all", 1),
+			updateTag: pgconn.NewCommandTag("UPDATE 1"),
+		}
+		repository, err := newCurrentSecretVaultRepository(store, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cleared, err := repository.ClearCurrentModelDefault(context.Background(), configurationapp.CurrentModelDefaultClear{
+			ProjectID: 1, Section: "llm", Match: match,
+		})
+		if err != nil || !cleared {
+			t.Fatalf("match %v: cleared=%v err=%v; the platform read would still show the hidden default", match, cleared, err)
+		}
+		rewritten, ok := store.execArgs[1].([]byte)
+		if !ok {
+			t.Fatalf("rewritten argument=%T", store.execArgs[1])
+		}
+		vault, err := centrysecrets.OpenUnwrapped([]byte(currentVaultProjectKey), rewritten)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := vault.Lookup("default_llm_model_name"); !errors.Is(err, centrysecrets.ErrSecretNotFound) {
+			t.Fatalf("the hidden default survived the clear: %v", err)
+		}
+		if _, err := vault.LookupProjectID("default_llm_model_project_id"); !errors.Is(err, centrysecrets.ErrSecretNotFound) {
+			t.Fatalf("the hidden project id survived the clear: %v", err)
+		}
+	}
+}
+
+func TestClearCurrentModelDefaultReadsTheAdminVaultRegularOnly(t *testing.T) {
+	// No reader takes a hidden admin default, so a clear leaves it alone.
+	store := &currentVaultSharedStore{
+		key: []byte(currentVaultProjectKey), vault: vaultWithHiddenModelDefault(t, "gpt-all", 1),
+		updateTag: pgconn.NewCommandTag("UPDATE 1"),
+	}
+	repository, err := newCurrentSecretVaultRepository(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := repository.ClearCurrentModelDefault(context.Background(), configurationapp.CurrentModelDefaultClear{
+		Admin: true, Section: "llm",
+	})
+	if err != nil || cleared || store.execSQL != "" {
+		t.Fatalf("cleared=%v err=%v update=%q", cleared, err, store.execSQL)
+	}
+}
+
+func TestClearCurrentModelDefaultTakesATierKeyAndRefusesAnyOtherKey(t *testing.T) {
+	repository, err := newCurrentSecretVaultRepository(&currentVaultSharedStore{queryErr: pgx.ErrNoRows}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ClearCurrentModelDefault(context.Background(), configurationapp.CurrentModelDefaultClear{
+		ProjectID: 7, Section: "llm_low_tier",
+	}); err != nil {
+		t.Fatalf("tier key refused: %v", err)
+	}
+	if _, err := repository.ClearCurrentModelDefault(context.Background(), configurationapp.CurrentModelDefaultClear{
+		ProjectID: 7, Section: "openai_api_key",
+	}); !errors.Is(err, ErrInvalidCurrentVaultMutation) {
+		t.Fatalf("a non-default key was accepted: %v", err)
+	}
+}

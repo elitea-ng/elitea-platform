@@ -41,6 +41,12 @@ func (r *CurrentSecretVaultRepository) SetCurrentModelDefault(
 // made after the model was deleted is never undone. It reports whether it
 // removed anything. A vault that does not exist holds no default, so it is not
 // an error.
+//
+// A project vault is read and cleared in BOTH collections. The platform
+// default read (storage.LoadPlatformModelDefault) falls back to the public
+// vault's hidden collection, so a hidden-only default that stayed would still
+// be the platform default after a clear. The admin vault is read in its
+// regular collection only, as every reader does.
 func (r *CurrentSecretVaultRepository) ClearCurrentModelDefault(
 	ctx context.Context,
 	request configurationapp.CurrentModelDefaultClear,
@@ -48,7 +54,8 @@ func (r *CurrentSecretVaultRepository) ClearCurrentModelDefault(
 	if r == nil || r.store == nil {
 		return false, ErrCurrentVaultUnavailable
 	}
-	if ctx == nil || request.Section == "" || (!request.Admin && request.ProjectID <= 0) {
+	if ctx == nil || !configurationapp.IsCurrentModelDefaultKey(request.Section) ||
+		(!request.Admin && request.ProjectID <= 0) {
 		return false, ErrInvalidCurrentVaultMutation
 	}
 	if err := ctx.Err(); err != nil {
@@ -81,8 +88,12 @@ func (r *CurrentSecretVaultRepository) ClearCurrentModelDefault(
 		if err != nil {
 			return ErrCurrentVaultUnavailable
 		}
-		name, nameErr := opened.LookupRegular(nameKey)
-		projectID, projectIDErr := opened.LookupRegularProjectID(projectIDKey)
+		lookupName, lookupProjectID := opened.Lookup, opened.LookupProjectID
+		if request.Admin {
+			lookupName, lookupProjectID = opened.LookupRegular, opened.LookupRegularProjectID
+		}
+		name, nameErr := lookupName(nameKey)
+		projectID, projectIDErr := lookupProjectID(projectIDKey)
 		nameStored := !errors.Is(nameErr, centrysecrets.ErrSecretNotFound)
 		projectIDStored := !errors.Is(projectIDErr, centrysecrets.ErrSecretNotFound)
 		if !nameStored && !projectIDStored {
@@ -93,10 +104,17 @@ func (r *CurrentSecretVaultRepository) ClearCurrentModelDefault(
 				name.Value != request.Match.Name || projectID.Value != request.Match.ProjectID) {
 			return nil
 		}
-		if err := vault.mutate(ctx, tx, r.masterKey, []centrysecrets.Mutation{
+		mutations := []centrysecrets.Mutation{
 			{Collection: centrysecrets.RegularSecrets, Name: nameKey, Delete: true},
 			{Collection: centrysecrets.RegularSecrets, Name: projectIDKey, Delete: true},
-		}); err != nil {
+		}
+		if !request.Admin {
+			mutations = append(mutations,
+				centrysecrets.Mutation{Collection: centrysecrets.HiddenSecrets, Name: nameKey, Delete: true},
+				centrysecrets.Mutation{Collection: centrysecrets.HiddenSecrets, Name: projectIDKey, Delete: true},
+			)
+		}
+		if err := vault.mutate(ctx, tx, r.masterKey, mutations); err != nil {
 			return err
 		}
 		cleared = true

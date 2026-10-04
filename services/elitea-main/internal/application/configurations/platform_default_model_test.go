@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ── Resolution precedence (#6826) ────────────────────────────────────────────
@@ -171,8 +172,12 @@ func TestCatalogServiceReportsAPlatformDefaultReadFailure(t *testing.T) {
 type fakeDefaultStore struct {
 	mu       sync.Mutex
 	platform CurrentModelDefault
+	// projects holds each project's own default of the section key.
 	projects map[int32]CurrentModelDefault
-	err      error
+	// keyed holds the defaults of the other keys, by "<project>/<key>".
+	keyed        map[string]CurrentModelDefault
+	err          error
+	projectLoads int
 }
 
 func (s *fakeDefaultStore) LoadPlatformModelDefault(context.Context, int32, CurrentModelSection) (CurrentModelDefault, error) {
@@ -181,10 +186,14 @@ func (s *fakeDefaultStore) LoadPlatformModelDefault(context.Context, int32, Curr
 	return s.platform, s.err
 }
 
-func (s *fakeDefaultStore) LoadProjectModelDefault(_ context.Context, projectID int32, _ CurrentModelSection) (CurrentModelDefault, error) {
+func (s *fakeDefaultStore) LoadProjectModelDefault(_ context.Context, projectID int32, key string) (CurrentModelDefault, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.projects[projectID], s.err
+	s.projectLoads++
+	if IsSupportedCurrentModelSection(CurrentModelSection(key)) {
+		return s.projects[projectID], s.err
+	}
+	return s.keyed[strconv.Itoa(int(projectID))+"/"+key], s.err
 }
 
 type fakeDefaultWriter struct {
@@ -193,6 +202,8 @@ type fakeDefaultWriter struct {
 	clears  []CurrentModelDefaultClear
 	setErr  error
 	clearOK bool
+	// fail makes a clear of these projects fail; -1 is the admin vault.
+	fail map[int32]bool
 }
 
 func (w *fakeDefaultWriter) SetCurrentModelDefault(_ context.Context, selection CurrentModelDefaultSelection) error {
@@ -206,13 +217,65 @@ func (w *fakeDefaultWriter) ClearCurrentModelDefault(_ context.Context, request 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.clears = append(w.clears, request)
+	target := request.ProjectID
+	if request.Admin {
+		target = -1
+	}
+	if w.fail[target] {
+		return false, errors.New("the vault will not open")
+	}
 	return w.clearOK, nil
 }
 
-type fakeProjectLister struct{ ids []int32 }
+func (w *fakeDefaultWriter) clearedProjects() []int32 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	seen := map[int32]bool{}
+	var projects []int32
+	for _, clear := range w.clears {
+		if clear.Admin || seen[clear.ProjectID] {
+			continue
+		}
+		seen[clear.ProjectID] = true
+		projects = append(projects, clear.ProjectID)
+	}
+	sort.Slice(projects, func(i, j int) bool { return projects[i] < projects[j] })
+	return projects
+}
 
-func (l fakeProjectLister) ListActiveCurrentProjectIDs(context.Context, int) ([]int32, error) {
-	return l.ids, nil
+type fakeProjectLister struct {
+	ids   []int32
+	err   error
+	pages int
+}
+
+func (l *fakeProjectLister) ListActiveProjectIDsAfter(_ context.Context, after int32, limit int) ([]int32, error) {
+	l.pages++
+	if l.err != nil {
+		return nil, l.err
+	}
+	sorted := append([]int32(nil), l.ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	var page []int32
+	for _, id := range sorted {
+		if id > after && len(page) < limit {
+			page = append(page, id)
+		}
+	}
+	return page, nil
+}
+
+type fakeModelRows struct {
+	mu      sync.Mutex
+	exists  bool
+	queries []PlatformModelDefaultRowQuery
+}
+
+func (r *fakeModelRows) ModelRowExists(_ context.Context, query PlatformModelDefaultRowQuery) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.queries = append(r.queries, query)
+	return r.exists, nil
 }
 
 type fakeVaultCreator struct{ ensured []string }
@@ -239,19 +302,40 @@ func platformCandidates() *currentModelCandidateRepositoryStub {
 	}}
 }
 
-func newTestPlatformDefaultService(
+type platformDefaultFixture struct {
+	store   *fakeDefaultStore
+	writer  *fakeDefaultWriter
+	lister  *fakeProjectLister
+	rows    *fakeModelRows
+	service *PlatformModelDefaultService
+}
+
+func newPlatformDefaultFixture(
 	t *testing.T, store *fakeDefaultStore, writer *fakeDefaultWriter, projects []int32, vaults *fakeVaultCreator,
-) *PlatformModelDefaultService {
+) platformDefaultFixture {
 	t.Helper()
 	var creator PlatformModelDefaultVaultCreator
 	if vaults != nil {
 		creator = vaults
 	}
-	service, err := NewPlatformModelDefaultService(platformCandidates(), store, writer, fakeProjectLister{ids: projects}, creator, 1)
+	lister := &fakeProjectLister{ids: projects}
+	rows := &fakeModelRows{}
+	service, err := NewPlatformModelDefaultService(platformCandidates(), store, writer, lister, rows, creator, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service
+	return platformDefaultFixture{store: store, writer: writer, lister: lister, rows: rows, service: service}
+}
+
+func newTestPlatformDefaultService(
+	t *testing.T, store *fakeDefaultStore, writer *fakeDefaultWriter, projects []int32, vaults *fakeVaultCreator,
+) *PlatformModelDefaultService {
+	t.Helper()
+	return newPlatformDefaultFixture(t, store, writer, projects, vaults).service
+}
+
+func platformRow(name string) PlatformModelDefaultModelRow {
+	return PlatformModelDefaultModelRow{OwnerProjectID: 1, Section: CurrentModelSectionLLM, Name: name, Shared: true}
 }
 
 func TestPlatformDefaultGetListsOnlyModelsOfferedToEveryProject(t *testing.T) {
@@ -391,19 +475,25 @@ func TestPlatformDefaultUsageCountsProjectsAndThePlatform(t *testing.T) {
 			4: {Name: "other", ProjectID: "1"},
 			5: {Name: "gpt-all", ProjectID: "1"},
 		},
+		// Project 6 names the model only as its low-tier default.
+		keyed: map[string]CurrentModelDefault{"6/llm_low_tier": {Name: "gpt-all", ProjectID: "1"}},
 	}
 	service := newTestPlatformDefaultService(t, store, &fakeDefaultWriter{}, []int32{1, 2, 3, 4, 5, 6}, nil)
 
-	usage, err := service.Usage(context.Background(), 1, CurrentModelSectionLLM, "gpt-all")
+	usage, err := service.Usage(context.Background(), PlatformModelDefaultModelRow{
+		OwnerProjectID: 1, RowID: 9, Section: CurrentModelSectionLLM, Name: "gpt-all", Shared: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := PlatformModelDefaultUsage{ModelName: "gpt-all", PlatformDefault: true, Projects: 2}
+	want := PlatformModelDefaultUsage{ModelName: "gpt-all", PlatformDefault: true, Projects: 3}
 	if usage != want {
 		t.Fatalf("usage = %+v, want %+v (the public project is the platform default, not a project)", usage, want)
 	}
 
-	usage, err = service.Usage(context.Background(), 3, CurrentModelSectionLLM, "gpt-all")
+	usage, err = service.Usage(context.Background(), PlatformModelDefaultModelRow{
+		OwnerProjectID: 3, Section: CurrentModelSectionLLM, Name: "gpt-all",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,50 +502,317 @@ func TestPlatformDefaultUsageCountsProjectsAndThePlatform(t *testing.T) {
 	}
 }
 
-func TestPlatformDefaultReleaseClearsMatchingDefaultsEverywhereForAPlatformModel(t *testing.T) {
-	writer := &fakeDefaultWriter{}
-	service := newTestPlatformDefaultService(t, &fakeDefaultStore{}, writer, []int32{1, 2, 3}, nil)
+func TestPlatformDefaultUsageOfAModelAnotherRowServesIsEmpty(t *testing.T) {
+	store := &fakeDefaultStore{
+		platform: CurrentModelDefault{Name: "gpt-all", ProjectID: "1"},
+		projects: map[int32]CurrentModelDefault{2: {Name: "gpt-all", ProjectID: "1"}},
+	}
+	fixture := newPlatformDefaultFixture(t, store, &fakeDefaultWriter{}, []int32{2}, nil)
+	fixture.rows.exists = true
 
-	if err := service.ReleaseDeletedModelDefault(context.Background(), 1, CurrentModelSectionLLM, "gpt-all"); err != nil {
+	usage, err := fixture.service.Usage(context.Background(), PlatformModelDefaultModelRow{
+		OwnerProjectID: 1, RowID: 9, Section: CurrentModelSectionLLM, Name: "gpt-all", Shared: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage != (PlatformModelDefaultUsage{ModelName: "gpt-all", ServedByAnotherRow: true}) {
+		t.Fatalf("usage = %+v; another shared gpt-all row still serves the model", usage)
+	}
+	want := []PlatformModelDefaultRowQuery{{
+		ProjectID: 1, Section: CurrentModelSectionLLM, Name: "gpt-all", SharedOnly: true, ExcludeID: 9,
+	}}
+	if !reflect.DeepEqual(fixture.rows.queries, want) {
+		t.Fatalf("survivor query = %+v, want %+v (the row itself must not count)", fixture.rows.queries, want)
+	}
+	if store.projectLoads != 0 {
+		t.Fatalf("the count read %d project vaults for a model that stays", store.projectLoads)
+	}
+}
+
+func TestPlatformDefaultUsageOfANonSharedPublicRowReadsNoProject(t *testing.T) {
+	store := &fakeDefaultStore{
+		platform: CurrentModelDefault{Name: "scratch", ProjectID: "1"},
+		projects: map[int32]CurrentModelDefault{2: {Name: "scratch", ProjectID: "1"}},
+	}
+	service := newTestPlatformDefaultService(t, store, &fakeDefaultWriter{}, []int32{2}, nil)
+	row := platformRow("scratch")
+	row.Shared = false
+	usage, err := service.Usage(context.Background(), row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage != (PlatformModelDefaultUsage{ModelName: "scratch", PlatformDefault: true}) || store.projectLoads != 0 {
+		t.Fatalf("usage = %+v loads=%d; a non-shared row was offered to no other project", usage, store.projectLoads)
+	}
+}
+
+func TestPlatformDefaultUsageIsCachedUntilAWrite(t *testing.T) {
+	store := &fakeDefaultStore{projects: map[int32]CurrentModelDefault{2: {Name: "gpt-all", ProjectID: "1"}}}
+	fixture := newPlatformDefaultFixture(t, store, &fakeDefaultWriter{}, []int32{2}, nil)
+	now := time.Unix(1_700_000_000, 0)
+	fixture.service.now = func() time.Time { return now }
+	row := platformRow("gpt-all")
+
+	count := func() int {
+		t.Helper()
+		usage, err := fixture.service.Usage(context.Background(), row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return usage.Projects
+	}
+	for range 2 {
+		if count() != 1 {
+			t.Fatal("unexpected count")
+		}
+	}
+	if fixture.lister.pages != 1 {
+		t.Fatalf("a repeated count within the TTL read the projects %d times", fixture.lister.pages)
+	}
+	now = now.Add(platformModelDefaultUsageTTL)
+	count()
+	if fixture.lister.pages != 2 {
+		t.Fatalf("an expired count was reused: pages=%d", fixture.lister.pages)
+	}
+	if err := fixture.service.Clear(context.Background(), CurrentModelSectionLLM); err != nil {
+		t.Fatal(err)
+	}
+	count()
+	if fixture.lister.pages != 3 {
+		t.Fatalf("a count was reused after a write: pages=%d", fixture.lister.pages)
+	}
+}
+
+func TestPlatformDefaultReleaseClearsThePlatformFirstAndOnlyMatchingProjects(t *testing.T) {
+	store := &fakeDefaultStore{
+		projects: map[int32]CurrentModelDefault{
+			2: {Name: "gpt-all", ProjectID: "1"},
+			3: {Name: "other", ProjectID: "1"},
+		},
+		keyed: map[string]CurrentModelDefault{"4/llm_high_tier": {Name: "gpt-all", ProjectID: "1"}},
+	}
+	writer := &fakeDefaultWriter{}
+	service := newTestPlatformDefaultService(t, store, writer, []int32{1, 2, 3, 4, 5}, nil)
+
+	if err := service.ReleaseDeletedModelDefault(context.Background(), platformRow("gpt-all")); err != nil {
 		t.Fatal(err)
 	}
 	match := CurrentModelDefault{Name: "gpt-all", ProjectID: "1"}
-	var projects []int32
+	keys := []string{"llm", "llm_low_tier", "llm_high_tier"}
+	var platform []CurrentModelDefaultClear
+	for _, key := range keys {
+		platform = append(platform,
+			CurrentModelDefaultClear{ProjectID: 1, Section: key, Match: &match},
+			CurrentModelDefaultClear{Admin: true, Section: key, Match: &match},
+		)
+	}
+	if len(writer.clears) < len(platform) || !reflect.DeepEqual(writer.clears[:len(platform)], platform) {
+		t.Fatalf("the platform defaults were not cleared first, for every key: %+v", writer.clears)
+	}
+	projectClears := writer.clears[len(platform):]
+	sort.Slice(projectClears, func(i, j int) bool { return projectClears[i].ProjectID < projectClears[j].ProjectID })
+	wantProjects := []CurrentModelDefaultClear{
+		{ProjectID: 2, Section: "llm", Match: &match},
+		{ProjectID: 4, Section: "llm_high_tier", Match: &match},
+	}
+	if !reflect.DeepEqual(projectClears, wantProjects) {
+		t.Fatalf("project clears = %+v, want only the vaults that name the model: %+v", projectClears, wantProjects)
+	}
+}
+
+func TestPlatformDefaultReleaseOfAModelNobodyChoseLocksNoProjectVault(t *testing.T) {
+	store := &fakeDefaultStore{projects: map[int32]CurrentModelDefault{2: {Name: "other", ProjectID: "1"}}}
+	writer := &fakeDefaultWriter{}
+	service := newTestPlatformDefaultService(t, store, writer, []int32{2, 3, 4}, nil)
+	if err := service.ReleaseDeletedModelDefault(context.Background(), platformRow("gpt-all")); err != nil {
+		t.Fatal(err)
+	}
+	if projects := writer.clearedProjects(); !reflect.DeepEqual(projects, []int32{1}) {
+		t.Fatalf("cleared vaults = %v, want the public vault only", projects)
+	}
+}
+
+func TestPlatformDefaultReleaseSkipsAModelAnotherRowServes(t *testing.T) {
+	store := &fakeDefaultStore{
+		platform: CurrentModelDefault{Name: "gpt-4o", ProjectID: "1"},
+		projects: map[int32]CurrentModelDefault{2: {Name: "gpt-4o", ProjectID: "1"}},
+	}
+	fixture := newPlatformDefaultFixture(t, store, &fakeDefaultWriter{}, []int32{2}, nil)
+	fixture.rows.exists = true
+
+	fanOut, err := fixture.service.ReleaseDeletedPlatformModelDefault(context.Background(), platformRow("gpt-4o"))
+	if err != nil || fanOut {
+		t.Fatalf("fanOut=%v err=%v", fanOut, err)
+	}
+	if err := fixture.service.ReleaseDeletedModelDefault(context.Background(), platformRow("gpt-4o")); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.writer.clears) != 0 {
+		t.Fatalf("a model still served by another row was released: %+v", fixture.writer.clears)
+	}
+	if query := fixture.rows.queries[0]; !query.SharedOnly || query.ProjectID != 1 || query.Name != "gpt-4o" {
+		t.Fatalf("survivor query = %+v; a public survivor must be shared", query)
+	}
+}
+
+func TestPlatformDefaultReleaseOfANonSharedPublicRowClearsOnlyThePlatform(t *testing.T) {
+	writer := &fakeDefaultWriter{}
+	store := &fakeDefaultStore{projects: map[int32]CurrentModelDefault{2: {Name: "scratch", ProjectID: "1"}}}
+	fixture := newPlatformDefaultFixture(t, store, writer, []int32{2}, nil)
+	row := platformRow("scratch")
+	row.Shared = false
+	if err := fixture.service.ReleaseDeletedModelDefault(context.Background(), row); err != nil {
+		t.Fatal(err)
+	}
+	if projects := writer.clearedProjects(); !reflect.DeepEqual(projects, []int32{1}) || fixture.lister.pages != 0 {
+		t.Fatalf("cleared = %v pages=%d; a non-shared row must not fan out", projects, fixture.lister.pages)
+	}
+}
+
+func TestPlatformDefaultReleaseIsBestEffortAcrossProjects(t *testing.T) {
+	store := &fakeDefaultStore{projects: map[int32]CurrentModelDefault{
+		2: {Name: "gpt-all", ProjectID: "1"},
+		3: {Name: "gpt-all", ProjectID: "1"},
+		4: {Name: "gpt-all", ProjectID: "1"},
+	}}
+	// The admin vault and project 3 will not open.
+	writer := &fakeDefaultWriter{fail: map[int32]bool{-1: true, 3: true}}
+	service := newTestPlatformDefaultService(t, store, writer, []int32{2, 3, 4}, nil)
+
+	err := service.ReleaseDeletedModelDefault(context.Background(), platformRow("gpt-all"))
+	if err == nil {
+		t.Fatal("the failures were not reported")
+	}
+	if projects := writer.clearedProjects(); !reflect.DeepEqual(projects, []int32{1, 2, 3, 4}) {
+		t.Fatalf("cleared = %v; one failure must not stop the other projects", projects)
+	}
+}
+
+func TestPlatformDefaultReleaseClearsThePlatformWhenTheProjectListFails(t *testing.T) {
+	writer := &fakeDefaultWriter{}
+	fixture := newPlatformDefaultFixture(t, &fakeDefaultStore{}, writer, nil, nil)
+	fixture.lister.err = errors.New("the project directory is down")
+
+	if err := fixture.service.ReleaseDeletedModelDefault(context.Background(), platformRow("gpt-all")); err == nil {
+		t.Fatal("the list failure was not reported")
+	}
 	admin := 0
 	for _, clear := range writer.clears {
-		if clear.Match == nil || *clear.Match != match {
-			t.Fatalf("an unconditional clear on release: %+v", clear)
-		}
 		if clear.Admin {
 			admin++
-			continue
 		}
-		projects = append(projects, clear.ProjectID)
 	}
-	sort.Slice(projects, func(i, j int) bool { return projects[i] < projects[j] })
-	if !reflect.DeepEqual(projects, []int32{1, 2, 3}) || admin != 1 {
-		t.Fatalf("released projects = %v admin=%d", projects, admin)
+	if projects := writer.clearedProjects(); !reflect.DeepEqual(projects, []int32{1}) || admin != 3 {
+		t.Fatalf("cleared = %v admin=%d; the platform default must be cleared first", projects, admin)
+	}
+}
+
+func TestPlatformDefaultReleasePagesThroughEveryProject(t *testing.T) {
+	total := PlatformModelDefaultProjectPage*2 + 17
+	ids := make([]int32, 0, total)
+	defaults := map[int32]CurrentModelDefault{}
+	for id := int32(2); len(ids) < total; id++ {
+		ids = append(ids, id)
+		defaults[id] = CurrentModelDefault{Name: "gpt-all", ProjectID: "1"}
+	}
+	writer := &fakeDefaultWriter{}
+	fixture := newPlatformDefaultFixture(t, &fakeDefaultStore{projects: defaults}, writer, ids, nil)
+	if err := fixture.service.ReleaseDeletedModelDefault(context.Background(), platformRow("gpt-all")); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(writer.clearedProjects()); got != total+1 {
+		t.Fatalf("cleared %d vaults, want %d projects and the public one", got, total)
+	}
+	if fixture.lister.pages != 3 {
+		t.Fatalf("pages = %d, want 3", fixture.lister.pages)
 	}
 }
 
 func TestPlatformDefaultReleaseOfAProjectModelTouchesOnlyThatProject(t *testing.T) {
 	writer := &fakeDefaultWriter{}
-	service := newTestPlatformDefaultService(t, &fakeDefaultStore{}, writer, []int32{1, 2, 3}, nil)
+	fixture := newPlatformDefaultFixture(t, &fakeDefaultStore{}, writer, []int32{1, 2, 3}, nil)
 
-	if err := service.ReleaseDeletedModelDefault(context.Background(), 3, CurrentModelSectionLLM, "mine"); err != nil {
+	if err := fixture.service.ReleaseDeletedModelDefault(context.Background(), PlatformModelDefaultModelRow{
+		OwnerProjectID: 3, Section: CurrentModelSectionLLM, Name: "mine",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	want := []CurrentModelDefaultClear{{ProjectID: 3, Section: "llm", Match: &CurrentModelDefault{Name: "mine", ProjectID: strconv.Itoa(3)}}}
+	match := &CurrentModelDefault{Name: "mine", ProjectID: strconv.Itoa(3)}
+	want := []CurrentModelDefaultClear{
+		{ProjectID: 3, Section: "llm", Match: match},
+		{ProjectID: 3, Section: "llm_low_tier", Match: match},
+		{ProjectID: 3, Section: "llm_high_tier", Match: match},
+	}
 	if !reflect.DeepEqual(writer.clears, want) {
 		t.Fatalf("clears = %+v, want %+v", writer.clears, want)
+	}
+	if fixture.lister.pages != 0 || fixture.rows.queries[0].SharedOnly {
+		t.Fatalf("a project model fanned out (pages=%d) or required a shared survivor", fixture.lister.pages)
 	}
 }
 
 func TestPlatformDefaultServiceRefusesIncompleteComposition(t *testing.T) {
-	if _, err := NewPlatformModelDefaultService(nil, &fakeDefaultStore{}, &fakeDefaultWriter{}, fakeProjectLister{}, nil, 1); err == nil {
+	if _, err := NewPlatformModelDefaultService(nil, &fakeDefaultStore{}, &fakeDefaultWriter{}, &fakeProjectLister{}, &fakeModelRows{}, nil, 1); err == nil {
 		t.Fatal("a service with no candidates was composed")
 	}
-	if _, err := NewPlatformModelDefaultService(platformCandidates(), &fakeDefaultStore{}, &fakeDefaultWriter{}, fakeProjectLister{}, nil, 0); err == nil {
+	if _, err := NewPlatformModelDefaultService(platformCandidates(), &fakeDefaultStore{}, &fakeDefaultWriter{}, &fakeProjectLister{}, nil, nil, 1); err == nil {
+		t.Fatal("a service with no row reader was composed")
+	}
+	if _, err := NewPlatformModelDefaultService(platformCandidates(), &fakeDefaultStore{}, &fakeDefaultWriter{}, &fakeProjectLister{}, &fakeModelRows{}, nil, 0); err == nil {
 		t.Fatal("a service with no public project was composed")
+	}
+}
+
+// ── Mutation-route delete (lifecycle reconciler) ────────────────────────────
+
+type recordingDefaultReleaser struct {
+	rows []PlatformModelDefaultModelRow
+	err  error
+}
+
+func (r *recordingDefaultReleaser) ReleaseDeletedModelDefault(_ context.Context, row PlatformModelDefaultModelRow) error {
+	r.rows = append(r.rows, row)
+	return r.err
+}
+
+func TestLifecycleDeleteReleasesTheDefaultsOfAProjectModel(t *testing.T) {
+	releaser := &recordingDefaultReleaser{}
+	reconciler := (&CurrentConfigurationLifecycleEffectsReconciler{
+		policy: CurrentProviderProjectPolicy{PublicProjectID: 1},
+	}).WithDeletedModelDefaults(releaser)
+
+	for _, before := range []CurrentConfigurationLifecycleSnapshot{
+		{ProjectID: 7, Section: "llm", Data: map[string]any{"name": "gpt-own"}},
+		{ProjectID: 7, Section: "vectorstorage", EliteaTitle: "pgvector", Shared: true},
+		// Not released: the public project, a credential, no name.
+		{ProjectID: 1, Section: "llm", Data: map[string]any{"name": "gpt-all"}, Shared: true},
+		{ProjectID: 7, Section: "ai_credentials", Data: map[string]any{"name": "x"}},
+		{ProjectID: 7, Section: "embedding", Data: map[string]any{}},
+	} {
+		if _, err, failed := reconciler.releaseCurrentDeletedModelDefault(context.Background(), before); failed || err != nil {
+			t.Fatalf("release of %+v failed: %v", before, err)
+		}
+	}
+	want := []PlatformModelDefaultModelRow{
+		{OwnerProjectID: 7, Section: CurrentModelSectionLLM, Name: "gpt-own"},
+		{OwnerProjectID: 7, Section: CurrentModelSectionVectorStorage, Name: "pgvector", Shared: true},
+	}
+	if !reflect.DeepEqual(releaser.rows, want) {
+		t.Fatalf("releases = %+v, want %+v", releaser.rows, want)
+	}
+
+	// A vault failure is best effort; only a context error retries.
+	releaser.err = errors.New("sealed")
+	if _, err, failed := reconciler.releaseCurrentDeletedModelDefault(context.Background(), CurrentConfigurationLifecycleSnapshot{
+		ProjectID: 7, Section: "llm", Data: map[string]any{"name": "gpt-own"},
+	}); failed || err != nil {
+		t.Fatalf("a vault failure retried the event: failed=%v err=%v", failed, err)
+	}
+	releaser.err = context.DeadlineExceeded
+	if _, err, failed := reconciler.releaseCurrentDeletedModelDefault(context.Background(), CurrentConfigurationLifecycleSnapshot{
+		ProjectID: 7, Section: "llm", Data: map[string]any{"name": "gpt-own"},
+	}); !failed || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a deadline did not retry: failed=%v err=%v", failed, err)
 	}
 }
