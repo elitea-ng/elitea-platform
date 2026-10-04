@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,9 +20,11 @@ import (
 // fake AI DIAL endpoint that serves the routes the issue measured on a real
 // DIAL deployment:
 //
-//	/openai/v1/chat/completions  404 "Route is not found"
-//	/openai/v1/responses         200 (gpt only)
-//	/anthropic/v1/messages       200, native Anthropic
+//	/openai/deployments/{m}/chat/completions  200, the default route
+//	/openai/deployments/{m}/embeddings        200
+//	/openai/v1/chat/completions               404 "Route is not found"
+//	/openai/v1/responses                      200 (gpt only)
+//	/anthropic/v1/messages                    200, native Anthropic
 //
 // The assertions are what the upstream RECEIVED: the path, the auth header,
 // the query and the body. A status code alone is no evidence, because the
@@ -56,8 +59,33 @@ func newFakeDIAL(t *testing.T) *fakeDIAL {
 		d.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/openai/v1/responses":
+		switch {
+		case r.URL.Path == "/openai/v1/responses" && body["stream"] == true:
+			writeDialResponsesStream(w, body)
+		case strings.HasPrefix(r.URL.Path, "/openai/deployments/") &&
+			strings.HasSuffix(r.URL.Path, "/chat/completions") && body["stream"] == true:
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(`data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",` +
+				`"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}` +
+				"\n\ndata: [DONE]\n\n"))
+		case strings.HasPrefix(r.URL.Path, "/openai/deployments/") &&
+			strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "chatcmpl-1", "object": "chat.completion", "created": 0, "model": body["model"],
+				"choices": []map[string]any{{
+					"index": 0, "finish_reason": "stop",
+					"message": map[string]any{"role": "assistant", "content": "hi"},
+				}},
+				"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+			})
+		case strings.HasPrefix(r.URL.Path, "/openai/deployments/") &&
+			strings.HasSuffix(r.URL.Path, "/embeddings"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list", "model": "text-embedding-3-small",
+				"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": []float64{0.1, 0.2}}},
+				"usage": map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+			})
+		case r.URL.Path == "/openai/v1/responses":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "resp_1", "object": "response", "created_at": 0, "status": "completed",
 				"model": body["model"],
@@ -67,7 +95,7 @@ func newFakeDIAL(t *testing.T) *fakeDIAL {
 				}},
 				"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
 			})
-		case "/anthropic/v1/messages":
+		case r.URL.Path == "/anthropic/v1/messages":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "msg_1", "type": "message", "role": "assistant", "model": body["model"],
 				"content":     []map[string]any{{"type": "text", "text": "hi"}},
@@ -100,13 +128,19 @@ func (d *fakeDIAL) only(t *testing.T) dialRequest {
 // leaked onto a versionless route.
 func dialAccount(t *testing.T, d *fakeDIAL) *EliteaAccount {
 	t.Helper()
-	return accountWithRowsAt(t, d.URL, [][]any{
-		credentialRow("dial-1", "epam-dial", map[string]any{
-			"api_base":    d.URL,
-			"api_key":     "dial-key",
-			"api_version": "2024-02-01",
-		}),
+	return dialAccountOfType(t, d, DialCredentialType)
+}
+
+// dialAccountOfType is dialAccount over a credential row of configType. The
+// row's own type is what decides whether the DIAL routes apply.
+func dialAccountOfType(t *testing.T, d *fakeDIAL, configType string) *EliteaAccount {
+	t.Helper()
+	row := credentialRow("dial-1", "epam-dial", map[string]any{
+		"api_base":    d.URL,
+		"api_key":     "dial-key",
+		"api_version": "2024-02-01",
 	})
+	return accountWithRowsAt(t, d.URL, [][]any{append(row, configType)})
 }
 
 // dialCtx is the context the /llm handler builds for a model on protocol p:
@@ -118,6 +152,7 @@ func dialCtx(model string, p DialProtocol) *schemas.BifrostContext {
 	bc.SetValue(ContextKeyLinkedCredential, LinkedCredential{
 		ProjectID: callerProject, ConfigID: "dial-1", Title: "epam-dial", DialProtocol: p,
 	})
+	bc.SetValue(ContextKeyDispatchKind, DispatchChat)
 	return bc
 }
 
@@ -238,40 +273,169 @@ func TestDialOpenAIProtocolResponsesRequest(t *testing.T) {
 	}
 }
 
-// TestDialDefaultProtocolIsUnchanged is the control. The default protocol, and
-// a pin with no protocol at all, must build exactly the key the gateway built
-// before the field existed: the credential's api-version alias, and no family.
-// The same chat request then takes the Azure-shaped route, which the fake DIAL
-// answers 404 — the defect the openai protocol exists to avoid.
-func TestDialDefaultProtocolIsUnchanged(t *testing.T) {
+// TestDialDefaultProtocolUsesTheDeploymentRoute is the control, and the fix
+// for the route DIAL does not serve. bifrost builds /openai/v1/chat/completions
+// for every non-Claude Azure chat; DIAL answers it 404. The default protocol
+// must reach the deployment route with the credential's api-version, streamed
+// or not, and an embedding must reach the deployment embeddings route.
+func TestDialDefaultProtocolUsesTheDeploymentRoute(t *testing.T) {
 	for name, p := range map[string]DialProtocol{"zero": "", "azure": DialProtocolAzure} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(name+"/chat", func(t *testing.T) {
 			d := newFakeDIAL(t)
-			a := dialAccount(t, d)
-
-			keys, err := a.GetKeysForProvider(dialCtx("gpt-5", p), schemas.Azure)
-			if err != nil {
-				t.Fatalf("GetKeysForProvider: %v", err)
+			core := newCore(t, dialAccount(t, d))
+			resp, bErr := core.ChatCompletionRequest(dialCtx("gpt-4o", p),
+				reasoningChat("gpt-4o", &schemas.ChatReasoning{Effort: schemas.Ptr("low")}))
+			if bErr != nil {
+				t.Fatalf("ChatCompletionRequest: %+v", bErr)
 			}
-			if len(keys) != 1 {
-				t.Fatalf("keys = %d, want 1", len(keys))
+			if resp == nil || len(resp.Choices) == 0 {
+				t.Fatalf("empty completion: %+v", resp)
 			}
-			alias, ok := keys[0].Aliases["gpt-5"]
-			if !ok || alias.AzureAliasCfg == nil || alias.APIVersion == nil ||
-				*alias.APIVersion != "2024-02-01" {
-				t.Fatalf("alias = %+v, want the credential's api-version alias exactly as before", alias)
+			got := d.only(t)
+			if got.path != "/openai/deployments/gpt-4o/chat/completions" {
+				t.Fatalf("path = %q, want the deployment route DIAL serves", got.path)
 			}
-			if alias.ModelFamily != nil {
-				t.Fatalf("alias.ModelFamily = %q, want none on the default protocol", *alias.ModelFamily)
+			if v := got.query.Get("api-version"); v != "2024-02-01" || len(got.query) != 1 {
+				t.Errorf("query = %q, want exactly the credential's api-version", got.query.Encode())
 			}
-
-			core := newCore(t, a)
-			_, _ = core.ChatCompletionRequest(dialCtx("gpt-5", p),
-				reasoningChat("gpt-5", &schemas.ChatReasoning{Effort: schemas.Ptr("low")}))
-			if got := d.only(t); got.path != "/openai/v1/chat/completions" {
-				t.Fatalf("path = %q, want the unchanged Azure-shaped chat route", got.path)
+			if v := got.header.Get("Api-Key"); v != "dial-key" {
+				t.Errorf("api-key = %q, want the credential's key", v)
 			}
 		})
+		t.Run(name+"/embedding", func(t *testing.T) {
+			d := newFakeDIAL(t)
+			core := newCore(t, dialAccount(t, d))
+			ctx := dialCtx("text-embedding-3-small", p)
+			ctx.SetValue(ContextKeyDispatchKind, DispatchEmbedding)
+			_, bErr := core.EmbeddingRequest(ctx, &schemas.BifrostEmbeddingRequest{
+				Provider: schemas.Azure, Model: "text-embedding-3-small",
+				Input: &schemas.EmbeddingInput{Text: schemas.Ptr("hello")},
+			})
+			if bErr != nil {
+				t.Fatalf("EmbeddingRequest: %+v", bErr)
+			}
+			got := d.only(t)
+			if got.path != "/openai/deployments/text-embedding-3-small/embeddings" ||
+				got.query.Get("api-version") != "2024-02-01" {
+				t.Fatalf("request = %s?%s, want the deployment embeddings route", got.path, got.query.Encode())
+			}
+		})
+	}
+	// A Gemini deployment is not gpt and not Claude: the deployment route is
+	// the only DIAL route that serves it.
+	t.Run("gemini", func(t *testing.T) {
+		d := newFakeDIAL(t)
+		core := newCore(t, dialAccount(t, d))
+		ch, bErr := core.ChatCompletionStreamRequest(dialCtx("gemini-2.5-pro", ""),
+			reasoningChat("gemini-2.5-pro", nil))
+		if bErr != nil {
+			t.Fatalf("ChatCompletionStreamRequest: %+v", bErr)
+		}
+		for range ch {
+		}
+		if got := d.only(t); got.path != "/openai/deployments/gemini-2.5-pro/chat/completions" {
+			t.Fatalf("stream path = %q, want the deployment route", got.path)
+		}
+	})
+}
+
+// TestDialDefaultProtocolKeepsTheClaudeRoute proves the default protocol does
+// not move a model that already worked: bifrost reads a Claude name as the
+// Anthropic family and sends it to the Messages route, and so does the probe
+// (DialRouteFor).
+func TestDialDefaultProtocolKeepsTheClaudeRoute(t *testing.T) {
+	d := newFakeDIAL(t)
+	core := newCore(t, dialAccount(t, d))
+	if _, bErr := core.ChatCompletionRequest(dialCtx("claude-sonnet-4-5", ""),
+		reasoningChat("claude-sonnet-4-5", nil)); bErr != nil {
+		t.Fatalf("ChatCompletionRequest: %+v", bErr)
+	}
+	if got := d.only(t); got.path != "/anthropic/v1/messages" {
+		t.Fatalf("path = %q, want the Messages route a Claude name took before", got.path)
+	}
+	if DialRouteFor("", "claude-sonnet-4-5") != DialRouteMessages {
+		t.Error("DialRouteFor disagrees with the runtime for a Claude name")
+	}
+}
+
+// TestDialDeploymentRouteNeedsAKnownOperation keeps every request the gateway
+// did not mark (the Responses API, text completion, audio) on the key it had
+// before: the api-version alias and no endpoint override.
+func TestDialDeploymentRouteNeedsAKnownOperation(t *testing.T) {
+	a := dialAccount(t, newFakeDIAL(t))
+	ctx := dialCtx("gpt-4o", "")
+	ctx.SetValue(ContextKeyDispatchKind, DispatchKind(""))
+	keys, err := a.GetKeysForProvider(ctx, schemas.Azure)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("GetKeysForProvider = %v, %v", keys, err)
+	}
+	alias := keys[0].Aliases["gpt-4o"]
+	if alias.AzureAliasCfg == nil || alias.Endpoint != nil ||
+		alias.APIVersion == nil || *alias.APIVersion != "2024-02-01" {
+		t.Fatalf("alias = %+v, want the api-version alias and no endpoint override", alias)
+	}
+}
+
+// TestDialRoutesNeedAnAIDialRow is the type gate. Three credential types share
+// the Azure provider. An azure_open_ai credential serves
+// /openai/v1/chat/completions, so it keeps that route, and a protocol on the
+// pin does not reach it, whatever the model row claims about the link.
+func TestDialRoutesNeedAnAIDialRow(t *testing.T) {
+	for _, configType := range []string{"azure_open_ai", "open_ai_azure"} {
+		for _, p := range []DialProtocol{"", DialProtocolOpenAI, DialProtocolAnthropic} {
+			t.Run(configType+"/"+string(p), func(t *testing.T) {
+				a := dialAccountOfType(t, newFakeDIAL(t), configType)
+				keys, err := a.GetKeysForProvider(dialCtx("gpt-4o", p), schemas.Azure)
+				if err != nil || len(keys) != 1 {
+					t.Fatalf("GetKeysForProvider = %v, %v", keys, err)
+				}
+				alias := keys[0].Aliases["gpt-4o"]
+				if alias.ModelFamily != nil {
+					t.Errorf("alias.ModelFamily = %q, want none on a %s row", *alias.ModelFamily, configType)
+				}
+				if alias.AzureAliasCfg == nil || alias.Endpoint != nil ||
+					alias.APIVersion == nil || *alias.APIVersion != "2024-02-01" {
+					t.Fatalf("alias = %+v, want only the api-version alias", alias)
+				}
+			})
+		}
+	}
+}
+
+// TestAzureCredentialWithoutAPIKeyIsRefused: an Azure-class credential with no
+// api_key would make bifrost authenticate with DefaultAzureCredential, which
+// sends the gateway's own ambient Azure token to the tenant's endpoint. The
+// account refuses it before dispatch, and the endpoint receives nothing.
+func TestAzureCredentialWithoutAPIKeyIsRefused(t *testing.T) {
+	for _, configType := range []string{DialCredentialType, "azure_open_ai", "open_ai_azure"} {
+		for name, apiKey := range map[string]any{"absent": nil, "empty": "", "blank": "  "} {
+			t.Run(configType+"/"+name, func(t *testing.T) {
+				d := newFakeDIAL(t)
+				data := map[string]any{"api_base": d.URL}
+				if apiKey != nil {
+					data["api_key"] = apiKey
+				}
+				row := append(credentialRow("dial-1", "epam-dial", data), configType)
+				a := accountWithRowsAt(t, d.URL, [][]any{row})
+				_, err := a.GetKeysForProvider(dialCtx("gpt-4o", ""), schemas.Azure)
+				if !errors.Is(err, ErrIncompleteCredential) {
+					t.Fatalf("error = %v, want %v", err, ErrIncompleteCredential)
+				}
+				if !strings.Contains(err.Error(), "api_key") {
+					t.Errorf("error = %v, want it to name api_key", err)
+				}
+
+				core := newCore(t, a)
+				if _, bErr := core.ChatCompletionRequest(dialCtx("gpt-4o", ""), reasoningChat("gpt-4o", nil)); bErr == nil {
+					t.Fatal("the chat was dispatched with no api_key")
+				}
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				if len(d.reqs) != 0 {
+					t.Fatalf("the endpoint received %d requests; want none", len(d.reqs))
+				}
+			})
+		}
 	}
 }
 

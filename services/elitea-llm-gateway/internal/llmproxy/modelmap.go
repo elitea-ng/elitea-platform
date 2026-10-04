@@ -332,6 +332,16 @@ func applyDialRequestShape(ctx *schemas.BifrostContext) {
 	ctx.SetValue(schemas.BifrostContextKeyChangeRequestType, schemas.ResponsesRequest)
 }
 
+// markDispatchKind records the operation this request dispatches. The account
+// builds the AI DIAL deployment route from it (legacy issue #6707): DIAL
+// serves a chat completion and an embedding on different deployment paths,
+// and core resolves the key before it calls the provider.
+func markDispatchKind(ctx *schemas.BifrostContext, kind account.DispatchKind) {
+	if ctx != nil {
+		ctx.SetValue(account.ContextKeyDispatchKind, kind)
+	}
+}
+
 // publishRequestModel records the model this request dispatches, so the account
 // can build the Azure api-version alias for it (issue #455). bifrost accepts a
 // per-key api-version only inside Key.Aliases, and it resolves that map by the

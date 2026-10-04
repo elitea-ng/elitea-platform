@@ -799,7 +799,19 @@ func (m *ModelResolver) applyCredentialLink(
 
 	// Legacy issue #6707. The DIAL protocol is a statement about an ai_dial
 	// endpoint, so a row that links any other credential type ignores it.
-	if credentialType != account.DialCredentialType {
+	//
+	// The type is the RESOLVED credential row's own type. The expanded link
+	// shape carries a configuration_type, but the model row's author writes
+	// it: a link that calls an azure_open_ai credential "ai_dial" must not
+	// change the route and the auth header used against that credential. A
+	// link the resolver cannot find has no type it can trust, so it gets the
+	// default protocol. The account applies the same rule to the credential
+	// row it loads (account.GetKeysForProvider).
+	if !refFound || ref.typ != account.DialCredentialType {
+		if credentialType == account.DialCredentialType && link.dialProtocolOf() != "" {
+			m.logger.WarnContext(ctx, "model names a DIAL protocol for a credential that is not a resolved ai_dial row; using the default",
+				"project_id", scopeProjectID, "model", mo.ID, "credential_found", refFound)
+		}
 		return
 	}
 	protocol, known := account.ParseDialProtocol(link.dialProtocolOf())

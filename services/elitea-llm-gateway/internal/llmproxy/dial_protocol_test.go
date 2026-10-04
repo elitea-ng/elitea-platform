@@ -11,6 +11,7 @@ package llmproxy
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -28,6 +29,7 @@ type dialSpy struct {
 	link       account.LinkedCredential
 	pinned     bool
 	changeType any
+	kind       any
 }
 
 func (s *dialSpy) ChatCompletionRequest(
@@ -36,8 +38,24 @@ func (s *dialSpy) ChatCompletionRequest(
 	s.mu.Lock()
 	s.link, s.pinned = ctx.Value(account.ContextKeyLinkedCredential).(account.LinkedCredential)
 	s.changeType = ctx.Value(schemas.BifrostContextKeyChangeRequestType)
+	s.kind = ctx.Value(account.ContextKeyDispatchKind)
 	s.mu.Unlock()
 	return s.dispatchSpy.ChatCompletionRequest(ctx, req)
+}
+
+func (s *dialSpy) EmbeddingRequest(
+	ctx *schemas.BifrostContext, req *schemas.BifrostEmbeddingRequest,
+) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
+	s.mu.Lock()
+	s.kind = ctx.Value(account.ContextKeyDispatchKind)
+	s.mu.Unlock()
+	return s.dispatchSpy.EmbeddingRequest(ctx, req)
+}
+
+func (s *dialSpy) dispatchKind() any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.kind
 }
 
 func (s *dialSpy) observed() (account.LinkedCredential, bool, any) {
@@ -59,6 +77,19 @@ func dialModelRow(rawProtocol string) fakeModelRow {
 		title: "Team Model",
 		data: []byte(fmt.Sprintf(
 			`{"name":"dial-model","ai_credentials":{"elitea_title":"team-dial","private":false}%s}`, extra)),
+	}
+}
+
+// dialExpandedModelRow is a model row in the EXPANDED link shape. Its
+// configuration_type is what the row's author wrote, which need not be the
+// credential row's own type.
+func dialExpandedModelRow(linkType, rawProtocol string) fakeModelRow {
+	return fakeModelRow{
+		title: "Team Model",
+		data: []byte(fmt.Sprintf(
+			`{"name":"dial-model","dial_protocol":%s,"ai_credentials":{"elitea_title":"team-dial","private":false,`+
+				`"configuration_type":%q,"configuration_uuid":"cred-dial","configuration_project_id":%q}}`,
+			rawProtocol, linkType, mapProjectID)),
 	}
 }
 
@@ -196,5 +227,70 @@ func TestDialProtocolDoesNotFollowARoutingRewrite(t *testing.T) {
 	}
 	if changeType != nil {
 		t.Errorf("change-request-type = %v after a rewrite; the routed chat request must stay chat", changeType)
+	}
+}
+
+// TestDialProtocolFollowsTheCredentialRowType is the design guard. The
+// expanded link shape lets a model row's author state the credential type. A
+// row that calls an azure_open_ai credential "ai_dial" must not change the
+// route or the auth header used against that credential; a row that misnames
+// a real ai_dial credential still gets its protocol, because the credential
+// row's own type decides.
+func TestDialProtocolFollowsTheCredentialRowType(t *testing.T) {
+	for _, tc := range []struct {
+		name, linkType, rowType string
+		want                    account.DialProtocol
+	}{
+		{name: "link claims ai_dial, row is azure_open_ai", linkType: "ai_dial", rowType: "azure_open_ai"},
+		{name: "link claims ai_dial, row is open_ai_azure", linkType: "ai_dial", rowType: "open_ai_azure"},
+		{name: "link and row agree", linkType: "ai_dial", rowType: "ai_dial", want: account.DialProtocolOpenAI},
+		{name: "link misnames an ai_dial row", linkType: "azure_open_ai", rowType: "ai_dial", want: account.DialProtocolOpenAI},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, spy := newDialHandler(t, dialExpandedModelRow(tc.linkType, `"openai"`), tc.rowType)
+			postDialChat(t, h)
+			link, pinned, changeType := spy.observed()
+			if !pinned {
+				t.Fatal("the credential pin is missing; the link must still resolve")
+			}
+			if link.DialProtocol != tc.want {
+				t.Errorf("pin.DialProtocol = %q, want %q", link.DialProtocol, tc.want)
+			}
+			if converts := changeType == schemas.ResponsesRequest; converts != (tc.want == account.DialProtocolOpenAI) {
+				t.Errorf("change-request-type = %v, want conversion only for a real ai_dial row", changeType)
+			}
+		})
+	}
+}
+
+// TestDialProtocolNeedsAResolvedCredential: an expanded link whose title the
+// resolver cannot find has no credential type it can trust, so the protocol
+// does not apply.
+func TestDialProtocolNeedsAResolvedCredential(t *testing.T) {
+	row := dialExpandedModelRow("ai_dial", `"anthropic"`)
+	row.data = []byte(strings.Replace(string(row.data), `"team-dial"`, `"not-in-scope"`, 1))
+	h, spy := newDialHandler(t, row, account.DialCredentialType)
+	postDialChat(t, h)
+	link, _, _ := spy.observed()
+	if link.DialProtocol != "" {
+		t.Fatalf("pin.DialProtocol = %q for an unresolved credential, want none", link.DialProtocol)
+	}
+}
+
+// TestDispatchKindReachesTheAccount: the account builds the DIAL deployment
+// route per operation, so the chat and the embedding handlers must name their
+// operation on the context core hands to the account.
+func TestDispatchKindReachesTheAccount(t *testing.T) {
+	h, spy := newDialHandler(t, dialModelRow(""), account.DialCredentialType)
+	postDialChat(t, h)
+	if got := spy.dispatchKind(); got != account.DispatchChat {
+		t.Errorf("chat dispatch kind = %v, want %q", got, account.DispatchChat)
+	}
+	rec := postAs(t, h, "/llm/v1/embeddings", mapProjectID, `{"model":"Team Model","input":"hi"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("embeddings status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := spy.dispatchKind(); got != account.DispatchEmbedding {
+		t.Errorf("embedding dispatch kind = %v, want %q", got, account.DispatchEmbedding)
 	}
 }
