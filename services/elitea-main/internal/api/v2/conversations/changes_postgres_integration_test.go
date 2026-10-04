@@ -323,3 +323,32 @@ func jsonHasError(body []byte, code string) bool {
 	var payload changesync.ErrorBody
 	return json.Unmarshal(body, &payload) == nil && payload.Error == code
 }
+
+// TestConversationDeltaPrivateThenDeletedWhileOffline: a member who synced a
+// public conversation, then went offline while it was made private and
+// deleted, must still be told to drop it. Its access_private marker can no
+// longer join a live conversation, and its private deletion tombstone names
+// neither the member as author nor as a former participant.
+func TestConversationDeltaPrivateThenDeletedWhileOffline(t *testing.T) {
+	pool := newChangesPool(t)
+	withdrawn := seedChat(t, pool, "public, then withdrawn", false, 8, 8)
+	neverPublic := seedChat(t, pool, "always private", true, 8, 8)
+
+	first := listChanges(t, pool, "", "7", nil)
+	if fmt.Sprint(rowIDs(first)) != fmt.Sprint([]int{withdrawn}) {
+		t.Fatalf("member 7 first sync rows = %v, want the public conversation", rowIDs(first))
+	}
+
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE p_1.chat_conversations SET is_private = true WHERE id = $1`, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	deleteChat(t, pool, withdrawn)
+	deleteChat(t, pool, neverPublic)
+
+	got := tombstonesByID(listChanges(t, pool, first.NextCursor, "7", nil))
+	want := map[int64]string{int64(withdrawn): changesync.ReasonDeleted}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("member 7 tombstones = %v, want %v (and no word of the never-public conversation)", got, want)
+	}
+}

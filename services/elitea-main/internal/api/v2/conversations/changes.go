@@ -182,8 +182,14 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	//   conversation        a deletion — of a public conversation to everyone;
 	//                       of a private one to its author, its former user
 	//                       participants (their access_participant rows were
-	//                       written when the mappings were deleted first) and
-	//                       project admins;
+	//                       written when the mappings were deleted first),
+	//                       project admins, and — when it was public once (an
+	//                       access_private row exists) — everyone: a member
+	//                       who cached it while public and was offline while
+	//                       it was made private and deleted has no other
+	//                       record left, because the access_private row can
+	//                       no longer join a live conversation. The id and
+	//                       uuid belonged to a conversation everyone could see;
 	//   access_private      a conversation turned private the caller can no
 	//                       longer see;
 	//   access_participant  the caller was removed and can no longer see it;
@@ -205,8 +211,9 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 		           OR t.author_id::text = $1::text
 		           OR $%[5]d::boolean
 		           OR EXISTS (SELECT 1 FROM %[1]s.chat_sync_tombstones a
-		                      WHERE a.kind = 'access_participant' AND a.entity_id = t.entity_id
-		                        AND a.user_id = $1::text)))
+		                      WHERE a.entity_id = t.entity_id
+		                        AND ((a.kind = 'access_participant' AND a.user_id = $1::text)
+		                             OR a.kind = 'access_private'))))
 		   OR (t.kind = 'access_private' AND c.id IS NOT NULL AND NOT COALESCE(%[6]s, false))
 		   OR (t.kind = 'access_participant' AND t.user_id = $1::text
 		       AND c.id IS NOT NULL AND NOT COALESCE(%[6]s, false))
