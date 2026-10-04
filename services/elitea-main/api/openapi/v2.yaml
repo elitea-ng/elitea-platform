@@ -109,6 +109,14 @@ tags:
   - name: tracing
   - name: webhooks
     description: OpenTelemetry trace ingest (collect/otlp proxy) and status
+  - name: branding
+    description: |
+      The deployment's resolved brand pack (ADR-0024), as served to clients
+      before sign-in.
+  - name: discovery
+    description: |
+      The public discovery document (ADR-0025 decision 1): what a client given
+      only a deployment's origin needs to know before it signs in.
 
 # ---------------------------------------------------------------------------
 # Reusable components
@@ -8655,6 +8663,104 @@ components:
           description: Unquoted content hash of the served bootstrap body.
         saved:
           type: boolean
+    DiscoveryDocument:
+      type: object
+      description: >-
+        The public discovery document served at
+        `/.well-known/elitea-client` (ADR-0025 decision 1). The key set is a
+        contract: adding a key is additive, renaming or removing one bumps
+        `client_contract`. NOTE(W2): marshalled from
+        internal/api/v2/discovery/document.go:36 (`Document`).
+      required:
+        - server_version
+        - client_contract
+        - deployment_kind
+        - display_name
+        - brand_pack_url
+        - native_auth
+        - client_policy
+        - min_client_version
+      properties:
+        server_version:
+          type: string
+          description: >-
+            The server release as `major.minor` only (the full build string
+            is admin-only), or `dev` for a build without a release version.
+          example: "1.62"
+        client_contract:
+          type: string
+          description: The client contract version this server speaks (ADR-0025 decision 6).
+          example: "1.0"
+        deployment_kind:
+          type: string
+          enum: [saas, self_hosted]
+          description: Who operates the deployment (ELITEA_DEPLOYMENT_KIND).
+        display_name:
+          type: string
+          description: The product name from the resolved brand pack.
+        brand_pack_url:
+          type: string
+          description: >-
+            Absolute, content-addressed URL of the brand pack JSON
+            (`.../api/v2/branding/pack.json?v=<etag>`).
+        native_auth:
+          description: >-
+            The native authorization endpoints, or null while no native
+            client is registered on this deployment.
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/NativeAuthEndpoints'
+        client_policy:
+          $ref: '#/components/schemas/ClientPublicPolicy'
+        min_client_version:
+          type: object
+          description: >-
+            Registered client id → the lowest client version this deployment
+            serves. Always an object; empty when no minimum is set.
+          additionalProperties: { type: string }
+    NativeAuthEndpoints:
+      type: object
+      description: >-
+        Endpoints of the native authorization server (ADR-0025 decision 3).
+        Every URL is absolute. NOTE(W2): internal/api/v2/discovery/document.go:54
+        (`NativeAuth`).
+      required:
+        - issuer
+        - authorization_endpoint
+        - token_endpoint
+        - revocation_endpoint
+        - code_challenge_methods_supported
+      properties:
+        issuer:
+          type: string
+          description: >-
+            The deployment origin; a client compares an authorization
+            response's `iss` (RFC 9207) against it.
+        authorization_endpoint: { type: string }
+        token_endpoint: { type: string }
+        revocation_endpoint: { type: string }
+        code_challenge_methods_supported:
+          type: array
+          items: { type: string }
+    ClientPublicPolicy:
+      type: object
+      description: >-
+        The public subset of the native client policy (ADR-0025 decision 5);
+        the full policy travels with every token response. NOTE(W2):
+        internal/api/v2/discovery/document.go:65 (`PublicPolicy`).
+      required: [require_device_lock, offline_enabled, min_client_version]
+      properties:
+        require_device_lock:
+          type: boolean
+          description: The client must refuse to run without a device passcode or biometric lock.
+        offline_enabled:
+          type: boolean
+          description: Offline storage is allowed.
+        min_client_version:
+          type: string
+          description: >-
+            Deployment-wide minimum client version; empty means none. A
+            per-client entry in `min_client_version` of the document wins.
     BrandPack:
       type: object
       description: >-
@@ -10003,6 +10109,61 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /.well-known/elitea-client:
+    # Root-mounted (RFC 8615), outside /api/v2 and outside the auth group
+    # (internal/api/router.go). The path-level server override is what puts
+    # it at the origin root instead of under the global /api/v2 base; the
+    # conformance loader honours it (internal/api/oapiserver/conformance.go).
+    servers:
+      - url: /
+        description: The deployment origin root
+    get:
+      operationId: getClientDiscovery
+      summary: Public discovery document for clients
+      description: |
+        What a client given only a deployment's origin needs before it signs
+        in (ADR-0025 decision 1): the server version (`major.minor`), the
+        client contract version, the deployment kind, the brand's display
+        name and pack URL, the native authorization endpoints (`null` while
+        no native client is registered), the public client policy and the
+        minimum client version per registered client id. It discloses nothing
+        the deployment's login page does not.
+
+        Caching: strong `ETag` (hash of the body), `Cache-Control: no-cache`
+        (the body follows database state), `If-None-Match` answers 304. When
+        the deployment has no configured public origin the URLs are built
+        from the request's Host and the response carries
+        `Vary: Host, X-Forwarded-Proto`. A failing source answers 503
+        `no-store` rather than a document that would wrongly say "no native
+        sign-in".
+      tags: [discovery]
+      security: []
+      responses:
+        '200':
+          description: The discovery document.
+          headers:
+            ETag:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveryDocument'
+        '304':
+          description: If-None-Match matched the current entity tag.
+          headers:
+            ETag:
+              schema: { type: string }
+        '503':
+          description: A source of the document is unavailable; retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /elitea_core/mcp_oauth_proxy/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -11288,6 +11449,71 @@ paths:
               schema: { type: string, format: binary }
         '404': { $ref: '#/components/responses/404' }
 
+  /branding/pack.json:
+    # Served OUTSIDE the auth group like bootstrap.js (ADR-0025 decision 2;
+    # route registered at internal/api/router.go, root level).
+    get:
+      operationId: getBrandingPackJSON
+      summary: The resolved brand pack as JSON, with absolute references
+      description: |
+        Serves the same resolved brand pack as `GET /branding/bootstrap.js`
+        (one resolver, one ETag), as JSON, with every same-origin reference
+        (`assets.*`, `typography.fontFaces[].url`, `product.docsUrl`) made
+        absolute against the deployment's public origin (`DEPLOYMENT_URL`).
+        Unauthenticated by design: a native client brands its sign-in screen
+        with it.
+
+        On a deployment with no brand pack of its own the response is the
+        product default pack (200), and `X-Elitea-Brand-Layers` says
+        `default`. That header lists the contributing layers bottom first:
+        `default` or `file`, then `db` when the admin Branding section
+        contributed.
+
+        Caching matches bootstrap.js: strong `ETag`; `no-cache` on the bare
+        URL; `public, max-age=31536000, immutable` when `?v=` equals the
+        current ETag value; a stale `?v=` answers 302 to the current URL;
+        `If-None-Match` answers 304. When the deployment has no configured
+        public origin the absolute URLs are built from the request's Host,
+        the response carries `Vary: Host, X-Forwarded-Proto` and its own
+        entity tag, and it is never immutable.
+      tags: [branding]
+      security: []
+      parameters:
+        - name: v
+          in: query
+          required: false
+          schema: { type: string }
+          description: >-
+            Content version token — the current ETag value without quotes,
+            as `brand_pack_url` in the discovery document carries it.
+      responses:
+        '200':
+          description: The resolved brand pack.
+          headers:
+            ETag:
+              description: Strong entity tag of the resolved pack state.
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+            X-Elitea-Brand-Layers:
+              description: Comma-separated contributing layers (`default`, `file`, `db`).
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrandPack'
+        '302':
+          description: >-
+            The `?v=` token does not match the current ETag value; Location
+            points at the current-version URL.
+          headers:
+            Location:
+              schema: { type: string }
+        '304':
+          description: If-None-Match matched the current entity tag.
+          headers:
+            ETag:
+              schema: { type: string }
   /branding/bootstrap.js:
     # NOTE(W3): served OUTSIDE the auth group — the SPA shell loads this
     # script before a session exists (UI reimplementation spec §4.3 delivery

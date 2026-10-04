@@ -59,6 +59,12 @@ var publicByDesign = map[string]string{
 	"/readyz":   "readiness, same reason.",
 	"/startupz": "startup, same reason.",
 
+	// The discovery document (ADR-0025 decision 1). A native client given
+	// only an origin reads it before it can hold any credential; it carries
+	// the version (major.minor), deployment kind, brand name and the public
+	// sign-in endpoints and policy — nothing a login page does not show.
+	"/.well-known/elitea-client": "the ADR-0025 discovery document. Anonymous by definition: it is how a client learns how to sign in.",
+
 	// The served API documentation (S251). These three are the static v2.yaml
 	// spec and the page that renders it — the same bytes for every caller,
 	// describing the shape of the API and carrying no tenant data. They are

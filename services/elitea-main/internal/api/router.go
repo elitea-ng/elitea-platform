@@ -31,6 +31,7 @@ import (
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
@@ -69,6 +70,7 @@ import (
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -145,6 +147,20 @@ type RouterConfig struct {
 	// login page can never disagree about the brand. Nil builds one here
 	// from BrandPackPath and Pool — the shape every test uses.
 	Branding *v2branding.Resolver
+	// DeploymentKind is published in the discovery document (ADR-0025
+	// decision 1): "saas" or "self_hosted", read from ELITEA_DEPLOYMENT_KIND
+	// in cmd/elitea-main/deployment_kind_config.go. Empty means self_hosted.
+	DeploymentKind string
+	// PublicOrigin is the deployment's public origin
+	// (publicorigin.Normalize(DEPLOYMENT_URL)). The discovery document and
+	// /api/v2/branding/pack.json make their URLs absolute against it. Empty
+	// derives the origin from each request and marks the response Vary.
+	PublicOrigin string
+	// NativeAuth and ClientPolicy feed the discovery document (ADR-0025
+	// WP2/WP4). Nil means `native_auth: null` and the default public policy.
+	// Keep them nil INTERFACES: a typed nil pointer here would be called.
+	NativeAuth   v2discovery.NativeAuthSource
+	ClientPolicy v2discovery.ClientPolicySource
 	// Mailer is outbound e-mail (ADR-0024 WP7): invitations, moderation
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
@@ -1198,7 +1214,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	//
 	// brandingResolver is built above the browser-auth routes. The admin
 	// routes below invalidate the same resolver on a save.
-	brandingHandler := v2branding.NewHandler(v2branding.Config{Resolver: brandingResolver})
+	brandingHandler := v2branding.NewHandler(v2branding.Config{
+		Resolver:     brandingResolver,
+		PublicOrigin: cfg.PublicOrigin,
+	})
 	// A nil *Composer must stay a nil INTERFACE for the With* options to
 	// recognise "no mailer"; a typed nil inside the interface would pass
 	// their check and panic on first use.
@@ -1213,6 +1232,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	brandingPackages := cfg.BrandingPackages
 	r.Get("/api/v2/branding/bootstrap.js", brandingHandler.Bootstrap)
 	r.Head("/api/v2/branding/bootstrap.js", brandingHandler.Bootstrap)
+	// The same resolved pack as JSON, with absolute references, for clients
+	// that are not a browser on this origin (ADR-0025 decision 2). Public for
+	// the same reason as the bootstrap script: it is the brand a sign-in
+	// screen renders, before any credential exists.
+	r.Get(v2branding.PackJSONPath, brandingHandler.PackJSON)
+	r.Head(v2branding.PackJSONPath, brandingHandler.PackJSON)
+	// The discovery document (ADR-0025 decision 1): what a client given only
+	// this deployment's origin needs before it signs in. Root-mounted under
+	// /.well-known/ (RFC 8615), above the Auth group like the routes around
+	// it, and forwarded by every browser edge as an exact path.
+	discoveryHandler := v2discovery.NewHandler(v2discovery.Config{
+		ServerVersion:  buildinfo.Version,
+		DeploymentKind: cfg.DeploymentKind,
+		PublicOrigin:   cfg.PublicOrigin,
+		Brand:          brandingResolver,
+		NativeAuth:     cfg.NativeAuth,
+		ClientPolicy:   cfg.ClientPolicy,
+	})
+	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
+	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
 	// Uploaded brand assets (ADR-0024 decision 3): public for the same
 	// reason as /icons — <img src>, <link rel="icon"> and @font-face fetches
 	// carry no credential. Content-addressed and immutable; the route

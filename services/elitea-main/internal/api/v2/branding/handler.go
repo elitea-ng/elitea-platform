@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/httpcache"
 )
 
 // Cache-Control values per spec §4.3 channel C:
@@ -21,6 +22,10 @@ const (
 
 // Config carries the handler's wiring inputs.
 type Config struct {
+	// PublicOrigin is the deployment's public origin
+	// (publicorigin.Normalize of DEPLOYMENT_URL) that pack.json makes its
+	// references absolute against. Empty means "derive it from the request".
+	PublicOrigin string
 	// PackPath is the file layer (BRAND_PACK_PATH env var). Empty means no
 	// file layer. Ignored when Resolver is set.
 	PackPath string
@@ -36,7 +41,9 @@ type Config struct {
 // its strong ETag are taken from the current Snapshot per request. The
 // Resolver caches, so this costs one indexed query per TTL, not per request.
 type Handler struct {
-	resolver *Resolver
+	resolver     *Resolver
+	publicOrigin string
+	packJSON     packJSONCache
 }
 
 // NewHandler wires the handler. It never fails: every degradation path is
@@ -46,7 +53,7 @@ func NewHandler(cfg Config) *Handler {
 	if resolver == nil {
 		resolver = NewResolver(ResolverConfig{PackPath: cfg.PackPath})
 	}
-	return &Handler{resolver: resolver}
+	return &Handler{resolver: resolver, publicOrigin: cfg.PublicOrigin}
 }
 
 // Resolver exposes the handler's resolver so the admin save path can
@@ -128,7 +135,7 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", snap.ETag)
 	w.Header().Set("Cache-Control", cacheControl)
 
-	if etagMatches(r.Header.Get("If-None-Match"), snap.ETag) {
+	if httpcache.ETagMatches(r.Header.Get("If-None-Match"), snap.ETag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -144,51 +151,4 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(snap.Body)
-}
-
-// etagMatches implements If-None-Match evaluation (RFC 9110 §13.1.2) against
-// one current entity tag: a list of entity-tags or "*", weak comparison (a
-// W/ prefix on the client's copy still matches — permitted for GET 304
-// revalidation).
-//
-// Tokenization follows RFC 9110 §8.8.3: an entity-tag is a quoted string, so
-// list splitting happens only on commas OUTSIDE quotes — the single
-// entity-tag `"abc,*,def"` is one (non-matching) tag, not three candidates.
-// "*" is only valid as the ENTIRE field value, never as a list member.
-func etagMatches(ifNoneMatch, etag string) bool {
-	if ifNoneMatch == "" {
-		return false
-	}
-	if strings.TrimSpace(ifNoneMatch) == "*" {
-		return true
-	}
-	for _, candidate := range splitETagList(ifNoneMatch) {
-		candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "W/")
-		if candidate == etag {
-			return true
-		}
-	}
-	return false
-}
-
-// splitETagList splits an If-None-Match field value on commas that sit
-// outside quoted strings. Entity-tags cannot contain a DQUOTE (etagc
-// excludes it, RFC 9110 §8.8.3), so a plain quote toggle is exact — there is
-// no escaping to worry about.
-func splitETagList(v string) []string {
-	var out []string
-	inQuote := false
-	start := 0
-	for i := 0; i < len(v); i++ {
-		switch v[i] {
-		case '"':
-			inQuote = !inQuote
-		case ',':
-			if !inQuote {
-				out = append(out, v[start:i])
-				start = i + 1
-			}
-		}
-	}
-	return append(out, v[start:])
 }

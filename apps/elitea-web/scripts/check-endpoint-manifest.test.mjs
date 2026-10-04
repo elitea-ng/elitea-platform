@@ -667,7 +667,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 266 -> 269: exchangeMcpOAuthGrant, registerMcpOAuthClient, and
 // deleteProjectContext. Existing handwritten callers keep the manifest count unchanged.
 // Combined main and Rust branch contract surface after the September integration.
-const GENERATED_OPERATION_COUNT = 274;
+// 274 -> 276 (ADR-0025 WP1): getClientDiscovery (`GET /.well-known/elitea-client`,
+// path-level `servers: [{url: /}]`) and getBrandingPackJSON
+// (`GET /branding/pack.json`). Both are for native clients; the web app reads
+// its brand through bootstrap.js, so neither has a browser caller and the
+// manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 276;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

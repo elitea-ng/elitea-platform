@@ -414,6 +414,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PackPath: brandPack.Path,
 		Pool:     pool,
 	})
+	// ADR-0025 WP1: the discovery document and the brand pack JSON are
+	// anonymous documents with absolute URLs. Both settings are read once.
+	deploymentKind, err := deploymentKindFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load deployment kind: %w", err)
+	}
+	publicOrigin, err := publicOriginFromEnv(os.LookupEnv, logger)
+	if err != nil {
+		return fmt.Errorf("load public origin: %w", err)
+	}
 
 	// Outbound e-mail (ADR-0024 WP7, gap G7). The environment is the BOOTSTRAP
 	// DEFAULT; the admin E-mail page's rows lay over it, and the resolver
@@ -2181,6 +2191,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
+		DeploymentKind:               deploymentKind,
+		PublicOrigin:                 publicOrigin,
 		Mailer:                       mailComposer,
 		EmailSettings:                emailResolver,
 		BrandingPackages:             brandingPackages,

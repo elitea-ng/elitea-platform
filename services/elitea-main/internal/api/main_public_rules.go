@@ -52,6 +52,9 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// alternative covers the content-addressed ?v=<etag> URL that
 		// branding.Handler hands out for the immutable cache entry.
 		uriRule("go.branding.bootstrap", `^/api/v2/branding/bootstrap\.js(\?.*)?$`),
+		// The same pack as JSON for native clients (ADR-0025 decision 2):
+		// read before sign-in to brand the sign-in screen. Same ?v= shape.
+		uriRule("go.branding.pack_json", `^/api/v2/branding/pack\.json(\?.*)?$`),
 		// Uploaded brand assets: <img src>, <link rel="icon"> and @font-face
 		// fetches carry no credential. The path is content-addressed
 		// (kind/<sha256>.<ext>) and the handler admits nothing else.
@@ -66,6 +69,10 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// each dependency's state. The query alternative covers a monitor's
 		// cache-busting parameter.
 		uriRule("go.health.healthz", `^/healthz(\?.*)?$`),
+		// The discovery document (ADR-0025 decision 1): how a client given
+		// only an origin learns how to sign in, so it can carry no
+		// credential. Exact path, no query: the document takes no parameter.
+		uriRule("go.discovery.well_known", `^/\.well-known/elitea-client$`),
 		// SCIM 2.0 (shared migration 0135). router.go mounts both outside
 		// the session Auth group, because a SCIM caller is an identity
 		// provider with a SCIM client credential and never has a browser
