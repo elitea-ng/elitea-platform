@@ -1,8 +1,10 @@
 package admin_test
 
 // ADR-0025 WP1 acceptance: a Branding save moves bootstrap.js, pack.json and
-// the discovery document to the SAME new version at once — one resolver, one
-// ETag — against a real `centry.platform_config`. Reuses newConfigPool and
+// the discovery document at once — one resolver — against a real
+// `centry.platform_config`. pack.json has its OWN entity tag (its body carries
+// the origin and, unbranded, the product default), and discovery publishes
+// exactly that tag. Reuses newConfigPool and
 // configDo from config_values_postgres_integration_test.go: set
 // ELITEA_TEST_DATABASE_URL to run.
 
@@ -76,8 +78,8 @@ func TestBranding_SaveMovesPackJSONAndDiscoveryWithBootstrap(t *testing.T) {
 	if before.layers != "default" || before.name != v2branding.ProductDefault().Product.Name {
 		t.Fatalf("fresh install: layers %q name %q, want the product default", before.layers, before.name)
 	}
-	if before.packETag != before.bootETag {
-		t.Fatalf("fresh install: pack.json ETag %q != bootstrap ETag %q", before.packETag, before.bootETag)
+	if want := origin + v2branding.PackJSONPath + "?v=" + strings.Trim(before.packETag, `"`); before.packURL != want {
+		t.Fatalf("fresh install: discovery brand_pack_url = %q, want %q", before.packURL, want)
 	}
 
 	rec := configDo(t, router, http.MethodPut, "/admin/branding/administration", map[string]any{
@@ -94,10 +96,10 @@ func TestBranding_SaveMovesPackJSONAndDiscoveryWithBootstrap(t *testing.T) {
 	if after.bootETag == before.bootETag {
 		t.Fatal("bootstrap ETag did not move across a save")
 	}
-	if after.packETag != after.bootETag {
-		t.Errorf("after save: pack.json ETag %q != bootstrap ETag %q", after.packETag, after.bootETag)
+	if after.packETag == before.packETag {
+		t.Fatal("pack.json ETag did not move across a save")
 	}
-	if want := origin + v2branding.PackJSONPath + "?v=" + strings.Trim(after.bootETag, `"`); after.packURL != want {
+	if want := origin + v2branding.PackJSONPath + "?v=" + strings.Trim(after.packETag, `"`); after.packURL != want {
 		t.Errorf("discovery brand_pack_url = %q, want %q", after.packURL, want)
 	}
 }
