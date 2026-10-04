@@ -93,6 +93,13 @@ type Handler struct {
 	// replaces them.
 	llmModelRow          func(ctx context.Context, projectID, configID string) (storedConfigurationRow, bool, error)
 	platformModelExposed func(ctx context.Context, model, credentialTitle string) (bool, error)
+	// modelDefaults is the platform default model service (#6826,
+	// platform_default_model.go). nil makes its admin routes answer 503 and
+	// makes a delete release no stored default.
+	modelDefaults ModelDefaultsManager
+	// modelRowLookup replaces the database read of one row's identity in a
+	// test. nil reads the pool.
+	modelRowLookup func(context.Context, int, string) (deletedModelRow, bool, error)
 }
 
 type Option func(*Handler)
@@ -1643,8 +1650,19 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1`, schema, configurationIDColumn(configID))
-	ct, err := h.pool.Exec(ctx, q, configID)
+	// RETURNING names the deleted row, so a model that some project stored as
+	// its default can be released below (#6826). The id column is unique, so
+	// the statement deletes one row or none.
+	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1
+		RETURNING section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)`,
+		schema, configurationIDColumn(configID))
+	var section, title, dataName string
+	var shared bool
+	err := h.pool.QueryRow(ctx, q, configID).Scan(&section, &title, &dataName, &shared)
+	if errors.Is(err, pgx.ErrNoRows) {
+		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+		return
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.ErrorContext(ctx, "configuration delete failed",
@@ -1653,10 +1671,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if ct.RowsAffected() == 0 {
-		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
-		return
-	}
+	h.releaseDeletedModelDefault(ctx, projectID, deletedModelRowFrom(section, title, dataName, shared))
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -349,7 +349,15 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
-	AdminUI            *adminui.Config
+	// PlatformModelDefaults is the platform default model service (#6826). It
+	// backs /api/v2/admin/gateway/default_model, the default_usage count a
+	// platform-model delete reads, the release of stored defaults after a
+	// model delete, and the seed that gives a new project the platform
+	// default. It is built from the Configurations runtime in main.go.
+	// Unassigned, the admin routes answer 503 and nothing is seeded; every
+	// project still reads the platform default through the catalogue.
+	PlatformModelDefaults PlatformModelDefaults
+	AdminUI               *adminui.Config
 	// ObjectStore is the new S3/Azure/GCS-compatible backend (see
 	// docs/plans/storage-migration-plan.md). S8 reads it for the bucket-plane
 	// DELETE cascade, but only inside newProductionRouter — it is
@@ -616,6 +624,13 @@ func (p supportProjectProvisioner) Provision(
 	return result.ProjectID, nil
 }
 
+// PlatformModelDefaults is what the router needs from the platform default
+// model service: the admin and delete surface, and the provisioning seed.
+type PlatformModelDefaults interface {
+	v2configs.ModelDefaultsManager
+	projectprovisioning.ProjectDefaultModelSeeder
+}
+
 // newProjectProvisioner builds the project-create pipeline (#333).
 //
 // ok is false without a pool, in which case the create route answers 503 rather
@@ -645,6 +660,11 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// The vector store (#371) IS conditional — see this function's doc comment.
 	if cfg.ProjectVectorStore != nil {
 		options = append(options, projectprovisioning.WithVectorStore(cfg.ProjectVectorStore))
+	}
+	// The platform default model seed (#6826) is optional too: a project
+	// created without it reads the platform default at request time.
+	if cfg.PlatformModelDefaults != nil {
+		options = append(options, projectprovisioning.WithDefaultModelSeeder(cfg.PlatformModelDefaults))
 	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
@@ -1367,6 +1387,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
 		v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
 		v2configs.WithPublicProjectID(apimw.PublicProjectID()),
+		v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 	)
 	artifactHandler := cfg.ArtifactHandler
 	if artifactHandler == nil {
@@ -2450,6 +2471,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						// credentials ONLY, so the two surfaces are mounted
 						// together and global_models.go enforces that pairing.
 						r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes())
+						// The PLATFORM DEFAULT model (#6826): which platform
+						// model a new project starts with, and what a project
+						// with no usable default of its own falls back to.
+						// platform_default_model.go has the precedence.
+						r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes())
 					})
 				})
 			})

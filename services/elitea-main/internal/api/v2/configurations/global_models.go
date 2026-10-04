@@ -196,6 +196,9 @@ func (h *Handler) GlobalModelRoutes() chi.Router {
 	r.Post("/", h.CreateGlobalModel)
 	r.Put("/{configID}", h.UpdateGlobalModel)
 	r.Delete("/{configID}", h.DeleteGlobalModel)
+	// What the delete confirmation reads first (#6826): how many projects
+	// name this model as their default. platform_default_model.go.
+	r.Get("/{configID}/default_usage", h.GlobalModelDefaultUsage)
 	return r
 }
 
