@@ -56,6 +56,8 @@ import type {
   AnalyticsAgentsList,
   AnalyticsCostBreakdown,
   AnalyticsDetailEnvelope,
+  AnalyticsEvaluationRun,
+  AnalyticsExecution,
   AnalyticsToolsList,
   AnalyticsUsersList,
   ErrorResponse,
@@ -2003,6 +2005,531 @@ export function useGetAnalyticsCosts<
   const queryOptions = getGetAnalyticsCostsQueryOptions(
     projectId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getExecutionAnalyticsResponse200 = {
+  data: AnalyticsExecution;
+  status: 200;
+};
+
+export type getExecutionAnalyticsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getExecutionAnalyticsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getExecutionAnalyticsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getExecutionAnalyticsResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type getExecutionAnalyticsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getExecutionAnalyticsResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type getExecutionAnalyticsResponseSuccess =
+  getExecutionAnalyticsResponse200 & {
+    headers: Headers;
+  };
+export type getExecutionAnalyticsResponseError = (
+  | getExecutionAnalyticsResponse400
+  | getExecutionAnalyticsResponse401
+  | getExecutionAnalyticsResponse403
+  | getExecutionAnalyticsResponse404
+  | getExecutionAnalyticsResponse500
+  | getExecutionAnalyticsResponse501
+) & {
+  headers: Headers;
+};
+
+export type getExecutionAnalyticsResponse =
+  getExecutionAnalyticsResponseSuccess | getExecutionAnalyticsResponseError;
+
+export const getGetExecutionAnalyticsUrl = (
+  projectId: string,
+  executionId: string,
+) => {
+  return `/elitea_core/analytics_execution/prompt_lib/${projectId}/${executionId}`;
+};
+
+/**
+ * Legacy issues 6667 and 6816. Reads gateway.llm_request_logs by the
+ * execution id, with NO date window: a run is a fixed set of calls. The
+ * figures include child attributions, which are the calls signed with an
+ * id of the form `<execution_id>:<suffix>`.
+ *
+ * `available: false` is not zero. A run admitted before shared migration
+ * 0100, or a run whose calls the gateway has pruned, answers 200 with
+ * `available: false`, an `unavailable_reason` and NO figure keys. A run
+ * that made no model call answers `available: true` with zero totals.
+ *
+ * Money is an ESTIMATE at the gateway.gateway_models catalogue rate, the
+ * same estimate /analytics_costs publishes under `estimate`.
+ * @summary One runtime execution's tokens, estimated cost, models and tools
+ */
+export const getExecutionAnalytics = async (
+  projectId: string,
+  executionId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getExecutionAnalyticsResponse> => {
+  return eliteaFetch<getExecutionAnalyticsResponse>(
+    getGetExecutionAnalyticsUrl(projectId, executionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetExecutionAnalyticsQueryKey = (
+  projectId: string,
+  executionId: string,
+) => {
+  return [
+    `/elitea_core/analytics_execution/prompt_lib/${projectId}/${executionId}`,
+  ] as const;
+};
+
+export const getGetExecutionAnalyticsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getExecutionAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getExecutionAnalytics>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetExecutionAnalyticsQueryKey(projectId, executionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getExecutionAnalytics>>
+  > = ({ signal }) =>
+    getExecutionAnalytics(projectId, executionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getExecutionAnalytics>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetExecutionAnalyticsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getExecutionAnalytics>>
+>;
+export type GetExecutionAnalyticsQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useGetExecutionAnalytics<
+  TData = Awaited<ReturnType<typeof getExecutionAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getExecutionAnalytics>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getExecutionAnalytics>>,
+          TError,
+          Awaited<ReturnType<typeof getExecutionAnalytics>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetExecutionAnalytics<
+  TData = Awaited<ReturnType<typeof getExecutionAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getExecutionAnalytics>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getExecutionAnalytics>>,
+          TError,
+          Awaited<ReturnType<typeof getExecutionAnalytics>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetExecutionAnalytics<
+  TData = Awaited<ReturnType<typeof getExecutionAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getExecutionAnalytics>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary One runtime execution's tokens, estimated cost, models and tools
+ */
+
+export function useGetExecutionAnalytics<
+  TData = Awaited<ReturnType<typeof getExecutionAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getExecutionAnalytics>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetExecutionAnalyticsQueryOptions(
+    projectId,
+    executionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getEvaluationRunAnalyticsResponse200 = {
+  data: AnalyticsEvaluationRun;
+  status: 200;
+};
+
+export type getEvaluationRunAnalyticsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getEvaluationRunAnalyticsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getEvaluationRunAnalyticsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getEvaluationRunAnalyticsResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type getEvaluationRunAnalyticsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getEvaluationRunAnalyticsResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type getEvaluationRunAnalyticsResponseSuccess =
+  getEvaluationRunAnalyticsResponse200 & {
+    headers: Headers;
+  };
+export type getEvaluationRunAnalyticsResponseError = (
+  | getEvaluationRunAnalyticsResponse400
+  | getEvaluationRunAnalyticsResponse401
+  | getEvaluationRunAnalyticsResponse403
+  | getEvaluationRunAnalyticsResponse404
+  | getEvaluationRunAnalyticsResponse500
+  | getEvaluationRunAnalyticsResponse501
+) & {
+  headers: Headers;
+};
+
+export type getEvaluationRunAnalyticsResponse =
+  | getEvaluationRunAnalyticsResponseSuccess
+  | getEvaluationRunAnalyticsResponseError;
+
+export const getGetEvaluationRunAnalyticsUrl = (
+  projectId: string,
+  runId: string,
+) => {
+  return `/elitea_core/eval_run_analytics/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * Legacy issues 6677 and 6817. The evaluation orchestrator signs every
+ * model call with `eval:<run>:case:<case>` (the agent turn) or
+ * `eval:<run>:judge:<case>` (a judge call). This read sums the run's
+ * calls, its two roles, and one row per case with the roles side by
+ * side. The roles are never added into each other.
+ *
+ * A run created before the release that signs these calls (shared
+ * migration 0140) answers `available: false` with no figures, never
+ * zero. Gated on the run read permission AND the analytics permission.
+ * @summary One evaluation run's tokens and estimated cost, agent and judge apart
+ */
+export const getEvaluationRunAnalytics = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getEvaluationRunAnalyticsResponse> => {
+  return eliteaFetch<getEvaluationRunAnalyticsResponse>(
+    getGetEvaluationRunAnalyticsUrl(projectId, runId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetEvaluationRunAnalyticsQueryKey = (
+  projectId: string,
+  runId: string,
+) => {
+  return [
+    `/elitea_core/eval_run_analytics/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getGetEvaluationRunAnalyticsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetEvaluationRunAnalyticsQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getEvaluationRunAnalytics>>
+  > = ({ signal }) =>
+    getEvaluationRunAnalytics(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetEvaluationRunAnalyticsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getEvaluationRunAnalytics>>
+>;
+export type GetEvaluationRunAnalyticsQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useGetEvaluationRunAnalytics<
+  TData = Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+          TError,
+          Awaited<ReturnType<typeof getEvaluationRunAnalytics>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvaluationRunAnalytics<
+  TData = Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+          TError,
+          Awaited<ReturnType<typeof getEvaluationRunAnalytics>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvaluationRunAnalytics<
+  TData = Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary One evaluation run's tokens and estimated cost, agent and judge apart
+ */
+
+export function useGetEvaluationRunAnalytics<
+  TData = Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getEvaluationRunAnalytics>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetEvaluationRunAnalyticsQueryOptions(
+    projectId,
+    runId,
     options,
   );
 

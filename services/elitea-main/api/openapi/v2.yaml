@@ -1314,6 +1314,322 @@ components:
             $ref: '#/components/schemas/AnalyticsEstimateTool'
         by_tool_truncated:
           type: boolean
+        evaluation:
+          $ref: '#/components/schemas/AnalyticsEstimateEvaluation'
+
+    AnalyticsUsageFigures:
+      type: object
+      required: [llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One scope's model calls, tokens and estimated cost, from
+        gateway.llm_request_logs. Source internal/domain/analytics/runs.go.
+
+    AnalyticsRunModel:
+      type: object
+      required: [provider, model, llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: One (provider, model) inside a run.
+
+    AnalyticsRunUser:
+      type: object
+      required: [user_id, email, llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        user_id: { type: string }
+        email:
+          type: string
+          description: Empty when the identity tables are absent.
+        name: { type: string }
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: One caller inside a run.
+
+    AnalyticsAutomatedActivity:
+      type: object
+      required: [trigger_origin, executions, users, llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        trigger_origin:
+          type: string
+          description: How the runs started. One of schedule, webhook or index.
+        executions:
+          type: integer
+          format: int64
+        users:
+          type: integer
+          format: int64
+          description: The people the unattended runs executed as.
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One unattended trigger origin's calls in the window (legacy issues
+        6802 and 6881). These calls are excluded from every active-user figure
+        and still counted in every total.
+
+    AnalyticsExecution:
+      type: object
+      required:
+        [execution_id, capability_id, trigger_origin, actor_user_id, state,
+         admitted_at, available, child_attributions, tool_dimension_available]
+      properties:
+        execution_id: { type: string }
+        capability_id: { type: string }
+        trigger_origin:
+          type: string
+          description: How the run started. One of manual, api, schedule, webhook or index.
+        actor_user_id: { type: string }
+        state: { type: string }
+        admitted_at: { type: string, format: date-time }
+        settled_at: { type: string, format: date-time }
+        available:
+          type: boolean
+          description: False when the figures cannot be measured. Every figure key is then absent.
+        unavailable_reason:
+          type: string
+          description: before_attribution or log_pruned. Present only when available is false.
+        child_attributions:
+          type: integer
+          format: int64
+          description: Distinct attribution ids under `<execution_id>:` that contributed calls.
+        totals: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        by_model:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsRunModel' }
+        by_user:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsRunUser' }
+        by_error_code:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsErrorCodeCount' }
+        tool_dimension_available:
+          type: boolean
+          description: False when this database records no tool calls (shared migration 0119).
+        tools:
+          type: array
+          items: { $ref: '#/components/schemas/ToolAnalytics' }
+      description: One runtime execution's analytics. Source internal/domain/analytics/runs.go.
+
+    AnalyticsEvaluationCase:
+      type: object
+      required: [case_id, agent, judge]
+      properties:
+        case_id: { type: string }
+        agent: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        judge: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+      description: One case of an evaluation run, the agent turn and the judge calls apart.
+
+    AnalyticsEvaluationRun:
+      type: object
+      required: [run_id, application_id, application_version_id, status, created_by, created_at, available]
+      properties:
+        run_id: { type: string }
+        application_id: { type: integer, nullable: true }
+        application_version_id: { type: integer, nullable: true }
+        status: { type: string }
+        created_by: { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        available:
+          type: boolean
+          description: False when the figures cannot be measured. Every figure key is then absent.
+        unavailable_reason:
+          type: string
+          description: before_attribution or log_pruned. Present only when available is false.
+        totals: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        agent: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        judge: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        by_case:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsEvaluationCase' }
+        by_model:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsRunModel' }
+        by_error_code:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsErrorCodeCount' }
+      description: >
+        One evaluation run's analytics. `agent` and `judge` add up to
+        `totals`. Source internal/domain/analytics/runs.go.
+
+    AnalyticsEstimateEvaluation:
+      type: object
+      required: [evaluation_dimension_available]
+      properties:
+        evaluation_dimension_available:
+          type: boolean
+          description: >
+            False for a window that ends before evaluation calls were
+            attributed (shared migration 0140). Every other key is then
+            absent.
+        runs:
+          type: integer
+          format: int64
+        totals: { $ref: '#/components/schemas/AnalyticsEstimateTotals' }
+        agent: { $ref: '#/components/schemas/AnalyticsEstimateTotals' }
+        judge: { $ref: '#/components/schemas/AnalyticsEstimateTotals' }
+        by_agent:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsEstimateEvaluationAgent' }
+        by_agent_truncated: { type: boolean }
+      description: >
+        The window's evaluation spend (legacy issues 6677 and 6678). These
+        calls name no execution, so the agent split counts them as
+        unattributed; this block attributes them.
+
+    AnalyticsEstimateEvaluationAgent:
+      type: object
+      required:
+        [application_id, name, runs, calls, prompt_tokens, completion_tokens,
+         total_tokens, priced]
+      properties:
+        application_id:
+          type: string
+          description: Empty for a run whose row is gone or names no agent.
+        name: { type: string }
+        runs:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced: { type: boolean }
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: One evaluated agent's evaluation spend in the window.
 
     AnalyticsEstimateAgent:
       type: object
@@ -4208,6 +4524,16 @@ components:
             real total.
         health:
           $ref: '#/components/schemas/AnalyticsHealth'
+        automated_activity:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsAutomatedActivity' }
+          description: >
+            The window's unattended calls, one row per trigger origin (legacy
+            issues 6802 and 6881). kpis.ai_active_users, the adoption pair,
+            daily_activity active users and top_ai_users EXCLUDE these calls;
+            kpis.llm_calls and kpis.total_tokens include them. Absent when the
+            deployment cannot tell the origins apart (shared migration 0140
+            has not run).
       description: >
         The Overview tab's response, and the Health tab's — one fetch serves
         both. Answers 501 with
@@ -11651,6 +11977,114 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/analytics_execution/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, maxLength: 128 }
+        description: >
+          The runtime execution id. It is the task_id of the agent response
+          the run produced. Letters, digits and the characters - _ . : only.
+    get:
+      operationId: getExecutionAnalytics
+      summary: One runtime execution's tokens, estimated cost, models and tools
+      description: |
+        Legacy issues 6667 and 6816. Reads gateway.llm_request_logs by the
+        execution id, with NO date window: a run is a fixed set of calls. The
+        figures include child attributions, which are the calls signed with an
+        id of the form `<execution_id>:<suffix>`.
+
+        `available: false` is not zero. A run admitted before shared migration
+        0100, or a run whose calls the gateway has pruned, answers 200 with
+        `available: false`, an `unavailable_reason` and NO figure keys. A run
+        that made no model call answers `available: true` with zero totals.
+
+        Money is an ESTIMATE at the gateway.gateway_models catalogue rate, the
+        same estimate /analytics_costs publishes under `estimate`.
+      tags: [analytics]
+      responses:
+        '200':
+          description: The execution's analytics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsExecution'
+        '400':
+          description: The project id or the execution id is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            The project holds no execution with this id. An id of another
+            project gets the same answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: The request log or its execution_id column is absent on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /elitea_core/eval_run_analytics/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getEvaluationRunAnalytics
+      summary: One evaluation run's tokens and estimated cost, agent and judge apart
+      description: |
+        Legacy issues 6677 and 6817. The evaluation orchestrator signs every
+        model call with `eval:<run>:case:<case>` (the agent turn) or
+        `eval:<run>:judge:<case>` (a judge call). This read sums the run's
+        calls, its two roles, and one row per case with the roles side by
+        side. The roles are never added into each other.
+
+        A run created before the release that signs these calls (shared
+        migration 0140) answers `available: false` with no figures, never
+        zero. Gated on the run read permission AND the analytics permission.
+      tags: [analytics]
+      responses:
+        '200':
+          description: The evaluation run's analytics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsEvaluationRun'
+        '400':
+          description: The project id or the run id is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: The project holds no evaluation run with this id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: The request log or the project's evaluation tables are absent on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
   # CHAT — execution-step traces

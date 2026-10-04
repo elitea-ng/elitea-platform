@@ -40,37 +40,34 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { AnalyticsAutomatedActivity } from "./analyticsAutomatedActivity.zod";
-import { AnalyticsDailyPoint } from "./analyticsDailyPoint.zod";
-import { AnalyticsHealth } from "./analyticsHealth.zod";
-import { AnalyticsKpis } from "./analyticsKpis.zod";
-import { ModelUsage } from "./modelUsage.zod";
-import { UserActivity } from "./userActivity.zod";
 
-export const ProjectAnalytics = zod
+export const AnalyticsRunModel = zod
   .object({
-    kpis: AnalyticsKpis,
-    top_ai_users: zod
-      .array(UserActivity)
-      .describe("The leaderboard, most calls first, capped at 10 rows."),
-    daily_activity: zod.array(AnalyticsDailyPoint),
-    models: zod.array(ModelUsage),
-    models_truncated: zod
-      .boolean()
+    provider: zod.string(),
+    model: zod.string(),
+    llm_calls: zod.int(),
+    prompt_tokens: zod.int(),
+    completion_tokens: zod.int(),
+    total_tokens: zod.int(),
+    errors: zod
+      .int()
+      .describe("Calls the gateway answered with status 400 or higher."),
+    avg_duration_ms: zod.number(),
+    unpriced_calls: zod
+      .int()
       .describe(
-        "True when `models` was cut to the busiest N (provider, model) pairs. Stated rather than implied because the client SUMS that array to normalise its share column: a cut it cannot see makes every share a percentage of the subset rather than of the project, adding to 100% over part of the traffic, beside a kpis.llm_calls figure carrying the real total.\n",
+        "Calls the price catalogue does not price. Their tokens count; their money does not.",
       ),
-    health: AnalyticsHealth.optional(),
-    automated_activity: zod
-      .array(AnalyticsAutomatedActivity)
+    input_cost: zod
+      .number()
       .optional()
       .describe(
-        "The window's unattended calls, one row per trigger origin (legacy issues 6802 and 6881). kpis.ai_active_users, the adoption pair, daily_activity active users and top_ai_users EXCLUDE these calls; kpis.llm_calls and kpis.total_tokens include them. Absent when the deployment cannot tell the origins apart (shared migration 0140 has not run).\n",
+        "Prompt tokens at each call's catalogue rate, an exact decimal. ABSENT when no call in the scope is priced.\n",
       ),
+    output_cost: zod.number().optional(),
+    total_cost: zod.number().optional(),
   })
-  .describe(
-    "The Overview tab's response, and the Health tab's — one fetch serves both. Answers 501 with `{error, code: no_data_source, detail}` on a deployment whose gateway request log is absent — a FINAL status, not a 500, so a client that retries transient failures does not ask twice for an answer the server has already refused.\n",
-  );
+  .describe("One (provider, model) inside a run.");
 
-export type ProjectAnalytics = zod.input<typeof ProjectAnalytics>;
-export type ProjectAnalyticsOutput = zod.output<typeof ProjectAnalytics>;
+export type AnalyticsRunModel = zod.input<typeof AnalyticsRunModel>;
+export type AnalyticsRunModelOutput = zod.output<typeof AnalyticsRunModel>;

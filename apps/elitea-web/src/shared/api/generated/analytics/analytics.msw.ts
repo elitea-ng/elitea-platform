@@ -48,6 +48,8 @@ import type {
   AnalyticsAgentsList,
   AnalyticsCostBreakdown,
   AnalyticsDetailEnvelope,
+  AnalyticsEvaluationRun,
+  AnalyticsExecution,
   AnalyticsToolsList,
   AnalyticsUsersList,
   ProjectAnalytics,
@@ -171,6 +173,36 @@ export const getGetProjectAnalyticsResponseMock = (
         errors: faker.number.int(),
       })),
     },
+    undefined,
+  ]),
+  automated_activity: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      trigger_origin: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      executions: faker.number.int(),
+      users: faker.number.int(),
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    })),
     undefined,
   ]),
   ...overrideResponse,
@@ -837,8 +869,432 @@ export const getGetAnalyticsCostsResponseMock = (
           undefined,
         ]),
         by_tool_truncated: faker.datatype.boolean(),
+        evaluation: faker.helpers.arrayElement([
+          {
+            evaluation_dimension_available: faker.datatype.boolean(),
+            runs: faker.helpers.arrayElement([faker.number.int(), undefined]),
+            totals: faker.helpers.arrayElement([
+              {
+                calls: faker.number.int(),
+                prompt_tokens: faker.number.int(),
+                completion_tokens: faker.number.int(),
+                total_tokens: faker.number.int(),
+                input_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                output_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                total_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            agent: faker.helpers.arrayElement([
+              {
+                calls: faker.number.int(),
+                prompt_tokens: faker.number.int(),
+                completion_tokens: faker.number.int(),
+                total_tokens: faker.number.int(),
+                input_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                output_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                total_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            judge: faker.helpers.arrayElement([
+              {
+                calls: faker.number.int(),
+                prompt_tokens: faker.number.int(),
+                completion_tokens: faker.number.int(),
+                total_tokens: faker.number.int(),
+                input_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                output_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                total_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            by_agent: faker.helpers.arrayElement([
+              Array.from(
+                { length: faker.number.int({ min: 1, max: 10 }) },
+                (_, i) => i + 1,
+              ).map(() => ({
+                application_id: faker.string.alpha({
+                  length: { min: 10, max: 20 },
+                }),
+                name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+                runs: faker.number.int(),
+                calls: faker.number.int(),
+                prompt_tokens: faker.number.int(),
+                completion_tokens: faker.number.int(),
+                total_tokens: faker.number.int(),
+                priced: faker.datatype.boolean(),
+                input_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                output_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+                total_cost: faker.helpers.arrayElement([
+                  faker.number.float({ fractionDigits: 2 }),
+                  undefined,
+                ]),
+              })),
+              undefined,
+            ]),
+            by_agent_truncated: faker.helpers.arrayElement([
+              faker.datatype.boolean(),
+              undefined,
+            ]),
+          },
+          undefined,
+        ]),
       },
     },
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetExecutionAnalyticsResponseMock = (
+  overrideResponse: Partial<Extract<AnalyticsExecution, object>> = {},
+): AnalyticsExecution => ({
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  capability_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  trigger_origin: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  actor_user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  admitted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  settled_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  available: faker.datatype.boolean(),
+  unavailable_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  child_attributions: faker.number.int(),
+  totals: faker.helpers.arrayElement([
+    {
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  by_model: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      model: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    })),
+    undefined,
+  ]),
+  by_user: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    })),
+    undefined,
+  ]),
+  by_error_code: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      error_code: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      requests: faker.number.int(),
+    })),
+    undefined,
+  ]),
+  tool_dimension_available: faker.datatype.boolean(),
+  tools: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      toolkit_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      tool_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      run_count: faker.number.int(),
+      error_count: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      error_rate: faker.number.float({ fractionDigits: 2 }),
+    })),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetEvaluationRunAnalyticsResponseMock = (
+  overrideResponse: Partial<Extract<AnalyticsEvaluationRun, object>> = {},
+): AnalyticsEvaluationRun => ({
+  run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  application_version_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  finished_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  available: faker.datatype.boolean(),
+  unavailable_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  totals: faker.helpers.arrayElement([
+    {
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  agent: faker.helpers.arrayElement([
+    {
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  judge: faker.helpers.arrayElement([
+    {
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  by_case: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      case_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      agent: {
+        llm_calls: faker.number.int(),
+        prompt_tokens: faker.number.int(),
+        completion_tokens: faker.number.int(),
+        total_tokens: faker.number.int(),
+        errors: faker.number.int(),
+        avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+        unpriced_calls: faker.number.int(),
+        input_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        output_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        total_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+      },
+      judge: {
+        llm_calls: faker.number.int(),
+        prompt_tokens: faker.number.int(),
+        completion_tokens: faker.number.int(),
+        total_tokens: faker.number.int(),
+        errors: faker.number.int(),
+        avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+        unpriced_calls: faker.number.int(),
+        input_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        output_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        total_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+      },
+    })),
+    undefined,
+  ]),
+  by_model: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      model: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      llm_calls: faker.number.int(),
+      prompt_tokens: faker.number.int(),
+      completion_tokens: faker.number.int(),
+      total_tokens: faker.number.int(),
+      errors: faker.number.int(),
+      avg_duration_ms: faker.number.float({ fractionDigits: 2 }),
+      unpriced_calls: faker.number.int(),
+      input_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      output_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+    })),
+    undefined,
+  ]),
+  by_error_code: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      error_code: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      requests: faker.number.int(),
+    })),
     undefined,
   ]),
   ...overrideResponse,
@@ -1063,6 +1519,58 @@ export const getGetAnalyticsCostsMockHandler = (
     options,
   );
 };
+
+export const getGetExecutionAnalyticsMockHandler = (
+  overrideResponse?:
+    | AnalyticsExecution
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AnalyticsExecution> | AnalyticsExecution),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/analytics_execution/prompt_lib/:projectId/:executionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetExecutionAnalyticsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetEvaluationRunAnalyticsMockHandler = (
+  overrideResponse?:
+    | AnalyticsEvaluationRun
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AnalyticsEvaluationRun> | AnalyticsEvaluationRun),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/eval_run_analytics/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetEvaluationRunAnalyticsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getAnalyticsMock = () => [
   getGetProjectAnalyticsMockHandler(),
   getListAnalyticsUsersMockHandler(),
@@ -1072,4 +1580,6 @@ export const getAnalyticsMock = () => [
   getListAnalyticsAgentsMockHandler(),
   getGetAnalyticsAgentDetailMockHandler(),
   getGetAnalyticsCostsMockHandler(),
+  getGetExecutionAnalyticsMockHandler(),
+  getGetEvaluationRunAnalyticsMockHandler(),
 ];

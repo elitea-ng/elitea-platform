@@ -40,37 +40,55 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { AnalyticsAutomatedActivity } from "./analyticsAutomatedActivity.zod";
-import { AnalyticsDailyPoint } from "./analyticsDailyPoint.zod";
-import { AnalyticsHealth } from "./analyticsHealth.zod";
-import { AnalyticsKpis } from "./analyticsKpis.zod";
-import { ModelUsage } from "./modelUsage.zod";
-import { UserActivity } from "./userActivity.zod";
+import { AnalyticsErrorCodeCount } from "./analyticsErrorCodeCount.zod";
+import { AnalyticsRunModel } from "./analyticsRunModel.zod";
+import { AnalyticsRunUser } from "./analyticsRunUser.zod";
+import { AnalyticsUsageFigures } from "./analyticsUsageFigures.zod";
+import { ToolAnalytics } from "./toolAnalytics.zod";
 
-export const ProjectAnalytics = zod
+export const AnalyticsExecution = zod
   .object({
-    kpis: AnalyticsKpis,
-    top_ai_users: zod
-      .array(UserActivity)
-      .describe("The leaderboard, most calls first, capped at 10 rows."),
-    daily_activity: zod.array(AnalyticsDailyPoint),
-    models: zod.array(ModelUsage),
-    models_truncated: zod
+    execution_id: zod.string(),
+    capability_id: zod.string(),
+    trigger_origin: zod
+      .string()
+      .describe(
+        "How the run started. One of manual, api, schedule, webhook or index.",
+      ),
+    actor_user_id: zod.string(),
+    state: zod.string(),
+    admitted_at: zod.iso.datetime({ offset: true }),
+    settled_at: zod.iso.datetime({ offset: true }).optional(),
+    available: zod
       .boolean()
       .describe(
-        "True when `models` was cut to the busiest N (provider, model) pairs. Stated rather than implied because the client SUMS that array to normalise its share column: a cut it cannot see makes every share a percentage of the subset rather than of the project, adding to 100% over part of the traffic, beside a kpis.llm_calls figure carrying the real total.\n",
+        "False when the figures cannot be measured. Every figure key is then absent.",
       ),
-    health: AnalyticsHealth.optional(),
-    automated_activity: zod
-      .array(AnalyticsAutomatedActivity)
+    unavailable_reason: zod
+      .string()
       .optional()
       .describe(
-        "The window's unattended calls, one row per trigger origin (legacy issues 6802 and 6881). kpis.ai_active_users, the adoption pair, daily_activity active users and top_ai_users EXCLUDE these calls; kpis.llm_calls and kpis.total_tokens include them. Absent when the deployment cannot tell the origins apart (shared migration 0140 has not run).\n",
+        "before_attribution or log_pruned. Present only when available is false.",
       ),
+    child_attributions: zod
+      .int()
+      .describe(
+        "Distinct attribution ids under `<execution_id>:` that contributed calls.",
+      ),
+    totals: AnalyticsUsageFigures.optional(),
+    by_model: zod.array(AnalyticsRunModel).optional(),
+    by_user: zod.array(AnalyticsRunUser).optional(),
+    by_error_code: zod.array(AnalyticsErrorCodeCount).optional(),
+    tool_dimension_available: zod
+      .boolean()
+      .describe(
+        "False when this database records no tool calls (shared migration 0119).",
+      ),
+    tools: zod.array(ToolAnalytics).optional(),
   })
   .describe(
-    "The Overview tab's response, and the Health tab's — one fetch serves both. Answers 501 with `{error, code: no_data_source, detail}` on a deployment whose gateway request log is absent — a FINAL status, not a 500, so a client that retries transient failures does not ask twice for an answer the server has already refused.\n",
+    "One runtime execution's analytics. Source internal/domain/analytics/runs.go.",
   );
 
-export type ProjectAnalytics = zod.input<typeof ProjectAnalytics>;
-export type ProjectAnalyticsOutput = zod.output<typeof ProjectAnalytics>;
+export type AnalyticsExecution = zod.input<typeof AnalyticsExecution>;
+export type AnalyticsExecutionOutput = zod.output<typeof AnalyticsExecution>;
