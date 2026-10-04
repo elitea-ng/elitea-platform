@@ -714,6 +714,17 @@ func (h *Handler) updateUsageUnits(
 			"metric", MetricAudioDefaultPriced)
 	}
 
+	// The catalog row has an input price and no output price, so the output
+	// tokens were billed at the pylon input x 3 estimate. That is the shape
+	// issue #6719 hid: gpt-image-2 billed its image output at half its real
+	// rate, and every log line looked like a catalog price. The bill does not
+	// change here; the estimate becomes visible.
+	if actualCost.OutputDerived {
+		h.logger.WarnContext(ctx, "cost: the catalog has no output price for this model; output tokens billed at the input x 3 estimate",
+			"provider", provider, "model", model,
+			"output_tokens", u.OutputTokens, "output_nano", actualCost.OutputNanoUSD)
+	}
+
 	// The authored credential rate policy decides whether this cost reaches the
 	// counter at all (policy_gate.go). It runs AFTER pricing on purpose: the
 	// price is what an operator sees in the ledger for a zero-rated request,
