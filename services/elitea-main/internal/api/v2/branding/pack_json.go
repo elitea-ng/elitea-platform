@@ -5,20 +5,23 @@ package branding
 // with every same-origin reference made absolute, for clients that are not a
 // browser on this origin (native apps, ADR-0025).
 //
-// # One ETag
+// # Its own entity tag
 //
-// The ETag and the ?v= token are the bootstrap Snapshot's. They identify the
-// resolved pack STATE, and both representations are derived from it, so a
-// client holding a pack.json?v=<x> URL from the discovery document and a
-// browser holding bootstrap.js?v=<x> agree on what "current" means. The
-// bootstrap ETag itself does not move: its ?v= URLs are cached as immutable.
+// pack.json is derived from the same resolved pack STATE as bootstrap.js, but
+// its BODY carries more than that state: every same-origin reference is made
+// absolute against the public origin, and an unbranded deployment serves the
+// embedded product default (bootstrap.js answers a constant inert body then).
+// Neither the origin nor the product default is in the bootstrap ETag, and a
+// matching ?v= URL is cached as immutable for a year — so pack.json's entity
+// tag and ?v= token are the strong hash of ITS rendered body
+// (Snapshot.PackJSONVersion), which the discovery document publishes in
+// brand_pack_url. A DEPLOYMENT_URL change or a release that changes the
+// product default therefore moves the token, and a client holding the old
+// URL is redirected to the new one.
 //
-// The single exception is a deployment with no configured public origin
-// (DEPLOYMENT_URL unset). Then the absolute URLs are built from the request's
-// own Host, two hosts get two bodies, and the entity tag folds the origin in
-// (a cache that revalidated a body built for one origin must not be told
-// "304, still current" for another). Such a response is never immutable and
-// carries Vary.
+// With no configured public origin (DEPLOYMENT_URL unset) the absolute URLs
+// are built from the request's own Host, so two hosts get two bodies and two
+// tags. Such a response is never immutable and carries Vary.
 //
 // # An unbranded deployment
 //
@@ -161,23 +164,52 @@ func packJSONBody(s Snapshot, origin string) []byte {
 	return data
 }
 
-// packJSONCache memoises the body for a fixed origin, keyed by the snapshot's
-// ETag value — one marshal per pack state, not per request.
-type packJSONCache struct {
-	mu    sync.Mutex
-	etag  string
+// packJSONEntry is one rendered pack.json: the body for one (pack state,
+// origin) pair and the strong entity tag of exactly that body.
+type packJSONEntry struct {
 	body  []byte
-	valid bool
+	etag  string // quoted
+	value string // unquoted: the ?v= token
 }
 
-func (c *packJSONCache) get(s Snapshot, origin string) []byte {
+// packJSONCache memoises renderings — one marshal and one hash per (pack
+// state, origin), not per request. Within one process the body is a function
+// of the snapshot's ETagValue (which identifies the resolved pack; the
+// product default is compiled in) and the origin, so that pair is the key.
+// The map is bounded: a request-derived origin (DEPLOYMENT_URL unset) comes
+// from the caller's Host, so it is cleared once it holds packJSONCacheMax
+// entries rather than growing.
+type packJSONCache struct {
+	mu      sync.Mutex
+	entries map[string]*packJSONEntry
+}
+
+const packJSONCacheMax = 16
+
+var sharedPackJSON packJSONCache
+
+func (c *packJSONCache) get(s Snapshot, origin string) *packJSONEntry {
+	key := s.ETagValue + "\n" + origin
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.valid && c.etag == s.ETagValue {
-		return c.body
+	if entry, ok := c.entries[key]; ok {
+		return entry
 	}
-	c.body, c.etag, c.valid = packJSONBody(s, origin), s.ETagValue, true
-	return c.body
+	if c.entries == nil || len(c.entries) >= packJSONCacheMax {
+		c.entries = make(map[string]*packJSONEntry, packJSONCacheMax)
+	}
+	body := packJSONBody(s, origin)
+	etag, value := httpcache.StrongETag(body)
+	entry := &packJSONEntry{body: body, etag: etag, value: value}
+	c.entries[key] = entry
+	return entry
+}
+
+// PackJSONVersion is the ?v= token of pack.json as served for origin: the
+// unquoted strong entity tag of its rendered body. The discovery document
+// publishes it in brand_pack_url.
+func (s Snapshot) PackJSONVersion(origin string) string {
+	return sharedPackJSON.get(s, origin).value
 }
 
 // PackJSON handles GET and HEAD /api/v2/branding/pack.json.
@@ -191,36 +223,34 @@ func (c *packJSONCache) get(s Snapshot, origin string) []byte {
 //	If-None-Match matches     → 304, ETag + the same Cache-Control as the 200
 func (h *Handler) PackJSON(w http.ResponseWriter, r *http.Request) {
 	snap := h.resolver.Current(r.Context())
+	origin, fromRequest := publicorigin.Resolve(h.publicOrigin, r)
+	rendered := sharedPackJSON.get(snap, origin)
 	v := r.URL.Query().Get("v")
-	if v != "" && v != snap.ETagValue {
+	if v != "" && v != rendered.value {
 		w.Header().Set("Cache-Control", cacheRevalidate)
-		http.Redirect(w, r, r.URL.Path+"?v="+snap.ETagValue, http.StatusFound)
+		if fromRequest {
+			w.Header().Set("Vary", publicorigin.VaryRequestOrigin)
+		}
+		http.Redirect(w, r, r.URL.Path+"?v="+rendered.value, http.StatusFound)
 		return
 	}
 
-	origin, fromRequest := publicorigin.Resolve(h.publicOrigin, r)
-	etag := snap.ETag
-	var body []byte
 	cacheControl := cacheRevalidate
 	if fromRequest {
-		body = packJSONBody(snap, origin)
-		etag, _ = httpcache.StrongETag([]byte(snap.ETagValue + "\n" + origin))
 		w.Header().Set("Vary", publicorigin.VaryRequestOrigin)
-	} else {
-		body = h.packJSON.get(snap, origin)
-		if v != "" {
-			cacheControl = cacheImmutable
-		}
+	} else if v != "" {
+		cacheControl = cacheImmutable
 	}
-	w.Header().Set("ETag", etag)
+	w.Header().Set("ETag", rendered.etag)
 	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set(LayersHeader, strings.Join(snap.LayerNames(), ", "))
 
-	if httpcache.ETagMatches(r.Header.Get("If-None-Match"), etag) {
+	if httpcache.ETagMatches(r.Header.Get("If-None-Match"), rendered.etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
+	body := rendered.body
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))

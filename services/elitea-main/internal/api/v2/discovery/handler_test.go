@@ -71,7 +71,7 @@ func TestHandler_DefaultsWithNoSources(t *testing.T) {
 		t.Errorf("Cache-Control %q Vary %q", rec.Header().Get("Cache-Control"), rec.Header().Get("Vary"))
 	}
 	doc := decode(t, rec)
-	etag := resolver.Current(context.Background()).ETagValue
+	etag := resolver.Current(context.Background()).PackJSONVersion("https://elitea.example.com")
 	want := map[string]any{
 		"server_version":  "1.62",
 		"client_contract": ClientContract,

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/httpcache"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -39,14 +40,15 @@ func TestPackJSON_HeaderMatrix(t *testing.T) {
 		PublicOrigin: "https://elitea.example.com",
 	})
 	snap := h.Resolver().Current(context.Background())
+	version := snap.PackJSONVersion("https://elitea.example.com")
 
-	t.Run("bare URL revalidates and shares the bootstrap ETag", func(t *testing.T) {
+	t.Run("bare URL revalidates against the body's own ETag", func(t *testing.T) {
 		rec := servePackJSON(t, h, http.MethodGet, PackJSONPath, nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("code %d", rec.Code)
 		}
-		if got := rec.Header().Get("ETag"); got != snap.ETag {
-			t.Errorf("ETag = %q, want the bootstrap snapshot's %q", got, snap.ETag)
+		if got := rec.Header().Get("ETag"); got != `"`+version+`"` {
+			t.Errorf("ETag = %q, want the pack.json version %q", got, version)
 		}
 		if got := rec.Header().Get("Cache-Control"); got != cacheRevalidate {
 			t.Errorf("Cache-Control = %q", got)
@@ -70,7 +72,7 @@ func TestPackJSON_HeaderMatrix(t *testing.T) {
 	})
 
 	t.Run("matching ?v= is immutable", func(t *testing.T) {
-		rec := servePackJSON(t, h, http.MethodGet, PackJSONPath+"?v="+snap.ETagValue, nil)
+		rec := servePackJSON(t, h, http.MethodGet, PackJSONPath+"?v="+version, nil)
 		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != cacheImmutable {
 			t.Errorf("code %d, Cache-Control %q", rec.Code, rec.Header().Get("Cache-Control"))
 		}
@@ -78,13 +80,13 @@ func TestPackJSON_HeaderMatrix(t *testing.T) {
 
 	t.Run("stale ?v= redirects to the current one", func(t *testing.T) {
 		rec := servePackJSON(t, h, http.MethodGet, PackJSONPath+"?v=deadbeef", nil)
-		if rec.Code != http.StatusFound || rec.Header().Get("Location") != PackJSONPath+"?v="+snap.ETagValue {
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != PackJSONPath+"?v="+version {
 			t.Errorf("code %d, Location %q", rec.Code, rec.Header().Get("Location"))
 		}
 	})
 
 	t.Run("If-None-Match answers 304", func(t *testing.T) {
-		rec := servePackJSON(t, h, http.MethodGet, PackJSONPath, http.Header{"If-None-Match": {`W/` + snap.ETag}})
+		rec := servePackJSON(t, h, http.MethodGet, PackJSONPath, http.Header{"If-None-Match": {`W/"` + version + `"`}})
 		if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
 			t.Errorf("code %d, body %q", rec.Code, rec.Body.String())
 		}
@@ -173,8 +175,8 @@ func TestPackJSON_RequestDerivedOrigin(t *testing.T) {
 	h := NewHandler(Config{Resolver: NewResolver(ResolverConfig{PackPath: filePack(t, "Acme AI")})})
 	snap := h.Resolver().Current(context.Background())
 
-	a := servePackJSON(t, h, http.MethodGet, "http://a.example"+PackJSONPath+"?v="+snap.ETagValue, nil)
-	b := servePackJSON(t, h, http.MethodGet, "http://b.example"+PackJSONPath+"?v="+snap.ETagValue,
+	a := servePackJSON(t, h, http.MethodGet, "http://a.example"+PackJSONPath+"?v="+snap.PackJSONVersion("http://a.example"), nil)
+	b := servePackJSON(t, h, http.MethodGet, "http://b.example"+PackJSONPath+"?v="+snap.PackJSONVersion("https://b.example"),
 		http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"evil.example"}})
 	if a.Code != http.StatusOK || b.Code != http.StatusOK {
 		t.Fatalf("codes %d %d", a.Code, b.Code)
@@ -219,5 +221,49 @@ func TestSnapshotHelpers(t *testing.T) {
 	var probe map[string]any
 	if err := json.Unmarshal(packJSONBody(Snapshot{}, "https://x.example"), &probe); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// pack.json's entity tag and ?v= token cover ITS body, not bootstrap.js's:
+// the body carries absolute URLs (the origin) and, unbranded, the embedded
+// product default — neither of which is in the bootstrap ETag. A versioned
+// URL is cached as immutable, so a token that does not move when the body
+// does pins clients to a stale pack (old origin, old default) for a year.
+func TestPackJSON_EntityTagCoversTheBody(t *testing.T) {
+	for name, cfg := range map[string]ResolverConfig{
+		"branded":   {PackPath: filePack(t, "Acme AI")},
+		"unbranded": {loadOverlay: overlayLoader(platformconfig.BrandingOverlay{}, nil)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolver := NewResolver(cfg)
+			oldOrigin := NewHandler(Config{Resolver: resolver, PublicOrigin: "https://old.example.com"})
+			newOrigin := NewHandler(Config{Resolver: resolver, PublicOrigin: "https://new.example.com"})
+			a := servePackJSON(t, oldOrigin, http.MethodGet, PackJSONPath, nil)
+			b := servePackJSON(t, newOrigin, http.MethodGet, PackJSONPath, nil)
+			for _, rec := range []*httptest.ResponseRecorder{a, b} {
+				want, _ := httpcache.StrongETag(rec.Body.Bytes())
+				if got := rec.Header().Get("ETag"); got != want {
+					t.Fatalf("ETag = %q, want the strong tag of the body %q", got, want)
+				}
+			}
+			if a.Header().Get("ETag") == b.Header().Get("ETag") {
+				t.Fatal("two origins (two bodies) share one entity tag")
+			}
+			snap := resolver.Current(context.Background())
+			version := snap.PackJSONVersion("https://new.example.com")
+			if `"`+version+`"` != b.Header().Get("ETag") {
+				t.Fatalf("PackJSONVersion = %q, want the served ETag %s", version, b.Header().Get("ETag"))
+			}
+			// The old origin's versioned URL is stale on the new origin.
+			oldVersion := strings.Trim(a.Header().Get("ETag"), `"`)
+			stale := servePackJSON(t, newOrigin, http.MethodGet, PackJSONPath+"?v="+oldVersion, nil)
+			if stale.Code != http.StatusFound || stale.Header().Get("Location") != PackJSONPath+"?v="+version {
+				t.Fatalf("stale ?v= = %d %q, want 302 to ?v=%s", stale.Code, stale.Header().Get("Location"), version)
+			}
+			current := servePackJSON(t, newOrigin, http.MethodGet, PackJSONPath+"?v="+version, nil)
+			if current.Code != http.StatusOK || current.Header().Get("Cache-Control") != cacheImmutable {
+				t.Fatalf("current ?v= = %d %q, want 200 immutable", current.Code, current.Header().Get("Cache-Control"))
+			}
+		})
 	}
 }

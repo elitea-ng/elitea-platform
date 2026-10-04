@@ -3,8 +3,8 @@ package api_test
 // Router-level wiring for the ADR-0025 WP1 anonymous documents: the discovery
 // document at /.well-known/elitea-client and the brand pack as JSON. Both must
 // answer a request that carries no credential, keep their own revalidating
-// Cache-Control (not the /api/v2 group's no-store), and agree with
-// bootstrap.js on the pack version.
+// Cache-Control (not the /api/v2 group's no-store), and discovery must
+// publish the version pack.json actually serves.
 
 import (
 	"encoding/json"
@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/httpcache"
 )
 
 func TestDiscoveryAndPackJSON_UnauthenticatedReachable(t *testing.T) {
@@ -36,9 +37,6 @@ func TestDiscoveryAndPackJSON_UnauthenticatedReachable(t *testing.T) {
 		return rec
 	}
 
-	boot := serve(http.MethodGet, "/api/v2/branding/bootstrap.js")
-	bootETag := strings.Trim(boot.Header().Get("ETag"), `"`)
-
 	disc := serve(http.MethodGet, "/.well-known/elitea-client")
 	if disc.Code != http.StatusOK {
 		t.Fatalf("unauthenticated GET discovery: got %d, want 200 (body: %s)", disc.Code, disc.Body.String())
@@ -56,9 +54,9 @@ func TestDiscoveryAndPackJSON_UnauthenticatedReachable(t *testing.T) {
 	if v, present := doc["native_auth"]; !present || v != nil {
 		t.Errorf("native_auth = %v (present %v), want null", v, present)
 	}
-	wantURL := "https://elitea.example.com/api/v2/branding/pack.json?v=" + bootETag
-	if doc["brand_pack_url"] != wantURL {
-		t.Errorf("brand_pack_url = %v, want %q (one resolver, one ETag)", doc["brand_pack_url"], wantURL)
+	wantURL, _ := doc["brand_pack_url"].(string)
+	if !strings.HasPrefix(wantURL, "https://elitea.example.com/api/v2/branding/pack.json?v=") {
+		t.Fatalf("brand_pack_url = %q, want an absolute versioned pack.json URL", wantURL)
 	}
 
 	// Follow brand_pack_url, as a client would.
@@ -69,8 +67,13 @@ func TestDiscoveryAndPackJSON_UnauthenticatedReachable(t *testing.T) {
 	if !strings.Contains(pack.Header().Get("Cache-Control"), "immutable") {
 		t.Errorf("versioned pack.json Cache-Control = %q, want immutable", pack.Header().Get("Cache-Control"))
 	}
-	if got := pack.Header().Get("ETag"); got != boot.Header().Get("ETag") {
-		t.Errorf("pack.json ETag %q != bootstrap.js ETag %q", got, boot.Header().Get("ETag"))
+	// pack.json's tag is its OWN body's (the body carries the origin, which
+	// bootstrap.js's does not), and brand_pack_url publishes exactly it.
+	if want, _ := httpcache.StrongETag(pack.Body.Bytes()); pack.Header().Get("ETag") != want {
+		t.Errorf("pack.json ETag %q, want the strong tag of its body %q", pack.Header().Get("ETag"), want)
+	}
+	if got := strings.Trim(pack.Header().Get("ETag"), `"`); wantURL != "https://elitea.example.com/api/v2/branding/pack.json?v="+got {
+		t.Errorf("brand_pack_url %q does not carry the served ETag %q", wantURL, got)
 	}
 	if !strings.Contains(pack.Body.String(), `"logoFull":"https://elitea.example.com/app/brand/l.svg"`) {
 		t.Errorf("pack.json assets not absolute:\n%s", pack.Body.String())

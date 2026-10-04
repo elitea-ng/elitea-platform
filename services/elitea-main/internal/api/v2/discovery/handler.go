@@ -72,7 +72,7 @@ func (h *Handler) Build(ctx context.Context, origin string) (Document, error) {
 		ClientContract:   ClientContract,
 		DeploymentKind:   h.deploymentKind,
 		DisplayName:      snap.DisplayName(),
-		BrandPackURL:     origin + branding.PackJSONPath + "?v=" + snap.ETagValue,
+		BrandPackURL:     origin + branding.PackJSONPath + "?v=" + snap.PackJSONVersion(origin),
 		ClientPolicy:     DefaultPublicPolicy(),
 		MinClientVersion: map[string]string{},
 	}

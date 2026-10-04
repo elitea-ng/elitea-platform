@@ -124,7 +124,7 @@ export const getGetBrandingPackJSONUrl = (
 
 /**
  * Serves the same resolved brand pack as `GET /branding/bootstrap.js`
- * (one resolver, one ETag), as JSON, with every same-origin reference
+ * (one resolver), as JSON, with every same-origin reference
  * (`assets.*`, `typography.fontFaces[].url`, `product.docsUrl`) made
  * absolute against the deployment's public origin (`DEPLOYMENT_URL`).
  * Unauthenticated by design: a native client brands its sign-in screen
@@ -136,13 +136,16 @@ export const getGetBrandingPackJSONUrl = (
  * `default` or `file`, then `db` when the admin Branding section
  * contributed.
  *
- * Caching matches bootstrap.js: strong `ETag`; `no-cache` on the bare
- * URL; `public, max-age=31536000, immutable` when `?v=` equals the
- * current ETag value; a stale `?v=` answers 302 to the current URL;
+ * Caching follows bootstrap.js, with pack.json's OWN entity tag: the
+ * strong `ETag` is the hash of this response body (which carries the
+ * public origin and, unbranded, the product default, neither of which
+ * is in bootstrap.js's tag); `no-cache` on the bare URL;
+ * `public, max-age=31536000, immutable` when `?v=` equals the current
+ * ETag value; a stale `?v=` answers 302 to the current URL;
  * `If-None-Match` answers 304. When the deployment has no configured
  * public origin the absolute URLs are built from the request's Host,
- * the response carries `Vary: Host, X-Forwarded-Proto` and its own
- * entity tag, and it is never immutable.
+ * the response carries `Vary: Host, X-Forwarded-Proto`, and it is
+ * never immutable.
  * @summary The resolved brand pack as JSON, with absolute references
  */
 export const getBrandingPackJSON = async (

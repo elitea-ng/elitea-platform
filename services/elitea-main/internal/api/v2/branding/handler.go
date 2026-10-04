@@ -43,7 +43,6 @@ type Config struct {
 type Handler struct {
 	resolver     *Resolver
 	publicOrigin string
-	packJSON     packJSONCache
 }
 
 // NewHandler wires the handler. It never fails: every degradation path is
