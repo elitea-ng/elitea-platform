@@ -94,6 +94,9 @@ func LoadPinnedCurrentAvailableCatalog() (*CurrentAvailableCatalog, error) {
 	if err := catalog.addModelInputLimitSchema(); err != nil {
 		return nil, err
 	}
+	if err := catalog.addLLMModelFormContract(); err != nil {
+		return nil, err
+	}
 	return catalog, nil
 }
 

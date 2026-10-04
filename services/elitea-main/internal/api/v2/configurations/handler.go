@@ -1117,6 +1117,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !applyLLMModelDescriptionRule(w, strVal(body, "type"), dataMap) {
+		return
+	}
 
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
@@ -1335,6 +1338,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
 		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		return
+	}
+	effectiveType := storedType
+	if requestedType != "" {
+		effectiveType = requestedType
+	}
+	if data, isObject := body["data"].(map[string]any); isObject &&
+		!applyLLMModelDescriptionRule(w, effectiveType, data) {
 		return
 	}
 

@@ -203,6 +203,13 @@ export const getListConfigurationModelsResponseMock = (
       ]),
       undefined,
     ]),
+    description: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 40 } }),
+        null,
+      ]),
+      undefined,
+    ]),
     type: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,

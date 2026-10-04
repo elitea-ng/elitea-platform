@@ -5897,6 +5897,16 @@ components:
           type: string
           nullable: true
           description: '`reviewed` only.'
+        description:
+          type: string
+          nullable: true
+          maxLength: 40
+          description: >
+            `reviewed` only, and llm_model only. The optional one-line text an
+            admin writes on the model (at most 40 characters). Pickers show it
+            under the model name. It is display text and never reaches the
+            provider. Absent when the model has none. `compat` carries the same
+            value inside `data`.
         type:
           type: string
           description: >

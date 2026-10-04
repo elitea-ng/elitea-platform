@@ -26,8 +26,11 @@ const (
 // shapes. Pointer fields distinguish a present false/zero value from a field
 // that is absent for another section.
 type CurrentModelCatalogItem struct {
-	Name            string  `json:"name"`
-	DisplayName     *string `json:"display_name,omitempty"`
+	Name        string  `json:"name"`
+	DisplayName *string `json:"display_name,omitempty"`
+	// Description is the llm_model's optional one-line description
+	// (model_description.go). It is display text for the pickers only.
+	Description     *string `json:"description,omitempty"`
 	ProjectID       int32   `json:"project_id"`
 	Shared          bool    `json:"shared"`
 	ContextWindow   *int    `json:"context_window,omitempty"`
@@ -218,6 +221,7 @@ func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCat
 		return item
 	}
 
+	item.Description = nil
 	item.ContextWindow = nil
 	item.MaxOutputTokens = nil
 	item.MaxInputTokens = nil
