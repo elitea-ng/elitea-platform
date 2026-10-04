@@ -19,6 +19,16 @@ func TestNormalize(t *testing.T) {
 		{in: "https://elitea.example.com/", want: "https://elitea.example.com"},
 		{in: "HTTPS://Elitea.Example.COM:8443", want: "https://elitea.example.com:8443"},
 		{in: "http://localhost:8080", want: "http://localhost:8080"},
+		// A default port is not part of a browser's serialized Origin, so it
+		// must not be part of ours: the consent POST compares them exactly.
+		{in: "https://elitea.example.com:443", want: "https://elitea.example.com"},
+		{in: "HTTPS://Elitea.Example.COM:443/", want: "https://elitea.example.com"},
+		{in: "http://elitea.example.com:80", want: "http://elitea.example.com"},
+		{in: "https://elitea.example.com:", want: "https://elitea.example.com"},
+		{in: "http://elitea.example.com:443", want: "http://elitea.example.com:443"},
+		{in: "https://elitea.example.com:80", want: "https://elitea.example.com:80"},
+		{in: "https://[2001:db8::1]:443", want: "https://[2001:db8::1]"},
+		{in: "https://[2001:db8::1]:8443", want: "https://[2001:db8::1]:8443"},
 		{in: "https://elitea.example.com/base", want: "https://elitea.example.com", dropped: true},
 		{in: "elitea.example.com", wantErr: true},
 		{in: "ftp://elitea.example.com", wantErr: true},
@@ -52,6 +62,12 @@ func TestFromRequest(t *testing.T) {
 	tlsReq.TLS = &tls.ConnectionState{}
 	if got := FromRequest(tlsReq); got != "https://elitea.local" {
 		t.Errorf("tls = %q", got)
+	}
+
+	defaultPort := httptest.NewRequest("GET", "https://elitea.local:443/x", nil)
+	defaultPort.TLS = &tls.ConnectionState{}
+	if got := FromRequest(defaultPort); got != "https://elitea.local" {
+		t.Errorf("default port = %q, want it dropped", got)
 	}
 
 	proxied := httptest.NewRequest("GET", "http://elitea.local/x", nil)

@@ -70,7 +70,23 @@ func Normalize(raw string) (origin string, droppedPath bool, err error) {
 		return "", false, fmt.Errorf("%w: %q must not carry a query or fragment", ErrInvalid, raw)
 	}
 	path := u.EscapedPath()
-	return scheme + "://" + strings.ToLower(u.Host), path != "" && path != "/", nil
+	return scheme + "://" + withoutDefaultPort(scheme, strings.ToLower(u.Host)), path != "" && path != "/", nil
+}
+
+// withoutDefaultPort drops a port equal to the scheme's default (and an empty
+// one), as a browser's serialized Origin does (RFC 6454 §6.1). The consent
+// decision compares the POST's Origin with this value byte for byte, and a
+// native client compares `iss` with the origin it was configured with, so
+// "https://host:443" must read as "https://host".
+func withoutDefaultPort(scheme, host string) string {
+	host = strings.TrimSuffix(host, ":")
+	switch {
+	case scheme == "https" && strings.HasSuffix(host, ":443"):
+		return strings.TrimSuffix(host, ":443")
+	case scheme == "http" && strings.HasSuffix(host, ":80"):
+		return strings.TrimSuffix(host, ":80")
+	}
+	return host
 }
 
 // FromRequest derives an origin from the request itself — the fallback when
@@ -90,7 +106,7 @@ func FromRequest(r *http.Request) string {
 		strings.EqualFold(strings.TrimSpace(values[0]), "https") {
 		scheme = "https"
 	}
-	return scheme + "://" + host
+	return scheme + "://" + withoutDefaultPort(scheme, host)
 }
 
 // Resolve returns the configured origin, or the request-derived one when
