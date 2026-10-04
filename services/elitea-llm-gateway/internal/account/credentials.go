@@ -53,6 +53,10 @@ type credential struct {
 	// useAnthropicEndpoints routes vllm-class credentials through the
 	// upstream's Anthropic-compatible /v1/messages surface (see credentialData).
 	useAnthropicEndpoints bool
+	// dialProtocol is the per-model AI DIAL protocol (dial_protocol.go). It is
+	// not stored on the credential row: GetKeysForProvider copies it from the
+	// linked-credential pin onto the one credential the pin selected.
+	dialProtocol DialProtocol
 }
 
 // sharedKeyIDPrefix marks a bifrost Key ID that came from the public project

@@ -91,6 +91,14 @@ const UnsupportedAPIBaseReason = "UNSUPPORTED_CREDENTIAL_API_BASE"
 // the OpenAI provider cannot be pointed at. It carries UnsupportedAPIBaseReason.
 var ErrUnsupportedAPIBase = errors.New(UnsupportedAPIBaseReason)
 
+// DialProtocolUnroutableReason is the rejection reason emitted when a model's
+// AI DIAL protocol cannot be applied to the key (legacy issue #6707).
+const DialProtocolUnroutableReason = "DIAL_PROTOCOL_UNROUTABLE"
+
+// ErrDialProtocolUnroutable is returned when a model chose a DIAL protocol and
+// the key cannot carry it. It carries DialProtocolUnroutableReason.
+var ErrDialProtocolUnroutable = errors.New(DialProtocolUnroutableReason)
+
 // ContextKeyRequestModel carries the model name the /llm handler dispatches,
 // written after the caller's model id is mapped onto the provider's own name
 // and read here by GetKeysForProvider.
@@ -462,6 +470,15 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 	if err != nil {
 		return nil, err
 	}
+	// Legacy issue #6707: the model row may choose an AI DIAL protocol. It is
+	// a statement about the Azure-shaped DIAL endpoint, so it reaches Azure
+	// keys only. The pin selected exactly one credential above, so the
+	// protocol is applied to the credential the model named and to no other.
+	if link, linked := linkedCredentialFromContext(ctx); linked && provider == schemas.Azure {
+		for i := range creds {
+			creds[i].dialProtocol = link.DialProtocol
+		}
+	}
 
 	keys := make([]schemas.Key, 0, len(creds))
 	for _, c := range creds {
@@ -576,6 +593,8 @@ func credentialRejectionReason(err error) string {
 		return IncompleteCredentialReason
 	case errors.Is(err, ErrUnsupportedAPIBase):
 		return UnsupportedAPIBaseReason
+	case errors.Is(err, ErrDialProtocolUnroutable):
+		return DialProtocolUnroutableReason
 	default:
 		return "INVALID_PROVIDER_CREDENTIAL"
 	}
@@ -626,6 +645,26 @@ func buildKey(provider schemas.ModelProvider, c credential, apiKey, requestModel
 			return schemas.Key{}, missingCredentialFields("api_base")
 		}
 		key.AzureKeyConfig = &schemas.AzureKeyConfig{Endpoint: plainSecret(c.apiBase)}
+		// Legacy issue #6707. A DIAL protocol other than the default forces
+		// the model family, which selects bifrost's route and auth header
+		// (see dial_protocol.go). It replaces the api-version alias: both
+		// routes it selects are versionless.
+		if family, forced := c.dialProtocol.modelFamily(); forced {
+			if requestModel == "" {
+				// The alias is keyed by the dispatched model name. Without one
+				// the request would silently take the default route, which is
+				// the route this model was configured away from.
+				return schemas.Key{}, fmt.Errorf(
+					"%w: the %s DIAL protocol needs the dispatched model name", ErrDialProtocolUnroutable, c.dialProtocol)
+			}
+			key.Aliases = schemas.KeyAliases{
+				requestModel: schemas.AliasConfig{
+					ModelID:     requestModel,
+					ModelFamily: schemas.Ptr(family),
+				},
+			}
+			return key, nil
+		}
 		// ISSUE #455. Attach the credential's api-version to the model this
 		// request dispatches. bifrost reads AzureAliasCfg.APIVersion from the
 		// alias it resolves for that model name; with no alias it substitutes

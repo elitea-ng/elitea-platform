@@ -76,6 +76,16 @@ type LinkedCredential struct {
 	// checks that ProjectID is exactly its operator-configured public project
 	// before it relaxes the shared-row predicate.
 	ModelOwnerAccess bool
+	// DialProtocol is the AI DIAL protocol of the model row that named this
+	// credential (dial_protocol.go). It is set only when the credential is an
+	// ai_dial credential, and the account applies it to Azure keys only. The
+	// zero value is the default protocol and changes nothing.
+	//
+	// It travels on the pin rather than on a key of its own because a routing
+	// rule that rewrites the target clears the pin (llmproxy/policy_gate.go):
+	// the protocol of the model the caller asked for must not follow the
+	// request to a different model.
+	DialProtocol DialProtocol
 }
 
 // empty reports whether the link names nothing at all.

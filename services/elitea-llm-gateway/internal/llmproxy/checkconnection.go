@@ -311,6 +311,11 @@ var checkConnectionProviders = map[string]checkConnectionProvider{
 	// account/credentials.go's providerConfigTypes — AI DIAL is explicitly an
 	// Azure-OpenAI-API-compatible proxy, so both list deployments the same
 	// way.
+	//
+	// The per-model DIAL protocol (legacy issue #6707, account/dial_protocol.go)
+	// does NOT change this probe. The protocol is a field of the MODEL, and a
+	// credential test has no model. GET /openai/deployments validates the key
+	// itself, so it stays the ai_dial probe for every protocol.
 	"azure_open_ai": {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	"ai_dial":       {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	// open_ai_azure is the third name providerConfigTypes maps to schemas.Azure

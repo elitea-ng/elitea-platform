@@ -79,6 +79,10 @@ type modelObject struct {
 	// account use that model's owner credential without publishing the
 	// credential as a generally reusable provider.
 	credentialModelOwnerAccess bool
+	// dialProtocol is the row's AI DIAL protocol (legacy issue #6707). It is
+	// set only when the linked credential is an ai_dial credential; for every
+	// other credential type it stays the zero value, which changes nothing.
+	dialProtocol account.DialProtocol
 }
 
 // linkedCredential returns the account-side selector for this model's linked
@@ -92,6 +96,7 @@ func (mo modelObject) linkedCredential() (account.LinkedCredential, bool) {
 		ConfigID:         mo.credentialID,
 		Title:            mo.credentialTitle,
 		ModelOwnerAccess: mo.credentialModelOwnerAccess,
+		DialProtocol:     mo.dialProtocol,
 	}, true
 }
 
@@ -124,6 +129,16 @@ type modelRows interface {
 type modelConfigData struct {
 	Name          string              `json:"name"`
 	AICredentials *modelCredentialRef `json:"ai_credentials"`
+	// DialProtocol is the llm_model's AI DIAL protocol: azure (the default),
+	// openai or anthropic (legacy issue #6707, account/dial_protocol.go). It
+	// is a field of the MODEL, because one DIAL key serves models of all three
+	// families. modelNames copies it onto the link, the one value that reaches
+	// applyCredentialLink, where the credential type decides whether it applies.
+	//
+	// It is decoded as raw JSON on purpose. A typed string field would make a
+	// malformed value (a number, an object) fail the WHOLE decode, and the row
+	// would then lose its credential link and its provider with it.
+	DialProtocol json.RawMessage `json:"dial_protocol"`
 }
 
 // modelCredentialRef is a model row's link to a credential row. TWO shapes
@@ -165,10 +180,23 @@ type modelCredentialRef struct {
 	// in the expanded shape. json.Number accepts it whether it was written as a
 	// number or as a string.
 	ConfigurationProjectID json.Number `json:"configuration_project_id"`
+
+	// dialProtocol is NOT part of the link object. It is the row's top-level
+	// data.dial_protocol, copied here by modelNames so it reaches
+	// applyCredentialLink with the link it qualifies.
+	dialProtocol string
 }
 
 // title returns the credential's elitea_title, accepting the pre-debranding
 // spelling.
+// dialProtocolOf returns the protocol the row stated, or "" for a nil link.
+func (r *modelCredentialRef) dialProtocolOf() string {
+	if r == nil {
+		return ""
+	}
+	return r.dialProtocol
+}
+
 func (r *modelCredentialRef) title() string {
 	if r == nil {
 		return ""
@@ -768,6 +796,23 @@ func (m *ModelResolver) applyCredentialLink(
 	mo.credentialID = configID
 	mo.credentialTitle = title
 	mo.credentialModelOwnerAccess = modelOwnerAccess && ownerProject == scopeProjectID
+
+	// Legacy issue #6707. The DIAL protocol is a statement about an ai_dial
+	// endpoint, so a row that links any other credential type ignores it.
+	if credentialType != account.DialCredentialType {
+		return
+	}
+	protocol, known := account.ParseDialProtocol(link.dialProtocolOf())
+	if !known {
+		// The write path refuses an unknown value, so reaching here means the
+		// row was written around it. The default keeps the request exactly as
+		// it was before the field existed; the warning names the row.
+		m.logger.WarnContext(ctx, "model names an unknown DIAL protocol; using the default azure protocol",
+			"project_id", scopeProjectID, "model", mo.ID)
+	}
+	if protocol != account.DialProtocolAzure {
+		mo.dialProtocol = protocol
+	}
 }
 
 // lookupCredentialRef finds title in the first lookup that holds it.
@@ -792,6 +837,7 @@ func lookupCredentialRef(creds []map[string]credentialRef, title string) (creden
 //     back to id when data.name is absent, so a row that carries a title and no
 //     wire name dispatches the title exactly as it did before issue #317.
 //   - link is the row's data.ai_credentials object, or nil when it has none.
+//     It also carries the row's data.dial_protocol (legacy issue #6707).
 //
 // A malformed data JSONB is treated as absent.
 func modelNames(title string, dataBytes []byte) (id, providerModel string, link *modelCredentialRef) {
@@ -812,7 +858,24 @@ func modelNames(title string, dataBytes []byte) (id, providerModel string, link 
 	if providerModel == "" {
 		providerModel = id
 	}
+	if d.AICredentials != nil {
+		d.AICredentials.dialProtocol = rawDialProtocol(d.DialProtocol)
+	}
 	return id, providerModel, d.AICredentials
+}
+
+// rawDialProtocol reads data.dial_protocol. A value that is not a JSON string
+// is returned as a marker that account.ParseDialProtocol does not know, so it
+// is logged and read as the default protocol rather than dropped silently.
+func rawDialProtocol(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "<not a string>"
+	}
+	return value
 }
 
 // validateNumericProjectID rejects a non-numeric projectID before it is
