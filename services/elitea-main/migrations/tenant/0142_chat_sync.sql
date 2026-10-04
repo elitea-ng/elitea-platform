@@ -96,6 +96,7 @@ DECLARE
     table_name text;
     has_updated boolean;
     has_created boolean;
+    entry record;
 BEGIN
     IF tenant IS NULL THEN
         RAISE EXCEPTION 'chat sync migration needs a tenant search_path';
@@ -124,6 +125,23 @@ BEGIN
         author_id integer,
         deleted_at timestamptz NOT NULL DEFAULT clock_timestamp()
     );
+    -- author_id is recorded in the form 0128 uses for owner and author
+    -- meanings (a VALUES row of table, column, meaning), because
+    -- migrations/owner_column_meanings_test.go reads that form and nothing
+    -- else (issue #533). Its one writer is chat_sync_conversation_changed() below, which
+    -- copies OLD.author_id of the deleted chat_conversations row (USER, per
+    -- 0128); its one reader, internal/api/v2/conversations/changes.go,
+    -- compares it with the caller's user id.
+    FOR entry IN
+        SELECT *
+          FROM (VALUES
+            ('chat_sync_tombstones', 'author_id',
+             'USER id, not project id. The author of a deleted conversation, copied from chat_conversations.author_id, so a private conversation''s deletion is told to its author only (ADR-0025 WP6).')
+          ) AS t(table_name, column_name, meaning)
+    LOOP
+        EXECUTE format('COMMENT ON COLUMN %I.%I IS %L',
+                       entry.table_name, entry.column_name, entry.meaning);
+    END LOOP;
     CREATE INDEX IF NOT EXISTS chat_sync_tombstones_deleted_at_idx
         ON chat_sync_tombstones (deleted_at, id);
     CREATE INDEX IF NOT EXISTS chat_sync_tombstones_message_idx
