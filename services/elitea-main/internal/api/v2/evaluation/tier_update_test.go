@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -36,6 +38,18 @@ func bodyWithTier(tier string) string {
 	return strings.Replace(validBody, `"tier": "project"`, `"tier": "`+tier+`"`, 1)
 }
 
+// newPromotingRouter is newTestRouter with the create-permission check wired,
+// answering `mayCreate` (or `err`) for every request.
+func newPromotingRouter(repo evaluation.Repository, mayCreate bool, err error) http.Handler {
+	handler := evaluation.NewHandler(repo, evaluation.WithCreatePermissionCheck(func(*http.Request) (bool, error) {
+		return mayCreate, err
+	}))
+	r := chi.NewRouter()
+	r.Post("/eval_dimensions/prompt_lib/{projectID}", handler.Create)
+	r.Put("/eval_dimension/prompt_lib/{projectID}/{dimensionID}", handler.Update)
+	return r
+}
+
 // Legacy issue 6669: the owner of a private project could not make an agent
 // dimension available across the project. A PUT with `tier: project` on an
 // `agent_adhoc` row now promotes it and clears the agent.
@@ -43,7 +57,7 @@ func TestUpdatePromotesAnAgentDimensionToTheProject(t *testing.T) {
 	t.Parallel()
 
 	repo := adhocRepo()
-	response := do(t, newTestRouter(repo), http.MethodPut, "/eval_dimension/prompt_lib/1/1", bodyWithTier("project"))
+	response := do(t, newPromotingRouter(repo, true, nil), http.MethodPut, "/eval_dimension/prompt_lib/1/1", bodyWithTier("project"))
 	if response.Code != http.StatusOK {
 		t.Fatalf("update: expected 200, got %d: %s", response.Code, response.Body.String())
 	}
@@ -56,6 +70,57 @@ func TestUpdatePromotesAnAgentDimensionToTheProject(t *testing.T) {
 	}
 	if repo.stored[0].Tier != evaluation.TierProject || repo.stored[0].ApplicationID != nil {
 		t.Fatalf("stored tier %q application %v, want project and no agent", repo.stored[0].Tier, repo.stored[0].ApplicationID)
+	}
+}
+
+// A promotion adds a dimension to the project library, so it is a create: a
+// caller holding dimension.update WITHOUT dimension.create gets a 403 and the
+// row keeps its agent scope. So does every caller when the composition root
+// wired no check at all.
+func TestPromotionNeedsTheCreatePermission(t *testing.T) {
+	t.Parallel()
+
+	routers := map[string]func(evaluation.Repository) http.Handler{
+		"update without create": func(repo evaluation.Repository) http.Handler { return newPromotingRouter(repo, false, nil) },
+		"no check wired":        newTestRouter,
+	}
+	for name, router := range routers {
+		repo := adhocRepo()
+		response := do(t, router(repo), http.MethodPut, "/eval_dimension/prompt_lib/1/1", bodyWithTier("project"))
+		if response.Code != http.StatusForbidden {
+			t.Errorf("%s: expected 403, got %d: %s", name, response.Code, response.Body.String())
+		}
+		if stored := repo.stored[0]; stored.Tier != evaluation.TierAgentAdhoc || stored.ApplicationID == nil || *stored.ApplicationID != 7 {
+			t.Errorf("%s: stored tier %q application %v, want the agent scope kept", name, stored.Tier, stored.ApplicationID)
+		}
+	}
+
+	// A resolution failure fails the request; it is not read as either answer.
+	repo := adhocRepo()
+	failing := newPromotingRouter(repo, false, errors.New("resolver down"))
+	if code := do(t, failing, http.MethodPut, "/eval_dimension/prompt_lib/1/1", bodyWithTier("project")).Code; code != http.StatusInternalServerError {
+		t.Errorf("resolver failure: expected 500, got %d", code)
+	}
+	if repo.stored[0].Tier != evaluation.TierAgentAdhoc {
+		t.Errorf("resolver failure: stored tier changed to %q", repo.stored[0].Tier)
+	}
+}
+
+// Editing a dimension that is ALREADY in the project library is an update,
+// not a promotion: it needs no create permission, though the editor sends
+// `tier: project` on every save.
+func TestEditingAProjectDimensionNeedsNoCreatePermission(t *testing.T) {
+	t.Parallel()
+
+	repo := &recordingRepo{}
+	router := newPromotingRouter(repo, false, nil)
+	if created := do(t, router, http.MethodPost, "/eval_dimensions/prompt_lib/1", validBody); created.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	body := strings.Replace(bodyWithTier("project"), `"Helpfulness"`, `"Helpfulness, renamed"`, 1)
+	response := do(t, router, http.MethodPut, "/eval_dimension/prompt_lib/1/1", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", response.Code, response.Body.String())
 	}
 }
 
@@ -149,19 +214,22 @@ func TestResolveTierUpdate(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		stored, requested, want string
-		status                  int
+		stored, requested string
+		mayCreate         bool
+		want              string
+		status            int
 	}{
-		{evaluation.TierAgentAdhoc, "", evaluation.TierAgentAdhoc, 0},
-		{evaluation.TierProject, "", evaluation.TierProject, 0},
-		{evaluation.TierProject, evaluation.TierProject, evaluation.TierProject, 0},
-		{evaluation.TierAgentAdhoc, evaluation.TierAgentAdhoc, evaluation.TierAgentAdhoc, 0},
-		{evaluation.TierAgentAdhoc, evaluation.TierProject, evaluation.TierProject, 0},
-		{evaluation.TierProject, evaluation.TierAgentAdhoc, "", http.StatusConflict},
-		{evaluation.TierProject, evaluation.TierPlatform, "", http.StatusBadRequest},
+		{evaluation.TierAgentAdhoc, "", false, evaluation.TierAgentAdhoc, 0},
+		{evaluation.TierProject, "", false, evaluation.TierProject, 0},
+		{evaluation.TierProject, evaluation.TierProject, false, evaluation.TierProject, 0},
+		{evaluation.TierAgentAdhoc, evaluation.TierAgentAdhoc, false, evaluation.TierAgentAdhoc, 0},
+		{evaluation.TierAgentAdhoc, evaluation.TierProject, true, evaluation.TierProject, 0},
+		{evaluation.TierAgentAdhoc, evaluation.TierProject, false, "", http.StatusForbidden},
+		{evaluation.TierProject, evaluation.TierAgentAdhoc, true, "", http.StatusConflict},
+		{evaluation.TierProject, evaluation.TierPlatform, true, "", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
-		got, err := evaluation.ResolveTierUpdate(tc.stored, tc.requested)
+		got, err := evaluation.ResolveTierUpdate(tc.stored, tc.requested, tc.mayCreate)
 		if tc.status == 0 {
 			if err != nil || got != tc.want {
 				t.Errorf("%s -> %q: got %q %v, want %q", tc.stored, tc.requested, got, err, tc.want)

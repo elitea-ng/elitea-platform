@@ -43,7 +43,7 @@ func (r *recordingRepo) Update(_ context.Context, _, id string, d evaluation.Dim
 			// never taken from the body; a promotion clears it. This fake
 			// must not be more permissive than the real one, or the handler
 			// test would pass against a scope-moving bug.
-			tier, err := evaluation.ResolveTierUpdate(r.stored[i].Tier, d.Tier)
+			tier, err := evaluation.ResolveTierUpdate(r.stored[i].Tier, d.Tier, d.PromotionPermitted)
 			if err != nil {
 				return evaluation.Dimension{}, err
 			}

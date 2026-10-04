@@ -14,10 +14,34 @@ import (
 // Handler serves the four dimension-library routes.
 type Handler struct {
 	repo Repository
+	// mayCreate answers whether the caller holds PermissionDimensionCreate in
+	// the route's project. Update asks it before a PROMOTION, which adds a
+	// dimension to the project library and is therefore a create. Nil refuses
+	// every promotion: a composition root that forgot to wire it must not
+	// fall back to the update permission alone.
+	mayCreate PermissionCheck
 }
 
-func NewHandler(repo Repository) *Handler {
-	return &Handler{repo: repo}
+// PermissionCheck answers, inside a handler, whether the caller of r holds
+// one permission in the route's project. An error is a failed resolution,
+// not a "no".
+type PermissionCheck func(r *http.Request) (bool, error)
+
+// HandlerOption configures a Handler.
+type HandlerOption func(*Handler)
+
+// WithCreatePermissionCheck wires the check Update runs before it promotes an
+// `agent_adhoc` dimension to the project library.
+func WithCreatePermissionCheck(check PermissionCheck) HandlerOption {
+	return func(h *Handler) { h.mayCreate = check }
+}
+
+func NewHandler(repo Repository, options ...HandlerOption) *Handler {
+	h := &Handler{repo: repo}
+	for _, option := range options {
+		option(h)
+	}
+	return h
 }
 
 // listResponse is `{rows, total}`.
@@ -141,6 +165,21 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dimension.Tier = requestedTier
+	// PROMOTION IS A CREATE. The route is gated on dimension.update, but
+	// `agent_adhoc` -> `project` adds a dimension to the library every agent's
+	// editor lists. A role holding update without create must not be able to
+	// do that, so the caller's create permission rides to the repository,
+	// which compares it against the STORED tier inside its transaction. Only
+	// a body asking for `project` can promote, so only that body pays for the
+	// second resolution.
+	if requestedTier == TierProject && h.mayCreate != nil {
+		allowed, err := h.mayCreate(r)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		dimension.PromotionPermitted = allowed
+	}
 
 	updated, err := h.repo.Update(r.Context(), projectID, dimensionID, dimension)
 	if err != nil {

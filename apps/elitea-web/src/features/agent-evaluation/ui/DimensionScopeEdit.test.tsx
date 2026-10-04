@@ -40,17 +40,21 @@ function dimensionRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function mockLibrary(row: ReturnType<typeof dimensionRow>, onPut: (body: Record<string, unknown>) => void): void {
+const ALL_DIMENSION_PERMISSIONS = [
+  PERMISSIONS.evaluation.dimensionRead,
+  PERMISSIONS.evaluation.dimensionCreate,
+  PERMISSIONS.evaluation.dimensionUpdate,
+  PERMISSIONS.evaluation.dimensionDelete,
+];
+
+function mockLibrary(
+  row: ReturnType<typeof dimensionRow>,
+  onPut: (body: Record<string, unknown>) => void,
+  granted: readonly string[] = ALL_DIMENSION_PERMISSIONS,
+): void {
   server.use(
     http.get(`${BASE}/auth/permissions/prompt_lib/:projectId`, () =>
-      HttpResponse.json(
-        [
-          PERMISSIONS.evaluation.dimensionRead,
-          PERMISSIONS.evaluation.dimensionCreate,
-          PERMISSIONS.evaluation.dimensionUpdate,
-          PERMISSIONS.evaluation.dimensionDelete,
-        ].map((name) => ({ name, enabled: true })),
-      ),
+      HttpResponse.json(granted.map((name) => ({ name, enabled: true }))),
     ),
     http.get(`${BASE}/elitea_core/eval_dimensions/prompt_lib/:projectId`, () =>
       HttpResponse.json({ rows: [row], total: 1 }),
@@ -83,6 +87,24 @@ describe('dimension scope on edit', () => {
 
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]).toMatchObject({ tier: EVAL_TIER.project, application_id: null });
+  });
+
+  // The server refuses a promotion without dimension.create (it adds a
+  // library entry), so the option is disabled for an update-only author.
+  it('does not offer the project library to an author who may update but not create', async () => {
+    mockLibrary(dimensionRow({ tier: EVAL_TIER.agentAdhoc, application_id: 42 }), () => {}, [
+      PERMISSIONS.evaluation.dimensionRead,
+      PERMISSIONS.evaluation.dimensionUpdate,
+    ]);
+    const user = userEvent.setup();
+
+    renderWithEvaluationProviders(<EvaluationLibraryView projectId="1" applicationId={42} />);
+    await user.click(await screen.findByTestId('evaluation-dimension-edit-1'));
+
+    const dialog = await screen.findByTestId('dimension-editor-dialog');
+    await user.click(within(dialog).getByLabelText('Scope'));
+    expect(await screen.findByRole('option', { name: 'Project library' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: 'This agent only' })).not.toHaveAttribute('aria-disabled', 'true');
   });
 
   it('does not offer to move a project dimension back to one agent', async () => {

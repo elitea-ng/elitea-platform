@@ -195,8 +195,10 @@ func (r *EvalDimensionsRepo) Create(
 // The stored row is read and locked FIRST, in the same transaction as the
 // write, because the tier rule compares against the stored tier:
 // evaluation.ResolveTierUpdate allows `agent_adhoc` -> `project` (and clears
-// `application_id`), refuses `project` -> `agent_adhoc` with a 409, and keeps
-// the stored tier when the body carried none. A check outside the transaction
+// `application_id`) when the handler set `PromotionPermitted` (the caller
+// also holds dimension.create), refuses it with a 403 otherwise, refuses
+// `project` -> `agent_adhoc` with a 409, and keeps the stored tier when the
+// body carried none. A check outside the transaction
 // would race a concurrent promotion.
 //
 // A `platform` row is refused outright: those are materialised from a registry
@@ -226,7 +228,7 @@ func (r *EvalDimensionsRepo) Update(
 			}
 			return fmt.Errorf("eval dimensions: update: read tier: %w", err)
 		}
-		tier, err := evaluation.ResolveTierUpdate(storedTier, dimension.Tier)
+		tier, err := evaluation.ResolveTierUpdate(storedTier, dimension.Tier, dimension.PromotionPermitted)
 		if err != nil {
 			return err
 		}

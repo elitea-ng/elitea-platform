@@ -49,6 +49,34 @@ func TestEvalDimensionPromotionToTheProjectAndRefusedDemotion(t *testing.T) {
 	}
 }
 
+// A promotion is a create: without dimension.create the real repository's
+// transaction refuses it with 403, and the row keeps its agent.
+func TestEvalDimensionPromotionNeedsTheCreatePermission(t *testing.T) {
+	router := newEvalDimensionsRouterWith(t, false)
+
+	adhoc := strings.Replace(evalCreateBody, `"tier": "project"`, `"tier": "agent_adhoc", "application_id": 77`, 1)
+	created := callEvalRoute(t, router, http.MethodPost, "/eval_dimensions/prompt_lib/1", adhoc)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", created.Code, created.Body.String())
+	}
+	var createdRow evaluation.Dimension
+	if err := json.Unmarshal(created.Body.Bytes(), &createdRow); err != nil {
+		t.Fatalf("decode the created dimension: %v", err)
+	}
+
+	promoted := callEvalRoute(t, router, http.MethodPut, "/eval_dimension/prompt_lib/1/"+createdRow.ID, evalCreateBody)
+	if promoted.Code != http.StatusForbidden {
+		t.Fatalf("promote without create: expected 403, got %d: %s", promoted.Code, promoted.Body.String())
+	}
+	if rows := listEvalDimensions(t, router, ""); len(rows) != 0 {
+		t.Fatalf("the project library = %+v, want it empty", rows)
+	}
+	agentRows := listEvalDimensions(t, router, "?agent_id=77")
+	if len(agentRows) != 1 || agentRows[0].Tier != evaluation.TierAgentAdhoc || agentRows[0].ApplicationID == nil {
+		t.Fatalf("agent 77's dimensions = %+v, want the row still scoped to it", agentRows)
+	}
+}
+
 // Legacy issue 6700: a case can be EXCLUDED and included again. The flag
 // reads back through the route, a text edit without the key keeps it, and the
 // run repository's case read carries it to the run start.

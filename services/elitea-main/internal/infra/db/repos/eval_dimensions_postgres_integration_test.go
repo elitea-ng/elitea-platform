@@ -36,8 +36,16 @@ import (
 // the handler refuses is a rule with a hole in it for every other writer.
 func newEvalDimensionsRouter(t *testing.T) http.Handler {
 	t.Helper()
+	return newEvalDimensionsRouterWith(t, true)
+}
+
+// newEvalDimensionsRouterWith wires the create-permission check a promotion
+// asks, answering `mayCreate` for every request.
+func newEvalDimensionsRouterWith(t *testing.T, mayCreate bool) http.Handler {
+	t.Helper()
 	pool := newMigratedPostgresIntegrationPool(t)
-	handler := evaluation.NewHandler(NewEvalDimensionsRepo(pool))
+	handler := evaluation.NewHandler(NewEvalDimensionsRepo(pool),
+		evaluation.WithCreatePermissionCheck(func(*http.Request) (bool, error) { return mayCreate, nil }))
 
 	r := chi.NewRouter()
 	r.Get("/eval_dimensions/prompt_lib/{projectID}", handler.List)

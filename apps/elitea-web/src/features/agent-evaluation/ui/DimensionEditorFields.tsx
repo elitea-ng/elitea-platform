@@ -101,9 +101,18 @@ function polarityOptions(): SingleSelectOption[] {
  * move with a 409, because other agents can already use a project dimension.
  * So "This agent only" is disabled for a stored project dimension, and the
  * select never offers a save that always fails.
+ *
+ * A promotion adds the dimension to the project library, so the server also
+ * asks for the create permission; "Project library" is disabled on a stored
+ * agent dimension for an author who may update but not create.
  */
-function tierOptions(canScopeToAgent: boolean, storedTier?: EvalDimensionForm['tier']): SingleSelectOption[] {
+function tierOptions(
+  canScopeToAgent: boolean,
+  canPromote: boolean,
+  storedTier?: EvalDimensionForm['tier'],
+): SingleSelectOption[] {
   const isStoredProject = storedTier === EVAL_TIER.project;
+  const isStoredAgent = storedTier === EVAL_TIER.agentAdhoc;
   return [
     {
       value: EVAL_TIER.agentAdhoc,
@@ -113,6 +122,7 @@ function tierOptions(canScopeToAgent: boolean, storedTier?: EvalDimensionForm['t
     {
       value: EVAL_TIER.project,
       label: t('features.agentEvaluation.tier.project', 'Project library'),
+      disabled: isStoredAgent && !canPromote,
     },
   ];
 }
@@ -141,6 +151,8 @@ export interface DimensionEditorFieldsProps {
   readonly form: EvalDimensionForm;
   readonly isEdit: boolean;
   readonly canScopeToAgent: boolean;
+  /** The caller holds dimension.create, which moving an agent dimension to the project library needs. */
+  readonly canPromote: boolean;
   /** The tier the stored dimension has. `undefined` in create mode. */
   readonly storedTier: EvalDimensionForm['tier'] | undefined;
   readonly onFieldChange: <K extends keyof EvalDimensionForm>(key: K, value: EvalDimensionForm[K]) => void;
@@ -148,7 +160,7 @@ export interface DimensionEditorFieldsProps {
 }
 
 export function DimensionEditorFields(props: DimensionEditorFieldsProps): ReactNode {
-  const { form, isEdit, canScopeToAgent, storedTier, onFieldChange, onToggleEngine } = props;
+  const { form, isEdit, canScopeToAgent, canPromote, storedTier, onFieldChange, onToggleEngine } = props;
   const isCode = isCodeOnly(form.allowed_engines);
 
   return (
@@ -186,7 +198,7 @@ export function DimensionEditorFields(props: DimensionEditorFieldsProps): ReactN
       <SingleSelect
         label={t('features.agentEvaluation.field.scope', 'Scope')}
         value={form.tier}
-        options={tierOptions(canScopeToAgent, isEdit ? storedTier : undefined)}
+        options={tierOptions(canScopeToAgent, canPromote, isEdit ? storedTier : undefined)}
         onChange={(value) => onFieldChange('tier', value as EvalDimensionForm['tier'])}
         id="dimension-tier-select"
       />

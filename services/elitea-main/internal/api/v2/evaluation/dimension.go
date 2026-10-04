@@ -154,6 +154,11 @@ type Dimension struct {
 	ReturnContract string `json:"return_contract"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
+	// PromotionPermitted is WRITE INTENT, never data: the update handler sets
+	// it when the caller also holds PermissionDimensionCreate, and
+	// ResolveTierUpdate refuses an `agent_adhoc` -> `project` promotion
+	// without it. `json:"-"`, so no body can set it and no answer carries it.
+	PromotionPermitted bool `json:"-"`
 }
 
 // IsCodeEngine reports the code-only shape: `allowed_engines == ['code']`.
@@ -251,21 +256,27 @@ func (d *Dimension) Normalize() {
 // kept. A client that does not send the scope must not move the dimension.
 //
 // PROMOTION is allowed: an `agent_adhoc` dimension may become a `project`
-// dimension, and its `application_id` is then cleared. The route that calls
-// this is gated on PermissionDimensionUpdate, which the project owner holds
-// (legacy issue 6669: a private-project owner could not change the tier).
-// Every project editor holds it too, and that is deliberate: the agent the
-// dimension is scoped to is itself editable by every project editor, so the
-// agent scope is not an access boundary to defend here (see Handler.List).
+// dimension, and its `application_id` is then cleared (legacy issue 6669: a
+// private-project owner could not change the tier). A promotion ADDS a
+// dimension to the project library, so it needs PermissionDimensionCreate as
+// well as the route's PermissionDimensionUpdate: `promotionPermitted` says the
+// caller holds it, and without it a promotion is a 403. Shared migration 0104
+// grants both to the same default roles, so this changes nothing for them; it
+// stops a custom role holding update alone from creating library entries.
+// The agent scope itself is not an access boundary (see Handler.List).
 //
 // DEMOTION is refused with a 409. A project dimension can already be in use by
 // other agents' runs and editors; moving it to one agent would remove it from
 // them without a trace.
-func ResolveTierUpdate(stored, requested string) (string, error) {
+func ResolveTierUpdate(stored, requested string, promotionPermitted bool) (string, error) {
 	if requested == "" || requested == stored {
 		return stored, nil
 	}
 	if stored == TierAgentAdhoc && requested == TierProject {
+		if !promotionPermitted {
+			return "", apierr.Forbidden("moving an agent dimension to the project library adds it to the library: it needs " +
+				PermissionDimensionCreate + " as well as " + PermissionDimensionUpdate)
+		}
 		return TierProject, nil
 	}
 	if stored == TierProject && requested == TierAgentAdhoc {
