@@ -77,7 +77,7 @@ test('clearing the chat empties the stored transcript and keeps the conversation
   // `llm_settings.model_name`. With nothing selected the send is refused 400
   // before it reaches the worker.
   await page.getByTestId('model-selector-button').click();
-  const modelOption = page.getByRole('menuitem').filter({ hasText: MODEL_NAME }).first();
+  const modelOption = page.getByRole('option').filter({ hasText: MODEL_NAME }).first();
   await expect(modelOption, `the seeded model ${MODEL_NAME} must be offered`).toBeVisible({ timeout: 20_000 });
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });

@@ -166,7 +166,7 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
 
   await page.getByTestId('model-selector-button').click();
-  const modelOption = page.getByRole('menuitem').filter({ hasText: MODEL_NAME }).first();
+  const modelOption = page.getByRole('option').filter({ hasText: MODEL_NAME }).first();
   await expect(modelOption, `the seeded model ${MODEL_NAME} must be offered`).toBeVisible({ timeout: 20_000 });
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });

@@ -124,7 +124,7 @@ test('Stop mid-stream cancels the run and keeps the partial answer', async ({ pa
   // and the start route reads `llm_settings.model_name`. With nothing selected
   // the send is rejected 400 before it reaches the worker.
   await page.getByTestId('model-selector-button').click();
-  const modelOption = page.getByRole('menuitem').filter({ hasText: MOCK_MODEL }).first();
+  const modelOption = page.getByRole('option').filter({ hasText: MOCK_MODEL }).first();
   await expect(
     modelOption,
     `the mock model ${MOCK_MODEL} must be offered — this journey cannot run against a real provider`,

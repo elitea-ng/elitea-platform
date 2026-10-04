@@ -4,6 +4,8 @@ export interface LLMModel {
   id: string;
   name: string;
   display_name?: string;
+  /** The admin's one-line text on the model (max 40 characters). The menu shows it under the name. */
+  description?: string;
   shared?: boolean;
   supports_vision?: boolean;
   supports_reasoning?: boolean;

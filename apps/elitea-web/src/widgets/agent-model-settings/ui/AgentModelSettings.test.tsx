@@ -80,7 +80,7 @@ function renderPicker(props: Partial<Parameters<typeof AgentModelSettings>[0]> =
 async function chooseModel(displayName: string): Promise<void> {
   const user = userEvent.setup();
   await user.click(await screen.findByTestId('model-selector-name'));
-  await user.click(await screen.findByRole('menuitem', { name: new RegExp(displayName) }));
+  await user.click(await screen.findByRole('option', { name: new RegExp(displayName) }));
 }
 
 beforeEach(() => {
@@ -108,7 +108,7 @@ describe('AgentModelSettings', () => {
     await screen.findByText('GPT-4o');
     await userEvent.setup().click(screen.getByTestId('model-selector-name'));
 
-    const rows = await screen.findAllByRole('menuitem');
+    const rows = await screen.findAllByRole('option');
     expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining('GPT-4o'), expect.stringContaining('O3 Mini')]);
     expect(rows[0]).toHaveClass('Mui-selected');
     expect(rows[1]).not.toHaveClass('Mui-selected');
