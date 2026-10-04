@@ -631,9 +631,14 @@ func currentApplicationRuntimeLLM(version map[string]any) ([]byte, error) {
 	return result, nil
 }
 
+// validUUID admits exactly the canonical lowercase spelling. question_id is
+// the turn's idempotency key and is compared as a string, while the database
+// stores it as a uuid: an upper-case spelling of the same id would be a
+// second key for one stored question. API_CONTRACT.md promises clients a 400
+// for it (ADR-0025 coordinator decision 14).
 func validUUID(value string) bool {
 	parsed, err := uuid.Parse(value)
-	return err == nil && parsed.String() == strings.ToLower(value)
+	return err == nil && parsed.String() == value
 }
 
 var currentTurnNamespace = uuid.MustParse("71581f1e-fb1b-4d50-a9db-8ebd4b47db76")
