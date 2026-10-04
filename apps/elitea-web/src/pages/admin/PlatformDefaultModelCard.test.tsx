@@ -148,13 +148,27 @@ describe('platform default helpers', () => {
   });
 
   it('describes who falls back after a delete', () => {
+    const usage = (platform_default: boolean, projects: number, served_by_another_row = false) => ({
+      model_name: 'm',
+      platform_default,
+      projects,
+      served_by_another_row,
+    });
     expect(platformDefaultImpact(undefined)).toBeUndefined();
-    expect(platformDefaultImpact({ model_name: 'm', platform_default: false, projects: 0 })).toBeUndefined();
-    expect(platformDefaultImpact({ model_name: 'm', platform_default: false, projects: 2 })).toContain(
-      '2 projects chose it',
+    expect(platformDefaultImpact(usage(false, 0))).toBeUndefined();
+    expect(platformDefaultImpact(usage(false, 1))).toBe(
+      '1 project uses it as its default. It moves to the platform default.',
     );
-    expect(platformDefaultImpact({ model_name: 'm', platform_default: true, projects: 0 })).toContain(
-      'platform default',
-    );
+    expect(platformDefaultImpact(usage(false, 2))).toContain('2 projects use it as their default');
+    // No "0 projects" clause, and the projects with no default of their own are named.
+    const platformOnly = platformDefaultImpact(usage(true, 0));
+    expect(platformOnly).toContain('platform default');
+    expect(platformOnly).toContain('no own default');
+    expect(platformOnly).not.toMatch(/\d/);
+    expect(platformDefaultImpact(usage(true, 1))).toContain('own default of 1 project.');
+    expect(platformDefaultImpact(usage(true, 1))).not.toContain('1 projects');
+    expect(platformDefaultImpact(usage(true, 3))).toContain('own default of 3 projects');
+    // Another row still serves the model: the delete releases nothing.
+    expect(platformDefaultImpact(usage(true, 3, true))).toBeUndefined();
   });
 });

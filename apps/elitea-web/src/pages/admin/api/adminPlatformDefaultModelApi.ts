@@ -48,8 +48,13 @@ export interface PlatformDefaultModel {
 export interface PlatformDefaultUsage {
   readonly model_name: string;
   readonly platform_default: boolean;
-  /** Projects other than the catalogue project whose own default is this model. */
+  /**
+   * Projects other than the catalogue project whose own default is this
+   * model, as the default or as a low-tier or high-tier default.
+   */
   readonly projects: number;
+  /** Another row serves the same model, so the delete releases no default. */
+  readonly served_by_another_row: boolean;
 }
 
 /**
@@ -123,6 +128,7 @@ export function usePlatformModelDefaultUsage(
         model_name: body?.model_name ?? '',
         platform_default: body?.platform_default ?? false,
         projects: body?.projects ?? 0,
+        served_by_another_row: body?.served_by_another_row ?? false,
       };
     },
   });

@@ -22,7 +22,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
-import { platformDefaultImpact } from './platformDefaultImpact';
+import { platformDefaultImpact, platformDefaultImpactUnknown } from './platformDefaultImpact';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminPlatformDefaultModel,
@@ -49,7 +49,9 @@ function saveDisabled(view: PlatformDefaultModel | undefined, selected: string):
  * delete each of them falls back.
  */
 export function PlatformModelDeleteImpact({ modelId }: { readonly modelId: number }): ReactNode {
-  const impact = platformDefaultImpact(usePlatformModelDefaultUsage(modelId).data);
+  const usage = usePlatformModelDefaultUsage(modelId);
+  // A failed count is said, not hidden: silence would read as "nobody uses it".
+  const impact = usage.isError ? platformDefaultImpactUnknown() : platformDefaultImpact(usage.data);
   if (impact === undefined) return null;
   return (
     <Box component="span" sx={{ display: 'block' }} data-testid="platform-models-delete-default-impact">

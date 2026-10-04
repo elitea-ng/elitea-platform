@@ -547,8 +547,23 @@ describe('PlatformModelsPanel — deletion', () => {
 
     const impact = await screen.findByTestId('platform-models-delete-default-impact');
     expect(impact).toHaveTextContent('platform default');
-    expect(impact).toHaveTextContent('3 projects');
+    expect(impact).toHaveTextContent('own default of 3 projects');
     expect(reads).toEqual(['11']);
+  });
+
+  it('says the impact is unknown when the count fails', async () => {
+    useModels([GPT4O]);
+    server.use(
+      http.get('*/admin/gateway/platform_models/:id/default_usage', () =>
+        HttpResponse.json({ error: 'too many projects to count' }, { status: 503 }),
+      ),
+    );
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    const impact = await screen.findByTestId('platform-models-delete-default-impact');
+    expect(impact).toHaveTextContent('Could not count');
   });
 
   it('adds no default warning for a model nobody chose as default', async () => {
