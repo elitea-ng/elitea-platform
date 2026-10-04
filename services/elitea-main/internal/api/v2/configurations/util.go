@@ -28,8 +28,13 @@ func firstStrVal(m map[string]any, keys ...string) string {
 // POST returns both `id` and `uuid`; matching on `id` alone made every
 // detail/update/delete call carrying the uuid 404 (#131). The result is one of
 // two literals, never caller data, so it is safe to interpolate into SQL.
+//
+// The id column is a 32-bit integer. A numeric segment outside that range
+// matches the uuid text instead, which no row has, so the caller answers 404.
+// Binding it to the integer column made PostgreSQL fail the statement, and the
+// route answered 500.
 func configurationIDColumn(configID string) string {
-	if _, err := strconv.Atoi(configID); err == nil {
+	if _, err := strconv.ParseInt(configID, 10, 32); err == nil {
 		return "id"
 	}
 	return "uuid::text"
