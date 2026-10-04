@@ -20,9 +20,14 @@ import (
 //	            a required property made optional                      breaking
 //	any schema  type or format changed; an enum member removed        breaking
 //	nullable    request: nullable -> not; response: not -> nullable   breaking
+//	request     an enum added where there was none; a minLength,
+//	            maxLength, pattern, minimum, maximum, exclusive bound,
+//	            minItems or maxItems added or tightened; a pattern
+//	            changed                                               breaking
 //
 // Everything else — a new operation, an optional parameter or property, a new
-// status, a new enum member, a looser request — is additive.
+// status, a new enum member, a looser request, a constraint on a response — is
+// additive.
 func Compare(locked, current *Surface) []string {
 	var out []string
 	keys := sortedKeys(locked.Operations)
@@ -165,6 +170,10 @@ func (c *comparer) shape(where string, dir side, was, now *Shape) {
 		}
 	}
 
+	if dir == request {
+		c.requestConstraints(where, was, now)
+	}
+
 	wasRequired := toSet(was.Required)
 	nowRequired := toSet(now.Required)
 	for _, name := range sortedKeys(was.Properties) {
@@ -217,6 +226,63 @@ func (c *comparer) shape(where string, dir side, was, now *Shape) {
 				c.fail(fmt.Sprintf("%s.oneOf[%d]", where, i), "alternative changed or removed")
 			}
 		}
+	}
+}
+
+// requestConstraints fails every way now admits fewer values than was: a
+// request a shipped client builds within the old bounds must stay valid.
+func (c *comparer) requestConstraints(where string, was, now *Shape) {
+	if len(was.Enum) == 0 && len(now.Enum) > 0 {
+		c.fail(where, "enum added %v (a free value is now restricted)", now.Enum)
+	}
+	if now.MinLength > was.MinLength {
+		c.fail(where, "minLength raised from %d to %d", was.MinLength, now.MinLength)
+	}
+	if tighterUpper(was.MaxLength, now.MaxLength) {
+		c.fail(where, "maxLength added or lowered (%s -> %s)", bound(was.MaxLength), bound(now.MaxLength))
+	}
+	if now.Pattern != "" && now.Pattern != was.Pattern {
+		c.fail(where, "pattern added or changed (%q -> %q)", was.Pattern, now.Pattern)
+	}
+	if now.MinItems > was.MinItems {
+		c.fail(where, "minItems raised from %d to %d", was.MinItems, now.MinItems)
+	}
+	if tighterUpper(was.MaxItems, now.MaxItems) {
+		c.fail(where, "maxItems added or lowered (%s -> %s)", bound(was.MaxItems), bound(now.MaxItems))
+	}
+	if tighterNumber(was.Minimum, now.Minimum, was.ExclusiveMin, now.ExclusiveMin, true) {
+		c.fail(where, "minimum added, raised or made exclusive")
+	}
+	if tighterNumber(was.Maximum, now.Maximum, was.ExclusiveMax, now.ExclusiveMax, false) {
+		c.fail(where, "maximum added, lowered or made exclusive")
+	}
+}
+
+func tighterUpper(was, now *uint64) bool {
+	return now != nil && (was == nil || *now < *was)
+}
+
+func bound(value *uint64) string {
+	if value == nil {
+		return "none"
+	}
+	return fmt.Sprint(*value)
+}
+
+// tighterNumber reports whether a numeric bound now admits fewer values:
+// added, moved inward, or the same value made exclusive.
+func tighterNumber(was, now *float64, wasExclusive, nowExclusive, lower bool) bool {
+	switch {
+	case now == nil:
+		return false
+	case was == nil:
+		return true
+	case *now == *was:
+		return nowExclusive && !wasExclusive
+	case lower:
+		return *now > *was
+	default:
+		return *now < *was
 	}
 }
 

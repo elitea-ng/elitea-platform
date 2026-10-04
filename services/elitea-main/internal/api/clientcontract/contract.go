@@ -98,6 +98,18 @@ type Shape struct {
 	// Ref names a component schema already being expanded higher up — a
 	// recursive schema is cut there rather than expanded for ever.
 	Ref string `json:"ref,omitempty"`
+
+	// Value constraints. On the request side each one narrows what a shipped
+	// client may send, so adding or tightening one is breaking.
+	MinLength    uint64   `json:"min_length,omitempty"`
+	MaxLength    *uint64  `json:"max_length,omitempty"`
+	Pattern      string   `json:"pattern,omitempty"`
+	Minimum      *float64 `json:"minimum,omitempty"`
+	Maximum      *float64 `json:"maximum,omitempty"`
+	ExclusiveMin bool     `json:"exclusive_minimum,omitempty"`
+	ExclusiveMax bool     `json:"exclusive_maximum,omitempty"`
+	MinItems     uint64   `json:"min_items,omitempty"`
+	MaxItems     *uint64  `json:"max_items,omitempty"`
 }
 
 // Normalize returns the client surface of doc. It fails when an operation is
@@ -218,7 +230,23 @@ func (w *walker) shape(ref *openapi3.SchemaRef) *Shape {
 		defer delete(w.active, ref.Ref)
 	}
 	s := ref.Value
-	out := &Shape{Format: s.Format, Nullable: s.Nullable}
+	out := &Shape{
+		Format: s.Format, Nullable: s.Nullable,
+		MinLength: s.MinLength, MaxLength: s.MaxLength, Pattern: s.Pattern,
+		Minimum: s.Min, Maximum: s.Max,
+		MinItems: s.MinItems, MaxItems: s.MaxItems,
+	}
+	// A 3.0 boolean exclusive bound; a 3.1 numeric one is the bound itself.
+	if bound := s.ExclusiveMin; bound.Bool != nil && *bound.Bool {
+		out.ExclusiveMin = true
+	} else if bound.Value != nil {
+		out.Minimum, out.ExclusiveMin = bound.Value, true
+	}
+	if bound := s.ExclusiveMax; bound.Bool != nil && *bound.Bool {
+		out.ExclusiveMax = true
+	} else if bound.Value != nil {
+		out.Maximum, out.ExclusiveMax = bound.Value, true
+	}
 	if s.Type != nil && len(*s.Type) > 0 {
 		types := append([]string(nil), (*s.Type)...)
 		sort.Strings(types)
@@ -267,6 +295,7 @@ func (w *walker) shape(ref *openapi3.SchemaRef) *Shape {
 		if len(out.Enum) == 0 {
 			out.Enum = merged.Enum
 		}
+		mergeConstraints(out, merged)
 		if out.Ref == "" && merged.Ref != "" && len(merged.Properties) == 0 {
 			out.Ref = merged.Ref
 		}
@@ -297,6 +326,33 @@ func (w *walker) shape(ref *openapi3.SchemaRef) *Shape {
 		out.Type = "object"
 	}
 	return out
+}
+
+// mergeConstraints takes an allOf branch's value constraints where the
+// schema states none of its own. Both apply to a value, and the lock only has
+// to see that one exists for the comparer to notice it tightening.
+func mergeConstraints(out, branch *Shape) {
+	if out.MinLength == 0 {
+		out.MinLength = branch.MinLength
+	}
+	if out.MaxLength == nil {
+		out.MaxLength = branch.MaxLength
+	}
+	if out.Pattern == "" {
+		out.Pattern = branch.Pattern
+	}
+	if out.Minimum == nil {
+		out.Minimum, out.ExclusiveMin = branch.Minimum, out.ExclusiveMin || branch.ExclusiveMin
+	}
+	if out.Maximum == nil {
+		out.Maximum, out.ExclusiveMax = branch.Maximum, out.ExclusiveMax || branch.ExclusiveMax
+	}
+	if out.MinItems == 0 {
+		out.MinItems = branch.MinItems
+	}
+	if out.MaxItems == nil {
+		out.MaxItems = branch.MaxItems
+	}
 }
 
 func componentName(ref string) string {

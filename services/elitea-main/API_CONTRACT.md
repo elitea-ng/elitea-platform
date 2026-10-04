@@ -238,8 +238,9 @@ Within one major version, the `client` subset may only grow. `internal/api/clien
 | Response | A status code, media type, header or property is removed; a required property becomes optional. |
 | Any schema | Its `type` or `format` changes; a member is removed from an enum. |
 | Nullability | A request field stops accepting `null`; a response field may now be `null`. |
+| Request values | An `enum` is added to a request field or parameter that had none; `minLength`, `maxLength`, `minimum`, `maximum`, an exclusive bound, `minItems` or `maxItems` is added or tightened; a `pattern` is added or changed. |
 
-**Additive changes** (allowed): a new operation; a new optional parameter or property; a new response status; a new enum member; a looser request.
+**Additive changes** (allowed): a new operation; a new optional parameter or property; a new response status; a new enum member; a looser request; a constraint on a response field.
 
 Clients must therefore:
 - ignore unknown response properties;

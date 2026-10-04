@@ -276,6 +276,7 @@ paths:
                 name: { type: string }
                 note: { type: string, nullable: true }
                 kind: { type: string, enum: [a, b] }
+                tags: { type: array, items: { type: string, maxLength: 64 }, maxItems: 20 }
                 meta:
                   type: object
                   additionalProperties: true
@@ -427,6 +428,16 @@ func TestCompareFailsEveryBreakingKind(t *testing.T) {
 		{"response may now be null", "parent: { type: string, nullable: false }", "parent: { type: string, nullable: true }", "may now be null"},
 		{"response enum lost a member", "enum: [new, done]", "enum: [new]", `enum member "done" removed`},
 		{"response type changed", "        id: { type: integer, format: int64 }", "        id: { type: string, format: int64 }", `type changed from "integer" to "string"`},
+		{"request enum added", "                name: { type: string }\n                note:", "                name: { type: string, enum: [x, y] }\n                note:", "enum added"},
+		{"request maxLength added", "                name: { type: string }\n                note:", "                name: { type: string, maxLength: 10 }\n                note:", "maxLength"},
+		{"request minLength added", "                name: { type: string }\n                note:", "                name: { type: string, minLength: 3 }\n                note:", "minLength"},
+		{"request pattern added", "                name: { type: string }\n                note:", "                name: { type: string, pattern: '^[a-z]+$' }\n                note:", "pattern"},
+		{"parameter maximum added", "schema: { type: integer }\n    post:", "schema: { type: integer, maximum: 100 }\n    post:", "maximum"},
+		{"parameter minimum added", "schema: { type: integer }\n    post:", "schema: { type: integer, minimum: 1 }\n    post:", "minimum"},
+		{"parameter bound made exclusive", "schema: { type: integer }\n    post:", "schema: { type: integer, minimum: 0, exclusiveMinimum: true }\n    post:", "minimum"},
+		{"request maxItems tightened", "maxItems: 20", "maxItems: 5", "maxItems"},
+		{"request minItems added", "maxItems: 20", "maxItems: 20, minItems: 1", "minItems"},
+		{"request maxLength tightened", "maxLength: 64", "maxLength: 32", "maxLength"},
 		{"nested $ref property removed", "      required: [error]\n      properties:\n        error: { type: string }", "      properties:\n        message: { type: string }", ".error: property removed"},
 	}
 	for _, tc := range cases {
@@ -455,6 +466,9 @@ func TestCompareAcceptsAdditiveChanges(t *testing.T) {
 		{"request property no longer required", "              required: [name]\n", ""},
 		{"request accepts null", "                name: { type: string }\n                note:", "                name: { type: string, nullable: true }\n                note:"},
 		{"request enum gained a member", "enum: [a, b]", "enum: [a, b, c]"},
+		{"request maxLength loosened", "maxLength: 64", "maxLength: 128"},
+		{"request maxItems lifted", ", maxItems: 20", ""},
+		{"response gained a constraint", "            label: { type: string }", "            label: { type: string, maxLength: 80, pattern: '^[a-z]+$' }"},
 		{"new response property", "            label: { type: string }", "            label: { type: string }\n            colour: { type: string }"},
 		{"response property became required", "          required: [name, state]", "          required: [name, state, label]"},
 		{"response enum gained a member", "enum: [new, done]", "enum: [new, done, archived]"},

@@ -748,7 +748,8 @@
         },
         "query:messages_limit": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           }
         },
         "query:sort_order": {
@@ -959,7 +960,8 @@
         },
         "query:limit": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "maximum": 100
           }
         },
         "query:mine": {
@@ -1180,22 +1182,27 @@
         },
         "query:limit": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "query:offset": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           }
         },
         "query:page": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           }
         },
         "query:page_size": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           }
         },
         "query:query": {
@@ -1614,12 +1621,15 @@
         },
         "query:limit": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
           }
         },
         "query:offset": {
           "schema": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           }
         },
         "query:only_new": {
@@ -2877,7 +2887,8 @@
                       "open": true
                     }
                   }
-                }
+                },
+                "max_items": 100
               },
               "source": {
                 "type": "string"
@@ -3132,7 +3143,8 @@
                     }
                   },
                   "user_input": {
-                    "type": "string"
+                    "type": "string",
+                    "min_length": 1
                   }
                 }
               },
@@ -3437,7 +3449,8 @@
                     "open": true
                   },
                   "user_input": {
-                    "type": "string"
+                    "type": "string",
+                    "min_length": 1
                   }
                 }
               },
@@ -3476,7 +3489,8 @@
                       "type": "string"
                     }
                   }
-                }
+                },
+                "max_items": 1
               }
             }
           }
