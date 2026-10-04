@@ -167,6 +167,18 @@ const (
 	// flat value list cannot express — a user name without a password is a
 	// session the relay refuses at AUTH. So the section says where the real
 	// editor is, and declares no fields of its own.
+	// nativeClientsElsewhereUnavailable — the native client registry
+	// (ADR-0025 WP2) is a typed list of {client_id, display_name,
+	// redirect_uris, enabled} with per-URI validation, a file layer under it,
+	// and a save that revokes every device of a client it disables. A flat
+	// value list can express none of that, so the section points at its
+	// managed surface, as `auth` and `email` do.
+	nativeClientsElsewhereUnavailable = "native clients are registered on their own editor " +
+		"(/admin/native_clients/administration), which validates every redirect URI and revokes the devices " +
+		"of a client it disables. The plugin-config value endpoints cannot serve this section. A deployment " +
+		"may also list clients in the NATIVE_CLIENTS_PATH file; a client saved here overrides a file entry " +
+		"with the same id."
+
 	emailElsewhereUnavailable = "outbound e-mail is configured on the E-mail editor, which stores the relay " +
 		"settings and seals the SMTP password in the platform vault. The plugin-config value endpoints cannot " +
 		"serve this section: the password is a credential, and it is sealed rather than stored in a settings row. " +
@@ -271,6 +283,7 @@ func configSections() []map[string]any {
 		llmProxySection(),
 		governanceSection(),
 		authSection(),
+		nativeClientsSection(),
 		resourcesSection(),
 		dedicatedBannerSection(),
 		brandingSection(),
@@ -1051,6 +1064,24 @@ func authSection() map[string]any {
 		// equivalents, and it collects more of them than these five could
 		// express.
 		"fields": []map[string]any{},
+	}
+}
+
+// nativeClientsSection is the native client registry (ADR-0025 WP2). It
+// POINTS at its managed surface and declares no fields, for the reason
+// authSection() declares none. Its permission is the one both native admin
+// surfaces share (coordinator decision 6), granted by shared 0141.
+func nativeClientsSection() map[string]any {
+	return map[string]any{
+		"id":                  "native_clients",
+		"managed_surface":     "native_clients",
+		"unavailable_reason":  nativeClientsElsewhereUnavailable,
+		"title":               "Native clients",
+		"description":         "Register the mobile and desktop apps that may sign users in to this deployment.",
+		"order":               7,
+		"icon":                "devices",
+		"required_permission": "configuration.native_clients",
+		"fields":              []map[string]any{},
 	}
 }
 

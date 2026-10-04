@@ -592,7 +592,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// of the bytes an extraction was made from, so a byte-identical
 	// re-upload (the chat client uploads the file again with every message)
 	// finds the filed extraction. No new permission.
-	require.EqualValues(t, 138, Head(shared))
+	//
+	// 141: shared/0141_native_auth.sql, native authorization for registered
+	// public clients (ADR-0025 WP2): the native_clients DB layer, the
+	// authorization requests, the device registry (one row per refresh-token
+	// family, anchored on an auth_core__token row with uuid NULL), hashed
+	// refresh and access tokens with the sealed re-delivery successor, and the
+	// `configuration.native_clients` administration grant. 139 and 140 are
+	// claimed on open branches; the number is renumbered at merge if needed.
+	require.EqualValues(t, 141, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    {{template "head" .}}
+    <title>{{.Brand.ProductName}} sign-in</title>
+  </head>
+  <body class="auth-login-page" data-auth-form="native-error">
+    {{template "backdrop"}}
+    <div class="auth-shell">
+      {{template "brand" .Brand}}
+      <main class="card card-signin" aria-labelledby="native-error-title">
+        <div class="form-signin">
+          <h1 id="native-error-title">Sign-in could not continue</h1>
+          <p class="login-error" role="alert" data-testid="native-error">{{template "error-icon"}}<span>{{.Message}}</span></p>
+          <p class="consent-muted">Return to the app and try again.</p>
+        </div>
+      </main>
+    </div>
+    {{template "theme-toggle"}}
+  </body>
+</html>

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1698,6 +1699,11 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		// or moves anything else out of it, this snapshot is what says so.
 		SharedChatStore:      dbrepos.NewSharedChatLinksRepo(pool),
 		SharedChatTranscript: dbrepos.NewSharedChatLinksRepo(pool),
+		// main.go builds the native authorization server whenever a pool
+		// exists (ADR-0025 WP2): five root routes that answer 404 until a
+		// client is registered, and the three admin registry routes.
+		NativeClients: nativeauth.NewRegistry(nil, pool),
+		NativeStore:   nativeauth.NewStore(pool, nativeauth.Config{}),
 	}
 	router := NewRouter(cfg)
 
@@ -1716,6 +1722,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/admin/mcp_prebuilt_servers/administration/{key}",
 		"DELETE /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"DELETE /api/v2/admin/modes/administration",
+		"DELETE /api/v2/admin/native_clients/administration/{clientID}",
 		"DELETE /api/v2/admin/roles/{scope}/{mode}",
 		"DELETE /api/v2/admin/scim_clients/administration/{id}",
 		"DELETE /api/v2/admin/scim_group_bindings/administration/{id}",
@@ -1793,6 +1800,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"GET /api/v2/admin/moderation_statuses/administration",
 		"GET /api/v2/admin/modes/administration",
+		"GET /api/v2/admin/native_clients/administration",
 		"GET /api/v2/admin/permissions/{scope}/{mode}",
 		"GET /api/v2/admin/plugin_config_schemas/{mode}",
 		"GET /api/v2/admin/plugin_config_suggestions/{mode}/{key}",
@@ -1821,6 +1829,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"GET /api/v2/artifacts/objects/{projectID}/{bucket}",
 		"GET /api/v2/artifacts/objects/{projectID}/{bucket}/*",
+		"GET /api/v2/auth/native/authorize",
+		"GET /api/v2/auth/native/authorize/continue",
 		"GET /api/v2/auth/permissions/prompt_lib/{projectID}",
 		"GET /api/v2/auth/token/",
 		"GET /api/v2/auth/token/{tokenUUID}",
@@ -2048,6 +2058,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/artifacts/grants/{projectID}/{grantID}:completeMultipart",
 		"POST /api/v2/artifacts/objects/{projectID}/{bucket}",
 		"POST /api/v2/artifacts/objects/{projectID}/{bucket}:batchDelete",
+		"POST /api/v2/auth/native/authorize/decision",
+		"POST /api/v2/auth/native/revoke",
+		"POST /api/v2/auth/native/token",
 		"POST /api/v2/auth/token/",
 		"POST /api/v2/configurations/check_connection/{mode}/{projectID}/{configType}",
 		"POST /api/v2/configurations/check_connection/{projectID}/{configType}",
@@ -2159,6 +2172,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/maintenance/{mode}",
 		"PUT /api/v2/admin/mcp_prebuilt_servers/administration/{key}",
 		"PUT /api/v2/admin/moderation_status/administration",
+		"PUT /api/v2/admin/native_clients/administration/{clientID}",
 		"PUT /api/v2/admin/permissions/{scope}/{mode}",
 		"PUT /api/v2/admin/plugin_config_values/administration/{plugin}",
 		"PUT /api/v2/admin/project_suspend/{mode}/{projectID}",

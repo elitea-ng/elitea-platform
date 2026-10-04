@@ -42,6 +42,7 @@ import (
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 // publicByDesign lists the routes that answer without credentials, each with
@@ -78,6 +79,16 @@ var publicByDesign = map[string]string{
 	"/api/openapi.yaml": "the OpenAPI document. Static, tenant-free, and public on purpose (router.go:903).",
 	"/api/openapi.json": "the same document as JSON.",
 	"/api/docs":         "the page that renders the document above. It fetches /api/openapi.json and nothing else.",
+
+	// Native authorization (ADR-0025 WP2). A native public client calls these
+	// before it holds any credential (RFC 8252): /authorize starts a sign-in
+	// in the system browser, /token exchanges a code or a refresh token, and
+	// /revoke answers 200 for ANY token by RFC 7009 §2.2 so it does not reveal
+	// whether a token existed. `continue` and `decision` are NOT listed: they
+	// require the browser session and answer a page otherwise.
+	"/api/v2/auth/native/authorize": "the RFC 8252 authorization request; it creates only a pending record bound to the browser.",
+	"/api/v2/auth/native/token":     "the token endpoint for public clients; it authenticates the code or refresh token itself.",
+	"/api/v2/auth/native/revoke":    "RFC 7009 revocation; 200 for any token by design, revealing nothing.",
 }
 
 // publicPrefixes covers surfaces whose whole subtree is anonymous.
@@ -222,5 +233,13 @@ func fullSurfaceRouterConfig(t *testing.T) RouterConfig {
 		LLMProxy:            http.NotFoundHandler(),
 		CurrentSocialAvatar: &v2social.CurrentAvatarRoute{},
 		DeepWiki:            &v2deepwiki.Route{},
+		// The native authorization server with one file-layer client, so its
+		// routes are live (not the 404 an empty registry answers) and the
+		// walk exercises them. No pool: nothing here may reach the store.
+		NativeClients: nativeauth.NewRegistry([]nativeauth.Client{{
+			ClientID: "dev.elitea.surface", DisplayName: "Surface", Enabled: true,
+			RedirectURIs: []string{"dev.elitea.surface:/oauth/callback"}, Source: nativeauth.SourceFile,
+		}}, nil),
+		NativeStore: nativeauth.NewStore(nil, nativeauth.Config{}),
 	}
 }

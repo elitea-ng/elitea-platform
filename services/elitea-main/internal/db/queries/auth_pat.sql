@@ -1,6 +1,10 @@
 -- The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 -- see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
 -- LEFT JOIN because an unbound token is the default and must still be listed.
+-- A row with uuid NULL is not a personal access token: no PAT JWT can name it.
+-- Native device sessions (ADR-0025, shared 0141) anchor on exactly such rows,
+-- so the filter keeps a signed-in phone from showing up in Settings > Tokens
+-- as a key named `native:<client>`. The device registry lists those instead.
 -- name: ListOwnedPATs :many
 SELECT
     token.id,
@@ -13,6 +17,7 @@ FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
 WHERE token.user_id = sqlc.arg(user_id)::integer
+  AND token.uuid IS NOT NULL
 ORDER BY token.id;
 
 -- name: GetOwnedPAT :one
@@ -27,6 +32,7 @@ FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
 WHERE token.uuid = sqlc.arg(uuid)::text
+  AND token.uuid IS NOT NULL
   AND token.user_id = sqlc.arg(user_id)::integer;
 
 -- name: CreatePATForActiveUser :one
@@ -113,6 +119,9 @@ WHERE token.uuid = sqlc.arg(uuid)::text
   AND owner.suspended = false
   AND (token.expires IS NULL OR token.expires > (clock_timestamp() AT TIME ZONE 'UTC'));
 
+-- `token.uuid IS NOT NULL` is load-bearing twice over: the durable-execution
+-- actor issuer signs the selected row as a PAT JWT, and a native device anchor
+-- (ADR-0025, uuid NULL) must never be signed into one.
 -- name: GetActivePATForUser :one
 SELECT
     token.id AS token_id,

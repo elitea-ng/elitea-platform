@@ -586,3 +586,34 @@ h1 {
     transition: none;
   }
 }
+
+/* The native sign-in confirmation and error pages (ADR-0025 WP2). */
+.consent-text {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.consent-muted {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.consent-cancel {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  border-color: var(--card-border);
+}
+
+.consent-switch {
+  display: block;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-align: center;
+}

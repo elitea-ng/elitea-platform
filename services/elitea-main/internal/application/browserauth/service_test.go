@@ -1334,3 +1334,27 @@ func testTransactionID(value byte) string {
 	}
 	return base64.RawURLEncoding.EncodeToString(random)
 }
+
+// ADR-0025 §3.9: a refused credential (a wrong Form password) reports the
+// transaction's return target with the error, and nothing else, so the Form
+// page can send the browser back to sign-in WITH it.
+func TestCompleteKeepsTheReturnTargetWhenTheCredentialIsRefused(t *testing.T) {
+	t.Parallel()
+	service, _, _, provisioner, _, _ := newTestService(t)
+	correlation := browserflow.ProtocolCorrelation{Nonce: "nonce-1"}
+	begin := beginFlow(t, service, "oidc", correlation)
+	result, err := service.Complete(context.Background(), CompleteRequest{
+		SessionID:     begin.SessionID,
+		TransactionID: begin.TransactionID,
+		Provider:      "oidc",
+	}, &assertionVerifierStub{err: errors.New("invalid login or password")})
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("error = %v, want %v", err, ErrUnauthenticated)
+	}
+	if result.ReturnTarget != "/projects/7" || result.SessionID != "" {
+		t.Fatalf("result = %+v, want only the return target", result)
+	}
+	if provisioner.callCount() != 0 {
+		t.Fatal("a refused credential reached provisioning")
+	}
+}

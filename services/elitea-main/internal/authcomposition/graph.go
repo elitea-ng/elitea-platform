@@ -37,6 +37,12 @@ type FormGraphDependencies struct {
 	// Brand is the resolved brand pack the login page renders (ADR-0024
 	// WP5); nil renders the default presentation.
 	Brand browserapi.BrandSource
+	// NativeTokens validates native access tokens (ADR-0025 WP2) at the
+	// gateway edge (/forward-auth) as well as in the API group: without it a
+	// Form-plane edge refuses every native call before it reaches
+	// elitea-main. Nil — a nil INTERFACE, never a typed nil pointer — keeps
+	// the edge PAT-only.
+	NativeTokens authsvc.TokenValidator
 }
 
 // FormGraph owns the Form browser routes and the separate current-Main gateway
@@ -154,7 +160,9 @@ func newFormGraph(
 		dependencies.PostgreSQL,
 		material.patSigningKey,
 	)
-	credentials, err := forwardapp.NewTokenCredentialAuthenticator(patValidator)
+	credentials, err := forwardapp.NewTokenCredentialAuthenticator(
+		authsvc.NewNativeAwareValidator(patValidator, dependencies.NativeTokens),
+	)
 	if err != nil {
 		return nil, composeError("credential authenticator", err)
 	}

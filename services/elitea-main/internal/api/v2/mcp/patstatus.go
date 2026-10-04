@@ -184,7 +184,11 @@ func (h *Handler) personalTokenState(ctx context.Context, userID int64) (string,
 				WHERE expires IS NULL OR expires > (clock_timestamp() AT TIME ZONE 'UTC')
 			)
 		FROM public.auth_core__token
-		WHERE user_id = $1`, userID).Scan(&total, &active)
+		WHERE user_id = $1
+		  -- A row without a uuid is not a personal access token: it is a
+		  -- native device anchor (ADR-0025, shared 0141), and counting it
+		  -- would report "active" for a user who holds no key.
+		  AND uuid IS NOT NULL`, userID).Scan(&total, &active)
 	if err != nil {
 		return "", err
 	}

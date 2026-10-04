@@ -84,6 +84,10 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  NativeClientList,
+  NativeClientSaveRequest,
+  NativeClientValidationError,
+  NativeClientWriteResult,
   OkResponse,
   PlatformSettings,
   ProjectRequestCreate,
@@ -128,6 +132,731 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type listNativeClientsResponse200 = {
+  data: NativeClientList;
+  status: 200;
+};
+
+export type listNativeClientsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listNativeClientsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listNativeClientsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listNativeClientsResponseSuccess = listNativeClientsResponse200 & {
+  headers: Headers;
+};
+export type listNativeClientsResponseError = (
+  | listNativeClientsResponse401
+  | listNativeClientsResponse403
+  | listNativeClientsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listNativeClientsResponse =
+  listNativeClientsResponseSuccess | listNativeClientsResponseError;
+
+export const getListNativeClientsUrl = () => {
+  return `/admin/native_clients/administration`;
+};
+
+/**
+ * The effective native client registry (ADR-0025 WP2): the
+ * NATIVE_CLIENTS_PATH file layer overlaid by the rows saved here, with
+ * each client's live device count. Requires
+ * `configuration.native_clients` in the administration mode.
+ * NOTE(W2): internal/api/nativeauth/admin.go:34.
+ * @summary List registered native clients
+ */
+export const listNativeClients = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listNativeClientsResponse> => {
+  return eliteaFetch<listNativeClientsResponse>(getListNativeClientsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListNativeClientsQueryKey = () => {
+  return [`/admin/native_clients/administration`] as const;
+};
+
+export const getListNativeClientsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listNativeClients>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listNativeClients>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListNativeClientsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listNativeClients>>
+  > = ({ signal }) => listNativeClients({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listNativeClients>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListNativeClientsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listNativeClients>>
+>;
+export type ListNativeClientsQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useListNativeClients<
+  TData = Awaited<ReturnType<typeof listNativeClients>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeClients>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listNativeClients>>,
+          TError,
+          Awaited<ReturnType<typeof listNativeClients>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListNativeClients<
+  TData = Awaited<ReturnType<typeof listNativeClients>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeClients>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listNativeClients>>,
+          TError,
+          Awaited<ReturnType<typeof listNativeClients>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListNativeClients<
+  TData = Awaited<ReturnType<typeof listNativeClients>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeClients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List registered native clients
+ */
+
+export function useListNativeClients<
+  TData = Awaited<ReturnType<typeof listNativeClients>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listNativeClients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListNativeClientsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type saveNativeClientResponse200 = {
+  data: NativeClientWriteResult;
+  status: 200;
+};
+
+export type saveNativeClientResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type saveNativeClientResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type saveNativeClientResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type saveNativeClientResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type saveNativeClientResponse422 = {
+  data: NativeClientValidationError;
+  status: 422;
+};
+
+export type saveNativeClientResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type saveNativeClientResponseSuccess = saveNativeClientResponse200 & {
+  headers: Headers;
+};
+export type saveNativeClientResponseError = (
+  | saveNativeClientResponse400
+  | saveNativeClientResponse401
+  | saveNativeClientResponse403
+  | saveNativeClientResponse409
+  | saveNativeClientResponse422
+  | saveNativeClientResponse503
+) & {
+  headers: Headers;
+};
+
+export type saveNativeClientResponse =
+  saveNativeClientResponseSuccess | saveNativeClientResponseError;
+
+export const getSaveNativeClientUrl = (clientId: string) => {
+  return `/admin/native_clients/administration/${clientId}`;
+};
+
+/**
+ * Upserts the database layer for one client; it overrides a file entry
+ * with the same id. Redirect URIs must be private-use reverse-domain
+ * schemes (`com.example.app:/oauth/callback`) or loopback
+ * (`http://127.0.0.1/path`, registered without a port). Disabling a
+ * client revokes every device of it in the same transaction; enabling it
+ * again resurrects none. 409 while DEPLOYMENT_URL is not set (the issuer
+ * every native sign-in carries). NOTE(W2): internal/api/nativeauth/admin.go:61.
+ * @summary Register or update a native client
+ */
+export const saveNativeClient = async (
+  clientId: string,
+  nativeClientSaveRequest: NativeClientSaveRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<saveNativeClientResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<saveNativeClientResponse>(
+    getSaveNativeClientUrl(clientId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(nativeClientSaveRequest),
+    },
+  );
+};
+
+export const getSaveNativeClientQueryKey = (
+  clientId: string,
+  nativeClientSaveRequest?: NativeClientSaveRequest,
+) => {
+  return [
+    "PUT",
+    `/admin/native_clients/administration/${clientId}`,
+    nativeClientSaveRequest,
+  ] as const;
+};
+
+export const getSaveNativeClientQueryOptions = <
+  TData = Awaited<ReturnType<typeof saveNativeClient>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | NativeClientValidationError,
+>(
+  clientId: string,
+  nativeClientSaveRequest: NativeClientSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSaveNativeClientQueryKey(clientId, nativeClientSaveRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof saveNativeClient>>
+  > = ({ signal }) =>
+    saveNativeClient(clientId, nativeClientSaveRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: clientId !== null && clientId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof saveNativeClient>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SaveNativeClientQueryResult = NonNullable<
+  Awaited<ReturnType<typeof saveNativeClient>>
+>;
+export type SaveNativeClientQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | NativeClientValidationError;
+
+export function useSaveNativeClient<
+  TData = Awaited<ReturnType<typeof saveNativeClient>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | NativeClientValidationError,
+>(
+  clientId: string,
+  nativeClientSaveRequest: NativeClientSaveRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveNativeClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveNativeClient>>,
+          TError,
+          Awaited<ReturnType<typeof saveNativeClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveNativeClient<
+  TData = Awaited<ReturnType<typeof saveNativeClient>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | NativeClientValidationError,
+>(
+  clientId: string,
+  nativeClientSaveRequest: NativeClientSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveNativeClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveNativeClient>>,
+          TError,
+          Awaited<ReturnType<typeof saveNativeClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveNativeClient<
+  TData = Awaited<ReturnType<typeof saveNativeClient>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | NativeClientValidationError,
+>(
+  clientId: string,
+  nativeClientSaveRequest: NativeClientSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Register or update a native client
+ */
+
+export function useSaveNativeClient<
+  TData = Awaited<ReturnType<typeof saveNativeClient>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | NativeClientValidationError,
+>(
+  clientId: string,
+  nativeClientSaveRequest: NativeClientSaveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSaveNativeClientQueryOptions(
+    clientId,
+    nativeClientSaveRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteNativeClientResponse200 = {
+  data: NativeClientWriteResult;
+  status: 200;
+};
+
+export type deleteNativeClientResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteNativeClientResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteNativeClientResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type deleteNativeClientResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type deleteNativeClientResponseSuccess =
+  deleteNativeClientResponse200 & {
+    headers: Headers;
+  };
+export type deleteNativeClientResponseError = (
+  | deleteNativeClientResponse401
+  | deleteNativeClientResponse403
+  | deleteNativeClientResponse404
+  | deleteNativeClientResponse503
+) & {
+  headers: Headers;
+};
+
+export type deleteNativeClientResponse =
+  deleteNativeClientResponseSuccess | deleteNativeClientResponseError;
+
+export const getDeleteNativeClientUrl = (clientId: string) => {
+  return `/admin/native_clients/administration/${clientId}`;
+};
+
+/**
+ * Removes the database row and revokes every device of the client in the
+ * same transaction. A file entry with the same id applies again.
+ * NOTE(W2): internal/api/nativeauth/admin.go:112.
+ * @summary Remove a native client's database row
+ */
+export const deleteNativeClient = async (
+  clientId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteNativeClientResponse> => {
+  return eliteaFetch<deleteNativeClientResponse>(
+    getDeleteNativeClientUrl(clientId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteNativeClientQueryKey = (clientId: string) => {
+  return [
+    "DELETE",
+    `/admin/native_clients/administration/${clientId}`,
+  ] as const;
+};
+
+export const getDeleteNativeClientQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteNativeClient>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteNativeClientQueryKey(clientId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteNativeClient>>
+  > = ({ signal }) =>
+    deleteNativeClient(clientId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: clientId !== null && clientId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteNativeClient>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteNativeClientQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteNativeClient>>
+>;
+export type DeleteNativeClientQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useDeleteNativeClient<
+  TData = Awaited<ReturnType<typeof deleteNativeClient>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  clientId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteNativeClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteNativeClient>>,
+          TError,
+          Awaited<ReturnType<typeof deleteNativeClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteNativeClient<
+  TData = Awaited<ReturnType<typeof deleteNativeClient>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteNativeClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteNativeClient>>,
+          TError,
+          Awaited<ReturnType<typeof deleteNativeClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteNativeClient<
+  TData = Awaited<ReturnType<typeof deleteNativeClient>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a native client's database row
+ */
+
+export function useDeleteNativeClient<
+  TData = Awaited<ReturnType<typeof deleteNativeClient>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteNativeClientQueryOptions(clientId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type userListResponse200 = {
   data: UserListResponse;

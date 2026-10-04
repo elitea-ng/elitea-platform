@@ -4,6 +4,7 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
 
 // apiGroupAuthConfig composes the credential set that api.NewRouter applies to
@@ -119,4 +120,28 @@ func apiGroupAuthConfig(
 		}
 	}
 	return apimw.AuthConfig{}
+}
+
+// withNativeTokens teaches the composed credential set the native access token
+// (ADR-0025 WP2), in ONE place: the /api/v2 group, the artifact routes and the
+// Traefik /auth edge endpoint all derive their validator from apiGroupAuth, so
+// all of them accept an `elnat_` bearer from this one change.
+//
+// The selected validator is wrapped, not replaced: a token with the `elnat_`
+// prefix goes to native, a refresh token or code is refused without a read,
+// and everything else reaches the validator this branch already chose.
+//
+// A deployment with no credential plane stays the zero AuthConfig: a native
+// token must not be the first credential such a deployment accepts. A nil
+// native (no pool) returns cfg unchanged.
+func withNativeTokens(cfg apimw.AuthConfig, native apimw.TokenValidator) apimw.AuthConfig {
+	if native == nil || !cfg.CredentialPlaneComposed() {
+		return cfg
+	}
+	var base authsvc.TokenValidator
+	if cfg.Validator != nil {
+		base = cfg.Validator
+	}
+	cfg.Validator = authsvc.NewNativeAwareValidator(base, native)
+	return cfg
 }

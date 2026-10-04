@@ -1039,6 +1039,32 @@ main:
     # Empty means 1h. A value outside the range stops the boot.
     ELITEA_SCIM_ACCESS_TOKEN_TTL: ""
 
+    # --- Native authorization (ADR-0025 WP2) ----------------------------------
+    # Lifetimes of the tokens a registered native (mobile or desktop) client
+    # receives from /api/v2/auth/native/token. Each is a Go duration; empty
+    # takes the default; a value outside its range STOPS the boot.
+    #   ELITEA_NATIVE_ACCESS_TOKEN_TTL           access token, 5m..1h, default 15m
+    #   ELITEA_NATIVE_REFRESH_IDLE_TTL           a device unused this long must sign
+    #                                            in again, 24h..2160h, default 720h;
+    #                                            stamped per device at sign-in, so a
+    #                                            change applies to new devices only
+    #   ELITEA_NATIVE_SESSION_MAX_LIFETIME       absolute cap per device, 0 (none,
+    #                                            the default) or 24h..8760h
+    #   ELITEA_NATIVE_REFRESH_REDELIVERY_WINDOW  how long a refresh token that was
+    #                                            just used still returns the SAME new
+    #                                            pair (a response lost on a mobile
+    #                                            network must not wipe the device),
+    #                                            0 (strict) or 1s..5m, default 30s
+    # NATIVE_CLIENTS_PATH names an optional file (JSON or YAML) of registered
+    # clients — [{client_id, display_name, redirect_uris, enabled}] — under the
+    # admin editor's database rows. Once any client is registered, DEPLOYMENT_URL
+    # MUST be set: it is the issuer every native sign-in carries.
+    ELITEA_NATIVE_ACCESS_TOKEN_TTL: ""
+    ELITEA_NATIVE_REFRESH_IDLE_TTL: ""
+    ELITEA_NATIVE_SESSION_MAX_LIFETIME: ""
+    ELITEA_NATIVE_REFRESH_REDELIVERY_WINDOW: ""
+    NATIVE_CLIENTS_PATH: ""
+
     # ELITEA_TRUSTED_PROXY_CIDRS lists the proxies (ingress, gateway) whose
     # X-Forwarded-For is believed, as comma-separated CIDRs, for example the
     # pod network "10.42.0.0/16". The SCIM token endpoint keys its failure

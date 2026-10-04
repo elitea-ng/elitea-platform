@@ -14,9 +14,11 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/gateway"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
@@ -79,6 +81,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
@@ -161,6 +164,20 @@ type RouterConfig struct {
 	// Keep them nil INTERFACES: a typed nil pointer here would be called.
 	NativeAuth   v2discovery.NativeAuthSource
 	ClientPolicy v2discovery.ClientPolicySource
+	// NativeClients and NativeStore are the native authorization server
+	// (ADR-0025 WP2): the effective client registry (file layer + DB layer)
+	// and its PostgreSQL store. Both nil mounts no native route at all; the
+	// discovery document then says `native_auth: null`. main.go builds both
+	// whenever a pool exists, so the routes are mounted and answer 404 until
+	// a client is registered.
+	NativeClients *nativeauth.Registry
+	NativeStore   *nativeauth.Store
+	// NativeSecureCookies selects the `__Host-` binder cookie
+	// (COOKIE_SECURE != "false").
+	NativeSecureCookies bool
+	// NativeTokenDecorator adds fields to every native token response
+	// (WP4's client_policy). Nil adds nothing.
+	NativeTokenDecorator nativeapi.TokenResponseDecorator
 	// Mailer is outbound e-mail (ADR-0024 WP7): invitations, moderation
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
@@ -1242,12 +1259,53 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// this deployment's origin needs before it signs in. Root-mounted under
 	// /.well-known/ (RFC 8615), above the Auth group like the routes around
 	// it, and forwarded by every browser edge as an exact path.
+	//
+	// The native authorization server (ADR-0025 WP2) is mounted first, because
+	// the discovery document reports its endpoints. Its five routes are
+	// root-mounted siblings of /api/v2 like the bootstrap script, so the
+	// group's JSON 401 never reaches the two browser pages; `continue` and
+	// `decision` authenticate with the SAME credential set the group uses,
+	// through apimw.BrowserSignInRequired. Each route answers 404 while no
+	// client is registered.
+	nativeDiscovery := cfg.NativeAuth
+	var nativeHandler *nativeapi.Handler
+	if cfg.NativeClients != nil && cfg.NativeStore != nil {
+		var nativeAddresses nativeapi.ClientAddresses
+		if cfg.SCIMClientAddresses != nil {
+			nativeAddresses = cfg.SCIMClientAddresses
+		}
+		nativeHandler = nativeapi.New(nativeapi.Config{
+			Registry:     cfg.NativeClients,
+			Store:        cfg.NativeStore,
+			PublicOrigin: cfg.PublicOrigin,
+			Pages:        browserauth.NewNativePages(brandingResolver),
+			Authenticate: apimw.Auth(apimw.AuthConfig{
+				Validator:                  cfg.AuthValidator,
+				PrincipalValidator:         cfg.PrincipalValidator,
+				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				SessionSecret:              cfg.SessionSecret,
+				SessionStore:               cfg.Auth.SessionStore,
+				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
+			}),
+			Addresses:     nativeAddresses,
+			Audit:         auditRecorder,
+			SecureCookies: cfg.NativeSecureCookies,
+			Decorate:      cfg.NativeTokenDecorator,
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(apimw.NoStore)
+			nativeHandler.Mount(r)
+		})
+		if nativeDiscovery == nil {
+			nativeDiscovery = nativeHandler
+		}
+	}
 	discoveryHandler := v2discovery.NewHandler(v2discovery.Config{
 		ServerVersion:  buildinfo.Version,
 		DeploymentKind: cfg.DeploymentKind,
 		PublicOrigin:   cfg.PublicOrigin,
 		Brand:          brandingResolver,
-		NativeAuth:     cfg.NativeAuth,
+		NativeAuth:     nativeDiscovery,
 		ClientPolicy:   cfg.ClientPolicy,
 	})
 	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
@@ -2046,6 +2104,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// deployment fact with no project-scoped view, so another mode
 				// 404s rather than being answered under a scope that does not
 				// apply.
+				// The native client registry (ADR-0025 WP2). One permission
+				// guards both native admin surfaces (coordinator decision 6);
+				// shared 0141 grants it. Mounted whenever the native server
+				// is, registered or not: these routes are how the first
+				// client is registered.
+				if nativeHandler != nil {
+					requireNativeClients := central("configuration.native_clients")
+					r.With(requireNativeClients).
+						Get("/native_clients/administration", nativeHandler.AdminList)
+					r.With(requireNativeClients).
+						Put("/native_clients/administration/{clientID}", nativeHandler.AdminSave)
+					r.With(requireNativeClients).
+						Delete("/native_clients/administration/{clientID}", nativeHandler.AdminDelete)
+				}
 				r.With(requireRuntimePlugins).
 					Get("/identity_providers/administration", adminHandler.IdentityProviderList)
 				r.With(requireRuntimePlugins).

@@ -8761,6 +8761,112 @@ components:
           description: >-
             Deployment-wide minimum client version; empty means none. A
             per-client entry in `min_client_version` of the document wins.
+    NativeOAuthError:
+      type: object
+      description: >-
+        RFC 6749 section 5.2 error of the native authorization endpoints.
+        NOTE(W2): internal/api/nativeauth/token.go:246 (`writeOAuthError`).
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: >-
+            invalid_request, invalid_client, invalid_grant,
+            unsupported_grant_type, temporarily_unavailable or not_found.
+        error_description:
+          type: string
+    NativeTokenRequest:
+      type: object
+      description: >-
+        The token request form. NOTE(W2): internal/api/nativeauth/token.go:55
+        (`tokenParameters`).
+      required: [grant_type, client_id]
+      properties:
+        grant_type:
+          type: string
+          description: authorization_code or refresh_token.
+        client_id: { type: string }
+        code: { type: string, description: The authorization code (authorization_code grant). }
+        redirect_uri: { type: string, description: The redirect URI the code was issued to (authorization_code grant). }
+        code_verifier: { type: string, description: 'The PKCE verifier, 43 to 128 unreserved characters (authorization_code grant).' }
+        refresh_token: { type: string, description: The current refresh token (refresh_token grant). }
+        client_version: { type: string, description: "The client's version, recorded on the device (refresh_token grant)." }
+    NativeTokenResponse:
+      type: object
+      description: >-
+        A native token pair. Both tokens are opaque. NOTE(W2):
+        internal/api/nativeauth/token.go:217 (`writeGrant`).
+      required: [access_token, token_type, expires_in, refresh_token, refresh_token_expires_in, device_id]
+      properties:
+        access_token: { type: string, description: 'Opaque bearer token, prefix elnat_.' }
+        token_type: { type: string, description: Always Bearer. }
+        expires_in: { type: integer, format: int64, description: Seconds until the access token expires. }
+        refresh_token: { type: string, description: 'Opaque refresh token, prefix elnrt_; rotated on every use.' }
+        refresh_token_expires_in: { type: integer, format: int64, description: Seconds of idle time before the device must sign in again. }
+        device_id: { type: string, description: The device session (refresh-token family) id. }
+    NativeRevokeRequest:
+      type: object
+      description: The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:252.
+      required: [token, client_id]
+      properties:
+        token: { type: string }
+        token_type_hint: { type: string, description: Ignored; the token's prefix decides. }
+        client_id: { type: string }
+    NativeClient:
+      type: object
+      description: >-
+        One registered native client, merged from the file and database
+        layers. NOTE(W2): internal/nativeauth/registry.go:38 (`Client`) and
+        internal/api/nativeauth/admin.go:28 (`AdminClientRow`).
+      required: [client_id, display_name, redirect_uris, enabled, source, overridden_file, active_devices]
+      properties:
+        client_id: { type: string }
+        display_name: { type: string }
+        redirect_uris:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }
+        source: { type: string, description: 'Which layer decides the client: db or file.' }
+        overridden_file: { type: boolean, description: A database row that shadows a file entry. }
+        active_devices: { type: integer, format: int64 }
+    NativeClientList:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:49.
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/NativeClient'
+    NativeClientSaveRequest:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:52 (`adminClientBody`); unknown fields are refused.
+      required: [display_name, redirect_uris]
+      properties:
+        display_name: { type: string }
+        redirect_uris:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean, description: Defaults to true. }
+    NativeClientWriteResult:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:107.
+      required: [client_id, revoked_devices]
+      properties:
+        client_id: { type: string }
+        revoked_devices: { type: integer, format: int64, description: Devices revoked by this write. }
+    NativeClientValidationError:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:91.
+      required: [error, reasons]
+      properties:
+        error: { type: string, description: Always invalid_native_client. }
+        reasons:
+          type: object
+          description: >-
+            One reason per invalid field, keyed client_id, display_name,
+            redirect_uris or redirect_uris[N].
+          additionalProperties: { type: string }
     BrandPack:
       type: object
       description: >-
@@ -10160,6 +10266,301 @@ paths:
           headers:
             Retry-After:
               schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/native/authorize:
+    get:
+      operationId: authorizeNativeClient
+      summary: Start a native sign-in (RFC 8252 authorization request)
+      description: |
+        A BROWSER NAVIGATION, not an API call: a registered native client
+        opens this URL in the system browser (ADR-0025 decision 3). The
+        deployment's existing sign-in runs (SSO chooser, OIDC, SAML or the
+        form), the user confirms the client and device on a one-line page,
+        and the browser is redirected to the client's registered
+        `redirect_uri` with a single-use `code` valid for 60 seconds, the
+        `state` and `iss` (RFC 9207, the deployment origin; equal to the
+        discovery `issuer`).
+
+        An unknown or disabled client, a missing or unregistered
+        `redirect_uri`, or a missing or malformed `state` answers an HTML
+        error page and NEVER redirects. Every later error redirects with
+        `error`, `error_description`, `state` and `iss`.
+        `scope`, `nonce` and `prompt` are ignored; `prompt=login` and
+        `max_age` are not supported. Answers 404 while no native client is
+        registered. NOTE(W2): internal/api/nativeauth/authorize.go:36.
+      tags: [auth]
+      security: []
+      parameters:
+        - { name: response_type, in: query, required: true, schema: { type: string }, description: Must be `code`. }
+        - { name: client_id, in: query, required: true, schema: { type: string } }
+        - name: redirect_uri
+          in: query
+          required: true
+          description: >-
+            One of the client's registered URIs: byte-for-byte for a
+            private-use scheme; for a loopback URI any port is accepted.
+          schema: { type: string }
+        - { name: code_challenge, in: query, required: true, schema: { type: string }, description: 'BASE64URL(SHA256(code_verifier)), 43 characters.' }
+        - { name: code_challenge_method, in: query, required: true, schema: { type: string }, description: Must be `S256`; plain is refused. }
+        - { name: state, in: query, required: true, schema: { type: string }, description: 1 to 512 printable ASCII characters. }
+        - { name: device_name, in: query, required: true, schema: { type: string }, description: "1 to 64 bytes, shown to the user as the app's claim." }
+        - { name: platform, in: query, required: true, schema: { type: string }, description: 'One of: ios, android, macos, windows, linux, other.' }
+        - { name: client_version, in: query, required: false, schema: { type: string }, description: 'Up to 32 characters of letters, digits and . + -' }
+      responses:
+        '302':
+          description: To the sign-in flow, or an error redirect to the app.
+          headers:
+            Location:
+              schema: { type: string }
+        '400':
+          description: An HTML error page (unknown client, unregistered redirect, bad state).
+          content:
+            text/html:
+              schema: { type: string }
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '503':
+          description: An HTML error page; the registry or the public origin is unavailable.
+          content:
+            text/html:
+              schema: { type: string }
+  /auth/native/token:
+    post:
+      operationId: exchangeNativeToken
+      summary: Exchange a native authorization code or refresh token
+      description: |
+        The token endpoint for registered native PUBLIC clients (RFC 6749
+        section 4.1.3 and 6, ADR-0025 decision 3). No client authentication:
+        `client_id` is in the body and an `Authorization` header is refused.
+        The body is `application/x-www-form-urlencoded` (at most 8 KiB) and no
+        parameter may repeat.
+
+        `grant_type=authorization_code` takes `code`, `redirect_uri`,
+        `client_id` and `code_verifier` (PKCE S256). A code is single-use; a
+        replayed code revokes the device session it produced.
+        `grant_type=refresh_token` takes `refresh_token`, `client_id` and an
+        optional `client_version`. The refresh token rotates on every use.
+        Presenting the IMMEDIATELY previous refresh token again within the
+        re-delivery window (default 30 seconds) returns the SAME new pair; any
+        other reuse revokes the whole device session.
+
+        Errors are RFC 6749 section 5.2 JSON. A revoked, expired, deactivated
+        or reused device session is refused; clients must persist the new pair
+        before using it and serialise refreshes. Failures are rate limited per
+        (client, address) and per address (429 with Retry-After). Answers 404
+        while no native client is registered.
+        NOTE(W2): internal/api/nativeauth/token.go:61.
+      tags: [auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/NativeTokenRequest'
+      responses:
+        '200':
+          description: A new token pair. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeTokenResponse'
+        '400':
+          description: invalid_request, unsupported_grant_type or invalid_grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '401':
+          description: invalid_client (the client is unknown or disabled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '429':
+          description: Too many failed requests; see Retry-After.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '503':
+          description: temporarily_unavailable; retry after Retry-After.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /auth/native/revoke:
+    post:
+      operationId: revokeNativeToken
+      summary: Revoke a native device session (RFC 7009)
+      description: |
+        Revokes the WHOLE device session (refresh-token family) the presented
+        refresh or access token belongs to (reason `signed_out`). An unknown or
+        already-revoked token, or one for another client, also answers 200 with
+        no body, so the answer reveals nothing. Form body: `token`,
+        `client_id`, optional `token_type_hint`. Answers 404 while no native
+        client is registered. NOTE(W2): internal/api/nativeauth/token.go:252.
+      tags: [auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/NativeRevokeRequest'
+      responses:
+        '200':
+          description: Revoked, or nothing to revoke. No body.
+        '400':
+          description: invalid_request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '401':
+          description: invalid_client (the client is not registered).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '429':
+          description: Too many requests from this address; see Retry-After.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '503':
+          description: temporarily_unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /admin/native_clients/administration:
+    get:
+      operationId: listNativeClients
+      summary: List registered native clients
+      description: |
+        The effective native client registry (ADR-0025 WP2): the
+        NATIVE_CLIENTS_PATH file layer overlaid by the rows saved here, with
+        each client's live device count. Requires
+        `configuration.native_clients` in the administration mode.
+        NOTE(W2): internal/api/nativeauth/admin.go:34.
+      tags: [admin]
+      responses:
+        '200':
+          description: The registry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The store did not answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/native_clients/administration/{client_id}:
+    parameters:
+      - name: client_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: 3 to 64 characters of lower-case letters, digits, dot, underscore or hyphen.
+    put:
+      operationId: saveNativeClient
+      summary: Register or update a native client
+      description: |
+        Upserts the database layer for one client; it overrides a file entry
+        with the same id. Redirect URIs must be private-use reverse-domain
+        schemes (`com.example.app:/oauth/callback`) or loopback
+        (`http://127.0.0.1/path`, registered without a port). Disabling a
+        client revokes every device of it in the same transaction; enabling it
+        again resurrects none. 409 while DEPLOYMENT_URL is not set (the issuer
+        every native sign-in carries). NOTE(W2): internal/api/nativeauth/admin.go:61.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NativeClientSaveRequest'
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientWriteResult'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: DEPLOYMENT_URL is not set on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The definition is invalid; one reason per field and per redirect URI.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientValidationError'
+        '503':
+          description: The store did not answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteNativeClient
+      summary: Remove a native client's database row
+      description: |
+        Removes the database row and revokes every device of the client in the
+        same transaction. A file entry with the same id applies again.
+        NOTE(W2): internal/api/nativeauth/admin.go:112.
+      tags: [admin]
+      responses:
+        '200':
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientWriteResult'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No database row has that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The store did not answer.
           content:
             application/json:
               schema:

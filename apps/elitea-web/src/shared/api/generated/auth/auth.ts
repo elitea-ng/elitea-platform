@@ -53,9 +53,14 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AuthorizeNativeClientParams,
   ErrorResponse,
   N401Response,
   N403Response,
+  NativeOAuthError,
+  NativeRevokeRequest,
+  NativeTokenRequest,
+  NativeTokenResponse,
   Permission,
   PersonalAccessToken,
   PersonalAccessTokenCreateRequest,
@@ -82,6 +87,779 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type authorizeNativeClientResponse302 = {
+  data: void;
+  status: 302;
+};
+
+export type authorizeNativeClientResponse400 = {
+  data: string;
+  status: 400;
+};
+
+export type authorizeNativeClientResponse404 = {
+  data: NativeOAuthError;
+  status: 404;
+};
+
+export type authorizeNativeClientResponse503 = {
+  data: string;
+  status: 503;
+};
+
+export type authorizeNativeClientResponseError = (
+  | authorizeNativeClientResponse302
+  | authorizeNativeClientResponse400
+  | authorizeNativeClientResponse404
+  | authorizeNativeClientResponse503
+) & {
+  headers: Headers;
+};
+
+export type authorizeNativeClientResponse = authorizeNativeClientResponseError;
+
+export const getAuthorizeNativeClientUrl = (
+  params: AuthorizeNativeClientParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/auth/native/authorize?${stringifiedParams}`
+    : `/auth/native/authorize`;
+};
+
+/**
+ * A BROWSER NAVIGATION, not an API call: a registered native client
+ * opens this URL in the system browser (ADR-0025 decision 3). The
+ * deployment's existing sign-in runs (SSO chooser, OIDC, SAML or the
+ * form), the user confirms the client and device on a one-line page,
+ * and the browser is redirected to the client's registered
+ * `redirect_uri` with a single-use `code` valid for 60 seconds, the
+ * `state` and `iss` (RFC 9207, the deployment origin; equal to the
+ * discovery `issuer`).
+ *
+ * An unknown or disabled client, a missing or unregistered
+ * `redirect_uri`, or a missing or malformed `state` answers an HTML
+ * error page and NEVER redirects. Every later error redirects with
+ * `error`, `error_description`, `state` and `iss`.
+ * `scope`, `nonce` and `prompt` are ignored; `prompt=login` and
+ * `max_age` are not supported. Answers 404 while no native client is
+ * registered. NOTE(W2): internal/api/nativeauth/authorize.go:36.
+ * @summary Start a native sign-in (RFC 8252 authorization request)
+ */
+export const authorizeNativeClient = async (
+  params: AuthorizeNativeClientParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<authorizeNativeClientResponse> => {
+  return eliteaFetch<authorizeNativeClientResponse>(
+    getAuthorizeNativeClientUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAuthorizeNativeClientQueryKey = (
+  params?: AuthorizeNativeClientParams,
+) => {
+  return [`/auth/native/authorize`, ...(params ? [params] : [])] as const;
+};
+
+export const getAuthorizeNativeClientQueryOptions = <
+  TData = Awaited<ReturnType<typeof authorizeNativeClient>>,
+  TError = void | string | NativeOAuthError,
+>(
+  params: AuthorizeNativeClientParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof authorizeNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAuthorizeNativeClientQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof authorizeNativeClient>>
+  > = ({ signal }) =>
+    authorizeNativeClient(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof authorizeNativeClient>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AuthorizeNativeClientQueryResult = NonNullable<
+  Awaited<ReturnType<typeof authorizeNativeClient>>
+>;
+export type AuthorizeNativeClientQueryError = void | string | NativeOAuthError;
+
+export function useAuthorizeNativeClient<
+  TData = Awaited<ReturnType<typeof authorizeNativeClient>>,
+  TError = void | string | NativeOAuthError,
+>(
+  params: AuthorizeNativeClientParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof authorizeNativeClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof authorizeNativeClient>>,
+          TError,
+          Awaited<ReturnType<typeof authorizeNativeClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAuthorizeNativeClient<
+  TData = Awaited<ReturnType<typeof authorizeNativeClient>>,
+  TError = void | string | NativeOAuthError,
+>(
+  params: AuthorizeNativeClientParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof authorizeNativeClient>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof authorizeNativeClient>>,
+          TError,
+          Awaited<ReturnType<typeof authorizeNativeClient>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAuthorizeNativeClient<
+  TData = Awaited<ReturnType<typeof authorizeNativeClient>>,
+  TError = void | string | NativeOAuthError,
+>(
+  params: AuthorizeNativeClientParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof authorizeNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start a native sign-in (RFC 8252 authorization request)
+ */
+
+export function useAuthorizeNativeClient<
+  TData = Awaited<ReturnType<typeof authorizeNativeClient>>,
+  TError = void | string | NativeOAuthError,
+>(
+  params: AuthorizeNativeClientParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof authorizeNativeClient>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAuthorizeNativeClientQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type exchangeNativeTokenResponse200 = {
+  data: NativeTokenResponse;
+  status: 200;
+};
+
+export type exchangeNativeTokenResponse400 = {
+  data: NativeOAuthError;
+  status: 400;
+};
+
+export type exchangeNativeTokenResponse401 = {
+  data: NativeOAuthError;
+  status: 401;
+};
+
+export type exchangeNativeTokenResponse404 = {
+  data: NativeOAuthError;
+  status: 404;
+};
+
+export type exchangeNativeTokenResponse429 = {
+  data: NativeOAuthError;
+  status: 429;
+};
+
+export type exchangeNativeTokenResponse503 = {
+  data: NativeOAuthError;
+  status: 503;
+};
+
+export type exchangeNativeTokenResponseSuccess =
+  exchangeNativeTokenResponse200 & {
+    headers: Headers;
+  };
+export type exchangeNativeTokenResponseError = (
+  | exchangeNativeTokenResponse400
+  | exchangeNativeTokenResponse401
+  | exchangeNativeTokenResponse404
+  | exchangeNativeTokenResponse429
+  | exchangeNativeTokenResponse503
+) & {
+  headers: Headers;
+};
+
+export type exchangeNativeTokenResponse =
+  exchangeNativeTokenResponseSuccess | exchangeNativeTokenResponseError;
+
+export const getExchangeNativeTokenUrl = () => {
+  return `/auth/native/token`;
+};
+
+/**
+ * The token endpoint for registered native PUBLIC clients (RFC 6749
+ * section 4.1.3 and 6, ADR-0025 decision 3). No client authentication:
+ * `client_id` is in the body and an `Authorization` header is refused.
+ * The body is `application/x-www-form-urlencoded` (at most 8 KiB) and no
+ * parameter may repeat.
+ *
+ * `grant_type=authorization_code` takes `code`, `redirect_uri`,
+ * `client_id` and `code_verifier` (PKCE S256). A code is single-use; a
+ * replayed code revokes the device session it produced.
+ * `grant_type=refresh_token` takes `refresh_token`, `client_id` and an
+ * optional `client_version`. The refresh token rotates on every use.
+ * Presenting the IMMEDIATELY previous refresh token again within the
+ * re-delivery window (default 30 seconds) returns the SAME new pair; any
+ * other reuse revokes the whole device session.
+ *
+ * Errors are RFC 6749 section 5.2 JSON. A revoked, expired, deactivated
+ * or reused device session is refused; clients must persist the new pair
+ * before using it and serialise refreshes. Failures are rate limited per
+ * (client, address) and per address (429 with Retry-After). Answers 404
+ * while no native client is registered.
+ * NOTE(W2): internal/api/nativeauth/token.go:61.
+ * @summary Exchange a native authorization code or refresh token
+ */
+export const exchangeNativeToken = async (
+  nativeTokenRequest: NativeTokenRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exchangeNativeTokenResponse> => {
+  const formUrlEncoded = new URLSearchParams();
+  formUrlEncoded.append(`grant_type`, nativeTokenRequest.grant_type);
+  formUrlEncoded.append(`client_id`, nativeTokenRequest.client_id);
+  if (nativeTokenRequest.code !== undefined) {
+    formUrlEncoded.append(`code`, nativeTokenRequest.code);
+  }
+  if (nativeTokenRequest.redirect_uri !== undefined) {
+    formUrlEncoded.append(`redirect_uri`, nativeTokenRequest.redirect_uri);
+  }
+  if (nativeTokenRequest.code_verifier !== undefined) {
+    formUrlEncoded.append(`code_verifier`, nativeTokenRequest.code_verifier);
+  }
+  if (nativeTokenRequest.refresh_token !== undefined) {
+    formUrlEncoded.append(`refresh_token`, nativeTokenRequest.refresh_token);
+  }
+  if (nativeTokenRequest.client_version !== undefined) {
+    formUrlEncoded.append(`client_version`, nativeTokenRequest.client_version);
+  }
+
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<exchangeNativeTokenResponse>(getExchangeNativeTokenUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...getHeaders(options?.headers),
+    },
+    body: formUrlEncoded,
+  });
+};
+
+export const getExchangeNativeTokenQueryKey = (
+  nativeTokenRequest?: NativeTokenRequest,
+) => {
+  return ["POST", `/auth/native/token`, nativeTokenRequest] as const;
+};
+
+export const getExchangeNativeTokenQueryOptions = <
+  TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeTokenRequest: NativeTokenRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeNativeToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getExchangeNativeTokenQueryKey(nativeTokenRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exchangeNativeToken>>
+  > = ({ signal }) =>
+    exchangeNativeToken(nativeTokenRequest, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof exchangeNativeToken>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExchangeNativeTokenQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exchangeNativeToken>>
+>;
+export type ExchangeNativeTokenQueryError = NativeOAuthError;
+
+export function useExchangeNativeToken<
+  TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeTokenRequest: NativeTokenRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeNativeToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exchangeNativeToken>>,
+          TError,
+          Awaited<ReturnType<typeof exchangeNativeToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExchangeNativeToken<
+  TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeTokenRequest: NativeTokenRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeNativeToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exchangeNativeToken>>,
+          TError,
+          Awaited<ReturnType<typeof exchangeNativeToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExchangeNativeToken<
+  TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeTokenRequest: NativeTokenRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeNativeToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Exchange a native authorization code or refresh token
+ */
+
+export function useExchangeNativeToken<
+  TData = Awaited<ReturnType<typeof exchangeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeTokenRequest: NativeTokenRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exchangeNativeToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExchangeNativeTokenQueryOptions(
+    nativeTokenRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeNativeTokenResponse200 = {
+  data: void;
+  status: 200;
+};
+
+export type revokeNativeTokenResponse400 = {
+  data: NativeOAuthError;
+  status: 400;
+};
+
+export type revokeNativeTokenResponse401 = {
+  data: NativeOAuthError;
+  status: 401;
+};
+
+export type revokeNativeTokenResponse404 = {
+  data: NativeOAuthError;
+  status: 404;
+};
+
+export type revokeNativeTokenResponse429 = {
+  data: NativeOAuthError;
+  status: 429;
+};
+
+export type revokeNativeTokenResponse503 = {
+  data: NativeOAuthError;
+  status: 503;
+};
+
+export type revokeNativeTokenResponseSuccess = revokeNativeTokenResponse200 & {
+  headers: Headers;
+};
+export type revokeNativeTokenResponseError = (
+  | revokeNativeTokenResponse400
+  | revokeNativeTokenResponse401
+  | revokeNativeTokenResponse404
+  | revokeNativeTokenResponse429
+  | revokeNativeTokenResponse503
+) & {
+  headers: Headers;
+};
+
+export type revokeNativeTokenResponse =
+  revokeNativeTokenResponseSuccess | revokeNativeTokenResponseError;
+
+export const getRevokeNativeTokenUrl = () => {
+  return `/auth/native/revoke`;
+};
+
+/**
+ * Revokes the WHOLE device session (refresh-token family) the presented
+ * refresh or access token belongs to (reason `signed_out`). An unknown or
+ * already-revoked token, or one for another client, also answers 200 with
+ * no body, so the answer reveals nothing. Form body: `token`,
+ * `client_id`, optional `token_type_hint`. Answers 404 while no native
+ * client is registered. NOTE(W2): internal/api/nativeauth/token.go:252.
+ * @summary Revoke a native device session (RFC 7009)
+ */
+export const revokeNativeToken = async (
+  nativeRevokeRequest: NativeRevokeRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeNativeTokenResponse> => {
+  const formUrlEncoded = new URLSearchParams();
+  formUrlEncoded.append(`token`, nativeRevokeRequest.token);
+  if (nativeRevokeRequest.token_type_hint !== undefined) {
+    formUrlEncoded.append(
+      `token_type_hint`,
+      nativeRevokeRequest.token_type_hint,
+    );
+  }
+  formUrlEncoded.append(`client_id`, nativeRevokeRequest.client_id);
+
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<revokeNativeTokenResponse>(getRevokeNativeTokenUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...getHeaders(options?.headers),
+    },
+    body: formUrlEncoded,
+  });
+};
+
+export const getRevokeNativeTokenQueryKey = (
+  nativeRevokeRequest?: NativeRevokeRequest,
+) => {
+  return ["POST", `/auth/native/revoke`, nativeRevokeRequest] as const;
+};
+
+export const getRevokeNativeTokenQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeRevokeRequest: NativeRevokeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getRevokeNativeTokenQueryKey(nativeRevokeRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeNativeToken>>
+  > = ({ signal }) =>
+    revokeNativeToken(nativeRevokeRequest, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeNativeToken>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeNativeTokenQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeNativeToken>>
+>;
+export type RevokeNativeTokenQueryError = NativeOAuthError;
+
+export function useRevokeNativeToken<
+  TData = Awaited<ReturnType<typeof revokeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeRevokeRequest: NativeRevokeRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeNativeToken>>,
+          TError,
+          Awaited<ReturnType<typeof revokeNativeToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeNativeToken<
+  TData = Awaited<ReturnType<typeof revokeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeRevokeRequest: NativeRevokeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeToken>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeNativeToken>>,
+          TError,
+          Awaited<ReturnType<typeof revokeNativeToken>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeNativeToken<
+  TData = Awaited<ReturnType<typeof revokeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeRevokeRequest: NativeRevokeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a native device session (RFC 7009)
+ */
+
+export function useRevokeNativeToken<
+  TData = Awaited<ReturnType<typeof revokeNativeToken>>,
+  TError = NativeOAuthError,
+>(
+  nativeRevokeRequest: NativeRevokeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeNativeToken>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeNativeTokenQueryOptions(
+    nativeRevokeRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type permissionListResponse200 = {
   data: Permission[];

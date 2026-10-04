@@ -22,6 +22,7 @@ package oapiserver_test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"net/http"
 	"os"
 	"strings"
@@ -136,6 +137,14 @@ func buildFullSurfaceConfig() api.RouterConfig {
 			OIDCHandler:    &v2auth.OIDCHandler{},
 		},
 		AppsRepo: struct{ applications.Repository }{},
+
+		// The native authorization server (ADR-0025 WP2). MANDATORY here:
+		// v2.yaml describes authorizeNativeClient, exchangeNativeToken,
+		// revokeNativeToken and the three native_clients admin operations,
+		// which resolve to no route unless both fields are non-nil. This walk
+		// never serves a request, so neither touches a database.
+		NativeClients: nativeauth.NewRegistry(nil, nil),
+		NativeStore:   nativeauth.NewStore(nil, nativeauth.Config{}),
 
 		// Agent Evaluation (#617). All three are MANDATORY here, not optional
 		// stubs, and the third is the one that is easy to forget: the run

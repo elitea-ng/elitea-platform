@@ -82,6 +82,15 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// that sent either to the login form would break every identity
 		// provider at the edge.
 		uriRule("go.scim.token", `^/api/v2/scim/oauth/token$`),
+		// Native authorization (ADR-0025 WP2). A native client calls these
+		// before it holds any credential; the user's browser reaches
+		// /authorize from the app. The authorize pattern deliberately does
+		// NOT match /authorize/continue or /authorize/decision: those need
+		// the browser session, and the edge's own 302 to the sign-in page is
+		// what starts the sign-in when there is none.
+		uriRule("go.native.authorize", `^/api/v2/auth/native/authorize(\?.*)?$`),
+		uriRule("go.native.token", `^/api/v2/auth/native/token$`),
+		uriRule("go.native.revoke", `^/api/v2/auth/native/revoke$`),
 		uriRule("go.scim.v2", `^/api/v2/scim/v2(/[^?]*)?(\?.*)?$`),
 		// API documentation predates any session.
 		uriRule("go.openapidocs.spec_yaml", `^/api/openapi\.yaml$`),

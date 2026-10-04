@@ -173,6 +173,9 @@ type Querier interface {
 	// models by data.name. A two-row sentinel lets the adapter reject duplicate
 	// mutable definitions instead of selecting one silently.
 	FindCurrentEmbeddingConfigurations(ctx context.Context, arg FindCurrentEmbeddingConfigurationsParams) ([]FindCurrentEmbeddingConfigurationsRow, error)
+	// `token.uuid IS NOT NULL` is load-bearing twice over: the durable-execution
+	// actor issuer signs the selected row as a PAT JWT, and a native device anchor
+	// (ADR-0025, uuid NULL) must never be signed into one.
 	GetActivePATForUser(ctx context.Context, userID int32) (GetActivePATForUserRow, error)
 	GetActivePATPrincipalByID(ctx context.Context, tokenID int32) (GetActivePATPrincipalByIDRow, error)
 	// This is the single query the credential validator runs for every request.
@@ -434,6 +437,10 @@ type Querier interface {
 	// The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 	// see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
 	// LEFT JOIN because an unbound token is the default and must still be listed.
+	// A row with uuid NULL is not a personal access token: no PAT JWT can name it.
+	// Native device sessions (ADR-0025, shared 0141) anchor on exactly such rows,
+	// so the filter keeps a signed-in phone from showing up in Settings > Tokens
+	// as a key named `native:<client>`. The device registry lists those instead.
 	ListOwnedPATs(ctx context.Context, userID int32) ([]ListOwnedPATsRow, error)
 	ListPendingAgentExecutionIDs(ctx context.Context, arg ListPendingAgentExecutionIDsParams) ([]string, error)
 	ListPendingToolkitExecuteReadIDs(ctx context.Context, arg ListPendingToolkitExecuteReadIDsParams) ([]string, error)

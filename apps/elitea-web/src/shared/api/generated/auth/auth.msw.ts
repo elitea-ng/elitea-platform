@@ -44,7 +44,23 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { Permission, PersonalAccessToken } from "../model";
+import type {
+  NativeTokenResponse,
+  Permission,
+  PersonalAccessToken,
+} from "../model";
+
+export const getExchangeNativeTokenResponseMock = (
+  overrideResponse: Partial<Extract<NativeTokenResponse, object>> = {},
+): NativeTokenResponse => ({
+  access_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  token_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  expires_in: faker.number.int(),
+  refresh_token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  refresh_token_expires_in: faker.number.int(),
+  device_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
 
 export const getPermissionListResponseMock = (): Permission[] =>
   Array.from(
@@ -121,6 +137,76 @@ export const getGetPersonalTokenResponseMock = (
   token: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
+
+export const getAuthorizeNativeClientMockHandler = (
+  overrideResponse?:
+    | unknown
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<unknown> | unknown),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/auth/native/authorize",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 200 });
+    },
+    options,
+  );
+};
+
+export const getExchangeNativeTokenMockHandler = (
+  overrideResponse?:
+    | NativeTokenResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<NativeTokenResponse> | NativeTokenResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/auth/native/token",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getExchangeNativeTokenResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeNativeTokenMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/auth/native/revoke",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 200 });
+    },
+    options,
+  );
+};
 
 export const getPermissionListMockHandler = (
   overrideResponse?:
@@ -248,6 +334,9 @@ export const getDeletePersonalTokenMockHandler = (
   );
 };
 export const getAuthMock = () => [
+  getAuthorizeNativeClientMockHandler(),
+  getExchangeNativeTokenMockHandler(),
+  getRevokeNativeTokenMockHandler(),
   getPermissionListMockHandler(),
   getListPersonalTokensMockHandler(),
   getCreatePersonalTokenMockHandler(),

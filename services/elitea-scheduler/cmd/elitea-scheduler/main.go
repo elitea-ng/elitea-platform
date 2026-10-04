@@ -18,6 +18,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/auditretention"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
@@ -148,6 +149,19 @@ func main() {
 		slog.Info("starting audit retention sweeper",
 			"window_days", cfg.AuditRetentionDays, "interval", cfg.AuditRetentionInterval)
 		go auditSweeper.Run(ctx)
+	}
+
+	// Native authorization retention (ADR-0025 WP2, elitea-main shared 0141):
+	// bounded batched deletes of expired access tokens and authorization
+	// requests, consumed refresh tokens past their family's idle TTL, idle
+	// families (revoked as `expired`, anchors removed) and families revoked
+	// more than 90 days ago. Correctness never depends on it: elitea-main
+	// checks every expiry at read time. Not gated on maintenance mode: it
+	// only removes credentials that can no longer be used.
+	if nativeSweeper, nativeErr := nativeauthretention.New(pool, nativeauthretention.Config{}, logger); nativeErr != nil {
+		slog.Error("native auth retention sweep did not start", "err", nativeErr)
+	} else {
+		go nativeSweeper.Run(ctx)
 	}
 
 	// Budget write-back consumer (design §8.6): durable pull consumer draining
