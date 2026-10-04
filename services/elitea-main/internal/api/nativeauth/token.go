@@ -78,12 +78,17 @@ func (h *Handler) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Failures are counted and judged only for a KNOWN address: an unknown
+	// one is the same key for every caller, so counting it would turn ordinary
+	// invalid_grant answers into a deployment-wide 429.
 	fail := func(status int, code, description string) {
-		h.tokenFailures.Fail(keys[0])
-		h.tokenAddressFailures.Fail(keys[1])
-		if blocked, retry := h.tokenBlocked(keys); blocked {
-			writeTooManyFailures(w, retry)
-			return
+		if known {
+			h.tokenFailures.Fail(keys[0])
+			h.tokenAddressFailures.Fail(keys[1])
+			if blocked, retry := h.tokenBlocked(keys); blocked {
+				writeTooManyFailures(w, retry)
+				return
+			}
 		}
 		writeOAuthError(w, status, code, description)
 	}

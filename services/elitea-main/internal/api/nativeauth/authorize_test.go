@@ -207,3 +207,25 @@ func TestDiscoverySeamPublishesEndpointsOnlyWhileAClientIsEnabled(t *testing.T) 
 		t.Fatalf("native_auth with only a disabled client = %+v, %v; want null", got, err)
 	}
 }
+
+// An UNKNOWN address (no trusted-proxy CIDRs, the Helm default) is not one
+// shared bucket: ordinary invalid_grant/invalid_client failures from many
+// callers must keep getting their OAuth error, never a deployment-wide 429.
+func TestTokenFailuresFromUnknownAddressesAreNotPooled(t *testing.T) {
+	handler := nativeapi.New(nativeapi.Config{
+		Registry:     domain.NewRegistry([]domain.Client{fileClient()}, nil),
+		PublicOrigin: testOrigin,
+	})
+	router := chi.NewRouter()
+	handler.Mount(router)
+	body := "grant_type=authorization_code&client_id=dev.elitea.nobody&code=x&redirect_uri=x&code_verifier=" + testVerifier
+	for attempt := 1; attempt <= 70; attempt++ {
+		request := httptest.NewRequest(http.MethodPost, nativeapi.TokenPath, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d from an unknown address = %d, want 401 invalid_client", attempt, recorder.Code)
+		}
+	}
+}

@@ -115,9 +115,14 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The per-address limit applies only to a KNOWN address, as on /token and
+	// /revoke: without trusted-proxy CIDRs (the Helm default) every caller
+	// resolves to the same unknown key, and one shared bucket would let any
+	// anonymous caller lock every native sign-in out. pendingCeiling still
+	// bounds what unknown callers can store.
 	address, known := h.address(r)
 	key := addressKey(address, known)
-	if blocked, _ := h.authorizations.Blocked(key); blocked {
+	if blocked, _ := h.authorizations.Blocked(key); known && blocked {
 		redirectError("temporarily_unavailable", "too many sign-in requests; retry later")
 		return
 	}
@@ -140,7 +145,9 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
 		redirectError("temporarily_unavailable", "the sign-in service is temporarily unavailable")
 		return
 	}
-	h.authorizations.Fail(key)
+	if known {
+		h.authorizations.Fail(key)
+	}
 	h.setBinder(w, binder)
 	http.Redirect(w, r, ContinuePath+"?"+url.Values{"request": {handle}}.Encode(), http.StatusFound)
 }
