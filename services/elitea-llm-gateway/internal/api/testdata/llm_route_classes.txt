@@ -1,0 +1,38 @@
+# The class of every route the gateway mounts (legacy issue 6879).
+#
+# Format: <class> <METHOD> <chi pattern>. The class is one of:
+#   inference  a model call. It can incur provider cost, so the analytics
+#              pages count it as an LLM call.
+#   other      not a model call: a listing, a token count, a credential check.
+#
+# Two tests read this file:
+#   - internal/api/route_classes_test.go (this module) walks the chi router.
+#     It fails when a mounted route is not in this file, or when this file
+#     names a route that is not mounted. So a new route needs a class here.
+#   - services/elitea-main/internal/domain/analytics/inference_routes_test.go
+#     compares the "inference" patterns with analytics.InferenceRoutes(). So a
+#     new inference route must also go into InferenceRouteSQLList, or its
+#     calls disappear from the analytics pages.
+#
+# Do not move or rename this file without both tests.
+
+inference POST /llm/v1/messages
+other     POST /llm/v1/messages/count_tokens
+other     POST /llm/v1/messages/*
+inference POST /llm/v1/images/edits
+inference POST /llm/v1/images/variations
+inference POST /llm/v1/images/generations
+inference POST /llm/v1/audio/speech
+inference POST /llm/v1/audio/transcriptions
+inference POST /llm/v1/audio/translations
+inference POST /llm/v1/chat/completions
+inference POST /llm/v1/completions
+inference POST /llm/v1/embeddings
+inference POST /llm/v1/responses
+inference GET  /llm/v1/realtime
+inference POST /llm/v1/realtime
+other     GET  /llm/v1/models
+other     GET  /llm/v1/models/*
+other     POST /llm/v1/check_connection
+other     POST /llm/v1/list_provider_models
+other     POST /llm/v1/list_provider_voices
