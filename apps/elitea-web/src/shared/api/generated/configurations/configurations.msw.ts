@@ -273,6 +273,10 @@ export const getListConfigurationModelsResponseMock = (
     faker.helpers.arrayElement([faker.number.int(), null]),
     undefined,
   ]),
+  default_model_configured: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   low_tier_default_model_name: faker.helpers.arrayElement([
     faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),

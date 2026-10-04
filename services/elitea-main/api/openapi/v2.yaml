@@ -6002,6 +6002,13 @@ components:
           type: integer
           nullable: true
           description: '`reviewed` only.'
+        default_model_configured:
+          type: boolean
+          description: >
+            `reviewed` only. True when `default_model_name` is the default an
+            admin configured for the project or the platform. False when no
+            configured default is in the catalogue and `default_model_name`
+            is only the first item. Omitted when false.
         low_tier_default_model_name:
           type: string
           nullable: true

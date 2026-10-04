@@ -4,11 +4,11 @@ import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { hasBackendCapability } from '@/shared/config';
 
 import {
+  aiEditModelName,
   findServicePrompt,
   getProjectModelCatalogue,
   getServicePromptTypes,
   getServicePrompts,
-  projectDefaultModelName,
   servicePromptDefaultsByKey,
 } from '../api/aiEdit';
 
@@ -36,9 +36,10 @@ import {
  *     type descriptor's `default_by_key` is the fallback. Neither present
  *     means no prompt, which means no affordance.
  *  3. **The model.** `predict_llm` is given an explicit `llm_settings`. Its
- *     model is the project's CURRENT default model, read from the model
- *     catalogue; the agent's own `version_details.llm_settings.model_name` is
- *     the fallback. With neither, nothing can be asked to generate anything.
+ *     model is the project's CURRENT configured default model, read from the
+ *     model catalogue; the agent's own `version_details.llm_settings.model_name`
+ *     is the fallback, and the catalogue's first model after that. With none
+ *     of them, nothing can be asked to generate anything.
  *
  * `isAvailable` is the AND of all three. Nothing here retries: a 404 on the
  * configurations routes is a permanent property of the deployment, not a
@@ -65,11 +66,14 @@ export interface UseAiEditAvailabilityResult {
 const AI_EDIT_QUERY_ROOT = ['agents', 'aiEdit'] as const;
 
 /**
- * THE MODEL is the project's CURRENT default (legacy issue 6872). The
- * version's own `model_name` is the default that was current when the agent
- * was created; after an admin changes the project default it is stale, and
- * "Edit with AI" ran on the old model. The version's model is the fallback
- * for a project with no default, or a catalogue that cannot be read.
+ * THE MODEL is the project's CURRENT configured default (legacy issue 6872).
+ * The version's own `model_name` is the default that was current when the
+ * agent was created; after an admin changes the project default it is stale,
+ * and "Edit with AI" ran on the old model. The version's model is the
+ * fallback for a project with no CONFIGURED default, or a catalogue that
+ * cannot be read. The catalogue names its first item as the default when
+ * none is configured (`default_model_configured: false`); that item wins only
+ * when the version has no model either (`aiEditModelName`).
  */
 function useAiEditModel(
   projectId: string | undefined,
@@ -83,7 +87,7 @@ function useAiEditModel(
     retry: false,
   });
   const versionModel = modelSettings?.model_name ?? '';
-  return { modelName: projectDefaultModelName(catalogue.data) || versionModel, isLoading: catalogue.isLoading };
+  return { modelName: aiEditModelName(catalogue.data, versionModel), isLoading: catalogue.isLoading };
 }
 
 /** True for a usable project id. A function, to keep the hook's own branches in the complexity budget. */

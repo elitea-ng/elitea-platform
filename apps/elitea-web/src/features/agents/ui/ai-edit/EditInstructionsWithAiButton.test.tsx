@@ -43,14 +43,21 @@ function renderButton(node: ReactNode): void {
 const NO_CATALOGUE = Symbol('no catalogue');
 type DefaultModel = string | null | typeof NO_CATALOGUE;
 
-/** A deployment that serves the Service Prompt catalogue (ELITEA_CONFIGURATIONS_ENABLED on). */
-function serveConfigurations(options: { authored?: string; fallback?: string; defaultModel?: DefaultModel } = {}): void {
+/**
+ * A deployment that serves the Service Prompt catalogue (ELITEA_CONFIGURATIONS_ENABLED on).
+ * `defaultConfigured: false` serves the catalogue's first-item fallback: a
+ * `default_model_name` that no admin chose.
+ */
+function serveConfigurations(
+  options: { authored?: string; fallback?: string; defaultModel?: DefaultModel; defaultConfigured?: boolean } = {},
+): void {
   const defaultModel = options.defaultModel ?? null;
+  const configured = options.defaultConfigured ?? defaultModel !== null;
   server.use(
     http.get(`${BASE}/configurations/models/7`, () =>
       defaultModel === NO_CATALOGUE
         ? new HttpResponse(null, { status: 404 })
-        : HttpResponse.json({ items: [], total: 0, default_model_name: defaultModel }),
+        : HttpResponse.json({ items: [], total: 0, default_model_name: defaultModel, default_model_configured: configured }),
     ),
     http.get(`${BASE}/configurations/available/`, () =>
       HttpResponse.json(
@@ -248,9 +255,13 @@ describe('EditInstructionsWithAiButton — generate and apply', () => {
  * default, and fall back to the version's model only when there is none.
  */
 describe('EditInstructionsWithAiButton — the model', () => {
-  async function generateWith(defaultModel: DefaultModel, settings: AgentLlmSettings | null): Promise<Record<string, unknown>> {
+  async function generateWith(
+    defaultModel: DefaultModel,
+    settings: AgentLlmSettings | null,
+    defaultConfigured?: boolean,
+  ): Promise<Record<string, unknown>> {
     const user = userEvent.setup();
-    serveConfigurations({ fallback: 'FALLBACK PROMPT', defaultModel });
+    serveConfigurations({ fallback: 'FALLBACK PROMPT', defaultModel, ...(defaultConfigured === undefined ? {} : { defaultConfigured }) });
     let body: Record<string, unknown> = {};
     server.use(
       http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, async ({ request }) => {
@@ -281,6 +292,18 @@ describe('EditInstructionsWithAiButton — the model', () => {
   it('falls back to the version model when the project has no default', async () => {
     const body = await generateWith(null, llmSettings);
     expect(body['llm_settings']).toMatchObject({ model_name: 'qwen3.5' });
+  });
+
+  it('prefers the version model over the catalogue first-item fallback', async () => {
+    // No default is configured, so the catalogue names its first item. No
+    // one chose that model; the agent's author chose the version's.
+    const body = await generateWith('first-in-catalogue', llmSettings, false);
+    expect(body['llm_settings']).toMatchObject({ model_name: 'qwen3.5' });
+  });
+
+  it('uses the catalogue first-item fallback when the version has no model', async () => {
+    const body = await generateWith('first-in-catalogue', null, false);
+    expect(body['llm_settings']).toMatchObject({ model_name: 'first-in-catalogue' });
   });
 
   it('falls back to the version model when the catalogue cannot be read', async () => {
