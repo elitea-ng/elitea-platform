@@ -651,6 +651,7 @@
   "entities.secret.model.createLabelPrivate": "New Private Secret",
   "entities.secret.model.createLabelProject": "New Project Secret",
   "entities.secret.pageTitle": "Secrets",
+  "entities.secret.retry": "Try again",
   "entities.secret.searchPlaceholder": "Search secrets",
   "entities.secret.table.actions": "Actions",
   "entities.secret.table.empty": "No secrets",

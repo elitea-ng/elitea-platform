@@ -226,9 +226,14 @@ test('J21b: a failing secrets list surfaces an error toast', async ({ page }) =>
 
   await page.goto(SECRETS_PAGE);
 
-  // Secrets.tsx:143-152 — the non-403 branch of the list-error effect.
-  const toast = page.getByRole('alert');
+  // Two alerts name the failure: the toast (the non-403 branch of the
+  // list-error effect) and the grid's own error state, which replaces the
+  // empty table and offers a retry.
+  const toast = page.getByRole('alert').and(page.locator('.MuiAlert-root'));
   await expect(toast).toHaveText('Failed to load secrets', { timeout: 15_000 });
+  const gridError = page.getByTestId('secrets-load-error');
+  await expect(gridError).toContainText('Failed to load secrets');
+  await expect(gridError.getByRole('button', { name: 'Try again' })).toBeVisible();
 
   await checkA11y(page);
 });

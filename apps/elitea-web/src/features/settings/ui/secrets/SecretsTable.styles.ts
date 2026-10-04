@@ -39,6 +39,15 @@ export const tableStyles: Record<string, SxProps<Theme>> = {
     justifyContent: 'center',
     height: '100%',
   },
+  /* Failed list (SecretsLoadError) — sits where the grid would. */
+  loadError: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '1rem',
+    minHeight: '12rem',
+  },
   /* Pagination footer */
   pagination: {
     display: 'flex',

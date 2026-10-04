@@ -52,7 +52,7 @@ func TestDefaultSecretPolicyFailureStopsHandlersBeforeVaultAccess(t *testing.T) 
 	handler.defaultSecretPolicy = func(context.Context) (defaultSecretPolicy, error) {
 		return defaultSecretPolicy{}, errors.New("private database detail")
 	}
-	for _, endpoint := range []http.HandlerFunc{handler.List, handler.Get, handler.Create, handler.Update, handler.Delete} {
+	for _, endpoint := range []http.HandlerFunc{handler.List, handler.Get, handler.Create, handler.Update, handler.Delete, handler.Hide} {
 		response := httptest.NewRecorder()
 		endpoint(response, httptest.NewRequest(http.MethodGet, "/", nil))
 		if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private") {
