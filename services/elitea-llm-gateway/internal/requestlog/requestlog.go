@@ -99,7 +99,13 @@ type Record struct {
 }
 
 // The values CredentialOwner can carry. Shared migration 0139 documents them on
-// the column, and the analytics reads in elitea-main group on them.
+// the column.
+//
+// The gateway RECORDS them, and nothing reads them yet. No elitea-main
+// analytics statement reads credential_owner, cache_read_tokens or
+// cache_write_tokens; the read that groups on them is the follow-up of legacy
+// issue 6709. Rows written before 0139 hold "" and 0 there, so that read must
+// report the dimension only for a window after the migration.
 const (
 	CredentialOwnerProject  = "project"
 	CredentialOwnerPlatform = "platform"
