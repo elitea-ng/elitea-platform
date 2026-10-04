@@ -4575,5 +4575,8 @@
   "pages.admin.platformDefault.error": "The default model could not be read or saved.",
   "pages.admin.platformDefault.intro": "New projects start with this model, and projects without their own default use it. A fast, low-cost model suits everyday chat.",
   "pages.admin.platformDefault.title": "Default model",
-  "pages.admin.platformDefault.unavailable": "“{{name}}” is no longer available to every project. Choose a replacement."
+  "pages.admin.platformDefault.unavailable": "“{{name}}” is no longer available to every project. Choose a replacement.",
+  "pages.agents.editApplication.triggers.absent": "This agent has no trigger URL.",
+  "pages.agents.editApplication.triggers.description": "An external system starts this agent by calling this URL with its secret. The body’s `input`, or else the payload, is the message.",
+  "pages.agents.editApplication.triggers.title": "Triggers"
 }
