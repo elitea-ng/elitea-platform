@@ -681,7 +681,17 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // listNativeDevicesAdministration and revokeNativeDeviceAdministration (the
 // device registry; its Settings and admin screens are follow-up web work).
 // No browser caller yet, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 286;
+// 286 -> 301 (ADR-0025 WP5): the native client contract describes fifteen
+// operations the web app already calls through hand-written clients —
+// createConversation, getConversation, deleteConversation,
+// listConversationMessages, sendChatMessage, regenerateChatMessage,
+// continueChatExecution, uploadConversationAttachment,
+// streamExecutionEvents, listNotifications, markNotificationsSeen,
+// deleteNotifications, markNotificationSeen, deleteNotification and
+// streamNotificationEvents. Their manifest entries stay `handwritten` (the
+// web callers are not migrated in this change), so the manifest count is
+// unchanged; thirteen ids came off the reverse-check allowlist.
+const GENERATED_OPERATION_COUNT = 301;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

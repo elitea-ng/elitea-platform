@@ -17,6 +17,7 @@ export * from "./deepwiki/deepwiki";
 export * from "./default/default";
 export * from "./discovery/discovery";
 export * from "./inventory/inventory";
+export * from "./notifications/notifications";
 export * from "./resources/resources";
 export * from "./search/search";
 export * from "./secrets/secrets";
