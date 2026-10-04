@@ -24,9 +24,14 @@ package analytics
 // # What is absent, and why it is absent rather than zero
 //
 //   - CACHE tokens. 0099 has prompt_tokens and completion_tokens and no third
-//     pair. `cache_dimension_available` is a constant false, in the shape of
-//     `tool_dimension_available` next door: the caller learns the deployment
-//     cannot answer, instead of reading a fabricated 0.
+//     pair. Shared migration 0139 adds cache_read_tokens and cache_write_tokens,
+//     and the gateway fills them from that migration on, but THIS READ DOES
+//     NOT SUM THEM YET: the response has no cache keys and the spec has no
+//     schema for them. So `cache_dimension_available` stays a constant false,
+//     in the shape of `tool_dimension_available` next door: the caller learns
+//     the endpoint cannot answer, instead of reading a fabricated 0. Rows
+//     written before 0139 hold 0 there, so a future read must report the
+//     dimension as available only for a window after the migration.
 //   - COST, when nothing in the window has a catalogue price. An operator who
 //     has not populated gateway.gateway_models gets `cost_dimension_available:
 //     false` and no money keys at all. A price of zero for every call would
@@ -211,8 +216,9 @@ type costEstimate struct {
 	// reads a flag rather than inferring from a missing key.
 	TokenDimensionAvailable bool `json:"token_dimension_available"`
 	CostDimensionAvailable  bool `json:"cost_dimension_available"`
-	// CacheDimensionAvailable is a constant false. 0099 records no cache token
-	// counts, and there is no second source to take them from.
+	// CacheDimensionAvailable is a constant false. The request log records
+	// cache token counts from shared migration 0139 on, but this read does not
+	// sum them yet; see the file header.
 	CacheDimensionAvailable bool   `json:"cache_dimension_available"`
 	Currency                string `json:"currency"`
 	// PricedCalls and UnpricedCalls partition the window. Their sum is
