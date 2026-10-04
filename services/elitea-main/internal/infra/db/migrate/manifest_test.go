@@ -601,8 +601,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 140: shared/0140_execution_trigger_origin.sql, how a runtime execution
 	// started (manual, api, schedule, webhook, index), so the analytics
 	// active-user reads stop counting a person for an unattended run (legacy
-	// issues 6802 and 6881), plus a (project_id, execution_id) index on the
-	// request log for the per-execution analytics read. No new permission.
+	// issues 6802 and 6881). No request-log index: the runner applies every
+	// pending file in one transaction, and a build there would hold the
+	// execution_jobs lock. No new permission.
 	require.EqualValues(t, 140, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

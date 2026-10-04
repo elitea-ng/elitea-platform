@@ -11,6 +11,7 @@ package migrations_test
 
 import (
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -141,11 +142,59 @@ VALUES ('exec-scheduled', '1', 5, 6, gen_random_uuid()::text, 'Schedule'),
 	}
 
 	// Idempotent: a second run changes nothing and does not fail on the
-	// constraint or the index it already created.
+	// constraint it already created.
 	applyTriggerOriginMigration(t, pool)
 	for id, origin := range want {
 		if got := originOf(t, pool, id); got != origin {
 			t.Errorf("%s after a second run = %q, want %q", id, got, origin)
 		}
 	}
+}
+
+// The ledgered runner applies every pending file in ONE transaction, so an
+// upgrade runs this file while 0139's ALTER holds ACCESS EXCLUSIVE on the
+// request log and this file's ALTER holds it on execution_jobs. An index
+// build or a validating CHECK here would keep both locks for a full scan.
+// Static, so it runs without a database.
+func TestTriggerOriginMigrationHoldsNoLockForAFullScan(t *testing.T) {
+	body, err := os.ReadFile(triggerOriginMigration)
+	if err != nil {
+		t.Fatalf("read %s: %v", triggerOriginMigration, err)
+	}
+	sql := stripSQLComments(string(body))
+	if regexp.MustCompile(`(?i)\bCREATE\s+(UNIQUE\s+)?INDEX\b`).MatchString(sql) {
+		t.Fatal("0140 builds an index inside the migration transaction")
+	}
+	if !regexp.MustCompile(`(?is)ADD\s+CONSTRAINT\s+execution_jobs_trigger_origin.*?NOT\s+VALID`).MatchString(sql) {
+		t.Fatal("0140 adds the trigger_origin CHECK without NOT VALID, which scans execution_jobs under the lock")
+	}
+}
+
+// The CHECK is enforced for new rows although it is NOT VALID.
+func TestTriggerOriginCheckIsNotValidatedButEnforced(t *testing.T) {
+	pool := newMigratedPool(t)
+	ctx, cancel := testContext()
+	defer cancel()
+	var validated bool
+	if err := pool.QueryRow(ctx, `
+SELECT convalidated FROM pg_constraint
+WHERE conname = 'execution_jobs_trigger_origin'
+  AND conrelid = 'elitea_runtime.execution_jobs'::regclass`).Scan(&validated); err != nil {
+		t.Fatalf("read constraint: %v", err)
+	}
+	if validated {
+		t.Fatal("the trigger_origin CHECK was validated, so the migration scanned execution_jobs")
+	}
+	var indexed bool
+	if err := pool.QueryRow(ctx,
+		`SELECT to_regclass('gateway.idx_llm_request_logs_project_execution') IS NOT NULL`).Scan(&indexed); err != nil {
+		t.Fatalf("probe index: %v", err)
+	}
+	if indexed {
+		t.Fatal("0140 built an index on gateway.llm_request_logs")
+	}
+}
+
+func stripSQLComments(sql string) string {
+	return regexp.MustCompile(`(?m)--.*$`).ReplaceAllString(sql, "")
 }

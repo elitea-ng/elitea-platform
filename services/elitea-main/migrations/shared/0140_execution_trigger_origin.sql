@@ -1,5 +1,4 @@
--- 0140_execution_trigger_origin.sql — record how a runtime execution started,
--- and index the request log for one execution's calls.
+-- 0140_execution_trigger_origin.sql — record how a runtime execution started.
 --
 -- WHY (legacy issues 6802 and 6881). An unattended run executes as the person
 -- who configured it: a pipeline schedule runs as its author, an inbound
@@ -30,13 +29,21 @@
 --
 -- Everything else stays `manual`, which is what it was counted as before.
 --
--- THE SECOND INDEX. The per-execution analytics read
--- (GET /analytics_execution/prompt_lib/{projectID}/{executionID}) selects one
--- execution's calls, and its evaluation-run twin selects every id under an
--- `eval:<run>:` prefix. 0100's index is (project_id, occurred_at), which
--- serves a WINDOW, not an id: without this one each lookup scans the
--- project's whole retained log. text_pattern_ops makes the same index serve
--- the equality and the prefix LIKE.
+-- NO INDEX ON THE REQUEST LOG. The ledgered runner applies EVERY pending
+-- migration in ONE transaction (migrate/runner.go apply). An upgrade from
+-- v3.1.0 applies 0139 and this file together. A CREATE INDEX here would run
+-- while that transaction holds ACCESS EXCLUSIVE on execution_jobs (the ALTER
+-- below) and on gateway.llm_request_logs (0139's ALTER). Chat admission,
+-- worker claims and settlement would stop for the whole build. The gateway
+-- request-log writer would block too, and its bounded buffer drops records
+-- when it is full. So the per-run analytics reads bound each lookup by the
+-- run's own lifetime instead, and 0100's (project_id, occurred_at) index
+-- serves them (internal/infra/db/repos/analytics_runs.go).
+--
+-- NOT VALID. The CHECK is added NOT VALID, so the ALTER does not scan the
+-- table under its ACCESS EXCLUSIVE lock. PostgreSQL still enforces it for
+-- every new and updated row. Every existing row holds the column DEFAULT
+-- 'manual' or a value the backfill below writes, so no row can violate it.
 --
 -- NO NEW PERMISSION. The reads that use this column are gated on the
 -- analytics permission shared 0063 already grants.
@@ -56,7 +63,8 @@ BEGIN
     ) THEN
         ALTER TABLE elitea_runtime.execution_jobs
             ADD CONSTRAINT execution_jobs_trigger_origin
-            CHECK (trigger_origin IN ('manual', 'api', 'schedule', 'webhook', 'index'));
+            CHECK (trigger_origin IN ('manual', 'api', 'schedule', 'webhook', 'index'))
+            NOT VALID;
     END IF;
 END
 $$;
@@ -75,7 +83,3 @@ UPDATE elitea_runtime.execution_jobs AS job
  WHERE run.execution_id = job.execution_id
    AND run.origin IN ('Schedule', 'Webhook')
    AND job.trigger_origin = 'manual';
-
-CREATE INDEX IF NOT EXISTS idx_llm_request_logs_project_execution
-    ON gateway.llm_request_logs (project_id, execution_id text_pattern_ops)
-    WHERE execution_id IS NOT NULL;
