@@ -109,11 +109,13 @@ type checkConnectionRequest struct {
 
 	// Model, when set, turns the request into a MODEL probe
 	// (checkconnection_model.go): one real completion with a one-token
-	// budget, instead of the read-only credential listing. APIProtocol selects
-	// the DIAL route for that probe (azure, openai or anthropic). Every other
-	// type ignores it.
-	Model       string `json:"model,omitempty"`
-	APIProtocol string `json:"api_protocol,omitempty"`
+	// budget, instead of the read-only credential listing.
+	Model string `json:"model,omitempty"`
+	// UseAnthropicEndpoints is the credential's use_anthropic_endpoints flag
+	// (account/credentials.go). For a vLLM-class credential the runtime then
+	// speaks the Anthropic dialect to /v1/messages, so the model probe does
+	// too. The credential probe and every other type ignore it.
+	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints,omitempty"`
 }
 
 // jsonTextField decodes a field that arrives either as a JSON string or as a

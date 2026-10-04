@@ -34,6 +34,10 @@ import (
 // budget. That is the smallest request that proves the model name, the route
 // and the protocol together.
 //
+// Each probe uses the route and the dialect the RUNTIME uses for the same
+// credential. A probe on another route reports failures the runtime never
+// sees, and successes the runtime cannot repeat.
+//
 // Every rule of the credential probe still holds:
 //
 //   - every host the probe contacts is named by dialTargets first and goes
@@ -79,13 +83,17 @@ const (
 	checkConnectionReasonInvalidModel  = "invalid_model"
 )
 
-// DIAL API protocols. An empty value is the Azure protocol: that is what the
-// runtime dispatches a DIAL credential with when the model names no protocol.
-const (
-	dialProtocolAzure     = "azure"
-	dialProtocolOpenAI    = "openai"
-	dialProtocolAnthropic = "anthropic"
-)
+// checkModelMaxConcurrent bounds how many model probes this process runs at
+// the same time. A model probe is a real, billed completion that holds a
+// goroutine and an upstream connection for up to checkModelProbeTimeout. It
+// does not go through the budget gate, so a caller must not be able to start
+// an unbounded number of them. elitea-main also limits the rate per project
+// and user; this bound protects the gateway itself.
+const checkModelMaxConcurrent = 8
+
+// modelProbeSlots holds one token for each model probe that runs now. It is a
+// var so a test can replace it with a smaller channel.
+var modelProbeSlots = make(chan struct{}, checkModelMaxConcurrent)
 
 // defaultAzureCompletionAPIVersion is the Azure OpenAI api-version a model
 // probe uses when the credential names none. It is a GA version that accepts
@@ -93,7 +101,7 @@ const (
 const defaultAzureCompletionAPIVersion = "2024-10-21"
 
 // anthropicAPIVersion is the anthropic-version header value the Messages API
-// requires.
+// requires. The vLLM-class probe sends it when use_anthropic_endpoints is set.
 const anthropicAPIVersion = "2023-06-01"
 
 // checkModelPrompt is the whole user message of a probe.
@@ -140,7 +148,6 @@ func (e *modelProbeError) Error() string {
 // The signature and the body bound are already checked by the caller.
 func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, req checkConnectionRequest) {
 	req.Model = strings.TrimSpace(req.Model)
-	req.APIProtocol = strings.ToLower(strings.TrimSpace(req.APIProtocol))
 	if reason, detail := validateModelProbeRequest(req); reason != "" {
 		writeJSON(w, http.StatusOK, checkConnectionResponse{Success: false, Reason: reason, Detail: detail, Probe: checkModelProbeKind})
 		return
@@ -177,10 +184,31 @@ func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
+	// The slot is taken after every refusal that costs nothing, and before
+	// the dial. A full set of slots is a refusal, not a queue: a queued probe
+	// would still hold this request open.
+	slots := modelProbeSlots
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		h.logger.WarnContext(r.Context(), "check_connection: model probe refused, too many running",
+			"type", req.Type, "limit", cap(slots))
+		writeJSON(w, http.StatusOK, checkConnectionResponse{
+			Success: false, Reason: checkConnectionReasonRateLimited,
+			Detail: "too many model tests are running. Try again in a moment.", Probe: checkModelProbeKind,
+		})
+		return
+	}
+
 	client := newCheckConnectionProbeClientWithTimeout(h.probeAllowsPrivateNetwork(req), checkModelProbeTimeout)
 	ctx, cancel := context.WithTimeout(r.Context(), checkModelProbeTimeout)
 	defer cancel()
 
+	// The probe is a real completion that the budget gate does not see, so
+	// every probe is logged with the signed project and user. That record is
+	// what an audit of the probe spend reads.
+	identity := identityFromHeaders(r.Header)
 	started := time.Now()
 	err = probe.run(ctx, client, req)
 	latency := time.Since(started).Milliseconds()
@@ -188,12 +216,16 @@ func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, r
 		reason, detail := classifyModelProbeError(ctx, err)
 		detail = scrubProviderMessage(detail, modelProbeSecrets(req))
 		h.logger.WarnContext(r.Context(), "check_connection: model probe failed",
-			"type", req.Type, "reason", reason, "latency_ms", latency, "err", err)
+			"type", req.Type, "model", req.Model, "project_id", identity.projectID, "user_id", identity.userID,
+			"reason", reason, "latency_ms", latency, "err", err)
 		writeJSON(w, http.StatusOK, checkConnectionResponse{
 			Success: false, Reason: reason, Detail: detail, Probe: checkModelProbeKind, LatencyMS: latency,
 		})
 		return
 	}
+	h.logger.InfoContext(r.Context(), "check_connection: model probe answered",
+		"type", req.Type, "model", req.Model, "project_id", identity.projectID, "user_id", identity.userID,
+		"latency_ms", latency)
 	writeJSON(w, http.StatusOK, checkConnectionResponse{
 		Success: true, Reason: checkConnectionReasonOK, Probe: checkModelProbeKind, LatencyMS: latency,
 	})
@@ -215,9 +247,15 @@ func (h *Handler) egressAllowsAll(ctx context.Context, credentialType string, ta
 	return true
 }
 
-// validateModelProbeRequest refuses a model name or a protocol that cannot be
-// sent safely. The model name goes into a URL path for four of the types, so a
-// control character or an over-long value is refused before any dial.
+// validateModelProbeRequest refuses a model name that cannot be sent safely.
+// The model name goes into a URL path for four of the types, so a control
+// character or an over-long value is refused before any dial.
+//
+// A name made of dots only is refused too. url.PathEscape keeps "." and "..",
+// so such a name becomes a dot-segment in the Azure, DIAL and Bedrock routes,
+// and an upstream normalises {api_base}/openai/deployments/../chat/completions
+// to a route other than the deployment route. The redeemed key would then go
+// to a path that the egress review did not assume.
 func validateModelProbeRequest(req checkConnectionRequest) (reason, detail string) {
 	if req.Model == "" || utf8.RuneCountInString(req.Model) > checkModelMaxNameLength {
 		return checkConnectionReasonInvalidModel, "the model name is empty or too long"
@@ -227,10 +265,8 @@ func validateModelProbeRequest(req checkConnectionRequest) (reason, detail strin
 			return checkConnectionReasonInvalidModel, "the model name contains a space or a control character"
 		}
 	}
-	switch req.APIProtocol {
-	case "", dialProtocolAzure, dialProtocolOpenAI, dialProtocolAnthropic:
-	default:
-		return checkConnectionReasonInvalidModel, "the API protocol must be azure, openai or anthropic"
+	if strings.Trim(req.Model, ".") == "" {
+		return checkConnectionReasonInvalidModel, "the model name cannot be only dots"
 	}
 	return "", ""
 }
@@ -384,25 +420,88 @@ func providerErrorMessage(body []byte) string {
 
 // --- the probes ---------------------------------------------------------------
 
-// probeOpenAIChatCompletion sends POST {api_base}/chat/completions. OpenAI's
-// own origin gets max_completion_tokens, which its reasoning models require;
-// every other OpenAI-compatible server (vLLM, a self-hosted proxy) gets the
-// max_tokens field that all of them accept.
+// probeOpenAIChatCompletion probes an open_ai or vllm credential on the route
+// the runtime uses for it (account.ProviderForCredential):
+//
+//   - open_ai on OpenAI's own origin: Bifrost's OpenAI provider, which posts to
+//     {origin}/v1/chat/completions. The probe sends max_completion_tokens,
+//     which OpenAI's reasoning models require.
+//   - vllm, and open_ai on any other origin: Bifrost's vLLM provider. The
+//     runtime removes one trailing /v1 from api_base and Bifrost adds /v1 back
+//     (account.bifrostVLLMBaseURL), so an api_base with or without /v1 works.
+//     The probe builds its URL the same way. It sends max_tokens, which every
+//     OpenAI-compatible server accepts.
+//   - a vLLM-class credential with use_anthropic_endpoints: the runtime speaks
+//     the Anthropic dialect to {root}/v1/messages with Bearer auth, so the
+//     probe does too.
+//
+// A reasoning model behind a compatible endpoint can refuse max_tokens, and an
+// older server can refuse max_completion_tokens. Either refusal is a 400 that
+// names the field. The probe then sends the request again, once, with the
+// other field (postCompletionWithTokenField).
 func probeOpenAIChatCompletion(ctx context.Context, client *http.Client, req checkConnectionRequest) error {
-	body := map[string]any{
-		"model":    req.Model,
-		"messages": []map[string]string{{"role": "user", "content": checkModelPrompt}},
-	}
-	if isOpenAIAPIOrigin(req.APIBase) {
-		body["max_completion_tokens"] = 1
-	} else {
-		body["max_tokens"] = 1
-	}
 	headers := map[string]string{}
 	if req.APIKey != "" {
 		headers["Authorization"] = "Bearer " + req.APIKey
 	}
-	return modelProbePOST(ctx, client, checkConnectionJoinURL(req.APIBase, "/chat/completions"), headers, body, "choices")
+	messages := []map[string]string{{"role": "user", "content": checkModelPrompt}}
+	root := openAICompatibleRootURL(req.APIBase)
+	if req.Type != "vllm" && isOpenAIAPIOrigin(req.APIBase) {
+		body := map[string]any{"model": req.Model, "messages": messages}
+		return postCompletionWithTokenField(ctx, client, root+"/v1/chat/completions",
+			headers, body, "max_completion_tokens", "max_tokens", "choices")
+	}
+	if req.UseAnthropicEndpoints {
+		headers["anthropic-version"] = anthropicAPIVersion
+		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
+		return modelProbePOST(ctx, client, root+"/v1/messages", headers, body, "content")
+	}
+	body := map[string]any{"model": req.Model, "messages": messages}
+	return postCompletionWithTokenField(ctx, client, root+"/v1/chat/completions",
+		headers, body, "max_tokens", "max_completion_tokens", "choices")
+}
+
+// openAICompatibleRootURL is account.bifrostVLLMBaseURL: api_base without
+// trailing slashes and without one trailing /v1. The runtime hands this root
+// to Bifrost, and Bifrost adds /v1 for every operation.
+func openAICompatibleRootURL(apiBase string) string {
+	base := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	if strings.HasSuffix(strings.ToLower(base), "/v1") {
+		return base[:len(base)-len("/v1")]
+	}
+	return base
+}
+
+// postCompletionWithTokenField sends a completion with a one-token budget in
+// the field named first. When the provider refuses that field with a 400 that
+// names it, the request is sent once more with the field named second.
+//
+// OpenAI's reasoning models answer max_tokens with "Unsupported parameter:
+// 'max_tokens' is not supported with this model. Use 'max_completion_tokens'
+// instead." Older OpenAI-compatible servers refuse max_completion_tokens in
+// the same way. Neither answer says anything about the model or the route, so
+// neither is a verdict.
+func postCompletionWithTokenField(
+	ctx context.Context, client *http.Client, rawURL string, headers map[string]string,
+	body map[string]any, first, second, expectKey string,
+) error {
+	body[first] = 1
+	err := modelProbePOST(ctx, client, rawURL, headers, body, expectKey)
+	if !refusesTokenField(err, first) {
+		return err
+	}
+	delete(body, first)
+	body[second] = 1
+	return modelProbePOST(ctx, client, rawURL, headers, body, expectKey)
+}
+
+// refusesTokenField reports whether err is a 400 whose message names field.
+func refusesTokenField(err error, field string) bool {
+	var me *modelProbeError
+	if !errors.As(err, &me) || me.notCompletion || me.status != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(strings.ToLower(me.message), field)
 }
 
 // probeAzureChatCompletion sends POST
@@ -415,45 +514,31 @@ func probeAzureChatCompletion(ctx context.Context, client *http.Client, req chec
 	body := map[string]any{
 		"messages": []map[string]string{{"role": "user", "content": checkModelPrompt}},
 	}
+	first, second := "max_tokens", "max_completion_tokens"
 	if azureAcceptsMaxCompletionTokens(apiVersion) {
-		body["max_completion_tokens"] = 1
-	} else {
-		body["max_tokens"] = 1
+		first, second = second, first
 	}
-	return modelProbePOST(ctx, client, azureDeploymentCompletionURL(req.APIBase, req.Model, apiVersion),
-		apiKeyHeader(req.APIKey), body, "choices")
+	return postCompletionWithTokenField(ctx, client, azureDeploymentCompletionURL(req.APIBase, req.Model, apiVersion),
+		apiKeyHeader(req.APIKey), body, first, second, "choices")
 }
 
-// probeDialCompletion routes a DIAL model probe by the model's API protocol.
-//
-//   - azure (and unset): DIAL's Azure-compatible deployment route. It sends
-//     max_tokens, because DIAL forwards the request to adapters that predate
-//     max_completion_tokens.
-//   - openai: the OpenAI-compatible route under {api_base}/openai.
-//   - anthropic: the Messages API under {api_base}.
-//
-// DIAL authenticates every route with the api-key header.
+// probeDialCompletion sends a DIAL model probe to DIAL's Azure-compatible
+// deployment route. That is the route the runtime dispatches every ai_dial
+// credential on (account/credentials.go maps ai_dial to Bifrost's Azure
+// provider). The llm_model has no API protocol field yet, so the probe has no
+// other route to choose. The per-model DIAL protocol must add its routes to
+// the runtime and to this probe together. The probe sends max_tokens, because
+// DIAL forwards the request to adapters that predate max_completion_tokens,
+// and it falls back to max_completion_tokens when a model refuses max_tokens.
+// DIAL authenticates with the api-key header.
 func probeDialCompletion(ctx context.Context, client *http.Client, req checkConnectionRequest) error {
-	messages := []map[string]string{{"role": "user", "content": checkModelPrompt}}
-	switch req.APIProtocol {
-	case dialProtocolOpenAI:
-		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
-		return modelProbePOST(ctx, client, checkConnectionJoinURL(req.APIBase, "/openai/v1/chat/completions"),
-			apiKeyHeader(req.APIKey), body, "choices")
-	case dialProtocolAnthropic:
-		body := map[string]any{"model": req.Model, "messages": messages, "max_tokens": 1}
-		headers := apiKeyHeader(req.APIKey)
-		headers["anthropic-version"] = anthropicAPIVersion
-		return modelProbePOST(ctx, client, checkConnectionJoinURL(req.APIBase, "/v1/messages"), headers, body, "content")
-	default:
-		apiVersion := strings.TrimSpace(req.APIVersion)
-		if apiVersion == "" {
-			apiVersion = defaultAzureAPIVersion
-		}
-		body := map[string]any{"messages": messages, "max_tokens": 1}
-		return modelProbePOST(ctx, client, azureDeploymentCompletionURL(req.APIBase, req.Model, apiVersion),
-			apiKeyHeader(req.APIKey), body, "choices")
+	apiVersion := strings.TrimSpace(req.APIVersion)
+	if apiVersion == "" {
+		apiVersion = defaultAzureAPIVersion
 	}
+	body := map[string]any{"messages": []map[string]string{{"role": "user", "content": checkModelPrompt}}}
+	return postCompletionWithTokenField(ctx, client, azureDeploymentCompletionURL(req.APIBase, req.Model, apiVersion),
+		apiKeyHeader(req.APIKey), body, "max_tokens", "max_completion_tokens", "choices")
 }
 
 // probeOllamaChat sends Ollama's native POST {api_base}/api/chat with a

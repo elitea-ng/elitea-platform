@@ -213,7 +213,10 @@ func TestCheckModelConnection_RefusesBadInputBeforeAnyDial(t *testing.T) {
 	for _, req := range []checkConnectionRequest{
 		{Type: "vllm", APIBase: fp.URL, Model: "two words"},
 		{Type: "vllm", APIBase: fp.URL, Model: strings.Repeat("m", checkModelMaxNameLength+1)},
-		{Type: "ai_dial", APIBase: fp.URL, Model: "m", APIProtocol: "gopher"},
+		// A dots-only name is a dot-segment in the deployment routes.
+		{Type: "ai_dial", APIBase: fp.URL, Model: ".."},
+		{Type: "azure_open_ai", APIBase: fp.URL, Model: "."},
+		{Type: "amazon_bedrock", AWSRegionName: "us-east-1", Model: "..."},
 	} {
 		rec := doCheckConnection(t, privateModelHandler(), req)
 		resp := decodeCheckConnectionResponse(t, rec)
@@ -285,53 +288,260 @@ func TestProbeAzureChatCompletion_OldVersionUsesMaxTokens(t *testing.T) {
 	}
 }
 
-func TestProbeDialCompletion_RoutesByProtocol(t *testing.T) {
-	cases := []struct {
-		protocol string
-		body     string
-		path     string
-		header   string
-	}{
-		{"", openAICompletionBody, "/openai/deployments/m/chat/completions", ""},
-		{dialProtocolAzure, openAICompletionBody, "/openai/deployments/m/chat/completions", ""},
-		{dialProtocolOpenAI, openAICompletionBody, "/openai/v1/chat/completions", ""},
-		{dialProtocolAnthropic, `{"type":"message","content":[]}`, "/v1/messages", anthropicAPIVersion},
-	}
-	for _, tc := range cases {
-		t.Run("protocol="+tc.protocol, func(t *testing.T) {
-			fp := newFakeModelProvider(http.StatusOK, tc.body)
-			defer fp.Close()
-			err := probeDialCompletion(context.Background(), fp.Client(), checkConnectionRequest{
-				APIBase: fp.URL, APIKey: "dial-key", Model: "m", APIProtocol: tc.protocol,
-			})
-			if err != nil {
-				t.Fatalf("probe: %v", err)
-			}
-			path, _, headers, _ := fp.last()
-			if path != tc.path {
-				t.Fatalf("path = %q, want %q", path, tc.path)
-			}
-			if headers.Get("api-key") != "dial-key" {
-				t.Fatal("DIAL authenticates with the api-key header")
-			}
-			if headers.Get("anthropic-version") != tc.header {
-				t.Fatalf("anthropic-version = %q, want %q", headers.Get("anthropic-version"), tc.header)
-			}
-		})
-	}
-}
-
-func TestProbeDialCompletion_WrongProtocolAnswerIsAFailure(t *testing.T) {
-	// The Anthropic route answering with an OpenAI completion is the shape of
-	// a wrong protocol choice: the answer is JSON, but not a Messages answer.
+func TestProbeDialCompletion_UsesTheRuntimeAzureRoute(t *testing.T) {
+	// The runtime sends every ai_dial credential to Bifrost's Azure provider,
+	// so the probe uses DIAL's Azure-compatible deployment route and nothing
+	// else.
 	fp := newFakeModelProvider(http.StatusOK, openAICompletionBody)
 	defer fp.Close()
 	err := probeDialCompletion(context.Background(), fp.Client(), checkConnectionRequest{
-		APIBase: fp.URL, APIKey: "k", Model: "m", APIProtocol: dialProtocolAnthropic,
+		APIBase: fp.URL, APIKey: "dial-key", Model: "m",
+	})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	path, query, headers, request := fp.last()
+	if path != "/openai/deployments/m/chat/completions" || query != "api-version="+defaultAzureAPIVersion {
+		t.Fatalf("route = %q?%q, want the deployment route", path, query)
+	}
+	if headers.Get("api-key") != "dial-key" || headers.Get("anthropic-version") != "" {
+		t.Fatalf("headers = %v, want the api-key header only", headers)
+	}
+	if request["max_tokens"] != float64(1) {
+		t.Fatalf("request = %v, want max_tokens", request)
+	}
+}
+
+func TestProbeOpenAIChatCompletion_UsesTheRuntimeRoute(t *testing.T) {
+	// The runtime removes one trailing /v1 and Bifrost adds /v1 back, so an
+	// api_base with or without /v1 reaches /v1/chat/completions.
+	for _, suffix := range []string{"", "/", "/v1", "/v1/", "/V1"} {
+		for _, credentialType := range []string{"vllm", "open_ai"} {
+			t.Run(credentialType+" api_base"+suffix, func(t *testing.T) {
+				fp := newFakeModelProvider(http.StatusOK, openAICompletionBody)
+				defer fp.Close()
+				err := probeOpenAIChatCompletion(context.Background(), fp.Client(), checkConnectionRequest{
+					Type: credentialType, APIBase: fp.URL + suffix, APIKey: "k", Model: "m",
+				})
+				if err != nil {
+					t.Fatalf("probe: %v", err)
+				}
+				if path, _, _, _ := fp.last(); path != "/v1/chat/completions" {
+					t.Fatalf("path = %q, want /v1/chat/completions", path)
+				}
+			})
+		}
+	}
+}
+
+func TestCheckModelConnection_APIBaseWithoutV1IsNotModelNotFound(t *testing.T) {
+	// A server that serves /v1/chat/completions only. Before the probe used
+	// the runtime route, it posted {api_base}/chat/completions, got a 404 and
+	// reported "Model not found" for a model that serves chat.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(openAICompletionBody))
+	}))
+	defer server.Close()
+	rec := doCheckConnection(t, privateModelHandler(), checkConnectionRequest{
+		Type: "vllm", APIBase: server.URL, Model: "m",
+	})
+	if resp := decodeCheckConnectionResponse(t, rec); !resp.Success {
+		t.Fatalf("got %+v, want success on the runtime route", resp)
+	}
+}
+
+func TestProbeOpenAIChatCompletion_AnthropicEndpoints(t *testing.T) {
+	fp := newFakeModelProvider(http.StatusOK, `{"type":"message","content":[]}`)
+	defer fp.Close()
+	err := probeOpenAIChatCompletion(context.Background(), fp.Client(), checkConnectionRequest{
+		Type: "vllm", APIBase: fp.URL + "/v1", APIKey: "k", Model: "claude-local", UseAnthropicEndpoints: true,
+	})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	path, _, headers, request := fp.last()
+	if path != "/v1/messages" {
+		t.Fatalf("path = %q, want /v1/messages", path)
+	}
+	if headers.Get("Authorization") != "Bearer k" || headers.Get("anthropic-version") != anthropicAPIVersion {
+		t.Fatalf("headers = %v, want Bearer auth and the anthropic-version header", headers)
+	}
+	if request["max_tokens"] != float64(1) || request["model"] != "claude-local" {
+		t.Fatalf("request = %v", request)
+	}
+}
+
+func TestProbeOpenAIChatCompletion_AnthropicEndpointsWrongDialectIsAFailure(t *testing.T) {
+	// An upstream that answers /v1/messages with an OpenAI completion does not
+	// serve the Anthropic dialect the runtime will speak to it.
+	fp := newFakeModelProvider(http.StatusOK, openAICompletionBody)
+	defer fp.Close()
+	err := probeOpenAIChatCompletion(context.Background(), fp.Client(), checkConnectionRequest{
+		Type: "vllm", APIBase: fp.URL, APIKey: "k", Model: "m", UseAnthropicEndpoints: true,
 	})
 	reason, _ := classifyModelProbeError(context.Background(), err)
 	if reason != checkConnectionReasonProtocol {
 		t.Fatalf("reason = %q, want protocol_error", reason)
+	}
+}
+
+func TestOpenAICompatibleRootURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://api.openai.com/v1/": "https://api.openai.com",
+		"http://host:8000":           "http://host:8000",
+		"http://host:8000/v1":        "http://host:8000",
+		" http://host:8000/x/v1 ":    "http://host:8000/x",
+		"http://host:8000/v1/v1":     "http://host:8000/v1",
+	} {
+		if got := openAICompatibleRootURL(in); got != want {
+			t.Errorf("openAICompatibleRootURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// tokenFieldProvider refuses one token-budget field with OpenAI's
+// "Unsupported parameter" 400, and answers a completion otherwise.
+func tokenFieldProvider(refused string) (*httptest.Server, *[]map[string]any, *sync.Mutex) {
+	var mu sync.Mutex
+	var seen []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		mu.Lock()
+		seen = append(seen, request)
+		mu.Unlock()
+		if _, sent := request[refused]; sent {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: '` + refused +
+				`' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"` +
+				refused + `","code":"unsupported_parameter"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(openAICompletionBody))
+	}))
+	return server, &seen, &mu
+}
+
+func TestCheckModelConnection_ReasoningModelRefusingMaxTokensIsRetried(t *testing.T) {
+	// An o-series or gpt-5 model behind an OpenAI-compatible endpoint that is
+	// not api.openai.com. The first request carries max_tokens and is refused;
+	// the retry carries max_completion_tokens and is answered.
+	server, seen, mu := tokenFieldProvider("max_tokens")
+	defer server.Close()
+
+	rec := doCheckConnection(t, privateModelHandler(), checkConnectionRequest{
+		Type: "open_ai", APIBase: server.URL + "/openai/v1", APIKey: "k", Model: "o4-mini",
+	})
+	resp := decodeCheckConnectionResponse(t, rec)
+	if !resp.Success {
+		t.Fatalf("got %+v, want success after the retry", resp)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*seen) != 2 {
+		t.Fatalf("requests = %d, want 2", len(*seen))
+	}
+	if _, ok := (*seen)[1]["max_tokens"]; ok || (*seen)[1]["max_completion_tokens"] != float64(1) {
+		t.Fatalf("retry = %v, want max_completion_tokens only", (*seen)[1])
+	}
+}
+
+func TestCheckModelConnection_UnsupportedTokenFieldIsNotAProtocolError(t *testing.T) {
+	// Before the retry, OpenAI's "Unsupported parameter: 'max_tokens'" 400
+	// was classified as protocol_error: "Wrong API protocol or route" for a
+	// model and a route that are correct.
+	err := &modelProbeError{status: http.StatusBadRequest,
+		message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}
+	if !refusesTokenField(err, "max_tokens") {
+		t.Fatal("the OpenAI refusal of max_tokens is not recognised")
+	}
+	if refusesTokenField(&modelProbeError{status: http.StatusBadRequest, message: "Invalid model name"}, "max_tokens") {
+		t.Fatal("a message that names no token field must not trigger the retry")
+	}
+	if refusesTokenField(&modelProbeError{status: http.StatusNotFound, message: "max_tokens"}, "max_tokens") {
+		t.Fatal("only a 400 triggers the retry")
+	}
+}
+
+func TestCheckModelConnection_RetryHappensOnce(t *testing.T) {
+	// A server that refuses BOTH fields gets two requests, not a loop, and
+	// the second refusal is the verdict.
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: max_tokens and max_completion_tokens"}}`))
+	}))
+	defer server.Close()
+	rec := doCheckConnection(t, privateModelHandler(), checkConnectionRequest{Type: "vllm", APIBase: server.URL, Model: "m"})
+	if resp := decodeCheckConnectionResponse(t, rec); resp.Success || resp.Reason != checkConnectionReasonProtocol {
+		t.Fatalf("got %+v, want protocol_error", resp)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("requests = %d, want 2", hits.Load())
+	}
+}
+
+func TestCheckModelConnection_RedirectIsRefusedAndNotFollowed(t *testing.T) {
+	// The model probe shares the redirect-refusing client. A 302 to another
+	// host must be the verdict, and the second host must never be dialled:
+	// following it would carry the redeemed key to an unvalidated host.
+	other := newFakeModelProvider(http.StatusOK, openAICompletionBody)
+	defer other.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/v1/chat/completions", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	rec := doCheckConnection(t, privateModelHandler(), checkConnectionRequest{
+		Type: "vllm", APIBase: redirector.URL, APIKey: "k", Model: "m",
+	})
+	resp := decodeCheckConnectionResponse(t, rec)
+	if resp.Success || resp.Reason != checkConnectionReasonProtocol {
+		t.Fatalf("got %+v, want protocol_error", resp)
+	}
+	if other.hits.Load() != 0 {
+		t.Fatal("the redirect target was dialled")
+	}
+}
+
+func TestCheckModelConnection_ConcurrencyBound(t *testing.T) {
+	// Every slot is taken: the next probe is refused before any dial.
+	for range cap(modelProbeSlots) {
+		modelProbeSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range cap(modelProbeSlots) {
+			<-modelProbeSlots
+		}
+	})
+	fp := newFakeModelProvider(http.StatusOK, openAICompletionBody)
+	defer fp.Close()
+	rec := doCheckConnection(t, privateModelHandler(), checkConnectionRequest{Type: "vllm", APIBase: fp.URL, Model: "m"})
+	resp := decodeCheckConnectionResponse(t, rec)
+	if resp.Success || resp.Reason != checkConnectionReasonRateLimited || resp.Probe != checkModelProbeKind {
+		t.Fatalf("got %+v, want rate_limited from the model probe", resp)
+	}
+	if fp.hits.Load() != 0 {
+		t.Fatal("a refused probe reached the provider")
+	}
+}
+
+func TestCheckModelConnection_SlotIsReleased(t *testing.T) {
+	fp := newFakeModelProvider(http.StatusOK, openAICompletionBody)
+	defer fp.Close()
+	for range cap(modelProbeSlots) + 2 {
+		rec := doCheckConnection(t, privateModelHandler(), checkConnectionRequest{Type: "vllm", APIBase: fp.URL, Model: "m"})
+		if resp := decodeCheckConnectionResponse(t, rec); !resp.Success {
+			t.Fatalf("got %+v, want every sequential probe to run", resp)
+		}
+	}
+	if len(modelProbeSlots) != 0 {
+		t.Fatalf("slots held = %d after the probes finished", len(modelProbeSlots))
 	}
 }
 
