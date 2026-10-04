@@ -17,6 +17,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -284,6 +285,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 
+	origin := startTriggerOrigin(user)
 	var outcome agentexecutionapp.CurrentApplicationStartOutcome
 	switch contract {
 	case CurrentApplicationStartContract:
@@ -302,6 +304,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				Attachments:      attachments,
 				MentionedUserIDs: mentioned,
 				MentionsEveryone: body.SendingToEveryone,
+				TriggerOrigin:    origin,
 			},
 		)
 	case CurrentAdhocStartContract:
@@ -319,6 +322,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				InteractionUUID: body.InteractionUUID,
 				LLMSettings:     bytes.Clone(body.LLMSettings),
 				Attachments:     attachments,
+				TriggerOrigin:   origin,
 			},
 		)
 	}
@@ -887,4 +891,16 @@ func parseStartAttachments(
 		refs = append(refs, ref)
 	}
 	return refs, true
+}
+
+// startTriggerOrigin is how a start through this route began (shared 0140).
+// The browser composer authenticates with a session; an access token is a
+// programmatic client (the SDK, a script, a PAT caller). Both are a person
+// acting, so the analytics active-user reads count both. The origin only
+// tells them apart on the execution row and in /analytics_execution.
+func startTriggerOrigin(user auth.User) executiondomain.TriggerOrigin {
+	if user.TokenID != "" || strings.EqualFold(user.AuthType, "token") {
+		return executiondomain.TriggerOriginAPI
+	}
+	return executiondomain.TriggerOriginManual
 }

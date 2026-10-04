@@ -14,6 +14,7 @@ import (
 	conversationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	agentapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/google/uuid"
 )
 
@@ -95,9 +96,9 @@ func (e *internalChatSendRuntime) execute(ctx context.Context, projectID, actorI
 	}
 	var outcome agentapp.CurrentApplicationStartOutcome
 	if target.application {
-		outcome, err = e.start.StartCurrentApplication(ctx, agentapp.CurrentApplicationStartRequest{ProjectID: projectID, ActorUserID: actorID, ConversationUUID: input.ConversationUUID, TargetParticipantID: target.participantID, QuestionID: input.QuestionID, UserInput: input.UserInput})
+		outcome, err = e.start.StartCurrentApplication(ctx, agentapp.CurrentApplicationStartRequest{ProjectID: projectID, ActorUserID: actorID, ConversationUUID: input.ConversationUUID, TargetParticipantID: target.participantID, QuestionID: input.QuestionID, UserInput: input.UserInput, TriggerOrigin: executiondomain.TriggerOriginAPI})
 	} else {
-		outcome, err = e.start.StartCurrentAdhoc(ctx, agentapp.CurrentAdhocStartRequest{ProjectID: projectID, ActorUserID: actorID, ConversationUUID: input.ConversationUUID, TargetParticipantID: target.participantID, QuestionID: input.QuestionID, UserInput: input.UserInput, LLMSettings: target.llmSettings})
+		outcome, err = e.start.StartCurrentAdhoc(ctx, agentapp.CurrentAdhocStartRequest{ProjectID: projectID, ActorUserID: actorID, ConversationUUID: input.ConversationUUID, TargetParticipantID: target.participantID, QuestionID: input.QuestionID, UserInput: input.UserInput, LLMSettings: target.llmSettings, TriggerOrigin: executiondomain.TriggerOriginAPI})
 	}
 	if err != nil {
 		return internalNotificationBadRequest("chat admission was not confirmed; check the conversation before retrying with the same question_id")

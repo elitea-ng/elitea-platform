@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -67,5 +69,41 @@ func TestCurrentApplicationStartRejectsAnUnknownTriggerOrigin(t *testing.T) {
 	request.TriggerOrigin = "cron"
 	if !errors.Is(request.Validate(), ErrInvalidCurrentAgentStart) {
 		t.Fatal("an unknown trigger origin passed Validate")
+	}
+}
+
+// An ad-hoc start carries its origin to the admission like an application
+// start does, and refuses an unknown one.
+func TestCurrentAdhocStartCarriesTheTriggerOrigin(t *testing.T) {
+	request := validCurrentAdhocStartRequest()
+	request.TriggerOrigin = "cron"
+	if !errors.Is(request.Validate(), ErrInvalidCurrentAgentStart) {
+		t.Fatal("an unknown trigger origin passed Validate")
+	}
+
+	resolver := &currentApplicationResolverStub{adhocTarget: CurrentAdhocTarget{
+		TargetParticipantID: 21,
+		LLMSettings:         []byte(`{"model_name":"saved","model_project_id":7,"max_tokens":1024}`),
+		Instructions:        "Project chat instructions",
+		Tools:               []byte(`[]`),
+		ChatHistory:         []byte(`[]`),
+		ConversationMeta:    []byte(`{"persona":"qa","steps_limit":12,"internal_tools":[]}`),
+	}}
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-adhoc", CommandID: "command-adhoc", Created: true,
+		AdmittedAt: time.Unix(1, 0), Deadline: time.Unix(61, 0),
+	}}
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver, resolver,
+		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = validCurrentAdhocStartRequest()
+	request.TriggerOrigin = executiondomain.TriggerOriginAPI
+	if _, err := service.StartCurrentAdhoc(context.Background(), request); err != nil {
+		t.Fatalf("StartCurrentAdhoc() error = %v", err)
+	}
+	if len(admissions.requests) != 1 || admissions.requests[0].TriggerOrigin != executiondomain.TriggerOriginAPI {
+		t.Fatalf("admission origin = %+v, want api", admissions.requests)
 	}
 }
