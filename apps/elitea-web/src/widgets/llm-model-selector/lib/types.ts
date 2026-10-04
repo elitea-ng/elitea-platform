@@ -17,7 +17,6 @@ export interface LLMSettingsValues {
   max_tokens?: number | string;
   reasoning_effort?: string;
   steps_limit?: number;
-  webhook_secret?: string;
 }
 
 export interface LLMModelSelectorProps {
@@ -28,7 +27,6 @@ export interface LLMModelSelectorProps {
   onClickSettings?: () => void;
   llmSettings?: LLMSettingsValues;
   onSetLLMSettings?: (settings: LLMSettingsValues) => void;
-  showWebhookSecret?: boolean;
   showStepsLimit?: boolean;
   showSettingsEntry?: boolean;
   modelTooltip?: string;

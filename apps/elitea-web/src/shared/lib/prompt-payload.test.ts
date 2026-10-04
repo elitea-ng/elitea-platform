@@ -9,8 +9,10 @@ describe('PROMPT_PAYLOAD_KEY', () => {
     expect(PROMPT_PAYLOAD_KEY.maxTokens).toBe('max_tokens');
     expect(PROMPT_PAYLOAD_KEY.reasoningEffort).toBe('reasoning_effort');
     expect(PROMPT_PAYLOAD_KEY.welcomeMessage).toBe('welcome_message');
-    expect(PROMPT_PAYLOAD_KEY.webhookSecret).toBe('webhook_secret');
-    expect(Object.keys(PROMPT_PAYLOAD_KEY)).toHaveLength(25);
+    // 24: `webhookSecret` is gone. The agent webhook is the inbound trigger
+    // (legacy issue 6656), not a model setting.
+    expect(PROMPT_PAYLOAD_KEY).not.toHaveProperty('webhookSecret');
+    expect(Object.keys(PROMPT_PAYLOAD_KEY)).toHaveLength(24);
   });
 });
 

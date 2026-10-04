@@ -17,7 +17,6 @@ type NormalizedLLMModelSelectorProps = {
   models: LLMModel[];
   disabled: boolean;
   llmSettings: LLMSettingsValues;
-  showWebhookSecret: boolean;
   showStepsLimit: boolean;
   showSettingsEntry: boolean;
   modelTooltip: string;
@@ -30,7 +29,6 @@ function resolveDefaultProps(props: LLMModelSelectorProps): NormalizedLLMModelSe
     models: props.models ?? [],
     disabled: props.disabled ?? false,
     llmSettings: props.llmSettings ?? {},
-    showWebhookSecret: props.showWebhookSecret ?? false,
     showStepsLimit: props.showStepsLimit ?? false,
     showSettingsEntry: props.showSettingsEntry ?? true,
     modelTooltip: props.modelTooltip ?? t('widgets.llmModelSelector.selector.modelTooltip', 'Select LLM Model'),
@@ -74,7 +72,6 @@ const LLMModelSelector = memo(
       models,
       disabled,
       llmSettings,
-      showWebhookSecret,
       showStepsLimit,
       showSettingsEntry,
       modelTooltip,
@@ -206,7 +203,6 @@ const LLMModelSelector = memo(
             onCancel={handleCancelSettings}
             selectedModel={selectedModel ?? null}
             llmSettings={llmSettings as Record<string, unknown>}
-            showWebhookSecret={showWebhookSecret}
             showStepsLimit={showStepsLimit}
             onResetToDefaults={onResetToDefaults}
           />

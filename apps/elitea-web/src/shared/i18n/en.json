@@ -2783,7 +2783,6 @@
   "widgets.llmModelSelector.capabilityChip.visionLabel": "Vision",
   "widgets.llmModelSelector.capabilityChip.visionTooltip": "Model supports image input",
   "widgets.llmModelSelector.creativitySlider.label": "Temperature",
-  "widgets.llmModelSelector.llmSettings.webhookSecretLabel": "Webhook secret",
   "widgets.llmModelSelector.llmSettingsDialog.applyLabel": "Apply",
   "widgets.llmModelSelector.llmSettingsDialog.cancelLabel": "Cancel",
   "widgets.llmModelSelector.llmSettingsDialog.resetToDefaultsLabel": "Reset to defaults",

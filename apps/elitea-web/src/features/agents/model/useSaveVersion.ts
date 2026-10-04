@@ -63,9 +63,11 @@ import { useApplicationsStore } from './applicationsStore';
  *   `entities/application-form/model/mutations.ts`'s
  *   `useSaveApplicationVersion` still discloses the old gap for its own
  *   narrower call — that file is outside this change's scope.
- * - `webhook_secret` has no field on `ApplicationUpdateRequest` — same gap
- *   `entities/application-form/model/mutations.ts`'s `useCreateApplicationDraft`
- *   discloses for CREATE; confirmed here it is equally absent on UPDATE.
+ * - `webhook_secret` has no field on `ApplicationUpdateRequest`, and it is
+ *   not sent. It is not a gap any more: legacy issue 6656 moved the agent's
+ *   webhook to the inbound trigger, which the editor's Triggers section
+ *   (`pages/agents/ui/EditApplicationTriggersPanel.tsx`) creates and rotates
+ *   on its own routes. The server mints that credential; no save carries it.
  * - `pipeline_settings` DOES have a write field now (`VersionWriteRequest`,
  *   added for #135) but is still not sent from this agents-domain hook: it
  *   has no live flow-editor state to read. The pipelines domain's own save
