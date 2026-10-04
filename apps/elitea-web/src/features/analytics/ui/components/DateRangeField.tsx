@@ -1,10 +1,11 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
+import type { DateTimeValidationError } from '@mui/x-date-pickers/models';
 
 import { t } from '@/shared/i18n';
 import { ArrowLeftIcon } from '@/shared/ui/icons/arrow-left-icon';
@@ -49,6 +50,19 @@ import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
  * each `DateRangeField`. Until that lands, this component intentionally
  * hides the Clear button instead of repeating the original silently-broken
  * affordance.
+ *
+ * ## An invalid value is never propagated (#6738)
+ *
+ * `minDateTime`/`maxDateTime` only constrain the calendar popup. A value TYPED
+ * into the field is validated but was still handed to `onChange`, so From could
+ * be set later than To and the screen queried a backwards window. MUI reports
+ * the outcome as `context.validationError`; a non-null error now keeps the
+ * last valid value and shows why under the field instead.
+ *
+ * ## Minimum width (#6818)
+ *
+ * The field sized itself to its content, so a From of `00:00` could render as
+ * `00:…`. The input now reserves room for a full `dd/MM/yyyy HH:mm`.
  */
 export interface DateRangeFieldProps {
   readonly label: string;
@@ -78,6 +92,32 @@ const fieldSx = (theme: Theme, active: boolean) => ({
   boxSizing: 'border-box' as const,
 });
 
+const rootSx = { position: 'relative' as const };
+
+/** Enough for `dd/MM/yyyy HH:mm` plus the calendar button at the field's font size. */
+const textFieldSx = { minWidth: '10.5rem' };
+
+const errorSx = (theme: Theme) => ({
+  position: 'absolute' as const,
+  top: '100%',
+  left: theme.spacing(1.5),
+  marginTop: theme.spacing(0.25),
+  color: theme.vars.palette.error.main,
+  fontSize: theme.typography.labelSmall.fontSize,
+  whiteSpace: 'nowrap' as const,
+});
+
+/** The message for a validation error, or `null` when the value is usable. */
+const BOUND_ERRORS: ReadonlySet<DateTimeValidationError> = new Set(['minDate', 'minTime', 'maxDate', 'maxTime']);
+
+function dateRangeFieldErrorMessage(error: DateTimeValidationError): string | null {
+  if (error === null) return null;
+  // The only bounds this field is given are the OTHER field's value, so a
+  // bound error always means From would be later than To.
+  if (BOUND_ERRORS.has(error)) return t('analytics.dateRange.fromAfterTo', 'From must not be later than To.');
+  return t('analytics.dateRange.invalid', 'Enter a valid date and time.');
+}
+
 const labelSx = (theme: Theme) => ({
   color: theme.vars.palette.text.default,
   fontSize: theme.typography.labelSmall.fontSize,
@@ -97,41 +137,69 @@ function DateRangeFieldImpl({
   maxDateTime,
   onClear,
 }: DateRangeFieldProps): ReactNode {
+  // Two sources of error. `onError` reports the CURRENT value against the
+  // bounds (an already-backwards pair). A rejected edit never becomes the
+  // value — the controlled field snaps back — so it is remembered here,
+  // tagged with the value it was rejected against: once the value changes
+  // (another edit, a preset) the stale message goes with it.
+  const [validationError, setValidationError] = useState<DateTimeValidationError>(null);
+  const [rejected, setRejected] = useState<{ error: DateTimeValidationError; against: number } | null>(null);
+  const rejectedError = rejected !== null && rejected.against === value.getTime() ? rejected.error : null;
+  const errorMessage = dateRangeFieldErrorMessage(rejectedError ?? validationError);
   return (
     // The testid is what the @visual suite masks. The value is a wall-clock
-    // range derived from `Date.now()` (`Last 24h` → now-24h .. now), so the
-    // rendered text changes on every single run; it is volatile in exactly the
+    // range derived from `Date.now()` (`Today` → today 00:00 .. 23:59), so the
+    // rendered text changes from day to day; it is volatile in exactly the
     // sense `volatileRegions()` exists for, and masking it is what lets the
     // rest of this screen be asserted at all (issue #159).
-    <Box sx={(theme: Theme) => fieldSx(theme, open)} data-testid="analytics-date-range">
-      <Typography sx={labelSx}>{label}</Typography>
-      <DateTimePicker
-        value={value}
-        onChange={(next) => {
-          if (next === null) {
-            onClear?.();
-            return;
-          }
-          onChange(next);
-        }}
-        open={open}
-        onOpen={onOpen}
-        onClose={onClose}
-        {...(minDateTime !== undefined ? { minDateTime } : {})}
-        {...(maxDateTime !== undefined ? { maxDateTime } : {})}
-        ampm={false}
-        format="dd/MM/yyyy HH:mm"
-        localeText={{ okButtonLabel: t('analytics.dateRange.apply', 'Apply') }}
-        slots={{
-          openPickerIcon: CalendarIcon,
-          leftArrowIcon: ArrowLeftIcon,
-          rightArrowIcon: ArrowRightIcon,
-        }}
-        slotProps={{
-          textField: { size: 'small', variant: 'standard' },
-          actionBar: { actions: onClear !== undefined ? ['clear', 'accept'] : ['accept'] },
-        }}
-      />
+    <Box sx={rootSx}>
+      <Box sx={(theme: Theme) => fieldSx(theme, open)} data-testid="analytics-date-range">
+        <Typography sx={labelSx}>{label}</Typography>
+        <DateTimePicker
+          value={value}
+          onChange={(next, context) => {
+            if (next === null) {
+              onClear?.();
+              return;
+            }
+            // #6738: keep the last valid value rather than query a backwards
+            // or half-typed window, and say why.
+            if (context.validationError !== null) {
+              setRejected({ error: context.validationError, against: value.getTime() });
+              return;
+            }
+            setRejected(null);
+            onChange(next);
+          }}
+          onError={setValidationError}
+          open={open}
+          onOpen={onOpen}
+          onClose={onClose}
+          {...(minDateTime !== undefined ? { minDateTime } : {})}
+          {...(maxDateTime !== undefined ? { maxDateTime } : {})}
+          ampm={false}
+          format="dd/MM/yyyy HH:mm"
+          localeText={{ okButtonLabel: t('analytics.dateRange.apply', 'Apply') }}
+          slots={{
+            openPickerIcon: CalendarIcon,
+            leftArrowIcon: ArrowLeftIcon,
+            rightArrowIcon: ArrowRightIcon,
+          }}
+          slotProps={{
+            textField: {
+              size: 'small',
+              variant: 'standard',
+              sx: textFieldSx,
+            },
+            actionBar: { actions: onClear !== undefined ? ['clear', 'accept'] : ['accept'] },
+          }}
+        />
+      </Box>
+      {errorMessage !== null ? (
+        <Typography sx={errorSx} role="alert" data-testid="analytics-date-range-error">
+          {errorMessage}
+        </Typography>
+      ) : null}
     </Box>
   );
 }
