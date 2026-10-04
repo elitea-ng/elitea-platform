@@ -10,6 +10,10 @@
  * characters visible. When the row is too narrow for the name and the tags,
  * the tags wrap to a new line below the name instead of squeezing it. Each
  * tag has a tooltip that says what it means, shown after a two-second hover.
+ *
+ * The scale range and the polarity are tags too. The row used to print them
+ * on a secondary line, and they are what tells an author scanning the library
+ * whether a target of 0.8 is high or low, and whether a higher score is good.
  */
 import type { ReactNode } from 'react';
 
@@ -24,7 +28,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { TypographyWithConditionalTooltip } from '@/shared/ui/TypographyWithConditionalTooltip';
 
-import { EVAL_ENGINE, EVAL_TIER, type EvalDimension, type EvalEngine } from '../model/types';
+import { EVAL_ENGINE, EVAL_POLARITY, EVAL_TIER, type EvalDimension, type EvalEngine } from '../model/types';
 
 /** The tag tooltips wait this long, so a pointer that crosses the row does not open them. */
 const DIMENSION_TAG_TOOLTIP_DELAY_MS = 2000;
@@ -112,6 +116,23 @@ function DimensionTags({ dimension }: { readonly dimension: EvalDimension }): Re
           testId={`evaluation-dimension-tag-engine-${engine}-${dimension.id}`}
         />
       ))}
+      <DimensionTag
+        label={t('features.agentEvaluation.tags.scale', 'Scale {{min}}–{{max}}', {
+          min: String(dimension.scale_min),
+          max: String(dimension.scale_max),
+        })}
+        tooltip={t('features.agentEvaluation.tags.scaleTooltip', 'The range a score falls in.')}
+        testId={`evaluation-dimension-tag-scale-${dimension.id}`}
+      />
+      <DimensionTag
+        label={
+          dimension.polarity === EVAL_POLARITY.lowerBetter
+            ? t('features.agentEvaluation.polarity.lower', 'Lower is better')
+            : t('features.agentEvaluation.polarity.higher', 'Higher is better')
+        }
+        tooltip={t('features.agentEvaluation.field.polarity', 'Polarity')}
+        testId={`evaluation-dimension-tag-polarity-${dimension.id}`}
+      />
       {hasTarget && (
         <DimensionTag
           label={t('features.agentEvaluation.tags.target', 'Target {{operator}} {{value}}', {

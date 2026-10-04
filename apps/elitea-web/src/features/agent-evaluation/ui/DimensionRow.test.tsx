@@ -1,6 +1,7 @@
 /**
  * Legacy issue 6694: the dimension card shows its evaluator, target and
- * importance as tags with delayed tooltips, and ellipsizes a long name.
+ * importance as tags with delayed tooltips, and ellipsizes a long name. The
+ * scale range and polarity stay on the card as tags of their own.
  */
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +56,22 @@ describe('DimensionRow', () => {
     expect(screen.queryByTestId('evaluation-dimension-tag-target-1')).not.toBeInTheDocument();
   });
 
+  // The pre-6694 row printed "engines · min-max · polarity". The tags must not
+  // drop the last two: they decide how the target reads.
+  it('keeps the scale range and the polarity on the card', () => {
+    renderRow(dimension());
+
+    expect(screen.getByTestId('evaluation-dimension-tag-scale-1')).toHaveTextContent('Scale 0–100');
+    expect(screen.getByTestId('evaluation-dimension-tag-polarity-1')).toHaveTextContent('Higher is better');
+  });
+
+  it('says lower is better for an inverse dimension', () => {
+    renderRow(dimension({ polarity: EVAL_POLARITY.lowerBetter, scale_min: 1, scale_max: 5 }));
+
+    expect(screen.getByTestId('evaluation-dimension-tag-scale-1')).toHaveTextContent('Scale 1–5');
+    expect(screen.getByTestId('evaluation-dimension-tag-polarity-1')).toHaveTextContent('Lower is better');
+  });
+
   it('ellipsizes the name on one line', () => {
     renderRow(dimension({ name: 'A very long dimension name that does not fit the card' }));
 
@@ -85,6 +102,17 @@ describe('DimensionRow', () => {
       await vi.advanceTimersByTimeAsync(1600);
     });
     expect(screen.getByRole('tooltip')).toHaveTextContent(text);
+  });
+
+  it('explains the scale tag', async () => {
+    vi.useFakeTimers();
+    renderRow(dimension());
+
+    fireEvent.mouseOver(screen.getByTestId('evaluation-dimension-tag-scale-1'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    expect(screen.getByRole('tooltip')).toHaveTextContent('The range a score falls in.');
   });
 
   it('explains the target and the importance tags', async () => {

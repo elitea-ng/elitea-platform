@@ -3053,6 +3053,8 @@
   "features.agentEvaluation.tags.targetTooltip": "The score or rating that must satisfy the selected success criterion for this dimension to pass.",
   "features.agentEvaluation.tags.importance": "Weight {{weight}}",
   "features.agentEvaluation.tags.importanceTooltip": "Indicates how significant this dimension is when interpreting the overall evaluation result.",
+  "features.agentEvaluation.tags.scale": "Scale {{min}}–{{max}}",
+  "features.agentEvaluation.tags.scaleTooltip": "The range a score falls in.",
   "features.agentEvaluation.datasets.saveFailed": "Failed to save the dataset.",
   "features.agentEvaluation.datasets.nameRequired": "A dataset needs a name.",
   "features.agentEvaluation.datasets.createTitle": "New dataset",
