@@ -126,6 +126,7 @@ export function DimensionEditorDialog(props: DimensionEditorDialogProps): ReactN
             form={form}
             isEdit={isEdit}
             canScopeToAgent={applicationId !== undefined}
+            storedTier={dimension?.tier}
             onFieldChange={setField}
             onToggleEngine={handleToggleEngine}
           />
