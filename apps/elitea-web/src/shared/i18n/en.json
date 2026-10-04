@@ -4565,5 +4565,12 @@
   "credentials.form.test.missingFields": "Set {{fields}} to test the connection",
   "credentials.form.test.modelName": "Model name",
   "pages.admin.platformModels.field.description": "Description",
-  "pages.admin.platformModels.field.descriptionHelp": "A few words on what the model is best for, shown under its name when people pick a model, for example Fast for everyday tasks."
+  "pages.admin.platformModels.field.descriptionHelp": "A few words on what the model is best for, shown under its name when people pick a model, for example Fast for everyday tasks.",
+  "pages.admin.platformDefault.clear": "Clear",
+  "pages.admin.platformDefault.deleteImpactPlatform": "It is the platform default, and {{count}} projects chose it as their own. They fall back to the first available model until you choose a new default.",
+  "pages.admin.platformDefault.deleteImpactProjects": "{{count}} projects chose it as their default. They fall back to the platform default.",
+  "pages.admin.platformDefault.error": "The default model could not be read or saved.",
+  "pages.admin.platformDefault.intro": "New projects start with this model, and projects without their own default use it. A fast, low-cost model suits everyday chat.",
+  "pages.admin.platformDefault.title": "Default model",
+  "pages.admin.platformDefault.unavailable": "“{{name}}” is no longer available to every project. Choose a replacement."
 }
