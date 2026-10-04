@@ -53,6 +53,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // agentExecutionCapabilities is internal/infra/db/repos/analytics.go's
@@ -79,7 +81,17 @@ const (
 // has to be: the Overview tab and the Costs tab paint the same window side by
 // side, and two predicates that disagree at a boundary put two counts of one
 // day on one screen.
-const requestLogWindow = ` WHERE l.project_id = $1 AND l.occurred_at >= $2 AND l.occurred_at < $3`
+//
+// That includes the route predicate (legacy issue 6879): only the inference
+// routes in analytics.InferenceRouteSQLList are model calls. Without it the
+// Costs tab counts the model listing and the token counter as calls while the
+// Overview tab does not.
+const requestLogWindow = ` WHERE l.project_id = $1 AND l.occurred_at >= $2 AND l.occurred_at < $3` +
+	inferenceRouteOnLog
+
+// inferenceRouteOnLog limits a read of the log under the alias `l` to the
+// inference routes.
+const inferenceRouteOnLog = ` AND l.route IN (` + analytics.InferenceRouteSQLList + `)`
 
 // pricedSource is the FROM clause when the price catalogue is present.
 //
@@ -687,7 +699,7 @@ SELECT count(*) FILTER (WHERE l.execution_id IS NOT NULL AND EXISTS (
 FROM gateway.llm_request_logs AS l
 WHERE l.project_id = $1
   AND l.occurred_at >= $2
-  AND l.occurred_at < $3`
+  AND l.occurred_at < $3` + inferenceRouteOnLog
 
 	var total int64
 	if err := tx.QueryRow(ctx, query, projectID, from, to).Scan(&attributed, &total); err != nil {

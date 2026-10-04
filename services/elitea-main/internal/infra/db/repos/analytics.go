@@ -119,7 +119,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -208,10 +210,22 @@ func NewAnalyticsRepo(pool *pgxpool.Pool) *AnalyticsRepo {
 //
 // Half-open at the top: a window ending at midnight must not also claim the
 // first instant of the next day, or two adjacent windows both count it.
+//
+// INFERENCE ROUTES ONLY (legacy issue 6879). The log also records the model
+// listing, the token counter, the connection check and unmatched paths, and
+// counting those as LLM calls made this page disagree with the Usage page.
+// analytics.InferenceRouteSQLList is the one definition of a model call, and
+// inferenceRouteOnLog below applies the same one to the aliased reads.
 const requestLogWindow = `
 WHERE project_id = $1
   AND occurred_at >= $2
-  AND occurred_at < $3`
+  AND occurred_at < $3
+  AND route IN (` + analytics.InferenceRouteSQLList + `)`
+
+// inferenceRouteOnLog is the same route predicate for a statement that reads
+// the log under the alias `l`.
+const inferenceRouteOnLog = `
+  AND l.route IN (` + analytics.InferenceRouteSQLList + `)`
 
 // missingRelation reports whether err is PostgreSQL's undefined_table (42P01)
 // or undefined_schema (3F000).
@@ -503,7 +517,7 @@ SELECT count(*) FILTER (WHERE l.execution_id IS NOT NULL AND EXISTS (
 FROM gateway.llm_request_logs AS l
 WHERE l.project_id = $1
   AND l.occurred_at >= $2
-  AND l.occurred_at < $3`
+  AND l.occurred_at < $3` + inferenceRouteOnLog
 
 	var total int64
 	if err := q.QueryRow(ctx, query, id, params.From, params.To).Scan(&attributed, &total); err != nil {
@@ -612,7 +626,7 @@ WITH attributed AS (
       ON m.provider = l.provider AND m.model_name = l.model
     WHERE l.project_id = $1
       AND l.occurred_at >= $2
-      AND l.occurred_at < $3
+      AND l.occurred_at < $3` + inferenceRouteOnLog + `
       AND l.execution_id IS NOT NULL
       AND EXISTS (
           SELECT 1 FROM elitea_runtime.execution_jobs AS j
@@ -962,7 +976,7 @@ SELECT user_id,
 FROM gateway.llm_request_logs` + requestLogWindow + `
   AND user_id IS NOT NULL
 GROUP BY user_id
-ORDER BY count(*) DESC, user_id ASC
+ORDER BY count(*) DESC, coalesce(sum(prompt_tokens + completion_tokens), 0) DESC, user_id ASC
 LIMIT $4`
 
 	rows, err := q.Query(ctx, query, id, params.From, params.To, limit)
@@ -1006,7 +1020,62 @@ LIMIT $4`
 			users[i].Name = identity.name
 		}
 	}
+	sortUserActivity(users)
 	return users, nil
+}
+
+// sortUserActivity puts the rows in the documented order (legacy issue 6764):
+// calls descending, then tokens descending, then display name ascending, then
+// user id ascending.
+//
+// Before this, two users with the same call count came back in user-id order.
+// The id is on no column of the Users table, so the order looked random. Every
+// key here is a visible column, and the id is last only so that the order is
+// TOTAL: two rows can never compare equal, so the order is the same on every
+// request.
+//
+// The SQL already orders by calls, tokens and id, so the LIMIT keeps the right
+// rows. The name is known only after userIdentities, so this second pass
+// applies it within the rows the statement returned.
+//
+// The display name is the name, else the email. A row with neither sorts after
+// every row that has one, so an unresolved identity does not jump to the top
+// of a tie.
+func sortUserActivity(users []analytics.UserActivity) {
+	sort.SliceStable(users, func(i, j int) bool {
+		a, b := users[i], users[j]
+		if a.RunCount != b.RunCount {
+			return a.RunCount > b.RunCount
+		}
+		if a.TotalTokens != b.TotalTokens {
+			return a.TotalTokens > b.TotalTokens
+		}
+		an, bn := userDisplayName(a), userDisplayName(b)
+		if an != bn {
+			if an == "" || bn == "" {
+				return bn == ""
+			}
+			return an < bn
+		}
+		return userIDOrder(a.UserID) < userIDOrder(b.UserID)
+	})
+}
+
+func userDisplayName(user analytics.UserActivity) string {
+	if user.Name != "" {
+		return strings.ToLower(user.Name)
+	}
+	return strings.ToLower(user.Email)
+}
+
+// userIDOrder compares ids numerically. The ids are decimal strings of int64
+// values, so a lexical comparison would put "10" before "9".
+func userIDOrder(id string) int64 {
+	value, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return math.MaxInt64
+	}
+	return value
 }
 
 type userIdentity struct {
@@ -1173,7 +1242,7 @@ SELECT (SELECT count(*)::bigint FROM project_members),
         FROM gateway.llm_request_logs AS l
         WHERE l.project_id = $1
           AND l.occurred_at >= $2
-          AND l.occurred_at < $3
+          AND l.occurred_at < $3` + inferenceRouteOnLog + `
           AND l.user_id IN (SELECT user_id FROM project_members))`
 
 	// Asked BEFORE the statement below, for the reason userIdentities gives at
