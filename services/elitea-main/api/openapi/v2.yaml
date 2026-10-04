@@ -10323,14 +10323,24 @@ components:
     PipelineInboundTriggerRunRequest:
       type: object
       description: >
-        The inbound call's body (inbound.go inboundBody, :70-73). It may be
-        empty, and an unparseable body is accepted as an empty input: a webhook
-        sender's payload format is not this service's contract.
+        The inbound call's body (inbound.go inboundBody). It may be empty, and
+        an unparseable body is accepted as an empty input: a webhook sender's
+        payload format is not this service's contract. For an AGENT version
+        (legacy issue 6656) a body with no `input` is itself the input: a
+        provider payload is given to the agent as its message.
       additionalProperties: false
       properties:
         input:
           type: string
-          description: The text placed in front of the pipeline.
+          description: The text placed in front of the pipeline or the agent.
+        variables:
+          type: object
+          description: >
+            AGENT versions only. New values for the variables the agent version
+            declares, by name. A name the version does not declare is ignored.
+            A string is used as it is, and a number or a boolean as its JSON
+            text. Other values are ignored. A pipeline ignores this field.
+          additionalProperties: true
 
     PipelineInboundTriggerRunAccepted:
       type: object
@@ -21547,7 +21557,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
-          description: No such pipeline version in this project
+          description: No such pipeline or agent version in this project
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -21771,10 +21781,11 @@ paths:
   /pipeline_trigger/{project_id}/{token_id}:
     post:
       operationId: runPipelineInboundTrigger
-      summary: Start a pipeline run from an external caller
+      summary: Start a pipeline or agent run from an external caller
       description: |
         The inbound trigger — issue 192. An external system calls this URL and
-        one pipeline version runs.
+        one pipeline version runs. Since legacy issue 6656 the trigger can
+        also belong to an ordinary AGENT version; see "Agent versions" below.
 
         ## This route has NO SESSION
 
@@ -21793,6 +21804,17 @@ paths:
         the pipeline runs from its entry node. An `input` that is not UTF-8
         text, or that holds a NUL character, is answered 422 and names
         `input`.
+
+        ## Agent versions
+
+        An agent answers a message, so its run needs text. The text is the
+        body's `input`. Without one, the raw request body is the input, cut
+        at 64 KiB: a GitHub or GitLab event is what the agent reads. A call
+        with no `input` and no payload is answered 422 and names `input`.
+        The body's `variables` object gives new values to the variables the
+        agent version declares. The credential, the signature modes, the
+        replay rule and every refusal are the same as for a pipeline. An
+        agent run emits no `pipeline.run.*` event.
 
         ## Nothing the caller sends selects a tenant
 
@@ -21865,7 +21887,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: The `input` is not UTF-8 text, or holds a NUL character
+          description: >
+            The `input` is not UTF-8 text, or holds a NUL character, or the
+            trigger starts an agent and the call carries no input
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -21978,7 +22002,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: The `input` is not UTF-8 text, or holds a NUL character
+          description: >
+            The `input` is not UTF-8 text, or holds a NUL character, or the
+            trigger starts an agent and the call carries no input
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

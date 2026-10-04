@@ -46,10 +46,16 @@ export const PipelineInboundTriggerRunRequest = zod
     input: zod
       .string()
       .optional()
-      .describe("The text placed in front of the pipeline."),
+      .describe("The text placed in front of the pipeline or the agent."),
+    variables: zod
+      .record(zod.string(), zod.unknown())
+      .optional()
+      .describe(
+        "AGENT versions only. New values for the variables the agent version declares, by name. A name the version does not declare is ignored. A string is used as it is, and a number or a boolean as its JSON text. Other values are ignored. A pipeline ignores this field.\n",
+      ),
   })
   .describe(
-    "The inbound call's body (inbound.go inboundBody, :70-73). It may be empty, and an unparseable body is accepted as an empty input: a webhook sender's payload format is not this service's contract.\n",
+    "The inbound call's body (inbound.go inboundBody). It may be empty, and an unparseable body is accepted as an empty input: a webhook sender's payload format is not this service's contract. For an AGENT version (legacy issue 6656) a body with no `input` is itself the input: a provider payload is given to the agent as its message.\n",
   );
 
 export type PipelineInboundTriggerRunRequest = zod.input<

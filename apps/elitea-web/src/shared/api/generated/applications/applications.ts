@@ -19201,7 +19201,8 @@ export const getRunPipelineInboundTriggerUrl = (
 
 /**
  * The inbound trigger — issue 192. An external system calls this URL and
- * one pipeline version runs.
+ * one pipeline version runs. Since legacy issue 6656 the trigger can
+ * also belong to an ordinary AGENT version; see "Agent versions" below.
  *
  * ## This route has NO SESSION
  *
@@ -19220,6 +19221,17 @@ export const getRunPipelineInboundTriggerUrl = (
  * the pipeline runs from its entry node. An `input` that is not UTF-8
  * text, or that holds a NUL character, is answered 422 and names
  * `input`.
+ *
+ * ## Agent versions
+ *
+ * An agent answers a message, so its run needs text. The text is the
+ * body's `input`. Without one, the raw request body is the input, cut
+ * at 64 KiB: a GitHub or GitLab event is what the agent reads. A call
+ * with no `input` and no payload is answered 422 and names `input`.
+ * The body's `variables` object gives new values to the variables the
+ * agent version declares. The credential, the signature modes, the
+ * replay rule and every refusal are the same as for a pipeline. An
+ * agent run emits no `pipeline.run.*` event.
  *
  * ## Nothing the caller sends selects a tenant
  *
@@ -19245,7 +19257,7 @@ export const getRunPipelineInboundTriggerUrl = (
  * budgets, governance, tracing, cancel and the transcript are unchanged.
  * The answer is 202 and an events URL: the run has not finished and will
  * not finish inside this request.
- * @summary Start a pipeline run from an external caller
+ * @summary Start a pipeline or agent run from an external caller
  */
 export const runPipelineInboundTrigger = async (
   projectId: number,
@@ -19449,7 +19461,7 @@ export function useRunPipelineInboundTrigger<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Start a pipeline run from an external caller
+ * @summary Start a pipeline or agent run from an external caller
  */
 
 export function useRunPipelineInboundTrigger<
