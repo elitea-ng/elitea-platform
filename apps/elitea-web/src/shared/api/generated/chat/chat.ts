@@ -61,6 +61,7 @@ import type {
   ChatRegenerateRequest,
   ChatSendRequest,
   ClearMemories200,
+  ClientUpgradeRequiredResponse,
   ContinueChatExecutionParams,
   ConversationAttachmentChunkReceived,
   ConversationAttachmentUploaded,
@@ -75,6 +76,8 @@ import type {
   ExportConversationParams,
   GetConversationParams,
   GetMessageTraceParams,
+  InvalidClientVersionError,
+  InvalidClientVersionResponse,
   ListConversationMessagesParams,
   ListConversationsParams,
   ListMemoriesParams,
@@ -101,8 +104,8 @@ import type {
   SupportConversationList,
   SupportPredictRequest,
   SupportPredictResponse,
+  SyncCursorError,
   SyncCursorExpiredResponse,
-  SyncCursorInvalidResponse,
   UploadConversationAttachmentBody,
 } from "../model";
 
@@ -1895,7 +1898,7 @@ export type listConversationsResponse200 = {
 };
 
 export type listConversationsResponse400 = {
-  data: SyncCursorInvalidResponse;
+  data: SyncCursorError | InvalidClientVersionError;
   status: 400;
 };
 
@@ -1914,6 +1917,11 @@ export type listConversationsResponse410 = {
   status: 410;
 };
 
+export type listConversationsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listConversationsResponse500 = {
   data: N500Response;
   status: 500;
@@ -1927,6 +1935,7 @@ export type listConversationsResponseError = (
   | listConversationsResponse401
   | listConversationsResponse403
   | listConversationsResponse410
+  | listConversationsResponse426
   | listConversationsResponse500
 ) & {
   headers: Headers;
@@ -1997,10 +2006,12 @@ export const getListConversationsQueryKey = (
 export const getListConversationsQueryOptions = <
   TData = Awaited<ReturnType<typeof listConversations>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2042,19 +2053,23 @@ export type ListConversationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listConversations>>
 >;
 export type ListConversationsQueryError =
-  | SyncCursorInvalidResponse
+  | SyncCursorError
+  | InvalidClientVersionError
   | N401Response
   | N403Response
   | SyncCursorExpiredResponse
+  | ClientUpgradeRequiredResponse
   | N500Response;
 
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2084,10 +2099,12 @@ export function useListConversations<
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2117,10 +2134,12 @@ export function useListConversations<
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2146,10 +2165,12 @@ export function useListConversations<
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2202,6 +2223,11 @@ export type createConversationResponse403 = {
   status: 403;
 };
 
+export type createConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type createConversationResponse500 = {
   data: N500Response;
   status: 500;
@@ -2215,6 +2241,7 @@ export type createConversationResponseError = (
   | createConversationResponse400
   | createConversationResponse401
   | createConversationResponse403
+  | createConversationResponse426
   | createConversationResponse500
 ) & {
   headers: Headers;
@@ -2288,7 +2315,12 @@ export const getCreateConversationQueryKey = (
 
 export const getCreateConversationQueryOptions = <
   TData = Awaited<ReturnType<typeof createConversation>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationCreateRequest: ConversationCreateRequest,
@@ -2333,11 +2365,20 @@ export type CreateConversationQueryResult = NonNullable<
   Awaited<ReturnType<typeof createConversation>>
 >;
 export type CreateConversationQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useCreateConversation<
   TData = Awaited<ReturnType<typeof createConversation>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationCreateRequest: ConversationCreateRequest,
@@ -2365,7 +2406,12 @@ export function useCreateConversation<
 };
 export function useCreateConversation<
   TData = Awaited<ReturnType<typeof createConversation>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationCreateRequest: ConversationCreateRequest,
@@ -2393,7 +2439,12 @@ export function useCreateConversation<
 };
 export function useCreateConversation<
   TData = Awaited<ReturnType<typeof createConversation>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationCreateRequest: ConversationCreateRequest,
@@ -2417,7 +2468,12 @@ export function useCreateConversation<
 
 export function useCreateConversation<
   TData = Awaited<ReturnType<typeof createConversation>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationCreateRequest: ConversationCreateRequest,
@@ -2454,6 +2510,11 @@ export type getConversationResponse200 = {
   status: 200;
 };
 
+export type getConversationResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type getConversationResponse401 = {
   data: N401Response;
   status: 401;
@@ -2469,6 +2530,11 @@ export type getConversationResponse404 = {
   status: 404;
 };
 
+export type getConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getConversationResponse500 = {
   data: N500Response;
   status: 500;
@@ -2478,9 +2544,11 @@ export type getConversationResponseSuccess = getConversationResponse200 & {
   headers: Headers;
 };
 export type getConversationResponseError = (
+  | getConversationResponse400
   | getConversationResponse401
   | getConversationResponse403
   | getConversationResponse404
+  | getConversationResponse426
   | getConversationResponse500
 ) & {
   headers: Headers;
@@ -2546,7 +2614,13 @@ export const getGetConversationQueryKey = (
 
 export const getGetConversationQueryOptions = <
   TData = Awaited<ReturnType<typeof getConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2596,11 +2670,22 @@ export type GetConversationQueryResult = NonNullable<
   Awaited<ReturnType<typeof getConversation>>
 >;
 export type GetConversationQueryError =
-  N401Response | N403Response | N404Response | N500Response;
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetConversation<
   TData = Awaited<ReturnType<typeof getConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2629,7 +2714,13 @@ export function useGetConversation<
 };
 export function useGetConversation<
   TData = Awaited<ReturnType<typeof getConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2658,7 +2749,13 @@ export function useGetConversation<
 };
 export function useGetConversation<
   TData = Awaited<ReturnType<typeof getConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2683,7 +2780,13 @@ export function useGetConversation<
 
 export function useGetConversation<
   TData = Awaited<ReturnType<typeof getConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2722,6 +2825,11 @@ export type deleteConversationResponse204 = {
   status: 204;
 };
 
+export type deleteConversationResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type deleteConversationResponse401 = {
   data: N401Response;
   status: 401;
@@ -2737,6 +2845,11 @@ export type deleteConversationResponse404 = {
   status: 404;
 };
 
+export type deleteConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type deleteConversationResponse500 = {
   data: N500Response;
   status: 500;
@@ -2747,9 +2860,11 @@ export type deleteConversationResponseSuccess =
     headers: Headers;
   };
 export type deleteConversationResponseError = (
+  | deleteConversationResponse400
   | deleteConversationResponse401
   | deleteConversationResponse403
   | deleteConversationResponse404
+  | deleteConversationResponse426
   | deleteConversationResponse500
 ) & {
   headers: Headers;
@@ -2799,7 +2914,13 @@ export const getDeleteConversationQueryKey = (
 
 export const getDeleteConversationQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2848,11 +2969,22 @@ export type DeleteConversationQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteConversation>>
 >;
 export type DeleteConversationQueryError =
-  N401Response | N403Response | N404Response | N500Response;
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useDeleteConversation<
   TData = Awaited<ReturnType<typeof deleteConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2880,7 +3012,13 @@ export function useDeleteConversation<
 };
 export function useDeleteConversation<
   TData = Awaited<ReturnType<typeof deleteConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2908,7 +3046,13 @@ export function useDeleteConversation<
 };
 export function useDeleteConversation<
   TData = Awaited<ReturnType<typeof deleteConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2932,7 +3076,13 @@ export function useDeleteConversation<
 
 export function useDeleteConversation<
   TData = Awaited<ReturnType<typeof deleteConversation>>,
-  TError = N401Response | N403Response | N404Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -2970,7 +3120,7 @@ export type listConversationMessagesResponse200 = {
 };
 
 export type listConversationMessagesResponse400 = {
-  data: SyncCursorInvalidResponse;
+  data: SyncCursorError | InvalidClientVersionError;
   status: 400;
 };
 
@@ -2994,6 +3144,11 @@ export type listConversationMessagesResponse410 = {
   status: 410;
 };
 
+export type listConversationMessagesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listConversationMessagesResponse500 = {
   data: N500Response;
   status: 500;
@@ -3009,6 +3164,7 @@ export type listConversationMessagesResponseError = (
   | listConversationMessagesResponse403
   | listConversationMessagesResponse404
   | listConversationMessagesResponse410
+  | listConversationMessagesResponse426
   | listConversationMessagesResponse500
 ) & {
   headers: Headers;
@@ -3077,11 +3233,13 @@ export const getListConversationMessagesQueryKey = (
 export const getListConversationMessagesQueryOptions = <
   TData = Awaited<ReturnType<typeof listConversationMessages>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | N404Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -3132,21 +3290,25 @@ export type ListConversationMessagesQueryResult = NonNullable<
   Awaited<ReturnType<typeof listConversationMessages>>
 >;
 export type ListConversationMessagesQueryError =
-  | SyncCursorInvalidResponse
+  | SyncCursorError
+  | InvalidClientVersionError
   | N401Response
   | N403Response
   | N404Response
   | SyncCursorExpiredResponse
+  | ClientUpgradeRequiredResponse
   | N500Response;
 
 export function useListConversationMessages<
   TData = Awaited<ReturnType<typeof listConversationMessages>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | N404Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -3177,11 +3339,13 @@ export function useListConversationMessages<
 export function useListConversationMessages<
   TData = Awaited<ReturnType<typeof listConversationMessages>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | N404Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -3212,11 +3376,13 @@ export function useListConversationMessages<
 export function useListConversationMessages<
   TData = Awaited<ReturnType<typeof listConversationMessages>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | N404Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -3243,11 +3409,13 @@ export function useListConversationMessages<
 export function useListConversationMessages<
   TData = Awaited<ReturnType<typeof listConversationMessages>>,
   TError =
-    | SyncCursorInvalidResponse
+    | SyncCursorError
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | N404Response
     | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -3322,6 +3490,11 @@ export type sendChatMessageResponse422 = {
   status: 422;
 };
 
+export type sendChatMessageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type sendChatMessageResponse500 = {
   data: N500Response;
   status: 500;
@@ -3343,6 +3516,7 @@ export type sendChatMessageResponseError = (
   | sendChatMessageResponse413
   | sendChatMessageResponse415
   | sendChatMessageResponse422
+  | sendChatMessageResponse426
   | sendChatMessageResponse500
   | sendChatMessageResponse503
 ) & {
@@ -3455,7 +3629,12 @@ export const getSendChatMessageQueryKey = (
 
 export const getSendChatMessageQueryOptions = <
   TData = Awaited<ReturnType<typeof sendChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -3511,11 +3690,20 @@ export type SendChatMessageQueryResult = NonNullable<
   Awaited<ReturnType<typeof sendChatMessage>>
 >;
 export type SendChatMessageQueryError =
-  ChatExecutionError | N401Response | N403Response | N500Response;
+  | ChatExecutionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useSendChatMessage<
   TData = Awaited<ReturnType<typeof sendChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -3545,7 +3733,12 @@ export function useSendChatMessage<
 };
 export function useSendChatMessage<
   TData = Awaited<ReturnType<typeof sendChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -3575,7 +3768,12 @@ export function useSendChatMessage<
 };
 export function useSendChatMessage<
   TData = Awaited<ReturnType<typeof sendChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -3601,7 +3799,12 @@ export function useSendChatMessage<
 
 export function useSendChatMessage<
   TData = Awaited<ReturnType<typeof sendChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -3677,6 +3880,11 @@ export type regenerateChatMessageResponse422 = {
   status: 422;
 };
 
+export type regenerateChatMessageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type regenerateChatMessageResponse500 = {
   data: N500Response;
   status: 500;
@@ -3699,6 +3907,7 @@ export type regenerateChatMessageResponseError = (
   | regenerateChatMessageResponse413
   | regenerateChatMessageResponse415
   | regenerateChatMessageResponse422
+  | regenerateChatMessageResponse426
   | regenerateChatMessageResponse500
   | regenerateChatMessageResponse503
 ) & {
@@ -3795,7 +4004,12 @@ export const getRegenerateChatMessageQueryKey = (
 
 export const getRegenerateChatMessageQueryOptions = <
   TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -3851,11 +4065,20 @@ export type RegenerateChatMessageQueryResult = NonNullable<
   Awaited<ReturnType<typeof regenerateChatMessage>>
 >;
 export type RegenerateChatMessageQueryError =
-  ChatExecutionError | N401Response | N403Response | N500Response;
+  | ChatExecutionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useRegenerateChatMessage<
   TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -3885,7 +4108,12 @@ export function useRegenerateChatMessage<
 };
 export function useRegenerateChatMessage<
   TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -3915,7 +4143,12 @@ export function useRegenerateChatMessage<
 };
 export function useRegenerateChatMessage<
   TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -3941,7 +4174,12 @@ export function useRegenerateChatMessage<
 
 export function useRegenerateChatMessage<
   TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -4017,6 +4255,11 @@ export type continueChatExecutionResponse422 = {
   status: 422;
 };
 
+export type continueChatExecutionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type continueChatExecutionResponse500 = {
   data: N500Response;
   status: 500;
@@ -4039,6 +4282,7 @@ export type continueChatExecutionResponseError = (
   | continueChatExecutionResponse413
   | continueChatExecutionResponse415
   | continueChatExecutionResponse422
+  | continueChatExecutionResponse426
   | continueChatExecutionResponse500
   | continueChatExecutionResponse503
 ) & {
@@ -4144,7 +4388,12 @@ export const getContinueChatExecutionQueryKey = (
 
 export const getContinueChatExecutionQueryOptions = <
   TData = Awaited<ReturnType<typeof continueChatExecution>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4203,11 +4452,20 @@ export type ContinueChatExecutionQueryResult = NonNullable<
   Awaited<ReturnType<typeof continueChatExecution>>
 >;
 export type ContinueChatExecutionQueryError =
-  ChatExecutionError | N401Response | N403Response | N500Response;
+  | ChatExecutionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useContinueChatExecution<
   TData = Awaited<ReturnType<typeof continueChatExecution>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4237,7 +4495,12 @@ export function useContinueChatExecution<
 };
 export function useContinueChatExecution<
   TData = Awaited<ReturnType<typeof continueChatExecution>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4267,7 +4530,12 @@ export function useContinueChatExecution<
 };
 export function useContinueChatExecution<
   TData = Awaited<ReturnType<typeof continueChatExecution>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4293,7 +4561,12 @@ export function useContinueChatExecution<
 
 export function useContinueChatExecution<
   TData = Awaited<ReturnType<typeof continueChatExecution>>,
-  TError = ChatExecutionError | N401Response | N403Response | N500Response,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4354,6 +4627,11 @@ export type uploadConversationAttachmentResponse403 = {
   status: 403;
 };
 
+export type uploadConversationAttachmentResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type uploadConversationAttachmentResponse500 = {
   data: N500Response;
   status: 500;
@@ -4369,6 +4647,7 @@ export type uploadConversationAttachmentResponseError = (
   | uploadConversationAttachmentResponse400
   | uploadConversationAttachmentResponse401
   | uploadConversationAttachmentResponse403
+  | uploadConversationAttachmentResponse426
   | uploadConversationAttachmentResponse500
 ) & {
   headers: Headers;
@@ -4447,7 +4726,12 @@ export const getUploadConversationAttachmentQueryKey = (
 
 export const getUploadConversationAttachmentQueryOptions = <
   TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4503,11 +4787,20 @@ export type UploadConversationAttachmentQueryResult = NonNullable<
   Awaited<ReturnType<typeof uploadConversationAttachment>>
 >;
 export type UploadConversationAttachmentQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useUploadConversationAttachment<
   TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4536,7 +4829,12 @@ export function useUploadConversationAttachment<
 };
 export function useUploadConversationAttachment<
   TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4565,7 +4863,12 @@ export function useUploadConversationAttachment<
 };
 export function useUploadConversationAttachment<
   TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4590,7 +4893,12 @@ export function useUploadConversationAttachment<
 
 export function useUploadConversationAttachment<
   TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4629,8 +4937,13 @@ export type streamExecutionEventsResponse200 = {
   status: 200;
 };
 
-export type streamExecutionEventsResponse400 = {
+export type streamExecutionEventsResponse400TextPlain = {
   data: string;
+  status: 400;
+};
+
+export type streamExecutionEventsResponse400ApplicationJson = {
+  data: InvalidClientVersionError;
   status: 400;
 };
 
@@ -4642,6 +4955,11 @@ export type streamExecutionEventsResponse401 = {
 export type streamExecutionEventsResponse403 = {
   data: string;
   status: 403;
+};
+
+export type streamExecutionEventsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type streamExecutionEventsResponse429 = {
@@ -4659,9 +4977,11 @@ export type streamExecutionEventsResponseSuccess =
     headers: Headers;
   };
 export type streamExecutionEventsResponseError = (
-  | streamExecutionEventsResponse400
+  | streamExecutionEventsResponse400TextPlain
+  | streamExecutionEventsResponse400ApplicationJson
   | streamExecutionEventsResponse401
   | streamExecutionEventsResponse403
+  | streamExecutionEventsResponse426
   | streamExecutionEventsResponse429
   | streamExecutionEventsResponse500
 ) & {
@@ -4747,7 +5067,7 @@ export const getStreamExecutionEventsQueryKey = (
 
 export const getStreamExecutionEventsQueryOptions = <
   TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   executionId: string,
@@ -4796,11 +5116,12 @@ export const getStreamExecutionEventsQueryOptions = <
 export type StreamExecutionEventsQueryResult = NonNullable<
   Awaited<ReturnType<typeof streamExecutionEvents>>
 >;
-export type StreamExecutionEventsQueryError = string;
+export type StreamExecutionEventsQueryError =
+  string | InvalidClientVersionError | ClientUpgradeRequiredResponse;
 
 export function useStreamExecutionEvents<
   TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   executionId: string,
@@ -4829,7 +5150,7 @@ export function useStreamExecutionEvents<
 };
 export function useStreamExecutionEvents<
   TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   executionId: string,
@@ -4858,7 +5179,7 @@ export function useStreamExecutionEvents<
 };
 export function useStreamExecutionEvents<
   TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   executionId: string,
@@ -4883,7 +5204,7 @@ export function useStreamExecutionEvents<
 
 export function useStreamExecutionEvents<
   TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   executionId: string,

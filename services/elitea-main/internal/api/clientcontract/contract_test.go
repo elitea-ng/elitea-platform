@@ -644,3 +644,46 @@ func TestMajor(t *testing.T) {
 		}
 	}
 }
+
+// notVersionGated are the client operations apimw.ClientVersion never judges:
+// discovery and the brand pack are root-mounted outside the /api/v2 group,
+// and so are the browser authorize page and the revoke route (which the gate
+// exempts by name besides). The token endpoint is judged by its own handler.
+var notVersionGated = map[string]bool{
+	"getClientDiscovery": true, "getBrandingPackJSON": true,
+	"authorizeNativeClient": true, "revokeNativeToken": true,
+}
+
+// TestClientOperationsDeclareTheVersionGate: apimw.ClientVersion runs over the
+// whole /api/v2 group, so every client operation in it can answer 426 (with
+// X-Min-Client-Version) or a JSON 400 invalid_client_version. The spec, and so
+// the lock, must say so: otherwise generated clients have no typed 426, and
+// dropping the gate from an operation later is not a contract break.
+func TestClientOperationsDeclareTheVersionGate(t *testing.T) {
+	surface := currentSurface(t)
+	for _, key := range sortedOperationKeys(surface) {
+		op := surface.Operations[key]
+		if notVersionGated[op.OperationID] {
+			continue
+		}
+		if op.Parameters["header:x-client-version"] == nil {
+			t.Errorf("%s (%s) does not declare the X-Client-Version header parameter", key, op.OperationID)
+		}
+		upgrade := op.Responses["426"]
+		if upgrade == nil || upgrade.Headers["x-min-client-version"] == nil || upgrade.Content["application/json"] == nil {
+			t.Errorf("%s (%s) does not declare 426 client_upgrade_required with X-Min-Client-Version", key, op.OperationID)
+		}
+		if bad := op.Responses["400"]; bad == nil || bad.Content["application/json"] == nil {
+			t.Errorf("%s (%s) does not declare a JSON 400 (invalid_client_version)", key, op.OperationID)
+		}
+	}
+}
+
+func sortedOperationKeys(surface *clientcontract.Surface) []string {
+	keys := make([]string, 0, len(surface.Operations))
+	for key := range surface.Operations {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}

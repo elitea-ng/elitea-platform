@@ -41,14 +41,13 @@
  */
 import * as zod from "zod";
 
-export const StreamNotificationEventsHeaders = zod.object({
+export const MarkNotificationsSeenHeaders = zod.object({
   "X-Client-Version": zod.string().optional(),
-  "Last-Event-ID": zod.string().optional(),
 });
 
-export type StreamNotificationEventsHeaders = zod.input<
-  typeof StreamNotificationEventsHeaders
+export type MarkNotificationsSeenHeaders = zod.input<
+  typeof MarkNotificationsSeenHeaders
 >;
-export type StreamNotificationEventsHeadersOutput = zod.output<
-  typeof StreamNotificationEventsHeaders
+export type MarkNotificationsSeenHeadersOutput = zod.output<
+  typeof MarkNotificationsSeenHeaders
 >;

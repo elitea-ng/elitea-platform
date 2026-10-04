@@ -57,6 +57,7 @@ import type {
   ClientUpgradeRequiredResponse,
   DeviceRevokedError,
   ErrorResponse,
+  InvalidClientVersionResponse,
   ListNativeDevicesParams,
   N401Response,
   N403Response,
@@ -890,6 +891,11 @@ export type listNativeDevicesResponse200 = {
   status: 200;
 };
 
+export type listNativeDevicesResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type listNativeDevicesResponse401 = {
   data: N401Response;
   status: 401;
@@ -900,11 +906,19 @@ export type listNativeDevicesResponse404 = {
   status: 404;
 };
 
+export type listNativeDevicesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listNativeDevicesResponseSuccess = listNativeDevicesResponse200 & {
   headers: Headers;
 };
 export type listNativeDevicesResponseError = (
-  listNativeDevicesResponse401 | listNativeDevicesResponse404
+  | listNativeDevicesResponse400
+  | listNativeDevicesResponse401
+  | listNativeDevicesResponse404
+  | listNativeDevicesResponse426
 ) & {
   headers: Headers;
 };
@@ -957,7 +971,11 @@ export const getListNativeDevicesQueryKey = (
 
 export const getListNativeDevicesQueryOptions = <
   TData = Awaited<ReturnType<typeof listNativeDevices>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   params?: ListNativeDevicesParams,
   options?: {
@@ -990,11 +1008,19 @@ export const getListNativeDevicesQueryOptions = <
 export type ListNativeDevicesQueryResult = NonNullable<
   Awaited<ReturnType<typeof listNativeDevices>>
 >;
-export type ListNativeDevicesQueryError = N401Response | NativeOAuthError;
+export type ListNativeDevicesQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | NativeOAuthError
+  | ClientUpgradeRequiredResponse;
 
 export function useListNativeDevices<
   TData = Awaited<ReturnType<typeof listNativeDevices>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   params: undefined | ListNativeDevicesParams,
   options: {
@@ -1021,7 +1047,11 @@ export function useListNativeDevices<
 };
 export function useListNativeDevices<
   TData = Awaited<ReturnType<typeof listNativeDevices>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   params?: ListNativeDevicesParams,
   options?: {
@@ -1048,7 +1078,11 @@ export function useListNativeDevices<
 };
 export function useListNativeDevices<
   TData = Awaited<ReturnType<typeof listNativeDevices>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   params?: ListNativeDevicesParams,
   options?: {
@@ -1071,7 +1105,11 @@ export function useListNativeDevices<
 
 export function useListNativeDevices<
   TData = Awaited<ReturnType<typeof listNativeDevices>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   params?: ListNativeDevicesParams,
   options?: {
@@ -1103,6 +1141,11 @@ export type revokeNativeDeviceResponse204 = {
   status: 204;
 };
 
+export type revokeNativeDeviceResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type revokeNativeDeviceResponse401 = {
   data: N401Response;
   status: 401;
@@ -1113,12 +1156,20 @@ export type revokeNativeDeviceResponse404 = {
   status: 404;
 };
 
+export type revokeNativeDeviceResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type revokeNativeDeviceResponseSuccess =
   revokeNativeDeviceResponse204 & {
     headers: Headers;
   };
 export type revokeNativeDeviceResponseError = (
-  revokeNativeDeviceResponse401 | revokeNativeDeviceResponse404
+  | revokeNativeDeviceResponse400
+  | revokeNativeDeviceResponse401
+  | revokeNativeDeviceResponse404
+  | revokeNativeDeviceResponse426
 ) & {
   headers: Headers;
 };
@@ -1156,7 +1207,11 @@ export const getRevokeNativeDeviceQueryKey = (deviceId: string) => {
 
 export const getRevokeNativeDeviceQueryOptions = <
   TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   deviceId: string,
   options?: {
@@ -1195,11 +1250,19 @@ export const getRevokeNativeDeviceQueryOptions = <
 export type RevokeNativeDeviceQueryResult = NonNullable<
   Awaited<ReturnType<typeof revokeNativeDevice>>
 >;
-export type RevokeNativeDeviceQueryError = N401Response | NativeOAuthError;
+export type RevokeNativeDeviceQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | NativeOAuthError
+  | ClientUpgradeRequiredResponse;
 
 export function useRevokeNativeDevice<
   TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   deviceId: string,
   options: {
@@ -1226,7 +1289,11 @@ export function useRevokeNativeDevice<
 };
 export function useRevokeNativeDevice<
   TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   deviceId: string,
   options?: {
@@ -1253,7 +1320,11 @@ export function useRevokeNativeDevice<
 };
 export function useRevokeNativeDevice<
   TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   deviceId: string,
   options?: {
@@ -1276,7 +1347,11 @@ export function useRevokeNativeDevice<
 
 export function useRevokeNativeDevice<
   TData = Awaited<ReturnType<typeof revokeNativeDevice>>,
-  TError = N401Response | NativeOAuthError,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | NativeOAuthError
+    | ClientUpgradeRequiredResponse,
 >(
   deviceId: string,
   options?: {

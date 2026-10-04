@@ -4,6 +4,11 @@
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:device_id": {
           "required": true,
           "schema": {
@@ -14,6 +19,25 @@
       },
       "responses": {
         "204": {},
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "401": {
           "content": {
             "application/json": {
@@ -46,12 +70,44 @@
               }
             }
           }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
         }
       }
     },
     "DELETE /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
       "operation_id": "deleteConversation",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:conversation_id": {
           "required": true,
           "schema": {
@@ -67,6 +123,25 @@
       },
       "responses": {
         "204": {},
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "401": {
           "content": {
             "application/json": {
@@ -109,6 +184,33 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
             }
           }
         },
@@ -363,6 +465,11 @@
     "GET /auth/native/devices": {
       "operation_id": "listNativeDevices",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "query:include_revoked": {
           "schema": {
             "type": "boolean"
@@ -442,6 +549,25 @@
             }
           }
         },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "401": {
           "content": {
             "application/json": {
@@ -472,6 +598,33 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
             }
           }
         }
@@ -734,6 +887,11 @@
     "GET /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
       "operation_id": "getConversation",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:conversation_id": {
           "required": true,
           "schema": {
@@ -867,6 +1025,25 @@
             }
           }
         },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "401": {
           "content": {
             "application/json": {
@@ -912,6 +1089,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -932,6 +1136,11 @@
     "GET /elitea_core/conversations/prompt_lib/{project_id}": {
       "operation_id": "listConversations",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:project_id": {
           "required": true,
           "schema": {
@@ -1078,19 +1287,38 @@
         "400": {
           "content": {
             "application/json": {
-              "type": "object",
-              "required": [
-                "error",
-                "message"
-              ],
-              "properties": {
-                "error": {
-                  "type": "string"
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "message": {
-                  "type": "string"
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },
@@ -1143,6 +1371,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -1163,6 +1418,11 @@
     "GET /elitea_core/messages/prompt_lib/{project_id}/{conversation_id}": {
       "operation_id": "listConversationMessages",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:conversation_id": {
           "required": true,
           "schema": {
@@ -1357,19 +1617,38 @@
         "400": {
           "content": {
             "application/json": {
-              "type": "object",
-              "required": [
-                "error",
-                "message"
-              ],
-              "properties": {
-                "error": {
-                  "type": "string"
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "message": {
-                  "type": "string"
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },
@@ -1437,6 +1716,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -1458,6 +1764,11 @@
       "operation_id": "streamExecutionEvents",
       "parameters": {
         "header:last-event-id": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "header:x-client-version": {
           "schema": {
             "type": "string"
           }
@@ -1490,6 +1801,21 @@
         },
         "400": {
           "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            },
             "text/plain": {
               "type": "string"
             }
@@ -1505,6 +1831,33 @@
         "403": {
           "content": {
             "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
               "type": "string"
             }
           }
@@ -1538,6 +1891,11 @@
             "type": "string"
           }
         },
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:project_id": {
           "required": true,
           "schema": {
@@ -1560,6 +1918,21 @@
         },
         "400": {
           "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            },
             "text/plain": {
               "type": "string"
             }
@@ -1575,6 +1948,33 @@
         "403": {
           "content": {
             "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
               "type": "string"
             }
           }
@@ -1603,6 +2003,11 @@
     "GET /notifications/notifications/prompt_lib/{project_id}": {
       "operation_id": "listNotifications",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:project_id": {
           "required": true,
           "schema": {
@@ -1770,6 +2175,21 @@
                   "type": "object",
                   "required": [
                     "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
                     "message"
                   ],
                   "properties": {
@@ -1853,6 +2273,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -1877,6 +2324,11 @@
     "GET /projects/project/default/{public_project_id}": {
       "operation_id": "listProjects",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:public_project_id": {
           "required": true,
           "schema": {
@@ -1955,6 +2407,25 @@
             }
           }
         },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "401": {
           "content": {
             "application/json": {
@@ -1967,6 +2438,33 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
             }
           }
         }
@@ -2356,6 +2854,11 @@
     "POST /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}": {
       "operation_id": "uploadConversationAttachment",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:conversation_id": {
           "required": true,
           "schema": {
@@ -2499,6 +3002,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -2519,6 +3049,11 @@
     "POST /elitea_core/continue_predict/prompt_lib/{project_id}/{conversation_id}": {
       "operation_id": "continueChatExecution",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:conversation_id": {
           "required": true,
           "schema": {
@@ -2784,6 +3319,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -2830,6 +3392,11 @@
     "POST /elitea_core/conversations/prompt_lib/{project_id}": {
       "operation_id": "createConversation",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:project_id": {
           "required": true,
           "schema": {
@@ -3041,6 +3608,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -3061,6 +3655,11 @@
     "POST /elitea_core/messages/prompt_lib/{project_id}/{conversation_id}": {
       "operation_id": "sendChatMessage",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:conversation_id": {
           "required": true,
           "schema": {
@@ -3338,6 +3937,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -3384,6 +4010,11 @@
     "POST /elitea_core/regenerate/prompt_lib/{project_id}/{message_id}": {
       "operation_id": "regenerateChatMessage",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:message_id": {
           "required": true,
           "schema": {
@@ -3672,6 +4303,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -3718,6 +4376,11 @@
     "PUT /notifications/notification/prompt_lib/{project_id}/{notification_id}": {
       "operation_id": "markNotificationSeen",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:notification_id": {
           "required": true,
           "schema": {
@@ -3784,19 +4447,38 @@
         "400": {
           "content": {
             "application/json": {
-              "type": "object",
-              "required": [
-                "error",
-                "ok"
-              ],
-              "properties": {
-                "error": {
-                  "type": "string"
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "ok": {
-                  "type": "boolean"
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "ok"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },
@@ -3830,6 +4512,33 @@
             }
           }
         },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
         "500": {
           "content": {
             "application/json": {
@@ -3854,6 +4563,11 @@
     "PUT /notifications/notifications/prompt_lib/{project_id}": {
       "operation_id": "markNotificationsSeen",
       "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "path:project_id": {
           "required": true,
           "schema": {
@@ -3911,19 +4625,38 @@
         "400": {
           "content": {
             "application/json": {
-              "type": "object",
-              "required": [
-                "error",
-                "ok"
-              ],
-              "properties": {
-                "error": {
-                  "type": "string"
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "ok": {
-                  "type": "boolean"
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "ok"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },
@@ -3954,6 +4687,33 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
             }
           }
         },

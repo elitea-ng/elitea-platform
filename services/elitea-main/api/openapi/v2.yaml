@@ -9571,6 +9571,17 @@ components:
           description: >-
             The lowest version this deployment serves this client; empty means
             none. MAJOR.MINOR.PATCH with an optional -prerelease.
+    InvalidClientVersionError:
+      type: object
+      description: >-
+        The 400 answer to a native client whose `X-Client-Version` does not
+        parse (ADR-0025 decision 5). NOTE(W2):
+        internal/api/middleware/client_version.go:190
+        (`WriteInvalidClientVersion`).
+      required: [error, error_description]
+      properties:
+        error: { type: string, description: Always invalid_client_version. }
+        error_description: { type: string }
     ClientUpgradeRequiredError:
       type: object
       description: >-
@@ -11030,6 +11041,15 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/SyncCursorError'
+    InvalidClientVersion:
+      description: >-
+        400: a native client's `X-Client-Version` does not parse as
+        MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5).
+        Only callers authenticated by a native access token are judged.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InvalidClientVersionError'
     ClientUpgradeRequired:
       description: >-
         426 Upgrade Required: the native client's `X-Client-Version` is below
@@ -11371,11 +11391,14 @@ paths:
         registered. NOTE(W2): internal/api/nativeauth/devices.go:90.
       tags: [auth, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: include_revoked
           in: query
           required: false
           schema: { type: boolean }
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: The caller's devices.
           content:
@@ -11404,7 +11427,11 @@ paths:
         device in use is allowed; its next call answers `device_revoked`.
         NOTE(W2): internal/api/nativeauth/devices.go:114.
       tags: [auth, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '204':
           description: Revoked.
         '401': { $ref: '#/components/responses/401' }
@@ -13947,6 +13974,7 @@ paths:
         The route also serves POST, createConversation below.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: source
           in: query
           required: false
@@ -13997,6 +14025,7 @@ paths:
             whole project is not a tombstone: the client sees 403 and drops
             that project's cache.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: >
             The matching conversations, newest first; with `changes_since`,
@@ -14006,7 +14035,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConversationListing'
-        '400': { $ref: '#/components/responses/SyncCursorInvalid' }
+        '400':
+          description: >-
+            `changes_since` is not a cursor this list issued, or `limit` is
+            not a positive integer (SyncCursorError); or, for a native client,
+            `X-Client-Version` does not parse (InvalidClientVersionError).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SyncCursorError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '410': { $ref: '#/components/responses/SyncCursorExpired' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
@@ -14027,7 +14066,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ConversationCreateRequest'
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '201':
           description: The created conversation.
           content:
@@ -14062,6 +14104,7 @@ paths:
         instead.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: messages_limit
           in: query
           required: false
@@ -14073,6 +14116,8 @@ paths:
           schema: { type: string }
           description: Order of the embedded groups, `asc` or `desc`.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: The conversation.
           content:
@@ -14093,7 +14138,11 @@ paths:
         per-message tombstones). A 500 after the rows are gone means the byte
         cleanup failed; the conversation is still deleted.
       tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '204': { description: Deleted. }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
@@ -14124,6 +14173,7 @@ paths:
         again; upsert by `id`.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: limit
           in: query
           required: false
@@ -14166,13 +14216,24 @@ paths:
             `0` is a full sync; otherwise the `next_cursor` of a previous delta
             of THIS conversation's transcript.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The transcript page or delta.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConversationMessageListing'
-        '400': { $ref: '#/components/responses/SyncCursorInvalid' }
+        '400':
+          description: >-
+            `changes_since` is not a cursor this list issued, or `limit` is
+            not a positive integer (SyncCursorError); or, for a native client,
+            `X-Client-Version` does not parse (InvalidClientVersionError).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SyncCursorError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '410': { $ref: '#/components/responses/SyncCursorExpired' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
@@ -14206,6 +14267,7 @@ paths:
         about 3 s before it decides.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: execution_contract
           in: query
           required: true
@@ -14219,6 +14281,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ChatSendRequest'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: "The turn was admitted (`created` true) or replayed (`created` false)."
           content:
@@ -14288,6 +14351,7 @@ paths:
         and `retryable: true`.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: execution_contract
           in: query
           required: true
@@ -14301,6 +14365,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ChatRegenerateRequest'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The regeneration was admitted or replayed.
           content:
@@ -14382,6 +14447,7 @@ paths:
         refresh the transcript instead of retrying.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: execution_contract
           in: query
           required: true
@@ -14395,6 +14461,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ChatContinueRequest'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The continuation was admitted or replayed.
           content:
@@ -14490,7 +14557,10 @@ paths:
                 total_chunks:
                   type: integer
                   description: Chunked upload only.
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '201':
           description: The file is stored.
           content:
@@ -14548,6 +14618,7 @@ paths:
         `: heartbeat`) keep the connection alive.
       tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: Last-Event-ID
           in: header
           required: false
@@ -14559,6 +14630,7 @@ paths:
           schema: { type: string }
           description: The same as `Last-Event-ID`, for clients that cannot set headers.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The event stream.
           content:
@@ -14569,6 +14641,8 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidClientVersionError' }
         '401':
           description: No authenticated principal.
           content:
@@ -14610,6 +14684,7 @@ paths:
         `sort_by` or `sort_order` is a 400 `invalid_sync_request`.
       tags: [notifications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: limit
           in: query
           required: false
@@ -14653,6 +14728,7 @@ paths:
             otherwise the `next_cursor` of a previous notification delta of
             the same user.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The page or delta.
           content:
@@ -14669,6 +14745,7 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/NotificationErrorResponse'
                   - $ref: '#/components/schemas/SyncCursorError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '410': { $ref: '#/components/responses/SyncCursorExpired' }
         '401':
           description: Not authenticated.
@@ -14693,7 +14770,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/NotificationBulkSeenRequest'
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: How many rows changed.
           content:
@@ -14708,7 +14788,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotificationErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
@@ -14766,7 +14848,10 @@ paths:
         Takes no body and answers the notification. An id that is not the
         caller's answers 400 "Notification is not found" (not 404).
       tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The notification, now seen.
           content:
@@ -14778,7 +14863,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotificationErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
@@ -14826,6 +14913,7 @@ paths:
         sync the list (`changes_since`) rather than trusting the stream.
       tags: [notifications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: Last-Event-ID
           in: header
           required: false
@@ -14835,6 +14923,7 @@ paths:
           required: false
           schema: { type: string }
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The event stream.
           content:
@@ -14845,6 +14934,8 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidClientVersionError' }
         '401':
           description: No authenticated principal.
           content:
@@ -17392,6 +17483,7 @@ paths:
         hides the public project from a caller who is not an admin of it.
       tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: check_public_role
           in: query
           schema: { type: boolean }
@@ -17399,6 +17491,8 @@ paths:
             Presence-only flag. The handler ignores the value, so
             `check_public_role=false` also switches the check on.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Accessible projects
           content:

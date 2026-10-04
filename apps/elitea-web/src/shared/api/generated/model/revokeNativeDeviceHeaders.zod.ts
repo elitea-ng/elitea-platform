@@ -41,14 +41,13 @@
  */
 import * as zod from "zod";
 
-export const StreamNotificationEventsHeaders = zod.object({
+export const RevokeNativeDeviceHeaders = zod.object({
   "X-Client-Version": zod.string().optional(),
-  "Last-Event-ID": zod.string().optional(),
 });
 
-export type StreamNotificationEventsHeaders = zod.input<
-  typeof StreamNotificationEventsHeaders
+export type RevokeNativeDeviceHeaders = zod.input<
+  typeof RevokeNativeDeviceHeaders
 >;
-export type StreamNotificationEventsHeadersOutput = zod.output<
-  typeof StreamNotificationEventsHeaders
+export type RevokeNativeDeviceHeadersOutput = zod.output<
+  typeof RevokeNativeDeviceHeaders
 >;

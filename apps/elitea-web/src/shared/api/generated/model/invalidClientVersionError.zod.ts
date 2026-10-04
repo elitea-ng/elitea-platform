@@ -41,14 +41,18 @@
  */
 import * as zod from "zod";
 
-export const StreamNotificationEventsHeaders = zod.object({
-  "X-Client-Version": zod.string().optional(),
-  "Last-Event-ID": zod.string().optional(),
-});
+export const InvalidClientVersionError = zod
+  .object({
+    error: zod.string().describe("Always invalid_client_version."),
+    error_description: zod.string(),
+  })
+  .describe(
+    "The 400 answer to a native client whose `X-Client-Version` does not parse (ADR-0025 decision 5). NOTE(W2): internal/api/middleware/client_version.go:190 (`WriteInvalidClientVersion`).",
+  );
 
-export type StreamNotificationEventsHeaders = zod.input<
-  typeof StreamNotificationEventsHeaders
+export type InvalidClientVersionError = zod.input<
+  typeof InvalidClientVersionError
 >;
-export type StreamNotificationEventsHeadersOutput = zod.output<
-  typeof StreamNotificationEventsHeaders
+export type InvalidClientVersionErrorOutput = zod.output<
+  typeof InvalidClientVersionError
 >;

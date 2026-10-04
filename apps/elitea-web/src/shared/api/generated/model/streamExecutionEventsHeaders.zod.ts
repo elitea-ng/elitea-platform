@@ -42,6 +42,7 @@
 import * as zod from "zod";
 
 export const StreamExecutionEventsHeaders = zod.object({
+  "X-Client-Version": zod.string().optional(),
   "Last-Event-ID": zod.string().optional(),
 });
 

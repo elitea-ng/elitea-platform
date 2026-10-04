@@ -53,7 +53,9 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ClientUpgradeRequiredResponse,
   DeleteNotifications200,
+  InvalidClientVersionError,
   ListNotificationsParams,
   MarkNotificationsSeen200,
   N401Response,
@@ -96,7 +98,7 @@ export type listNotificationsResponse200 = {
 };
 
 export type listNotificationsResponse400 = {
-  data: NotificationErrorResponse | SyncCursorError;
+  data: NotificationErrorResponse | SyncCursorError | InvalidClientVersionError;
   status: 400;
 };
 
@@ -115,6 +117,11 @@ export type listNotificationsResponse410 = {
   status: 410;
 };
 
+export type listNotificationsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listNotificationsResponse500 = {
   data: NotificationErrorResponse;
   status: 500;
@@ -128,6 +135,7 @@ export type listNotificationsResponseError = (
   | listNotificationsResponse401
   | listNotificationsResponse403
   | listNotificationsResponse410
+  | listNotificationsResponse426
   | listNotificationsResponse500
 ) & {
   headers: Headers;
@@ -195,8 +203,10 @@ export const getListNotificationsQueryOptions = <
   TError =
     | NotificationErrorResponse
     | SyncCursorError
+    | InvalidClientVersionError
     | N403Response
-    | SyncCursorExpiredResponse,
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListNotificationsParams,
@@ -239,16 +249,20 @@ export type ListNotificationsQueryResult = NonNullable<
 export type ListNotificationsQueryError =
   | NotificationErrorResponse
   | SyncCursorError
+  | InvalidClientVersionError
   | N403Response
-  | SyncCursorExpiredResponse;
+  | SyncCursorExpiredResponse
+  | ClientUpgradeRequiredResponse;
 
 export function useListNotifications<
   TData = Awaited<ReturnType<typeof listNotifications>>,
   TError =
     | NotificationErrorResponse
     | SyncCursorError
+    | InvalidClientVersionError
     | N403Response
-    | SyncCursorExpiredResponse,
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params: undefined | ListNotificationsParams,
@@ -279,8 +293,10 @@ export function useListNotifications<
   TError =
     | NotificationErrorResponse
     | SyncCursorError
+    | InvalidClientVersionError
     | N403Response
-    | SyncCursorExpiredResponse,
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListNotificationsParams,
@@ -311,8 +327,10 @@ export function useListNotifications<
   TError =
     | NotificationErrorResponse
     | SyncCursorError
+    | InvalidClientVersionError
     | N403Response
-    | SyncCursorExpiredResponse,
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListNotificationsParams,
@@ -339,8 +357,10 @@ export function useListNotifications<
   TError =
     | NotificationErrorResponse
     | SyncCursorError
+    | InvalidClientVersionError
     | N403Response
-    | SyncCursorExpiredResponse,
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListNotificationsParams,
@@ -378,7 +398,7 @@ export type markNotificationsSeenResponse200 = {
 };
 
 export type markNotificationsSeenResponse400 = {
-  data: NotificationErrorResponse;
+  data: NotificationErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -390,6 +410,11 @@ export type markNotificationsSeenResponse401 = {
 export type markNotificationsSeenResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type markNotificationsSeenResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type markNotificationsSeenResponse500 = {
@@ -405,6 +430,7 @@ export type markNotificationsSeenResponseError = (
   | markNotificationsSeenResponse400
   | markNotificationsSeenResponse401
   | markNotificationsSeenResponse403
+  | markNotificationsSeenResponse426
   | markNotificationsSeenResponse500
 ) & {
   headers: Headers;
@@ -473,7 +499,12 @@ export const getMarkNotificationsSeenQueryKey = (
 
 export const getMarkNotificationsSeenQueryOptions = <
   TData = Awaited<ReturnType<typeof markNotificationsSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkSeenRequest: NotificationBulkSeenRequest,
@@ -518,11 +549,20 @@ export type MarkNotificationsSeenQueryResult = NonNullable<
   Awaited<ReturnType<typeof markNotificationsSeen>>
 >;
 export type MarkNotificationsSeenQueryError =
-  NotificationErrorResponse | N401Response | N403Response;
+  | NotificationErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse;
 
 export function useMarkNotificationsSeen<
   TData = Awaited<ReturnType<typeof markNotificationsSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkSeenRequest: NotificationBulkSeenRequest,
@@ -550,7 +590,12 @@ export function useMarkNotificationsSeen<
 };
 export function useMarkNotificationsSeen<
   TData = Awaited<ReturnType<typeof markNotificationsSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkSeenRequest: NotificationBulkSeenRequest,
@@ -578,7 +623,12 @@ export function useMarkNotificationsSeen<
 };
 export function useMarkNotificationsSeen<
   TData = Awaited<ReturnType<typeof markNotificationsSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkSeenRequest: NotificationBulkSeenRequest,
@@ -602,7 +652,12 @@ export function useMarkNotificationsSeen<
 
 export function useMarkNotificationsSeen<
   TData = Awaited<ReturnType<typeof markNotificationsSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkSeenRequest: NotificationBulkSeenRequest,
@@ -902,7 +957,7 @@ export type markNotificationSeenResponse200 = {
 };
 
 export type markNotificationSeenResponse400 = {
-  data: NotificationErrorResponse;
+  data: NotificationErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -914,6 +969,11 @@ export type markNotificationSeenResponse401 = {
 export type markNotificationSeenResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type markNotificationSeenResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type markNotificationSeenResponse500 = {
@@ -929,6 +989,7 @@ export type markNotificationSeenResponseError = (
   | markNotificationSeenResponse400
   | markNotificationSeenResponse401
   | markNotificationSeenResponse403
+  | markNotificationSeenResponse426
   | markNotificationSeenResponse500
 ) & {
   headers: Headers;
@@ -975,7 +1036,12 @@ export const getMarkNotificationSeenQueryKey = (
 
 export const getMarkNotificationSeenQueryOptions = <
   TData = Awaited<ReturnType<typeof markNotificationSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1024,11 +1090,20 @@ export type MarkNotificationSeenQueryResult = NonNullable<
   Awaited<ReturnType<typeof markNotificationSeen>>
 >;
 export type MarkNotificationSeenQueryError =
-  NotificationErrorResponse | N401Response | N403Response;
+  | NotificationErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse;
 
 export function useMarkNotificationSeen<
   TData = Awaited<ReturnType<typeof markNotificationSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1056,7 +1131,12 @@ export function useMarkNotificationSeen<
 };
 export function useMarkNotificationSeen<
   TData = Awaited<ReturnType<typeof markNotificationSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1084,7 +1164,12 @@ export function useMarkNotificationSeen<
 };
 export function useMarkNotificationSeen<
   TData = Awaited<ReturnType<typeof markNotificationSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1108,7 +1193,12 @@ export function useMarkNotificationSeen<
 
 export function useMarkNotificationSeen<
   TData = Awaited<ReturnType<typeof markNotificationSeen>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1387,8 +1477,13 @@ export type streamNotificationEventsResponse200 = {
   status: 200;
 };
 
-export type streamNotificationEventsResponse400 = {
+export type streamNotificationEventsResponse400TextPlain = {
   data: string;
+  status: 400;
+};
+
+export type streamNotificationEventsResponse400ApplicationJson = {
+  data: InvalidClientVersionError;
   status: 400;
 };
 
@@ -1400,6 +1495,11 @@ export type streamNotificationEventsResponse401 = {
 export type streamNotificationEventsResponse403 = {
   data: string;
   status: 403;
+};
+
+export type streamNotificationEventsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type streamNotificationEventsResponse429 = {
@@ -1417,9 +1517,11 @@ export type streamNotificationEventsResponseSuccess =
     headers: Headers;
   };
 export type streamNotificationEventsResponseError = (
-  | streamNotificationEventsResponse400
+  | streamNotificationEventsResponse400TextPlain
+  | streamNotificationEventsResponse400ApplicationJson
   | streamNotificationEventsResponse401
   | streamNotificationEventsResponse403
+  | streamNotificationEventsResponse426
   | streamNotificationEventsResponse429
   | streamNotificationEventsResponse503
 ) & {
@@ -1487,7 +1589,7 @@ export const getStreamNotificationEventsQueryKey = (
 
 export const getStreamNotificationEventsQueryOptions = <
   TData = Awaited<ReturnType<typeof streamNotificationEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: StreamNotificationEventsParams,
@@ -1528,11 +1630,12 @@ export const getStreamNotificationEventsQueryOptions = <
 export type StreamNotificationEventsQueryResult = NonNullable<
   Awaited<ReturnType<typeof streamNotificationEvents>>
 >;
-export type StreamNotificationEventsQueryError = string;
+export type StreamNotificationEventsQueryError =
+  string | InvalidClientVersionError | ClientUpgradeRequiredResponse;
 
 export function useStreamNotificationEvents<
   TData = Awaited<ReturnType<typeof streamNotificationEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params: undefined | StreamNotificationEventsParams,
@@ -1560,7 +1663,7 @@ export function useStreamNotificationEvents<
 };
 export function useStreamNotificationEvents<
   TData = Awaited<ReturnType<typeof streamNotificationEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: StreamNotificationEventsParams,
@@ -1588,7 +1691,7 @@ export function useStreamNotificationEvents<
 };
 export function useStreamNotificationEvents<
   TData = Awaited<ReturnType<typeof streamNotificationEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: StreamNotificationEventsParams,
@@ -1612,7 +1715,7 @@ export function useStreamNotificationEvents<
 
 export function useStreamNotificationEvents<
   TData = Awaited<ReturnType<typeof streamNotificationEvents>>,
-  TError = string,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: StreamNotificationEventsParams,
