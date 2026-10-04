@@ -1926,6 +1926,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
 			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
 			Logger:         logger,
+			// The analytics reads decide active users and run spend from
+			// the inbound execution id, so the edge keeps it only for a live
+			// execution of the caller.
+			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool),
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)

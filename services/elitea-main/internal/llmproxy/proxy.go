@@ -34,6 +34,12 @@ type Config struct {
 
 	// Logger receives proxy error events. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// ExecutionVerifier checks an inbound X-Elitea-Execution-Id against a
+	// live execution of the caller before the edge signs it. Nil keeps the
+	// shape check only. Production composition always sets it: the analytics
+	// reads decide active users and run spend from this id.
+	ExecutionVerifier ExecutionVerifier
 }
 
 // Proxy is elitea-main's whole gateway role: a streaming reverse proxy to
@@ -76,6 +82,7 @@ func New(cfg Config) (*Proxy, error) {
 	}
 
 	secret := []byte(cfg.IdentitySecret)
+	verifier := cfg.ExecutionVerifier
 
 	rp := &httputil.ReverseProxy{
 		// FlushInterval < 0 flushes to the client immediately after every proxy
@@ -92,7 +99,7 @@ func New(cfg Config) (*Proxy, error) {
 			// signed identity (X-Elitea-Project-Id / X-Elitea-User-Id /
 			// X-Elitea-Tenant-Id + X-Elitea-Identity-Signature). The gateway
 			// trusts these only on the mTLS-internal network (design §2, §6.1).
-			injectIdentity(pr.In.Context(), pr.Out.Header, secret)
+			injectIdentity(pr.In.Context(), pr.Out.Header, secret, verifier)
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// Ensure no downstream proxy (Traefik/nginx) buffers the stream; the
