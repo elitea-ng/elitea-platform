@@ -44,6 +44,12 @@ var (
 	// working model that no request can reach.
 	ErrDialProtocolOpenAIIsGPTOnly = errors.New(
 		"data.dial_protocol openai serves gpt models only; use anthropic for a Claude model")
+	// ErrDialProtocolAnthropicIsClaudeOnly refuses the anthropic protocol on
+	// an OpenAI-family model. The gateway then sends every request to
+	// /anthropic/v1/messages with x-api-key, which DIAL cannot serve for a gpt
+	// deployment. It is the same failure as the openai protocol on Claude.
+	ErrDialProtocolAnthropicIsClaudeOnly = errors.New(
+		"data.dial_protocol anthropic serves Claude models only; use azure or openai for a gpt model")
 )
 
 // ValidateLLMModelDialProtocol checks `data.dial_protocol` of an llm_model.
@@ -59,7 +65,11 @@ func ValidateLLMModelDialProtocol(data map[string]any) (protocol string, present
 		return "", false, ErrInvalidDialProtocol
 	}
 	switch value {
-	case DialProtocolAzure, DialProtocolAnthropic:
+	case DialProtocolAzure:
+	case DialProtocolAnthropic:
+		if name, _ := data["name"].(string); looksLikeOpenAIModel(name) {
+			return "", false, ErrDialProtocolAnthropicIsClaudeOnly
+		}
 	case DialProtocolOpenAI:
 		if name, _ := data["name"].(string); looksLikeClaudeModel(name) {
 			return "", false, ErrDialProtocolOpenAIIsGPTOnly
@@ -68,6 +78,29 @@ func ValidateLLMModelDialProtocol(data map[string]any) (protocol string, present
 		return "", false, ErrInvalidDialProtocol
 	}
 	return value, true, nil
+}
+
+// looksLikeOpenAIModel reports whether a provider model name names an OpenAI
+// model. It is the gateway's own test for the family (bifrost
+// schemas.IsOpenAIModel), case-folded: "gpt-", "text-embedding-", or an
+// o-series id such as "o3" or "o4-mini" after any "provider/" prefix.
+//
+// The two family tests are deliberately narrow. A name that matches neither
+// (a Gemini deployment, a custom alias) is not refused for either protocol:
+// the write path cannot prove what the deployment serves, and the field
+// description says which family each protocol carries.
+func looksLikeOpenAIModel(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(lower, "gpt-") || strings.Contains(lower, "text-embedding-") {
+		return true
+	}
+	if i := strings.LastIndexAny(lower, "/:"); i >= 0 {
+		lower = lower[i+1:]
+	}
+	if len(lower) < 2 || lower[0] != 'o' || lower[1] < '0' || lower[1] > '9' {
+		return false
+	}
+	return len(lower) == 2 || lower[2] == '-'
 }
 
 // looksLikeClaudeModel reports whether a provider model name names an
