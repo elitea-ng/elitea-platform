@@ -164,6 +164,10 @@ type checkConnectionRequestBody struct {
 	// The runtime then speaks the Anthropic dialect to a vLLM-class upstream,
 	// so the gateway's model probe does too.
 	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints,omitempty"`
+	// DialProtocol is the llm_model's data.dial_protocol (legacy issue #6707).
+	// The llm_model check sets it for an ai_dial credential only. The gateway's
+	// model probe then posts to the route the runtime uses for that protocol.
+	DialProtocol string `json:"dial_protocol,omitempty"`
 }
 
 // checkConnectionResponseBody is the gateway's reply (mirrors

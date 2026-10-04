@@ -51,6 +51,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
@@ -85,6 +86,9 @@ type ModelConnectionCheck struct {
 	// and is dropped. It is never logged, stored or returned.
 	Credential map[string]any
 	Model      string
+	// DialProtocol is the form's data.dial_protocol, or "" for the default.
+	// It is forwarded for an ai_dial credential only (legacy issue #6707).
+	DialProtocol string
 	// UserID is the caller, signed into the identity headers so the gateway
 	// can attribute the probe in its log. Empty sends no user header.
 	UserID string
@@ -152,6 +156,9 @@ func (c *GatewayConnectionChecker) CheckModel(ctx context.Context, check ModelCo
 	}
 	body := gatewayCredentialRequestBody(check.CredentialType, check.Credential)
 	body.Model = check.Model
+	if check.CredentialType == dialCredentialType {
+		body.DialProtocol = check.DialProtocol
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return ModelConnectionResult{}, fmt.Errorf("check model connection: encode request: %w", err)
@@ -225,12 +232,18 @@ func (h *Handler) modelConnectionChecker() ModelConnectionChecker {
 	return checker
 }
 
+// dialCredentialType is the only credential type the DIAL protocol applies to.
+const dialCredentialType = "ai_dial"
+
 // llmModelCheckInput is the part of a posted llm_model form the test uses.
 type llmModelCheckInput struct {
-	model      string
-	title      string
-	private    bool
-	credential map[string]any
+	model string
+	// dialProtocol is the form's data.dial_protocol, already validated, or ""
+	// when the form sends none (the default protocol).
+	dialProtocol string
+	title        string
+	private      bool
+	credential   map[string]any
 	// configID is the saved row the form edits; "" on the create form.
 	configID string
 }
@@ -263,6 +276,15 @@ func readLLMModelCheckInput(data map[string]any) (llmModelCheckInput, string) {
 	}
 	input.private, _ = reference["private"].(bool)
 	input.credential = map[string]any{"elitea_title": input.title, "private": input.private}
+	// Legacy issue #6707. The protocol selects the route the model is tested
+	// on. A value that the save would refuse is refused here too, with the
+	// same message, before any credential resolves.
+	protocol, _, err := configurationapp.ValidateLLMModelDialProtocol(
+		map[string]any{"name": input.model, configurationapp.DialProtocolField: data[configurationapp.DialProtocolField]})
+	if err != nil {
+		return input, err.Error()
+	}
+	input.dialProtocol = protocol
 	return input, ""
 }
 
@@ -355,6 +377,7 @@ func (h *Handler) checkLLMModelConnection(w http.ResponseWriter, r *http.Request
 		CredentialType: credentialType,
 		Credential:     credential,
 		Model:          input.model,
+		DialProtocol:   input.dialProtocol,
 		UserID:         userID,
 	})
 	// The audit record of the spend: who tested which model with whose key.
