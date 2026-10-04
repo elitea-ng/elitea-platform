@@ -153,7 +153,11 @@ func writeRepoFailure(w http.ResponseWriter, err error) {
 //	                    with the first, and only one of the two carries the
 //	                    scope rules that stop it double-counting.
 func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
-	summary, err := h.repo.GetUsageSummary(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	summary, err := h.repo.GetUsageSummary(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -235,7 +239,11 @@ func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
 // /llm traffic is not made from a runtime execution, so without both figures an
 // operator is reconciling a breakdown against a total it never summed to.
 func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
-	breakdown, err := h.repo.GetAgentAnalytics(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	breakdown, err := h.repo.GetAgentAnalytics(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -268,7 +276,7 @@ func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
 	// with the flag that says which window it covers, and the per-agent split
 	// stays unclaimed rather than faked from a join that does not exist.
 	if r.URL.Query().Get("application_id") != "" || r.URL.Query().Get("agent_id") != "" {
-		tools, toolErr := h.repo.GetToolAnalytics(r.Context(), h.parseParams(r))
+		tools, toolErr := h.repo.GetToolAnalytics(r.Context(), params)
 		if toolErr != nil && !errors.Is(toolErr, analytics.ErrNoSource) {
 			writeRepoFailure(w, toolErr)
 			return
@@ -324,7 +332,11 @@ func agentName(breakdown analytics.AgentBreakdown, r *http.Request) string {
 // to map over. The precedent is the Agents tab above, and behind it
 // usageDimensions.Available (internal/api/v2/budgets/usage_dimensions.go).
 func (h *Handler) Tools(w http.ResponseWriter, r *http.Request) {
-	tools, err := h.repo.GetToolAnalytics(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	tools, err := h.repo.GetToolAnalytics(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -379,7 +391,11 @@ func toolName(tools analytics.ToolBreakdown, r *http.Request) string {
 // does not carry. It answers with empty lists and no kpis block rather than
 // with zeros, for the same reason the list branches refuse outright.
 func (h *Handler) Users(w http.ResponseWriter, r *http.Request) {
-	users, truncated, err := h.repo.GetUserActivity(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	users, truncated, err := h.repo.GetUserActivity(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -429,7 +445,7 @@ func round1(v float64) float64 {
 // decisions, and two endpoints on the same screen answering over two different
 // windows is a discrepancy no reader can attribute. dateWindow is shared with
 // it for exactly that reason.
-func (h *Handler) parseParams(r *http.Request) analytics.QueryParams {
+func (h *Handler) parseParams(r *http.Request) (analytics.QueryParams, error) {
 	query := r.URL.Query()
 	startDate := query.Get("start_date")
 	if startDate == "" {
@@ -454,7 +470,10 @@ func (h *Handler) parseParams(r *http.Request) analytics.QueryParams {
 	if endDate != "" {
 		window.Set("date_to", endDate)
 	}
-	from, to := dateWindow(window, h.clock)
+	from, to, err := dateWindow(window, h.clock)
+	if err != nil {
+		return analytics.QueryParams{}, err
+	}
 	return analytics.QueryParams{
 		ProjectID: chi.URLParam(r, "projectID"),
 		From:      from,
@@ -462,7 +481,18 @@ func (h *Handler) parseParams(r *http.Request) analytics.QueryParams {
 		StartDate: startDate,
 		EndDate:   endDate,
 		Period:    query.Get("period"),
+	}, nil
+}
+
+// requestParams is parseParams for a handler: a reversed window is answered
+// with 400 invalid_date_range here, and ok is false so the handler returns.
+func (h *Handler) requestParams(w http.ResponseWriter, r *http.Request) (analytics.QueryParams, bool) {
+	params, err := h.parseParams(r)
+	if err != nil {
+		writeInvalidDateRange(w)
+		return analytics.QueryParams{}, false
 	}
+	return params, true
 }
 
 func (h *Handler) clock() time.Time {

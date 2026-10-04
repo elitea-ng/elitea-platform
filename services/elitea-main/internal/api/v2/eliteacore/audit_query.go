@@ -74,6 +74,37 @@ func parseAuditFilters(r *http.Request) auditFilters {
 	}
 }
 
+// parseAuditRequest is parseAuditFilters for a handler. A window whose
+// date_from is later than its date_to is answered with 400
+// invalid_date_range, and ok is false so the handler returns (legacy issue
+// 6738). Before this the reversed window reached the SQL as it was, every
+// range condition matched nothing, and the page showed an empty audit trail
+// that looked like a quiet period.
+func parseAuditRequest(w http.ResponseWriter, r *http.Request) (auditFilters, bool) {
+	filters := parseAuditFilters(r)
+	if reversedDateRange(filters.dateFrom, filters.dateTo) {
+		writeInvalidDateRange(w)
+		return auditFilters{}, false
+	}
+	return filters, true
+}
+
+// reversedDateRange reports a window whose start is later than its end. A
+// missing bound is an open window, never a reversed one, and an equal start and
+// end is an empty window, not an invalid one.
+func reversedDateRange(from, to *time.Time) bool {
+	return from != nil && to != nil && from.After(*to)
+}
+
+// writeInvalidDateRange answers a reversed window. The code is the one the
+// analytics endpoints use for the same mistake, so one client check covers both.
+func writeInvalidDateRange(w http.ResponseWriter) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": "date_from must not be later than date_to",
+		"code":  "invalid_date_range",
+	})
+}
+
 // splitEventTypes accepts pylon's comma-separated list. The page always sends
 // one — the active tab's whole set ("api,socketio,rpc,agent,tool,llm") when no
 // type is chosen — so a single-element result is the exception, not the rule.
