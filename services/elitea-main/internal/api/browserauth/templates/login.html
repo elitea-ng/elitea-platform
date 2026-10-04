@@ -1,35 +1,33 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {{template "head" .}}
     <title>{{.Brand.ProductName}} login</title>
-    {{if .Brand.FaviconURL}}<link rel="icon" href="{{.Brand.FaviconURL}}">{{end}}
-    <style>{{.Style}}</style>
-    {{if .Brand.Style}}<style>{{.Brand.Style}}</style>{{end}}
   </head>
   <body class="auth-login-page" data-auth-form="form">
-    <main class="card card-signin">
-      <div class="form-signin">
-        <header class="brand-header">
-          {{if .Brand.LogoURL}}<img class="brand-logo" src="{{.Brand.LogoURL}}" alt="{{.Brand.ProductName}}">{{else}}<p class="brand-name">{{.Brand.ProductName}}</p>{{end}}
-          {{if .Brand.Tagline}}<p class="brand-tagline">{{.Brand.Tagline}}</p>{{end}}
-        </header>
-        <h1>Sign in</h1>
-        <form action="/auth/form/authorize" method="post">
-          <div class="form-floating">
-            <input class="form-control" type="text" id="login" name="login" placeholder="Login" autocomplete="username" required>
-            <label for="login">Login</label>
-          </div>
-          <div class="form-floating">
-            <input class="form-control" type="password" id="password" name="password" placeholder="Password" autocomplete="current-password" required>
-            <label for="password">Password</label>
-          </div>
-          <input type="hidden" name="target" value="{{.Target}}">
-          <button class="sign-in-button" type="submit">Sign in</button>
-          {{if .Error}}<p class="login-error" role="alert">Invalid login or password</p>{{end}}
-        </form>
-      </div>
-    </main>
+    {{template "backdrop"}}
+    <div class="auth-shell">
+      {{template "brand" .Brand}}
+      <main class="card card-signin" aria-labelledby="sign-in-title">
+        <div class="form-signin">
+          <h1 id="sign-in-title">Sign in</h1>
+          <p class="lede">Continue to {{.Brand.ProductName}}</p>
+          <form class="password-form" action="/auth/form/authorize" method="post">
+            <div class="field">
+              <label class="field-label" for="login">Login</label>
+              <input class="form-control" type="text" id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+            </div>
+            <div class="field">
+              <label class="field-label" for="password">Password</label>
+              <input class="form-control" type="password" id="password" name="password" autocomplete="current-password" required>
+            </div>
+            <input type="hidden" name="target" value="{{.Target}}">
+            <button class="sign-in-button" type="submit">Sign in</button>
+            {{if .Error}}<p class="login-error" role="alert">{{template "error-icon"}}<span>Invalid login or password</span></p>{{end}}
+          </form>
+        </div>
+      </main>
+    </div>
+    {{template "theme-toggle"}}
   </body>
 </html>

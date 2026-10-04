@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	_ "embed"
-	"encoding/base64"
 	"errors"
 	"html/template"
 	"mime"
@@ -47,13 +46,14 @@ var (
 //go:embed templates/login.html
 var loginTemplateSource string
 
-//go:embed templates/login.css
-var loginStyleSource string
-
-var loginStyleCSPSource = func() string {
-	digest := sha256.Sum256([]byte(loginStyleSource))
-	return "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
-}()
+// loginPage is the Form page template's data.
+type loginPage struct {
+	Target string
+	Error  bool
+	Style  template.CSS
+	Script template.JS
+	Brand  loginBrand
+}
 
 type Flow interface {
 	Begin(context.Context, browserapp.BeginRequest) (browserapp.BeginResult, error)
@@ -132,7 +132,7 @@ func NewHandler(
 	if config.MaxFormBodyBytes < 1024 || config.MaxFormBodyBytes > maxMaxFormBodyBytes {
 		return nil, ErrInvalidHandlerConfiguration
 	}
-	loginTemplate, err := template.New("login.html").Parse(loginTemplateSource)
+	loginTemplate, err := parseAuthPage("login.html", loginTemplateSource)
 	if err != nil {
 		return nil, ErrInvalidHandlerConfiguration
 	}
@@ -228,23 +228,19 @@ func (h *Handler) renderForm(writer http.ResponseWriter, request *http.Request) 
 
 	brand := h.loginBrand(request.Context())
 	var body bytes.Buffer
-	if err := h.loginTemplate.Execute(&body, struct {
-		Target string
-		Error  bool
-		Style  template.CSS
-		Brand  loginBrand
-	}{
+	if err := h.loginTemplate.Execute(&body, loginPage{
 		Target: target,
 		Error:  hasQueryKey(request.URL.Query(), "error"),
-		Style:  template.CSS(loginStyleSource), // The source is compiled into this binary.
+		Style:  authPageStyle(),
+		Script: authPageScript(),
 		Brand:  brand,
 	}); err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable)
 		return
 	}
-	// The brand stylesheet's hash joins the static one; nothing else in the
-	// policy changes (branding.go).
-	writer.Header().Set("Content-Security-Policy", loginContentSecurityPolicy(brand.StyleSource))
+	// The brand stylesheet's hash joins the static one (branding.go); the
+	// theme script is pinned by its own hash (page.go).
+	writer.Header().Set("Content-Security-Policy", authPageCSP("'self'", brand.StyleSource))
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(body.Bytes())
@@ -463,7 +459,7 @@ func setRetryAfter(writer http.ResponseWriter, retryAfter time.Duration) {
 func securityHeaders(writer http.ResponseWriter) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Pragma", "no-cache")
-	writer.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; style-src "+loginStyleCSPSource)
+	writer.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; style-src "+authStyleCSPSource)
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("X-Frame-Options", "DENY")
