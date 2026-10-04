@@ -10,7 +10,6 @@ import {
   createSocketClient,
   SocketClientContext,
 } from '@/shared/api/socket/client';
-import { createRealtimeStatusStore, RealtimeStatusContext } from '@/shared/api/sse';
 
 import { AppErrorBoundary } from './ErrorBoundary';
 import { BrandThemeProvider } from './BrandThemeProvider';
@@ -88,10 +87,6 @@ export function AppProviders({ children }: AppProvidersProps) {
   // or empty (E2E compose, offline dev), a no-op client is provided so that
   // useSocketClient() callers render in degraded-but-functional state instead
   // of throwing "no SocketClientContext.Provider is mounted".
-  // The live-channel health store the sidebar connection dot reads (SSE
-  // subscriptions report into it; see shared/api/sse/realtimeStatus.ts).
-  const [realtimeStatus] = useState(createRealtimeStatusStore);
-
   const socketClient = useMemo(() => {
     const cfg = getConfig();
     if (cfg.status !== 'ok') return createNoopSocketClient();
@@ -107,9 +102,7 @@ export function AppProviders({ children }: AppProvidersProps) {
         <I18nProvider>
           <QueryClientProvider client={queryClient}>
             <SocketClientContext.Provider value={socketClient}>
-              <RealtimeStatusContext.Provider value={realtimeStatus}>
-                {children}
-              </RealtimeStatusContext.Provider>
+              {children}
             </SocketClientContext.Provider>
           </QueryClientProvider>
         </I18nProvider>
