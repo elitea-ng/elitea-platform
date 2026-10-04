@@ -36,6 +36,21 @@ const gptImage2Sheet = `{
 		"output_cost_per_token": 0.0000025,
 		"output_cost_per_image_token": 0.00003
 	},
+	"gpt-image-1.5": {
+		"litellm_provider": "openai",
+		"mode": "image_generation",
+		"input_cost_per_token": 0.000005,
+		"input_cost_per_image_token": 0.000008,
+		"output_cost_per_token": 0.00001,
+		"output_cost_per_image_token": 0.000032
+	},
+	"openrouter/google/gemini-2.5-flash-image": {
+		"litellm_provider": "openrouter",
+		"mode": "chat",
+		"input_cost_per_token": 0.0000003,
+		"output_cost_per_token": 0.0000025,
+		"output_cost_per_image_token": 0.00003
+	},
 	"fal_ai/gpt-image-2.5/text-to-image": {
 		"litellm_provider": "fal_ai",
 		"mode": "image_generation",
@@ -61,10 +76,10 @@ func TestParseLiteLLMMapsTheImageTokenOutputPrice(t *testing.T) {
 	if !approxEqual(image.OutputCost, 0.00003) {
 		t.Fatalf("gpt-image-2 output price = %v, want the image-token rate 0.00003 (issue #6719)", image.OutputCost)
 	}
-	// The text input price wins over the image input price: a generation
-	// request sends text in.
-	if !approxEqual(image.InputCost, 0.000005) {
-		t.Errorf("gpt-image-2 input price = %v, want the per-token rate 0.000005", image.InputCost)
+	// An image_generation entry takes the HIGHER input rate. An /images/edits
+	// call uploads images, and the text rate billed their tokens 37.5% low.
+	if !approxEqual(image.InputCost, 0.000008) {
+		t.Errorf("gpt-image-2 input price = %v, want the higher image-token rate 0.000008", image.InputCost)
 	}
 
 	azure := byModel["azure/gpt-image-2"]
@@ -80,11 +95,28 @@ func TestParseLiteLLMMapsTheImageTokenOutputPrice(t *testing.T) {
 		t.Errorf("image-only-input = in %v out %v, want in 0.00001 and out nil", inputOnly.InputCost, inputOnly.OutputCost)
 	}
 
-	// A per-token output price stays the output price. The image rate fills
-	// only an ABSENT per-token price.
+	// An image_generation entry with BOTH output prices takes the higher one.
+	// The provider reports the ~1290 tokens of a generated image as output
+	// tokens. At the 2.5 USD text rate an image billed ~0.0032 USD where the
+	// provider charges ~0.039, so a budget allowed about 12 times too many.
 	gemini := byModel["gemini-2.5-flash-image"]
-	if !approxEqual(gemini.OutputCost, 0.0000025) {
-		t.Errorf("gemini-2.5-flash-image output = %v, want its per-token rate 0.0000025", gemini.OutputCost)
+	if !approxEqual(gemini.OutputCost, 0.00003) {
+		t.Errorf("gemini-2.5-flash-image output = %v, want the higher image-token rate 0.00003", gemini.OutputCost)
+	}
+	if !approxEqual(gemini.InputCost, 0.0000003) {
+		t.Errorf("gemini-2.5-flash-image input = %v, want its only input rate 0.0000003", gemini.InputCost)
+	}
+	gptImage15 := byModel["gpt-image-1.5"]
+	if !approxEqual(gptImage15.InputCost, 0.000008) || !approxEqual(gptImage15.OutputCost, 0.000032) {
+		t.Errorf("gpt-image-1.5 = in %v out %v, want the higher rates 0.000008 and 0.000032",
+			gptImage15.InputCost, gptImage15.OutputCost)
+	}
+
+	// A CHAT entry keeps its per-token rate: most of its calls produce text
+	// only. The image rate fills only an ABSENT per-token price there.
+	chat := byModel["openrouter/google/gemini-2.5-flash-image"]
+	if !approxEqual(chat.OutputCost, 0.0000025) {
+		t.Errorf("chat-mode output = %v, want its per-token rate 0.0000025", chat.OutputCost)
 	}
 
 	// A flat per-image price has no token column, so the entry has nothing the
@@ -92,8 +124,8 @@ func TestParseLiteLLMMapsTheImageTokenOutputPrice(t *testing.T) {
 	if _, ok := byModel["fal_ai/gpt-image-2.5/text-to-image"]; ok {
 		t.Error("a flat per-image price must not be stored in a per-token column")
 	}
-	if len(got) != 4 {
-		t.Fatalf("expected 4 admitted models, got %d (%+v)", len(got), got)
+	if len(got) != 6 {
+		t.Fatalf("expected 6 admitted models, got %d (%+v)", len(got), got)
 	}
 }
 

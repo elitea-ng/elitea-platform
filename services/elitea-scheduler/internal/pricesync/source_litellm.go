@@ -58,20 +58,42 @@ type litellmEntry struct {
 }
 
 // tokenRates returns the per-token input and output prices the catalog stores
-// for this entry. A per-token price wins. When it is absent, the per-image-token
-// price takes its place, because for an image model that is the price of the
-// tokens the provider reports in the same usage field.
+// for this entry.
 //
-// The fallback applies per direction. gpt-image-2 publishes a text input price
-// AND an image input price; the text one stays, because a generation request
-// sends text in. Its output has no per-token price, so the image output price
-// fills it.
+// For an entry in the image_generation mode, each direction takes the HIGHER
+// of the per-token price and the per-image-token price. The catalog has one
+// rate per direction, and the provider reports text tokens and image tokens
+// in the same usage field. The higher rate is the one that never bills a
+// call below the provider's charge:
+//
+//   - Output. gemini-2.5-flash-image publishes 2.5 USD per 1M text tokens and
+//     30 USD per 1M image tokens. An image of ~1290 tokens costs ~0.039 USD.
+//     With the text rate it billed ~0.0032 USD, so a budget allowed about 12
+//     times more images than it paid for. gpt-image-1.5 has the same shape.
+//   - Input. gpt-image-2 publishes 5 USD per 1M text tokens and 8 USD per 1M
+//     image tokens. An /images/edits call uploads images, and the text rate
+//     billed those tokens 37.5% low.
+//
+// The cost of the higher rate is an over-charge on the text share: a
+// generation prompt of ~50 tokens, and the rare text output of an image model.
+// Both are small next to the image tokens. A split by usage details (image
+// tokens against text tokens) is the exact answer, and it needs a second
+// catalog rate per direction. It is not done here.
+//
+// For every other mode the per-token price wins, and the per-image-token price
+// only fills an ABSENT per-token price. A chat model that can also emit images
+// (openrouter/google/*-image) keeps its text rate, because most of its calls
+// produce text only; its image output is still billed at the text rate.
 //
 // A flat per-image price (output_cost_per_image, some fal.ai models) is NOT
 // mapped here. It prices an image, not a token, and the catalog has no column
 // for that unit. Putting it into a per-1M-token column would bill it a million
 // times too low or too high, depending on the direction of the mistake.
 func (e litellmEntry) tokenRates() (in, out *float64) {
+	if e.Mode == imageGenerationMode {
+		return higherRate(e.InputCostPerToken, e.InputCostPerImageToken),
+			higherRate(e.OutputCostPerToken, e.OutputCostPerImageToken)
+	}
 	in, out = e.InputCostPerToken, e.OutputCostPerToken
 	if in == nil {
 		in = e.InputCostPerImageToken
@@ -80,6 +102,23 @@ func (e litellmEntry) tokenRates() (in, out *float64) {
 		out = e.OutputCostPerImageToken
 	}
 	return in, out
+}
+
+// imageGenerationMode is the LiteLLM "mode" of an image-generation entry.
+const imageGenerationMode = "image_generation"
+
+// higherRate returns the higher of two optional rates, or the one that is set.
+func higherRate(a, b *float64) *float64 {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case *b > *a:
+		return b
+	default:
+		return a
+	}
 }
 
 // audioModes are the LiteLLM "mode" values whose per-second and per-character
