@@ -56,6 +56,10 @@ type JudgeRequest struct {
 	Input          string
 	Output         string
 	ExpectedOutput *string
+	// AttributionID is JudgeAttributionID(run, case). It is signed as the
+	// execution id of the judge call so its spend is queryable per run and
+	// per role (legacy issue 6677). Empty sends no attribution.
+	AttributionID string
 }
 
 // JudgeVerdict is one parsed grading answer.
@@ -135,10 +139,11 @@ func (j *AIJudge) Score(ctx context.Context, req JudgeRequest) (JudgeVerdict, er
 	// disagree with itself for reasons that have nothing to do with the agent.
 	temperature := 0.0
 	raw, err := j.completer.Complete(ctx, predict.CompletionRequest{
-		ProjectID:   req.ProjectID,
-		UserID:      req.UserID,
-		Model:       req.Model,
-		Temperature: &temperature,
+		ProjectID:     req.ProjectID,
+		UserID:        req.UserID,
+		Model:         req.Model,
+		Temperature:   &temperature,
+		AttributionID: req.AttributionID,
 		Messages: []predict.Message{
 			{Role: "system", Content: system},
 			{Role: "user", Content: user.String()},

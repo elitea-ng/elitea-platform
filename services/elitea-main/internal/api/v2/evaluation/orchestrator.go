@@ -288,7 +288,7 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
 			return nil
 		}
 
-		output, agentErr := o.agentTurn(ctx, ref.ProjectID, actor(run), version, testCase)
+		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
@@ -372,6 +372,11 @@ func (o *Orchestrator) scoreOne(
 
 	verdict, err := o.judgeCall(ctx, JudgeRequest{
 		ProjectID: ref.ProjectID,
+		// The run's author, the same identity the agent turn signs. It was
+		// accepted by this function and never passed on, so every judge call
+		// reached the gateway with no user at all.
+		UserID:        userID,
+		AttributionID: JudgeAttributionID(ref.RunID, testCase.ID),
 		// The judge runs on the AGENT VERSION's own model. This slice has no
 		// separate judge-model setting — that belongs to the suite, which does
 		// not exist here — and silently picking a different model would make
@@ -435,7 +440,7 @@ func (o *Orchestrator) judgeCall(ctx context.Context, req JudgeRequest) (JudgeVe
 // measured.
 func (o *Orchestrator) agentTurn(
 	ctx context.Context,
-	projectID string,
+	ref RunRef,
 	userID string,
 	version AgentVersion,
 	testCase DatasetCase,
@@ -450,10 +455,13 @@ func (o *Orchestrator) agentTurn(
 	messages = append(messages, predict.Message{Role: "user", Content: substitute(testCase.Input, testCase.Variables)})
 
 	output, err := o.completer.Complete(ctx, predict.CompletionRequest{
-		ProjectID: projectID,
+		ProjectID: ref.ProjectID,
 		UserID:    userID,
 		Model:     version.ModelName,
 		Messages:  messages,
+		// Legacy issue 6677: the agent turn's spend is attributed to this run
+		// and case, so it is not lost among unattributed /predict_llm calls.
+		AttributionID: AgentAttributionID(ref.RunID, testCase.ID),
 	})
 	if err != nil {
 		return "", err
