@@ -109,6 +109,13 @@ export const GUIDE_SECTIONS: readonly GuideSection[] = [
         source: 'Captured when the SDK calls ChatAnthropic, ChatOpenAI, ChatBedrock, etc.',
       },
       {
+        name: 'COST',
+        description:
+          'Billed spend from the budget accumulator, which records money per billing period (a calendar month), not per day. The tile shows every billing period that overlaps the selected range and names those dates under the figure, so under Today it is the month to date, not today\'s spend. Per-day and per-model cost estimates are on the Costs tab.',
+        calculation: 'Sum of project-scope accumulator rows whose billing period overlaps the date range.',
+        source: 'The LLM gateway\'s budget write-back.',
+      },
+      {
         name: 'TOOL RUNS',
         description:
           'Total number of tool executions. When an AI agent uses a tool (e.g. web search, Slack message, Jira query, database lookup), each execution is counted as one tool run.',
@@ -253,7 +260,7 @@ export const GUIDE_SECTIONS: readonly GuideSection[] = [
       {
         name: 'Date Range',
         description:
-          'All Analytics metrics are filtered by the selected date range. Use Today, Last 7d, Last 30d, or Last 90d for calendar-day ranges. Each preset starts at 00:00 on its first day and ends at 23:59 today, including the entire final minute. Last 7d, Last 30d, and Last 90d include today in their day count. To view the last 24 hours or another exact period, set the From and To dates and times manually. The Custom selector appears when a custom range is active.',
+          'All Analytics metrics are filtered by the selected date range. Use Today, Last 7d, Last 30d, or Last 90d for calendar-day ranges. Each preset starts at 00:00 on its first day and ends at 23:59 today, including the entire final minute. Last 7d, Last 30d, and Last 90d include today in their day count. To view the last 24 hours or another exact period, set the From and To dates and times manually. The Custom selector appears when a custom range is active. Daily charts group activity by UTC day, so outside UTC one local day can appear as two chart columns.',
       },
       {
         name: 'Project Scope',

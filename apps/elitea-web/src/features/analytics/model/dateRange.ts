@@ -5,11 +5,9 @@
  *
  * ## Calendar-day presets (#6791)
  *
- * The presets used to be rolling windows (`Last 24h` = now-24h .. now). A
- * rolling 24 hours spans two calendar dates, so the daily chart showed two
- * buckets and a per-user "active days" count could read 2 for one day of use
- * (#6763). The presets are now whole calendar days in the browser's local
- * timezone — the same timezone the pickers display:
+ * The presets used to be rolling windows (`Last 24h` = now-24h .. now). The
+ * presets are now whole calendar days in the browser's local timezone — the
+ * same timezone the pickers display:
  *
  * | Preset   | From                         | To            |
  * |----------|------------------------------|---------------|
@@ -21,6 +19,17 @@
  * Days are counted with `setDate`, never by subtracting multiples of 24 hours,
  * so a daylight-saving change inside the window does not shift a boundary off
  * midnight.
+ *
+ * ## What this does NOT fix: daily chart buckets are UTC days
+ *
+ * Every daily series is bucketed server-side as
+ * `date_trunc('day', occurred_at AT TIME ZONE 'UTC')` (`repos/analytics.go`,
+ * `v2/analytics/estimate.go`). A local calendar day is one UTC day only for a
+ * UTC browser: in UTC+3, `Today` is 21:00Z yesterday .. 21:00Z today and still
+ * spans two chart columns (#6763 stays open for non-UTC users). Fixing it needs
+ * the browser's zone on the wire and `AT TIME ZONE $tz` server-side — an API
+ * change that belongs with the analytics server work, not this client. Until
+ * then the Guide and the tour say chart days are UTC days.
  *
  * ## The To field names the LAST MINUTE INCLUDED
  *

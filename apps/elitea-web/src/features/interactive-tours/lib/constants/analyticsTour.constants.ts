@@ -30,6 +30,7 @@ export const analyticsTourSteps: TourStep[] = [
 
 - **Quick presets** — **Today**, **Last 7d**, **Last 30d**, **Last 90d**; each covers whole calendar days, from 00:00 on its first day to 23:59 today, and the page loads with **Today** pre-selected
 - **Custom range** — set a precise **From / To** window (for example the last 24 hours); the **Custom** selector appears while one is active
+- **Daily charts** group activity by UTC day, so outside UTC one local day can span two chart columns
 
 Data is cached for up to 5 minutes.`,
   },

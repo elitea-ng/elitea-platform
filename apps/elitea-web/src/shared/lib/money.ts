@@ -14,6 +14,17 @@
  *    rounding to zero.
  *
  * This is a DISPLAY conversion. The exact decimal stays on the wire.
+ *
+ * ## Deliberate exemption: Admin › LLM Proxy usage and models panels
+ *
+ * `pages/admin/LlmProxyUsagePanel.tsx` and `LlmProxyModelsPanel.tsx` keep their
+ * own fixed-precision `costLabel` (`$0.0042`, four digits, `<$0.0001` below
+ * that). They already never print a non-zero spend as zero — the #6682 defect
+ * this module exists for — and they are operator tables where a fixed number of
+ * digits keeps a column of costs aligned for comparison, which the variable
+ * 2-or-6 digits here would break. Their per-1M-token prices (`priceLabel`) keep
+ * eight digits for the same reason. Moving them here is a column-layout
+ * decision for that screen, not a correctness fix.
  */
 
 /** The smallest non-zero amount six fraction digits can show. */
