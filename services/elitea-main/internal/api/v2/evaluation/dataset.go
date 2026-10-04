@@ -49,6 +49,14 @@ const (
 // the only thing between a paste of a thousand rows and a bill nobody
 // authorised. The refusal names the limit; it is not a silent truncation,
 // which would store a dataset that reads as complete and is not.
+//
+// The cap counts EVERY stored case, excluded ones included. That is a
+// decision, not an accident: AddCase accepts `excluded: true`, so a cap on
+// active cases alone would let a caller grow the table without bound and then
+// include the rows one at a time, each include needing a cap check of its own.
+// One total bound is the rule that cannot be walked around. The 409 says so,
+// and the dataset carries both `case_count` and `active_case_count`, so a
+// client can tell "full" apart from "nothing to run".
 const MaxCasesPerDataset = 10
 
 // MaxDatasetNameLength matches the column width and the dimension editor's own
@@ -59,6 +67,18 @@ const MaxDatasetNameLength = 128
 // text and both are sent to a model once per run, so an unbounded field is a
 // cost and a context-window failure rather than only a storage question.
 const MaxCaseInputBytes = 32 << 10 // 32 KiB
+
+// MaxCaseVariablesBytes bounds the JSON encoding of one case's template
+// variables. They are substituted into the input, so they reach the model on
+// every run just as the input does.
+const MaxCaseVariablesBytes = 32 << 10 // 32 KiB
+
+// MaxWriteBodyBytes bounds every evaluation write body BEFORE it is decoded.
+// The field caps are checked only after the whole body is in memory, so
+// without this bound a caller could stream any amount into the process first.
+// It sits well above the sum of the field caps, so no body that the field caps
+// accept is refused here.
+const MaxWriteBodyBytes = 256 << 10 // 256 KiB
 
 // Dataset is one stored dataset row.
 //
@@ -80,9 +100,14 @@ type Dataset struct {
 	// reads `case_count` for the list badge and `cases_truncated` to say the
 	// page is short. A client that counted the page would report a 200-case
 	// dataset as having 200 when the page size is 200 and it has 900.
-	CaseCount int    `json:"case_count"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	CaseCount int `json:"case_count"`
+	// ActiveCaseCount is the stored count of cases that are NOT excluded, i.e.
+	// the cases a run would execute. A dataset whose every case is excluded
+	// has a non-zero case_count and nothing to run; the run start refuses it
+	// with a 422, and this field lets a client say so before the request.
+	ActiveCaseCount int    `json:"active_case_count"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 // DatasetDetail is the ONE dataset read: the summary plus a page of cases.
@@ -205,8 +230,12 @@ func (input CaseWriteInput) Validate() error {
 	// marshalled reaches PostgreSQL as a driver error, i.e. a 500 for a caller
 	// error, and json.Marshal is the only thing that can tell the two apart
 	// before the write.
-	if _, err := json.Marshal(input.Variables); err != nil {
+	encoded, err := json.Marshal(input.Variables)
+	if err != nil {
 		return apierr.BadRequest("variables must be a JSON object of scalar values")
+	}
+	if len(encoded) > MaxCaseVariablesBytes {
+		return apierr.BadRequest(fmt.Sprintf("variables must be at most %d bytes as JSON", MaxCaseVariablesBytes))
 	}
 	return nil
 }
@@ -251,5 +280,10 @@ type DatasetRepository interface {
 
 	AddCase(ctx context.Context, projectID, datasetID string, input CaseWriteInput) (DatasetCase, error)
 	UpdateCase(ctx context.Context, projectID, datasetID, caseID string, input CaseWriteInput) (DatasetCase, error)
+	// SetCaseExcluded writes the exclusion flag and NOTHING else. It is what
+	// an update body holding only `excluded` runs, so including or excluding a
+	// case cannot write a client's cached copy of the case text back over an
+	// edit made since that copy was read.
+	SetCaseExcluded(ctx context.Context, projectID, datasetID, caseID string, excluded bool) (DatasetCase, error)
 	DeleteCase(ctx context.Context, projectID, datasetID, caseID string) error
 }

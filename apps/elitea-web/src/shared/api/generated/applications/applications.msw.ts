@@ -112,6 +112,7 @@ export const getListEvalDatasetsResponseMock = (
     application_id: faker.helpers.arrayElement([faker.number.int(), null]),
     is_shared: faker.datatype.boolean(),
     case_count: faker.number.int(),
+    active_case_count: faker.number.int(),
     created_at: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -138,6 +139,7 @@ export const getCreateEvalDatasetResponseMock = (
   application_id: faker.helpers.arrayElement([faker.number.int(), null]),
   is_shared: faker.datatype.boolean(),
   case_count: faker.number.int(),
+  active_case_count: faker.number.int(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -161,6 +163,7 @@ export const getGetEvalDatasetResponseMock = (): EvalDatasetDetail => ({
     application_id: faker.helpers.arrayElement([faker.number.int(), null]),
     is_shared: faker.datatype.boolean(),
     case_count: faker.number.int(),
+    active_case_count: faker.number.int(),
     created_at: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -216,6 +219,7 @@ export const getUpdateEvalDatasetResponseMock = (
   application_id: faker.helpers.arrayElement([faker.number.int(), null]),
   is_shared: faker.datatype.boolean(),
   case_count: faker.number.int(),
+  active_case_count: faker.number.int(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

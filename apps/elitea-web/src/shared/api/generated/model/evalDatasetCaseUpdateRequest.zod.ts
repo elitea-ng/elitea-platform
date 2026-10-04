@@ -41,35 +41,20 @@
  */
 import * as zod from "zod";
 
-export const EvalDataset = zod
+export const EvalDatasetCaseUpdateRequest = zod
   .object({
-    id: zod.string(),
-    uuid: zod.string().optional(),
-    name: zod.string(),
-    description: zod.string(),
-    application_id: zod
-      .int()
-      .nullable()
-      .describe(
-        "The agent this dataset was authored for. `null` is a project-wide dataset. It is `application_id` and not the reference's `agent_id` because every agent reference in this schema is an `applications` row; the QUERY PARAMETER stays `agent_id`.\n",
-      ),
-    is_shared: zod.boolean(),
-    case_count: zod
-      .int()
-      .describe(
-        "Every stored case, excluded ones included. This is the number the per-dataset case cap counts.\n",
-      ),
-    active_case_count: zod
-      .int()
-      .describe(
-        "The stored cases that are NOT excluded, i.e. the cases a run would execute. Zero with a non-zero `case_count` means every case is excluded, and a run start is refused.\n",
-      ),
-    created_at: zod.string().optional(),
-    updated_at: zod.string().optional(),
+    input: zod.string().optional(),
+    variables: zod.record(zod.string(), zod.unknown()).optional(),
+    expected_output: zod.string().nullish(),
+    excluded: zod.boolean().optional(),
   })
   .describe(
-    "A named set of evaluation cases. `case_count` is the STORED count and never the length of a page: the detail read is paged, so a client that counted the page would report a dataset of 900 cases as having 200.\n",
+    "Two forms. A body whose ONLY key is `excluded` writes the exclusion flag and nothing else; the include/exclude toggle sends this, so it cannot write a stale copy of the case text back over a newer edit. Any other body is a full rewrite of the case and must carry `input`; in that form an absent `excluded` keeps the stored flag.\n",
   );
 
-export type EvalDataset = zod.input<typeof EvalDataset>;
-export type EvalDatasetOutput = zod.output<typeof EvalDataset>;
+export type EvalDatasetCaseUpdateRequest = zod.input<
+  typeof EvalDatasetCaseUpdateRequest
+>;
+export type EvalDatasetCaseUpdateRequestOutput = zod.output<
+  typeof EvalDatasetCaseUpdateRequest
+>;

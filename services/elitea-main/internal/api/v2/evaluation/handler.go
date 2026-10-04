@@ -55,8 +55,18 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	// An absent `agent_id` means "the project library alone". It does NOT mean
 	// "every ad-hoc dimension in the project": an ad-hoc dimension authored on
-	// another agent is that agent's private rubric, and listing it here would
-	// leak every agent's evaluation criteria into every other agent's editor.
+	// another agent is SCOPED to that agent, and listing it here would fill
+	// every agent's editor with every other agent's criteria.
+	//
+	// The scope is a filter, NOT an authorization boundary. Every evaluation
+	// route is gated on a project permission only, and so is the agent itself
+	// (`models.applications.application.details` / `.update`): any project
+	// editor may open and change any agent in the project, so they may read,
+	// edit, delete or promote that agent's dimensions too. Nothing here checks
+	// the caller against the agent's author, because nothing else in the
+	// project does either. If agent-level ownership is ever introduced, these
+	// routes must check it on List with `agent_id`, Update (including the
+	// agent_adhoc -> project promotion) and Delete.
 	if raw := r.URL.Query().Get("agent_id"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
@@ -153,16 +163,13 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func decodeDimension(w http.ResponseWriter, r *http.Request) (Dimension, bool) {
 	var dimension Dimension
-	decoder := json.NewDecoder(r.Body)
 	// An unknown field is refused rather than dropped. The baseline's editor
 	// posts `evidence_scope` alongside the dimension body in one place, and
 	// that field belongs to a BINDING — a concept this slice does not have.
 	// Accepting and discarding it would report success for a setting that was
 	// never stored, which is the failure this whole slice is trying not to
-	// repeat.
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&dimension); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body: "+err.Error()))
+	// repeat. decodeStrict does that, and bounds the body (413) first.
+	if !decodeStrict(w, r, &dimension) {
 		return Dimension{}, false
 	}
 	return dimension, true

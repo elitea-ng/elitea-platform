@@ -1,7 +1,11 @@
 package evaluation
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -159,13 +163,38 @@ func (h *DatasetHandler) AddCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, created)
 }
 
+// UpdateCase rewrites one case, or ONLY its exclusion flag.
+//
+// A body whose single key is `excluded` writes the flag and nothing else. The
+// include/exclude checkbox sends exactly that. Before this form existed the
+// checkbox had to send the case text back with the flag, i.e. the client's
+// cached copy of it, so a toggle from a stale view silently reverted an edit
+// made in another tab. Any other body is a full rewrite, and `input` is
+// required in it as before.
 func (h *DatasetHandler) UpdateCase(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	datasetID := chi.URLParam(r, "datasetID")
 	caseID := chi.URLParam(r, "caseID")
 
+	raw, ok := readBoundedBody(w, r)
+	if !ok {
+		return
+	}
+	if excluded, flagOnly, err := exclusionOnly(raw); err != nil {
+		apierr.Write(w, err)
+		return
+	} else if flagOnly {
+		updated, err := h.repo.SetCaseExcluded(r.Context(), projectID, datasetID, caseID, excluded)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+		return
+	}
+
 	var input CaseWriteInput
-	if !decodeStrict(w, r, &input) {
+	if !decodeStrictBytes(w, raw, &input) {
 		return
 	}
 	input.Normalize()
@@ -227,12 +256,68 @@ func decodeCasePage(w http.ResponseWriter, r *http.Request) (CasePage, bool) {
 // this API is snake_case throughout — a lenient decoder would store `is_shared`
 // false for every dataset a reference-shaped client created, with a 201 each
 // time.
+//
+// The body is read through readBoundedBody first, so an oversized body is a
+// 413 before any of it is decoded.
 func decodeStrict(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(r.Body)
+	raw, ok := readBoundedBody(w, r)
+	if !ok {
+		return false
+	}
+	return decodeStrictBytes(w, raw, target)
+}
+
+func decodeStrictBytes(w http.ResponseWriter, raw []byte, target any) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body: "+err.Error()))
 		return false
 	}
 	return true
+}
+
+// readBoundedBody reads the whole request body, refusing one larger than
+// MaxWriteBodyBytes with a 413.
+//
+// Every evaluation write goes through here. The per-field caps in Validate
+// run only after decoding, and decoding buffers the whole body: without this
+// bound an authenticated editor could stream hundreds of megabytes into the
+// process before any cap is looked at.
+func readBoundedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxWriteBodyBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			apierr.WriteStatus(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("request body too large: at most %d bytes", MaxWriteBodyBytes))
+			return nil, false
+		}
+		apierr.Write(w, apierr.BadRequest("the request body could not be read"))
+		return nil, false
+	}
+	return raw, true
+}
+
+// exclusionOnly reports whether a case update body is the flag-only form,
+// `{"excluded": true|false}`, and the flag it carries.
+//
+// A body that is not a JSON object, or has any other key, is not the flag-only
+// form, and the caller decodes it as a full rewrite (which then reports its
+// own errors). `{"excluded": null}` is refused: it names the flag and gives it
+// no value, and treating it as either value would be a guess.
+func exclusionOnly(raw []byte) (bool, bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || len(fields) != 1 {
+		return false, false, nil
+	}
+	value, present := fields["excluded"]
+	if !present {
+		return false, false, nil
+	}
+	var excluded *bool
+	if err := json.Unmarshal(value, &excluded); err != nil || excluded == nil {
+		return false, false, apierr.BadRequest("excluded must be true or false")
+	}
+	return *excluded, true, nil
 }

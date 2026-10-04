@@ -95,6 +95,15 @@ const (
 	ReturnContractNumber = "number"
 )
 
+// MaxDimensionDescriptionBytes bounds the rubric. The description is the AI
+// judge's prompt, so it is sent to a model for every case of every run that
+// scores this dimension: an unbounded rubric is a per-run cost, not only a
+// storage question.
+const MaxDimensionDescriptionBytes = 32 << 10 // 32 KiB
+
+// MaxDimensionCodeBytes bounds a code-engine dimension's validation script.
+const MaxDimensionCodeBytes = 64 << 10 // 64 KiB
+
 // MaxNameLength matches the editor's own `inputProps={{ maxLength: 128 }}` and
 // the column width. Enforced here so a non-browser caller gets the same answer.
 const MaxNameLength = 128
@@ -170,7 +179,8 @@ type Repository interface {
 // (evaluationApi.js:29-39). The listing is "this project's own dimensions,
 // plus the ad-hoc ones belonging to the agent being edited" — an ad-hoc
 // dimension authored on ANOTHER agent must not appear, or every agent's editor
-// grows every other agent's private rubrics.
+// grows every other agent's rubrics. This is a scope filter, not an access
+// boundary (see Handler.List): any project editor may edit any agent.
 type ListFilter struct {
 	IncludePlatform bool
 	ApplicationID   *int
@@ -244,6 +254,9 @@ func (d *Dimension) Normalize() {
 // dimension, and its `application_id` is then cleared. The route that calls
 // this is gated on PermissionDimensionUpdate, which the project owner holds
 // (legacy issue 6669: a private-project owner could not change the tier).
+// Every project editor holds it too, and that is deliberate: the agent the
+// dimension is scoped to is itself editable by every project editor, so the
+// agent scope is not an access boundary to defend here (see Handler.List).
 //
 // DEMOTION is refused with a 409. A project dimension can already be in use by
 // other agents' runs and editors; moving it to one agent would remove it from
@@ -279,6 +292,12 @@ func (d Dimension) Validate(isCreate bool) error {
 	}
 	if len(d.Name) > MaxNameLength {
 		return apierr.BadRequest(fmt.Sprintf("name must be at most %d characters", MaxNameLength))
+	}
+	if len(d.Description) > MaxDimensionDescriptionBytes {
+		return apierr.BadRequest(fmt.Sprintf("description must be at most %d bytes", MaxDimensionDescriptionBytes))
+	}
+	if len(d.Code) > MaxDimensionCodeBytes {
+		return apierr.BadRequest(fmt.Sprintf("code must be at most %d bytes", MaxDimensionCodeBytes))
 	}
 	if !knownTiers[d.Tier] {
 		return apierr.BadRequest("tier must be one of project, agent_adhoc, platform")

@@ -76,6 +76,7 @@ import type {
   ErrorResponse,
   EvalDataset,
   EvalDatasetCase,
+  EvalDatasetCaseUpdateRequest,
   EvalDatasetCaseWriteRequest,
   EvalDatasetDetail,
   EvalDatasetList,
@@ -1899,13 +1900,16 @@ export const getUpdateEvalDatasetCaseUrl = (
  * `dataset_id` is in the storage predicate and not only in the path.
  * Without it, a caller who knows any case id could edit it through any
  * dataset's path and the 404 would never fire.
- * @summary Rewrite one case
+ *
+ * A body of `{"excluded": true|false}` alone writes only the flag. Any
+ * other body is a full rewrite and needs `input`.
+ * @summary Rewrite one case, or only its exclusion flag
  */
 export const updateEvalDatasetCase = async (
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest: EvalDatasetCaseUpdateRequest,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<updateEvalDatasetCaseResponse> => {
   const getHeaders = (
@@ -1938,7 +1942,7 @@ export const updateEvalDatasetCase = async (
         "Content-Type": "application/json",
         ...getHeaders(options?.headers),
       },
-      body: JSON.stringify(evalDatasetCaseWriteRequest),
+      body: JSON.stringify(evalDatasetCaseUpdateRequest),
     },
   );
 };
@@ -1947,12 +1951,12 @@ export const getUpdateEvalDatasetCaseQueryKey = (
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest?: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest?: EvalDatasetCaseUpdateRequest,
 ) => {
   return [
     "PUT",
     `/elitea_core/eval_dataset_case/prompt_lib/${projectId}/${datasetId}/${caseId}`,
-    evalDatasetCaseWriteRequest,
+    evalDatasetCaseUpdateRequest,
   ] as const;
 };
 
@@ -1964,7 +1968,7 @@ export const getUpdateEvalDatasetCaseQueryOptions = <
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest: EvalDatasetCaseUpdateRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -1984,7 +1988,7 @@ export const getUpdateEvalDatasetCaseQueryOptions = <
       projectId,
       datasetId,
       caseId,
-      evalDatasetCaseWriteRequest,
+      evalDatasetCaseUpdateRequest,
     );
 
   const queryFn: QueryFunction<
@@ -1994,7 +1998,7 @@ export const getUpdateEvalDatasetCaseQueryOptions = <
       projectId,
       datasetId,
       caseId,
-      evalDatasetCaseWriteRequest,
+      evalDatasetCaseUpdateRequest,
       { signal, ...requestOptions },
     );
 
@@ -2030,7 +2034,7 @@ export function useUpdateEvalDatasetCase<
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest: EvalDatasetCaseUpdateRequest,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -2061,7 +2065,7 @@ export function useUpdateEvalDatasetCase<
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest: EvalDatasetCaseUpdateRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2092,7 +2096,7 @@ export function useUpdateEvalDatasetCase<
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest: EvalDatasetCaseUpdateRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2108,7 +2112,7 @@ export function useUpdateEvalDatasetCase<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Rewrite one case
+ * @summary Rewrite one case, or only its exclusion flag
  */
 
 export function useUpdateEvalDatasetCase<
@@ -2119,7 +2123,7 @@ export function useUpdateEvalDatasetCase<
   projectId: string,
   datasetId: string,
   caseId: string,
-  evalDatasetCaseWriteRequest: EvalDatasetCaseWriteRequest,
+  evalDatasetCaseUpdateRequest: EvalDatasetCaseUpdateRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -2138,7 +2142,7 @@ export function useUpdateEvalDatasetCase<
     projectId,
     datasetId,
     caseId,
-    evalDatasetCaseWriteRequest,
+    evalDatasetCaseUpdateRequest,
     options,
   );
 

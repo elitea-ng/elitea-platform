@@ -132,6 +132,12 @@ export function DatasetCasesPanel(props: DatasetCasesPanelProps): ReactNode {
   const cases = detail?.cases ?? [];
   const activeCount = cases.filter((datasetCase) => !datasetCase.excluded).length;
   const addError = datasetErrorMessage(mutations.addCase.error);
+  // The toggle and the remove button fail SILENTLY without these: there is
+  // no optimistic update, so a refused PUT or DELETE (no dataset.update, a
+  // case another tab deleted, a network failure) just leaves the row as it
+  // was, and the author cannot tell why the click did nothing.
+  const toggleError = datasetErrorMessage(mutations.setCaseExcluded.error);
+  const removeError = datasetErrorMessage(mutations.removeCase.error);
 
   const handleAdd = (): void => {
     const trimmed = input.trim();
@@ -204,10 +210,21 @@ export function DatasetCasesPanel(props: DatasetCasesPanelProps): ReactNode {
           datasetCase={datasetCase}
           canEdit={canEdit}
           isToggling={mutations.setCaseExcluded.isPending}
-          onToggle={(excluded) => mutations.setCaseExcluded.mutate({ datasetId, datasetCase, excluded })}
+          onToggle={(excluded) => mutations.setCaseExcluded.mutate({ datasetId, caseId: datasetCase.id, excluded })}
           onRemove={() => mutations.removeCase.mutate({ datasetId, caseId: datasetCase.id })}
         />
       ))}
+
+      {toggleError !== undefined && (
+        <Typography role="alert" variant="bodyMedium" component="p" color="error" data-testid="dataset-case-toggle-error">
+          {toggleError}
+        </Typography>
+      )}
+      {removeError !== undefined && (
+        <Typography role="alert" variant="bodyMedium" component="p" color="error" data-testid="dataset-case-remove-error">
+          {removeError}
+        </Typography>
+      )}
 
       {canEdit && (
         <Box sx={formSx}>

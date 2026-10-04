@@ -170,6 +170,7 @@ export * from "./error.zod";
 export * from "./errorResponse.zod";
 export * from "./evalDataset.zod";
 export * from "./evalDatasetCase.zod";
+export * from "./evalDatasetCaseUpdateRequest.zod";
 export * from "./evalDatasetCaseWriteRequest.zod";
 export * from "./evalDatasetDetail.zod";
 export * from "./evalDatasetList.zod";

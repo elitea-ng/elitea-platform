@@ -33,6 +33,7 @@ function datasetRow(overrides: Record<string, unknown> = {}) {
     application_id: null,
     is_shared: false,
     case_count: 2,
+    active_case_count: 1,
     ...overrides,
   };
 }
@@ -54,7 +55,7 @@ beforeEach(() => configureGeneratedClient({ baseUrl: BASE }));
 afterEach(() => resetGeneratedClient());
 
 describe('dataset case exclusion', () => {
-  it('counts the active cases and toggles one with a full PUT carrying `excluded`', async () => {
+  it('counts the active cases and toggles one with a PUT carrying `excluded` alone', async () => {
     mockPermissions([PERMISSIONS.evaluation.datasetRead, PERMISSIONS.evaluation.datasetUpdate]);
     const cases = [caseRow('11', false), caseRow('12', true)];
     const bodies: unknown[] = [];
@@ -92,13 +93,44 @@ describe('dataset case exclusion', () => {
     await userEvent.click(excluded);
     await waitFor(() => expect(screen.getByTestId('dataset-cases-active-count')).toHaveTextContent('2 active'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(bodies).toEqual([
-      { input: 'question 12', variables: { topic: 'Go' }, expected_output: null, excluded: false },
-    ]);
+    // The flag ALONE. The cached case text in this body would overwrite any
+    // edit made in another tab since this view last read the dataset.
+    expect(bodies).toEqual([{ excluded: false }]);
 
     await userEvent.click(screen.getAllByRole('checkbox', { name: 'Include this case in runs' })[0]!);
     await waitFor(() => expect(screen.getByTestId('dataset-cases-active-count')).toHaveTextContent('1 active'));
-    expect(bodies[1]).toMatchObject({ input: 'question 11', excluded: true });
+    expect(bodies[1]).toEqual({ excluded: true });
+  });
+
+  it('says why a refused toggle or remove did nothing', async () => {
+    mockPermissions([PERMISSIONS.evaluation.datasetRead, PERMISSIONS.evaluation.datasetUpdate]);
+    server.use(
+      http.get(`${BASE}/elitea_core/eval_datasets/prompt_lib/:projectId`, () =>
+        HttpResponse.json({ rows: [datasetRow()], total: 1 }),
+      ),
+      http.get(`${BASE}/elitea_core/eval_dataset/prompt_lib/:projectId/:datasetId`, () =>
+        HttpResponse.json({ ...datasetRow(), cases: [caseRow('11', false)], cases_truncated: false }),
+      ),
+      http.put(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId`, () =>
+        HttpResponse.json({ error: 'case not found in this dataset' }, { status: 404 }),
+      ),
+      http.delete(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId`, () =>
+        HttpResponse.json({ error: 'missing permission' }, { status: 403 }),
+      ),
+    );
+
+    renderWithEvaluationProviders(<EvaluationDatasetsView projectId="1" applicationId={42} />);
+    await userEvent.click(await screen.findByTestId('evaluation-dataset-row-5'));
+
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Include this case in runs' }));
+    expect(await screen.findByTestId('dataset-case-toggle-error')).toHaveTextContent('case not found in this dataset');
+    // The stored state is unchanged, and the box says so once the refetch lands.
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: 'Include this case in runs' })).toBeChecked(),
+    );
+
+    await userEvent.click(screen.getByTestId('dataset-case-remove-11'));
+    expect(await screen.findByTestId('dataset-case-remove-error')).toHaveTextContent('missing permission');
   });
 
   it('shows the checkbox read-only to a caller who may not update the dataset', async () => {

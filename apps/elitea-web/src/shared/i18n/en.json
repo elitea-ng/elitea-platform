@@ -3106,6 +3106,7 @@
   "features.agentEvaluation.runs.needVersion": "Save this agent before running an evaluation: a run scores one specific version.",
   "features.agentEvaluation.runs.needDataset": "Choose a dataset.",
   "features.agentEvaluation.runs.needCases": "This dataset has no cases. Add at least one before starting a run.",
+  "features.agentEvaluation.runs.allCasesExcluded": "Every case in this dataset is excluded. Include at least one before starting a run.",
   "features.agentEvaluation.runs.needDimension": "Choose at least one dimension to score against.",
   "features.agentEvaluation.runs.tooManyDimensions": "A run may score against at most {{max}} dimensions.",
   "features.agentEvaluation.runs.datasetLabel": "Dataset",

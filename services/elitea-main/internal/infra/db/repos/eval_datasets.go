@@ -41,6 +41,7 @@ const datasetColumns = `
 	d.application_id,
 	d.is_shared,
 	(SELECT count(*) FROM %[1]s.eval_dataset_cases AS c WHERE c.dataset_id = d.id)::int,
+	(SELECT count(*) FROM %[1]s.eval_dataset_cases AS c WHERE c.dataset_id = d.id AND NOT c.excluded)::int,
 	d.created_at,
 	d.updated_at`
 
@@ -55,6 +56,7 @@ func scanDataset(row pgx.Row) (evaluation.Dataset, error) {
 		&dataset.ApplicationID,
 		&dataset.IsShared,
 		&dataset.CaseCount,
+		&dataset.ActiveCaseCount,
 		&createdAt,
 		&updatedAt,
 	)
@@ -349,11 +351,17 @@ func (r *EvalDatasetsRepo) DeleteDataset(ctx context.Context, projectID, dataset
 
 // AddCase appends one case, refusing past the cap.
 //
-// The count and the insert are ONE STATEMENT. Checking first and inserting
-// second is a race two concurrent writers win together, and the cap exists to
-// bound model spend — an over-count is not cosmetic. The `WHERE (SELECT
-// count(*) ...) < cap` predicate makes PostgreSQL evaluate both in the same
-// snapshot, and a zero-row insert is the refusal.
+// The dataset row is LOCKED (`FOR UPDATE`) for the whole transaction, and the
+// count, the next order_index and the insert all run under that lock. A single
+// `INSERT ... WHERE (SELECT count(*) ...) < cap` statement is NOT enough on its
+// own. Under READ COMMITTED, two concurrent inserts into a dataset holding nine
+// cases both see nine, both pass, and the dataset ends with eleven. They would
+// also compute the same max(order_index)+1. The cap exists to bound model
+// spend, so an over-count is not cosmetic. With the lock, the second writer
+// waits for the first to commit and then counts its row.
+//
+// The cap counts excluded cases as well (see evaluation.MaxCasesPerDataset),
+// and the 409 says so.
 func (r *EvalDatasetsRepo) AddCase(
 	ctx context.Context,
 	projectID, datasetID string,
@@ -372,39 +380,86 @@ func (r *EvalDatasetsRepo) AddCase(
 		return evaluation.DatasetCase{}, apierr.BadRequest("variables must be a JSON object")
 	}
 
-	// The dataset is confirmed to exist FIRST, so "no such dataset" answers 404
-	// and "the dataset is full" answers 409 — a single zero-row insert cannot
-	// tell the two apart, and answering the same code for both sends the caller
-	// looking in the wrong place.
-	var exists bool
-	if err := r.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT EXISTS (SELECT 1 FROM %s.eval_datasets WHERE id = $1)`, schema), id).
-		Scan(&exists); err != nil {
-		return evaluation.DatasetCase{}, fmt.Errorf("eval datasets: add case: %w", err)
-	}
-	if !exists {
-		return evaluation.DatasetCase{}, apierr.NotFound("dataset not found")
-	}
-
-	created, err := scanCase(r.pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %[1]s.eval_dataset_cases
-			(dataset_id, input, variables, expected_output, source_type, order_index, excluded)
-		SELECT $1, $2, $3::jsonb, $4, $5,
-		       COALESCE((SELECT max(order_index) + 1 FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1), 0),
-		       COALESCE($7::boolean, false)
-		WHERE (SELECT count(*) FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1) < $6
-		RETURNING `+caseColumns, schema),
-		id, input.Input, string(variables), input.ExpectedOutput,
-		evaluation.CaseSourceManual, evaluation.MaxCasesPerDataset, input.Excluded))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return evaluation.DatasetCase{}, apierr.Conflict(fmt.Sprintf(
-				"a dataset holds at most %d cases: a run spends two model calls per case, so the cap is what stands between a large paste and an unauthorised bill",
-				evaluation.MaxCasesPerDataset))
+	var created evaluation.DatasetCase
+	err = pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		// The dataset is confirmed to exist FIRST, so "no such dataset" answers
+		// 404 and "the dataset is full" answers 409 — a single zero-row insert
+		// cannot tell the two apart, and answering the same code for both sends
+		// the caller looking in the wrong place. The same read takes the lock.
+		var locked int
+		if err := tx.QueryRow(ctx, fmt.Sprintf(
+			`SELECT id FROM %s.eval_datasets WHERE id = $1 FOR UPDATE`, schema), id).
+			Scan(&locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return apierr.NotFound("dataset not found")
+			}
+			return fmt.Errorf("eval datasets: add case: lock dataset: %w", err)
 		}
-		return evaluation.DatasetCase{}, wrapEvalWrite("case create", err)
+
+		row, err := scanCase(tx.QueryRow(ctx, fmt.Sprintf(`
+			INSERT INTO %[1]s.eval_dataset_cases
+				(dataset_id, input, variables, expected_output, source_type, order_index, excluded)
+			SELECT $1, $2, $3::jsonb, $4, $5,
+			       COALESCE((SELECT max(order_index) + 1 FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1), 0),
+			       COALESCE($7::boolean, false)
+			WHERE (SELECT count(*) FROM %[1]s.eval_dataset_cases WHERE dataset_id = $1) < $6
+			RETURNING `+caseColumns, schema),
+			id, input.Input, string(variables), input.ExpectedOutput,
+			evaluation.CaseSourceManual, evaluation.MaxCasesPerDataset, input.Excluded))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return apierr.Conflict(fmt.Sprintf(
+					"a dataset holds at most %d cases, excluded cases included: a run spends two model calls per case, so the cap is what stands between a large paste and an unauthorised bill. Remove a case to add another",
+					evaluation.MaxCasesPerDataset))
+			}
+			return wrapEvalWrite("case create", err)
+		}
+		created = row
+		return nil
+	})
+	if err != nil {
+		return evaluation.DatasetCase{}, err
 	}
 	return created, nil
+}
+
+// SetCaseExcluded writes ONLY the exclusion flag of one case.
+//
+// The case text is not in the statement, so a client toggling from a stale
+// view cannot write its cached copy of the text back over a newer edit.
+func (r *EvalDatasetsRepo) SetCaseExcluded(
+	ctx context.Context,
+	projectID, datasetID, caseID string,
+	excluded bool,
+) (evaluation.DatasetCase, error) {
+	schema, err := tenantSchema(projectID)
+	if err != nil {
+		return evaluation.DatasetCase{}, err
+	}
+	datasetKey, err := parseEvalID(datasetID, "dataset")
+	if err != nil {
+		return evaluation.DatasetCase{}, err
+	}
+	caseKey, err := parseEvalID(caseID, "case")
+	if err != nil {
+		return evaluation.DatasetCase{}, err
+	}
+
+	// `dataset_id` is in the predicate for the reason UpdateCase gives.
+	updated, err := scanCase(r.pool.QueryRow(ctx, fmt.Sprintf(`
+		UPDATE %s.eval_dataset_cases
+		SET excluded = $1,
+		    updated_at = now()
+		WHERE id = $2 AND dataset_id = $3
+		RETURNING `+caseColumns, schema),
+		excluded, caseKey, datasetKey))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return evaluation.DatasetCase{}, apierr.NotFound("case not found in this dataset")
+		}
+		return evaluation.DatasetCase{}, wrapEvalWrite("case exclusion", err)
+	}
+	return updated, nil
 }
 
 func (r *EvalDatasetsRepo) UpdateCase(

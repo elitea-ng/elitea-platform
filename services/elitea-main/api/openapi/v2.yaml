@@ -9751,10 +9751,20 @@ components:
             because every agent reference in this schema is an `applications`
             row; the QUERY PARAMETER stays `agent_id`.
         is_shared: { type: boolean }
-        case_count: { type: integer }
+        case_count:
+          type: integer
+          description: >
+            Every stored case, excluded ones included. This is the number the
+            per-dataset case cap counts.
+        active_case_count:
+          type: integer
+          description: >
+            The stored cases that are NOT excluded, i.e. the cases a run would
+            execute. Zero with a non-zero `case_count` means every case is
+            excluded, and a run start is refused.
         created_at: { type: string }
         updated_at: { type: string }
-      required: [id, name, description, application_id, is_shared, case_count]
+      required: [id, name, description, application_id, is_shared, case_count, active_case_count]
 
     EvalDatasetDetail:
       description: >
@@ -9861,6 +9871,27 @@ components:
             Absent keeps the stored flag, so a text edit does not include an
             excluded case again. A new case is active unless this is `true`.
       required: [input]
+      additionalProperties: false
+
+    EvalDatasetCaseUpdateRequest:
+      type: object
+      description: >
+        Two forms. A body whose ONLY key is `excluded` writes the exclusion
+        flag and nothing else; the include/exclude toggle sends this, so it
+        cannot write a stale copy of the case text back over a newer edit.
+        Any other body is a full rewrite of the case and must carry `input`;
+        in that form an absent `excluded` keeps the stored flag.
+      properties:
+        input: { type: string }
+        variables:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the case's template variables, an arbitrary string-keyed
+            map the author writes and the judge prompt reads verbatim
+            (internal/api/v2/evaluation/dataset.go:116, Variables map[string]any).
+        expected_output: { type: string, nullable: true }
+        excluded: { type: boolean }
       additionalProperties: false
 
     EvalRunSnapshotDimension:
@@ -12450,18 +12481,21 @@ paths:
 
     put:
       operationId: updateEvalDatasetCase
-      summary: Rewrite one case
+      summary: Rewrite one case, or only its exclusion flag
       description: |
         `dataset_id` is in the storage predicate and not only in the path.
         Without it, a caller who knows any case id could edit it through any
         dataset's path and the 404 would never fire.
+
+        A body of `{"excluded": true|false}` alone writes only the flag. Any
+        other body is a full rewrite and needs `input`.
       tags: [applications]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EvalDatasetCaseWriteRequest'
+              $ref: '#/components/schemas/EvalDatasetCaseUpdateRequest'
       responses:
         '200':
           description: The stored case

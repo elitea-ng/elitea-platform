@@ -18,7 +18,6 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 
 import type {
   EvalDataset,
-  EvalDatasetCase,
   EvalDatasetCaseWriteRequest,
   EvalDatasetDetail,
   EvalDatasetWriteRequest,
@@ -31,7 +30,6 @@ import {
   addCase,
   cancelRun,
   createDataset,
-  editCase,
   fetchEvalDataset,
   fetchEvalDatasets,
   fetchEvalRun,
@@ -39,6 +37,7 @@ import {
   fetchScorecard,
   removeCase,
   removeDataset,
+  setCaseExcluded,
   startRun,
 } from '../api/evaluationRunsApi';
 
@@ -147,7 +146,7 @@ interface AddCaseArgs {
 
 interface SetCaseExcludedArgs {
   readonly datasetId: string;
-  readonly datasetCase: EvalDatasetCase;
+  readonly caseId: string;
   readonly excluded: boolean;
 }
 
@@ -180,18 +179,14 @@ export function useEvalDatasetMutations(projectId: string | undefined) {
       onSuccess: invalidateDatasets,
     }),
     /*
-     * Include or exclude ONE case (legacy issue 6700). The case route is a
-     * full PUT, so the case's own text is sent back unchanged with the flag.
+     * Include or exclude ONE case (legacy issue 6700). Only the flag is sent:
+     * the server writes `{excluded}` alone and leaves the case text as stored,
+     * so a toggle from a stale view cannot revert an edit made elsewhere.
      * An excluded case stays in the dataset; a run start leaves it out.
      */
     setCaseExcluded: useMutation({
       mutationFn: (args: SetCaseExcludedArgs) =>
-        editCase(projectId ?? '', args.datasetId, args.datasetCase.id, {
-          input: args.datasetCase.input,
-          variables: args.datasetCase.variables,
-          expected_output: args.datasetCase.expected_output ?? null,
-          excluded: args.excluded,
-        }),
+        setCaseExcluded(projectId ?? '', args.datasetId, args.caseId, args.excluded),
       onSuccess: invalidateDatasets,
     }),
     removeCase: useMutation({
