@@ -26,7 +26,12 @@
 --     sync_at = clock_timestamp().
 --   * Child -> parent bumps, throttled to one per second per parent row:
 --     a message group insert/update/delete bumps its conversation, and a
---     chat_message_items / chat_messages_text write bumps its group. The
+--     chat_message_items / chat_messages_text write bumps its group, as does
+--     a write to any other payload the message delta projects:
+--     chat_messages_canvas and chat_messages_attachment (keyed by the item
+--     id) and chat_canvas_versions (keyed by canvas_item_id). The canvas
+--     editor's save writes ONLY the last two, so without them a synced
+--     client would never see a canvas edit. The
 --     throttle is sound only while it is shorter than the read side's settle
 --     window (internal/application/changesync, 5 s): a client whose cursor
 --     stops at S - settle is behind the last bump, so the parent comes back
@@ -245,6 +250,39 @@ BEGIN
         END
         $body$ $fn$, tenant);
 
+    -- chat_messages_canvas / chat_messages_attachment: payloads keyed by the
+    -- item id, like chat_messages_text. On a cascade from the item's own
+    -- delete the item row is already gone; the item trigger bumped the group.
+    EXECUTE format($fn$
+        CREATE OR REPLACE FUNCTION %1$I.chat_sync_payload_changed() RETURNS trigger
+        LANGUAGE plpgsql AS $body$
+        BEGIN
+            IF current_setting('elitea.sync_cascade', true) = 'conversation' THEN
+                RETURN NULL;
+            END IF;
+            PERFORM %1$I.chat_sync_bump_group(
+                (SELECT message_group_id FROM %1$I.chat_message_items
+                  WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END));
+            RETURN NULL;
+        END
+        $body$ $fn$, tenant);
+
+    -- chat_canvas_versions: a canvas edit is a new version row, keyed by the
+    -- canvas item.
+    EXECUTE format($fn$
+        CREATE OR REPLACE FUNCTION %1$I.chat_sync_canvas_version_changed() RETURNS trigger
+        LANGUAGE plpgsql AS $body$
+        BEGIN
+            IF current_setting('elitea.sync_cascade', true) = 'conversation' THEN
+                RETURN NULL;
+            END IF;
+            PERFORM %1$I.chat_sync_bump_group(
+                (SELECT message_group_id FROM %1$I.chat_message_items
+                  WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.canvas_item_id ELSE NEW.canvas_item_id END));
+            RETURN NULL;
+        END
+        $body$ $fn$, tenant);
+
     -- chat_participant_mapping: gaining a participant bumps the conversation
     -- (a new participant must see a private conversation it now belongs to);
     -- losing a user participant records who lost it.
@@ -311,6 +349,23 @@ BEGIN
         DROP TRIGGER IF EXISTS chat_sync_changed ON chat_messages_text;
         CREATE TRIGGER chat_sync_changed AFTER INSERT OR UPDATE ON chat_messages_text
             FOR EACH ROW EXECUTE FUNCTION chat_sync_text_changed();
+    END IF;
+    FOREACH table_name IN ARRAY ARRAY['chat_messages_canvas', 'chat_messages_attachment'] LOOP
+        CONTINUE WHEN to_regclass(table_name) IS NULL
+                   OR to_regclass('chat_message_items') IS NULL
+                   OR to_regclass('chat_message_group') IS NULL;
+        EXECUTE format('DROP TRIGGER IF EXISTS chat_sync_changed ON %I', table_name);
+        EXECUTE format('CREATE TRIGGER chat_sync_changed AFTER INSERT OR UPDATE OR DELETE ON %I
+            FOR EACH ROW EXECUTE FUNCTION chat_sync_payload_changed()', table_name);
+    END LOOP;
+    IF to_regclass('chat_canvas_versions') IS NOT NULL
+       AND to_regclass('chat_message_items') IS NOT NULL
+       AND to_regclass('chat_message_group') IS NOT NULL
+       AND (SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass('chat_canvas_versions')
+              AND NOT attisdropped AND attname = 'canvas_item_id') = 1 THEN
+        DROP TRIGGER IF EXISTS chat_sync_changed ON chat_canvas_versions;
+        CREATE TRIGGER chat_sync_changed AFTER INSERT OR UPDATE OR DELETE ON chat_canvas_versions
+            FOR EACH ROW EXECUTE FUNCTION chat_sync_canvas_version_changed();
     END IF;
     IF to_regclass('chat_participant_mapping') IS NOT NULL
        AND to_regclass('chat_participants') IS NOT NULL

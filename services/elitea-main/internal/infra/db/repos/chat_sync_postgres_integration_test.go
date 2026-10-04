@@ -333,3 +333,71 @@ func TestChatSyncMessageCursorRefusals(t *testing.T) {
 		t.Fatalf("back-dated cursor: err = %v, want ErrCursorExpired", err)
 	}
 }
+
+// TestChatSyncMessageDeltaCarriesCanvasAndAttachmentEdits: the message delta
+// projects canvas items (name, type, newest version) and attachments, and the
+// canvas editor's save writes only chat_messages_canvas and a new
+// chat_canvas_versions row. Those writes must bump the owning group, or a
+// client that already synced the transcript never sees the edit.
+func TestChatSyncMessageDeltaCarriesCanvasAndAttachmentEdits(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	_, conversationUUID, groups := seedConversationWithParticipant(t, repo, "before CANVAS BODY after")
+	groupID := groupIDByUUID(t, pool, groups[0])
+	var itemID int64
+	if err := pool.QueryRow(ctx, `SELECT id FROM p_1.chat_message_items WHERE message_group_id = $1`, groupID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	canvas, err := repo.CreateCanvas(ctx, "1", map[string]any{
+		"message_group_id": int(groupID), "message_item_id": int(itemID),
+		"name": "snippet", "canvas_type": "code", "code_language": "python",
+		"canvas_content_starts_at": 7, "canvas_content_ends_at": 18,
+	})
+	if err != nil {
+		t.Fatalf("CreateCanvas: %v", err)
+	}
+	canvasUUID, _ := canvas["uuid"].(string)
+
+	settled := func() string {
+		t.Helper()
+		backdate(t, pool, "p_1.chat_message_group", groupID, 10*time.Minute)
+		page, err := repo.ListMessageChanges(ctx, "1", conversationUUID, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page.NextCursor
+	}
+	delivers := func(label, cursor string) {
+		t.Helper()
+		page, err := repo.ListMessageChanges(ctx, "1", conversationUUID, cursor, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range page.Items {
+			if item.UUID == groups[0] {
+				return
+			}
+		}
+		t.Fatalf("%s: the edited group is not in the next delta (%d items)", label, len(page.Items))
+	}
+
+	cursor := settled()
+	if err := repo.UpdateCanvas(ctx, "1", canvasUUID, map[string]any{"canvas_content": "rewritten"}); err != nil {
+		t.Fatalf("UpdateCanvas content: %v", err)
+	}
+	delivers("canvas content edit", cursor)
+
+	cursor = settled()
+	if err := repo.UpdateCanvas(ctx, "1", canvasUUID, map[string]any{"name": "renamed"}); err != nil {
+		t.Fatalf("UpdateCanvas name: %v", err)
+	}
+	delivers("canvas rename", cursor)
+
+	cursor = settled()
+	if _, err := pool.Exec(ctx, `INSERT INTO p_1.chat_messages_attachment (id, name, bucket, attachment_type)
+		SELECT id, 'a.txt', 'b', 'file' FROM p_1.chat_message_items WHERE message_group_id = $1 LIMIT 1`, groupID); err != nil {
+		t.Fatal(err)
+	}
+	delivers("attachment write", cursor)
+}
