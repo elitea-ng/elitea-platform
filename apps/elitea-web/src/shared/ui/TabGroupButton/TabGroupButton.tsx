@@ -17,6 +17,12 @@ export interface TabGroupButtonProps {
   value?: string;
   defaultValue?: string;
   onChange?: (value: string) => void;
+  /**
+   * Opt-in: called with the current value when the ALREADY-selected button is
+   * clicked again. The selection does not change either way; a caller whose
+   * choice is time-relative (a "Today" range, say) uses this to re-apply it.
+   */
+  onReselect?: (value: string) => void;
   size?: 'small' | 'medium' | 'large';
   disableTooltip?: boolean;
   ariaLabel?: string;
@@ -65,6 +71,7 @@ export function TabGroupButton({
   value: controlledValue,
   defaultValue,
   onChange,
+  onReselect,
   size = 'small',
   disableTooltip,
   ariaLabel,
@@ -88,6 +95,7 @@ export function TabGroupButton({
       // one button always selected rather than allowing a fully-deselected
       // group.
       if (newValue === null) {
+        if (currentValue !== undefined) onReselect?.(currentValue);
         return;
       }
       if (!isControlled) {
@@ -95,7 +103,7 @@ export function TabGroupButton({
       }
       onChange?.(newValue);
     },
-    [isControlled, onChange],
+    [currentValue, isControlled, onChange, onReselect],
   );
 
   return (

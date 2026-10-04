@@ -49,6 +49,12 @@ export interface AnalyticsKpiRowProps {
    * screens do not).
    */
   readonly totalCost?: string | undefined;
+  /**
+   * The billing period(s) `totalCost` covers (`fmtBilledPeriod`). The figure
+   * is a whole-period accumulator, not the selected window's spend, so the
+   * tile names the period instead of implying the window.
+   */
+  readonly totalCostPeriod?: string | undefined;
 }
 
 const rowSx: SxProps<Theme> = {
@@ -56,6 +62,15 @@ const rowSx: SxProps<Theme> = {
   gridTemplateColumns: 'repeat(auto-fit, minmax(9rem, 1fr))',
   gap: (theme: Theme) => theme.spacing(2),
 };
+
+/**
+ * The COST tile names the billing period its figure covers: an accumulator
+ * row is a whole period, so under `Today` the figure is the month to date.
+ */
+function costSubtitle(period: string | undefined): string {
+  if (period === undefined) return t('analytics.kpi.cost.subtitleNoPeriod', 'billing period to date, USD');
+  return t('analytics.kpi.cost.subtitle', 'billed {{period}}, USD', { period });
+}
 
 /**
  * The tiles, as data.
@@ -66,7 +81,11 @@ const rowSx: SxProps<Theme> = {
  * question about the response, and answering it in one place keeps the JSX from
  * having to re-ask it per tile.
  */
-function tilesFor(kpis: AnalyticsKpis | undefined, totalCost: string | undefined): readonly KpiCardProps[] {
+function tilesFor(
+  kpis: AnalyticsKpis | undefined,
+  totalCost: string | undefined,
+  totalCostPeriod: string | undefined,
+): readonly KpiCardProps[] {
   const tiles: KpiCardProps[] = [];
   if (kpis === undefined) return tiles;
 
@@ -112,7 +131,7 @@ function tilesFor(kpis: AnalyticsKpis | undefined, totalCost: string | undefined
     tiles.push({
       label: t('analytics.kpi.cost.label', 'COST'),
       value: totalCost,
-      subtitle: t('analytics.kpi.cost.subtitle', 'billed spend, USD'),
+      subtitle: costSubtitle(totalCostPeriod),
     });
   }
   // The three below have no producer today, so these branches never fire. They
@@ -131,7 +150,7 @@ function tilesFor(kpis: AnalyticsKpis | undefined, totalCost: string | undefined
   return tiles;
 }
 
-function AnalyticsKpiRowImpl({ kpis, totalCost }: AnalyticsKpiRowProps): ReactNode {
+function AnalyticsKpiRowImpl({ kpis, totalCost, totalCostPeriod }: AnalyticsKpiRowProps): ReactNode {
   return (
     // The testid is the @visual suite's landmark for "the analytics query has
     // resolved and the tab content is painted". Before it existed, the visual
@@ -139,7 +158,7 @@ function AnalyticsKpiRowImpl({ kpis, totalCost }: AnalyticsKpiRowProps): ReactNo
     // spinner — and the committed baseline was a picture of that spinner
     // (run 31345403013, issue #159).
     <Box sx={rowSx} data-testid="analytics-kpi-row">
-      {tilesFor(kpis, totalCost).map((tile) => (
+      {tilesFor(kpis, totalCost, totalCostPeriod).map((tile) => (
         <KpiCard
           key={tile.label}
           {...tile}

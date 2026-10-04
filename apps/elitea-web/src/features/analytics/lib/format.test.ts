@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fmtDuration, fmtNum, fmtShare, fmtUsd, UNAVAILABLE_METRIC } from './format';
+import { fmtBilledPeriod, fmtDuration, fmtNum, fmtShare, fmtUsd, UNAVAILABLE_METRIC } from './format';
 
 describe('fmtNum', () => {
   it.each([
@@ -92,5 +92,38 @@ describe('fmtShare', () => {
     [5, -1],
   ])('fmtShare(%p, %p) reports the metric as unavailable', (value, total) => {
     expect(fmtShare(value, total)).toBe(UNAVAILABLE_METRIC);
+  });
+});
+
+describe('fmtBilledPeriod', () => {
+  const utcDates = (from: string, to: string): string =>
+    new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).formatRange(
+      new Date(from),
+      new Date(to),
+    );
+
+  it('names the whole billing month a project row covers, last day inclusive', () => {
+    expect(
+      fmtBilledPeriod([
+        { scope: 'project', period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z' },
+      ]),
+    ).toBe(utcDates('2026-10-01T00:00:00Z', '2026-10-31T23:59:59.999Z'));
+  });
+
+  it('spans every project row and ignores narrower scopes', () => {
+    expect(
+      fmtBilledPeriod([
+        { scope: 'user', period_start: '2026-07-01T00:00:00Z', period_end: '2026-08-01T00:00:00Z' },
+        { scope: 'project', period_start: '2026-09-01T00:00:00Z', period_end: '2026-10-01T00:00:00Z' },
+        { scope: 'project', period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z' },
+      ]),
+    ).toBe(utcDates('2026-09-01T00:00:00Z', '2026-10-31T23:59:59.999Z'));
+  });
+
+  it('is undefined when no project row says what it covers', () => {
+    expect(fmtBilledPeriod([])).toBeUndefined();
+    expect(
+      fmtBilledPeriod([{ scope: 'user', period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z' }]),
+    ).toBeUndefined();
   });
 });

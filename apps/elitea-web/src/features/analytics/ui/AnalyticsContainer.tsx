@@ -16,6 +16,7 @@ import { TabGroupButton } from '@/shared/ui/TabGroupButton';
 
 import { useProjectAnalyticsQuery, useProjectCostsQuery } from '../api/useAnalytics';
 import { ANALYTICS_TAB, CUSTOM_DATE_PRESET, DATE_FILTER_PRESETS, DEFAULT_DATE_PRESET } from '../lib/constants';
+import { fmtBilledPeriod } from '../lib/format';
 import { presetToDateRange, toIsoRange } from '../model/dateRange';
 import { AnalyticsTabContent } from './components/AnalyticsTabContent';
 import { DateRangeField } from './components/DateRangeField';
@@ -173,6 +174,13 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
     // routinely below a cent, and `$0.00` would claim nothing was spent (#6682).
     return formatSmallUsd(kpis.total_cost);
   }, [costs.data]);
+  // The figure is per BILLING PERIOD, matched by overlap: under `Today` it is
+  // the month to date. The tile names the period so it is not read as the
+  // window's spend.
+  const totalCostPeriod = useMemo(
+    () => (costs.data === undefined ? undefined : fmtBilledPeriod(costs.data.periods)),
+    [costs.data],
+  );
 
   const handlePresetChange = useCallback((value: string) => {
     const preset = DATE_FILTER_PRESETS.find((candidate) => candidate.value === value);
@@ -246,6 +254,10 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
           items={presetItems}
           value={selectedPreset}
           onChange={handlePresetChange}
+          // A preset is relative to `now`, computed once on click. Clicking the
+          // selected one again re-applies it, so a page left open past midnight
+          // can move `Today` onto the new day (a no-op for Custom).
+          onReselect={handlePresetChange}
         />
         <Box sx={dateFieldsRowSx}>
           <DateRangeField
@@ -290,6 +302,7 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
             isError={isError}
             error={error}
             totalCost={totalCost}
+            totalCostPeriod={totalCostPeriod}
             data={data}
             projectId={projectId}
             dateFrom={range.dateFrom}

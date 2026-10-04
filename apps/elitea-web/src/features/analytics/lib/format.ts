@@ -88,3 +88,40 @@ export function fmtTimestamp(value: unknown): string {
     minute: '2-digit',
   });
 }
+
+/** The part of an `/analytics_costs` period row the billed-period label reads. */
+export interface BilledPeriod {
+  readonly scope: string;
+  readonly period_start: string;
+  readonly period_end: string;
+}
+
+/**
+ * The calendar dates the COST tile's figure actually covers, or `undefined`
+ * when no project-scope row says.
+ *
+ * `/analytics_costs` sums every PROJECT-scope accumulator row that OVERLAPS the
+ * window, and each row is a whole billing period (a month). So under `Today`
+ * the figure is the month's spend to date, not today's — and the tile has to
+ * say which dates it is about rather than borrow the window's.
+ *
+ * Periods are UTC calendar months (`period_end` exclusive), so the dates are
+ * formatted in UTC: in a negative-offset browser local time would print the
+ * 1st as the last day of the previous month.
+ */
+export function fmtBilledPeriod(periods: readonly BilledPeriod[]): string | undefined {
+  let start: number | undefined;
+  let end: number | undefined;
+  for (const period of periods) {
+    if (period.scope !== 'project') continue;
+    const from = Date.parse(period.period_start);
+    const to = Date.parse(period.period_end);
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) continue;
+    start = start === undefined ? from : Math.min(start, from);
+    end = end === undefined ? to : Math.max(end, to);
+  }
+  if (start === undefined || end === undefined) return undefined;
+  const format = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
+  // `period_end` is exclusive: the last day covered ends one instant before it.
+  return format.formatRange(new Date(start), new Date(end - 1));
+}
