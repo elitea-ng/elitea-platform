@@ -47,7 +47,7 @@ import (
 // route-tree interactions with the rest of the router.
 func reviewedRoutesRouter(cfg RouterConfig) chi.Router {
 	r := chi.NewRouter()
-	mountReviewedProductionRoutes(r, cfg)
+	mountReviewedProductionRoutes(r, cfg, nil)
 	return r
 }
 

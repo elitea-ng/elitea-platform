@@ -282,6 +282,11 @@ func (g *maintenanceGate) isAdministrator(r *http.Request) bool {
 	return false
 }
 
+// MaintenanceExempt reports whether maintenance never refuses path — the
+// allowlist the gate applies. Exported for the router guard test, which must
+// know which routes a window legitimately leaves open.
+func MaintenanceExempt(path string) bool { return maintenanceExempt(path) }
+
 // maintenanceExempt matches a path against the allowlist on SEGMENT boundaries.
 //
 // `strings.HasPrefix` alone would exempt `/api/v2/administration_of_secrets`

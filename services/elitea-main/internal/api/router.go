@@ -755,6 +755,10 @@ type ArtifactDeps struct {
 	Handler      *v2artifacts.Handler
 	Authenticate func(http.Handler) http.Handler
 	Resolver     platformauth.PermissionResolver
+	// Gates are the API group's post-authentication gates (Maintenance, then
+	// the minimum client version), applied directly after Authenticate as
+	// the group applies them. Nil applies none.
+	Gates []func(http.Handler) http.Handler
 }
 
 // mountArtifactRoutes registers all 24 artifact routes (13 from S7, plus
@@ -764,7 +768,9 @@ type ArtifactDeps struct {
 // newProductionRouter, so the oapiserver conformance suite and production
 // see an identical route shape. Deliberately NOT nested inside the /api/v2
 // group: that group compresses JSON responses, which would buffer and encode
-// every downloaded object rather than streaming it (S12).
+// every downloaded object rather than streaming it (S12). Everything ELSE the
+// group applies is applied here too — NoStore in front of authentication and
+// deps.Gates behind it — so leaving the group costs only the compression.
 func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
 	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
@@ -826,7 +832,14 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	}
 
 	r.Group(func(r chi.Router) {
+		// NoStore never replaces a value a handler chose. Object downloads
+		// state their own ("private, no-store", artifacts streamObject);
+		// every other artifact answer gets the group's no-store from here.
+		r.Use(apimw.NoStore)
 		r.Use(deps.Authenticate)
+		for _, gate := range deps.Gates {
+			r.Use(gate)
+		}
 		r.Route("/api/v2/artifacts", func(r chi.Router) {
 			// Bucket plane — S8.
 			r.With(view).Get("/buckets/{projectID}", listBuckets)
@@ -1532,10 +1545,44 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		SessionStore:               cfg.Auth.SessionStore,
 		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 	})
+	// The API group's post-authentication gates, built ONCE and applied to
+	// every /api/v2 surface that authenticates a user: the group below, the
+	// artifact routes, and the root-mounted reviewed routes
+	// (mountReviewedProductionRoutes), which carry their own Auth. One
+	// maintenance gate means one cached switch, so a window opens and closes
+	// on every surface at the same moment.
+	//
+	// Maintenance, immediately AFTER authentication and before anything
+	// that does work. The ordering is load-bearing. It has to be after Auth,
+	// because the only caller it admits is one whose administration
+	// permissions can be resolved, and that needs a principal on the
+	// context. It has to be above everything that does work, so a refused
+	// request reaches no handler.
+	//
+	// The minimum client version (ADR-0025 WP4), directly AFTER Maintenance:
+	// a 503 ("come back later") is the truer answer during a window than a
+	// 426 ("upgrade"). After Auth, because only a caller authenticated by a
+	// NATIVE access token is gated (coordinator decision 13); PAT and cookie
+	// callers pass whatever they send.
+	var nativeClientForToken func(context.Context, string) (string, bool, error)
+	if cfg.NativeAccess != nil {
+		nativeClientForToken = cfg.NativeAccess.ClientID
+	}
+	apiGates := []func(http.Handler) http.Handler{
+		apimw.Maintenance(apimw.MaintenanceConfig{
+			Pool:     cfg.Pool,
+			Resolver: permissionResolver,
+		}),
+		apimw.ClientVersion(apimw.ClientVersionConfig{
+			MinimumFor:           nativePolicy.MinimumFor,
+			NativeClientForToken: nativeClientForToken,
+		}),
+	}
 	mountArtifactRoutes(r, ArtifactDeps{
 		Handler:      artifactHandler,
 		Authenticate: authenticate,
 		Resolver:     artifactResolver,
+		Gates:        apiGates,
 	})
 	// Construct these collaborators before either route family is mounted.
 	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
@@ -1665,6 +1712,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// group writes plain JSON and only the outermost layer encodes it.
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
+		// A browser must not keep a copy of an API answer. Nothing here said
+		// so, and WebKit reads "nothing" as "decide for yourself" — it served
+		// a reloaded page the previous answer for seconds. The middleware's
+		// own doc carries the measurement. Handlers that serve something
+		// genuinely cacheable still set their own value.
+		//
+		// It sits ABOVE Auth, not inside the /api/v2 route: the 401, the
+		// maintenance 503 and the 426 are per-caller answers too, and the
+		// root-mounted reviewed routes (production_router.go) apply it at the
+		// same position — in front of their own Auth — so every /api/v2
+		// answer carries the directive whichever composition served it.
+		r.Use(apimw.NoStore)
 		r.Use(apimw.Auth(apimw.AuthConfig{
 			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
@@ -1674,32 +1733,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 		}))
 
-		// Maintenance mode, immediately AFTER authentication and before
-		// anything that does work.
-		//
-		// The ordering is load-bearing. It has to be after Auth, because the
-		// only caller it admits is one whose administration permissions can be
-		// resolved, and that needs a principal on the context. It has to be
-		// above everything that does work, so a refused request reaches no
-		// handler.
-		r.Use(apimw.Maintenance(apimw.MaintenanceConfig{
-			Pool:     cfg.Pool,
-			Resolver: permissionResolver,
-		}))
-
-		// The minimum client version (ADR-0025 WP4), directly AFTER
-		// Maintenance: a 503 ("come back later") is the truer answer during a
-		// window than a 426 ("upgrade"). After Auth, because only a caller
-		// authenticated by a NATIVE access token is gated (coordinator
-		// decision 13); PAT and cookie callers pass whatever they send.
-		var nativeClientForToken func(context.Context, string) (string, bool, error)
-		if cfg.NativeAccess != nil {
-			nativeClientForToken = cfg.NativeAccess.ClientID
+		// Maintenance, then the minimum client version, directly after
+		// authentication: apiGates (built above, where the ordering is
+		// explained) — the same instances the artifact and reviewed routes
+		// apply.
+		for _, gate := range apiGates {
+			r.Use(gate)
 		}
-		r.Use(apimw.ClientVersion(apimw.ClientVersionConfig{
-			MinimumFor:           nativePolicy.MinimumFor,
-			NativeClientForToken: nativeClientForToken,
-		}))
 
 		// The audit-trail emitter for `centry.audit_events` — the producer the
 		// admin Audit Trail page never had (internal/api/middleware/audit.go
@@ -1716,13 +1756,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
-			// A browser must not keep a copy of an API answer. Nothing here
-			// said so, and WebKit reads "nothing" as "decide for yourself" —
-			// it served a reloaded page the previous answer for seconds. The
-			// middleware's own doc carries the measurement. Handlers that
-			// serve something genuinely cacheable still set their own value.
-			r.Use(apimw.NoStore)
-
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
 			//
 			// Auth runs ABOVE this subrouter, so a path nobody registered is
@@ -4608,7 +4641,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// The broad prototype compatibility handler above already owns the current
 	// project-context GET/PUT/DELETE. Keep that single live registration while adding the
 	// reviewed routes it does not provide, including chat config and agent SSE.
-	mountReviewedProductionRoutes(r, cfg)
+	//
+	// They get the group's whole post-authentication chain, in the group's
+	// order: apiGates, then Audit last. The reviewed set includes the
+	// configuration writes (POST/PUT/DELETE /api/v2/configurations/...),
+	// where a project's ai_credentials are created, overwritten and deleted;
+	// without Audit here they left no centry.audit_events row. A fresh slice,
+	// so the append can never write into apiGates' backing array.
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+1)
+	reviewedGates = append(reviewedGates, apiGates...)
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder))
+	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
 	return r
 }
