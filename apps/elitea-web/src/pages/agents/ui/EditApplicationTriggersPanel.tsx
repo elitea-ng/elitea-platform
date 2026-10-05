@@ -15,6 +15,7 @@ import { SingleSelect } from '@/shared/ui/SingleSelect';
 import {
   AGENT_WEBHOOK_MODES,
   agentWebhookModeOf,
+  selectableAgentWebhookModes,
   useAgentWebhookTrigger,
   type AgentWebhookMode,
   type AgentWebhookTrigger,
@@ -30,10 +31,9 @@ const valueSx: SxProps<Theme> = {
   color: 'text.secondary',
 };
 
-const MODE_OPTIONS = AGENT_WEBHOOK_MODES.map(mode => ({ label: mode.label, value: mode.value }));
 
 /** What a sender of each type must be configured with. The strings are the pipeline dialog's, by key. */
-function modeHint(mode: AgentWebhookMode): string {
+function modeHint(mode: AgentWebhookMode, settings?: AgentWebhookTrigger): string {
   switch (mode) {
     case 'github':
       return t(
@@ -57,7 +57,49 @@ function modeHint(mode: AgentWebhookMode): string {
         'pipelines.pipelineWebhookModal.modeCustomHint',
         'The sender presents the secret itself, as an Authorization: Bearer header, as X-Elitea-Trigger-Token, or as a token query parameter.',
       );
+    case 'custom_hmac':
+      return t(
+        'pages.agents.editApplication.triggers.modeCustomHmacHint',
+        'The sender signs the request body with the secret and sends the hex digest in {{header}}. Rotating keeps this header.',
+        { header: settings?.trigger?.signature_header ?? '' },
+      );
   }
+}
+
+/**
+ * What a person must know before wiring this agent to a sender: whose access
+ * its toolkits use, that a payload is third-party text, which events start a
+ * run, and whether the URL holder can change the instructions.
+ */
+function TriggerRisks({ trigger }: { readonly trigger: PipelineInboundTrigger | undefined }): ReactNode {
+  const events = trigger?.events;
+  return (
+    <Box sx={sectionSx} data-testid="agent-trigger-risks">
+      <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-access">
+        {t(
+          'pages.agents.editApplication.triggers.access',
+          'Runs use this agent’s toolkits with the access of the person who created the trigger. A GitHub or GitLab payload can hold text that anyone wrote; the agent gets it as untrusted data.',
+        )}
+      </Typography>
+      {trigger?.configured === true && (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-events">
+          {events === undefined || events.length === 0
+            ? t('pages.agents.editApplication.triggers.eventsAll', 'Every event starts a run, except a GitHub ping.')
+            : t('pages.agents.editApplication.triggers.eventsListed', 'Only these events start a run: {{events}}.', { events: events.join(', ') })}
+        </Typography>
+      )}
+      {trigger?.configured === true && (
+        <Typography variant="bodySmall" color={trigger.allow_variable_overrides === true ? 'warning.main' : 'text.secondary'} data-testid="agent-trigger-variables">
+          {trigger.allow_variable_overrides === true
+            ? t(
+                'pages.agents.editApplication.triggers.variablesOpen',
+                'Anyone with this URL can change the agent’s variables, and so its instructions.',
+              )
+            : t('pages.agents.editApplication.triggers.variablesClosed', 'Callers cannot change the agent’s variables.')}
+        </Typography>
+      )}
+    </Box>
+  );
 }
 
 interface TriggerState {
@@ -130,6 +172,10 @@ function TriggerBody({ settings, isReadOnly }: { readonly settings: AgentWebhook
   useEffect(() => setMode(storedMode), [storedMode]);
   const state = triggerState(settings, isReadOnly, mode);
   const lastUsed = settings.trigger?.last_used_at;
+  const modeOptions = useMemo(
+    () => selectableAgentWebhookModes(storedMode).map(option => ({ label: option.label, value: option.value })),
+    [storedMode],
+  );
 
   return (
     <Box sx={sectionSx} data-testid="agent-trigger-card">
@@ -148,13 +194,14 @@ function TriggerBody({ settings, isReadOnly }: { readonly settings: AgentWebhook
         id="agent-trigger-mode"
         label={t('pipelines.pipelineWebhookModal.modeLabel', 'Webhook type')}
         value={mode}
-        options={MODE_OPTIONS}
+        options={modeOptions}
         onChange={value => setMode(AGENT_WEBHOOK_MODES.find(option => option.value === value)?.value ?? 'custom')}
         disabled={state.disabled}
       />
       <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-mode-hint">
-        {modeHint(mode)}
+        {modeHint(mode, settings)}
       </Typography>
+      <TriggerRisks trigger={settings.trigger} />
       {state.modeChanged && (
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-mode-pending">
           {t(
@@ -221,10 +268,18 @@ export function EditApplicationTriggersPanel({ projectId, versionId, isReadOnly 
     () => [
       {
         title: t('pages.agents.editApplication.triggers.title', 'Triggers'),
-        content: <TriggerBody settings={settings} isReadOnly={isReadOnly} />,
+        // Keyed by the version: the panel stays mounted when the editor
+        // switches versions, and the selected mode must not carry over.
+        content: (
+          <TriggerBody
+            key={versionId}
+            settings={settings}
+            isReadOnly={isReadOnly}
+          />
+        ),
       },
     ],
-    [settings, isReadOnly],
+    [settings, isReadOnly, versionId],
   );
   if (projectId === undefined || versionId === undefined) return null;
   return <BasicAccordion items={items} data-testid="edit-application-triggers-panel" />;

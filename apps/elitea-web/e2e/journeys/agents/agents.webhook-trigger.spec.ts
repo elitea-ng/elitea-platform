@@ -120,17 +120,30 @@ test('a GitHub-type agent webhook is created from the editor and verifies the si
   expect(stored.authMode, 'the GitHub type stores the signature mode').toBe('hmac_sha256');
 
   // A GitHub event carries no `input`: the agent reads the payload itself.
+  // A new GitHub agent trigger admits push and pull_request events only, so
+  // the delivery names its event the way GitHub does.
   const body = '{"action":"opened","pull_request":{"number":7,"title":"Fix the build"}}';
   const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
   const sender = await webhookSender();
   try {
     await expectCredentialAccepted(
       await sender.post(stored.url, {
-        headers: { 'content-type': 'application/json', [GITHUB_SIGNATURE_HEADER]: signature },
+        headers: { 'content-type': 'application/json', [GITHUB_SIGNATURE_HEADER]: signature, 'x-github-event': 'pull_request' },
         data: body,
       }),
       'a correctly signed GitHub delivery to an agent',
     );
+    // The ping GitHub sends when the webhook is saved starts no run.
+    const ping = '{"zen":"Keep it logically awesome.","hook_id":1}';
+    const pinged = await sender.post(stored.url, {
+      headers: {
+        'content-type': 'application/json',
+        [GITHUB_SIGNATURE_HEADER]: `sha256=${createHmac('sha256', secret).update(ping).digest('hex')}`,
+        'x-github-event': 'ping',
+      },
+      data: ping,
+    });
+    expect(pinged.status(), 'a GitHub ping is answered 204 and starts no agent run').toBe(204);
     await expectCredentialRefused(
       await sender.post(stored.url, {
         headers: { 'content-type': 'application/json', [GITHUB_SIGNATURE_HEADER]: 'sha256=00' },

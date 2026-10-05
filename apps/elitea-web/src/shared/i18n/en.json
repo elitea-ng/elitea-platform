@@ -4578,5 +4578,11 @@
   "pages.admin.platformDefault.unavailable": "“{{name}}” is no longer available to every project. Choose a replacement.",
   "pages.agents.editApplication.triggers.absent": "This agent has no trigger URL.",
   "pages.agents.editApplication.triggers.description": "An external system starts this agent by calling this URL with its secret. The body’s `input`, or else the payload, is the message.",
-  "pages.agents.editApplication.triggers.title": "Triggers"
+  "pages.agents.editApplication.triggers.title": "Triggers",
+  "pages.agents.editApplication.triggers.access": "Runs use this agent’s toolkits with the access of the person who created the trigger. A GitHub or GitLab payload can hold text that anyone wrote; the agent gets it as untrusted data.",
+  "pages.agents.editApplication.triggers.eventsAll": "Every event starts a run, except a GitHub ping.",
+  "pages.agents.editApplication.triggers.eventsListed": "Only these events start a run: {{events}}.",
+  "pages.agents.editApplication.triggers.modeCustomHmacHint": "The sender signs the request body with the secret and sends the hex digest in {{header}}. Rotating keeps this header.",
+  "pages.agents.editApplication.triggers.variablesClosed": "Callers cannot change the agent’s variables.",
+  "pages.agents.editApplication.triggers.variablesOpen": "Anyone with this URL can change the agent’s variables, and so its instructions."
 }
