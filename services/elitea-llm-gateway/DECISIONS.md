@@ -700,7 +700,7 @@ in a release note.**
   | Limit | Why |
   |---|---|
   | Neither route streams | A streaming speech route needs the detached-drain billing machinery the chat stream has. The pylon TTS client reads the body with `iter_content`, so a unary body still arrives chunked to it; it loses first-byte latency, not audio. |
-  | A response the catalog carries no rate for bills zero | `cost.Calculator` now prices three bases — tokens, seconds and characters (migration 0086) — but only from the catalog. There is no default per-second or per-character price and there must not be one: an invented rate reaches the authoritative budget counter as if it were measured. A model with no catalog audio rate is UNPRICED. The condition is counted on `gateway_audio_unpriced_total` and logged, not hidden. |
+  | A response the catalog carries no rate for bills zero | `cost.Calculator` now prices three bases — tokens, seconds and characters (migration 0086) — but only from the catalog. There is no default per-second or per-character price and there must not be one: an invented rate reaches the authoritative budget counter as if it were measured. A model with no catalog audio rate is UNPRICED. The condition is counted on `gateway_audio_unpriced_total` and logged, not hidden. 2026-10-04: a project WITH a budget is refused such a model before dispatch (501 `audio_unpriced`, `gateway_audio_refused_unpriced_model_total`). The browser voice client calls these routes per utterance and per sentence, so bill-zero was an unbounded hole under a budget. A project without a budget keeps bill-zero-and-count. |
 
   **Two follow-up decisions, both from the adversarial review of this change:**
 

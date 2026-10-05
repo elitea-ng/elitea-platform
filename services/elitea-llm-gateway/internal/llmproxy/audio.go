@@ -32,12 +32,14 @@
 package llmproxy
 
 import (
+	"context"
 	"expvar"
 	"math"
 	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -98,10 +100,23 @@ const MetricAudioDefaultPriced = "gateway_audio_default_priced_total"
 // paths are live at all, and how many requests they carry.
 const MetricAudioNonTokenBasis = "gateway_audio_non_token_priced_total"
 
+// MetricAudioRefusedUnpricedModel counts audio requests refused BEFORE
+// dispatch, because the project has a budget and the catalog carries no rate
+// the model's response could be billed on.
+//
+// "Bill zero and count it" (MetricAudioUnpriced) was the answer while one
+// audio request was one bounded call from the indexer. The browser voice
+// client now calls these routes for every utterance and every sentence, with
+// the member's session, so a project with a budget and an unpriced audio model
+// had no ceiling on that spend at all. A project without a budget keeps the
+// old answer: it has no ceiling to protect.
+const MetricAudioRefusedUnpricedModel = "gateway_audio_refused_unpriced_model_total"
+
 var (
-	audioUnpriced      = expvar.NewInt(MetricAudioUnpriced)
-	audioNonTokenBasis = expvar.NewInt(MetricAudioNonTokenBasis)
-	audioDefaultPriced = expvar.NewInt(MetricAudioDefaultPriced)
+	audioRefusedUnpricedModel = expvar.NewInt(MetricAudioRefusedUnpricedModel)
+	audioUnpriced             = expvar.NewInt(MetricAudioUnpriced)
+	audioNonTokenBasis        = expvar.NewInt(MetricAudioNonTokenBasis)
+	audioDefaultPriced        = expvar.NewInt(MetricAudioDefaultPriced)
 )
 
 // AudioMetricNames returns the names of this file's counters, in a fixed order,
@@ -113,7 +128,7 @@ var (
 // mux: expvar registers /debug/vars on http.DefaultServeMux, which this gateway
 // never serves (CLAUDE.md, issue #465). Add a counter here when you publish it.
 func AudioMetricNames() []string {
-	return []string{MetricAudioUnpriced, MetricAudioNonTokenBasis, MetricAudioDefaultPriced}
+	return []string{MetricAudioUnpriced, MetricAudioNonTokenBasis, MetricAudioDefaultPriced, MetricAudioRefusedUnpricedModel}
 }
 
 // maxBillableAudioSeconds bounds a provider-reported duration at 24 hours.
@@ -168,6 +183,66 @@ func secondsToMillis(sec float64) (int64, bool) {
 	return millis, true
 }
 
+// speechPriceProbes and transcriptionPriceProbes are the non-token units each
+// route's responses can be billed on (speechUnits, transcriptionUnits). A probe
+// that prices to a non-empty basis means the catalog carries that rate.
+var (
+	speechPriceProbes        = []cost.Units{{InputChars: 1000}, {OutputMillis: 1000}}
+	transcriptionPriceProbes = []cost.Units{{InputMillis: 1000}}
+)
+
+// checkAudioAdmission is checkBudget for the audio routes, plus one rule: a
+// project WITH a budget is refused a model the catalog cannot price.
+//
+// Such a request would be dispatched, delivered and billed zero
+// (MetricAudioUnpriced), and a zero never moves the accumulator the budget gate
+// reads. Every member of the project could then send unlimited speech and
+// transcription traffic to a paid provider and never reach the budget. The
+// refusal is a 501 `audio_unpriced`, not a 402: the budget is not exhausted, a
+// piece of model configuration (the catalog rate) is missing.
+//
+// The probe accepts a CATALOG token rate or a catalog rate for one of the
+// route's audio bases, like realtimePricedModel. A default-table token price
+// does not count: it is a guess, and an audio model that reports seconds or
+// characters is not billed by it anyway.
+func (h *Handler) checkAudioAdmission(w http.ResponseWriter, ctx context.Context, provider, model string, probes []cost.Units) bool {
+	v := h.admissionVerdict(ctx, model)
+	if !v.allow {
+		if v.retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.FormatInt(int64(v.retryAfter/time.Second)+1, 10))
+		}
+		writeBudgetRefusal(w, v)
+		return false
+	}
+	if !v.budgeted || h.audioModelPriced(ctx, provider, model, probes) {
+		return true
+	}
+	audioRefusedUnpricedModel.Add(1)
+	h.logger.WarnContext(ctx, "audio: the project has a budget and the catalog carries no rate for this model; refusing the request",
+		"provider", provider, "model", model, "metric", MetricAudioRefusedUnpricedModel)
+	writeError(w, http.StatusNotImplemented, "invalid_request_error",
+		"the model `"+model+"` has no audio price in the catalogue, and the project has a budget; the request was refused", "audio_unpriced")
+	return false
+}
+
+// audioModelPriced reports whether the catalog carries a rate this model's
+// audio response can be billed on.
+func (h *Handler) audioModelPriced(ctx context.Context, provider, model string, probes []cost.Units) bool {
+	bp := h.budget()
+	if bp.calc == nil {
+		return true
+	}
+	if bp.calc.CostUnits(ctx, provider, model, cost.Units{InputTokens: 1, OutputTokens: 1}).FromCatalog() {
+		return true
+	}
+	for _, u := range probes {
+		if bp.calc.CostUnits(ctx, provider, model, u).Basis != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // Speech handles POST /llm/v1/audio/speech (text-to-speech).
 //
 // The success body is the raw audio the provider returned, NOT JSON. That is
@@ -199,7 +274,7 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 	}
 	provider, model := providerModelFromSpeechReq(bifReq)
 	format := applyDefaultSpeechFormat(bifReq, provider)
-	if !h.checkBudget(w, ctx, model) {
+	if !h.checkAudioAdmission(w, ctx, provider, model, speechPriceProbes) {
 		return
 	}
 
@@ -287,7 +362,7 @@ func (h *Handler) Transcription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider, model := providerModelFromTranscriptionReq(bifReq)
-	if !h.checkBudget(w, ctx, model) {
+	if !h.checkAudioAdmission(w, ctx, provider, model, transcriptionPriceProbes) {
 		return
 	}
 

@@ -198,6 +198,12 @@ type Decision struct {
 	// (issue #322). It is carried on every Decision, including the blocking
 	// ones, because the handler consults the POST-increment decision.
 	SoftAlertsDisabled bool
+	// Budgeted reports that the scope has a hard ceiling: a budget row, or an
+	// authored default that applies to it. It is false for an unlimited scope.
+	// Decide does not set it; GovernanceStore.CheckBudget does, from the
+	// snapshot it read. The audio routes read it to refuse a model the catalog
+	// cannot price, rather than bill it zero against a budget (audio.go).
+	Budgeted bool
 }
 
 // natsHealthy is the sentinel the caller passes as authoritativeNano to signal

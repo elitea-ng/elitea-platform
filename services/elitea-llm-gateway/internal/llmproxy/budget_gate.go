@@ -235,6 +235,9 @@ type budgetVerdict struct {
 	// "member". See budgetScopeFieldProject.
 	scope      string
 	retryAfter time.Duration
+	// budgeted is set only on an ALLOWED verdict: the project has a hard
+	// ceiling (failmode.Decision.Budgeted). The audio routes read it.
+	budgeted bool
 }
 
 // budgetAllowed is the verdict every admitted request gets.
@@ -370,7 +373,9 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		}
 		// The project has room. The member cap is a SECOND ceiling inside it,
 		// so it is asked only after the project admits (issue #321).
-		return h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v.budgeted = v.allow && dec.Budgeted
+		return v
 	case failmode.Block402:
 		return budgetVerdict{
 			status:  http.StatusPaymentRequired,
@@ -393,7 +398,9 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		// independent limit.
 		h.logger.Warn("budget gate: unknown verdict; allowing request",
 			"verdict", fmt.Sprintf("%v", dec.Verdict))
-		return h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v.budgeted = v.allow && dec.Budgeted
+		return v
 	}
 }
 
