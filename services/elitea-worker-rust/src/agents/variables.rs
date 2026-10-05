@@ -89,9 +89,10 @@
 //! `apps/elitea-web/e2e/streaming/chat.variables.spec.ts` now pins the SAME
 //! journal assertion on both runtimes rather than on this one alone.
 //!
-//! Nothing here changed for it: both keys resolve to the same rows, `meta` is
-//! still applied last, and this module keeps reproducing the SDK's SEMANTICS
-//! over the values the platform really stores.
+//! Nothing here changed for it: both keys resolve to the same rows. The
+//! `meta` ARRAY mirror is applied as a stored default, BEFORE the request's
+//! own values, and only a `meta` OBJECT is applied last (the one shape the
+//! SDK's `assistant.py:574` reads). See `AgentVariables::admit`.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -127,24 +128,53 @@ impl AgentVariables {
     /// per-conversation VALUES for variables the version already declares
     /// (`chat_participant_mapping.entity_settings -> 'variables'`, projected
     /// by `agent_chat.sql:8`). Exactly as `client.py:822-825` does, a name the
-    /// version does not declare is ignored rather than introduced, and
-    /// `meta.variables` is applied last so it still wins — that is the order
-    /// `assistant.py:562-575` builds the same map in.
+    /// version does not declare is ignored rather than introduced.
+    ///
+    /// THE ORDER, and why `meta.variables` is split by shape:
+    ///
+    /// 1. the version's own list (`variables`, the `application_variables`
+    ///    rows, or the `meta` mirror the projection falls back to);
+    /// 2. `meta.variables` when it is an ARRAY. That is the mirror Main writes
+    ///    (`applications/handler.go`), so it carries the same stored DEFAULTS
+    ///    as step 1. It is applied as a default, BEFORE the request values;
+    /// 3. the participant (request) values, for every DECLARED name — also a
+    ///    name whose stored default is empty, which the SDK re-values too
+    ///    (`client.py` folds the request into the full declared list before
+    ///    `assistant.py` drops empty values);
+    /// 4. `meta.variables` when it is an OBJECT, last, because that is the
+    ///    only shape `assistant.py:574` applies, and it applies it after the
+    ///    request values.
+    ///
+    /// Before this order the array mirror was applied last, so its stored
+    /// defaults overwrote every request value: a webhook or a chat participant
+    /// that re-valued `topic` rendered the default on this runtime and the
+    /// request value on the SDK worker.
     pub(super) fn admit(
         version: &Map<String, Value>,
         participant: Option<&Value>,
     ) -> Result<Self, NativeAgentAssemblyError> {
+        let meta = meta_variables(version.get("meta"))?;
         let mut values = BTreeMap::new();
         for (name, value) in capture_variables(version.get("variables"))? {
             values.insert(name, value);
         }
-        for (name, value) in capture_variables(participant)? {
-            if let Some(declared) = values.get_mut(&name) {
-                *declared = value;
+        if let Some(rows @ Value::Array(_)) = meta {
+            for (name, value) in capture_variables(Some(rows))? {
+                values.insert(name, value);
             }
         }
-        for (name, value) in capture_variables(meta_variables(version.get("meta"))?)? {
-            values.insert(name, value);
+        if participant.is_some() {
+            let declared = declared_names([version.get("variables"), meta]);
+            for (name, value) in capture_variables(participant)? {
+                if declared.contains(&name) {
+                    values.insert(name, value);
+                }
+            }
+        }
+        if let Some(rows @ Value::Object(_)) = meta {
+            for (name, value) in capture_variables(Some(rows))? {
+                values.insert(name, value);
+            }
         }
         Ok(Self { values })
     }
@@ -215,33 +245,10 @@ pub(super) struct AgentCallVariables {
 impl AgentCallVariables {
     pub(super) fn admit(version: &Map<String, Value>) -> Result<Self, NativeAgentAssemblyError> {
         let defaults = AgentVariables::admit(version, None)?;
-        let mut names = std::collections::BTreeSet::new();
-        for collection in [
+        let mut names = declared_names([
             version.get("variables"),
             meta_variables(version.get("meta"))?,
-        ] {
-            match collection {
-                Some(Value::Array(rows)) => {
-                    for row in rows {
-                        if let Some(name) = row
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .filter(|name| bounded_variable_name(name))
-                        {
-                            names.insert(name.to_owned());
-                        }
-                    }
-                }
-                Some(Value::Object(rows)) => {
-                    names.extend(
-                        rows.keys()
-                            .filter(|name| bounded_variable_name(name))
-                            .cloned(),
-                    );
-                }
-                _ => {}
-            }
-        }
+        ]);
         if names.len() > MAX_VARIABLES {
             return Err(resource_exhausted_profile());
         }
@@ -281,6 +288,36 @@ impl AgentCallVariables {
         }
         Ok(bound)
     }
+}
+
+/// Every name a version DECLARES, including one whose stored default is
+/// empty: an empty default is still a declaration a request may re-value.
+fn declared_names(collections: [Option<&Value>; 2]) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for collection in collections {
+        match collection {
+            Some(Value::Array(rows)) => {
+                for row in rows {
+                    if let Some(name) = row
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|name| bounded_variable_name(name))
+                    {
+                        names.insert(name.to_owned());
+                    }
+                }
+            }
+            Some(Value::Object(rows)) => {
+                names.extend(
+                    rows.keys()
+                        .filter(|name| bounded_variable_name(name))
+                        .cloned(),
+                );
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// Admit one stored variable collection without capturing it.
@@ -621,6 +658,73 @@ mod tests {
         );
         assert_eq!(
             AgentVariables::admit(&version, None)
+                .expect("admitted")
+                .render_with_date("{{tone}}", DATE),
+            "formal"
+        );
+    }
+
+    /// The array mirror Main writes holds the stored DEFAULTS. A request
+    /// value (a chat participant, or an inbound webhook's `variables`) must
+    /// win over it, as it does on the SDK worker, which never reads an array
+    /// `meta.variables`.
+    #[test]
+    fn a_request_value_wins_over_the_meta_array_default() {
+        let version = version(
+            json!([{"name": "topic", "value": "general"}]),
+            json!([{"name": "topic", "value": "general"}]),
+        );
+        let participant = json!([{"name": "topic", "value": "billing"}]);
+        assert_eq!(
+            AgentVariables::admit(&version, Some(&participant))
+                .expect("admitted")
+                .render_with_date("{{topic}}", DATE),
+            "billing"
+        );
+    }
+
+    /// The same, for an agent whose only store is the mirror (an older
+    /// import): the projection carries no list, and the request still wins.
+    #[test]
+    fn a_request_value_wins_when_the_mirror_is_the_only_store() {
+        let version = version(json!([]), json!([{"name": "topic", "value": "general"}]));
+        let participant = json!([{"name": "topic", "value": "billing"}]);
+        assert_eq!(
+            AgentVariables::admit(&version, Some(&participant))
+                .expect("admitted")
+                .render_with_date("{{topic}}", DATE),
+            "billing"
+        );
+    }
+
+    /// An empty stored default still DECLARES the variable, so a request may
+    /// re-value it. An undeclared name stays ignored.
+    #[test]
+    fn a_request_re_values_an_empty_default_and_never_declares_a_name() {
+        let version = version(json!([{"name": "topic", "value": ""}]), json!([]));
+        let participant = json!([
+            {"name": "topic", "value": "billing"},
+            {"name": "undeclared", "value": "x"},
+        ]);
+        assert_eq!(
+            AgentVariables::admit(&version, Some(&participant))
+                .expect("admitted")
+                .render_with_date("{{topic}}|{{undeclared}}", DATE),
+            "billing|{{ undeclared }}"
+        );
+    }
+
+    /// A `meta.variables` OBJECT is the one shape the SDK applies, and it
+    /// applies it after the request values. Kept for parity.
+    #[test]
+    fn a_meta_object_is_still_applied_last() {
+        let version = version(
+            json!([{"name": "tone", "value": "terse"}]),
+            json!({"tone": "formal"}),
+        );
+        let participant = json!([{"name": "tone", "value": "casual"}]);
+        assert_eq!(
+            AgentVariables::admit(&version, Some(&participant))
                 .expect("admitted")
                 .render_with_date("{{tone}}", DATE),
             "formal"
