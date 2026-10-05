@@ -223,7 +223,7 @@ async fn a_failed_publish_leaves_the_live_index_untouched() {
     let before = observe(&pool, wiki).await;
 
     // An empty build is never published over a possibly good one.
-    let empty = space.begin(wiki).await.expect("begin");
+    let mut empty = space.begin(wiki).await.expect("begin");
     let refused = empty.publish(&WikiRecord::default()).await;
     assert!(
         matches!(&refused, Err(StorageError::Publish(m)) if m.contains("staged no nodes")),

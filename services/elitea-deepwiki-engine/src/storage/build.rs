@@ -4,16 +4,26 @@
 //! (and later its embeddings) into the `deepwiki_build` tables with `COPY`,
 //! and publishes. [`Build::publish`] is ONE transaction:
 //!
-//! 1. lock the build row (a build the sweep removed cannot publish);
-//! 2. upsert the `wikis` row (its row lock also orders two publishes of one
-//!    wiki);
-//! 3. refuse an empty build, before anything is deleted;
-//! 4. delete the wiki's live rows: `wiki_bm25_*`, embeddings, edges, nodes;
-//! 5. `INSERT ... SELECT` the staged nodes, edges and embeddings;
-//! 6. write the `wiki_bm25_*` statistics of both branches;
-//! 7. delete the build row, which cascades to every staged row;
-//! 8. `ANALYZE` the live tables, so the planner statistics that describe
-//!    the new rows become visible with them.
+//! 1. lock the build row (a build the sweep removed cannot publish; the
+//!    sweep skips a locked build);
+//! 2. queue, without a timeout: first behind a publish of the same wiki
+//!    (a transaction-scoped advisory lock on the wiki id), then for one of
+//!    [`PublishSettings::slots`] publish slots per database (advisory locks
+//!    too), which bounds the `work_mem` the publishes take together;
+//! 3. set `statement_timeout`, `lock_timeout` and `work_mem` for the rest
+//!    of the transaction ([`PublishSettings`]);
+//! 4. upsert the `wikis` row;
+//! 5. refuse an empty build, before anything is deleted;
+//! 6. delete the wiki's live rows: `wiki_bm25_*`, embeddings, edges, nodes;
+//! 7. `INSERT ... SELECT` the staged nodes, edges and embeddings;
+//! 8. write the `wiki_bm25_*` statistics of both branches;
+//! 9. delete the build row, which cascades to every staged row.
+//!
+//! After the commit, the live tables are `ANALYZE`d, best effort: one
+//! short transaction per table with a short `lock_timeout`, skipped (and
+//! logged) when another `ANALYZE` or a vacuum holds the table. Inside the
+//! publish transaction an `ANALYZE` would hold its lock on the SHARED live
+//! tables until the commit and cancel autovacuum on them.
 //!
 //! Under PostgreSQL's MVCC a reader sees the old index or the new one,
 //! never a part of one: no statement of the publish is visible before the
@@ -37,10 +47,13 @@
 //! 1.0 for an empty corpus.
 //!
 //! Abandoned builds: [`BuildSpace::reconcile_owner`] at startup deletes the
-//! builds of this process's owner (a predecessor's, never another
-//! replica's); [`BuildSpace::sweep`] deletes builds whose heartbeat is older
-//! than a limit. A build calls [`Build::heartbeat`] while it works; every
-//! stage call beats it too.
+//! builds of this process's owner that an EARLIER run of it opened (each
+//! build records the run's boot id, migration 0004), never this run's and
+//! never another replica's; [`BuildSpace::sweep`] deletes builds whose
+//! heartbeat is older than a limit. An open [`Build`] beats its heartbeat
+//! from a background task every [`heartbeat_interval`], so a long model
+//! call between staging and the publish does not get it swept; the task
+//! stops when the build is dropped, published or abandoned.
 
 use crate::graph::{CodeGraph, edge_row, node_row};
 use crate::storage::copy::CopyWriter;
@@ -51,10 +64,116 @@ use indexmap::IndexMap;
 use serde_json::Value;
 use sqlx::Connection;
 use sqlx::postgres::{PgConnection, PgPool};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The default age after which the sweep removes a build (2 h, ADR-0026).
 pub const DEFAULT_STALE_AFTER: Duration = Duration::from_hours(2);
+
+/// The smallest staleness limit the settings accept (5 min): the heartbeat
+/// must be able to miss a few beats (a database failover, a long pause)
+/// before a live build is swept.
+pub const MIN_STALE_AFTER: Duration = Duration::from_mins(5);
+
+/// The advisory lock class of the publish slots
+/// (`hashtext(PUBLISH_SLOT_LOCK)`, with the slot number as the object).
+pub const PUBLISH_SLOT_LOCK: &str = "elitea_deepwiki.publish_slot";
+
+/// The advisory lock class that orders publishes of one wiki
+/// (`hashtext(PUBLISH_WIKI_LOCK)`, with `hashtext(wiki_id)` as the object).
+pub const PUBLISH_WIKI_LOCK: &str = "elitea_deepwiki.publish_wiki";
+
+/// How a publish uses the database. Every field has an
+/// `ELITEA_DEEPWIKI_PUBLISH_*` setting (`config.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishSettings {
+    /// `statement_timeout` of each statement of the publish transaction
+    /// (default 30 min). A large repository's postings insert took 137 s.
+    pub statement_timeout: Duration,
+    /// `lock_timeout` of each statement of the publish transaction, after
+    /// the queue (default 30 s).
+    pub lock_timeout: Duration,
+    /// `work_mem` of the publish transaction, in MiB (default 64).
+    pub work_mem_mb: u32,
+    /// Publishes that run at once against one database (default 2); the
+    /// others queue. Every engine replica must use the same number.
+    pub slots: u32,
+    /// `lock_timeout` of each best-effort `ANALYZE` (default 5 s).
+    pub analyze_lock_timeout: Duration,
+}
+
+impl Default for PublishSettings {
+    fn default() -> Self {
+        Self {
+            statement_timeout: Duration::from_mins(30),
+            lock_timeout: Duration::from_secs(30),
+            work_mem_mb: 64,
+            slots: 2,
+            analyze_lock_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+impl PublishSettings {
+    /// The `SET LOCAL`s of the publish transaction, as `set_config`
+    /// arguments. A duration is whole milliseconds, at least 1 (0 would
+    /// disable the timeout).
+    #[must_use]
+    pub fn session_settings(&self) -> [(&'static str, String); 4] {
+        [
+            ("statement_timeout", millis(self.statement_timeout)),
+            ("lock_timeout", millis(self.lock_timeout)),
+            ("work_mem", format!("{}MB", self.work_mem_mb.max(1))),
+            // Every statement of the publish moves a whole index. With the
+            // live tables' statistics stale by a whole wiki, the planner
+            // chose nested loops over sequential scans (measured: 23 s for
+            // 35k postings against 5k documents); hash joins are right for
+            // every one of them.
+            ("enable_nestloop", "off".to_owned()),
+        ]
+    }
+}
+
+/// A PostgreSQL duration setting: whole milliseconds, at least 1.
+fn millis(duration: Duration) -> String {
+    format!("{}ms", duration.as_millis().clamp(1, i32::MAX as u128))
+}
+
+/// How often an open build beats its heartbeat: a tenth of the staleness
+/// limit, between 100 ms and 1 min (30 s at the 5 min minimum).
+#[must_use]
+pub fn heartbeat_interval(stale_after: Duration) -> Duration {
+    (stale_after / 10).clamp(Duration::from_millis(100), Duration::from_mins(1))
+}
+
+/// This process run's boot id, drawn at first use and the same for every
+/// [`BuildSpace`] of the process.
+#[must_use]
+pub fn process_boot_id() -> &'static str {
+    static BOOT_ID: OnceLock<String> = OnceLock::new();
+    BOOT_ID.get_or_init(new_boot_id)
+}
+
+/// A fresh boot id: the process id, the start time and 128 random bits
+/// (the standard library's per-process random hash keys).
+#[must_use]
+pub fn new_boot_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let random = || {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{:x}-{nanos:x}-{:016x}{:016x}",
+        std::process::id(),
+        random(),
+        random()
+    )
+}
 
 /// Nodes staged per round of `COPY` statements. Bounds the BM25 postings
 /// held in memory while the node `COPY` of the same round is open.
@@ -65,6 +184,9 @@ const NODES_PER_ROUND: usize = 2_000;
 pub struct BuildSpace {
     pool: PgPool,
     owner: String,
+    boot_id: String,
+    stale_after: Duration,
+    publish: PublishSettings,
 }
 
 /// Row counts a stage call wrote.
@@ -84,6 +206,10 @@ pub struct PublishCounts {
     pub embeddings: u64,
     pub bm25_documents: u64,
     pub fts_documents: u64,
+    /// Every live table was `ANALYZE`d after the commit. `false` when one
+    /// was skipped (another `ANALYZE` or a vacuum held it); autovacuum
+    /// catches up.
+    pub statistics_refreshed: bool,
 }
 
 /// The `wikis` row a publish writes: `registry_from_result`'s fields.
@@ -153,12 +279,39 @@ impl WikiRecord {
 
 impl BuildSpace {
     /// The build space of `owner`: the identity of this process across a
-    /// restart (the pod name), never shared by two live processes.
+    /// restart (the pod name), never shared by two live processes. The
+    /// boot id is [`process_boot_id`], the staleness limit
+    /// [`DEFAULT_STALE_AFTER`], the publish settings the defaults.
     pub fn new(pool: PgPool, owner: impl Into<String>) -> Self {
         Self {
             pool,
             owner: owner.into(),
+            boot_id: process_boot_id().to_owned(),
+            stale_after: DEFAULT_STALE_AFTER,
+            publish: PublishSettings::default(),
         }
+    }
+
+    /// Another boot id (a test stands for a restarted process with it).
+    #[must_use]
+    pub fn with_boot_id(mut self, boot_id: impl Into<String>) -> Self {
+        self.boot_id = boot_id.into();
+        self
+    }
+
+    /// The staleness limit the sweep uses; a build's heartbeat interval
+    /// follows from it ([`heartbeat_interval`]).
+    #[must_use]
+    pub fn with_stale_after(mut self, stale_after: Duration) -> Self {
+        self.stale_after = stale_after;
+        self
+    }
+
+    /// The publish settings of the builds this space opens.
+    #[must_use]
+    pub fn with_publish_settings(mut self, publish: PublishSettings) -> Self {
+        self.publish = publish;
+        self
     }
 
     /// This process's owner identity.
@@ -167,58 +320,114 @@ impl BuildSpace {
         &self.owner
     }
 
-    /// Open a build of `wiki_id`.
+    /// This process run's boot id.
+    #[must_use]
+    pub fn boot_id(&self) -> &str {
+        &self.boot_id
+    }
+
+    /// Open a build of `wiki_id`, recorded under this owner and boot id,
+    /// and start its heartbeat task.
     ///
     /// # Errors
     ///
     /// [`StorageError::Database`].
     pub async fn begin(&self, wiki_id: &str) -> Result<Build> {
         let build_id: String = sqlx::query_scalar(
-            "INSERT INTO deepwiki_build.builds (build_id, wiki_id, owner) \
-             VALUES (gen_random_uuid()::text, $1, $2) RETURNING build_id",
+            "INSERT INTO deepwiki_build.builds (build_id, wiki_id, owner, boot_id) \
+             VALUES (gen_random_uuid()::text, $1, $2, $3) RETURNING build_id",
         )
         .bind(wiki_id)
         .bind(&self.owner)
+        .bind(&self.boot_id)
         .fetch_one(&self.pool)
         .await?;
+        let beat_every = heartbeat_interval(self.stale_after);
+        let beat = HeartbeatTask::spawn(self.pool.clone(), build_id.clone(), beat_every);
         Ok(Build {
             pool: self.pool.clone(),
             id: build_id,
             wiki_id: wiki_id.to_owned(),
             next_ord: 0,
+            publish: self.publish,
+            beat_every,
+            beat: Some(beat),
+            published: false,
         })
     }
 
-    /// Startup reconciliation: delete every build of this owner. At
-    /// startup no build of this process exists yet, so each one found is a
-    /// predecessor's that will never finish. Returns the builds deleted.
+    /// Startup reconciliation: delete the builds of this owner that an
+    /// earlier run opened (a boot id other than this run's, or none: a
+    /// build from before migration 0004). Such a build will never finish.
+    /// This run's own builds stay, so the reconciliation is safe at any
+    /// time, also when a database that was down at start comes up after
+    /// this run opened builds. Returns the builds deleted.
     ///
     /// # Errors
     ///
     /// [`StorageError::Database`].
     pub async fn reconcile_owner(&self) -> Result<u64> {
-        let done = sqlx::query("DELETE FROM deepwiki_build.builds WHERE owner = $1")
-            .bind(&self.owner)
-            .execute(&self.pool)
-            .await?;
+        let done = sqlx::query(
+            "DELETE FROM deepwiki_build.builds \
+             WHERE owner = $1 AND boot_id IS DISTINCT FROM $2",
+        )
+        .bind(&self.owner)
+        .bind(&self.boot_id)
+        .execute(&self.pool)
+        .await?;
         Ok(done.rows_affected())
     }
 
     /// The periodic sweep: delete every build, of any owner, whose
-    /// heartbeat is older than `stale_after`. Returns the builds deleted.
+    /// heartbeat is older than `stale_after`. A build that is publishing
+    /// holds its row locked and is skipped (`SKIP LOCKED`): the sweep
+    /// neither waits for a publish nor removes a build a publish failed
+    /// on before its heartbeat resumes. Returns the builds deleted.
     ///
     /// # Errors
     ///
     /// [`StorageError::Database`].
     pub async fn sweep(&self, stale_after: Duration) -> Result<u64> {
         let done = sqlx::query(
-            "DELETE FROM deepwiki_build.builds \
-             WHERE heartbeat_at < now() - make_interval(secs => $1)",
+            "DELETE FROM deepwiki_build.builds WHERE build_id IN ( \
+                 SELECT build_id FROM deepwiki_build.builds \
+                 WHERE heartbeat_at < now() - make_interval(secs => $1) \
+                 FOR UPDATE SKIP LOCKED)",
         )
         .bind(stale_after.as_secs_f64())
         .execute(&self.pool)
         .await?;
         Ok(done.rows_affected())
+    }
+}
+
+/// The background heartbeat of one open build. Dropping it stops it.
+#[derive(Debug)]
+struct HeartbeatTask(tokio::task::JoinHandle<()>);
+
+impl HeartbeatTask {
+    fn spawn(pool: PgPool, build: String, every: Duration) -> Self {
+        Self(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                match heartbeat(&pool, &build).await {
+                    Ok(()) => {}
+                    Err(StorageError::Publish(_)) => {
+                        tracing::warn!(build, "the build no longer exists; its heartbeat stops");
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, build, "build heartbeat failed; retrying");
+                    }
+                }
+            }
+        }))
+    }
+}
+
+impl Drop for HeartbeatTask {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -230,8 +439,8 @@ pub fn sweep_interval(stale_after: Duration) -> Duration {
 }
 
 /// The reconciliation loop `serve` runs when a database is configured:
-/// the owner reconciliation once, then the sweep every
-/// [`sweep_interval`]. A failure is logged and retried at the next tick;
+/// the owner reconciliation once (it spares this run's builds, so a late
+/// first success is harmless), then the sweep every [`sweep_interval`]. A failure is logged and retried at the next tick;
 /// it never stops the sidecar (no runner needs the database yet, and a
 /// database that comes up late is reconciled when it does).
 pub async fn run_reconciler(space: BuildSpace, stale_after: Duration) {
@@ -260,8 +469,8 @@ pub async fn run_reconciler(space: BuildSpace, stale_after: Duration) {
     }
 }
 
-/// One build in progress. Dropping it leaves its rows for the
-/// reconciliation; [`Build::abandon`] deletes them at once.
+/// One build in progress. Dropping it stops its heartbeat and leaves its
+/// rows for the reconciliation; [`Build::abandon`] deletes them at once.
 #[derive(Debug)]
 pub struct Build {
     pool: PgPool,
@@ -269,6 +478,11 @@ pub struct Build {
     wiki_id: String,
     /// The graph position of the next staged node (`bm25_docs.ord`).
     next_ord: i64,
+    publish: PublishSettings,
+    beat_every: Duration,
+    /// `None` while a publish runs and after a publish succeeded.
+    beat: Option<HeartbeatTask>,
+    published: bool,
 }
 
 /// The node `COPY`'s column list (no `fts`: it is generated).
@@ -285,13 +499,25 @@ const EDGE_COPY: &str = "COPY deepwiki_build.wiki_edges (build_id, source_id, ta
 const EMBEDDING_COPY: &str =
     "COPY deepwiki_build.wiki_node_embeddings (build_id, node_id, embedding) FROM STDIN";
 
-/// Statistics for the staged tables, before a publish reads them.
-const ANALYZE_STAGING: &str = "ANALYZE deepwiki_build.wiki_nodes, deepwiki_build.wiki_edges, \
-     deepwiki_build.wiki_node_embeddings, deepwiki_build.bm25_docs, deepwiki_build.bm25_postings";
+/// The staged tables, `ANALYZE`d before a publish reads them.
+const STAGING_TABLES: [&str; 5] = [
+    "deepwiki_build.wiki_nodes",
+    "deepwiki_build.wiki_edges",
+    "deepwiki_build.wiki_node_embeddings",
+    "deepwiki_build.bm25_docs",
+    "deepwiki_build.bm25_postings",
+];
 
-/// Statistics for the live tables, inside the publish transaction.
-const ANALYZE_LIVE: &str = "ANALYZE wiki_nodes, wiki_edges, wiki_node_embeddings, \
-     wiki_bm25_meta, wiki_bm25_docs, wiki_bm25_terms, wiki_bm25_postings";
+/// The live tables, `ANALYZE`d after a publish commits.
+pub const LIVE_TABLES: [&str; 7] = [
+    "wiki_nodes",
+    "wiki_edges",
+    "wiki_node_embeddings",
+    "wiki_bm25_meta",
+    "wiki_bm25_docs",
+    "wiki_bm25_terms",
+    "wiki_bm25_postings",
+];
 
 /// One staged node's BM25 input: its graph position, token count and
 /// term frequencies (first-seen order, as a Python `Counter`).
@@ -315,8 +541,10 @@ impl Build {
         &self.wiki_id
     }
 
-    /// Record that the build is alive. Fails when the build no longer
-    /// exists (the sweep removed it): its work cannot be published.
+    /// Record that the build is alive. The background task does this every
+    /// [`heartbeat_interval`]; a call here beats at once. Fails when the
+    /// build no longer exists (the sweep removed it, or it was published):
+    /// its work cannot be published.
     ///
     /// # Errors
     ///
@@ -459,12 +687,14 @@ impl Build {
         writer.finish().await
     }
 
-    /// Delete the build and everything it staged.
+    /// Delete the build and everything it staged; also after a failed
+    /// publish.
     ///
     /// # Errors
     ///
     /// [`StorageError::Database`].
-    pub async fn abandon(self) -> Result<()> {
+    pub async fn abandon(mut self) -> Result<()> {
+        self.beat = None;
         sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
             .bind(&self.id)
             .execute(&self.pool)
@@ -475,46 +705,61 @@ impl Build {
     /// Publish the build as the wiki's live index, in one transaction (see
     /// the module documentation), and remove the build.
     ///
+    /// The build stays with the caller. After an error the transaction has
+    /// rolled back, the live index is untouched, the build keeps its rows
+    /// and its heartbeat runs again: the caller can retry the publish (a
+    /// timeout, a lost connection), stage more and retry, or
+    /// [`Build::abandon`] it. After a success the build is gone; another
+    /// publish, stage or heartbeat is refused.
+    ///
     /// # Errors
     ///
-    /// [`StorageError::Publish`] when the build is gone or staged no node
-    /// (an empty index is never published over a possibly good one, the
-    /// `publish.py` rule); [`StorageError::Database`]. On any error the
-    /// transaction rolls back: the live index is untouched and the build
-    /// keeps its rows.
-    pub async fn publish(self, record: &WikiRecord) -> Result<PublishCounts> {
+    /// [`StorageError::Publish`] when the build is gone or already
+    /// published, or staged no node (an empty index is never published
+    /// over a possibly good one, the `publish.py` rule);
+    /// [`StorageError::Database`], also for a statement or lock timeout.
+    pub async fn publish(&mut self, record: &WikiRecord) -> Result<PublishCounts> {
+        if self.published {
+            return Err(StorageError::Publish(format!(
+                "build {} was already published",
+                self.id
+            )));
+        }
+        // The publish holds the build row locked: a heartbeat would wait on
+        // it, and the sweep skips the build while it is locked.
+        self.beat = None;
+        let outcome = self.publish_once(record).await;
+        match &outcome {
+            Ok(_) => self.published = true,
+            Err(_) => match heartbeat(&self.pool, &self.id).await {
+                Err(StorageError::Publish(_)) => {}
+                Ok(()) | Err(_) => {
+                    self.beat = Some(HeartbeatTask::spawn(
+                        self.pool.clone(),
+                        self.id.clone(),
+                        self.beat_every,
+                    ));
+                }
+            },
+        }
+        outcome
+    }
+
+    async fn publish_once(&self, record: &WikiRecord) -> Result<PublishCounts> {
         let mut connection = self.pool.acquire().await?;
         // The staging tables were just filled; their statistics describe
         // whatever was there before. Fresh statistics first, outside the
-        // transaction (ANALYZE locks a table against another ANALYZE until
-        // its transaction ends).
-        sqlx::raw_sql(ANALYZE_STAGING)
-            .execute(&mut *connection)
-            .await?;
-        let mut tx = connection.begin().await?;
-        // Every statement below moves a whole index. With the live tables'
-        // statistics stale by a whole wiki, the planner chose nested loops
-        // over sequential scans (measured: 23 s for 35k postings against 5k
-        // documents); hash joins are right for every one of them. The
-        // postings (millions of rows for a large repository) are inserted
-        // in key order, so the B-trees fill in order instead of at random
-        // (measured on elitea-platform: 5.1M postings, 137 s unsorted); the
-        // sorts and hashes get the memory to do that in one pass.
-        sqlx::raw_sql("SET LOCAL enable_nestloop = off; SET LOCAL work_mem = '256MB'")
-            .execute(&mut *tx)
-            .await?;
+        // transaction and best effort.
+        analyze_best_effort(
+            &mut connection,
+            &STAGING_TABLES,
+            self.publish.analyze_lock_timeout,
+        )
+        .await;
         let build = self.id.as_str();
         let wiki = self.wiki_id.as_str();
-
-        let locked: Option<String> = sqlx::query_scalar(
-            "SELECT wiki_id FROM deepwiki_build.builds WHERE build_id = $1 FOR UPDATE",
-        )
-        .bind(build)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if locked.is_none() {
-            return Err(gone(build));
-        }
+        let mut tx = connection.begin().await?;
+        enter_publish(&mut tx, &self.publish, build, wiki).await?;
 
         upsert_wiki(&mut tx, wiki, record).await?;
 
@@ -579,28 +824,181 @@ impl Build {
         .await?
         .rows_affected();
 
+        // The postings (millions of rows for a large repository) are
+        // inserted in key order, so the B-trees fill in order instead of at
+        // random (measured on elitea-platform: 5.1M postings, 137 s
+        // unsorted); the sorts get `work_mem` for that.
         let bm25_documents = write_bm25_branch(&mut tx, wiki, build).await?;
         let fts_documents = write_fts_branch(&mut tx, wiki).await?;
-        // Statistics that describe the new rows, committed with them: the
-        // first searches after a publish otherwise plan against the old
-        // row counts (measured: a BM25 search that had not finished after
-        // 10 minutes). The lock this takes orders a concurrent publish's
-        // ANALYZE behind this commit; readers are not blocked.
-        sqlx::raw_sql(ANALYZE_LIVE).execute(&mut *tx).await?;
 
         sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
             .bind(build)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+
+        // Statistics that describe the new rows: the first searches after
+        // a publish otherwise plan against the old row counts (measured: a
+        // BM25 search that had not finished after 10 minutes). After the
+        // commit, so the shared tables are not held until it.
+        let statistics_refreshed = analyze_best_effort(
+            &mut connection,
+            &LIVE_TABLES,
+            self.publish.analyze_lock_timeout,
+        )
+        .await;
         Ok(PublishCounts {
             nodes,
             edges,
             embeddings,
             bm25_documents,
             fts_documents,
+            statistics_refreshed,
         })
     }
+}
+
+/// The publish transaction's first steps: set the publish settings, lock
+/// the build row, queue (without a timeout) behind a publish of the same
+/// wiki and for a publish slot, then set the settings again.
+async fn enter_publish(
+    tx: &mut PgConnection,
+    settings: &PublishSettings,
+    build: &str,
+    wiki: &str,
+) -> Result<()> {
+    apply_settings(&mut *tx, &settings.session_settings()).await?;
+
+    let locked: Option<String> = sqlx::query_scalar(
+        "SELECT wiki_id FROM deepwiki_build.builds WHERE build_id = $1 FOR UPDATE",
+    )
+    .bind(build)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if locked.is_none() {
+        return Err(gone(build));
+    }
+
+    // The queue: no timeout while waiting for a publish of this wiki,
+    // then for a slot. The settings apply again once both are held.
+    apply_settings(
+        &mut *tx,
+        &[
+            ("lock_timeout", "0".to_owned()),
+            ("statement_timeout", "0".to_owned()),
+        ],
+    )
+    .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
+        .bind(PUBLISH_WIKI_LOCK)
+        .bind(wiki)
+        .execute(&mut *tx)
+        .await?;
+    take_publish_slot(&mut *tx, settings.slots, build).await?;
+    apply_settings(&mut *tx, &settings.session_settings()).await?;
+    Ok(())
+}
+
+/// `set_config(name, value, true)` for each pair: `SET LOCAL` with bound
+/// values.
+async fn apply_settings(tx: &mut PgConnection, settings: &[(&'static str, String)]) -> Result<()> {
+    for (name, value) in settings {
+        sqlx::query("SELECT set_config($1, $2, true)")
+            .bind(name)
+            .bind(value)
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Hold one of `slots` publish slots until the transaction ends. A free
+/// slot is taken at once; when every slot is held, the publish waits for
+/// the slot its build id hashes to (it queues, it does not fail).
+async fn take_publish_slot(tx: &mut PgConnection, slots: u32, build: &str) -> Result<i32> {
+    let slots = i32::try_from(slots.max(1)).unwrap_or(i32::MAX);
+    for slot in 0..slots {
+        let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtext($1), $2)")
+            .bind(PUBLISH_SLOT_LOCK)
+            .bind(slot)
+            .fetch_one(&mut *tx)
+            .await?;
+        if taken {
+            return Ok(slot);
+        }
+    }
+    let slot = queue_slot(build, slots);
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), $2)")
+        .bind(PUBLISH_SLOT_LOCK)
+        .bind(slot)
+        .execute(&mut *tx)
+        .await?;
+    Ok(slot)
+}
+
+/// The slot a publish waits for when none is free: FNV-1a of the build id,
+/// so waiting publishes spread over the slots.
+fn queue_slot(build: &str, slots: i32) -> i32 {
+    let hash = build.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    let slots = u64::try_from(slots.max(1)).unwrap_or(1);
+    i32::try_from(hash % slots).unwrap_or(0)
+}
+
+/// `ANALYZE` each table in its own short transaction with `lock_timeout`.
+/// A table another `ANALYZE` or a vacuum holds is skipped and logged.
+/// Returns whether every table was analyzed.
+async fn analyze_best_effort(
+    connection: &mut PgConnection,
+    tables: &[&'static str],
+    lock_timeout: Duration,
+) -> bool {
+    let mut all = true;
+    for table in tables {
+        if let Err(error) = analyze_one(connection, table, lock_timeout).await {
+            all = false;
+            if is_lock_timeout(&error) {
+                tracing::info!(
+                    table,
+                    "ANALYZE skipped: the table is locked (autovacuum catches up)"
+                );
+            } else {
+                tracing::warn!(table, %error, "ANALYZE failed; autovacuum catches up");
+            }
+        }
+    }
+    all
+}
+
+async fn analyze_one(
+    connection: &mut PgConnection,
+    table: &'static str,
+    lock_timeout: Duration,
+) -> std::result::Result<(), sqlx::Error> {
+    let mut tx = connection.begin().await?;
+    sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+        .bind(millis(lock_timeout))
+        .execute(&mut *tx)
+        .await?;
+    // A table name from the constant lists above, never input.
+    // `query`, not `raw_sql`: the `raw_sql` future is not `Send` for every
+    // lifetime, which would make the whole publish future non-`Send`.
+    let statement = format!("ANALYZE {table}");
+    sqlx::query(&statement)
+        .persistent(false)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
+/// SQLSTATE 55P03 (`lock_not_available`): a `lock_timeout` expired.
+#[must_use]
+pub fn is_lock_timeout(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(sqlx::error::DatabaseError::code)
+        .is_some_and(|code| code == "55P03")
 }
 
 fn add(a: StageCounts, b: StageCounts) -> StageCounts {
@@ -891,5 +1289,74 @@ mod tests {
         assert_eq!(bare.repo, None);
         assert_eq!(bare.display_name, None);
         assert_eq!(bare.folder_path, None);
+    }
+
+    #[test]
+    fn the_publish_future_is_send() {
+        // A runner spawns the publish; a future that is not `Send` (the
+        // `raw_sql` ANALYZE made it so) fails to compile here.
+        fn is_send<T: Send>(_: &T) {}
+        fn probe(build: &mut Build, record: &WikiRecord) {
+            is_send(&build.publish(record));
+        }
+        let _: fn(&mut Build, &WikiRecord) = probe;
+    }
+
+    #[test]
+    fn the_publish_session_settings() {
+        let settings = PublishSettings::default().session_settings();
+        assert_eq!(
+            settings,
+            [
+                ("statement_timeout", "1800000ms".to_owned()),
+                ("lock_timeout", "30000ms".to_owned()),
+                ("work_mem", "64MB".to_owned()),
+                ("enable_nestloop", "off".to_owned()),
+            ]
+        );
+        // A timeout never reaches 0 (which disables it) nor overflows the
+        // server's 32-bit milliseconds.
+        assert_eq!(millis(Duration::from_micros(10)), "1ms");
+        assert_eq!(
+            millis(Duration::from_hours(24 * 365)),
+            format!("{}ms", i32::MAX)
+        );
+    }
+
+    #[test]
+    fn the_heartbeat_is_well_under_the_staleness_limit() {
+        assert_eq!(heartbeat_interval(MIN_STALE_AFTER), Duration::from_secs(30));
+        assert_eq!(
+            heartbeat_interval(DEFAULT_STALE_AFTER),
+            Duration::from_mins(1)
+        );
+        assert_eq!(
+            heartbeat_interval(Duration::from_secs(1)),
+            Duration::from_millis(100)
+        );
+        for stale in [
+            MIN_STALE_AFTER,
+            DEFAULT_STALE_AFTER,
+            Duration::from_hours(24),
+        ] {
+            assert!(heartbeat_interval(stale) * 5 <= stale, "{stale:?}");
+        }
+    }
+
+    #[test]
+    fn boot_ids_differ_per_run_and_hold_within_one() {
+        assert_ne!(new_boot_id(), new_boot_id());
+        assert_eq!(process_boot_id(), process_boot_id());
+        assert!(process_boot_id().len() >= 32);
+    }
+
+    #[test]
+    fn a_queued_publish_waits_for_an_existing_slot() {
+        for slots in [1, 2, 7] {
+            for build in ["a", "b", "0f6e-uuid", ""] {
+                assert!((0..slots).contains(&queue_slot(build, slots)));
+            }
+        }
+        assert_eq!(queue_slot("anything", 0), 0);
     }
 }

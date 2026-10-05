@@ -111,15 +111,23 @@ async fn migrate() -> ExitCode {
     }
 }
 
-/// With a database configured: reconcile abandoned builds at start and
-/// sweep stale ones periodically, in the background.
+/// With a database configured: reconcile the abandoned builds of this
+/// owner's earlier runs, then sweep stale ones periodically, in the
+/// background. `Settings` already refused the shared default owner.
 fn start_reconciler(settings: &Settings) {
     let Some(url) = settings.database_url.as_ref() else {
         return;
     };
     match storage::lazy_pool(url.expose(), 2) {
         Ok(pool) => {
-            let space = storage::build::BuildSpace::new(pool, settings.build_owner.clone());
+            let space = storage::build::BuildSpace::new(pool, settings.build_owner.clone())
+                .with_stale_after(settings.build_stale_after)
+                .with_publish_settings(settings.publish);
+            tracing::info!(
+                owner = %space.owner(),
+                boot_id = %space.boot_id(),
+                "build reconciliation: this run's builds are recorded under this owner and boot id"
+            );
             tokio::spawn(storage::build::run_reconciler(
                 space,
                 settings.build_stale_after,

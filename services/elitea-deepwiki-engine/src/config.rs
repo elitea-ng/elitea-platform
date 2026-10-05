@@ -9,6 +9,7 @@ use crate::ingest::IngestSettings;
 use crate::ingest::egress::EgressPolicy;
 use crate::ingest::limits::IngestLimits;
 use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY};
+use crate::storage::build::{MIN_STALE_AFTER, PublishSettings};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -22,7 +23,8 @@ pub const DEFAULT_SOCKET: &str = "/run/deepwiki/engine.sock";
 pub const DEFAULT_SCRATCH_PATH: &str = "/tmp/deepwiki";
 
 /// The build-space owner when neither `ELITEA_DEEPWIKI_BUILD_OWNER` nor
-/// `HOSTNAME` is set.
+/// `HOSTNAME` is set. Every such engine would share it, so it is refused
+/// when a database is configured (the reconciliation is keyed by owner).
 pub const DEFAULT_BUILD_OWNER: &str = "elitea-deepwiki-engine";
 
 /// A database URL. It can carry a password, so its `Debug` form is
@@ -71,11 +73,16 @@ pub struct Settings {
     /// `ELITEA_DEEPWIKI_BUILD_OWNER`, else `HOSTNAME` (the pod name): the
     /// identity a build is recorded under. It must survive a restart of
     /// this process and differ between replicas, because the startup
-    /// reconciliation deletes every build of this owner.
+    /// reconciliation deletes this owner's builds from earlier runs. With a
+    /// database configured, one of the two must be set
+    /// ([`DEFAULT_BUILD_OWNER`] is refused).
     pub build_owner: String,
-    /// `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default 2 h): the sweep
-    /// deletes a build whose heartbeat is older.
+    /// `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default 2 h, at least 300):
+    /// the sweep deletes a build whose heartbeat is older.
     pub build_stale_after: Duration,
+    /// `ELITEA_DEEPWIKI_PUBLISH_*`: the publish transaction's timeouts,
+    /// `work_mem` and concurrency.
+    pub publish: PublishSettings,
     /// The model client's process-wide settings.
     pub model: ModelEnvSettings,
 }
@@ -160,6 +167,95 @@ fn positive_seconds(
         .map_err(|_| ConfigError(format!("{ENV_PREFIX}{name} is out of range, got '{text}'")))
 }
 
+/// [`positive_seconds`], at most `max`.
+fn bounded_seconds(
+    raw: &impl Fn(&str) -> Option<String>,
+    name: &str,
+    default: Duration,
+    max: Duration,
+) -> Result<Duration, ConfigError> {
+    let value = positive_seconds(raw, name, default)?;
+    if value > max {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}{name} must be at most {} seconds, got {}",
+            max.as_secs(),
+            value.as_secs_f64()
+        )));
+    }
+    Ok(value)
+}
+
+/// [`positive_count`], at most `max`.
+fn bounded_count(
+    raw: &impl Fn(&str) -> Option<String>,
+    name: &str,
+    default: u32,
+    max: u32,
+) -> Result<u32, ConfigError> {
+    let value = positive_count(raw, name, u64::from(default))?;
+    u32::try_from(value)
+        .ok()
+        .filter(|v| *v <= max)
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "{ENV_PREFIX}{name} must be at most {max}, got {value}"
+            ))
+        })
+}
+
+fn publish_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<PublishSettings, ConfigError> {
+    let defaults = PublishSettings::default();
+    // PostgreSQL holds a timeout in milliseconds in a 32-bit integer
+    // (about 24.8 days); a day is far beyond any publish.
+    let day = Duration::from_hours(24);
+    Ok(PublishSettings {
+        statement_timeout: bounded_seconds(
+            raw,
+            "PUBLISH_STATEMENT_TIMEOUT_SECONDS",
+            defaults.statement_timeout,
+            day,
+        )?,
+        lock_timeout: bounded_seconds(
+            raw,
+            "PUBLISH_LOCK_TIMEOUT_SECONDS",
+            defaults.lock_timeout,
+            day,
+        )?,
+        work_mem_mb: bounded_count(raw, "PUBLISH_WORK_MEM_MB", defaults.work_mem_mb, 4096)?,
+        slots: bounded_count(raw, "PUBLISH_SLOTS", defaults.slots, 64)?,
+        analyze_lock_timeout: bounded_seconds(
+            raw,
+            "PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS",
+            defaults.analyze_lock_timeout,
+            day,
+        )?,
+    })
+}
+
+/// The build owner: `ELITEA_DEEPWIKI_BUILD_OWNER`, else `HOSTNAME`. With a
+/// database, the shared default is refused.
+fn build_owner(
+    raw: &impl Fn(&str) -> Option<String>,
+    lookup: &impl Fn(&str) -> Option<String>,
+    has_database: bool,
+) -> Result<String, ConfigError> {
+    let owner = raw("BUILD_OWNER")
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            lookup("HOSTNAME")
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_BUILD_OWNER.to_owned());
+    if has_database && owner == DEFAULT_BUILD_OWNER {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}DATABASE_URL is set, but the build owner is the shared default '{DEFAULT_BUILD_OWNER}' (neither {ENV_PREFIX}BUILD_OWNER nor HOSTNAME is set). The build reconciliation is keyed by owner, so engines that share it can delete each other's builds. Set {ENV_PREFIX}BUILD_OWNER (or HOSTNAME) to a name that is unique to this engine and stays the same across its restarts (in Kubernetes, the pod name)."
+        )));
+    }
+    Ok(owner)
+}
+
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
     let defaults = IngestLimits::default();
     Ok(IngestSettings {
@@ -235,14 +331,20 @@ impl Settings {
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty())
             .map(DatabaseUrl);
-        let build_owner = raw("BUILD_OWNER")
-            .or_else(|| lookup("HOSTNAME").filter(|v| !v.trim().is_empty()))
-            .map_or_else(|| DEFAULT_BUILD_OWNER.to_owned(), |v| v.trim().to_owned());
+        let build_owner = build_owner(&raw, &lookup, database_url.is_some())?;
         let build_stale_after = positive_seconds(
             &raw,
             "BUILD_STALE_SECONDS",
             crate::storage::build::DEFAULT_STALE_AFTER,
         )?;
+        if build_stale_after < MIN_STALE_AFTER {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}BUILD_STALE_SECONDS must be at least {} (a live build beats its heartbeat every tenth of it and must survive a few missed beats), got {}",
+                MIN_STALE_AFTER.as_secs(),
+                build_stale_after.as_secs_f64()
+            )));
+        }
+        let publish = publish_settings(&raw)?;
         Ok(Self {
             runner,
             fixture_step,
@@ -251,6 +353,7 @@ impl Settings {
             database_url,
             build_owner,
             build_stale_after,
+            publish,
             model,
         })
     }
@@ -394,6 +497,96 @@ mod tests {
         ]);
         assert_eq!(owner.map(|s| s.build_owner), Ok("replica-a".to_owned()));
         assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "0")]).is_err());
+    }
+
+    #[test]
+    fn a_database_refuses_the_shared_default_owner() {
+        let dsn = (
+            "ELITEA_DEEPWIKI_DATABASE_URL",
+            "postgresql://u:p@db/deepwiki",
+        );
+        let refused = settings(&[dsn]);
+        assert!(
+            matches!(&refused, Err(ConfigError(m)) if m.contains("ELITEA_DEEPWIKI_BUILD_OWNER") && m.contains("HOSTNAME")),
+            "{refused:?}"
+        );
+        // Blank values do not count as set.
+        assert!(
+            settings(&[
+                dsn,
+                ("HOSTNAME", "  "),
+                ("ELITEA_DEEPWIKI_BUILD_OWNER", " ")
+            ])
+            .is_err()
+        );
+        // Naming the default explicitly is the same sharing.
+        assert!(settings(&[dsn, ("ELITEA_DEEPWIKI_BUILD_OWNER", DEFAULT_BUILD_OWNER)]).is_err());
+        assert_eq!(
+            settings(&[dsn, ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a")]).map(|s| s.build_owner),
+            Ok("replica-a".to_owned())
+        );
+        assert_eq!(
+            settings(&[dsn, ("HOSTNAME", "pod-1")]).map(|s| s.build_owner),
+            Ok("pod-1".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_stale_limit_has_a_floor() {
+        assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "299")]).is_err());
+        assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "60")]).is_err());
+        assert_eq!(
+            settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "300")])
+                .map(|s| s.build_stale_after),
+            Ok(Duration::from_mins(5))
+        );
+    }
+
+    #[test]
+    fn the_publish_settings_default_and_parse() {
+        assert_eq!(
+            settings(&[]).map(|s| s.publish),
+            Ok(PublishSettings {
+                statement_timeout: Duration::from_mins(30),
+                lock_timeout: Duration::from_secs(30),
+                work_mem_mb: 64,
+                slots: 2,
+                analyze_lock_timeout: Duration::from_secs(5),
+            })
+        );
+        assert_eq!(
+            settings(&[
+                ("ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS", "3600"),
+                ("ELITEA_DEEPWIKI_PUBLISH_LOCK_TIMEOUT_SECONDS", "2.5"),
+                ("ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB", "256"),
+                ("ELITEA_DEEPWIKI_PUBLISH_SLOTS", "1"),
+                ("ELITEA_DEEPWIKI_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS", "1"),
+            ])
+            .map(|s| s.publish),
+            Ok(PublishSettings {
+                statement_timeout: Duration::from_hours(1),
+                lock_timeout: Duration::from_millis(2500),
+                work_mem_mb: 256,
+                slots: 1,
+                analyze_lock_timeout: Duration::from_secs(1),
+            })
+        );
+        for (name, bad) in [
+            ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "0"),
+            ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "x"),
+            ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "86401"),
+            ("PUBLISH_LOCK_TIMEOUT_SECONDS", "-1"),
+            ("PUBLISH_WORK_MEM_MB", "0"),
+            ("PUBLISH_WORK_MEM_MB", "64MB"),
+            ("PUBLISH_WORK_MEM_MB", "4097"),
+            ("PUBLISH_SLOTS", "0"),
+            ("PUBLISH_SLOTS", "65"),
+            ("PUBLISH_SLOTS", "1.5"),
+            ("PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS", "inf"),
+        ] {
+            let key = format!("ELITEA_DEEPWIKI_{name}");
+            assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
+        }
     }
 
     #[test]
