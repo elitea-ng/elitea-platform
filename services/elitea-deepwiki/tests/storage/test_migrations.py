@@ -120,3 +120,35 @@ def test_the_wheel_configuration_ships_the_package_directory():
         f"the wheel ships {packages}, which does not include the package the "
         "migrations now live in"
     )
+
+
+def test_the_test_reset_drops_what_the_migrations_create():
+    """The PostgreSQL fixture's clean slate must cover every migration.
+
+    A schema the reset leaves behind can hold objects that depend on ones it
+    drops: 0003's staging `fts` column depends on `deepwiki_porter`, and a
+    reset that dropped the configuration without the schema failed on every
+    run after the first.
+    """
+    from .conftest import RESET_STATEMENTS
+
+    sql = "\n".join(m.sql for m in migrate.discover())
+    reset = [statement.lower() for statement in RESET_STATEMENTS]
+
+    def position(fragment: str) -> int:
+        for index, statement in enumerate(reset):
+            if fragment in statement:
+                return index
+        raise AssertionError(f"the test reset does not drop {fragment!r}")
+
+    schemas = re.findall(r"CREATE SCHEMA IF NOT EXISTS (\w+)", sql)
+    assert schemas, "no migration creates a schema any more; update this test"
+    configuration = position("drop text search configuration if exists deepwiki_porter")
+    for schema in schemas:
+        assert position(f"drop schema if exists {schema} cascade") < configuration
+
+    # Every unqualified table is dropped by name.
+    tables = re.findall(r"CREATE (?:UNLOGGED )?TABLE IF NOT EXISTS (\w+)\s", sql)
+    dropped = next(s for s in reset if s.startswith("drop table"))
+    for table in tables:
+        assert re.search(rf"\b{table}\b", dropped), f"the test reset keeps {table}"
