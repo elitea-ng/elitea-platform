@@ -2081,9 +2081,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		orchestrator := v2evaluation.NewOrchestrator(
 			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
 		// Started with the PROCESS context, so the workers and the recovery
-		// sweep stop on SIGTERM. A run in flight then leaves its row `running`
-		// with a fresh heartbeat, and the next process re-queues it once the
-		// heartbeat goes stale — which is what makes a restart lose nothing.
+		// sweep stop on SIGTERM. A run in flight then hands its row back to
+		// `created`, and the next process resumes it at startup; a process
+		// that dies without that write is re-queued once its heartbeat goes
+		// stale — which is what makes a restart lose nothing.
 		orchestrator.Start(ctx)
 		evalOrchestrator = orchestrator
 	}

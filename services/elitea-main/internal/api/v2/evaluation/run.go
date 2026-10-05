@@ -302,6 +302,15 @@ type RunRepository interface {
 	// restart: the goroutine died with the process, and nothing else can tell
 	// a dead run from a slow one.
 	RequeueStaleRuns(ctx context.Context, olderThanSeconds int) ([]RunRef, error)
+	// FailAbandonedRuns moves to `errored` the stale `running` rows that
+	// STARTED more than maxAgeSeconds ago, with `reason` on the row, across
+	// every project schema. It runs before RequeueStaleRuns, so an orphan that
+	// keeps dying is not resumed (and billed) without end.
+	FailAbandonedRuns(ctx context.Context, staleSeconds, maxAgeSeconds int, reason string) ([]RunRef, error)
+	// ReleaseRun moves one `running` row back to `created` when its process
+	// shuts down, so the next process resumes it at once and not after the
+	// stale TTL. It moves nothing when the row is not `running`.
+	ReleaseRun(ctx context.Context, projectID, runID string) error
 	// PendingRuns lists `created` runs so a fresh process picks up what it
 	// re-queued (and anything queued while no worker was alive).
 	PendingRuns(ctx context.Context, limit int) ([]RunRef, error)
