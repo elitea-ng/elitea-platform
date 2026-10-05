@@ -70,6 +70,29 @@ describe('TabGroupButton', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('reports a click on the selected button through onReselect, keeping the selection', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onReselect = vi.fn();
+    const { getByRole } = renderWithTheme(
+      <TabGroupButton
+        items={items}
+        value="grid"
+        onChange={onChange}
+        onReselect={onReselect}
+      />,
+    );
+    const gridButton = getByRole('button', { name: 'Grid' });
+    await user.click(gridButton);
+    expect(onReselect).toHaveBeenCalledExactlyOnceWith('grid');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(gridButton).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(getByRole('button', { name: 'List' }));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('list');
+    expect(onReselect).toHaveBeenCalledTimes(1);
+  });
+
   it('respects a controlled value and ignores its own internal state', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

@@ -151,9 +151,11 @@ test('J24: settings: analytics renders the live backend\'s own usage figures', a
   // gets stored is no longer order-dependent (issue #161 — AppShell and
   // ProjectSwitcher both resolve it from the project list now).
   await expect(page.getByText(`Project: ${DEFAULT_PROJECT_NAME}`, { exact: true })).toBeVisible({ timeout: 15_000 });
-  for (const preset of ['Last 24h', 'Last 7d', 'Last 30d', 'Last 90d']) {
+  // #6791: calendar-day presets — `Today` replaced the rolling `Last 24h`.
+  for (const preset of ['Today', 'Last 7d', 'Last 30d', 'Last 90d']) {
     await expect(page.getByRole('button', { name: preset, exact: true })).toBeVisible();
   }
+  await expect(page.getByRole('button', { name: 'Last 24h', exact: true })).toHaveCount(0);
   // The two `DateRangeField` MUI DateTimePickers (AnalyticsContainer.tsx:186-205)
   // render five segmented spinbuttons each (MM/DD/YYYY hh:mm) — ten in total.
   await expect(page.getByText('From:', { exact: true })).toBeVisible();
@@ -516,7 +518,7 @@ test('J24d: the Users tab renders the rows the backend returned, not a stub tabl
   // THE ORACLE MUST ASK THE SAME QUESTION THE SCREEN DID. Sent bare, this
   // request carries no date_from/date_to, so the server falls back to its
   // 7-day default (defaultDateRangeDays) while the tab it is being compared
-  // against is showing the "Last 24h" preset. Both counts are 0 on a stack with
+  // against is showing the "Today" preset. Both counts are 0 on a stack with
   // no gateway traffic, so the mismatch is invisible today and would surface as
   // a failure that is not a defect the first time the seed plants a request-log
   // row aged between one and seven days.
@@ -573,8 +575,16 @@ test('J24e: a date preset re-queries the backend with the selected range', async
   const first = page.waitForRequest((r) => USAGE_RE.test(r.url()), { timeout: 20_000 });
   await page.goto(BASE_URL + '/app/settings/analytics');
   const initialUrl = new URL((await first).url());
-  // Default preset is "Last 24h" (AnalyticsContainer.tsx:120-122).
+  // Default preset is "Today": local midnight to the next local midnight, so
+  // one day long (23 or 25 hours on a daylight-saving day) (#6791).
   const initialSpanDays = spanDays(initialUrl);
+  // Calendar day, not a rolling window: the bound is midnight in the BROWSER's
+  // zone, the same zone the pickers show.
+  const fromIsLocalMidnight = await page.evaluate((iso) => {
+    const d = new Date(iso);
+    return d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0;
+  }, initialUrl.searchParams.get('date_from') ?? '');
+  expect(fromIsLocalMidnight).toBe(true);
   expect(initialSpanDays).toBeGreaterThan(0.9);
   expect(initialSpanDays).toBeLessThan(1.1);
 

@@ -39,6 +39,8 @@ export interface AnalyticsTabContentProps {
   readonly data: ProjectAnalytics | undefined;
   /** Formatted project spend for the window, from `/analytics_costs`. */
   readonly totalCost?: string | undefined;
+  /** The billing period(s) `totalCost` covers. */
+  readonly totalCostPeriod?: string | undefined;
   readonly projectId: string | undefined;
   readonly dateFrom: string;
   readonly dateTo: string;
@@ -64,6 +66,7 @@ function renderTabBody({
   activeTab,
   data,
   totalCost,
+  totalCostPeriod,
   projectId,
   dateFrom,
   dateTo,
@@ -78,6 +81,7 @@ function renderTabBody({
           data={data}
           onUserClick={onUserClick}
           totalCost={totalCost}
+          totalCostPeriod={totalCostPeriod}
         />
       );
     case ANALYTICS_TAB.costs:

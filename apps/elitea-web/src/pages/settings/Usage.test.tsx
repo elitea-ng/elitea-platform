@@ -64,7 +64,9 @@ describe('Settings > Usage scope (#6732)', () => {
       </AppProviders>,
     );
 
-    expect(await screen.findByText('$9.50')).toBeInTheDocument();
+    // The digits, not the symbol: the symbol is the runtime locale's ("$" under
+    // en-US, "US$" under en-CA) — see `shared/lib/money.test.ts`.
+    expect(await screen.findByText(/^\D*9\.50$/)).toBeInTheDocument();
     expect(requested).toEqual(['user']);
     expect(screen.getByTestId('settings-usage-member-scope')).toBeInTheDocument();
     expect(screen.getByTestId('settings-usage')).toHaveAttribute('data-scope', 'user');
@@ -77,7 +79,7 @@ describe('Settings > Usage scope (#6732)', () => {
       </AppProviders>,
     );
 
-    expect(await screen.findByText('$1.25')).toBeInTheDocument();
+    expect(await screen.findByText(/^\D*1\.25$/)).toBeInTheDocument();
     await waitFor(() => expect(requested).toEqual(['project']));
     expect(screen.queryByTestId('settings-usage-member-scope')).not.toBeInTheDocument();
   });
