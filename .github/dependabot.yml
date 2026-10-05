@@ -262,6 +262,25 @@ updates:
       # FormData internals; re-run `npm run test:unit` to confirm.
       - dependency-name: jsdom
         versions: [">= 30.1.0"]
+      # msw 3 is a migration, not a bump (PR #1049 tried 3.0.1). Measured on
+      # that tree, swapping ONLY msw back to 2.15.0 turns the same files green:
+      #   - `server.listen({ onUnhandledRequest })` is gone (now
+      #     `onUnhandledFrame`): TS2353 in src/test/setup.ts, and at runtime
+      #     the R-M5 'error' fence silently falls back to 'warn';
+      #   - multipart bodies die in handler lookup ("AbortError ... Premature
+      #     close" / "unhandled exception during the handler lookup"), taking
+      #     out every upload test (artifacts, skill/application icon, branding,
+      #     support-assistant attachments);
+      #   - the XHR interceptor now surfaces the CORS preflight, so cross-origin
+      #     XHR tests hit an unhandled `OPTIONS`; the abort-wiring test fails;
+      #   - unhandled peripheral requests (support_assistant/config,
+      #     project_budget) now break the render in AppShell/ToolMenu/
+      #     GenerateAgentButton tests (~30 tests in ~20 files in all).
+      # Do it in its own PR: rename the option (setup.ts, the R-M5 selftest and
+      # fixtures, ~20 test comments), re-check multipart on a later 3.x, add the
+      # missing handlers.
+      - dependency-name: msw
+        update-types: ["version-update:semver-major"]
       # playwright 1.63.0 stops exposing the body of a response the PAGE has
       # consumed as a Blob. `Response.text()` returns "" where 1.62.1 returns the
       # document, so chat.sharing S4/S5 — which read the conversation_export
