@@ -1073,7 +1073,8 @@ fn a_populated_variable_list_is_substituted_into_the_instructions() {
 
 /// The REQUEST's own `application.variables` re-VALUE a declared variable and
 /// cannot declare one — `client.py:822-825` updates only names already in the
-/// version's list, and `meta.variables` is applied afterwards and still wins.
+/// version's list. A `meta.variables` ARRAY is Main's stored-defaults mirror and
+/// yields to the request; only a `meta.variables` OBJECT is applied last.
 #[test]
 fn participant_variables_revalue_declared_names_only() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
@@ -1102,33 +1103,35 @@ fn participant_variables_revalue_declared_names_only() {
         "formal / {{ undeclared }}"
     );
 
-    let mut meta_wins = ordinary_request(AgentExecutionKind::Application);
-    meta_wins
-        .payload
-        .application
-        .get_mut("version_details")
-        .and_then(Value::as_object_mut)
-        .expect("application version")
-        .insert(
+    for (meta, expected) in [
+        (json!([{"name": "tone", "value": "stored"}]), "formal"),
+        (json!({"tone": "stored"}), "stored"),
+    ] {
+        let mut with_meta = ordinary_request(AgentExecutionKind::Application);
+        with_meta
+            .payload
+            .application
+            .get_mut("version_details")
+            .and_then(Value::as_object_mut)
+            .expect("application version")
+            .insert(
+                "variables".to_owned(),
+                json!([{"name": "tone", "value": "terse"}]),
+            );
+        insert_application_meta(&mut with_meta, "variables", meta.clone());
+        with_meta.payload.application.insert(
             "variables".to_owned(),
-            json!([{"name": "tone", "value": "terse"}]),
+            json!([{"name": "tone", "value": "formal"}]),
         );
-    insert_application_meta(
-        &mut meta_wins,
-        "variables",
-        json!([{"name": "tone", "value": "stored"}]),
-    );
-    meta_wins.payload.application.insert(
-        "variables".to_owned(),
-        json!([{"name": "tone", "value": "formal"}]),
-    );
-    set_application_instructions(&mut meta_wins, "{{tone}}");
-    assert_eq!(
-        OrdinaryNoToolProfile::validate(&meta_wins)
-            .expect("meta variables")
-            .instructions(),
-        "stored"
-    );
+        set_application_instructions(&mut with_meta, "{{tone}}");
+        assert_eq!(
+            OrdinaryNoToolProfile::validate(&with_meta)
+                .unwrap_or_else(|error| panic!("meta variables {meta}: {error:?}"))
+                .instructions(),
+            expected,
+            "meta.variables = {meta}"
+        );
+    }
 }
 
 /// An undefined name is neither blanked nor fatal — Jinja2's `DebugUndefined`
