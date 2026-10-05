@@ -15,6 +15,8 @@
 # a login path anyone uses: the browser still authenticates through oidc-mock
 # and receives the OIDC session cookie, and the single Form user in
 # auth-form-users.json has a random password that is never typed anywhere.
+# Form sign-in is also OFF (ELITEA_FORM_LOGIN_ENABLED is unset), so that user is
+# loaded and ignored.
 #
 # Every *_file below is provisioned by deploy/scripts/gen-runtime-certs.sh and
 # installed into this container's /run/elitea-runtime by the runtime-material

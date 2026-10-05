@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -40,11 +41,62 @@ func NewChatMentionNotificationRepo(pool *pgxpool.Pool) *ChatMentionNotification
 // camelCase blob here would round-trip through the database and arrive as
 // `undefined` at the renderer, which is the "invisible data" shape this
 // repository keeps paying for.
+//
+// `sender` (client contract 1.1) is the typed form a client renders as
+// "{sender.name} mentioned you" without a user lookup it may not be allowed
+// to make. `sender_user_id` stays beside it for the readers that predate it.
 type chatMentionMeta struct {
-	ConversationID string `json:"conversation_id"`
-	MessageID      string `json:"message_id,omitempty"`
-	ProjectID      int64  `json:"project_id"`
-	SenderUserID   int64  `json:"sender_user_id"`
+	ConversationID string            `json:"conversation_id"`
+	MessageID      string            `json:"message_id,omitempty"`
+	ProjectID      int64             `json:"project_id"`
+	SenderUserID   int64             `json:"sender_user_id"`
+	Sender         chatMentionSender `json:"sender"`
+}
+
+type chatMentionSender struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// senderNames resolves the display names of the senders, best effort: the
+// notification is worth writing without one (`name` is then empty), and a
+// database where `public.auth_core__user` is not readable must not cost the
+// mention — the same rule the whole producer follows.
+func (repo *ChatMentionNotificationRepo) senderNames(ctx context.Context, rows []agentexecutionapp.MentionNotification) map[int64]string {
+	ids := make([]int64, 0, 1)
+	seen := map[int64]bool{}
+	for _, row := range rows {
+		if row.SenderUserID > 0 && !seen[row.SenderUserID] {
+			seen[row.SenderUserID] = true
+			ids = append(ids, row.SenderUserID)
+		}
+	}
+	names := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return names
+	}
+	result, err := repo.pool.Query(ctx, `
+SELECT account.id, coalesce(nullif(account.name, ''), account.email, '')
+FROM public.auth_core__user AS account
+WHERE account.id = ANY($1::bigint[])`, ids)
+	if err != nil {
+		slog.Warn("chat mention notification: sender name lookup failed; writing without names", "err", err)
+		return names
+	}
+	defer result.Close()
+	for result.Next() {
+		var id int64
+		var name string
+		if err := result.Scan(&id, &name); err != nil {
+			slog.Warn("chat mention notification: scan sender name", "err", err)
+			return names
+		}
+		names[id] = name
+	}
+	if err := result.Err(); err != nil {
+		slog.Warn("chat mention notification: read sender names", "err", err)
+	}
+	return names
 }
 
 // WriteChatMentionNotifications inserts one row per recipient.
@@ -56,6 +108,7 @@ func (repo *ChatMentionNotificationRepo) WriteChatMentionNotifications(
 		return nil
 	}
 
+	names := repo.senderNames(ctx, rows)
 	projectIDs := make([]int64, 0, len(rows))
 	userIDs := make([]int64, 0, len(rows))
 	metas := make([]string, 0, len(rows))
@@ -65,6 +118,7 @@ func (repo *ChatMentionNotificationRepo) WriteChatMentionNotifications(
 			MessageID:      row.MessageID,
 			ProjectID:      row.ProjectID,
 			SenderUserID:   row.SenderUserID,
+			Sender:         chatMentionSender{ID: row.SenderUserID, Name: names[row.SenderUserID]},
 		})
 		if err != nil {
 			return fmt.Errorf("encode mention notification meta: %w", err)

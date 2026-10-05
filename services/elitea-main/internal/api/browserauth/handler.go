@@ -300,6 +300,9 @@ func (h *Handler) authorizeForm(writer http.ResponseWriter, request *http.Reques
 	}, verifier)
 	if err != nil {
 		switch {
+		case errors.Is(err, browserapp.ErrUnauthenticated) && result.ReturnTarget != "":
+			// A wrong password keeps the original target (ADR-0025 §3.9).
+			h.redirectLoginFailureTo(writer, request, result.ReturnTarget)
 		case errors.Is(err, browserapp.ErrUnauthenticated),
 			errors.Is(err, browserapp.ErrAuthenticationExpired),
 			// A rejected transaction means the rendered form went stale: it
@@ -401,6 +404,19 @@ func (h *Handler) logout(writer http.ResponseWriter, request *http.Request) {
 
 func (h *Handler) redirectLoginFailure(writer http.ResponseWriter, request *http.Request) {
 	http.Redirect(writer, request, BasePath+LoginPath+"?error=true", http.StatusFound)
+}
+
+// redirectLoginFailureTo is redirectLoginFailure carrying the return target
+// the failed attempt was for. A target that is not a canonical same-origin
+// path is dropped, never passed through.
+func (h *Handler) redirectLoginFailureTo(writer http.ResponseWriter, request *http.Request, target string) {
+	canonical, err := browserflow.CanonicalReturnTarget(target)
+	if err != nil {
+		h.redirectLoginFailure(writer, request)
+		return
+	}
+	query := url.Values{"error": {"true"}, "target_to": {canonical}}
+	http.Redirect(writer, request, BasePath+LoginPath+"?"+query.Encode(), http.StatusFound)
 }
 
 func (h *Handler) writeFlowError(writer http.ResponseWriter, err error) {

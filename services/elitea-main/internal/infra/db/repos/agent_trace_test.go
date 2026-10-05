@@ -481,3 +481,106 @@ func TestCurrentAgentTraceStripsANULFromAChunkedToolOutput(t *testing.T) {
 		t.Fatalf("the completed call's output = %q, want the sanitized text", out)
 	}
 }
+
+// Demo issue 6: the native worker now names the frozen toolkit row id beside
+// the toolkit name on a tool frame. The id passes the metadata allowlist and
+// reaches the tool-call record; a value that is not a positive whole number is
+// dropped rather than stored.
+func TestCurrentAgentToolCallAttrsCarryTheWorkersToolkitID(t *testing.T) {
+	decode := func(raw string) map[string]any {
+		t.Helper()
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		var entry map[string]any
+		if err := decoder.Decode(&entry); err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	for name, testCase := range map[string]struct {
+		entry  string
+		wantID int64
+	}{
+		"top-level metadata": {
+			entry:  `{"metadata":{"toolkit_name":"my_github","toolkit_type":"github","toolkit_id":17}}`,
+			wantID: 17,
+		},
+		"tool_meta metadata only": {
+			entry:  `{"tool_meta":{"name":"get_commits","metadata":{"toolkit_name":"my_github","toolkit_type":"github","toolkit_id":17}}}`,
+			wantID: 17,
+		},
+		"no id from an older worker": {
+			entry:  `{"metadata":{"toolkit_name":"my_github","toolkit_type":"github"}}`,
+			wantID: 0,
+		},
+		"negative id": {
+			entry:  `{"metadata":{"toolkit_name":"my_github","toolkit_type":"github","toolkit_id":-3}}`,
+			wantID: 0,
+		},
+		"fractional id": {
+			entry:  `{"metadata":{"toolkit_name":"my_github","toolkit_type":"github","toolkit_id":1.5}}`,
+			wantID: 0,
+		},
+		"string id": {
+			entry:  `{"metadata":{"toolkit_name":"my_github","toolkit_type":"github","toolkit_id":"17"}}`,
+			wantID: 0,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			attrs := currentAgentToolCallAttrs(decode(testCase.entry))
+			if got := currentAgentToolkitAttr(attrs, "toolkit_name"); got != "my_github" {
+				t.Fatalf("toolkit_name = %q, want my_github", got)
+			}
+			if got := currentAgentToolkitIDAttr(attrs); got != testCase.wantID {
+				t.Fatalf("toolkit id = %d, want %d", got, testCase.wantID)
+			}
+			// The attrs survive a jsonb round trip as float64; the id must too.
+			encoded, err := json.Marshal(attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var roundTripped map[string]any
+			if err := json.Unmarshal(encoded, &roundTripped); err != nil {
+				t.Fatal(err)
+			}
+			if got := currentAgentToolkitIDAttr(roundTripped); got != testCase.wantID {
+				t.Fatalf("toolkit id after a round trip = %d, want %d", got, testCase.wantID)
+			}
+		})
+	}
+}
+
+// TestToolCallAttrsCarryTheClientContractKeys pins the writer to what client
+// contract 1.1 types on MessageTraceStep.attrs: a reloaded transcript draws a
+// tool chip from `metadata.toolkit_name`, `metadata.parent_agent_name` and
+// `tool_meta.name`/`display_name` without a detail fetch, so the writer must
+// keep producing exactly those keys.
+func TestToolCallAttrsCarryTheClientContractKeys(t *testing.T) {
+	attrs := currentAgentToolCallAttrs(map[string]any{
+		"metadata": map[string]any{
+			"toolkit_name":      "github",
+			"toolkit_type":      "github",
+			"display_name":      "List issues",
+			"original_name":     "list_issues",
+			"parent_agent_name": "Researcher",
+			"unlisted_key":      "dropped",
+		},
+		"tool_meta": map[string]any{"name": "github___list_issues", "display_name": "List issues"},
+	})
+	metadata, _ := attrs["metadata"].(map[string]any)
+	for key, want := range map[string]string{
+		"toolkit_name": "github", "toolkit_type": "github", "display_name": "List issues",
+		"original_name": "list_issues", "parent_agent_name": "Researcher",
+	} {
+		if metadata[key] != want {
+			t.Errorf("attrs.metadata.%s = %#v, want %q", key, metadata[key], want)
+		}
+	}
+	if _, present := metadata["unlisted_key"]; present {
+		t.Errorf("attrs.metadata kept a key outside the allowlist: %#v", metadata)
+	}
+	toolMeta, _ := attrs["tool_meta"].(map[string]any)
+	if toolMeta["name"] != "github___list_issues" || toolMeta["display_name"] != "List issues" {
+		t.Errorf("attrs.tool_meta = %#v, want name and display_name", toolMeta)
+	}
+}

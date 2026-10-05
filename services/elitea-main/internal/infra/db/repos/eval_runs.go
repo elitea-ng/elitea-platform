@@ -548,7 +548,7 @@ func (r *EvalRunsRepo) RequeueStaleRuns(ctx context.Context, olderThanSeconds in
 	for _, schema := range schemas {
 		rows, queryErr := r.pool.Query(ctx, fmt.Sprintf(`
 			UPDATE %s.eval_runs
-			SET status = $1, heartbeat_at = NULL
+			SET status = $1, heartbeat_at = NULL, resume_count = resume_count + 1
 			WHERE status = $2
 			  AND (heartbeat_at IS NULL OR heartbeat_at < now() - make_interval(secs => $3))
 			RETURNING id::text`, quoteSchema(schema)),
@@ -572,6 +572,80 @@ func (r *EvalRunsRepo) RequeueStaleRuns(ctx context.Context, olderThanSeconds in
 		rows.Close()
 	}
 	return requeued, nil
+}
+
+// FailAbandonedRuns moves to `errored` every stale `running` row that the
+// sweep already re-queued maxResumes times, across every tenant schema.
+//
+// A resume re-pays for the case that was in flight. An orphan that is
+// interrupted again and again (a crash loop, a case that kills the process)
+// would be resumed for ever. The resume bound stops that, and the reason on the
+// row tells the operator why the run did not finish. Only STALE rows are
+// touched: a live run that is slow keeps its heartbeat fresh and is never
+// failed here.
+func (r *EvalRunsRepo) FailAbandonedRuns(
+	ctx context.Context,
+	staleSeconds, maxResumes int,
+	reason string,
+) ([]evaluation.RunRef, error) {
+	schemas, err := r.projectSchemas(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	failed := []evaluation.RunRef{}
+	for _, schema := range schemas {
+		rows, queryErr := r.pool.Query(ctx, fmt.Sprintf(`
+			UPDATE %s.eval_runs
+			SET status = $1, error = $2, finished_at = now(), heartbeat_at = NULL
+			WHERE status = $3
+			  AND (heartbeat_at IS NULL OR heartbeat_at < now() - make_interval(secs => $4::double precision))
+			  AND resume_count >= $5
+			RETURNING id::text`, quoteSchema(schema)),
+			evaluation.RunStatusErrored, reason, evaluation.RunStatusRunning,
+			float64(staleSeconds), maxResumes)
+		if queryErr != nil {
+			// The same per-project tolerance as RequeueStaleRuns.
+			continue
+		}
+		for rows.Next() {
+			var runID string
+			if scanErr := rows.Scan(&runID); scanErr != nil {
+				continue
+			}
+			failed = append(failed, evaluation.RunRef{
+				ProjectID: projectIDFromSchema(schema), RunID: runID,
+			})
+		}
+		rows.Close()
+	}
+	return failed, nil
+}
+
+// ReleaseRun moves one `running` row back to `created` at process shutdown.
+//
+// Without it a run interrupted by a rollout waits the whole stale TTL before
+// any process may resume it, and the UI shows a frozen progress bar for that
+// time. The `status = 'running'` predicate keeps a cancel or a finish that
+// won the race intact.
+func (r *EvalRunsRepo) ReleaseRun(ctx context.Context, projectID, runID string) error {
+	schema, err := tenantSchema(projectID)
+	if err != nil {
+		return err
+	}
+	id, err := parseEvalID(runID, "run")
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, fmt.Sprintf(`
+		UPDATE %s.eval_runs
+		SET status = $1, heartbeat_at = NULL
+		WHERE id = $2 AND status = $3`, schema),
+		evaluation.RunStatusCreated, id, evaluation.RunStatusRunning)
+	if err != nil {
+		return fmt.Errorf("eval runs: release: %w", err)
+	}
+	return nil
 }
 
 // PendingRuns lists `created` runs across every tenant schema, oldest first.

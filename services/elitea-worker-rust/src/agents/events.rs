@@ -338,6 +338,96 @@ pub(crate) struct ApplicationToolPresentationCatalog {
     by_tool_name: BTreeMap<String, ApplicationToolPresentation>,
 }
 
+/// The toolkit each provider-visible tool name was bound from.
+///
+/// Main projects a tool-call frame into `elitea_runtime.tool_call_records`, and
+/// the Analytics Tools tab groups by toolkit. The frame is the only place that
+/// knows which toolkit produced a call. Without this catalog every MCP or
+/// configured-toolkit row reached Main with an empty `toolkit_name`, and two
+/// toolkits that expose a tool of the same name merged into one row.
+///
+/// The values come from Main's frozen tool snapshot (the toolkit row id, its
+/// name and its type), never from the provider. They carry no settings.
+#[derive(Clone, Default)]
+pub(crate) struct ToolkitAttributionCatalog {
+    by_tool_name: BTreeMap<String, ToolkitAttribution>,
+}
+
+#[derive(Clone)]
+struct ToolkitAttribution {
+    id: Option<u64>,
+    name: String,
+    kind: String,
+}
+
+impl ToolkitAttributionCatalog {
+    /// Record the toolkit of one provider-visible tool name. A value that is
+    /// not a safe display identity is not recorded: attribution is
+    /// observability, and it must not fail a turn.
+    pub(crate) fn insert(
+        &mut self,
+        provider_tool_name: &str,
+        toolkit_id: Option<u64>,
+        toolkit_name: &str,
+        toolkit_type: &str,
+    ) {
+        let safe = |value: &str| {
+            !value.is_empty()
+                && value.len() <= MAX_CONTEXT_TEXT_BYTES
+                && !value.chars().any(char::is_control)
+        };
+        if !valid_tool_identity(provider_tool_name) || !safe(toolkit_name) || !safe(toolkit_type) {
+            return;
+        }
+        self.by_tool_name.insert(
+            provider_tool_name.to_owned(),
+            ToolkitAttribution {
+                id: toolkit_id.filter(|id| *id > 0),
+                name: toolkit_name.to_owned(),
+                kind: toolkit_type.to_owned(),
+            },
+        );
+    }
+
+    /// Join the frozen toolkit references (`toolkit_name`, toolkit row id,
+    /// toolkit type) with the binding plan (`toolset_name`, logical tool name,
+    /// provider-visible name). A toolset with no frozen reference (an internal
+    /// toolset such as `ask_user` or the skill loader) gets no attribution.
+    pub(crate) fn from_bindings<'a>(
+        references: impl IntoIterator<Item = (&'a str, Option<u64>, &'a str)>,
+        bindings: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    ) -> Self {
+        let toolkits: BTreeMap<&str, (Option<u64>, &str)> = references
+            .into_iter()
+            .map(|(name, id, kind)| (name, (id, kind)))
+            .collect();
+        let mut catalog = Self::default();
+        for (toolset_name, _logical_name, provider_name) in bindings {
+            if let Some((toolkit_id, toolkit_type)) = toolkits.get(toolset_name) {
+                catalog.insert(provider_name, *toolkit_id, toolset_name, toolkit_type);
+            }
+        }
+        catalog
+    }
+
+    fn get(&self, provider_tool_name: &str) -> Option<&ToolkitAttribution> {
+        self.by_tool_name.get(provider_tool_name)
+    }
+}
+
+impl ToolkitAttribution {
+    fn insert_into(&self, metadata: &mut Value) {
+        let Value::Object(object) = metadata else {
+            return;
+        };
+        object.insert("toolkit_name".to_owned(), json!(self.name));
+        object.insert("toolkit_type".to_owned(), json!(self.kind));
+        if let Some(toolkit_id) = self.id {
+            object.insert("toolkit_id".to_owned(), json!(toolkit_id));
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ApplicationToolPresentation {
     display_name: String,
@@ -631,6 +721,7 @@ struct ActiveToolCall {
     application: Option<ApplicationToolPresentation>,
     sibling_ordinal: Option<usize>,
     pipeline_node_name: Option<String>,
+    toolkit: Option<ToolkitAttribution>,
 }
 
 #[derive(Clone)]
@@ -727,6 +818,7 @@ pub(crate) struct AgentEventProjector {
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     application_tools: ApplicationToolPresentationCatalog,
+    toolkit_attribution: ToolkitAttributionCatalog,
     descendants: BTreeMap<String, DescendantAgentProjector>,
     pipeline_result: Option<String>,
     saw_pipeline_node_events: bool,
@@ -866,12 +958,21 @@ impl AgentEventProjector {
             sensitive_tools,
             delegated_authorization,
             application_tools,
+            toolkit_attribution: ToolkitAttributionCatalog::default(),
             descendants: BTreeMap::new(),
             pipeline_result: None,
             saw_pipeline_node_events: false,
             continuation_overlap,
             checkpoint_recovery: false,
         })
+    }
+
+    /// Attach the toolkit of each bound tool, so every tool frame names the
+    /// toolkit that produced it (see [`ToolkitAttributionCatalog`]).
+    #[must_use]
+    pub(crate) fn with_toolkit_attribution(mut self, catalog: ToolkitAttributionCatalog) -> Self {
+        self.toolkit_attribution = catalog;
+        self
     }
 
     /// Restored generation replaces its interrupted browser attempt. The
@@ -2195,6 +2296,7 @@ impl AgentEventProjector {
                 application: self.application_tools.get(call.name).cloned(),
                 sibling_ordinal: self.application_tools.get(call.name).map(|_| index + 1),
                 pipeline_node_name: pipeline_node_name.clone(),
+                toolkit: self.toolkit_attribution.get(call.name).cloned(),
             };
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
@@ -4903,10 +5005,29 @@ fn tool_entry(
             }),
         );
     } else if let Some(node_name) = active.pipeline_node_name.as_deref() {
-        let metadata = json!({
+        let mut metadata = json!({
             "langgraph_node": node_name,
             "original_name": node_name,
         });
+        if let Some(toolkit) = active.toolkit.as_ref() {
+            toolkit.insert_into(&mut metadata);
+        }
+        let Value::Object(object) = &mut entry else {
+            return entry;
+        };
+        object.insert("metadata".to_owned(), metadata.clone());
+        object.insert(
+            "tool_meta".to_owned(),
+            json!({
+                "name": active.name,
+                "metadata": metadata,
+            }),
+        );
+    } else if let Some(toolkit) = active.toolkit.as_ref() {
+        // A plain toolkit tool (configured or MCP). Main reads these keys into
+        // the tool-call record that the Analytics Tools tab groups by.
+        let mut metadata = json!({});
+        toolkit.insert_into(&mut metadata);
         let Value::Object(object) = &mut entry else {
             return entry;
         };

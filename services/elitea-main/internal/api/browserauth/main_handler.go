@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"net/http"
 	"net/url"
 	"strings"
@@ -182,6 +183,18 @@ func (h *MainHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			writeProblem(writer, http.StatusServiceUnavailable)
 		}
 	case forwardapp.DecisionDeny:
+		if bearerCredential(request.Header) {
+			// A bearer caller is a program, not a browser: a 302 to the
+			// access-denied PAGE tells a native client nothing (ADR-0025
+			// WP3). A revoked native device session gets the ADR's
+			// device_revoked answer, any other refused bearer a plain 401.
+			if decision.Reason == forwardapp.ReasonCredentialRevoked {
+				apimw.WriteDeviceRevoked(writer)
+				return
+			}
+			writeBearerRejected(writer)
+			return
+		}
 		http.Redirect(writer, request, h.absoluteTarget(h.accessDeniedTarget), http.StatusFound)
 	case forwardapp.DecisionLogin:
 		query := url.Values{"target_to": {forwarded.URI}}
@@ -290,4 +303,22 @@ func validMainAvatarValue(value string) bool {
 func nullJSON(value json.RawMessage) bool {
 	value = bytes.TrimSpace(value)
 	return len(value) == 0 || bytes.Equal(value, []byte("null"))
+}
+
+// bearerCredential reports an `Authorization: Bearer` credential on the
+// request: the caller is an API client, and a deny must be a 401 it can read.
+func bearerCredential(headers http.Header) bool {
+	value := headers.Get("Authorization")
+	scheme, _, ok := strings.Cut(value, " ")
+	return ok && strings.EqualFold(scheme, "Bearer")
+}
+
+// writeBearerRejected is the 401 the API's own Auth middleware writes for a
+// refused bearer token, so a client sees the same refusal through the edge.
+func writeBearerRejected(writer http.ResponseWriter) {
+	writer.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusUnauthorized)
+	_, _ = writer.Write([]byte(`{"error":{"message":"token validation failed","type":"authentication_error","code":"token_rejected"}}` + "\n"))
 }

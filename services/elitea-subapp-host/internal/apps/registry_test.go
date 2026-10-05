@@ -127,7 +127,7 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 			t.Errorf("%s accepted an unknown runner: %v", name, err)
 		}
 		for _, offered := range app.RunnerNames() {
-			if _, err := app.Runner(offered, settings, time.Millisecond); err != nil && offered != "legacy" {
+			if _, err := app.Runner(offered, settings, time.Millisecond); err != nil && offered != "legacy" && offered != "native" {
 				t.Errorf("%s offers %s and refuses it: %v", name, offered, err)
 			}
 		}
@@ -145,6 +145,14 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 	withSocket.EngineSocket = "/run/deepwiki/engine.sock"
 	if runner, err := deepwiki.Runner("legacy", withSocket, 0); err != nil || runner.Name() != "legacy" {
 		t.Fatalf("deepwiki/legacy: %v %v", err, runner)
+	}
+	// The Rust engine (ADR-0026) speaks the same socket protocol: the same
+	// refusal without a socket, and its own name in /health with one.
+	if _, err := deepwiki.Runner("native", settings, 0); !errors.Is(err, spi.ErrConfig) {
+		t.Fatalf("deepwiki/native with no socket: %v", err)
+	}
+	if runner, err := deepwiki.Runner("native", withSocket, 0); err != nil || runner.Name() != "native" {
+		t.Fatalf("deepwiki/native: %v %v", err, runner)
 	}
 	// Inventory has a legacy runner of its own since ADR-0023 H4c stage I3, and
 	// it takes the same refusal without a socket.

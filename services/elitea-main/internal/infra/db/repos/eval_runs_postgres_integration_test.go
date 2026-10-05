@@ -342,6 +342,92 @@ func TestEvalRunSweepRequeuesAnOrphanedRun(t *testing.T) {
 	}
 }
 
+// A SHUTDOWN RELEASE moves only a `running` row back to `created`. A row the
+// user cancelled while the process stopped stays cancelled.
+func TestEvalRunReleaseMovesOnlyARunningRow(t *testing.T) {
+	fixture := newEvalRunFixture(t)
+	run := fixture.startRun(t, fixture.seedAIDimension(t))
+	ctx := context.Background()
+
+	if _, err := fixture.repo.ClaimRun(ctx, "1", run.ID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := fixture.repo.ReleaseRun(ctx, "1", run.ID); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if stored := fixture.readRun(t, run.ID); stored.Status != evaluation.RunStatusCreated {
+		t.Fatalf("status = %q, want created", stored.Status)
+	}
+
+	if _, err := fixture.repo.CancelRun(ctx, "1", run.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if err := fixture.repo.ReleaseRun(ctx, "1", run.ID); err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+	if stored := fixture.readRun(t, run.ID); stored.Status != evaluation.RunStatusCancelled {
+		t.Fatalf("status = %q, want the cancel kept", stored.Status)
+	}
+}
+
+// THE ABANDON BOUND. A stale orphan the sweep already resumed MaxResumes
+// times is failed with the reason. A stale orphan with fewer resumes (even one
+// that started hours ago) and a live run with many resumes are not touched.
+// The re-queue sweep counts each resume.
+func TestEvalRunSweepFailsOnlyAbandonedOrphans(t *testing.T) {
+	fixture := newEvalRunFixture(t)
+	dimensionID := fixture.seedAIDimension(t)
+	ctx := context.Background()
+	staleSeconds := int(evaluation.StaleRunTTL.Seconds())
+
+	abandoned := fixture.startRun(t, dimensionID)
+	young := fixture.startRun(t, dimensionID)
+	live := fixture.startRun(t, dimensionID)
+	for _, run := range []evaluation.Run{abandoned, young, live} {
+		if _, err := fixture.repo.ClaimRun(ctx, "1", run.ID); err != nil {
+			t.Fatalf("claim %s: %v", run.ID, err)
+		}
+	}
+	for _, statement := range []struct {
+		sql string
+		id  string
+	}{
+		{`UPDATE p_1.eval_runs SET resume_count = 5, heartbeat_at = now() - interval '1 hour' WHERE id = $1`, abandoned.ID},
+		{`UPDATE p_1.eval_runs SET resume_count = 4, started_at = now() - interval '7 hours', heartbeat_at = now() - interval '1 hour' WHERE id = $1`, young.ID},
+		{`UPDATE p_1.eval_runs SET resume_count = 9, heartbeat_at = now() WHERE id = $1`, live.ID},
+	} {
+		if _, err := fixture.pool.Exec(ctx, statement.sql, statement.id); err != nil {
+			t.Fatalf("age run %s: %v", statement.id, err)
+		}
+	}
+
+	failed, err := fixture.repo.FailAbandonedRuns(ctx, staleSeconds, evaluation.MaxResumes, evaluation.AbandonedRunReason)
+	if err != nil {
+		t.Fatalf("fail abandoned: %v", err)
+	}
+	if len(failed) != 1 || failed[0].RunID != abandoned.ID || failed[0].ProjectID != "1" {
+		t.Fatalf("failed = %+v, want only run %s", failed, abandoned.ID)
+	}
+	stored := fixture.readRun(t, abandoned.ID)
+	if stored.Status != evaluation.RunStatusErrored || stored.Error != evaluation.AbandonedRunReason || stored.FinishedAt == "" {
+		t.Fatalf("abandoned run = %q %q finished %q", stored.Status, stored.Error, stored.FinishedAt)
+	}
+	if got := fixture.readRun(t, young.ID).Status; got != evaluation.RunStatusRunning {
+		t.Errorf("young orphan = %q, want running (the re-queue sweep resumes it)", got)
+	}
+	requeued, err := fixture.repo.RequeueStaleRuns(ctx, staleSeconds)
+	if err != nil || len(requeued) != 1 || requeued[0].RunID != young.ID {
+		t.Fatalf("requeue = %+v, %v; want only run %s", requeued, err, young.ID)
+	}
+	var resumes int
+	if err := fixture.pool.QueryRow(ctx, `SELECT resume_count FROM p_1.eval_runs WHERE id = $1`, young.ID).Scan(&resumes); err != nil || resumes != 5 {
+		t.Fatalf("resume_count after requeue = %d, %v; want 5", resumes, err)
+	}
+	if got := fixture.readRun(t, live.ID).Status; got != evaluation.RunStatusRunning {
+		t.Errorf("live old run = %q, want running", got)
+	}
+}
+
 // A RESULT UPSERTS on (run, case, dimension). A re-queued run re-scores cases
 // it already scored, and a second row would be counted twice by every average.
 func TestEvalRunResultUpsertsRatherThanDuplicating(t *testing.T) {

@@ -73,6 +73,7 @@ func (s *stubSettlements) ReadToolkitCallToolSettlement(
 func testInputs() AuthoritativeInputs {
 	return AuthoritativeInputs{
 		ToolkitType:    "github",
+		ToolkitName:    "gh",
 		RuntimeContext: json.RawMessage(`{"toolkit_security":{"blocked_toolkits":[],"blocked_tools":{},"sensitive_tools":{},"sensitive_action_company_name":"Company","sensitive_action_message_template":"Approval required"}}`),
 		ToolkitID:      19,
 		ToolName:       "list_issues",
@@ -540,6 +541,11 @@ func TestRunToolRecordsASettledRunForAnalytics(t *testing.T) {
 	if record.ProjectID != 1 || record.ActorUserID != 7 || record.ToolkitID != 19 ||
 		record.ToolName != "list_issues" || record.ToolkitType != "github" {
 		t.Fatalf("record identity: %+v", record)
+	}
+	// Demo issue 6: the explicit run (the test button, MCP tools/call) names
+	// its toolkit too, so the Analytics Tools row is not left without one.
+	if record.ToolkitName != "gh" {
+		t.Fatalf("toolkit name = %q, want the resolved runtime name", record.ToolkitName)
 	}
 	if record.ExecutionID != "exec-1" {
 		t.Fatalf("the record must name the execution it describes: %+v", record)

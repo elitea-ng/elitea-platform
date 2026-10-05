@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -138,7 +138,7 @@ export const EditUserRolesDialog = ({
                 value={option.value}
                 sx={menuItemSx}
               >
-                <Checkbox
+                <BaseCheckbox
                   size="small"
                   checked={selectedRoleIds.includes(option.value)}
                   sx={checkboxSx}

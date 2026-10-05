@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
@@ -36,6 +37,19 @@ func NewProductionAuthRoutes(browser, main http.Handler) (*ProductionAuthRoutes,
 		return nil, ErrInvalidProductionAuthRoutes
 	}
 	return &ProductionAuthRoutes{browser: browser, main: main}, nil
+}
+
+// NewEdgeOnlyProductionAuthRoutes composes production authentication with
+// Form sign-in DISABLED (ELITEA_FORM_LOGIN_ENABLED, off by default): the
+// gateway edge is mounted, and no Form browser route is — so /auth belongs
+// to the single sign-on plane when one is configured, and is absent (404)
+// when none is. It is a separate constructor, not a nil argument, so a
+// missing browser handler can never be mistaken for a deliberate choice.
+func NewEdgeOnlyProductionAuthRoutes(main http.Handler) (*ProductionAuthRoutes, error) {
+	if main == nil {
+		return nil, ErrInvalidProductionAuthRoutes
+	}
+	return &ProductionAuthRoutes{main: main}, nil
 }
 
 // NewRouter builds the single production route composition. It used to
@@ -75,7 +89,26 @@ func NewRouter(cfg RouterConfig) chi.Router {
 // parity-verified default is enabled:true; coreHandler's prototype-stub
 // default is enabled:false) — a behavior change caught by a visual
 // regression test, not something this cleanup is meant to do.
-func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
+//
+// CROSS-CUTTING MIDDLEWARE. These routes are registered on the ROOT router,
+// outside the /api/v2 group, and each handler carries its own apimw.Auth over
+// the group's AuthConfig — so mounting them under the group's Auth would
+// authenticate every request twice. Registered bare, they skipped everything
+// else the group applies: an answer with no `Cache-Control: no-store`, no
+// minimum-client-version 426 for an outdated native client, and no
+// maintenance window. So every /api/v2 route below is registered in a group
+// that applies NoStore in front of the handler's own Auth, and schedules
+// `gates` (newProductionRouter's apiGates: Maintenance, then ClientVersion) to
+// run right after it via apimw.AfterAuthentication — the position they hold in
+// the group. Authentication itself is untouched: the same AuthConfig, the same
+// refusals, once. router_cross_cutting_gates_test.go walks the composed router
+// and fails on any /api/v2 route that answers without all three.
+//
+// The two browser-auth edges at the top are not /api/v2 routes and stay on
+// the root as they were: /auth is the sign-in surface and /internal/auth/main
+// is the gateway edge's identity check, neither of which a maintenance window
+// or a client version may close.
+func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig, gates []func(http.Handler) http.Handler) {
 	if cfg.ProductionAuth != nil {
 		// Exactly one browser-auth plane may own /auth. router.go mounts
 		// the OIDC session lifecycle on that prefix when SessionHandler is
@@ -102,13 +135,27 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 		// latter into the former before reaching here, and the OIDC mount at
 		// router.go:408 tests exactly this field. Testing the other one would
 		// miss a caller that sets the top-level field directly and panic again.
-		if cfg.SessionHandler == nil {
+		//
+		// A nil browser handler is NewEdgeOnlyProductionAuthRoutes: Form
+		// sign-in is disabled, and no Form route is mounted at all.
+		if cfg.SessionHandler == nil && cfg.ProductionAuth.browser != nil {
 			mountFormBrowserRoutes(r, cfg.ProductionAuth.browser)
 		}
 		// This address is reached only by the gateway's EdgeAuth middleware;
 		// deployment routing must never expose it as a product route.
 		r.Method(http.MethodGet, browserauth.MainEdgeAuthPath, cfg.ProductionAuth.main)
 	}
+	r.Group(func(r chi.Router) {
+		r.Use(apimw.NoStore)
+		r.Use(apimw.AfterAuthentication(gates...))
+		mountReviewedAPIRoutes(r, cfg)
+	})
+}
+
+// mountReviewedAPIRoutes registers the reviewed /api/v2 routes on r, which
+// mountReviewedProductionRoutes has already given the group's cross-cutting
+// middleware.
+func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.CurrentProjectList != nil {
 		r.Method(http.MethodGet, v2projects.CurrentProjectListPath, cfg.CurrentProjectList)
 	}

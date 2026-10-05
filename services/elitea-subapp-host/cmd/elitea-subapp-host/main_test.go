@@ -42,6 +42,10 @@ func TestComposeSelectsTheApplicationAndRefusesWhatItCannotServe(t *testing.T) {
 	if err != nil || app.Name != "elitea-deepwiki" || app.Runner.Name() != "legacy" {
 		t.Fatalf("legacy: %v %+v", err, app)
 	}
+	app, _, err = compose(lookup(map[string]string{"ELITEA_DEEPWIKI_RUNNER": "native", "ELITEA_DEEPWIKI_ENGINE_SOCKET": "/run/deepwiki/engine.sock"}))
+	if err != nil || app.Name != "elitea-deepwiki" || app.Runner.Name() != "native" {
+		t.Fatalf("native: %v %+v", err, app)
+	}
 	app, _, err = compose(lookup(map[string]string{"ELITEA_SUBAPP": "inventory"}))
 	if err != nil || app.Name != "elitea-inventory" || app.Runner.Name() != "unavailable" {
 		t.Fatalf("inventory: %v %+v", err, app)
@@ -60,6 +64,7 @@ func TestComposeSelectsTheApplicationAndRefusesWhatItCannotServe(t *testing.T) {
 	for name, pairs := range map[string]map[string]string{
 		"an unknown application":       {"ELITEA_SUBAPP": "nope"},
 		"the legacy Python runner":     {"ELITEA_DEEPWIKI_RUNNER": "legacy"},
+		"the native runner, no socket": {"ELITEA_DEEPWIKI_RUNNER": "native"},
 		"the fixture runner elsewhere": {"ELITEA_SUBAPP": "echo", "ELITEA_ECHO_RUNNER": "fixture"},
 		"a non-numeric step":           {"ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS": "soon"},
 		"a bad setting":                {"ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS": "0"},

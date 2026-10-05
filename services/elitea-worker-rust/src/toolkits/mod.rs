@@ -14,6 +14,7 @@ mod families;
 mod invocation;
 mod materialize;
 mod mcp;
+mod mcp_error;
 mod mcp_tool_cache;
 mod policy;
 mod snapshot;

@@ -1,0 +1,98 @@
+name: CI — DeepWiki native engine
+
+# ADR-0026: the Rust-native DeepWiki engine behind the engine sidecar socket.
+#
+# One job, on purpose: the repository's Actions plan runs 20 jobs at a time,
+# and every check here needs the same compiled dependency graph.
+#
+#   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
+#   * the crate's tests, which run the sidecar on a REAL Unix socket;
+#   * the release binary, and then the Go sub-application host's own tests
+#     against it (internal/apps/deepwiki/run, native_engine_test.go): the
+#     host's sidecar client, composition and upload over the Rust engine.
+#     ELITEA_REQUIRE_NATIVE_ENGINE=1 turns their "no binary → skip" into a
+#     failure here, so a broken path to the binary cannot pass as a run that
+#     never happened. ci-go.yml builds no Rust; it declares the skip.
+
+on:
+  pull_request:
+    paths:
+      - "services/elitea-deepwiki-engine/**"
+      - "services/elitea-subapp-host/internal/engine/**"
+      - "services/elitea-subapp-host/internal/apps/deepwiki/**"
+      - "conformance/provider/fixtures/deepwiki/**"
+      - ".github/workflows/ci-deepwiki-engine.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/elitea-deepwiki-engine/**"
+      - "services/elitea-subapp-host/internal/engine/**"
+      - "services/elitea-subapp-host/internal/apps/deepwiki/**"
+      - "conformance/provider/fixtures/deepwiki/**"
+      - ".github/workflows/ci-deepwiki-engine.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: Engine — lint, test, and the Go host against the binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/elitea-deepwiki-engine
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # Read everywhere, write on main only: a pull request's target
+      # directory duplicated per branch would crowd the 10 GB Actions cache.
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: services/elitea-deepwiki-engine
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --all-features
+
+      - name: Run the crate's tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Build the release binary
+        run: cargo build --locked --release
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache-dependency-path: services/elitea-subapp-host/go.sum
+
+      - name: Run the Go host's sidecar tests against the binary
+        working-directory: services/elitea-subapp-host
+        env:
+          ELITEA_DEEPWIKI_NATIVE_ENGINE_BIN: ${{ github.workspace }}/services/elitea-deepwiki-engine/target/release/elitea-deepwiki-engine
+          ELITEA_REQUIRE_NATIVE_ENGINE: "1"
+        run: go test -race -count=1 -run 'Native' -v ./internal/apps/deepwiki/run

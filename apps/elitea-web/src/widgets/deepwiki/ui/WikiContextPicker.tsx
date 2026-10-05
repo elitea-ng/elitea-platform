@@ -18,7 +18,7 @@ import { memo, useCallback, useMemo, useState, type MouseEvent } from 'react';
 
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import Badge from '@mui/material/Badge';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import ListItemText from '@mui/material/ListItemText';
@@ -117,7 +117,7 @@ export const WikiContextPicker = memo(function WikiContextPicker({
             }}
             data-testid="wiki-chat-context-option"
           >
-            <Checkbox size="small" checked={chosen.has(pageId)} tabIndex={-1} disableRipple />
+            <BaseCheckbox size="small" checked={chosen.has(pageId)} tabIndex={-1} disableRipple />
             <ListItemText primary={pageLabel(pageId)} secondary={pageId} />
           </MenuItem>
         ))}

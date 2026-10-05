@@ -367,7 +367,7 @@
   {
     "slug": "integrations/mcp/mcp-server",
     "title": "Elitea MCP server",
-    "description": "Connect an external MCP client (VS Code, Claude Code) to Elitea's own MCP server over streamable HTTP."
+    "description": "Connect an external MCP client (Claude Code, Cursor, VS Code, Claude Desktop) to Elitea's own MCP server over streamable HTTP."
   },
   {
     "slug": "integrations/mcp/prebuilt-mcp-servers",

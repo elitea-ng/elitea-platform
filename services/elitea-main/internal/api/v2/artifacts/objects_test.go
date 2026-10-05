@@ -449,6 +449,39 @@ func TestDownloadObject_FullAndRange(t *testing.T) {
 	}
 }
 
+// TestDownloadObject_StatesItsOwnCacheControl: an object download is an
+// authenticated, per-user answer, and the handler says so itself — on the
+// full body and on a 206 alike. Before, streamObject set no Cache-Control at
+// all and the artifact routes' NoStore middleware supplied it, while that
+// mount's comment claimed downloads choose their own value. Stating it here
+// keeps the contract on every mount of the handler (the S3-compatible plane
+// streams through the same function) and makes the router comment true.
+func TestDownloadObject_StatesItsOwnCacheControl(t *testing.T) {
+	h, _, _ := newObjectTestHandler(t)
+	r := newObjectTestRouter(h)
+
+	uploadRR := httptest.NewRecorder()
+	r.ServeHTTP(uploadRR, newUploadRequest(t, "/objects/1/reports", "cache.txt", []byte("0123456789")))
+	if uploadRR.Code != http.StatusCreated {
+		t.Fatalf("seed upload: expected 201, got %d: %s", uploadRR.Code, uploadRR.Body.String())
+	}
+
+	for _, rangeHeader := range []string{"", "bytes=2-5"} {
+		req := httptest.NewRequest(http.MethodGet, "/objects/1/reports/cache.txt", nil)
+		if rangeHeader != "" {
+			req.Header.Set("Range", rangeHeader)
+		}
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK && rr.Code != http.StatusPartialContent {
+			t.Fatalf("download (Range %q): got %d: %s", rangeHeader, rr.Code, rr.Body.String())
+		}
+		if got := rr.Header().Get("Cache-Control"); got != "private, no-store" {
+			t.Errorf("download (Range %q) Cache-Control = %q, want %q", rangeHeader, got, "private, no-store")
+		}
+	}
+}
+
 func TestDownloadObject_NotFound(t *testing.T) {
 	h, _, _ := newObjectTestHandler(t)
 	r := newObjectTestRouter(h)

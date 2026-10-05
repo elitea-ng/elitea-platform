@@ -2,9 +2,14 @@ package agentexecution
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 )
 
 // #977 — `user_ids` is the mention list, no longer a parity gate.
@@ -65,5 +70,30 @@ func TestParseMentionedUserIDsRefusesAnUnboundedAudience(t *testing.T) {
 	}
 	if _, ok := parseMentionedUserIDs(json.RawMessage("["+strings.Join(ids, ",")+"]"), nil); ok {
 		t.Fatalf("a mention list past %d entries must be refused", maxMentionedUsers)
+	}
+}
+
+// A model (ad-hoc) chat carries the mention list to its use case too. Before
+// client contract 1.1 the route parsed `user_ids` and then dropped it for
+// this contract, so a person tagged in a model chat was never told.
+func TestCurrentAdhocStartRouteCarriesMentionsToTheUseCase(t *testing.T) {
+	useCase := &currentStartUseCaseStub{outcome: agentexecutionapp.CurrentApplicationStartOutcome{
+		ExecutionID: "execution-adhoc", CommandID: "command-adhoc",
+	}}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	body := strings.Replace(validCurrentAdhocStartBody(), `"project_id":7,`,
+		`"project_id":7,"user_ids":[12,13,12],"is_mentioning_everyone":true,`, 1)
+
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentAdhocStartRequest(body))
+
+	if response.Code != http.StatusOK || useCase.adhocCalls != 1 {
+		t.Fatalf("status=%d adhoc_calls=%d body=%s", response.Code, useCase.adhocCalls, response.Body.String())
+	}
+	if got := useCase.adhocRequest.MentionedUserIDs; !reflect.DeepEqual(got, []int64{12, 13}) {
+		t.Fatalf("mentions = %v, want the deduplicated [12 13]", got)
+	}
+	if !useCase.adhocRequest.MentionsEveryone {
+		t.Fatal("is_mentioning_everyone was dropped")
 	}
 }

@@ -74,7 +74,19 @@ const cellSx = (theme: Theme) => ({
 });
 
 function matchesSearch(row: ToolAnalytics, query: string): boolean {
-  return row.tool_name.toLowerCase().includes(query.toLowerCase());
+  const needle = query.toLowerCase();
+  return row.tool_name.toLowerCase().includes(needle) || (row.toolkit_name ?? '').toLowerCase().includes(needle);
+}
+
+/**
+ * The toolkit a row's calls came from. Two toolkits can expose a tool of the
+ * same name, and the server keeps them as separate rows, so the table has to
+ * say which is which. An empty name is a row recorded before the producers
+ * named their toolkit (demo issue 6); it shows a dash, not an invented name.
+ */
+function toolkitLabel(row: Record<string, unknown>): string {
+  const name = typeof row['toolkit_name'] === 'string' ? row['toolkit_name'] : '';
+  return name === '' ? UNAVAILABLE_METRIC : name;
 }
 
 function AnalyticsToolsImpl({ projectId, dateFrom, dateTo }: AnalyticsToolsProps): ReactNode {
@@ -164,6 +176,18 @@ function AnalyticsToolsImpl({ projectId, dateFrom, dateTo }: AnalyticsToolsProps
           sx={cellSx}
         >
           {String(row['tool_name'])}
+        </Typography>
+      ),
+    },
+    {
+      header: t('analytics.tools.columnToolkit', 'Toolkit'),
+      flex: 2,
+      render: (row) => (
+        <Typography
+          noWrap
+          sx={cellSx}
+        >
+          {toolkitLabel(row)}
         </Typography>
       ),
     },
@@ -276,7 +300,7 @@ function AnalyticsToolsImpl({ projectId, dateFrom, dateTo }: AnalyticsToolsProps
           isFetching={isFetching}
           columns={columns}
           rowKey={(row, index) => `${String(row['toolkit_id'])}-${index}`}
-          searchPlaceholder={t('analytics.tools.searchPlaceholder', 'Search by tool name')}
+          searchPlaceholder={t('analytics.tools.searchPlaceholder', 'Search by tool or toolkit name')}
           searchFilter={(row, query) => matchesSearch(row as unknown as ToolAnalytics, query)}
           onRowClick={(row) =>
             setSelectedTool({ toolkitId: String(row['toolkit_id']), toolName: String(row['tool_name']) })

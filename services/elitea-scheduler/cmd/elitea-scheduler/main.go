@@ -21,9 +21,11 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/pricesync"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/rpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/scheduler"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
 
 func main() {
@@ -148,6 +150,36 @@ func main() {
 		slog.Info("starting audit retention sweeper",
 			"window_days", cfg.AuditRetentionDays, "interval", cfg.AuditRetentionInterval)
 		go auditSweeper.Run(ctx)
+	}
+
+	// Incremental-sync tombstone retention (ADR-0025 WP6, elitea-main tenant
+	// 0144 and shared 0144): bounded batched deletes of tombstones older than
+	// the window elitea-main still serves a `changes_since` cursor for. The
+	// window can only be raised above that floor. Gated on maintenance like
+	// the audit sweep, since it writes to every tenant schema.
+	if syncSweeper, raised, syncErr := syncretention.New(pool, sched.MaintenanceActive, syncretention.Config{
+		RetentionDays: cfg.SyncTombstoneRetentionDays,
+	}, logger); syncErr != nil {
+		slog.Error("sync tombstone retention sweep did not start; tombstone tables grow without bound", "err", syncErr)
+	} else {
+		if raised {
+			slog.Warn("SYNC_TOMBSTONE_RETENTION_DAYS is below the cursor window elitea-main serves; raised to the floor",
+				"configured_days", cfg.SyncTombstoneRetentionDays, "floor_days", syncretention.MinimumRetentionDays)
+		}
+		go syncSweeper.Run(ctx)
+	}
+
+	// Native authorization retention (ADR-0025 WP2, elitea-main shared 0141):
+	// bounded batched deletes of expired access tokens and authorization
+	// requests, consumed refresh tokens past their family's idle TTL, idle
+	// families (revoked as `expired`, anchors removed) and families revoked
+	// more than 90 days ago. Correctness never depends on it: elitea-main
+	// checks every expiry at read time. Not gated on maintenance mode: it
+	// only removes credentials that can no longer be used.
+	if nativeSweeper, nativeErr := nativeauthretention.New(pool, nativeauthretention.Config{}, logger); nativeErr != nil {
+		slog.Error("native auth retention sweep did not start", "err", nativeErr)
+	} else {
+		go nativeSweeper.Run(ctx)
 	}
 
 	// Budget write-back consumer (design §8.6): durable pull consumer draining

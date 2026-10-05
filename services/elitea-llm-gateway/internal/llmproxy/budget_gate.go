@@ -593,7 +593,7 @@ func (h *Handler) updateUsage(
 	projectIDStr string,
 	userIDStr string,
 ) billOutcome {
-	return h.updateUsageUnits(ctx, surfaceAudio, provider, model,
+	return h.updateUsageUnits(ctx, surfaceTokens, provider, model,
 		cost.Units{InputTokens: inputTokens, OutputTokens: outputTokens},
 		projectIDStr, userIDStr)
 }
@@ -611,9 +611,16 @@ func (h *Handler) updateUsage(
 type billingSurface int
 
 const (
-	// surfaceAudio is the unary /llm/v1/audio/* routes, and the token routes
-	// that reach here through updateUsage.
-	surfaceAudio billingSurface = iota
+	// surfaceTokens is the token routes (chat, completions, responses,
+	// messages, embeddings, images) that reach here through updateUsage. They
+	// carry no audio units, so the audio counters and the "audio: …" log lines
+	// do not apply to them. Before this value existed updateUsage passed
+	// surfaceAudio, and every plain text chat priced from the fallback table
+	// logged "audio: billed a token price the catalog did not supply" and moved
+	// gateway_audio_default_priced_total.
+	surfaceTokens billingSurface = iota
+	// surfaceAudio is the unary /llm/v1/audio/* routes only.
+	surfaceAudio
 	// surfaceRealtime is a turn of a /llm/v1/realtime session.
 	surfaceRealtime
 )

@@ -3,10 +3,18 @@
   Everything here is static markup or html/template-escaped data; the art and
   the icons are inline SVG, so the page loads nothing from anywhere.
 */}}
-{{define "head"}}<meta charset="utf-8">
+{{/*
+  "head" is every page's head with `no-referrer`. The native consent page uses
+  "head-base" and declares `same-origin` itself: a document under
+  `no-referrer` sends `Origin: null` on its form POST, and the consent
+  decision handler refuses "null" (native_pages.go, consentReferrerPolicy).
+  The meta would override the response header, so both must say the same.
+*/}}
+{{define "head"}}{{template "head-base" .}}
+    <meta name="referrer" content="no-referrer">{{end}}
+{{define "head-base"}}<meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <meta name="referrer" content="no-referrer">
     {{if .Brand.FaviconURL}}<link rel="icon" href="{{.Brand.FaviconURL}}">{{end}}
     <script>{{.Script}}</script>
     <style>{{.Style}}</style>

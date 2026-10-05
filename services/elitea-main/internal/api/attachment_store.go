@@ -133,6 +133,29 @@ func (a *attachmentRepoAdapter) ListAttachmentObjectKeys(ctx context.Context, bu
 	return keys, nil
 }
 
+// AttachmentObject resolves one attachment's metadata row under the
+// runtime reader's gates: the project's own bucket, the reserved system
+// bucket type, and an exact key match (ListObjects is a LIKE prefix query).
+func (a *attachmentRepoAdapter) AttachmentObject(ctx context.Context, projectID int64, bucketName, key string) (v2convs.AttachmentObjectInfo, error) {
+	bucket, err := a.buckets.GetBucket(ctx, projectID, bucketName)
+	if err != nil {
+		return v2convs.AttachmentObjectInfo{}, err
+	}
+	if bucket.ProjectID != projectID || bucket.BucketType != "system" {
+		return v2convs.AttachmentObjectInfo{}, storage.ErrNotFound
+	}
+	rows, err := a.objects.ListObjects(ctx, bucket.ID, key)
+	if err != nil {
+		return v2convs.AttachmentObjectInfo{}, err
+	}
+	for _, row := range rows {
+		if row.Key == key {
+			return v2convs.AttachmentObjectInfo{MediaType: row.MediaType, ByteLength: row.ByteLength}, nil
+		}
+	}
+	return v2convs.AttachmentObjectInfo{}, storage.ErrNotFound
+}
+
 func (a *attachmentRepoAdapter) DeleteAttachmentObjects(ctx context.Context, bucketID int64, keys []string) error {
 	return a.objects.DeleteObjects(ctx, bucketID, keys)
 }

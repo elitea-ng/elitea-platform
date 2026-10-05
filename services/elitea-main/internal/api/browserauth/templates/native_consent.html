@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    {{template "head-base" .}}
+    <meta name="referrer" content="same-origin">
+    <title>Sign in to {{.Brand.ProductName}} on a device</title>
+  </head>
+  <body class="auth-login-page" data-auth-form="native-consent">
+    {{template "backdrop"}}
+    <div class="auth-shell">
+      {{template "brand" .Brand}}
+      <main class="card card-signin" aria-labelledby="consent-title">
+        <div class="form-signin">
+          <h1 id="consent-title">Confirm sign-in</h1>
+          <p class="lede">{{.Origin}}</p>
+          <p class="consent-text" data-testid="native-consent-summary"><strong>{{.ClientName}}</strong> wants to sign in to <strong>{{.Brand.ProductName}}</strong> as <strong>{{.Email}}</strong>.</p>
+          <p class="consent-text">The app says this device is <strong>{{.DeviceName}}</strong> ({{.Platform}}).</p>
+          <p class="consent-muted">Only continue if you just started signing in on your device. App id: {{.ClientID}}</p>
+          <form id="native-consent-form" action="{{.Action}}" method="post">
+            <input type="hidden" name="request" value="{{.Request}}">
+            <input type="hidden" name="uid" value="{{.UserID}}">
+            <button class="sign-in-button" type="submit" name="decision" value="allow" data-testid="native-consent-allow">Continue</button>
+            <button class="sign-in-button consent-cancel" type="submit" name="decision" value="deny" data-testid="native-consent-deny">Cancel</button>
+          </form>
+          <a class="consent-switch" href="{{.SwitchAccountURL}}" data-testid="native-consent-switch">Not {{.Email}}? Use another account</a>
+        </div>
+      </main>
+    </div>
+    {{template "theme-toggle"}}
+  </body>
+</html>

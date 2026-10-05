@@ -401,6 +401,19 @@ func newAuditEmitterPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply %s: %v", source, err)
 	}
+	// A suspension revokes the account's browser sessions and native device
+	// sessions in the same transaction (ADR-0025 WP3), so their tables exist
+	// here as they do on every migrated deployment.
+	for _, migration := range []string{"0117_browser_sessions.sql", "0141_native_auth.sql"} {
+		file := filepath.Join("..", "..", "migrations", "shared", migration)
+		sql, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
+	}
 
 	// The table must start empty, or "1 row" below could be a fixture. The
 	// migration creates it and inserts nothing; this asserts that rather than

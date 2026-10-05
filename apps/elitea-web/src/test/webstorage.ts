@@ -16,30 +16,10 @@
  * per-file import disappear. F4 may not edit setup.ts, hence the split.
  */
 
-function createMemoryStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    get length() {
-      return map.size;
-    },
-    clear() {
-      map.clear();
-    },
-    getItem(key: string) {
-      return map.get(key) ?? null;
-    },
-    key(index: number) {
-      return [...map.keys()][index] ?? null;
-    },
-    removeItem(key: string) {
-      map.delete(key);
-    },
-    setItem(key: string, value: string) {
-      map.set(key, String(value));
-    },
-  };
-}
+import { createMemoryStorage } from '@/shared/lib/webstorage.testshim';
 
+// One implementation for both shims, so the faithful `Storage` semantics
+// (enumerable stored keys included) cannot drift between them.
 /** Installs in-memory storage for any missing area; idempotent. */
 export function installWebStorageShim(): void {
   for (const name of ['localStorage', 'sessionStorage'] as const) {

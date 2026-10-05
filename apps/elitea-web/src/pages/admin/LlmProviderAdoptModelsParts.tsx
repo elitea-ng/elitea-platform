@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import DialogActions from '@mui/material/DialogActions';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import LinearProgress from '@mui/material/LinearProgress';
@@ -203,7 +203,7 @@ export function AdoptSelectionBar({
     <Box sx={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
       <FormControlLabel
         control={
-          <Checkbox
+          <BaseCheckbox
             size="small"
             data-testid="adopt-models-select-all"
             checked={selectable.length > 0 && selected.length === selectable.length}
@@ -298,7 +298,7 @@ function AdoptModelRow({
 }): ReactNode {
   return (
     <ListItem disablePadding sx={{ paddingLeft: '0.5rem' }}>
-      <Checkbox
+      <BaseCheckbox
         size="small"
         data-testid={`adopt-models-item-${id}`}
         checked={already || checked}

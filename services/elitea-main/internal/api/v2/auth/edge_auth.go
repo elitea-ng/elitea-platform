@@ -119,6 +119,13 @@ func (h *EdgeAuthHandler) authenticate(
 		Type:    credentialType,
 		Data:    credentialData,
 	})
+	if err == nil && result.Resolution == forwardapp.CredentialRevoked {
+		// Traefik relays a ForwardAuth refusal to the client verbatim: a
+		// revoked native device session must read as device_revoked there
+		// too, or the client refreshes instead of wiping (ADR-0025 WP3).
+		apimw.WriteDeviceRevoked(w)
+		return
+	}
 	if err != nil || result.Resolution != forwardapp.CredentialAccepted {
 		writeAccessDenied(w)
 		return

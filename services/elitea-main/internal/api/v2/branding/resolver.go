@@ -37,9 +37,7 @@ package branding
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -49,6 +47,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/httpcache"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -220,12 +219,11 @@ func (r *Resolver) readOverlay(ctx context.Context) (platformconfig.BrandingOver
 // newSnapshot renders the body and its content hash.
 func newSnapshot(pack *Pack, layers Layers) Snapshot {
 	body := renderBootstrapJS(pack)
-	sum := sha256.Sum256(body)
-	value := hex.EncodeToString(sum[:])
+	etag, value := httpcache.StrongETag(body)
 	return Snapshot{
 		Pack:      pack,
 		Body:      body,
-		ETag:      `"` + value + `"`,
+		ETag:      etag,
 		ETagValue: value,
 		Layers:    layers,
 	}

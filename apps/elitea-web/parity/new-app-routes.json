@@ -51,6 +51,7 @@
   "/settings/create-configuration",
   "/settings/create-configuration/:credentialType",
   "/settings/create-personal-token",
+  "/settings/devices",
   "/settings/edit-configuration/:credential_uid",
   "/settings/environment",
   "/settings/memory",

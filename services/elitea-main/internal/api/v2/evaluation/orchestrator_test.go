@@ -159,6 +159,21 @@ func (f *fakeRunRepo) FinishRun(_ context.Context, _, runID, status string, head
 
 func (f *fakeRunRepo) RequeueStaleRuns(context.Context, int) ([]RunRef, error) { return nil, nil }
 func (f *fakeRunRepo) PendingRuns(context.Context, int) ([]RunRef, error)      { return nil, nil }
+func (f *fakeRunRepo) FailAbandonedRuns(context.Context, int, int, string) ([]RunRef, error) {
+	return nil, nil
+}
+
+// ReleaseRun reproduces the `status = 'running'` predicate: only a running row
+// goes back to `created`.
+func (f *fakeRunRepo) ReleaseRun(_ context.Context, _, runID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	run, ok := f.runs[runID]
+	if ok && run.Status == RunStatusRunning {
+		run.Status = RunStatusCreated
+	}
+	return nil
+}
 
 func (f *fakeRunRepo) AgentVersion(context.Context, string, int) (AgentVersion, error) {
 	return f.version, nil
@@ -460,6 +475,9 @@ type sweepRepo struct {
 	stale   []RunRef
 	pending []RunRef
 	ttl     int
+
+	abandonCalls  [][2]int
+	abandonReason string
 }
 
 func (s *sweepRepo) RequeueStaleRuns(_ context.Context, olderThanSeconds int) ([]RunRef, error) {
@@ -468,6 +486,12 @@ func (s *sweepRepo) RequeueStaleRuns(_ context.Context, olderThanSeconds int) ([
 }
 
 func (s *sweepRepo) PendingRuns(context.Context, int) ([]RunRef, error) { return s.pending, nil }
+
+func (s *sweepRepo) FailAbandonedRuns(_ context.Context, staleSeconds, maxResumes int, reason string) ([]RunRef, error) {
+	s.abandonCalls = append(s.abandonCalls, [2]int{staleSeconds, maxResumes})
+	s.abandonReason = reason
+	return nil, nil
+}
 
 func drain(o *Orchestrator) []RunRef {
 	out := []RunRef{}

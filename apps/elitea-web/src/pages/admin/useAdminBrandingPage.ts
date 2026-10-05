@@ -9,9 +9,11 @@
  *
  * The server answers `values` for every declared key. The page keeps only the
  * keys the operator touched in `draft`, lays them over the server's values for
- * rendering, and on save sends the MERGED record in full — the PUT is a
- * replace of the database layer, not a patch, so an omitted key would read as
- * "inherit" and silently drop a stored value.
+ * rendering, and on save sends the MERGED record of the keys it edits. The PUT
+ * is a per-key UPSERT, not a replace: a key the payload omits keeps its stored
+ * value. A save relies on that to leave the keys this page does not edit
+ * (`scheme_tokens`, `sender_name`, `support_email`) alone; a reset must
+ * therefore name them explicitly — see `resetBrandingPayload`.
  *
  * ## The preview pack
  *
@@ -40,6 +42,7 @@ import {
   effectiveFontFaces,
   effectiveLogoEmail,
   emptyBrandingValues,
+  resetBrandingPayload,
   parseBrandingValues,
   withDerivedSchemes,
   type BrandingAssetKey,
@@ -220,7 +223,7 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
   const onCancelReset = useCallback(() => setResetOpen(false), []);
   const onConfirmReset = useCallback(() => {
     setResetOpen(false);
-    save.mutate(emptyBrandingValues(), {
+    save.mutate(resetBrandingPayload(query.data?.values), {
       onSuccess: () => {
         setDraft({});
         setToast({
@@ -240,7 +243,7 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
         });
       },
     });
-  }, [save]);
+  }, [save, query.data]);
 
   const onUploadAsset = useCallback(
     (kind: BrandingAssetKind, file: File, target: BrandingUploadTarget) => {

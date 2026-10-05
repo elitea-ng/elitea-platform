@@ -1,5 +1,9 @@
+import { createRouter } from '@tanstack/react-router';
 import { describe, expect, it } from 'vitest';
 
+import { stubAuthContext } from '@/app/router-context';
+
+import { routeTree } from '../../../routeTree.gen';
 import { buildSettingsSections, isTabHidden } from './settingsSections';
 
 const ALL_OPEN = {
@@ -83,6 +87,7 @@ describe('buildSettingsSections — PERSONAL', () => {
       'ai-personality',
       'memory',
       'tokens',
+      'devices',
       'notifications',
     ]);
   });
@@ -108,5 +113,27 @@ describe('isTabHidden', () => {
 
   it('does not redirect when there is no tab segment yet', () => {
     expect(isTabHidden(undefined, ALL_OPEN)).toBe(false);
+  });
+});
+
+describe('buildSettingsSections — every row is a real route', () => {
+  it('maps every drawer row, under every gate, to its own route in the generated tree', () => {
+    // A drawer row whose slug has no route of its own falls through to the
+    // `$tab` catch-all and lands somewhere else: the unit-tested page would be
+    // unreachable from the drawer (the composition-root blind spot).
+    const router = createRouter({ routeTree, context: { auth: stubAuthContext } });
+    const byPath = router.routesByPath as unknown as Record<string, unknown>;
+    const gateSets = [
+      ALL_OPEN,
+      { ...ALL_OPEN, isPublicProject: true },
+      { ...ALL_OPEN, isPersonalProject: true },
+    ];
+    for (const gates of gateSets) {
+      for (const section of buildSettingsSections(gates)) {
+        for (const tab of section.tabs) {
+          expect(byPath[`/settings/${tab.id}`], tab.id).toBeDefined();
+        }
+      }
+    }
   });
 });
