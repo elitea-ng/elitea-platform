@@ -150,11 +150,24 @@ registry is filled and read in sorted path order.
 - **Symlinks are never followed** by discovery or by any pass that reads a
   file. Python followed them, so a link to a secret file was read, sent to the
   model and published.
-- **Deep nesting does not fail a file.** Python's recursive visitors fail a
-  file at its 1,000-frame recursion limit (about 450–600 nesting levels for
-  Java, C#, C++ and JavaScript). The exact depth depends on the caller's stack,
-  so it cannot be reproduced; the Rust parsers run on large worker stacks and
-  parse such a file. The Python parser port does reproduce `ast`'s own limits.
+- **Deep nesting fails a file later, and never the process.** Python's
+  recursive visitors fail a file at its 1,000-frame recursion limit (about
+  450–600 nesting levels for Java, C#, C++ and JavaScript). The exact depth
+  depends on the caller's stack, so it cannot be reproduced; the Rust parsers
+  run on large worker stacks and parse such a file. A file whose syntax tree is
+  deeper than 4,000 levels (measured without recursion before any walk) fails
+  alone with `maximum recursion depth exceeded`, the text Python gives, instead
+  of overflowing the stack and aborting the engine. The Python parser port
+  reproduces `ast`'s own limits and refuses the same depth. When the
+  large-stack worker pool cannot start, every file fails with that error; the
+  parse never falls back to a small stack.
+- **A file whose output passes 256 MiB fails.** Every symbol keeps its node's
+  whole text, so nested declarations repeat the same bytes once per level and
+  the output can grow with the square of the file (1,100 nested functions
+  around 300 KB of text give 330 MB). Python keeps it all; the Rust parsers
+  count the symbol text (and JavaScript's body-reference edges) per file and
+  fail the file with `output limit exceeded` at 256 MiB. No file of the parity
+  corpora comes near either limit.
 - **Hash-seeded iteration order is sorted.** Where Python iterates a `set`
   (some `imports` lists, some edge-insertion loops), the order changes with
   the hash seed between runs; the Rust order is sorted. Rows do not change.

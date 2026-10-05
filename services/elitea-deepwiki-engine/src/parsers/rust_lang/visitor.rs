@@ -11,6 +11,7 @@
 //! not `constrained_type_parameter`, so several Python branches never fire.
 
 use super::{REFERENCE_WRAPPERS, is_builtin_type};
+use crate::parsers::limits;
 use crate::parsers::model::{
     ParseResult, Range, Relationship, RelationshipType, Scope, Symbol, SymbolType,
 };
@@ -83,6 +84,9 @@ pub(super) fn parse_source(file_path: &str, source: &str) -> ParseResult {
     let Some(tree) = parser.parse(source, None) else {
         return failed(file_path, "Tree-sitter Rust parser returned no tree");
     };
+    if limits::too_deep(tree.root_node()) {
+        return failed(file_path, limits::RECURSION_ERROR);
+    }
     let mut visitor = Visitor::new(file_path, source);
     visitor.visit_top_level(tree.root_node());
     ParseResult {
@@ -387,7 +391,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(format!("struct {name}{}", generic_suffix(&type_params)));
         symbol.metadata = metadata;
         self.symbols.push(symbol);
@@ -414,7 +418,7 @@ impl<'s> Visitor<'s> {
             symbol.full_name = Some(full_name.clone());
             symbol.parent_symbol = Some(struct_name.to_owned());
             symbol.visibility = Some(self.visibility(decl).to_owned());
-            symbol.source_text = Some(self.text(decl).to_owned());
+            symbol.source_text = limits::kept_str(self.text(decl));
             symbol.metadata = object([("field_type", Value::String(field_type.to_owned()))]);
             self.symbols.push(symbol);
 
@@ -513,7 +517,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(format!("enum {name}{}", generic_suffix(&type_params)));
         symbol.metadata = metadata;
         self.symbols.push(symbol);
@@ -545,7 +549,7 @@ impl<'s> Visitor<'s> {
         let mut symbol = self.symbol(variant_name, SymbolType::Field, Scope::Class, node);
         symbol.full_name = Some(full_name.clone());
         symbol.parent_symbol = Some(enum_name.to_owned());
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.metadata = object([("variant_kind", Value::String(kind.to_owned()))]);
         self.symbols.push(symbol);
 
@@ -592,7 +596,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(format!("trait {name}{}", generic_suffix(&type_params)));
         if !type_params.is_empty() {
             symbol
@@ -658,7 +662,7 @@ impl<'s> Visitor<'s> {
         symbol.visibility = Some("public".to_owned());
         symbol.is_abstract = true;
         symbol.is_async = modifiers.contains_key("is_async");
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(self.function_signature(method_name, node, return_type));
         symbol.return_type = return_type.map(str::to_owned);
         symbol.parameter_types = self.parameter_types(node);
@@ -815,7 +819,7 @@ impl<'s> Visitor<'s> {
         symbol.is_static = is_static_method;
         symbol.is_async = modifiers.contains_key("is_async");
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(self.function_signature(func_name, node, return_type));
         symbol.return_type = return_type.map(str::to_owned);
         symbol.parameter_types = self.parameter_types(node);
@@ -866,7 +870,7 @@ impl<'s> Visitor<'s> {
         symbol.parent_symbol = parent.map(str::to_owned);
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         self.symbols.push(symbol);
 
         if let Some(parent) = parent {
@@ -893,7 +897,7 @@ impl<'s> Visitor<'s> {
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.is_static = true;
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.metadata = object([("is_static", Value::Bool(true))]);
         self.symbols.push(symbol);
     }
@@ -919,7 +923,7 @@ impl<'s> Visitor<'s> {
         symbol.parent_symbol = parent.map(str::to_owned);
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         self.symbols.push(symbol);
 
         if let Some(parent) = parent {
@@ -985,7 +989,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.metadata = object([("is_inline", Value::Bool(list.is_some()))]);
         self.symbols.push(symbol);
 
@@ -1021,7 +1025,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some("public".to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.metadata = object([("is_declarative", Value::Bool(true))]);
         self.symbols.push(symbol);
     }
@@ -1042,7 +1046,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(self.visibility(node).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(format!("union {name}"));
         symbol.metadata = metadata;
         self.symbols.push(symbol);

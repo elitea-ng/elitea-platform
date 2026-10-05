@@ -21,6 +21,7 @@ mod visitor;
 mod tests;
 
 use super::LanguageParser;
+use super::limits;
 use super::model::{ParseResult, Range, Relationship, RelationshipType, SymbolType};
 use indexmap::IndexMap;
 use rayon::prelude::*;
@@ -73,7 +74,8 @@ impl LanguageParser for GoParser {
         let results = files
             .par_iter()
             .map(|path| match read_python_text(path) {
-                Ok(source) => visitor::parse_source(path, &source),
+                Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
+                    .unwrap_or_else(|error| visitor::failed(path, error)),
                 Err(error) => visitor::failed(path, error),
             })
             .collect();

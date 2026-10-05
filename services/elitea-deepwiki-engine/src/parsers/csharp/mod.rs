@@ -30,7 +30,9 @@
 //! nested some 450 levels deep (a long string concatenation) fails whole
 //! with `maximum recursion depth exceeded` and no symbols. The exact depth
 //! depends on the caller's own stack, so it cannot be reproduced; this
-//! parser parses such a file normally, on a large worker stack.
+//! parser parses such a file normally, on a large worker stack, up to
+//! `limits::MAX_TREE_DEPTH` tree levels (deeper, the file fails alone with
+//! `maximum recursion depth exceeded`).
 //!
 //! The grammar is the language pack's, but the runtime is not: the pinned
 //! `tree-sitter` 0.27 recovers from some syntax errors differently from the
@@ -47,6 +49,7 @@ mod tests;
 use super::LanguageParser;
 use super::java::os_error_text;
 use super::java::source::Source;
+use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
@@ -67,12 +70,14 @@ impl LanguageParser for CSharpParser {
     fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
         let parse_all =
             || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
-        let mut results = match rayon::ThreadPoolBuilder::new()
-            .stack_size(WORKER_STACK)
-            .build()
-        {
-            Ok(pool) => pool.install(parse_all),
-            Err(_) => files.iter().map(|f| parse_path(f)).collect(),
+        let mut results = match limits::on_worker_pool("C#", WORKER_STACK, parse_all) {
+            Ok(results) => results,
+            Err(error) => {
+                return files
+                    .iter()
+                    .map(|f| (f.clone(), visitor::failed(f, error.clone())))
+                    .collect();
+            }
         };
         resolve_cross_file(files, &mut results);
         files.iter().cloned().zip(results).collect()
@@ -91,7 +96,8 @@ fn parse_path(path: &str) -> ParseResult {
         Err(error) => return visitor::failed(path, os_error_text(&error, path)),
     };
     match Source::decode(&bytes) {
-        Ok(source) => visitor::parse_source(path, &source),
+        Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
+            .unwrap_or_else(|error| visitor::failed(path, error)),
         Err(error) => visitor::failed(path, error),
     }
 }

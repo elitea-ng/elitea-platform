@@ -17,6 +17,7 @@
 //! `dependencies` or `module_docstring`.
 
 use crate::parsers::java::source::Source;
+use crate::parsers::limits;
 use crate::parsers::model::{
     ParseResult, Range, Relationship, RelationshipType, Scope, Symbol, SymbolType,
 };
@@ -240,6 +241,9 @@ pub(super) fn parse_source(file_path: &str, source: &Source) -> FileOutput {
     let Some(tree) = parser.parse(source.bytes(), None) else {
         return empty(file_path);
     };
+    if limits::too_deep(tree.root_node()) {
+        return failed(file_path, limits::RECURSION_ERROR);
+    }
     let mut visitor = Visitor::new(source, file_path);
     visitor.visit(tree.root_node());
     visitor.flush_jsx_usages();
@@ -698,7 +702,7 @@ impl<'s, 't> Visitor<'s, 't> {
         symbol.parent_symbol = Some(self.scope_or_module());
         let full_name = self.qualify(&name);
         symbol.full_name = Some(full_name.clone());
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         if let Some(doc) = &doc {
             symbol.metadata = doc.callable_metadata();
         }
@@ -730,7 +734,7 @@ impl<'s, 't> Visitor<'s, 't> {
         );
         symbol.parent_symbol = Some(self.scope_or_module());
         symbol.full_name = Some(self.qualify(&name));
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         self.symbols.push(symbol);
         let kids = children(node);
         let base = if let Some(heritage) = find_child(node, &["class_heritage"]) {
@@ -782,7 +786,7 @@ impl<'s, 't> Visitor<'s, 't> {
         );
         symbol.parent_symbol = Some(self.scope_or_module());
         symbol.full_name = Some(full_name.clone());
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.is_static = has_child(node, "static");
         if let Some(doc) = &doc {
             symbol.metadata = doc.callable_metadata();
@@ -834,7 +838,7 @@ impl<'s, 't> Visitor<'s, 't> {
         // Python: the scope path itself, no module fallback here.
         symbol.parent_symbol = Some(self.scope_path());
         symbol.full_name = Some(full_name.clone());
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.is_static = has_child(node, "static");
         symbol.visibility = Some(if is_private { "private" } else { "public" }.to_owned());
         symbol.metadata = metadata;
@@ -877,7 +881,7 @@ impl<'s, 't> Visitor<'s, 't> {
                 );
                 symbol.parent_symbol = Some(self.module.clone());
                 symbol.full_name = Some(self.qualify(&name));
-                symbol.source_text = Some(self.text(*child).to_owned());
+                symbol.source_text = limits::kept_str(self.text(*child));
                 self.symbols.push(symbol);
                 if is_export {
                     self.exports.push(ExportEntry {
@@ -1131,6 +1135,8 @@ impl<'s, 't> Visitor<'s, 't> {
     /// that order, not the source order. Nested functions are scanned with
     /// their parent's body too.
     fn scan_body_references(&mut self) {
+        /// What one edge costs against the output budget, over its names.
+        const RELATIONSHIP_BYTES: usize = 128;
         let module_prefix = format!("{}.", self.module);
         let mut known: HashSet<&str> = self
             .symbols
@@ -1152,7 +1158,7 @@ impl<'s, 't> Visitor<'s, 't> {
             return;
         }
         let mut found = Vec::new();
-        for (full_name, decl) in &self.bodies {
+        'bodies: for (full_name, decl) in &self.bodies {
             let mut body = None;
             let mut params = None;
             for child in children(*decl) {
@@ -1184,6 +1190,11 @@ impl<'s, 't> Visitor<'s, 't> {
                             continue;
                         }
                         seen.insert(name);
+                        // Each nested body repeats its parent's edges: the
+                        // count can grow with the square of the file.
+                        if !limits::charge(full_name.len() + name.len() + RELATIONSHIP_BYTES) {
+                            break 'bodies;
+                        }
                         let mut rel = self.relationship(
                             full_name.clone(),
                             name.to_owned(),

@@ -16,6 +16,7 @@
 
 use super::names::{TYPE_KINDS, children, find, find_any, user_defined_types};
 use super::source::Source;
+use crate::parsers::limits;
 use crate::parsers::model::{Relationship, RelationshipType, Scope, Symbol, SymbolType};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -236,7 +237,7 @@ impl SymbolExtractor<'_> {
         let mut symbol = self.symbol(&name, symbol_type, scope, Source::range(node));
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full.clone());
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         if !has_body {
             symbol
                 .metadata
@@ -304,7 +305,7 @@ impl SymbolExtractor<'_> {
         let mut symbol = self.symbol(&name, SymbolType::Enum, Scope::Class, Source::range(node));
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full.clone());
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("is_enum".to_owned(), Value::Bool(true));
@@ -339,7 +340,7 @@ impl SymbolExtractor<'_> {
         );
         symbol.full_name = Some(format!("{parent}::{name}"));
         symbol.parent_symbol = Some(parent.to_owned());
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         self.symbols.push(symbol);
     }
 
@@ -360,7 +361,7 @@ impl SymbolExtractor<'_> {
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full.clone());
         symbol.return_type.clone_from(&aliased);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("is_type_alias".to_owned(), Value::Bool(true));
@@ -431,7 +432,7 @@ impl SymbolExtractor<'_> {
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full.clone());
         symbol.return_type.clone_from(&base_type);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("is_typedef".to_owned(), Value::Bool(true));
@@ -715,7 +716,7 @@ impl SymbolExtractor<'_> {
         symbol.full_name = Some(full);
         symbol.return_type = return_type;
         symbol.parameter_types = parameters.into_iter().map(|p| p.type_name).collect();
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         self.template_metadata(&mut symbol.metadata);
         symbol
             .metadata
@@ -762,7 +763,8 @@ impl SymbolExtractor<'_> {
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full);
         symbol.return_type = type_name.cloned();
-        symbol.source_text = Some(self.text(declaration));
+        symbol.source_text =
+            limits::kept_text(declaration.byte_range().len(), || self.text(declaration));
         self.symbols.push(symbol);
     }
 
@@ -831,7 +833,7 @@ impl SymbolExtractor<'_> {
         symbol.full_name = Some(full.clone());
         symbol.return_type.clone_from(&return_type);
         symbol.parameter_types.clone_from(&parameter_types);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         self.template_metadata(&mut symbol.metadata);
         if is_const {
             symbol
@@ -1076,7 +1078,7 @@ impl SymbolExtractor<'_> {
         symbol.full_name = Some(full.clone());
         symbol.return_type = return_type;
         symbol.parameter_types = parameters.iter().map(|p| p.type_name.clone()).collect();
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         if is_const {
             symbol
                 .metadata
@@ -1110,7 +1112,7 @@ impl SymbolExtractor<'_> {
         let mut symbol = self.symbol(&name, SymbolType::Macro, Scope::Global, Source::range(node));
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("macro".to_owned(), Value::Bool(true));
@@ -1139,7 +1141,7 @@ impl SymbolExtractor<'_> {
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full.clone());
         symbol.parameter_types.clone_from(&params);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("macro".to_owned(), Value::Bool(true));
@@ -1183,7 +1185,7 @@ impl SymbolExtractor<'_> {
         );
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("is_include".to_owned(), Value::Bool(true));

@@ -33,6 +33,7 @@ mod unparse;
 mod tests;
 
 use super::LanguageParser;
+use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
 use rayon::prelude::*;
 use serde_json::Value;
@@ -53,16 +54,14 @@ impl LanguageParser for PythonParser {
             link(files, parsed)
         };
         // Lowering and the visitors recurse once per tree level; files may
-        // nest up to `lower::MAX_TREE_DEPTH` levels, more than a default
+        // nest up to `limits::MAX_TREE_DEPTH` levels, more than a default
         // 2 MiB thread stack holds.
-        match rayon::ThreadPoolBuilder::new()
-            .stack_size(STACK_SIZE)
-            .thread_name(|i| format!("python-parser-{i}"))
-            .build()
-        {
-            Ok(pool) => pool.install(run),
-            Err(_) => run(),
-        }
+        limits::on_worker_pool("Python", STACK_SIZE, run).unwrap_or_else(|error| {
+            files
+                .iter()
+                .map(|path| (path.clone(), failed(path, error.clone())))
+                .collect()
+        })
     }
 }
 
@@ -79,7 +78,14 @@ pub(crate) struct Parsed {
 /// Read and parse one file as `PythonParser.parse_file`.
 fn parse_path(path: &str) -> Parsed {
     match read_python_text(path) {
-        Ok(source) => parse_source(path, &source),
+        Ok(source) => {
+            limits::with_output_budget(|| parse_source(path, &source)).unwrap_or_else(|error| {
+                Parsed {
+                    result: failed(path, error),
+                    module: None,
+                }
+            })
+        }
         Err(error) => Parsed {
             result: failed(path, format!("Parse error: {error}")),
             module: None,

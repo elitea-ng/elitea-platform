@@ -12,6 +12,7 @@
 //! `exports`, and no relationship has a `source_range`.
 
 use super::source::Source;
+use crate::parsers::limits;
 use crate::parsers::model::{
     ParseResult, Relationship, RelationshipType, Scope, Symbol, SymbolType,
 };
@@ -161,6 +162,9 @@ pub(super) fn parse_source(file_path: &str, source: &Source) -> ParseResult {
         return failed(file_path, "Tree-sitter Java parser returned no tree");
     };
     let root = tree.root_node();
+    if limits::too_deep(root) {
+        return failed(file_path, limits::RECURSION_ERROR);
+    }
     let mut visitor = Visitor::new(file_path, source);
     // A file without a package declaration (among the ROOT's children)
     // scopes its symbols under the file stem instead.
@@ -381,7 +385,7 @@ impl<'s> Visitor<'s> {
         let mut symbol = self.symbol(&name, symbol_type, Scope::Class, node);
         symbol.parent_symbol = self.parent();
         symbol.full_name = Some(self.qualified(&name));
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         let source = symbol.qualified_name();
         self.symbols.push(symbol);
         if inheritance {
@@ -459,7 +463,7 @@ impl<'s> Visitor<'s> {
         let mut symbol = self.symbol(&name, SymbolType::Class, Scope::Class, node);
         symbol.parent_symbol = self.parent();
         symbol.full_name = Some(self.qualified(&name));
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol
             .metadata
             .insert("is_record".to_owned(), Value::Bool(true));
@@ -590,7 +594,7 @@ impl<'s> Visitor<'s> {
         symbol.parameter_types = formal_parameters
             .map(|p| self.parameter_types(p))
             .unwrap_or_default();
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         if is_override {
             symbol
                 .metadata
@@ -713,7 +717,7 @@ impl<'s> Visitor<'s> {
         symbol.parameter_types = child_of_kind(node, "formal_parameters")
             .map(|p| self.parameter_types(p))
             .unwrap_or_default();
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         self.symbols.push(symbol);
         self.visit_in_scope(node, "<init>".to_owned());
     }
@@ -748,7 +752,7 @@ impl<'s> Visitor<'s> {
             let mut symbol = self.symbol(&field_name, SymbolType::Field, Scope::Class, node);
             symbol.parent_symbol = self.parent();
             symbol.full_name = Some(qualified.clone());
-            symbol.source_text = Some(self.text(node));
+            symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
             self.symbols.push(symbol);
             if let Some(field_type) = field_type.filter(|t| !t.is_empty()) {
                 self.field_types

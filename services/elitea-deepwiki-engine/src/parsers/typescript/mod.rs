@@ -28,6 +28,7 @@ mod symbols;
 mod tests;
 
 use super::LanguageParser;
+use super::limits;
 use super::model::{ParseResult, RelationshipType, SymbolType};
 use rayon::prelude::*;
 use source::Source;
@@ -49,12 +50,20 @@ impl LanguageParser for TypeScriptParser {
     fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
         let parse_all =
             || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
-        let mut results = match rayon::ThreadPoolBuilder::new()
-            .stack_size(WORKER_STACK)
-            .build()
-        {
-            Ok(pool) => pool.install(parse_all),
-            Err(_) => files.iter().map(|f| parse_path(f)).collect(),
+        let mut results = match limits::on_worker_pool("TypeScript", WORKER_STACK, parse_all) {
+            Ok(results) => results,
+            Err(error) => {
+                return files
+                    .iter()
+                    .map(|f| {
+                        (f.clone(), {
+                            let mut result = ParseResult::new(f, "typescript");
+                            result.errors.push(error.clone());
+                            result
+                        })
+                    })
+                    .collect();
+            }
         };
         resolve_cross_file(&mut results);
         files.iter().cloned().zip(results).collect()
@@ -65,7 +74,14 @@ impl LanguageParser for TypeScriptParser {
 /// Python `parse_file`'s exception handler records it.
 fn parse_path(path: &str) -> ParseResult {
     match std::fs::read(path) {
-        Ok(bytes) => parse_file(path, &Source::decode(&bytes)),
+        Ok(bytes) => {
+            let source = Source::decode(&bytes);
+            limits::with_output_budget(|| parse_file(path, &source)).unwrap_or_else(|error| {
+                let mut result = ParseResult::new(path, "typescript");
+                result.errors.push(error.to_owned());
+                result
+            })
+        }
         Err(error) => {
             let mut result = ParseResult::new(path, "typescript");
             result.errors.push(format!("Parse error: {error}"));
@@ -96,6 +112,12 @@ fn parse_file(path: &str, source: &Source) -> ParseResult {
         return result;
     };
     let root = tree.root_node();
+    if limits::too_deep(root) {
+        result
+            .errors
+            .push(format!("Parse error: {}", limits::RECURSION_ERROR));
+        return result;
+    }
 
     let mut symbol_walk = symbols::SymbolExtractor::new(source, path);
     symbol_walk.visit(root);

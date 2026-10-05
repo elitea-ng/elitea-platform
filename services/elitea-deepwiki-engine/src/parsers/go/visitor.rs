@@ -8,6 +8,7 @@
 //! `statement_list`, `method_elem` and `type_elem` all exist in both).
 
 use super::{BUILTIN_FUNCTIONS, BUILTIN_TYPES};
+use crate::parsers::limits;
 use crate::parsers::model::{
     ParseResult, Range, Relationship, RelationshipType, Scope, Symbol, SymbolType,
 };
@@ -92,6 +93,9 @@ pub(super) fn parse_source(file_path: &str, source: &str) -> ParseResult {
     let Some(tree) = parser.parse(source, None) else {
         return failed(file_path, "Tree-sitter Go parser returned no tree");
     };
+    if limits::too_deep(tree.root_node()) {
+        return failed(file_path, limits::RECURSION_ERROR);
+    }
     let mut visitor = Visitor::new(file_path, source);
     visitor.visit_top_level(tree.root_node());
     visitor.link_same_file_methods();
@@ -312,7 +316,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(visibility(name).to_owned());
         symbol.docstring = self.preceding_comment(decl);
-        symbol.source_text = Some(self.text(decl).to_owned());
+        symbol.source_text = limits::kept_str(self.text(decl));
         symbol.signature = Some(signature);
         if !type_params.is_empty() {
             symbol
@@ -349,7 +353,7 @@ impl<'s> Visitor<'s> {
             symbol.parent_symbol = Some(struct_name.to_owned());
             symbol.full_name = Some(full_name.clone());
             symbol.visibility = Some(visibility(field_name).to_owned());
-            symbol.source_text = Some(self.text(field).to_owned());
+            symbol.source_text = limits::kept_str(self.text(field));
             symbol.metadata.insert(
                 "field_type".to_owned(),
                 Value::String(field_type.to_owned()),
@@ -391,7 +395,7 @@ impl<'s> Visitor<'s> {
         symbol.parent_symbol = Some(struct_name.to_owned());
         symbol.full_name = Some(full_name.clone());
         symbol.visibility = Some(visibility(embed).to_owned());
-        symbol.source_text = Some(self.text(field).to_owned());
+        symbol.source_text = limits::kept_str(self.text(field));
         symbol
             .metadata
             .insert("is_embedded".to_owned(), Value::Bool(true));
@@ -480,7 +484,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(full_name.clone());
         symbol.visibility = Some(visibility(method_name).to_owned());
         symbol.is_abstract = true;
-        symbol.source_text = Some(self.text(elem).to_owned());
+        symbol.source_text = limits::kept_str(self.text(elem));
         symbol.signature = Some(signature);
         symbol.parameter_types = params.into_iter().map(|(_, t)| t).collect();
         symbol.return_type = joined_returns(&return_types);
@@ -516,7 +520,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(visibility(name).to_owned());
         symbol.docstring = self.preceding_comment(decl);
-        symbol.source_text = Some(self.text(decl).to_owned());
+        symbol.source_text = limits::kept_str(self.text(decl));
         symbol.signature = Some(format!("type {name} = {}", target.unwrap_or("?")));
         symbol.metadata.insert(
             "target_type".to_owned(),
@@ -557,7 +561,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.to_owned());
         symbol.visibility = Some(visibility(name).to_owned());
         symbol.docstring = self.preceding_comment(decl);
-        symbol.source_text = Some(self.text(decl).to_owned());
+        symbol.source_text = limits::kept_str(self.text(decl));
         symbol.signature = Some(format!("type {name} {}", underlying.unwrap_or("?")));
         symbol.metadata.insert(
             "target_type".to_owned(),
@@ -608,7 +612,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(name.clone());
         symbol.visibility = Some(visibility(&name).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(signature);
         symbol.parameter_types = params.into_iter().map(|(_, t)| t).collect();
         symbol.return_type = joined_returns(&return_types);
@@ -651,7 +655,7 @@ impl<'s> Visitor<'s> {
         symbol.full_name = Some(full_name.clone());
         symbol.visibility = Some(visibility(method_name).to_owned());
         symbol.docstring = self.preceding_comment(node);
-        symbol.source_text = Some(self.text(node).to_owned());
+        symbol.source_text = limits::kept_str(self.text(node));
         symbol.signature = Some(signature);
         symbol.parameter_types = params.into_iter().map(|(_, t)| t).collect();
         symbol.return_type = joined_returns(&return_types);
@@ -787,7 +791,7 @@ impl<'s> Visitor<'s> {
             symbol.full_name = Some(enum_name.clone());
             symbol.visibility = Some(visibility(&enum_name).to_owned());
             symbol.docstring = self.preceding_comment(node);
-            symbol.source_text = Some(self.text(node).to_owned());
+            symbol.source_text = limits::kept_str(self.text(node));
             symbol.signature = Some(format!("const ({enum_name} = iota ...)"));
             symbol
                 .metadata
@@ -803,7 +807,7 @@ impl<'s> Visitor<'s> {
             let mut symbol = self.symbol(name, SymbolType::Constant, Scope::Global, spec);
             symbol.full_name = Some(name.to_owned());
             symbol.visibility = Some(visibility(name).to_owned());
-            symbol.source_text = Some(self.text(spec).to_owned());
+            symbol.source_text = limits::kept_str(self.text(spec));
             symbol.metadata.insert(
                 "iota_type".to_owned(),
                 iota_type.map_or(Value::Null, |t| Value::String(t.to_owned())),
@@ -836,7 +840,7 @@ impl<'s> Visitor<'s> {
             let mut symbol = self.symbol(name, SymbolType::Variable, Scope::Global, spec);
             symbol.full_name = Some(name.to_owned());
             symbol.visibility = Some(visibility(name).to_owned());
-            symbol.source_text = Some(self.text(spec).to_owned());
+            symbol.source_text = limits::kept_str(self.text(spec));
             self.symbols.push(symbol);
         }
     }

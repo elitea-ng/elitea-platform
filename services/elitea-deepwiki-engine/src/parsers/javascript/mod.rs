@@ -37,7 +37,9 @@
 //!   found before the failure still enter the multi-file pass). The depth
 //!   at which that happens depends on the caller's stack, so it cannot be
 //!   reproduced; this parser parses such a file normally, on a large
-//!   worker stack. No file of the parity corpora reaches the limit.
+//!   worker stack, up to `limits::MAX_TREE_DEPTH` tree levels (deeper, the
+//!   file fails alone with the same text). No file of the parity corpora
+//!   reaches either limit.
 
 mod resolve;
 mod visitor;
@@ -48,6 +50,7 @@ mod tests;
 use super::LanguageParser;
 use super::java::os_error_text;
 use super::java::source::Source;
+use super::limits;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use visitor::FileOutput;
@@ -67,12 +70,14 @@ impl LanguageParser for JavaScriptParser {
 
     fn parse_files(&self, files: &[String]) -> BTreeMap<String, super::model::ParseResult> {
         let parse_all = || -> Vec<FileOutput> { files.par_iter().map(|f| parse_path(f)).collect() };
-        let outputs = match rayon::ThreadPoolBuilder::new()
-            .stack_size(WORKER_STACK)
-            .build()
-        {
-            Ok(pool) => pool.install(parse_all),
-            Err(_) => files.iter().map(|f| parse_path(f)).collect(),
+        let outputs = match limits::on_worker_pool("JavaScript", WORKER_STACK, parse_all) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return files
+                    .iter()
+                    .map(|f| (f.clone(), visitor::failed(f, error.clone()).result))
+                    .collect();
+            }
         };
         let results = resolve::resolve_cross_file(files, outputs);
         files.iter().cloned().zip(results).collect()
@@ -87,7 +92,8 @@ fn parse_path(path: &str) -> FileOutput {
         Err(error) => return visitor::failed(path, os_error_text(&error, path)),
     };
     match Source::decode(&bytes) {
-        Ok(source) => visitor::parse_source(path, &source),
+        Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
+            .unwrap_or_else(|error| visitor::failed(path, error)),
         Err(error) => visitor::failed(path, error),
     }
 }

@@ -11,6 +11,7 @@ use super::ast::{
 };
 use super::text::{cleandoc, is_upper, repr_bytes, repr_float, repr_imaginary};
 use super::unparse::unparse;
+use crate::parsers::limits;
 use crate::parsers::model::{
     ParseResult, Position, Range, Relationship, RelationshipType, Scope, Symbol, SymbolType,
 };
@@ -399,7 +400,7 @@ impl SymbolExtractor<'_> {
         };
         let mut symbol = Symbol::new(id, symbol_type, scope, range_of(target.loc), self.file);
         symbol.parent_symbol = parent;
-        symbol.source_text = Some(node_source(self.lines, stmt.loc));
+        symbol.source_text = limits::kept(node_source(self.lines, stmt.loc));
         symbol
     }
 
@@ -420,7 +421,7 @@ impl SymbolExtractor<'_> {
         symbol.parent_symbol = parent;
         symbol.full_name = Some(full);
         symbol.docstring = docstring(&def.body);
-        symbol.source_text = Some(node_source(self.lines, stmt.loc));
+        symbol.source_text = limits::kept(node_source(self.lines, stmt.loc));
         self.symbols.push(symbol);
         self.class_names.insert(def.name.clone());
         self.scope_stack.push(def.name.clone());
@@ -460,7 +461,7 @@ impl SymbolExtractor<'_> {
             .filter_map(|p| p.type_.clone().filter(|t| !t.is_empty()))
             .collect();
         symbol.is_async = def.is_async;
-        symbol.source_text = Some(node_source(self.lines, stmt.loc));
+        symbol.source_text = limits::kept(node_source(self.lines, stmt.loc));
         symbol.signature = Some(function_signature(def, return_type.as_deref()));
         symbol.return_type = return_type;
         symbol

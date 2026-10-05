@@ -80,9 +80,13 @@ pub fn parse_module(source: &str) -> Result<Vec<Stmt>> {
         });
     };
     let root = tree.root_node();
-    if tree_depth(root) > MAX_TREE_DEPTH {
+    // A tree deeper than `MAX_TREE_DEPTH` is far past what Python's
+    // recursive visitors survive (about 500 `ast` levels, each one to three
+    // tree-sitter levels), so it is rejected before the recursive lowering —
+    // which keeps the stack bounded.
+    if crate::parsers::limits::too_deep(root) {
         return Err(SyntaxError {
-            message: "maximum recursion depth exceeded".to_owned(),
+            message: crate::parsers::limits::RECURSION_ERROR.to_owned(),
             line: None,
             too_deep: true,
         });
@@ -122,34 +126,6 @@ fn first_error(root: Node<'_>) -> Option<Node<'_>> {
         }
     }
     None
-}
-
-/// A tree deeper than this is far past what Python's recursive visitors
-/// survive (about 500 `ast` levels, each one to three tree-sitter levels),
-/// so it is rejected before the recursive lowering — which keeps the stack
-/// bounded.
-const MAX_TREE_DEPTH: usize = 4000;
-
-/// The depth of the tree, without recursion.
-fn tree_depth(root: Node<'_>) -> usize {
-    let mut cursor = root.walk();
-    let (mut depth, mut deepest) = (0usize, 0usize);
-    loop {
-        deepest = deepest.max(depth);
-        if cursor.goto_first_child() {
-            depth += 1;
-            continue;
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() {
-                return deepest;
-            }
-            depth -= 1;
-        }
-    }
 }
 
 /// What Python's tokenizer checks about brackets: more than

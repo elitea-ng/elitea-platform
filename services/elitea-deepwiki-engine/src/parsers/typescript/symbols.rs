@@ -26,6 +26,7 @@ use super::ast::{
     is_tsx, range, stem, text,
 };
 use super::source::{Source, py_strip};
+use crate::parsers::limits;
 use crate::parsers::model::{Range, Relationship, RelationshipType, Scope, Symbol, SymbolType};
 use serde_json::{Map, Value, json};
 use tree_sitter::Node;
@@ -220,7 +221,7 @@ impl<'a> SymbolExtractor<'a> {
         let mut symbol = self.new_symbol(&name, SymbolType::Class, scope, node);
         symbol.parent_symbol.clone_from(&parent_symbol);
         symbol.full_name = Some(full_name.clone());
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol.is_abstract = is_abstract;
         let mut metadata = Map::new();
         if is_exported {
@@ -278,7 +279,7 @@ impl<'a> SymbolExtractor<'a> {
         let mut symbol = self.new_symbol(&name, SymbolType::Interface, scope, node);
         symbol.parent_symbol.clone_from(&parent_symbol);
         symbol.full_name = Some(full_name.clone());
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         let mut metadata = Map::new();
         if is_exported {
             metadata.insert("is_exported".to_owned(), Value::Bool(true));
@@ -340,7 +341,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.parent_symbol = parent_symbol;
         symbol.full_name = Some(full_name);
         symbol.return_type.clone_from(&aliased_type);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         let mut metadata = Map::new();
         metadata.insert("is_type_alias".to_owned(), Value::Bool(true));
         metadata.insert("aliased_type".to_owned(), json!(aliased_type));
@@ -379,7 +380,7 @@ impl<'a> SymbolExtractor<'a> {
         let mut symbol = self.new_symbol(&name, SymbolType::Enum, scope, node);
         symbol.parent_symbol = parent_symbol;
         symbol.full_name = Some(full_name.clone());
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         let mut metadata = Map::new();
         metadata.insert("is_enum".to_owned(), Value::Bool(true));
         metadata.insert("is_const_enum".to_owned(), Value::Bool(is_const));
@@ -425,7 +426,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.full_name = Some(full_name.clone());
         symbol.return_type = annotation_text(self.source, node);
         symbol.parameter_types = parameter_types(&parameters);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol.is_async = is_async;
         let mut metadata = Map::new();
         if is_exported {
@@ -461,7 +462,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.full_name = Some(full_name.clone());
         symbol.return_type = annotation_text(self.source, node);
         symbol.parameter_types = parameter_types(&parameters);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol.is_static = has_modifier(node, "static");
         symbol.is_async = has_modifier(node, "async");
         symbol.is_abstract = has_modifier(node, "abstract");
@@ -491,7 +492,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.parent_symbol = parent_symbol;
         symbol.full_name = Some(full_name.clone());
         symbol.parameter_types = parameter_types(&parameters);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         let fallback = symbol.range;
         self.symbols.push(symbol);
         self.push_parameters(&parameters, &full_name, fallback);
@@ -527,7 +528,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.full_name = Some(full_name);
         symbol.return_type = annotation_text(self.source, node);
         symbol.parameter_types = parameter_types(&parameters);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol.is_abstract = true;
         self.symbols.push(symbol);
     }
@@ -547,7 +548,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.parent_symbol = parent_symbol;
         symbol.full_name = Some(full_name.clone());
         symbol.return_type.clone_from(&type_annotation);
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         if is_optional {
             symbol
                 .metadata
@@ -675,7 +676,7 @@ impl<'a> SymbolExtractor<'a> {
         symbol.parent_symbol = parent_symbol;
         symbol.full_name = Some(full_name);
         symbol.return_type = var_type;
-        symbol.source_text = Some(self.text(node));
+        symbol.source_text = limits::kept_text(node.byte_range().len(), || self.text(node));
         symbol.metadata.insert("kind".to_owned(), json!(kind));
         symbol
             .metadata
@@ -712,7 +713,8 @@ impl<'a> SymbolExtractor<'a> {
         symbol.full_name = Some(full_name);
         symbol.return_type = return_type;
         symbol.parameter_types = parameter_types(&parameters);
-        symbol.source_text = Some(self.text(declarator));
+        symbol.source_text =
+            limits::kept_text(declarator.byte_range().len(), || self.text(declarator));
         symbol.is_async = has_modifier(arrow, "async");
         if is_exported {
             symbol

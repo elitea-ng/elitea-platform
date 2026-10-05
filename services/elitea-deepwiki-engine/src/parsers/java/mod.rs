@@ -27,7 +27,9 @@
 //! `maximum recursion depth exceeded` and no symbols. The exact depth
 //! depends on the caller's own stack (a thread-pool worker in production,
 //! inline in the reference dump), so it cannot be reproduced; this parser
-//! parses such a file normally, on a large worker stack.
+//! parses such a file normally, on a large worker stack, up to
+//! `limits::MAX_TREE_DEPTH` tree levels (deeper, the file fails alone with
+//! `maximum recursion depth exceeded`).
 
 /// Shared with the C# and JavaScript parsers, whose Python originals read
 /// and position files the same way.
@@ -38,6 +40,7 @@ mod visitor;
 mod tests;
 
 use super::LanguageParser;
+use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
 use rayon::prelude::*;
 use source::Source;
@@ -60,12 +63,14 @@ impl LanguageParser for JavaParser {
     fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
         let parse_all =
             || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
-        let mut results = match rayon::ThreadPoolBuilder::new()
-            .stack_size(WORKER_STACK)
-            .build()
-        {
-            Ok(pool) => pool.install(parse_all),
-            Err(_) => files.iter().map(|f| parse_path(f)).collect(),
+        let mut results = match limits::on_worker_pool("java", WORKER_STACK, parse_all) {
+            Ok(results) => results,
+            Err(error) => {
+                return files
+                    .iter()
+                    .map(|f| (f.clone(), visitor::failed(f, error.clone())))
+                    .collect();
+            }
         };
         resolve_cross_file(files, &mut results);
         files.iter().cloned().zip(results).collect()
@@ -84,7 +89,8 @@ fn parse_path(path: &str) -> ParseResult {
         Err(error) => return visitor::failed(path, os_error_text(&error, path)),
     };
     match Source::decode(&bytes) {
-        Ok(source) => visitor::parse_source(path, &source),
+        Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
+            .unwrap_or_else(|error| visitor::failed(path, error)),
         Err(error) => visitor::failed(path, error),
     }
 }

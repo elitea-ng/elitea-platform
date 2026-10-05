@@ -13,6 +13,7 @@
 //! graph builder reads both as `{}`.
 
 use crate::parsers::java::source::Source;
+use crate::parsers::limits;
 use crate::parsers::model::{
     ParseResult, Relationship, RelationshipType, Scope, Symbol, SymbolType,
 };
@@ -249,6 +250,9 @@ pub(super) fn parse_source(file_path: &str, source: &Source) -> ParseResult {
     let Some(tree) = parser.parse(source.bytes(), None) else {
         return failed(file_path, "Tree-sitter C# parser returned no tree");
     };
+    if limits::too_deep(tree.root_node()) {
+        return failed(file_path, limits::RECURSION_ERROR);
+    }
     let mut visitor = Visitor::new(file_path, source);
     visitor.visit(tree.root_node());
     let defines = defines_relationships(&visitor.symbols, file_path);
@@ -439,7 +443,10 @@ impl<'s> Visitor<'s> {
 
     /// `_extract_node_source`: `None` only for an empty file.
     fn node_source(&self, node: Node<'_>) -> Option<String> {
-        (!self.source.bytes().is_empty()).then(|| self.text(node))
+        if self.source.bytes().is_empty() {
+            return None;
+        }
+        limits::kept_text(node.byte_range().len(), || self.text(node))
     }
 
     /// `visit_node`: dispatch by kind, else descend.

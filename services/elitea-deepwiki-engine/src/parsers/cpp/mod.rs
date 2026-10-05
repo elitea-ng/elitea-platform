@@ -30,7 +30,9 @@
 //! some 450 levels deep fails the whole file with `Parse error: maximum
 //! recursion depth exceeded`. The exact depth depends on the caller's
 //! stack, so it cannot be reproduced; this parser parses such a file
-//! normally, on a large worker stack.
+//! normally, on a large worker stack, up to
+//! `limits::MAX_TREE_DEPTH` tree levels (deeper, the file fails alone with
+//! `maximum recursion depth exceeded`).
 
 mod names;
 mod relations;
@@ -41,6 +43,7 @@ mod symbols;
 mod tests;
 
 use super::LanguageParser;
+use super::limits;
 use super::model::{ParseResult, RelationshipType, SymbolType};
 use crate::graph::pystr::stem;
 use rayon::prelude::*;
@@ -63,12 +66,14 @@ impl LanguageParser for CppParser {
     fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
         let parse_all =
             || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
-        let mut results = match rayon::ThreadPoolBuilder::new()
-            .stack_size(WORKER_STACK)
-            .build()
-        {
-            Ok(pool) => pool.install(parse_all),
-            Err(_) => files.iter().map(|f| parse_path(f)).collect(),
+        let mut results = match limits::on_worker_pool("C++", WORKER_STACK, parse_all) {
+            Ok(results) => results,
+            Err(error) => {
+                return files
+                    .iter()
+                    .map(|f| (f.clone(), failed(f, error.clone())))
+                    .collect();
+            }
         };
         resolve_cross_file(files, &mut results);
         files.iter().cloned().zip(results).collect()
@@ -79,7 +84,11 @@ impl LanguageParser for CppParser {
 /// never fail (`errors='ignore'`).
 fn parse_path(path: &str) -> ParseResult {
     match std::fs::read(path) {
-        Ok(bytes) => parse_source(path, &Source::decode(&bytes)),
+        Ok(bytes) => {
+            let source = Source::decode(&bytes);
+            limits::with_output_budget(|| parse_source(path, &source))
+                .unwrap_or_else(|error| failed(path, error.to_owned()))
+        }
         Err(error) => failed(
             path,
             format!("Parse error: {}", os_error_text(&error, path)),
@@ -119,6 +128,9 @@ fn parse_source(path: &str, source: &Source) -> ParseResult {
         return failed(path, "Failed to parse C++ file".to_owned());
     };
     let root = tree.root_node();
+    if limits::too_deep(root) {
+        return failed(path, format!("Parse error: {}", limits::RECURSION_ERROR));
+    }
     let file_stem = stem(path);
     let extracted = symbols::extract(root, source, path, file_stem);
     let mut symbols = extracted.symbols;

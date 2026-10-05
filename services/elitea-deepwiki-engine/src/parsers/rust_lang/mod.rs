@@ -35,6 +35,7 @@ mod visitor;
 mod tests;
 
 use super::LanguageParser;
+use super::limits;
 use super::model::{ParseResult, Relationship, RelationshipType, SymbolType};
 use indexmap::IndexMap;
 use rayon::prelude::*;
@@ -57,12 +58,14 @@ impl LanguageParser for RustParser {
     fn parse_files(&self, files: &[String]) -> BTreeMap<String, ParseResult> {
         let parse_all =
             || -> Vec<ParseResult> { files.par_iter().map(|f| parse_path(f)).collect() };
-        let results = match rayon::ThreadPoolBuilder::new()
-            .stack_size(WORKER_STACK)
-            .build()
-        {
-            Ok(pool) => pool.install(parse_all),
-            Err(_) => files.iter().map(|f| parse_path(f)).collect(),
+        let results = match limits::on_worker_pool("Rust", WORKER_STACK, parse_all) {
+            Ok(results) => results,
+            Err(error) => {
+                return files
+                    .iter()
+                    .map(|f| (f.clone(), visitor::failed(f, error.clone())))
+                    .collect();
+            }
         };
         link(files, results)
     }
@@ -74,7 +77,8 @@ impl LanguageParser for RustParser {
 /// UTF-8 slice (`node.text.decode('utf8')`), so non-ASCII text is not shifted.
 fn parse_path(path: &str) -> ParseResult {
     match super::go::read_python_text(path) {
-        Ok(source) => visitor::parse_source(path, &source),
+        Ok(source) => limits::with_output_budget(|| visitor::parse_source(path, &source))
+            .unwrap_or_else(|error| visitor::failed(path, error)),
         Err(error) => visitor::failed(path, error),
     }
 }
