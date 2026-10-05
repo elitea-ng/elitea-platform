@@ -2597,9 +2597,19 @@ components:
             produced.
         user_ids:
           type: array
-          description: Users this message mentions (at most 64). `userIds` is accepted as an alias.
+          description: >-
+            USER ids this message mentions (at most 64; `entity_meta.id` of a
+            user participant, never a participant row id). `userIds` is
+            accepted as an alias. Each project member named, except the
+            sender, gets one `chat_user_mentioned` notification once the turn
+            is admitted — on both execution contracts (an ad-hoc model chat
+            notifies since client contract 1.1). An id that is not a project
+            member is dropped silently; a replay of the same `question_id`
+            notifies nobody again.
           items: { type: integer, format: int64 }
-        is_mentioning_everyone: { type: boolean }
+        is_mentioning_everyone:
+          type: boolean
+          description: '`@everyone`: every project member except the sender is notified.'
 
     ChatRegenerateRequest:
       type: object
