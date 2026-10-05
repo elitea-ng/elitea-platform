@@ -36,6 +36,35 @@ func TestAudio_AProviderThatCannotServeTheRouteAnswers501(t *testing.T) {
 	})
 }
 
+// TestUnsupportedOperation_Is501OnEveryRoute pins that the remap is GLOBAL, on
+// purpose (DECISIONS.md, "Error mapping"). statusAndType serves every handler,
+// so embeddings on a provider without embeddings, or chat on a provider
+// without chat, also answer 501 `invalid_request_error`, not 500 `api_error`.
+// A future change that scopes the remap to audio must change this test and
+// that decision together.
+func TestUnsupportedOperation_Is501OnEveryRoute(t *testing.T) {
+	unsupported := func() *schemas.BifrostError {
+		return &schemas.BifrostError{Error: &schemas.ErrorField{
+			Message: "operation is not supported by this provider",
+			Code:    strPtr("unsupported_operation"),
+		}}
+	}
+	cases := []struct {
+		name, path, body string
+		fake             *fakeRouter
+	}{
+		{"embeddings", "/llm/v1/embeddings", `{"model":"m","input":"i"}`, &fakeRouter{embErr: unsupported()}},
+		{"chat", "/llm/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, &fakeRouter{chatErr: unsupported()}},
+		{"image_gen", "/llm/v1/images/generations", `{"model":"m","prompt":"p"}`, &fakeRouter{imgErr: unsupported()}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := postJSON(t, NewHandler(tc.fake, nil, nil).route(), tc.path, tc.body)
+			assertUnsupported(t, rec.Code, rec.Body.Bytes())
+		})
+	}
+}
+
 func assertUnsupported(t *testing.T, status int, raw []byte) {
 	t.Helper()
 	if status != http.StatusNotImplemented {

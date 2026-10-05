@@ -1221,6 +1221,20 @@ in a release note.**
   with core queue depth. `internal/llmproxy/testdata/p99_overhead_benchmark.json`
   records the OLD, narrower metric; do not read it as a measurement of this one.
 
+## Error mapping
+- **2026-10-04 — a provider's status-less `unsupported_operation` refusal
+  answers 501 on EVERY route, not only on the audio routes.** bifrost's
+  `NewUnsupportedOperationError` carries no HTTP status. It used to fall
+  through `statusAndType` to 500 `api_error`, which reads as a gateway crash.
+  `statusAndType` serves every handler, so the 501 `invalid_request_error`
+  applies to chat, embeddings, rerank, images and audio alike. That is
+  deliberate: in each case the provider cannot do the operation, and a retry
+  does not help. A 501 is still a 5xx, so the request-log error class does not
+  change. The OpenAI SDKs retry every status of 500 or more, so their retry
+  behaviour does not change either. A refusal
+  that carries an upstream status keeps that status.
+  `TestUnsupportedOperation_Is501OnEveryRoute` pins the non-audio routes.
+
 ## Resolved follow-ups
 - ✅ `SECRETS_MASTER_KEY` + `GATEWAY_IDENTITY_SECRET` now wired via the chart's
   `secrets:` block (valueFrom.secretKeyRef, optional:true default) — provision the
