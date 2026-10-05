@@ -20,6 +20,7 @@ use super::transport::{BodyError, Call, Transport, read_limited};
 use crate::errors::{EngineError, ErrorType};
 use crate::runner::StopSignal;
 use serde_json::{Map, Value, json};
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 /// A blocking completion's body cap: a 64k-token answer is well under
@@ -547,14 +548,28 @@ fn parse_completion(value: &Value) -> Result<ChatResponse, String> {
 struct PartialCall {
     id: String,
     name: String,
+    /// The name is whole: a fragment carried `arguments` with it or after
+    /// it. A different name after that is another call, never a suffix.
+    name_complete: bool,
     arguments: String,
 }
+
+/// Where a streamed call is kept: its `index`, then the generation of that
+/// index (a server that reuses an index for a new call, with a new id or a
+/// new name, starts the next generation).
+type CallKey = (u64, u32);
 
 /// Builds one answer from the stream's deltas.
 #[derive(Debug, Default)]
 struct Assembler {
     content: String,
-    calls: Vec<PartialCall>,
+    /// The calls, ordered by index, then by generation. An index the server
+    /// skipped leaves no slot.
+    calls: BTreeMap<CallKey, PartialCall>,
+    /// The current generation of each index.
+    generations: HashMap<u64, u32>,
+    /// The call the last fragment went to, for a server without `index`.
+    last: Option<CallKey>,
     finish_reason: Option<String>,
     usage: Option<Usage>,
     done: bool,
@@ -618,59 +633,122 @@ impl Assembler {
 
     fn tool_delta(&mut self, delta: &Value) -> Result<(), String> {
         let id = delta.get("id").and_then(Value::as_str).unwrap_or("");
-        // `index` names the call a fragment belongs to. A server that
-        // omits it sends each call whole: a new id starts a new call.
-        let index = match delta.get("index").and_then(Value::as_u64) {
-            Some(index) => {
-                usize::try_from(index).map_err(|_| "a tool call index is out of range")?
-            }
-            None => match self.calls.last() {
-                Some(last) if id.is_empty() || last.id == id => self.calls.len() - 1,
-                _ => self.calls.len(),
-            },
-        };
-        if index >= MAX_TOOL_CALLS {
-            return Err(format!(
-                "the answer makes more than {MAX_TOOL_CALLS} tool calls"
-            ));
-        }
-        if index >= self.calls.len() {
-            self.calls.resize_with(index + 1, PartialCall::default);
-        }
-        let call = &mut self.calls[index];
+        let function = delta.get("function");
+        let name = function
+            .and_then(|f| f.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let key = self.call_key(delta.get("index"), id, name)?;
+        self.last = Some(key);
+        let call = self.calls.entry(key).or_default();
         if !id.is_empty() && call.id.is_empty() {
             id.clone_into(&mut call.id);
         }
-        if let Some(function) = delta.get("function") {
-            if let Some(name) = function.get("name").and_then(Value::as_str)
-                && !name.is_empty()
-                && call.name != name
-            {
-                // OpenAI sends the name once; a server that repeats it in
-                // every fragment is matched by the equality test.
-                call.name.push_str(name);
+        let Some(function) = function else {
+            return Ok(());
+        };
+        // OpenAI sends the name once; a server that repeats it in every
+        // fragment is matched by the equality test. A name split over
+        // fragments is joined only until the arguments start.
+        if !name.is_empty() && call.name != name {
+            call.name.push_str(name);
+        }
+        match function.get("arguments") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(fragment)) => {
+                call.name_complete |= !call.name.is_empty();
+                call.arguments.push_str(fragment);
             }
-            match function.get("arguments") {
-                Some(Value::String(fragment)) => call.arguments.push_str(fragment),
-                None | Some(Value::Null) => {}
-                Some(other) => call.arguments.push_str(&other.to_string()),
+            Some(other) => {
+                call.name_complete |= !call.name.is_empty();
+                call.arguments.push_str(&other.to_string());
             }
-            if call.arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
-                return Err("a tool call's arguments exceed their size cap".to_owned());
-            }
+        }
+        if call.arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
+            return Err("a tool call's arguments exceed their size cap".to_owned());
         }
         Ok(())
     }
 
+    /// The call a fragment belongs to, created when it is new.
+    ///
+    /// `index` names the call. On an index already in use, a fragment with
+    /// a different non-empty id, or a different name once the call's name
+    /// is complete, starts a new call. A server that omits `index` sends
+    /// each call whole: a new id or a new complete name starts a new call.
+    fn call_key(&mut self, index: Option<&Value>, id: &str, name: &str) -> Result<CallKey, String> {
+        let starts_new = |call: &PartialCall| {
+            let new_id = !id.is_empty() && !call.id.is_empty() && call.id != id;
+            let new_name = !name.is_empty() && call.name_complete && call.name != name;
+            new_id || new_name
+        };
+        let key = match index.filter(|v| !v.is_null()) {
+            Some(index) => {
+                let index = index
+                    .as_u64()
+                    .ok_or("a tool call index is not a whole number")?;
+                match self.generations.get(&index).copied() {
+                    None => (index, 0),
+                    Some(generation) => {
+                        let current = (index, generation);
+                        match self.calls.get(&current) {
+                            Some(call) if starts_new(call) => {
+                                same_id_renamed(call, id)?;
+                                (index, generation + 1)
+                            }
+                            _ => current,
+                        }
+                    }
+                }
+            }
+            None => match self
+                .last
+                .and_then(|key| self.calls.get(&key).map(|call| (key, call)))
+            {
+                Some((key, call)) if !starts_new(call) => key,
+                Some((_, call)) => {
+                    same_id_renamed(call, id)?;
+                    (self.next_index(), 0)
+                }
+                None => (self.next_index(), 0),
+            },
+        };
+        if !self.calls.contains_key(&key) {
+            if self.calls.len() >= MAX_TOOL_CALLS {
+                return Err(format!(
+                    "the answer makes more than {MAX_TOOL_CALLS} tool calls"
+                ));
+            }
+            self.generations.insert(key.0, key.1);
+        }
+        Ok(key)
+    }
+
+    /// The index after every index seen, for a call without one.
+    fn next_index(&self) -> u64 {
+        self.calls
+            .keys()
+            .next_back()
+            .map_or(0, |(index, _)| index.saturating_add(1))
+    }
+
     fn finish(self) -> Result<ChatResponse, String> {
         let mut tool_calls = Vec::with_capacity(self.calls.len());
-        for (index, call) in self.calls.into_iter().enumerate() {
+        for ((index, _), call) in self.calls {
             if call.name.is_empty() {
-                return Err(format!("streamed tool call {index} has no name"));
+                // A slot that got no name and no arguments carries nothing
+                // to run (a keep-alive fragment, an id alone): dropped.
+                if call.arguments.is_empty() {
+                    continue;
+                }
+                return Err(format!(
+                    "streamed tool call at index {index} has arguments but no name"
+                ));
             }
+            let position = tool_calls.len();
             tool_calls.push(ToolCall {
                 id: if call.id.is_empty() {
-                    format!("call_{index}")
+                    format!("call_{position}")
                 } else {
                     call.id
                 },
@@ -685,6 +763,18 @@ impl Assembler {
             usage: self.usage,
         })
     }
+}
+
+/// A call whose id stays the same but whose complete name changes is
+/// not two calls and not one: refused.
+fn same_id_renamed(call: &PartialCall, id: &str) -> Result<(), String> {
+    if !call.id.is_empty() && (id.is_empty() || call.id == id) {
+        return Err(format!(
+            "streamed tool call {} changed its name after its arguments began",
+            call.id
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -747,5 +837,114 @@ mod tests {
         };
         assert_eq!(response.tool_calls.len(), 2);
         assert_eq!(response.tool_calls[1].arguments, "{\"x\":1}");
+    }
+
+    fn assemble(deltas: &[Value]) -> Result<Vec<ToolCall>, String> {
+        let mut assembler = Assembler::default();
+        for delta in deltas {
+            assembler.tool_delta(delta)?;
+        }
+        assembler.finish().map(|response| response.tool_calls)
+    }
+
+    fn summary(calls: &[ToolCall]) -> Vec<(&str, &str, &str)> {
+        calls
+            .iter()
+            .map(|c| (c.id.as_str(), c.name.as_str(), c.arguments.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_id_on_a_used_index_starts_a_new_call() {
+        let calls = assemble(&[
+            json!({"index": 0, "id": "a", "function": {"name": "get_code", "arguments": "{\"p\""}}),
+            json!({"index": 0, "function": {"arguments": ":1}"}}),
+            json!({"index": 0, "id": "b", "function": {"name": "think", "arguments": "{}"}}),
+            json!({"index": 0, "function": {"arguments": ""}}),
+        ]);
+        let Ok(calls) = calls else {
+            panic!("refused: {calls:?}");
+        };
+        assert_eq!(
+            summary(&calls),
+            [("a", "get_code", "{\"p\":1}"), ("b", "think", "{}")]
+        );
+    }
+
+    #[test]
+    fn a_complete_name_is_never_extended() {
+        // Repeated in every fragment: one name.
+        let repeated = assemble(&[
+            json!({"index": 0, "id": "a", "function": {"name": "f", "arguments": "{"}}),
+            json!({"index": 0, "function": {"name": "f", "arguments": "}"}}),
+        ]);
+        assert_eq!(repeated.as_deref().map(summary), Ok(vec![("a", "f", "{}")]));
+        // Split before the arguments start: joined.
+        let split = assemble(&[
+            json!({"index": 0, "id": "a", "function": {"name": "get_"}}),
+            json!({"index": 0, "function": {"name": "code", "arguments": "{}"}}),
+        ]);
+        assert_eq!(
+            split.as_deref().map(summary),
+            Ok(vec![("a", "get_code", "{}")])
+        );
+        // No ids, one index, a second whole call: a new call, not "fg".
+        let reused = assemble(&[
+            json!({"index": 0, "function": {"name": "f", "arguments": "{}"}}),
+            json!({"index": 0, "function": {"name": "g", "arguments": "{}"}}),
+        ]);
+        assert_eq!(
+            reused.as_deref().map(summary),
+            Ok(vec![("call_0", "f", "{}"), ("call_1", "g", "{}")])
+        );
+        // The same id renamed after its arguments began: refused.
+        let renamed = assemble(&[
+            json!({"index": 0, "id": "a", "function": {"name": "f", "arguments": "{}"}}),
+            json!({"index": 0, "id": "a", "function": {"name": "g"}}),
+        ]);
+        assert!(
+            matches!(&renamed, Err(m) if m.contains("changed its name")),
+            "{renamed:?}"
+        );
+    }
+
+    #[test]
+    fn indexes_that_skip_numbers_leave_no_slot() {
+        let calls = assemble(&[
+            json!({"index": 1, "id": "a", "function": {"name": "f", "arguments": "{}"}}),
+            json!({"index": 5, "id": "b", "function": {"name": "g", "arguments": "{}"}}),
+            json!({"index": 3, "id": "c", "function": {"name": "h", "arguments": "{}"}}),
+        ]);
+        assert_eq!(
+            calls.as_deref().map(summary),
+            Ok(vec![("a", "f", "{}"), ("c", "h", "{}"), ("b", "g", "{}")])
+        );
+    }
+
+    #[test]
+    fn a_nameless_slot_is_dropped_unless_it_has_arguments() {
+        let calls = assemble(&[
+            json!({"index": 0, "id": "a", "function": {"name": "f", "arguments": "{}"}}),
+            json!({"index": 1, "id": "ghost"}),
+        ]);
+        assert_eq!(calls.as_deref().map(summary), Ok(vec![("a", "f", "{}")]));
+        let refused = assemble(&[json!({"index": 2, "function": {"arguments": "{}"}})]);
+        assert!(
+            matches!(&refused, Err(m) if m.contains("index 2") && m.contains("no name")),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn the_call_cap_counts_calls_not_index_values() {
+        let deltas: Vec<Value> = (0..=MAX_TOOL_CALLS)
+            .map(|i| json!({"index": i * 1000, "id": format!("c{i}"), "function": {"name": "f", "arguments": "{}"}}))
+            .collect();
+        assert!(assemble(&deltas[..MAX_TOOL_CALLS]).is_ok());
+        let refused = assemble(&deltas);
+        assert!(
+            matches!(&refused, Err(m) if m.contains("more than")),
+            "{refused:?}"
+        );
     }
 }
