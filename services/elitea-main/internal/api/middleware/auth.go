@@ -365,6 +365,7 @@ func validatePrincipal(ctx context.Context, cfg AuthConfig, user auth.User) (aut
 
 func serveAuthenticated(next http.Handler, w http.ResponseWriter, r *http.Request, user auth.User, source auth.AuthenticationSource) {
 	ctx := auth.ContextWithAuthenticatedUser(r.Context(), user, source)
+	ctx, next = withScheduledGates(ctx, next)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
