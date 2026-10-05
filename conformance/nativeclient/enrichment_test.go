@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,14 +33,29 @@ func (s *suite) chatEnrichment(t *testing.T) {
 	}
 	api := s.main.api
 
-	// Discovery speaks 1.1 and carries the attachment policy.
+	// Discovery speaks 1.2 and carries the attachment policy.
 	discovery := mustJSON(t, need(t)(api.Get(ctx, "/.well-known/elitea-client")), http.StatusOK)
-	if discovery["client_contract"] != "1.1" {
-		t.Errorf("discovery client_contract = %v, want 1.1", discovery["client_contract"])
+	if discovery["client_contract"] != "1.2" {
+		t.Errorf("discovery client_contract = %v, want 1.2", discovery["client_contract"])
 	}
 	policy, _ := discovery["attachments"].(map[string]any)
 	if chunk, _ := asInt64(policy["chunk_bytes"]); chunk <= 0 || policy["inline_image_downscale"] != true {
 		t.Errorf("discovery attachments policy = %v", policy)
+	}
+
+	// Who am I (1.2): the caller's identity and the personal project the chat
+	// scenario found in the project list, over the native bearer.
+	me := mustJSON(t, need(t)(api.Get(ctx, "/api/v2/social/author")), http.StatusOK)
+	if id, _ := me["id"].(string); id == "" {
+		t.Errorf("current user has no id: %v", me)
+	}
+	for _, key := range []string{"name", "email", "avatar"} {
+		if _, ok := me[key].(string); !ok {
+			t.Errorf("current user %s = %#v, want a string", key, me[key])
+		}
+	}
+	if me["personal_project_id"] != strconv.FormatInt(s.projectID, 10) {
+		t.Errorf("current user personal_project_id = %v, want %d", me["personal_project_id"], s.projectID)
 	}
 
 	// Participants: add (single object), retry answers the same row, read

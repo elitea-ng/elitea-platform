@@ -125,7 +125,7 @@ func TestClientFrameCatalogueAcceptsWorkerFrames(t *testing.T) {
 	// The floor: each worker's file must exercise the frames it can emit, so
 	// a file emptied by a broken capture does not pass vacuously.
 	for worker, want := range map[string][]string{
-		"python": {"agent_tool_start", "agent_tool_end", "agent_tool_error", "agent_tool_output_chunk", "agent_hitl_interrupt", "mcp_authorization_required"},
+		"python": {"agent_tool_start", "agent_tool_end", "agent_tool_error", "agent_tool_paused", "agent_tool_output_chunk", "agent_hitl_interrupt", "mcp_authorization_required"},
 		"rust":   {"agent_tool_start", "agent_tool_end", "agent_hitl_interrupt", "mcp_authorization_required", "agent_requires_confirmation"},
 	} {
 		for _, frameType := range want {

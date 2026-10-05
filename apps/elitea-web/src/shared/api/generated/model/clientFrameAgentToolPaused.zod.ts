@@ -40,67 +40,20 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { ClientFrameToolMetadata } from "./clientFrameToolMetadata.zod";
+import { ClientFrameEnvelope } from "./clientFrameEnvelope.zod";
+import { ClientFrameToolCall } from "./clientFrameToolCall.zod";
 
-export const ClientFrameToolCall = zod.object({
-  tool_name: zod.string(),
-  tool_run_id: zod
-    .string()
-    .describe("The key of one call across its start, chunks and end."),
-  tool_meta: zod
-    .object({
-      name: zod.string().nullish(),
-    })
-    .nullish(),
-  tool_inputs: zod
-    .unknown()
-    .nullish()
-    .describe(
-      "The arguments the model called the tool with. May be sensitive; show on demand.",
-    ),
-  metadata: ClientFrameToolMetadata.optional(),
-  timestamp_start: zod.string().nullish(),
-  timestamp_finish: zod.string().nullish(),
-  finish_reason: zod
-    .string()
-    .nullish()
-    .describe(
-      '`stop` on success, `error` on failure; absent or null while running. Contract 1.2: `awaiting_approval`, `awaiting_input` or `interrupted` on an `agent_tool_paused` call, which paused for the user and did NOT fail. A client treats an unknown value as "not failed" unless `error` is set.',
-    ),
-  tool_output: zod
-    .string()
-    .nullish()
-    .describe(
-      "The result as text. Empty when it was chunked (see `tool_output_chunks`); null on failure.",
-    ),
-  error: zod
-    .string()
-    .nullish()
-    .describe("The failure text of an `agent_tool_error`."),
-  pause: zod
-    .object({
-      interrupt_id: zod.string().nullish(),
-      guardrail_type: zod
-        .string()
-        .nullish()
-        .describe(
-          "`sensitive_tool` for an approval, `clarifying_question` for a question.",
-        ),
-    })
-    .nullish()
-    .describe(
-      "Contract 1.2. Set on an `agent_tool_paused` call: which pause it waits on. `interrupt_id` matches the `interrupt_id` of the `agent_hitl_interrupt` card that follows, so a client can show the call as awaiting that decision.",
-    ),
-  tool_output_chunks: zod
-    .object({
-      total: zod.int(),
-      tool_output_sha256: zod.string(),
-    })
-    .nullish()
-    .describe(
-      "Present when the output was too large for one frame: it arrived as `total` `agent_tool_output_chunk` frames before this one, and their concatenation hashes to `tool_output_sha256`.",
-    ),
-});
+export const ClientFrameAgentToolPaused = ClientFrameEnvelope.and(
+  zod.object({
+    response_metadata: ClientFrameToolCall,
+  }),
+).describe(
+  "Contract 1.2. A tool call paused for the user — a sensitive tool waiting for approval, or a clarifying question — instead of finishing. It is NOT a failure: `error` is null and `finish_reason` is `awaiting_approval`, `awaiting_input` or `interrupted`. The pause itself arrives next as `agent_hitl_interrupt`. A server before 1.2 sent `agent_tool_error` for the same call. Not terminal. NOTE(W2): services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py `_tool_pause`.",
+);
 
-export type ClientFrameToolCall = zod.input<typeof ClientFrameToolCall>;
-export type ClientFrameToolCallOutput = zod.output<typeof ClientFrameToolCall>;
+export type ClientFrameAgentToolPaused = zod.input<
+  typeof ClientFrameAgentToolPaused
+>;
+export type ClientFrameAgentToolPausedOutput = zod.output<
+  typeof ClientFrameAgentToolPaused
+>;

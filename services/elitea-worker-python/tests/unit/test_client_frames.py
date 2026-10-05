@@ -115,6 +115,37 @@ def _capture() -> dict[str, dict[str, Any]]:
     callback.on_tool_error(RuntimeError("file not found"), run_id="run-2")
     captured["tool_error"] = _first(_frames(events), "agent_tool_error")
 
+    # A sensitive tool paused for approval (contract 1.2, issue 1066): a pause,
+    # never an `agent_tool_error`.
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
+
+    callback, events = _callback()
+    callback.on_tool_start(
+        {"name": "delete_branch", "metadata": {"display_name": "Delete branch"}},
+        "ignored",
+        run_id="run-4",
+        metadata={"toolkit_name": "github"},
+        inputs={"branch": "old"},
+    )
+    callback.on_tool_error(
+        GraphInterrupt(
+            (
+                Interrupt(
+                    value={
+                        "type": "hitl",
+                        "interrupt_id": "interrupt-1",
+                        "guardrail_type": "sensitive_tool",
+                        "tool_args": {"branch": "old"},
+                    },
+                    id="langgraph-interrupt-1",
+                ),
+            )
+        ),
+        run_id="run-4",
+    )
+    captured["tool_paused"] = _first(_frames(events), "agent_tool_paused")
+
     # A result too large for one frame: its first chunk and its end.
     callback, events = _callback()
     callback.on_tool_start(
@@ -207,3 +238,7 @@ def test_the_terminal_rules_hold_on_the_captured_frames() -> None:
     position = captured["tool_output_chunk"]["response_metadata"]["tool_output_chunk"]
     assert position["tool_call_id"] == "run-3" and position["index"] == 0
     assert captured["tool_end_chunked"]["response_metadata"]["tool_output_chunks"]["total"] == position["total"]
+    # A paused call is not a failed one, and names the card it waits on.
+    paused = captured["tool_paused"]["response_metadata"]
+    assert paused["error"] is None and paused["finish_reason"] == "awaiting_approval"
+    assert paused["pause"]["interrupt_id"] == captured["hitl_interrupt"]["response_metadata"]["hitl_interrupt"]["interrupt_id"]

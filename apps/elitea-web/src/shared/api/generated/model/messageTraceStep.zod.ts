@@ -51,10 +51,19 @@ export const MessageTraceStep = zod
     parent_agent_call_id: zod.string().nullish(),
     started_at: zod.iso.datetime({ offset: true }).nullish(),
     finished_at: zod.iso.datetime({ offset: true }).nullish(),
-    is_error: zod.boolean(),
+    is_error: zod
+      .boolean()
+      .describe(
+        "True for a tool call that failed. A call that paused for the user (contract 1.2, `finish_reason` `awaiting_approval`, `awaiting_input` or `interrupted`) is not an error.",
+      ),
     step_type: zod.string().nullish(),
     model_name: zod.string().nullish(),
-    finish_reason: zod.string().nullish(),
+    finish_reason: zod
+      .string()
+      .nullish()
+      .describe(
+        "For a tool call: `stop`, `error`, or (contract 1.2) a pause reason — `awaiting_approval`, `awaiting_input`, `interrupted`. A client treats an unknown value by `is_error`.",
+      ),
     attrs: zod
       .object({
         metadata: zod
@@ -98,6 +107,15 @@ export const MessageTraceStep = zod
           .optional()
           .describe(
             "Present on a tool call whose output was chunked: how many of its `total` chunks were `received`, and whether the reassembly is `complete` (its SHA-256 matched).",
+          ),
+        pause: zod
+          .object({
+            interrupt_id: zod.string().optional(),
+            guardrail_type: zod.string().optional(),
+          })
+          .optional()
+          .describe(
+            "Contract 1.2. Present on a tool call that paused for the user: the `interrupt_id` of the approval card it waited on and the `guardrail_type` (`sensitive_tool`, `clarifying_question`).",
           ),
       })
       .nullish()

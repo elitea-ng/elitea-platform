@@ -584,3 +584,78 @@ func TestToolCallAttrsCarryTheClientContractKeys(t *testing.T) {
 		t.Errorf("attrs.tool_meta = %#v, want name and display_name", toolMeta)
 	}
 }
+
+// Issue 1066: a tool call that paused for the user is stored as a pause, not
+// as a failure. The current worker sends `finish_reason: awaiting_approval`
+// with no error; a worker built before the fix sent the LangGraph interrupt's
+// repr as the error with `finish_reason: error`, and that shape is recognised
+// too so a mixed-version rollout stores the same row.
+func TestCurrentAgentPausedToolCallIsNotStoredAsAnError(t *testing.T) {
+	started := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		entry      map[string]any
+		wantReason string
+	}{
+		"current worker": {
+			entry: map[string]any{
+				"finish_reason": "awaiting_approval",
+				"error":         nil,
+				"pause":         map[string]any{"interrupt_id": "hitl_abc", "guardrail_type": "sensitive_tool", "tool_args": map[string]any{"x": 1}},
+			},
+			wantReason: "awaiting_approval",
+		},
+		"clarifying question": {
+			entry:      map[string]any{"finish_reason": "awaiting_input", "error": nil},
+			wantReason: "awaiting_input",
+		},
+		"pre-fix worker": {
+			entry: map[string]any{
+				"finish_reason": "error",
+				"error":         "(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_abc', 'tool_args': {'secret': 1}}, id='x'),)",
+			},
+			wantReason: "awaiting_approval",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			entry := map[string]any{
+				"tool_name": "mock_tool_status", "tool_run_id": "run-p", "run_id": "run-p",
+				"timestamp_start":  started.Format(time.RFC3339Nano),
+				"timestamp_finish": started.Add(time.Second).Format(time.RFC3339Nano),
+				"tool_output":      nil,
+			}
+			for key, value := range tc.entry {
+				entry[key] = value
+			}
+			row, err := currentAgentToolCallToRow(9, currentAgentToolCall{key: "run-p", entry: entry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.isError {
+				t.Fatalf("a paused call was stored as an error: %#v", row)
+			}
+			if row.finishReason != tc.wantReason {
+				t.Fatalf("finish_reason = %q, want %q", row.finishReason, tc.wantReason)
+			}
+			if pause, ok := tc.entry["pause"].(map[string]any); ok {
+				stored := currentAgentMap(row.attrs, "pause")
+				if stored["interrupt_id"] != pause["interrupt_id"] || stored["guardrail_type"] != pause["guardrail_type"] {
+					t.Fatalf("attrs.pause = %#v", stored)
+				}
+				if _, leaked := stored["tool_args"]; leaked {
+					t.Fatalf("attrs.pause kept a key outside its allowlist: %#v", stored)
+				}
+			}
+		})
+	}
+
+	// A real failure is still one.
+	row, err := currentAgentToolCallToRow(9, currentAgentToolCall{key: "run-e", entry: map[string]any{
+		"tool_name": "read", "tool_run_id": "run-e", "finish_reason": "error", "error": "file not found",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.isError || row.finishReason != "error" {
+		t.Fatalf("a failed call lost its error: %#v", row)
+	}
+}

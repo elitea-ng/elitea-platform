@@ -296,6 +296,48 @@
     "thinking": null,
     "type": "agent_tool_output_chunk"
   },
+  "tool_paused": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": null,
+      "finish_reason": "awaiting_approval",
+      "metadata": {
+        "display_name": "Delete branch",
+        "toolkit_name": "github"
+      },
+      "pause": {
+        "guardrail_type": "sensitive_tool",
+        "interrupt_id": "interrupt-1"
+      },
+      "run_id": "run-4",
+      "timestamp_finish": "<timestamp>",
+      "timestamp_start": "<timestamp>",
+      "tool_inputs": {
+        "branch": "old"
+      },
+      "tool_meta": {
+        "metadata": {
+          "display_name": "Delete branch",
+          "toolkit_name": "github"
+        },
+        "name": "delete_branch"
+      },
+      "tool_name": "delete_branch",
+      "tool_output": null,
+      "tool_run_id": "run-4"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_paused"
+  },
   "tool_start": {
     "agent_name": null,
     "content": null,

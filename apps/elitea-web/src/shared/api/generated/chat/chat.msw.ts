@@ -902,6 +902,19 @@ export const getListMessageTracesResponseMock = (
             },
             undefined,
           ]),
+          pause: faker.helpers.arrayElement([
+            {
+              interrupt_id: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              guardrail_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
         },
         null,
       ]),
@@ -1035,6 +1048,19 @@ export const getGetMessageTraceResponseMock = (): MessageTraceStepDetail => ({
               ]),
               sanitized: faker.helpers.arrayElement([
                 faker.datatype.boolean(),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          pause: faker.helpers.arrayElement([
+            {
+              interrupt_id: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              guardrail_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
                 undefined,
               ]),
             },

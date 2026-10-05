@@ -665,6 +665,9 @@ func reconstructCurrentAgentTrace(
 			if toolMeta := currentAgentMap(row.attrs, "tool_meta"); toolMeta != nil {
 				entry["tool_meta"] = cloneCurrentAgentMap(toolMeta)
 			}
+			if pause := currentAgentMap(row.attrs, "pause"); pause != nil {
+				entry["pause"] = cloneCurrentAgentMap(pause)
+			}
 			// The chunk progress travels back onto the entry so the NEXT
 			// chunk knows which index it is waiting for. Without it every
 			// chunk would look like index 0 against a fresh row and only the
@@ -736,6 +739,7 @@ func currentAgentToolCallToRow(
 	if err := validateCurrentAgentAttrs(attrs); err != nil {
 		return currentAgentTraceRow{}, err
 	}
+	isError, finishReason := currentAgentToolCallOutcome(entry)
 	return currentAgentTraceRow{
 		messageGroupID:    messageGroupID,
 		kind:              "tool_call",
@@ -744,12 +748,12 @@ func currentAgentToolCallToRow(
 		parentAgentCallID: boundedCurrentAgentString(currentAgentString(hierarchy["parent_agent_call_id"])),
 		startedAt:         parseCurrentAgentTime(entry["timestamp_start"]),
 		finishedAt:        parseCurrentAgentTime(entry["timestamp_finish"]),
-		isError:           currentAgentTruthy(entry["error"]),
+		isError:           isError,
 		hasVisibleContent: true,
 		toolName:          boundedCurrentAgentString(toolName),
 		toolInputs:        toolInputs,
 		toolOutput:        currentAgentStringPointer(entry["tool_output"]),
-		finishReason:      boundedCurrentAgentString(currentAgentString(entry["finish_reason"])),
+		finishReason:      finishReason,
 		attrs:             attrs,
 	}, nil
 }
@@ -984,6 +988,54 @@ func currentAgentHierarchyMetadata(entry map[string]any) map[string]any {
 	return result
 }
 
+// The finish reasons of a tool call that PAUSED for the user rather than
+// ending (issue 1066): a sensitive-tool approval, a clarifying question, or
+// another LangGraph interrupt. A paused call is not a failed one — the client
+// contract's frame catalogue documents them on `agent_tool_paused`.
+var currentAgentToolCallPauseReasons = map[string]bool{
+	"awaiting_approval": true,
+	"awaiting_input":    true,
+	"interrupted":       true,
+}
+
+// currentAgentLegacyInterruptErrorPrefix is how a Python worker built before
+// issue 1066 reported a pause: `str(GraphInterrupt(...))` as the call's error.
+// Recognising it keeps a mixed-version rollout from storing a pause as a
+// failure. The text itself is never stored (it carries the call's arguments).
+const currentAgentLegacyInterruptErrorPrefix = "(Interrupt(value="
+
+// currentAgentToolCallOutcome is the stored (is_error, finish_reason) of one
+// tool call entry.
+func currentAgentToolCallOutcome(entry map[string]any) (bool, string) {
+	finishReason := boundedCurrentAgentString(currentAgentString(entry["finish_reason"]))
+	if currentAgentToolCallPauseReasons[finishReason] {
+		return false, finishReason
+	}
+	if text, ok := entry["error"].(string); ok && strings.HasPrefix(text, currentAgentLegacyInterruptErrorPrefix) {
+		return false, "awaiting_approval"
+	}
+	return currentAgentTruthy(entry["error"]), finishReason
+}
+
+// currentAgentToolCallPauseAttrs keeps the two identity fields of a paused
+// call that tie it to its approval card, and nothing else from the pause.
+func currentAgentToolCallPauseAttrs(entry map[string]any) map[string]any {
+	pause := currentAgentMap(entry, "pause")
+	if pause == nil {
+		return nil
+	}
+	kept := map[string]any{}
+	for _, key := range []string{"interrupt_id", "guardrail_type"} {
+		if value := boundedCurrentAgentString(currentAgentString(pause[key])); value != "" {
+			kept[key] = value
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
 func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	attrs := map[string]any{}
 	if chunk, ok := entry["tool_output_chunk_v1"]; ok {
@@ -1025,6 +1077,9 @@ func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	}
 	if progress := currentAgentChunkProgressAttrs(entry); progress != nil {
 		attrs[currentAgentChunkProgressKey] = progress
+	}
+	if pause := currentAgentToolCallPauseAttrs(entry); pause != nil {
+		attrs["pause"] = pause
 	}
 	if len(attrs) == 0 {
 		return nil
