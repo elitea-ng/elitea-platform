@@ -124,9 +124,42 @@ export function parseBrandingValues(raw: unknown): BrandingValues {
   return { ...text, ...numbers, font_faces };
 }
 
-/** Every key at "inherit" — what "Reset to defaults" writes. */
+/** Every key this page edits, at "inherit". */
 export function emptyBrandingValues(): BrandingValues {
   return parseBrandingValues({});
+}
+
+/**
+ * The section keys this page does not edit, at "inherit": the hand-tuned
+ * scheme tokens a brand-package import writes, and the e-mail sender fields.
+ * A save leaves them alone; a reset must not, because the server upserts only
+ * the keys it is sent — omitting `scheme_tokens` kept every imported colour.
+ */
+const UNEDITED_KEYS_INHERIT: Readonly<Record<string, unknown>> = {
+  scheme_tokens: {},
+  sender_name: '',
+  support_email: '',
+};
+
+/** The inherit value of a stored value's own shape. */
+function inheritLike(value: unknown): unknown {
+  if (Array.isArray(value)) return [];
+  if (typeof value === 'number') return 0;
+  if (typeof value === 'object' && value !== null) return {};
+  return '';
+}
+
+/**
+ * What "Reset to defaults" writes: EVERY key the section stores at inherit —
+ * the edited ones, the known unedited ones, and any other key the server
+ * answered with (a key added server-side later must not survive a reset).
+ */
+export function resetBrandingPayload(stored?: unknown): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (typeof stored === 'object' && stored !== null && !Array.isArray(stored)) {
+    for (const [key, value] of Object.entries(stored)) payload[key] = inheritLike(value);
+  }
+  return { ...payload, ...UNEDITED_KEYS_INHERIT, ...emptyBrandingValues() };
 }
 
 /** Whether `key` is left to the layer below. */

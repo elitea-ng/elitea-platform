@@ -40,6 +40,7 @@ import {
   effectiveFontFaces,
   effectiveLogoEmail,
   emptyBrandingValues,
+  resetBrandingPayload,
   parseBrandingValues,
   withDerivedSchemes,
   type BrandingAssetKey,
@@ -220,7 +221,7 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
   const onCancelReset = useCallback(() => setResetOpen(false), []);
   const onConfirmReset = useCallback(() => {
     setResetOpen(false);
-    save.mutate(emptyBrandingValues(), {
+    save.mutate(resetBrandingPayload(query.data?.values), {
       onSuccess: () => {
         setDraft({});
         setToast({
@@ -240,7 +241,7 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
         });
       },
     });
-  }, [save]);
+  }, [save, query.data]);
 
   const onUploadAsset = useCallback(
     (kind: BrandingAssetKind, file: File, target: BrandingUploadTarget) => {
