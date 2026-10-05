@@ -36,6 +36,7 @@ import { NativeClientTable } from './AdminNativeClientTable';
 import {
   NO_FIELD_ERRORS,
   placeNativeClientReasons,
+  registerRefusal,
   type NativeClientFieldErrors,
 } from './adminNativeClientForm';
 import {
@@ -178,6 +179,11 @@ export function AdminNativeClientsEditor() {
   }, [saveMutation.isPending, saveMutation.variables, deleteMutation.isPending, deleteMutation.variables]);
 
   const handleSubmit = (draft: NativeClientDraft): void => {
+    const refusal = dialog.editing === undefined ? registerRefusal(draft, clients) : undefined;
+    if (refusal !== undefined) {
+      setDialog((previous) => ({ ...previous, serverError: undefined, fieldErrors: refusal }));
+      return;
+    }
     setDialog((previous) => ({ ...previous, serverError: undefined, fieldErrors: NO_FIELD_ERRORS }));
     saveMutation.mutate(draft, {
       onSuccess: (outcome) => {

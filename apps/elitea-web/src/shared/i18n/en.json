@@ -4686,5 +4686,7 @@
   "shared.nativeDevices.revokeDialog.title": "Revoke device",
   "shared.nativeDevices.revokeLabel": "Revoke {{name}}",
   "shared.nativeDevices.status.active": "Active",
-  "shared.nativeDevices.status.revoked": "Revoked"
+  "shared.nativeDevices.status.revoked": "Revoked",
+  "pages.admin.nativeClients.dialog.clientIdRequired": "Enter the client ID the app sends.",
+  "pages.admin.nativeClients.dialog.clientIdTaken": "A client with this ID is already registered. Edit it instead."
 }

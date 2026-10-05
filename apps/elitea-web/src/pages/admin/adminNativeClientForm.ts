@@ -11,6 +11,7 @@
  * field it names (`redirect_uris[2]` → the third line).
  */
 import type { NativeClient } from '@/shared/api/generated/model';
+import { t } from '@/shared/i18n';
 
 import { NATIVE_CLIENT_SOURCE_FILE, type NativeClientDraft } from './api/adminNativeClientsApi';
 
@@ -105,4 +106,40 @@ export const NO_FIELD_ERRORS: NativeClientFieldErrors = { redirectUris: [], othe
 /** A client the editor may change: one held in the database layer. */
 export function isEditableNativeClient(client: NativeClient): boolean {
   return client.source !== NATIVE_CLIENT_SOURCE_FILE;
+}
+
+/**
+ * The two refusals the dialog makes BEFORE any request, both in Register mode.
+ *
+ *  - A blank id would PUT `/administration/`, which no route matches: the
+ *    server could only answer a bare 404, never "this field".
+ *  - The PUT is an UPSERT. Registering an id a DATABASE row already holds
+ *    would silently replace that client's name and redirect URIs, and every
+ *    installed copy of the real app would fail its next sign-in. Editing that
+ *    client is the way to change it. A FILE entry with the same id is not
+ *    refused: shadowing it is the database layer's documented purpose.
+ *
+ * Returns `undefined` when the draft may be sent.
+ */
+export function registerRefusal(
+  draft: Pick<NativeClientDraft, 'clientId'>,
+  clients: readonly NativeClient[],
+): NativeClientFieldErrors | undefined {
+  if (draft.clientId === '') {
+    return {
+      ...NO_FIELD_ERRORS,
+      clientId: t('pages.admin.nativeClients.dialog.clientIdRequired', 'Enter the client ID the app sends.'),
+    };
+  }
+  const taken = clients.some((client) => client.client_id === draft.clientId && isEditableNativeClient(client));
+  if (taken) {
+    return {
+      ...NO_FIELD_ERRORS,
+      clientId: t(
+        'pages.admin.nativeClients.dialog.clientIdTaken',
+        'A client with this ID is already registered. Edit it instead.',
+      ),
+    };
+  }
+  return undefined;
 }

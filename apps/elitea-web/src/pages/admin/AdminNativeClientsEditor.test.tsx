@@ -255,4 +255,56 @@ describe('AdminNativeClientsEditor', () => {
       'This deployment does not serve native sign-in',
     );
   });
+  // Regression: the PUT is an UPSERT. "Register" with an id a database row
+  // already holds silently replaced that client's name and redirect URIs —
+  // every installed copy of the real app then failed its next sign-in.
+  it('refuses to register an id a database client already holds, without a PUT', async () => {
+    useHandlers();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    await user.click(screen.getByTestId('admin-native-clients-add'));
+    await user.type(screen.getByTestId('native-client-id'), 'com.example.desktop');
+    await user.type(screen.getByTestId('native-client-display-name'), 'Impostor');
+    await user.type(screen.getByTestId('native-client-redirect-uris'), 'com.example.desktop:/other');
+    await user.click(screen.getByTestId('native-client-save'));
+
+    expect(await screen.findByText('A client with this ID is already registered. Edit it instead.')).toBeVisible();
+    expect(screen.getByTestId('native-client-dialog')).toBeVisible();
+    expect(recorded).toHaveLength(0);
+  });
+
+  it('still lets Register override a FILE entry with the same id (a deliberate shadow)', async () => {
+    useHandlers();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    await user.click(screen.getByTestId('admin-native-clients-add'));
+    await user.type(screen.getByTestId('native-client-id'), 'com.example.mobile');
+    await user.type(screen.getByTestId('native-client-display-name'), 'Mobile override');
+    await user.type(screen.getByTestId('native-client-redirect-uris'), 'com.example.mobile:/oauth/callback');
+    await user.click(screen.getByTestId('native-client-save'));
+
+    await waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]!.url).toMatch(/\/administration\/com\.example\.mobile$/);
+  });
+
+  // Regression: a blank id PUT `/administration/`, which no route matches —
+  // the operator got "Failed to save" and no hint which field was wrong.
+  it('refuses a blank client id beside the field, without a PUT', async () => {
+    useHandlers();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    await user.click(screen.getByTestId('admin-native-clients-add'));
+    await user.type(screen.getByTestId('native-client-display-name'), 'Acme');
+    await user.type(screen.getByTestId('native-client-redirect-uris'), 'com.acme.app:/cb');
+    await user.click(screen.getByTestId('native-client-save'));
+
+    expect(await screen.findByText('Enter the client ID the app sends.')).toBeVisible();
+    expect(recorded).toHaveLength(0);
+  });
 });
