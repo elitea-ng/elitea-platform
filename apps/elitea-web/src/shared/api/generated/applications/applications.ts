@@ -19136,6 +19136,11 @@ export type runPipelineInboundTriggerResponse202 = {
   status: 202;
 };
 
+export type runPipelineInboundTriggerResponse204 = {
+  data: void;
+  status: 204;
+};
+
 export type runPipelineInboundTriggerResponse400 = {
   data: ErrorResponse;
   status: 400;
@@ -19156,20 +19161,27 @@ export type runPipelineInboundTriggerResponse422 = {
   status: 422;
 };
 
+export type runPipelineInboundTriggerResponse429 = {
+  data: ErrorResponse;
+  status: 429;
+};
+
 export type runPipelineInboundTriggerResponse503 = {
   data: ErrorResponse;
   status: 503;
 };
 
-export type runPipelineInboundTriggerResponseSuccess =
-  runPipelineInboundTriggerResponse202 & {
-    headers: Headers;
-  };
+export type runPipelineInboundTriggerResponseSuccess = (
+  runPipelineInboundTriggerResponse202 | runPipelineInboundTriggerResponse204
+) & {
+  headers: Headers;
+};
 export type runPipelineInboundTriggerResponseError = (
   | runPipelineInboundTriggerResponse400
   | runPipelineInboundTriggerResponse401
   | runPipelineInboundTriggerResponse413
   | runPipelineInboundTriggerResponse422
+  | runPipelineInboundTriggerResponse429
   | runPipelineInboundTriggerResponse503
 ) & {
   headers: Headers;
@@ -19201,7 +19213,8 @@ export const getRunPipelineInboundTriggerUrl = (
 
 /**
  * The inbound trigger — issue 192. An external system calls this URL and
- * one pipeline version runs.
+ * one pipeline version runs. Since legacy issue 6656 the trigger can
+ * also belong to an ordinary AGENT version; see "Agent versions" below.
  *
  * ## This route has NO SESSION
  *
@@ -19220,6 +19233,42 @@ export const getRunPipelineInboundTriggerUrl = (
  * the pipeline runs from its entry node. An `input` that is not UTF-8
  * text, or that holds a NUL character, is answered 422 and names
  * `input`.
+ *
+ * ## Agent versions
+ *
+ * An agent answers a message, so its run needs text. The text is the
+ * body's `input`, at most 16 KiB. Without one, the request payload is
+ * the input, cut at 64 KiB: a GitHub or GitLab event is what the agent
+ * reads. A GitHub delivery sent as `application/x-www-form-urlencoded`
+ * is decoded from its `payload` field first; the signature is still
+ * checked over the raw bytes. A call with no `input` and no payload is
+ * answered 422 and names `input`.
+ *
+ * A payload is UNTRUSTED DATA: a signature proves which system sent a
+ * delivery, not who wrote its content. The agent gets it inside a fixed
+ * envelope that says so, with `<`, `>` and `&` escaped so the content
+ * cannot close the envelope. The conversation meta records
+ * `input_source: payload`. Toolkits on the agent version run with the
+ * trigger creator's access.
+ *
+ * The body's `variables` object gives new values to the variables the
+ * agent version declares, only when the trigger sets
+ * `allow_variable_overrides`. The credential, the signature modes, the
+ * replay rule and every refusal are the same as for a pipeline. An
+ * agent run emits no `pipeline.run.*` event.
+ *
+ * A trigger issued for a pipeline is refused with the one 401 after its
+ * version becomes an agent, and the reverse. A rotation re-issues it.
+ *
+ * An agent trigger may have at most 4 runs streaming and 30 runs
+ * started in 10 minutes. Over that, the call is answered 429 with
+ * `Retry-After`.
+ *
+ * ## Events that start no run
+ *
+ * A GitHub `ping` delivery, and a delivery whose event the trigger's
+ * `events` list does not hold, are answered 204 and start nothing. This
+ * holds for pipeline and agent triggers.
  *
  * ## Nothing the caller sends selects a tenant
  *
@@ -19245,7 +19294,7 @@ export const getRunPipelineInboundTriggerUrl = (
  * budgets, governance, tracing, cancel and the transcript are unchanged.
  * The answer is 202 and an events URL: the run has not finished and will
  * not finish inside this request.
- * @summary Start a pipeline run from an external caller
+ * @summary Start a pipeline or agent run from an external caller
  */
 export const runPipelineInboundTrigger = async (
   projectId: number,
@@ -19449,7 +19498,7 @@ export function useRunPipelineInboundTrigger<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Start a pipeline run from an external caller
+ * @summary Start a pipeline or agent run from an external caller
  */
 
 export function useRunPipelineInboundTrigger<
@@ -19495,6 +19544,11 @@ export type runPipelineInboundTriggerForProviderResponse202 = {
   status: 202;
 };
 
+export type runPipelineInboundTriggerForProviderResponse204 = {
+  data: void;
+  status: 204;
+};
+
 export type runPipelineInboundTriggerForProviderResponse400 = {
   data: ErrorResponse;
   status: 400;
@@ -19515,20 +19569,28 @@ export type runPipelineInboundTriggerForProviderResponse422 = {
   status: 422;
 };
 
+export type runPipelineInboundTriggerForProviderResponse429 = {
+  data: ErrorResponse;
+  status: 429;
+};
+
 export type runPipelineInboundTriggerForProviderResponse503 = {
   data: ErrorResponse;
   status: 503;
 };
 
-export type runPipelineInboundTriggerForProviderResponseSuccess =
-  runPipelineInboundTriggerForProviderResponse202 & {
-    headers: Headers;
-  };
+export type runPipelineInboundTriggerForProviderResponseSuccess = (
+  | runPipelineInboundTriggerForProviderResponse202
+  | runPipelineInboundTriggerForProviderResponse204
+) & {
+  headers: Headers;
+};
 export type runPipelineInboundTriggerForProviderResponseError = (
   | runPipelineInboundTriggerForProviderResponse400
   | runPipelineInboundTriggerForProviderResponse401
   | runPipelineInboundTriggerForProviderResponse413
   | runPipelineInboundTriggerForProviderResponse422
+  | runPipelineInboundTriggerForProviderResponse429
   | runPipelineInboundTriggerForProviderResponse503
 ) & {
   headers: Headers;
@@ -19597,7 +19659,7 @@ export const getRunPipelineInboundTriggerForProviderUrl = (
  * A GitHub or GitLab trigger's body is the provider's own event payload,
  * so it may be up to 1 MiB in every mode, including a GitLab secret-token
  * trigger. A custom bearer trigger's body is held to 64 KiB.
- * @summary Start a pipeline run from a provider-shaped webhook URL
+ * @summary Start a pipeline or agent run from a provider-shaped webhook URL
  */
 export const runPipelineInboundTriggerForProvider = async (
   projectId: number,
@@ -19802,7 +19864,7 @@ export function useRunPipelineInboundTriggerForProvider<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Start a pipeline run from a provider-shaped webhook URL
+ * @summary Start a pipeline or agent run from a provider-shaped webhook URL
  */
 
 export function useRunPipelineInboundTriggerForProvider<

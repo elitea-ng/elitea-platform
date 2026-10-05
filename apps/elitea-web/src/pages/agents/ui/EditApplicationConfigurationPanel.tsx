@@ -21,6 +21,7 @@ import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import type { EditApplicationEditorBridge } from '../lib/useEditApplicationEditorBridge';
 import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicationVersionFields';
 import { EditApplicationToolsPanel } from './EditApplicationToolsPanel';
+import { EditApplicationTriggersPanel } from './EditApplicationTriggersPanel';
 
 const mcpTagName = 'mcp';
 
@@ -188,6 +189,16 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         disabled={isReadOnly}
       />
       {/*
+       * Legacy issue 6656 — the agent's inbound webhook. It replaces the
+       * "Webhook secret" model setting, which wrote a value no server code
+       * read. The trigger is the pipeline's own, keyed by the version id.
+       */}
+      <EditApplicationTriggersPanel
+        projectId={projectId}
+        versionId={activeVersion === undefined ? undefined : Number(activeVersion.id)}
+        isReadOnly={isReadOnly}
+      />
+      {/*
        * #898 — the EDITOR NOTES accordion. Free-text documentation for the
        * author: never sent to the model, to chat or to execution, and stored
        * in `meta.notes` (there is no column, by design — see the barrel's own
@@ -214,9 +225,9 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
        * `<ApplicationInformation/>` as the final child of the configuration
        * column, below every other section.
        *
-       * `isPipeline={false}` — an agent has no `pipeline_trigger` row, so the
-       * trigger/schedule rows and the "Show pipeline" link stay off and the
-       * panel issues no trigger request. Everything else is the same data the
+       * `isPipeline={false}` — the trigger/schedule rows and the "Show
+       * pipeline" link stay off and the panel issues no trigger request. An
+       * agent's trigger (legacy issue 6656) has its own Triggers section above. Everything else is the same data the
        * pipeline panel passes: the page's own `applicationId`, the open
        * version's `id`, and the fork origin read off `version_details.meta`.
        */}

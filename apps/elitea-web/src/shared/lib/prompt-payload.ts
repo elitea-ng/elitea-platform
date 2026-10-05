@@ -32,7 +32,6 @@ export const PROMPT_PAYLOAD_KEY = {
   allowAttachment: 'allow_attachment',
   meta: 'meta',
   isForked: 'is_forked',
-  webhookSecret: 'webhook_secret',
   icon: 'icon',
 } as const;
 

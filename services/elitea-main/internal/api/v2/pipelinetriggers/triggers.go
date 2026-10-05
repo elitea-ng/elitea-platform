@@ -61,14 +61,21 @@ type triggerView struct {
 	// dialog has to show which header the sender must be configured with
 	// every time it opens, and none of the three is a secret — the header
 	// name is public by construction, since the sender sets it.
-	AuthMode        string     `json:"auth_mode,omitempty"`
-	SignatureHeader string     `json:"signature_header,omitempty"`
-	Provider        string     `json:"provider,omitempty"`
-	CreatedBy       int64      `json:"created_by,omitempty"`
-	CreatedAt       *time.Time `json:"created_at,omitempty"`
-	RotatedAt       *time.Time `json:"rotated_at,omitempty"`
-	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
+	AuthMode        string `json:"auth_mode,omitempty"`
+	SignatureHeader string `json:"signature_header,omitempty"`
+	Provider        string `json:"provider,omitempty"`
+	// TargetKind, Events and AllowVariableOverrides are 0142's (controls.go).
+	// None is a secret. `events` is omitted when the trigger admits every
+	// event, and `allow_variable_overrides` when it is off, so the answer
+	// for a version with no trigger stays `{"configured": false}` alone.
+	TargetKind             string     `json:"target_kind,omitempty"`
+	Events                 []string   `json:"events,omitempty"`
+	AllowVariableOverrides bool       `json:"allow_variable_overrides,omitempty"`
+	CreatedBy              int64      `json:"created_by,omitempty"`
+	CreatedAt              *time.Time `json:"created_at,omitempty"`
+	RotatedAt              *time.Time `json:"rotated_at,omitempty"`
+	RevokedAt              *time.Time `json:"revoked_at,omitempty"`
+	LastUsedAt             *time.Time `json:"last_used_at,omitempty"`
 }
 
 // triggerURL is the inbound path, plus the provider SUFFIX for a preset that
@@ -89,17 +96,20 @@ func triggerURL(projectID int64, tokenID, provider string) string {
 
 func viewOf(projectID int64, trigger triggerRow) triggerView {
 	view := triggerView{
-		Configured:      true,
-		TokenID:         trigger.TokenID,
-		URL:             triggerURL(projectID, trigger.TokenID, trigger.Provider),
-		AuthMode:        trigger.AuthMode,
-		SignatureHeader: trigger.SignatureHeader,
-		Provider:        trigger.Provider,
-		CreatedBy:       trigger.CreatedBy,
-		CreatedAt:       &trigger.CreatedAt,
-		RotatedAt:       trigger.RotatedAt,
-		RevokedAt:       trigger.RevokedAt,
-		LastUsedAt:      trigger.LastUsedAt,
+		Configured:             true,
+		TokenID:                trigger.TokenID,
+		URL:                    triggerURL(projectID, trigger.TokenID, trigger.Provider),
+		AuthMode:               trigger.AuthMode,
+		SignatureHeader:        trigger.SignatureHeader,
+		Provider:               trigger.Provider,
+		TargetKind:             trigger.TargetKind,
+		Events:                 trigger.EventFilter,
+		CreatedBy:              trigger.CreatedBy,
+		AllowVariableOverrides: trigger.AllowVariableOverrides,
+		CreatedAt:              &trigger.CreatedAt,
+		RotatedAt:              trigger.RotatedAt,
+		RevokedAt:              trigger.RevokedAt,
+		LastUsedAt:             trigger.LastUsedAt,
 	}
 	return view
 }
@@ -218,10 +228,17 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 				"or `auth_mode: hmac_sha256` with the header the sender signs into")
 		return
 	}
-	target, err := h.resolveRunTarget(r.Context(), schema, versionID)
+	requested, err := parseTriggerControls(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest,
+			"`events` must be a non-empty list of provider event names, or [\"*\"] for every event, "+
+				"and `allow_variable_overrides` must be true or false")
+		return
+	}
+	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesAndAgents)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
-		writeError(w, http.StatusNotFound, "no such pipeline version in this project")
+		writeError(w, http.StatusNotFound, "no such pipeline or agent version in this project")
 		return
 	case err != nil:
 		h.log().Error("pipelinetriggers: resolve version", "err", err)
@@ -246,6 +263,12 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	if !modeNamed && previousErr == nil {
 		mode = storedAuthMode(previous)
 	}
+	controls, err := resolveControls(requested, mode, modeNamed, previous, previousErr == nil, target)
+	if err != nil {
+		writeError(w, http.StatusBadRequest,
+			"`events` filters a GitHub or GitLab trigger only: a custom sender names no provider event")
+		return
+	}
 	tokenID, secret, hash, err := newCredential(mode)
 	if err != nil {
 		h.log().Error("pipelinetriggers: mint credential", "err", err)
@@ -259,7 +282,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	trigger, err := h.upsertTrigger(r.Context(), schema,
-		target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode)
+		target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls)
 	if err != nil {
 		h.log().Error("pipelinetriggers: write trigger", "err", err)
 		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")
@@ -274,7 +297,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 			h.log().Warn("pipelinetriggers: could not remove the superseded credential", "err", err)
 		}
 	}
-	h.annotate(r, versionID, target.Name, projectID)
+	h.annotate(r, controls.TargetKind, versionID, target.Name, projectID)
 	writeJSON(w, http.StatusOK, withSecret(viewOf(projectID, trigger), secret))
 }
 
@@ -296,7 +319,7 @@ func (h *Handler) RevokeTrigger(w http.ResponseWriter, r *http.Request) {
 	trigger, err := h.revokeTrigger(r.Context(), schema, versionID, actorID)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, "this pipeline has no trigger")
+		writeError(w, http.StatusNotFound, "this version has no trigger")
 		return
 	case err != nil:
 		h.log().Error("pipelinetriggers: revoke trigger", "err", err)
@@ -308,7 +331,7 @@ func (h *Handler) RevokeTrigger(w http.ResponseWriter, r *http.Request) {
 			h.log().Warn("pipelinetriggers: could not remove the revoked credential", "err", err)
 		}
 	}
-	h.annotate(r, versionID, "", projectID)
+	h.annotate(r, trigger.TargetKind, versionID, "", projectID)
 	writeJSON(w, http.StatusOK, viewOf(projectID, trigger))
 }
 
@@ -317,7 +340,7 @@ func (h *Handler) RevokeTrigger(w http.ResponseWriter, r *http.Request) {
 // continue.
 func (h *Handler) routeTarget(w http.ResponseWriter, r *http.Request) (string, int64, int64, bool) {
 	if h.pool == nil {
-		writeError(w, http.StatusServiceUnavailable, "pipeline triggers are not available on this deployment")
+		writeError(w, http.StatusServiceUnavailable, "triggers are not available on this deployment")
 		return "", 0, 0, false
 	}
 	projectIDText := chi.URLParam(r, "projectID")
@@ -364,12 +387,26 @@ func (h *Handler) actorID(w http.ResponseWriter, r *http.Request) (int64, bool) 
 
 // annotate gives the audit middleware the domain meaning of a settings write.
 // Without it the row still exists and still names the route; with it the row
-// names the pipeline.
-func (h *Handler) annotate(r *http.Request, versionID int64, name string, projectID int64) {
+// names the pipeline or the agent.
+//
+// The entity type is the trigger's KIND. It was always "pipeline", so the
+// trail listed a change to an agent's webhook credential as a pipeline
+// change.
+func (h *Handler) annotate(r *http.Request, kind string, versionID int64, name string, projectID int64) {
 	audit.Annotate(r.Context(), audit.Annotation{
-		EntityType: "pipeline",
+		EntityType: auditEntityType(kind),
 		EntityID:   audit.ID(versionID),
 		EntityName: name,
 		ProjectID:  audit.ID(projectID),
 	})
+}
+
+// auditEntityType is the audit entity type for a trigger kind. An unknown or
+// empty kind is a pipeline, which is what every row before 0142 was issued
+// for.
+func auditEntityType(kind string) string {
+	if kind == TargetKindAgent {
+		return TargetKindAgent
+	}
+	return TargetKindPipeline
 }
