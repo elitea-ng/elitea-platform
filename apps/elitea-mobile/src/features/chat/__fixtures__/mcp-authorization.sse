@@ -1,0 +1,14 @@
+: fixture mcp-authorization.sse: mcp_authorization_required is progress until it carries authorization_requests
+
+id: 1
+event: execution.node_event
+data: {"type":"agent_start","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:00Z","response_metadata":{}}
+
+id: 2
+event: execution.node_event
+data: {"type":"mcp_authorization_required","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:01Z","content":"[server name]","response_metadata":{}}
+
+id: 3
+event: execution.node_event
+data: {"type":"mcp_authorization_required","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:02Z","content":"[server name]","response_metadata":{"authorization_requests":[{"server":"[server name]"}]}}
+

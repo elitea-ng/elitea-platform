@@ -38,9 +38,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supportsTablet: true,
     icon: './assets/expo.icon', // TODO: placeholder (template icon); see docs/design.md "Icons".
     infoPlist: {
-      // TODO(export-compliance): placeholder only. SQLCipher (encrypted offline store) and
-      // AES-GCM attachment encryption are planned; this value MUST be reviewed before the
-      // first App Store submission. See docs/open-questions.md.
+      // iOS names the app by CFBundleName in system prompts, e.g. the sign-in sheet's
+      // '"<name>" Wants to Use "<host>" to Sign In'. Prebuild leaves it as $(PRODUCT_NAME),
+      // the Xcode target name without the space ("AgentZefir"). Must stay under 16 characters.
+      CFBundleName: identity.displayName,
+      // TODO(export-compliance): placeholder only. The offline store uses SQLCipher (expo-sqlite
+      // useSQLCipher) and AES-GCM attachment encryption is planned; this value MUST be reviewed
+      // before the first App Store submission. See docs/open-questions.md.
       ITSAppUsesNonExemptEncryption: false,
     },
   },
@@ -69,6 +73,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         imageWidth: 76,
       },
     ],
+    // iOS crashes on Face ID use without NSFaceIDUsageDescription.
+    [
+      'expo-local-authentication',
+      { faceIDPermission: `${identity.displayName} uses Face ID to unlock your workspace.` },
+    ],
+    // The offline store is SQLCipher (src/db/). Needs a native build; Expo Go and web have
+    // no SQLCipher, and the store refuses to run without it (src/db/open.ts).
+    ['expo-sqlite', { useSQLCipher: true }],
+    // No plaintext URL cache: responses (tokens, transcripts) are never written to
+    // Library/Caches/<bundle id>/Cache.db (DEF-R2). Our own plugin, see plugins/.
+    './plugins/withNoHttpCache',
   ],
   experiments: {
     typedRoutes: true,

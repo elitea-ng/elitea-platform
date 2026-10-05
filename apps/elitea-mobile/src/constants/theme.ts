@@ -1,6 +1,7 @@
 /**
- * Fallback palette. At runtime this is overridden by the connected server's
- * brand pack (see docs/design.md "Runtime branding") — TODO.
+ * Fallback palette. At runtime the connected workspace's brand pack overrides
+ * individual tokens (src/theme/brandPack.ts, docs/design.md "Runtime
+ * branding"); every token not overridden comes from here.
  */
 export const Colors = {
   light: {
@@ -25,7 +26,7 @@ export const Colors = {
   },
 } as const;
 
-export type Palette = (typeof Colors)['light' | 'dark'];
+export type Palette = { -readonly [K in keyof (typeof Colors)['light']]: string };
 
 export const Spacing = {
   one: 4,

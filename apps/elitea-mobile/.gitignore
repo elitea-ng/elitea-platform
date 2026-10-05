@@ -45,3 +45,6 @@ example
 
 # test output
 coverage/
+
+# contract build output (scripts/contract.mjs build)
+contract/.build/

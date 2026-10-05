@@ -1,0 +1,74 @@
+import type { ReactNode } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+
+import { Spacing } from '@/constants/theme';
+import { usePalette } from '@/constants/use-palette';
+import type { ChatRole } from '@/features/chat/messageModel';
+
+export interface MessageBubbleProps {
+  role: ChatRole;
+  author?: string | null;
+  /** The body; plain text, or a rendered node (markdown). */
+  children: ReactNode;
+  /** A one-line status under the body ("Using web_search…", "Still generating…"). */
+  status?: string | null;
+  /** Shown in the danger colour under the body. */
+  error?: string | null;
+  footer?: ReactNode;
+}
+
+export function MessageBubble({ role, author, children, status, error, footer }: MessageBubbleProps) {
+  const palette = usePalette();
+  const mine = role === 'user';
+  return (
+    <View style={[styles.row, mine ? styles.mine : styles.theirs]}>
+      <View
+        style={[
+          styles.bubble,
+          mine
+            ? { backgroundColor: palette.accent }
+            : { backgroundColor: palette.backgroundElement, borderColor: palette.border },
+        ]}>
+        {!mine && author ? (
+          <Text style={[styles.author, { color: palette.textSecondary }]}>{author}</Text>
+        ) : null}
+        {typeof children === 'string' ? (
+          <Text selectable style={[styles.text, { color: mine ? palette.onAccent : palette.text }]}>
+            {children}
+          </Text>
+        ) : (
+          children
+        )}
+        {status ? (
+          <Text accessibilityLiveRegion="polite" style={[styles.status, { color: mine ? palette.onAccent : palette.textSecondary }]}>
+            {status}
+          </Text>
+        ) : null}
+        {error ? (
+          <Text accessibilityRole="alert" style={[styles.status, { color: palette.danger }]}>
+            {error}
+          </Text>
+        ) : null}
+        {footer}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  row: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.one, flexDirection: 'row' },
+  mine: { justifyContent: 'flex-end' },
+  theirs: { justifyContent: 'flex-start' },
+  bubble: {
+    maxWidth: '88%',
+    borderRadius: 14,
+    paddingHorizontal: Spacing.three - 4,
+    paddingVertical: Spacing.two,
+    gap: Spacing.one,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'transparent',
+  },
+  author: { fontSize: 12, fontWeight: '600' },
+  text: { fontSize: 16, lineHeight: 22 },
+  status: { fontSize: 13, fontStyle: 'italic' },
+});

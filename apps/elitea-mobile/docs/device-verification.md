@@ -1,0 +1,204 @@
+# Device verification checklist
+
+The CI machine has no Xcode or Android SDK. Everything that depends on native
+behaviour is covered in jest by mocks only, so it must be checked by hand on
+the first EAS **development build** (`eas build --profile development`) on a
+real iPhone and a real Android phone, and again before each store submission.
+
+How to use this file: copy the checklist into the PR or release ticket, fill
+in the device, OS version and build, and tick each item. A failed item is a
+bug against the module named in its row.
+
+| Field | iOS | Android |
+|---|---|---|
+| Device / OS version | | |
+| Build (version, EAS build id) | | |
+| Workspace (origin, server version) | | |
+| Date / tester | | |
+
+Test setup: a workspace reachable from the phone with Agent Zefir registered as a
+native client (redirect URI `ca.zefir.agent:/oauth/callback`), or a personal access
+token for developer sign-in (development profile only, `__DEV__`),
+a device passcode, and Face ID / Touch ID / fingerprint enrolled unless an item
+says otherwise.
+
+## 1. Secure storage and fresh install (`src/security/secureStorage.ts`, `freshInstall.ts`)
+
+- [ ] **iOS reinstall purge.** Sign in, delete the app, reinstall it. The app opens on
+      "Connect to your workspace", not signed in. (The Keychain survives an uninstall;
+      the marker file in the documents directory does not.)
+- [ ] **Android reinstall.** Same steps; the app opens on "Connect". (`allowBackup` is
+      false and Keystore entries go with the app.)
+- [ ] **No device migration.** iOS: restore an encrypted backup to a second device, or
+      Android: run a device-to-device transfer. The token does not come across
+      (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`).
+- [ ] **Locked-device launch.** Lock the phone and get the app launched in the
+      background (for example by a debugger attach), or force-quit it and open it
+      immediately while the device is locking. A secure-storage read error must NOT
+      sign the user out: once unlocked and active, the session is restored.
+
+## 2. Launch, hydration and splash (`src/state/hydrate.ts`, `src/app/_layout.tsx`)
+
+- [ ] Cold start while signed in: the native splash stays up until the lock screen
+      shows. There is no flash of the connect or sign-in screen.
+- [ ] Cold start while connected but signed out: the splash goes straight to "Sign in".
+- [ ] The selected project survives a restart (the header chip shows the same project).
+- [ ] Kill the app during "Log out & wipe" (tap it, then force-quit within a second).
+      On the next launch the wipe finishes before anything shows: the app opens on
+      "Connect".
+
+## 3. Device lock (`src/security/lock/*`)
+
+- [ ] **Launch lock.** Cold start while signed in shows "Agent Zefir is locked" and the
+      Face ID / fingerprint prompt opens by itself.
+- [ ] **Face ID usage string.** The iOS prompt shows "Agent Zefir uses Face ID to unlock
+      your workspace." (Missing string = crash on first use.)
+- [ ] **Passcode fallback.** Fail biometrics until the passcode option appears; the
+      passcode unlocks the app.
+- [ ] **Cancel.** Cancelling the prompt leaves the lock screen with "Unlock was
+      cancelled." and a working "Unlock" button.
+- [ ] **No lock loop.** Unlocking does not immediately lock again (the Face ID sheet
+      makes iOS go inactive → active).
+- [ ] **Short background.** Background the app for under 5 minutes, return: no lock.
+- [ ] **Idle relock.** Background it for 5 minutes or more (strict default 300 s),
+      return: locked, and the screen you were on is still there after unlocking
+      (navigation state preserved).
+- [ ] **Inactive only.** Pull down Control Center / the notification shade for a long
+      time without leaving the app: no lock.
+- [ ] **Streams pause while locked.** Start a long answer, background the app past the
+      idle time, return. Behind the lock nothing streams (server log or proxy shows the
+      event stream closed); after unlocking the answer resumes from where it was
+      (`Last-Event-ID`).
+- [ ] **No device security.** Remove the device passcode (and so biometrics). Launch:
+      "Set a device passcode" blocks the app; only "Log out & wipe" works. Set a
+      passcode again in Settings, return to the app: it moves to the lock screen.
+- [ ] **Can't unlock.** "Can't unlock? Log out & wipe" asks for confirmation and then
+      lands on "Connect" with nothing stored.
+- [ ] **Lockout.** Exceed the biometric attempts: the hint reads "Too many attempts…".
+- [ ] Release build (production profile): the "Development build: continue without
+      unlocking" link is absent.
+
+## 4. Screen privacy (`src/security/privacy/*`)
+
+- [ ] **iOS app switcher.** Open the app switcher on a conversation: the snapshot is
+      blurred/covered, no message text is readable.
+- [ ] **iOS screenshots (strict default).** Take a screenshot of a conversation: the
+      captured image does not show the app's content. Screen recording likewise.
+      Note any rendering glitch the capture block causes (black views, broken text
+      input) as a bug.
+- [ ] **Android Recents.** Open Recents: the app's card is blank (FLAG_SECURE).
+- [ ] **Android screenshots.** A screenshot is refused ("Can't take screenshot due to
+      security policy" or a black image).
+- [ ] **Cover.** On both platforms, the branded cover appears whenever the app is not
+      active, above the lock screen too, and disappears when it is active again.
+- [ ] Known limitation, record the observed behaviour: with a policy that allows
+      screenshots (B4), Android may show content in Recents because the snapshot can
+      be taken before JS renders the cover.
+
+## 5. Workspace switch and connect links (`src/state/workspace.tsx`, `src/linking/*`)
+
+- [ ] Open `agentzefir://connect?server=https://<other host>` while signed in: "Switch
+      workspace?" names both hosts; Cancel changes nothing; "Switch & wipe" lands on
+      "Sign in" for the new host with nothing left from the old one.
+- [ ] Open a connect link for the workspace already in use: nothing happens.
+- [ ] Open a connect link while the app is locked: no dialog until after unlocking.
+- [ ] Cold start from a connect link while not connected: the address field is filled.
+
+## 6. Networking and streaming (B1/B2 carry-over)
+
+- [ ] **Incremental streaming.** A long answer appears token by token on iOS and on
+      Android (OkHttp must not buffer the event stream).
+- [ ] **Redirects.** The API does not forward `Authorization` across hosts: point a test
+      route at a 30x to another host and confirm the request fails without the header
+      reaching that host (REST: global fetch; SSE: `redirect: 'error'`).
+- [ ] **Resume.** Toggle airplane mode for 10 s during a streamed answer: it resumes
+      without duplicated or missing text.
+- [ ] **Give-up.** Keep the network off for over 2 minutes: the thread shows a
+      "Reconnect" action that works once the network is back.
+- [ ] **Thread layout.** The inverted message list and the composer stay above the
+      keyboard on both platforms; long Markdown answers scroll smoothly while
+      streaming (note any jank with the 50 ms render throttle).
+- [ ] **Markdown.** `react-native-svg` loads (no red screen); images render as a host
+      chip and are never fetched (proxy shows no image request); an https link asks
+      first and opens in the system browser.
+- [ ] **Notifications bell.** A notification created on the server appears on the bell
+      while the app is in the foreground; the stream closes in the background.
+
+## 7. Logout and revocation
+
+- [ ] Settings → "Log out & wipe": lands on "Connect"; a relaunch stays there.
+- [ ] Revoke or delete the PAT on the server, then pull to refresh: the app wipes and
+      lands on "Connect" with the previous address pre-filled (an in-memory hint
+      only; after a relaunch the field is empty).
+- [ ] Logs (Xcode console / `adb logcat`) during all of the above contain no token, no
+      message text and no URL query strings.
+
+## 8. Native sign-in (ADR-0025, `src/auth/*`, `src/app/+native-intent.tsx`)
+
+Needs a workspace with Agent Zefir registered (`client_id` `ca.zefir.agent`,
+redirect URI `ca.zefir.agent:/oauth/callback`) and `DEPLOYMENT_URL` set.
+
+- [ ] **Connect confirmation.** Typing the workspace address shows the host in large
+      text, the workspace name and logo, "Self-hosted"/"Hosted service" and the
+      server version before anything is stored; "Use a different address" stores
+      nothing (relaunch lands on "Connect").
+- [ ] **System browser.** "Sign in with …" opens ASWebAuthenticationSession (iOS) /
+      a Custom Tab (Android), never an in-app web view; the workspace's usual sign-in
+      runs, then its one-line confirmation names Agent Zefir and this device.
+- [ ] **Redirect delivery.** After confirming, the browser closes and the app signs in.
+      On Android, confirm the single-slash `ca.zefir.agent:/oauth/callback?…` intent
+      reaches the app and the router does not show an "unmatched route" screen.
+- [ ] **Cancel.** Closing the browser sheet returns to "Sign in" without an error.
+- [ ] **Killed during sign-in.** Kill the app while the browser is open, then finish
+      the sign-in: the app opens on "Sign in" (the attempt is gone) and a new attempt
+      works.
+- [ ] **Refresh.** Leave the app signed in past the access-token lifetime (15 min by
+      default); the next action works without a sign-in prompt.
+- [ ] **Lost refresh answer.** With a proxy, drop the response of one refresh call:
+      the app re-presents the same refresh token and continues (server grace window).
+- [ ] **Revocation.** Revoke the device from the workspace's device list (or suspend
+      the user): the next request wipes the app and lands on "Connect".
+- [ ] **Sign out.** Settings → "Log out & wipe" revokes the device session (it shows as
+      `signed_out` in the workspace's device list).
+- [ ] **Minimum version.** Raise `min_client_version` above the app's version: the
+      next request (and the connect check) shows "Update Agent Zefir"; signing out
+      still works.
+- [ ] **Policy.** Change `native_client_policy` on the workspace (lock required on/off,
+      idle seconds, screenshots): within one access-token lifetime (or at once after
+      "Log out & wipe" and sign-in) Settings shows the new values, the lock and the
+      screenshot block follow them, and a relaunch keeps them before any network call.
+
+## 9. Encrypted offline store (ADR-0025 WP6, `src/db/*`)
+
+Set `native_client_policy.offline_retention_days` > 0 on the workspace first; with
+0 (the default) the app must never create the file.
+
+- [ ] **SQLCipher is linked.** On a dev build, open a conversation, then pull the
+      app container (Xcode → Devices → Download Container; `adb exec-out run-as
+      ca.zefir.agent` on Android) and run `sqlite3 az-offline.db .tables` on
+      `SQLite/az-offline.db`: it must fail with "file is not a database" (the file is
+      encrypted). `PRAGMA cipher_version` was non-empty (the app refuses to store
+      anything otherwise; a warning "this build has no SQLCipher" in the log means the
+      plugin option did not reach the native build).
+- [ ] **No file without policy.** With `offline_retention_days = 0`, sign in and use
+      the app: no `az-offline.db` exists in the container. Turning offline off while
+      signed in deletes the file at the next token refresh (or sign-in).
+- [ ] **Key behind the lock.** With `require_device_lock`, relaunch: the store opens
+      only after Face ID / fingerprint / passcode (the key is read after unlock), and
+      it is closed again when the app relocks after `idle_lock_seconds`.
+- [ ] **Wipe.** "Log out & wipe", a device revocation and a server switch each delete
+      `az-offline.db` with its `-wal`/`-shm` files and the `az.db.key` Keychain /
+      Keystore item.
+- [ ] **Offline read.** Open a few conversations online, then turn on airplane mode
+      and relaunch: after unlock, the list, those threads (with their latest
+      messages) and the notifications show with the "Offline" line; a conversation
+      never opened shows read-only from the synced transcript.
+- [ ] **Sync.** Back online, rename or delete a conversation in the web app: after the
+      app returns to the foreground (or pull to refresh) the offline copy follows
+      (renamed / gone). Remove yourself from the project: the next sync drops that
+      project's offline data.
+- [ ] **Outbox.** In airplane mode, send two messages in a thread: both show
+      "Queued". Turn the network back on: they are admitted in order (each answer
+      appears), with no duplicate turns in the web app. Kill the app while one is
+      "Sending…" and relaunch online: it is sent once (the server replays the same
+      `question_id`).

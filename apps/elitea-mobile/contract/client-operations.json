@@ -1,0 +1,21 @@
+{
+  "$comment": "The app's declared API surface: the operationIds (upstream or overlay) kept in the generated client. Everything else in the pinned contract is pruned. After ADR-0025 WP5 this becomes a tag selector.",
+  "operations": [
+    "listProjects",
+    "listConversations",
+    "listApplications",
+    "getApplication",
+    "getConversation",
+    "listConversationMessages",
+    "listConfigurationModels",
+    "createConversation",
+    "deleteConversation",
+    "startApplicationTurn",
+    "listNotifications",
+    "updateNotifications",
+    "getClientDiscovery",
+    "getBrandingPackJSON",
+    "exchangeNativeToken",
+    "revokeNativeToken"
+  ]
+}

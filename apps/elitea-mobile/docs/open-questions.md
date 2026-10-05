@@ -35,8 +35,9 @@ Decide which legal entity publishes the app. Then:
 
 ## 4. Encryption export compliance
 
-The planned use of SQLCipher for the local database and AES-GCM for attachments goes
-beyond exempt-only encryption such as HTTPS.
+The offline store uses SQLCipher (`expo-sqlite` with `useSQLCipher`, AES-256), and
+AES-GCM for cached attachments is planned. Both go beyond exempt-only encryption such
+as HTTPS.
 
 - Determine whether the exemptions apply, or whether a classification (for example a US
   ECCN 5D992 self-classification or an annual report) and the matching
@@ -60,3 +61,14 @@ Options:
 - a small in-repo Expo module (Swift and Kotlin)
 
 Also define the key schema, such as `serverUrl`, `lockServer`, and policy overrides.
+
+## 6. Offline attachments (follow-up)
+
+The offline store keeps conversations, transcripts, notifications and the outbox.
+Attachments are not stored, whatever `offline_attachments` says, and an offline
+thread marks messages with attachments as viewable in the web app only. The design
+(per-file AES-GCM through `expo-crypto`, each file key wrapped by the database key,
+files deleted with the store and by the same retention and size cap) is in
+plan-app B4.6; it needs a decision on download triggers and size limits before it
+is built.
+

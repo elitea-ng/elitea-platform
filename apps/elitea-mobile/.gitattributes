@@ -1,0 +1,5 @@
+# The pinned upstream contract is hashed byte-for-byte: never normalise it.
+contract/elitea-v2.yaml -text -diff linguist-vendored
+
+# SSE fixtures are byte streams: never normalise their line endings.
+*.sse -text

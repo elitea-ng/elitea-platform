@@ -47,6 +47,13 @@ comes from the server at runtime.
 - **Server-driven policy:** the server can set the lock timeout, offline allowed or not,
   attachment caching, screenshot blocking and maximum offline age. The app falls back to
   strict defaults when no policy is available.
+  - Implementation (`src/security/policyStore.ts`): the full policy of the latest token
+    response wins, else the discovery document's public subset (which may tighten, never
+    loosen, a server policy), else strict defaults. It is persisted per workspace so the
+    launch lock uses it. `idle_lock_seconds: 0` means "never relock on resume" (the
+    server's definition); the launch lock still applies. A tightened policy applies at
+    once. `min_client_version` (token response or discovery) shows the update screen
+    before the server has to answer `426`.
 - **Streaming chat** over Server-Sent Events, read via `fetch` streaming with
   `Authorization: Bearer`. A dropped stream resumes with `Last-Event-ID`.
 - **In-app notifications only:**
@@ -58,6 +65,15 @@ comes from the server at runtime.
   - After connecting, the app fetches the server's brand pack JSON: colours, logo and
     fonts. These apply inside the app only, with a fallback palette in
     `src/constants/theme.ts`.
+  - Implementation (`src/theme/`): only an allowlist of tokens is read and only plain
+    colours (`#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`) are accepted; a scheme
+    whose text misses WCAG 4.5:1 on its background is dropped. Logos and font faces load
+    only from the workspace origin (raster logos may also be inline `data:` URIs). An
+    SVG logo is fetched through the origin guard (no cross-origin redirect) and rendered
+    from its markup only when every reference in it is local (`#id`): no `<image>`,
+    `<foreignObject>`, external `href` or `url()`; web
+    font stacks are ignored unless the pack ships a same-origin `.ttf`/`.otf` face. The
+    workspace host on the connect confirmation is always in the system font.
   - The app name is always "Agent Zefir".
   - There are no per-customer builds.
 - **Icons:** the app bundles exactly two icon sets.
@@ -96,3 +112,35 @@ The app talks to the server only through its public HTTP API.
 - Encryption export compliance needs review before the first store submission. For now
   `ITSAppUsesNonExemptEncryption` is a placeholder (see `app.config.ts` and the open
   questions).
+
+## Security baseline as implemented (B3)
+
+The decisions above are implemented as follows. Native behaviour is checked by hand
+with [device-verification.md](device-verification.md).
+
+- **One exit path.** Every logout, revocation, rejected credential, server switch and
+  "can't unlock" reset goes through `src/security/endSession.ts`. It writes a
+  crash-resume marker first and removes it last; launch hydration re-runs an
+  interrupted wipe before showing anything. Each step is attempted even if an earlier
+  one fails. The server revoke (B4) is best effort and capped at 3 s.
+- **Key registry.** Every secure-storage key is declared in
+  `src/security/secureStorage.ts` (lint forbids `expo-secure-store` elsewhere), so the
+  wipe covers new keys automatically.
+- **Reinstall.** The iOS Keychain outlives an uninstall; a marker file in the
+  documents directory detects a reinstall and purges the registry
+  (`src/security/freshInstall.ts`).
+- **Restore behind the splash.** The workspace origin, credential and selected project
+  are restored at launch while the native splash is up. A storage read error
+  (device locked) is retried when the app is active, never treated as signed out.
+- **Server switch.** A connect link for another workspace asks first, then wipes.
+- **Device lock.** `src/security/lock/`: a session restored at launch is locked, the
+  app relocks after `idle_lock_seconds` in the background (strict default 300 s),
+  'inactive' alone never locks, biometrics fall back to the passcode, and a device
+  without a passcode is blocked when the policy requires a lock. A locked app counts
+  as backgrounded for streams and refetch (`src/lib/appActivity.ts`).
+- **Screen privacy.** `src/security/privacy/`: iOS app-switcher blur, screenshot and
+  recording blocking while the policy disallows screenshots (Android FLAG_SECURE also
+  blanks Recents), and an opaque in-app cover whenever the app is not active.
+- **Policy.** `src/security/policy.ts` holds the strict defaults until the server
+  supplies a policy (B4).
+
