@@ -608,12 +608,23 @@ func TestCurrentAgentPausedToolCallIsNotStoredAsAnError(t *testing.T) {
 			entry:      map[string]any{"finish_reason": "awaiting_input", "error": nil},
 			wantReason: "awaiting_input",
 		},
+		// The pre-fix worker's error is _trace_text(GraphInterrupt(...)):
+		// json.dumps(str(exc)), so the text keeps its JSON quotes. These
+		// fixtures are that function's real output (worker on main before
+		// issue 1066), not a hand-written repr.
 		"pre-fix worker": {
 			entry: map[string]any{
 				"finish_reason": "error",
-				"error":         "(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_abc', 'tool_args': {'secret': 1}}, id='x'),)",
+				"error":         "\"(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_abc', 'guardrail_type': 'sensitive_tool', 'tool_args': {'secret': 1}}, id='x'),)\"",
 			},
 			wantReason: "awaiting_approval",
+		},
+		"pre-fix worker clarifying question": {
+			entry: map[string]any{
+				"finish_reason": "error",
+				"error":         "\"(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_q', 'guardrail_type': 'clarifying_question', 'question': 'Which?'}, id='x'),)\"",
+			},
+			wantReason: "awaiting_input",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -999,10 +999,31 @@ var currentAgentToolCallPauseReasons = map[string]bool{
 }
 
 // currentAgentLegacyInterruptErrorPrefix is how a Python worker built before
-// issue 1066 reported a pause: `str(GraphInterrupt(...))` as the call's error.
-// Recognising it keeps a mixed-version rollout from storing a pause as a
-// failure. The text itself is never stored (it carries the call's arguments).
+// issue 1066 reported a pause: the call's error was
+// `_trace_text(GraphInterrupt(...))`, i.e. `json.dumps(str(exc))`, so the
+// repr arrives still wrapped in one pair of JSON quotes (and possibly
+// truncated, losing the closing one). Recognising it keeps a mixed-version
+// rollout from storing a pause as a failure. The text itself is never stored
+// (it carries the call's arguments).
 const currentAgentLegacyInterruptErrorPrefix = "(Interrupt(value="
+
+// currentAgentLegacyClarifyingQuestionMarker is the ask_user guardrail inside
+// that repr: a question to the user, which the current worker reports as
+// awaiting_input rather than awaiting_approval.
+const currentAgentLegacyClarifyingQuestionMarker = "'guardrail_type': 'clarifying_question'"
+
+// currentAgentLegacyInterruptReason is the pause finish reason of a pre-1066
+// worker's interrupt-repr error, or "" when the text is not one.
+func currentAgentLegacyInterruptReason(text string) string {
+	text = strings.TrimPrefix(text, `"`)
+	if !strings.HasPrefix(text, currentAgentLegacyInterruptErrorPrefix) {
+		return ""
+	}
+	if strings.Contains(text, currentAgentLegacyClarifyingQuestionMarker) {
+		return "awaiting_input"
+	}
+	return "awaiting_approval"
+}
 
 // currentAgentToolCallOutcome is the stored (is_error, finish_reason) of one
 // tool call entry.
@@ -1011,8 +1032,10 @@ func currentAgentToolCallOutcome(entry map[string]any) (bool, string) {
 	if currentAgentToolCallPauseReasons[finishReason] {
 		return false, finishReason
 	}
-	if text, ok := entry["error"].(string); ok && strings.HasPrefix(text, currentAgentLegacyInterruptErrorPrefix) {
-		return false, "awaiting_approval"
+	if text, ok := entry["error"].(string); ok {
+		if reason := currentAgentLegacyInterruptReason(text); reason != "" {
+			return false, reason
+		}
 	}
 	return currentAgentTruthy(entry["error"]), finishReason
 }
