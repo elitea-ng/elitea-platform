@@ -16416,8 +16416,9 @@ paths:
         NOTE(W2): internal/api/v2/applications/handler.go:83-119 — the
         response is the domain ListResponse (types.go:105-111). The handler
         also reads query/search, tags, folder_id, agents_type.
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
         - name: query
@@ -16439,6 +16440,7 @@ paths:
           in: query
           schema: { type: string }
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Paginated application list
           content:
@@ -16620,8 +16622,11 @@ paths:
       summary: Retrieve full application details
       description: |
         NOTE(W2): internal/api/v2/applications/handler.go:110-139.
-      tags: [applications]
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Application details with version summaries
           content:
@@ -20440,8 +20445,11 @@ paths:
         the reviewed handler also emits (issue 395). SkillsList itself stays
         as it is, because the project-skills List operation shares it and
         emits neither key.
-      tags: [skills]
+      tags: [skills, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Skills list
           content:
@@ -22564,11 +22572,13 @@ paths:
         documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
         The caller must be a member of {project_id} (or a super-admin), and a
         repository failure is returned as a safe 500 error.
-      tags: [toolkits]
+      tags: [toolkits, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Toolkit instances
           content:
@@ -22650,8 +22660,11 @@ paths:
         The worker discovers tools from those immutable inputs.
         The response contains the accepted immutable result artifact.
         Discovery is unavailable until the runtime activation flag is enabled.
-      tags: [toolkits]
+      tags: [toolkits, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Available tool descriptions and argument schemas.
           content:
