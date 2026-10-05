@@ -28,6 +28,7 @@ var scenarios = []string{
 	"stream_resume",
 	"conversation_sync",
 	"notification_sync",
+	"chat_enrichment",
 	"min_client_version",
 	"device_revocation",
 }
@@ -52,6 +53,7 @@ func TestNativeClientConformance(t *testing.T) {
 		"stream_resume":        state.streamResume,
 		"conversation_sync":    state.conversationSync,
 		"notification_sync":    state.notificationSync,
+		"chat_enrichment":      state.chatEnrichment,
 		"min_client_version":   state.minClientVersion,
 		"device_revocation":    state.deviceRevocation,
 	}
