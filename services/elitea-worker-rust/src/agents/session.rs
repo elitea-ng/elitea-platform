@@ -48,7 +48,7 @@ use super::direct_hitl::{
 use super::events::{
     AgentEventProjectionContext, AgentEventProjectionError, AgentEventProjectionErrorCode,
     AgentEventProjector, ApplicationToolPresentationCatalog, CompletedAgentBrowserOutput,
-    OrdinaryProjectionInput, PipelineProjectionInput,
+    OrdinaryProjectionInput, PipelineProjectionInput, ToolkitAttributionCatalog,
 };
 use super::graph::compiler::PipelineDefinition;
 use super::graph::resume::{PipelineResumeError, PipelineResumeErrorCode};
@@ -204,6 +204,8 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// Tools two toolsets both published, and what each is called now (#983).
     /// Named in the session's opening notice beside the two above.
     renamed_tools: Vec<RenamedTool>,
+    /// The toolkit each bound tool came from, named on its browser frames.
+    toolkit_attribution: ToolkitAttributionCatalog,
     application_runtime: ApplicationRuntimeProjection,
     instruction_plan: super::instruction_authority::InstructionPlan,
 }
@@ -224,6 +226,7 @@ impl OrdinaryRuntimeBindings {
             internal_tools: InternalToolCatalog::empty(),
             skipped_application_children: Vec::new(),
             renamed_tools: Vec::new(),
+            toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
         }
     }
@@ -254,6 +257,12 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) fn with_renamed_tools(mut self, renamed: Vec<RenamedTool>) -> Self {
         self.renamed_tools = renamed;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_toolkit_attribution(mut self, catalog: ToolkitAttributionCatalog) -> Self {
+        self.toolkit_attribution = catalog;
         self
     }
 
@@ -1942,6 +1951,7 @@ fn build_runtime_agent(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
+        toolkit_attribution,
         application_runtime,
         instruction_plan,
     } = runtime;
@@ -2014,7 +2024,8 @@ fn build_runtime_agent(
         delegated_authorization,
         application_tools,
     )
-    .map_err(projection_configuration)?;
+    .map_err(projection_configuration)?
+    .with_toolkit_attribution(toolkit_attribution);
     Ok((agent, projector))
 }
 
@@ -2128,6 +2139,7 @@ async fn prepare_direct_resume(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
+        toolkit_attribution,
         application_runtime,
         instruction_plan,
     } = runtime;
@@ -2201,7 +2213,8 @@ async fn prepare_direct_resume(
             },
         )
         .with_internal_tools(internal_tools)
-        .with_instruction_plan(instruction_plan),
+        .with_instruction_plan(instruction_plan)
+        .with_toolkit_attribution(toolkit_attribution),
         parallel_applications,
     })
 }

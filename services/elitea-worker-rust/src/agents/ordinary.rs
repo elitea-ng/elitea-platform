@@ -18,6 +18,7 @@ use super::application_tools::{
     ApplicationToolDependencies, materialize_application_toolset, skipped_application_children,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::events::ToolkitAttributionCatalog;
 use super::internal_tools::ASK_USER_TOOLSET_NAME;
 use super::internal_tools::BuilderToolAuthority;
 use super::runtime::{
@@ -381,6 +382,23 @@ impl OrdinaryNativeAgentAssembler {
                 exposed: exposed.to_owned(),
             })
             .collect();
+        // Demo issue 6: name each bound tool's toolkit on its frames, so the
+        // tool-call record Main writes (and the Analytics Tools tab) is not
+        // left with an empty toolkit. Nested applications carry their own
+        // presentation and are not toolkits here.
+        let toolkit_attribution = ToolkitAttributionCatalog::from_bindings(
+            tool_snapshot
+                .iter()
+                .filter(|reference| reference.kind() != FrozenToolKind::Application)
+                .map(|reference| {
+                    (
+                        reference.toolkit_name(),
+                        reference.tool_id(),
+                        reference.tool_type(),
+                    )
+                }),
+            binding.bindings(),
+        );
         let toolsets = binding.into_toolsets();
         if !skipped_applications.is_empty() {
             tracing::warn!(
@@ -410,7 +428,8 @@ impl OrdinaryNativeAgentAssembler {
             .with_internal_tools(internal_tools)
             .with_instruction_plan(profile.instruction_plan().clone())
             .with_skipped_application_children(skipped_applications)
-            .with_renamed_tools(renamed_tools),
+            .with_renamed_tools(renamed_tools)
+            .with_toolkit_attribution(toolkit_attribution),
             fresh_execution_mode,
         ))
     }
