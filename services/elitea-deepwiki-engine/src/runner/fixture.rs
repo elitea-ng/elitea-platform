@@ -180,12 +180,13 @@ fn not_a_mapping(value: &Value) -> EngineError {
     )
 }
 
-/// `active_branch` as the Python tool used it: `str.strip` on it fails for
-/// anything but a string or `None`.
+/// `active_branch` as the Python tool used it: `(branch or 'main').strip()`,
+/// so any falsy value is the default branch and `str.strip` fails for a
+/// truthy non-string.
 fn branch_of(value: &Value) -> Result<Option<&str>, EngineError> {
     match value {
         Value::String(text) => Ok(Some(text.as_str())),
-        Value::Null => Ok(None),
+        other if !py_truthy(other) => Ok(None),
         other => Err(EngineError::new(
             ErrorType::Generic,
             format!(
@@ -450,6 +451,21 @@ mod tests {
             result["repository_context"],
             "repository: acme/notes\nbranch: dev\nfiles: 12\n"
         );
+    }
+
+    #[test]
+    fn a_falsy_branch_is_the_default_branch() {
+        // python: wiki_id_for(cfg, False) == "acme--notes--main"; the context
+        // line prints the value as Python would.
+        for falsy in [json!(false), json!(0), json!(null), json!("")] {
+            let result = generate_wiki(&args(&json!({
+                "query": "q", "repo_config": {"repository": "acme/notes"}, "active_branch": falsy,
+            })))
+            .unwrap_or_default();
+            assert_eq!(result["wiki_id"], "acme--notes--main", "{falsy}");
+        }
+        let truthy = generate_wiki(&args(&json!({"query": "q", "active_branch": 7})));
+        assert_eq!(truthy.err().map(|e| e.error_type), Some(ErrorType::Generic));
     }
 
     #[test]

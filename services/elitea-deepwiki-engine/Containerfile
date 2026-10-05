@@ -29,9 +29,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
 
+# The socket directory, built here because the runtime image has no shell.
+# A compose named volume (and Docker's fresh volume in particular) takes the
+# IMAGE path's ownership on first mount; without the directory in the image
+# it arrives root:root 0755, uid 10001 cannot bind the socket, the engine is
+# never healthy, and the Go host and elitea-main that wait on it never start.
+# World-writable, as the Python engine image makes it: the Go host connects
+# as another uid. The Python image's Containerfile carries the same rule.
+RUN mkdir -p /socket-dir/run/deepwiki && chmod 0777 /socket-dir/run/deepwiki
+
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 COPY --from=builder /usr/local/bin/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
+COPY --from=builder --chown=10001:10001 /socket-dir/run/ /run/
 
 # The socket is created world-writable inside a directory only the pod (or
 # the compose project) shares, so the Go host — another non-root user — can
