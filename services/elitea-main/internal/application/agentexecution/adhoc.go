@@ -89,10 +89,31 @@ type CurrentAdhocStartRequest struct {
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
 	Attachments []CurrentTurnAttachmentRef
+	// TriggerOrigin is how this run started (shared 0140), as on
+	// CurrentApplicationStartRequest: empty for the chat composer, `api` for
+	// a programmatic client.
+	TriggerOrigin executiondomain.TriggerOrigin
+	// MentionedUserIDs and MentionsEveryone are the message's `@` mentions,
+	// exactly as on CurrentApplicationStartRequest (#977). A model chat used
+	// to drop them silently: the route parsed the list and never passed it
+	// on, so a colleague tagged in a model chat was never told.
+	MentionedUserIDs []int64
+	MentionsEveryone bool
+}
+
+// mentionRequest is the part of an ad-hoc start the mention notifier reads,
+// in the shape notifyMentionedUsers already takes.
+func (request CurrentAdhocStartRequest) mentionRequest() CurrentApplicationStartRequest {
+	return CurrentApplicationStartRequest{
+		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
+		ConversationUUID: request.ConversationUUID, QuestionID: request.QuestionID,
+		MentionedUserIDs: request.MentionedUserIDs, MentionsEveryone: request.MentionsEveryone,
+	}
 }
 
 func (request CurrentAdhocStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID < 0 ||
+		!request.TriggerOrigin.Valid() ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
@@ -196,6 +217,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		IdempotencyKey: request.QuestionID, CapabilityID: executiondomain.AgentAdhocCapability,
 		ClientStreamID: request.ConversationUUID, ClientMessageID: responseMessageID,
 		SIOEvent: "chat_predict", Input: input,
+		TriggerOrigin: request.TriggerOrigin,
 		CurrentAdhocTurn: &CurrentAdhocTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID: request.ConversationUUID, TargetParticipantID: target.TargetParticipantID,
@@ -210,6 +232,13 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	// Best-effort, AFTER admission — see recordCurrentMemoryUsage's own
 	// comment for why this never affects the turn's outcome.
 	service.recordCurrentMemoryUsage(ctx, request.ProjectID, responseMessageID, memoryRecall)
+	// #977 for a model chat, best effort and after admission exactly as the
+	// application path does it. Only a NEW admission notifies: a replay of
+	// the same question_id (a client retrying a lost response) is the same
+	// message, and telling its audience twice is noise.
+	if outcome.Created {
+		service.notifyMentionedUsers(ctx, request.mentionRequest())
+	}
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,

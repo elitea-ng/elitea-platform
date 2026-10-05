@@ -34,6 +34,12 @@ type Config struct {
 
 	// Logger receives proxy error events. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// ExecutionVerifier checks an inbound X-Elitea-Execution-Id against a
+	// live execution of the caller before the edge signs it. Nil keeps the
+	// shape check only. Production composition always sets it: the analytics
+	// reads decide active users and run spend from this id.
+	ExecutionVerifier ExecutionVerifier
 }
 
 // Proxy is elitea-main's whole gateway role: a streaming reverse proxy to
@@ -42,6 +48,9 @@ type Config struct {
 type Proxy struct {
 	rp     *httputil.ReverseProxy
 	logger *slog.Logger
+	// audio caps the /llm/v1/audio requests one principal has in flight
+	// (audio_limits.go).
+	audio *audioInFlight
 }
 
 // New builds a streaming reverse proxy from cfg. It returns an error if the
@@ -76,6 +85,7 @@ func New(cfg Config) (*Proxy, error) {
 	}
 
 	secret := []byte(cfg.IdentitySecret)
+	verifier := cfg.ExecutionVerifier
 
 	rp := &httputil.ReverseProxy{
 		// FlushInterval < 0 flushes to the client immediately after every proxy
@@ -92,7 +102,7 @@ func New(cfg Config) (*Proxy, error) {
 			// signed identity (X-Elitea-Project-Id / X-Elitea-User-Id /
 			// X-Elitea-Tenant-Id + X-Elitea-Identity-Signature). The gateway
 			// trusts these only on the mTLS-internal network (design §2, §6.1).
-			injectIdentity(pr.In.Context(), pr.Out.Header, secret)
+			injectIdentity(pr.In.Context(), pr.Out.Header, secret, verifier)
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// Ensure no downstream proxy (Traefik/nginx) buffers the stream; the
@@ -101,6 +111,12 @@ func New(cfg Config) (*Proxy, error) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// An audio request the edge stopped (body ceiling, deadline) gets
+			// its own named refusal, not "gateway unavailable".
+			if writeAudioRefusal(w, r, err) {
+				logger.Warn("llmproxy: audio request stopped at the edge", "err", err, "path", r.URL.Path)
+				return
+			}
 			logger.Error("llmproxy: upstream error", "err", err, "path", r.URL.Path)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
@@ -108,14 +124,22 @@ func New(cfg Config) (*Proxy, error) {
 		},
 	}
 
-	return &Proxy{rp: rp, logger: logger}, nil
+	return &Proxy{rp: rp, logger: logger, audio: newAudioInFlight(maxAudioInFlightPerPrincipal)}, nil
 }
 
 // ServeHTTP proxies the request to the gateway. It clears the per-connection
 // write deadline before streaming so the http.Server's global WriteTimeout does
 // not hard-kill a long-lived SSE response on the /llm path (design §9.5). This
 // is the edge-side equivalent of the gateway's WriteTimeout: 0.
+//
+// The /llm/v1/audio routes are not streams. They get a body ceiling and a
+// deadline here (audio_limits.go) before the request leaves the edge.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := limitAudioRequest(w, r, p.audio)
+	if !ok {
+		return
+	}
+	defer release()
 	hop.ClearWriteDeadline(w, p.logger)
 	p.rp.ServeHTTP(w, r)
 }

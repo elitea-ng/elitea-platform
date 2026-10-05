@@ -33,6 +33,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { formatSmallUsd } from '@/shared/lib/money';
 
 import type { MemberBudgetRow } from './api/adminBudgetsApi';
 
@@ -51,7 +52,9 @@ const DASH = '—';
 
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return DASH;
-  return `$${value.toFixed(2)}`;
+  // Not `toFixed(2)`: a sub-cent spend is real spend, and `$0.00` would claim
+  // none (#6682).
+  return formatSmallUsd(value);
 }
 
 function hasCap(row: MemberBudgetRow): boolean {
@@ -77,7 +80,7 @@ export function AdminBudgetMembersDrawer({
       slotProps={{ paper: { sx: { width: 'min(40rem, 100vw)' } } }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 1.25rem' }}>
-        <Typography variant="h6" sx={{ flex: 1 }}>
+        <Typography variant="headingSmall" component="h2" sx={{ flex: 1 }}>
           {t('pages.admin.budgets.members.title', 'Member budgets — {{name}}', {
             name: projectName,
           })}

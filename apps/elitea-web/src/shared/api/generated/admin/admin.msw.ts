@@ -58,6 +58,9 @@ import type {
   ModeRoleRemoveResult,
   ModerationRequestList,
   ModerationRequestRow,
+  NativeAdminDeviceList,
+  NativeClientList,
+  NativeClientWriteResult,
   OkResponse,
   PlatformSettings,
   PublishedAgentsListing,
@@ -69,6 +72,79 @@ import type {
   UserProjectPermissionsResult,
   UserProjectRoleMap,
 } from "../model";
+
+export const getListNativeDevicesAdministrationResponseMock = (
+  overrideResponse: Partial<Extract<NativeAdminDeviceList, object>> = {},
+): NativeAdminDeviceList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    ...{
+      id: faker.string.uuid(),
+      client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      client_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      device_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      platform: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      client_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      last_seen_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      revoked_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      revoke_reason: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      current: faker.datatype.boolean(),
+    },
+    ...{
+      user_id: faker.number.int(),
+      email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getListNativeClientsResponseMock = (
+  overrideResponse: Partial<Extract<NativeClientList, object>> = {},
+): NativeClientList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    redirect_uris: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    enabled: faker.datatype.boolean(),
+    min_client_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    overridden_file: faker.datatype.boolean(),
+    active_devices: faker.number.int(),
+  })),
+  ...overrideResponse,
+});
+
+export const getSaveNativeClientResponseMock = (
+  overrideResponse: Partial<Extract<NativeClientWriteResult, object>> = {},
+): NativeClientWriteResult => ({
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revoked_devices: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getDeleteNativeClientResponseMock = (
+  overrideResponse: Partial<Extract<NativeClientWriteResult, object>> = {},
+): NativeClientWriteResult => ({
+  client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revoked_devices: faker.number.int(),
+  ...overrideResponse,
+});
 
 export const getUserListResponseMock = (
   overrideResponse: Partial<Extract<UserListResponse, object>> = {},
@@ -966,6 +1042,132 @@ export const getGetSystemInfoResponseMock = (
   ...overrideResponse,
 });
 
+export const getListNativeDevicesAdministrationMockHandler = (
+  overrideResponse?:
+    | NativeAdminDeviceList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<NativeAdminDeviceList> | NativeAdminDeviceList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/native_devices/administration",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListNativeDevicesAdministrationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeNativeDeviceAdministrationMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/native_devices/administration/:deviceId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getListNativeClientsMockHandler = (
+  overrideResponse?:
+    | NativeClientList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<NativeClientList> | NativeClientList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/native_clients/administration",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListNativeClientsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveNativeClientMockHandler = (
+  overrideResponse?:
+    | NativeClientWriteResult
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<NativeClientWriteResult> | NativeClientWriteResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/native_clients/administration/:clientId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveNativeClientResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteNativeClientMockHandler = (
+  overrideResponse?:
+    | NativeClientWriteResult
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<NativeClientWriteResult> | NativeClientWriteResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/native_clients/administration/:clientId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDeleteNativeClientResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getUserListMockHandler = (
   overrideResponse?:
     | UserListResponse
@@ -1756,6 +1958,11 @@ export const getGetSystemInfoMockHandler = (
   );
 };
 export const getAdminMock = () => [
+  getListNativeDevicesAdministrationMockHandler(),
+  getRevokeNativeDeviceAdministrationMockHandler(),
+  getListNativeClientsMockHandler(),
+  getSaveNativeClientMockHandler(),
+  getDeleteNativeClientMockHandler(),
   getUserListMockHandler(),
   getUserCreateMockHandler(),
   getUserUpdateMockHandler(),

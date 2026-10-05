@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import chartPalette from './chart-palette.json';
 import {
   CHART_COLORS,
+  CUSTOM_DATE_PRESET,
   DATE_FILTER_PRESETS,
+  DEFAULT_DATE_PRESET,
   EVENT_TYPE_COLORS,
   GUIDE_SECTIONS,
   MEDAL_COLORS,
@@ -59,6 +61,13 @@ describe('DATE_FILTER_PRESETS', () => {
     expect(DATE_FILTER_PRESETS.map((preset) => preset.value)).toEqual(['1', '7', '30', '90']);
     expect(DATE_FILTER_PRESETS.map((preset) => preset.days)).toEqual([1, 7, 30, 90]);
   });
+
+  // #6791: calendar-day labels; `Today` replaced the rolling `Last 24h`.
+  it('labels the presets Today | Last 7d | Last 30d | Last 90d, Today first and default', () => {
+    expect(DATE_FILTER_PRESETS.map((preset) => preset.label)).toEqual(['Today', 'Last 7d', 'Last 30d', 'Last 90d']);
+    expect(DEFAULT_DATE_PRESET.label).toBe('Today');
+    expect(DATE_FILTER_PRESETS).not.toContain(CUSTOM_DATE_PRESET);
+  });
 });
 
 describe('GUIDE_SECTIONS', () => {
@@ -73,5 +82,18 @@ describe('GUIDE_SECTIONS', () => {
     const overview = GUIDE_SECTIONS.find((section) => section.title === 'Overview Tab');
     expect(overview).toBeDefined();
     expect(overview?.metrics.map((metric) => metric.name)).toContain('TEAM');
+  });
+
+  // #6763: no Active Days column exists in this app; the guide described one.
+  it('does not document an Active Days metric', () => {
+    const text = JSON.stringify(GUIDE_SECTIONS).toLowerCase();
+    expect(text).not.toContain('active days');
+  });
+
+  // #6791: the Date Range entry describes calendar-day presets.
+  it('describes the calendar-day presets in the Date Range entry', () => {
+    const entry = GUIDE_SECTIONS.flatMap((section) => section.metrics).find((metric) => metric.name === 'Date Range');
+    expect(entry?.description).toContain('Use Today, Last 7d, Last 30d, or Last 90d for calendar-day ranges.');
+    expect(entry?.description).not.toContain('24h');
   });
 });

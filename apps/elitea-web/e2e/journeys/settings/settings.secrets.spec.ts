@@ -206,10 +206,11 @@ test('J21a: settings/secrets renders its real page chrome', async ({ page }) => 
   const add = page.getByRole('button', { name: 'Create new secret', exact: true });
   await expect(add).toBeEnabled({ timeout: 15_000 });
 
-  // The header's own title, scoped to the header row that owns the search
-  // input — an unscoped `getByText('Secrets')` also matches the settings
-  // sidebar link, which is present on every settings route.
-  await expect(search.locator('../..').getByText('Secrets', { exact: true })).toBeVisible();
+  // The header's own title. DrawerPageHeader renders it as the page's h1;
+  // an unscoped `getByText('Secrets')` also matches the settings sidebar
+  // link, which is present on every settings route. (A DOM-path scope from
+  // the search input broke when every search field became one SimpleSearchBar.)
+  await expect(page.getByRole('heading', { level: 1, name: 'Secrets', exact: true })).toBeVisible();
 
   await checkA11y(page);
 });
@@ -226,9 +227,14 @@ test('J21b: a failing secrets list surfaces an error toast', async ({ page }) =>
 
   await page.goto(SECRETS_PAGE);
 
-  // Secrets.tsx:143-152 — the non-403 branch of the list-error effect.
-  const toast = page.getByRole('alert');
+  // Two alerts name the failure: the toast (the non-403 branch of the
+  // list-error effect) and the grid's own error state, which replaces the
+  // empty table and offers a retry.
+  const toast = page.getByRole('alert').and(page.locator('.MuiAlert-root'));
   await expect(toast).toHaveText('Failed to load secrets', { timeout: 15_000 });
+  const gridError = page.getByTestId('secrets-load-error');
+  await expect(gridError).toContainText('Failed to load secrets');
+  await expect(gridError.getByRole('button', { name: 'Try again' })).toBeVisible();
 
   await checkA11y(page);
 });

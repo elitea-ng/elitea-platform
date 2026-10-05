@@ -41,6 +41,16 @@ import type { EliteaComponents } from '../theme-types';
  * (`Accordion.js`), so there is no specificity fight to pre-empt here.
  */
 export const MuiAccordion: EliteaComponents['MuiAccordion'] = {
+  /**
+   * The summary's heading wrapper is an `<h2>`, not MUI's default `<h3>`:
+   * an accordion title is a section title (typography spec §3), and the
+   * pages that hold accordions (AI Configuration, the settings screens)
+   * now open with a `headingLarge` `<h1>` — an `<h3>` straight under it is
+   * an axe `heading-order` violation.
+   */
+  defaultProps: {
+    slots: { heading: 'h2' },
+  },
   styleOverrides: {
     root: ({ theme }) => ({
       '&:first-of-type': {

@@ -12,6 +12,13 @@ import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/
 import { expect, request as playwrightRequest } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
+import {
+  CATALOGUE_PROJECT_ID_OVERRIDE,
+  DEFAULT_PROJECT_ID,
+  NO_PROJECT,
+  PUBLIC_PROJECT_ID_OVERRIDE,
+  PUBLISH_AUTHOR_PROJECT_ID_OVERRIDE,
+} from './project';
 // The journal-scope rule lives in `scripts/lib` so it can be unit-tested
 // without Playwright, a browser or a running stack — `scripts/mock-journal-scope.test.mjs`.
 import { mockLlmJournalScopeFailure } from '../../scripts/lib/mock-journal-scope.mjs';
@@ -92,8 +99,11 @@ export async function clickCreateButton(page: Page): Promise<void> {
 /** API base from env (matches the app's VITE_SERVER_URL). */
 export const API_BASE = (process.env['PLAYWRIGHT_BASE_URL'] ?? 'http://localhost:8082') + '/api/v2';
 
-/** Default public project ID (matches compose env VITE_PUBLIC_PROJECT_ID). */
-export const DEFAULT_PROJECT_ID = process.env['E2E_PROJECT_ID'] ?? '1';
+/**
+ * The project the personas work in (`E2E_PROJECT_ID`, rig: 1). Declared once,
+ * in `fixtures/project.ts`, with the rest of the run's tenancy.
+ */
+export { DEFAULT_PROJECT_ID };
 
 /* ── the tenancy the publish journeys need ───────────────────────────────── */
 
@@ -172,11 +182,30 @@ export async function resolveProjectIdByName(
   return id;
 }
 
-/** The seeded author project's id — the project a publish is issued FROM. */
+/**
+ * The author project's id — the project a publish is issued FROM.
+ *
+ * `E2E_PUBLISH_AUTHOR_PROJECT_ID` names it on a deployment that has no seeded
+ * `e2e-publish-author`; unset, the seeded name is resolved (the rig).
+ * `none` is a declaration that the deployment has no such project — ask
+ * `publishAuthorProjectDeclaredAbsent()` before calling this.
+ */
 export async function resolvePublishAuthorProjectId(
   request: APIRequestContext,
 ): Promise<string> {
+  if (PUBLISH_AUTHOR_PROJECT_ID_OVERRIDE === NO_PROJECT) {
+    throw new Error(
+      'resolvePublishAuthorProjectId: E2E_PUBLISH_AUTHOR_PROJECT_ID=none declares this deployment ' +
+        'has no author project; the caller should have skipped (publishAuthorProjectDeclaredAbsent).',
+    );
+  }
+  if (PUBLISH_AUTHOR_PROJECT_ID_OVERRIDE !== undefined) return PUBLISH_AUTHOR_PROJECT_ID_OVERRIDE;
   return resolveProjectIdByName(request, PUBLISH_AUTHOR_PROJECT_NAME);
+}
+
+/** The run declared (`E2E_PUBLISH_AUTHOR_PROJECT_ID=none`) that there is no author project. */
+export function publishAuthorProjectDeclaredAbsent(): boolean {
+  return PUBLISH_AUTHOR_PROJECT_ID_OVERRIDE === NO_PROJECT;
 }
 
 /**
@@ -190,8 +219,12 @@ export async function resolvePublishAuthorProjectId(
  */
 export const PUBLIC_PROJECT_NAME = 'e2e-public';
 
-/** The seeded frontend-public project's id — see `PUBLIC_PROJECT_NAME`. */
+/**
+ * The frontend-public project's id — see `PUBLIC_PROJECT_NAME`.
+ * `E2E_PUBLIC_PROJECT_ID` names it on a deployment that did not seed it.
+ */
 export async function resolvePublicProjectId(request: APIRequestContext): Promise<string> {
+  if (PUBLIC_PROJECT_ID_OVERRIDE !== undefined) return PUBLIC_PROJECT_ID_OVERRIDE;
   return resolveProjectIdByName(request, PUBLIC_PROJECT_NAME);
 }
 
@@ -209,6 +242,9 @@ export async function resolveCatalogueProjectId(request: APIRequestContext): Pro
   const url = `${API_BASE}/elitea_core/platform_settings/prompt_lib`;
   const response = await request.get(url);
   if (!response.ok()) {
+    // `E2E_CATALOGUE_PROJECT_ID` stands in only when the server cannot be
+    // asked; when it CAN, the server's answer is checked against it below.
+    if (CATALOGUE_PROJECT_ID_OVERRIDE !== undefined) return CATALOGUE_PROJECT_ID_OVERRIDE;
     throw new Error(
       `resolveCatalogueProjectId: GET ${url} -> ${response.status()}` +
         `${await describeRefusal(response)}`,
@@ -223,8 +259,34 @@ export async function resolveCatalogueProjectId(request: APIRequestContext): Pro
     );
   }
   const value = String(id);
+  if (CATALOGUE_PROJECT_ID_OVERRIDE !== undefined && CATALOGUE_PROJECT_ID_OVERRIDE !== value) {
+    throw new Error(
+      `resolveCatalogueProjectId: the run declares E2E_CATALOGUE_PROJECT_ID=` +
+        `${CATALOGUE_PROJECT_ID_OVERRIDE}, but this deployment resolves the catalogue to ${value}.`,
+    );
+  }
   resolvedProjectIds.set('#catalogue', value);
   return value;
+}
+
+/**
+ * The catalogue project's MODELS, read the way a caller outside it can.
+ *
+ * On the rig every persona belongs to the catalogue project, so its own model
+ * list is readable directly. On a deployment where the personas work in
+ * another project, that read is a 403 — the catalogue's models are then what
+ * the working project sees SHARED from it, which is also exactly what an agent
+ * there can name.
+ */
+export async function readCatalogueModels(
+  request: APIRequestContext,
+  catalogueProjectId: string,
+): Promise<readonly CatalogueModel[]> {
+  if (catalogueProjectId === DEFAULT_PROJECT_ID) return readProjectModels(request, catalogueProjectId);
+  const direct = await request.get(`${API_BASE}/configurations/models/${catalogueProjectId}`);
+  if (direct.status() !== 403) return readProjectModels(request, catalogueProjectId);
+  const shared = await readProjectModels(request, DEFAULT_PROJECT_ID, { includeShared: true });
+  return shared.filter((model) => model.projectId === catalogueProjectId);
 }
 
 /** One row of the model catalogue, as the picker reads it. */
@@ -995,12 +1057,13 @@ export async function readVersionExpanded(
 /**
  * The route that links one agent version into another as a SUB-AGENT.
  *
- * The URL names the CHILD and the body names the PARENT version — an order no
- * reader guesses, and the reason this is a helper rather than a line repeated
- * in each case: `internal/api/v2/eliteacore/application_relation.go` reads the
- * child's application and version out of the path and takes only
- * `version_id` from the body. `application_id` is sent because the route
- * refuses a body without it, and it is the CHILD's id there too.
+ * The URL names the CHILD and the body names the PARENT — an order no reader
+ * guesses, and the reason this is a helper rather than a line repeated in each
+ * case. The body's `application_id` and `version_id` are BOTH the parent's:
+ * `internal/api/v2/eliteacore/application_relation.go` refuses a body whose
+ * `application_id` does not own `version_id` (400 "the parent version does not
+ * belong to application_id"), as pylon's `entity_id`/`entity_version_id` check
+ * did, and the app's own association call sends the parent's ids.
  *
  * The response is returned rather than asserted, because the refusal cases need
  * it: a published parent refuses the change, and a pair already linked refuses
@@ -1008,37 +1071,44 @@ export async function readVersionExpanded(
  */
 export function attachSubAgent(
   request: APIRequestContext,
-  parentVersionId: string,
+  parent: SubAgentParent,
   child: { readonly applicationId: string; readonly versionId: string },
   projectId: string = DEFAULT_PROJECT_ID,
 ): Promise<APIResponse> {
-  const url =
-    `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
-    `${child.applicationId}/${child.versionId}`;
-  return request.patch(url, {
-    data: {
-      application_id: Number(child.applicationId),
-      version_id: Number(parentVersionId),
-      has_relation: true,
-    },
-  });
+  return changeSubAgentRelation(request, parent, child, projectId, true);
 }
 
 /** The same route with `has_relation: false` — the detach half. */
 export function detachSubAgent(
   request: APIRequestContext,
-  parentVersionId: string,
+  parent: SubAgentParent,
   child: { readonly applicationId: string; readonly versionId: string },
   projectId: string = DEFAULT_PROJECT_ID,
+): Promise<APIResponse> {
+  return changeSubAgentRelation(request, parent, child, projectId, false);
+}
+
+/** The parent agent and the version a sub-agent is linked into. */
+export interface SubAgentParent {
+  readonly id: string;
+  readonly versionId: string;
+}
+
+function changeSubAgentRelation(
+  request: APIRequestContext,
+  parent: SubAgentParent,
+  child: { readonly applicationId: string; readonly versionId: string },
+  projectId: string,
+  hasRelation: boolean,
 ): Promise<APIResponse> {
   const url =
     `${API_BASE}/elitea_core/application_relation/prompt_lib/${projectId}/` +
     `${child.applicationId}/${child.versionId}`;
   return request.patch(url, {
     data: {
-      application_id: Number(child.applicationId),
-      version_id: Number(parentVersionId),
-      has_relation: false,
+      application_id: Number(parent.id),
+      version_id: Number(parent.versionId),
+      has_relation: hasRelation,
     },
   });
 }

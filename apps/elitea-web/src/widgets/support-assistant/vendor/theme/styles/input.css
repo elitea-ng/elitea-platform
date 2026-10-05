@@ -204,7 +204,7 @@
 
 .elitea-assistant-file-chip-progress-text {
   width: 1.5625rem;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   color: var(--elitea-assistant-input-text);
   flex-shrink: 0;
   text-align: right;

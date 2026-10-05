@@ -217,7 +217,7 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  * The names the nav also asks for that NO administration-mode seed in this
  * repository grants.
  *
- * Six are the reference sidebar's pylon SECTION names. One,
+ * Four are the reference sidebar's pylon SECTION names. One,
  * `admin.moderation.view`, this platform does seed — in the DEFAULT mode
  * (`migrations/shared/0077_moderation_permissions.sql`), which the admin
  * console never resolves.
@@ -229,11 +229,9 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  */
 const NOT_SEEDED_IN_ADMINISTRATION = new Set([
   'admin.moderation.view',
-  'configuration',
   'configuration.roles',
   'configuration.secrets.secret.list',
   'configuration.service_descriptors',
-  'projects',
   'projects.projects',
 ]);
 
@@ -326,7 +324,7 @@ describe('permission filtering', () => {
 
   it('drops a group that loses every item, rather than rendering an empty one', () => {
     const groups = visibleAdminNavGroups((permission) =>
-      ['admin.auth.users', 'configuration.roles', 'projects', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
+      ['admin.auth.users', 'configuration.roles', 'projects.projects', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
         permission,
       ),
     );
@@ -495,6 +493,22 @@ describe('collapsed state', () => {
 
     await userEvent.click(screen.getByTestId('admin-nav-collapse-toggle'));
     expect(screen.queryByRole('group', { name: 'Theme' })).toBeNull();
+  });
+
+  it('sizes the theme toggle to the rail, not to three fixed 6.25rem buttons', async () => {
+    // jsdom has no layout, so assert the declarations that keep it inside the
+    // 13.75rem rail: the group fills its container and every segment may
+    // shrink (min-width 0) rather than holding a fixed 6.25rem (3 x 6.25rem
+    // = 18.75rem overflowed the rail's ~11.5rem content box). Labels stay
+    // visible; each segment keeps its accessible name.
+    await mountAdmin();
+    const group = screen.getByRole('group', { name: 'Theme' });
+    expect(getComputedStyle(group).width).toBe('100%');
+    for (const name of ['System', 'Dark', 'Light']) {
+      const button = within(group).getByRole('button', { name });
+      expect(button).toHaveTextContent(name);
+      expect(getComputedStyle(button).minWidth).toBe('0px');
+    }
   });
 
   it('persists through localStorage, under its own key', async () => {
@@ -705,7 +719,7 @@ describe('user footer', () => {
   });
 
   it('sweeps the el. namespace on logout', async () => {
-    // The `/forward-auth/logout` handoff itself assigns `window.location.href`,
+    // The `/auth/logout` handoff itself assigns `window.location.href`,
     // which jsdom cannot perform; the observable half here is the storage sweep
     // that `performLogout()` does and the reference's raw `location.href =` did
     // not. The navigation half is covered by the E2E journey.

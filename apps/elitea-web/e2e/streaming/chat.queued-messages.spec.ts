@@ -88,7 +88,7 @@ const sendButton = (page: import('@playwright/test').Page) => page.getByTestId('
 /** Select the mock model. Without one the start route refuses 400 before the worker is reached. */
 async function pickMockModel(page: import('@playwright/test').Page): Promise<void> {
   await page.getByTestId('model-selector-button').click();
-  const option = page.getByRole('menuitem').filter({ hasText: MOCK_MODEL }).first();
+  const option = page.getByRole('option').filter({ hasText: MOCK_MODEL }).first();
   await expect(
     option,
     `the mock model ${MOCK_MODEL} must be offered — this journey cannot run against a real provider`,

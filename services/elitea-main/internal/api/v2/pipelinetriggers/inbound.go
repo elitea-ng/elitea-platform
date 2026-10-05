@@ -57,8 +57,8 @@ const InboundProviderPath = InboundPath + "/{provider}"
 
 // TriggerTokenHeader is the preferred way to present the secret.
 //
-// Three carriers are accepted, in this order: `Authorization: Bearer`, this
-// header, then `?token=`. The query parameter is LAST and is documented as the
+// Four carriers are accepted, in this order: `Authorization: Bearer`, this
+// header, GitLab's `X-Gitlab-Token` (GitLabTokenHeader), then `?token=`. The query parameter is LAST and is documented as the
 // least safe: a URL is written to proxy and browser logs, and a credential in
 // one outlives the request. It is accepted at all because a large share of
 // webhook senders cannot set a header, and a trigger nobody can call is not a
@@ -68,7 +68,9 @@ const TriggerTokenHeader = "X-Elitea-Trigger-Token" //nolint:gosec // header NAM
 // TriggerTokenQueryParam is the last-resort carrier.
 const TriggerTokenQueryParam = "token" //nolint:gosec // parameter NAME, not a credential
 
-// maxInboundBody bounds a BEARER call's body, and every settings body.
+// maxInboundBody bounds a custom BEARER call's body, and every settings body.
+// A provider trigger's body is the provider's payload and gets the larger cap
+// (inboundBodyWithinCap).
 //
 // 64 KiB is generous for what this route reads out of a body: one `input`
 // string the pipeline sees. A bearer sender is writing to an endpoint of ours
@@ -108,13 +110,19 @@ const refusal = "this trigger cannot be used"
 
 // inboundBody is the accepted request body. Everything else in it is ignored.
 //
-// `input` is the only field, and it is TEXT the pipeline sees. It is not a
-// place to select a project, a version or an identity: those come from the
-// stored row (package doc, rule 1). A body that carries such keys is not
-// refused, because a webhook sender's payload is not this service's to
-// validate — it is simply not read.
+// `input` is TEXT the pipeline or agent sees. `variables` re-values an
+// AGENT's declared variables (agentrun.go) and is ignored for a pipeline.
+// Neither is a place to select a project, a version or an identity: those
+// come from the stored row (package doc, rule 1). A body that carries such
+// keys is not refused, because a webhook sender's payload is not this
+// service's to validate — it is simply not read.
+//
+// `variables` is kept RAW and decoded on its own (bodyVariables), so a
+// provider payload that happens to carry a `variables` key of another shape
+// does not also lose its `input`.
 type inboundBody struct {
-	Input string `json:"input"`
+	Input     string          `json:"input"`
+	Variables json.RawMessage `json:"variables"`
 }
 
 // Trigger admits one inbound run.
@@ -123,13 +131,16 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 	projectIDText := chi.URLParam(r, "projectID")
 	tokenID := chi.URLParam(r, "tokenID")
 
+	// The audit row's entity type is the trigger's KIND once the row is
+	// read, so an agent's webhook calls are not listed as pipeline calls.
+	entityType := TargetKindPipeline
 	record := func(status int, projectID, userID, versionID int64, reason string) {
-		h.recordInbound(r, started, status, projectID, userID, versionID, reason)
+		h.recordInbound(r, started, status, entityType, projectID, userID, versionID, reason)
 	}
 
 	if h.pool == nil {
 		record(http.StatusServiceUnavailable, 0, 0, 0, "no database on this deployment")
-		writeError(w, http.StatusServiceUnavailable, "pipeline triggers are not available on this deployment")
+		writeError(w, http.StatusServiceUnavailable, "triggers are not available on this deployment")
 		return
 	}
 	schema, err := tenantschema.Quote(projectIDText)
@@ -184,6 +195,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "this trigger could not be checked")
 		return
 	}
+	entityType = auditEntityType(trigger.TargetKind)
 
 	// The URL SUFFIX, checked against the stored provider (#970). A suffix the
 	// row does not carry is refused rather than ignored: the sender was given
@@ -236,13 +248,96 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// WHICH DELIVERIES ARE A RUN AT ALL (controls.go). A GitHub `ping` never
+	// is, and a trigger with an event filter admits only the events it
+	// lists. Checked after the credential, so an unauthenticated caller
+	// learns nothing from it, and before the delivery claim, so an ignored
+	// delivery writes no row. The answer is 204: the delivery was accepted
+	// and there is no run to follow. The event header is not signed by
+	// either provider, so this is a cost and noise control, not a security
+	// boundary; the credential above is the boundary.
+	event := deliveryEvent(trigger, r.Header)
+	if reason := ignoredEventReason(trigger, event); reason != "" {
+		record(http.StatusNoContent, projectID, trigger.CreatedBy, trigger.VersionID, reason)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// `variables` re-value the agent's instructions, so they are read only
+	// for a trigger that opts in (controls.go). Ignored otherwise, and the
+	// audit row says so.
+	variables := bodyVariables(body)
+	variablesNote := ""
+	if len(variables) > 0 && !trigger.AllowVariableOverrides {
+		variables = nil
+		variablesNote = "`variables` ignored: this trigger does not allow variable overrides"
+	}
+
+	// ONE RUN PER SIGNED DELIVERY (deliveries.go). Claimed only now, after
+	// the signature and the revocation check: an unauthenticated request
+	// must not be able to write a row, and a refused one must not occupy a
+	// key a genuine delivery will need.
+	deliveryKey := signedDeliveryKey(trigger, r.Header, raw)
+	if deliveryKey != "" {
+		state, previous, claimErr := h.claimDelivery(r.Context(), schema, trigger.TokenID, deliveryKey)
+		switch {
+		case claimErr != nil:
+			// Fail CLOSED. Admitting without the claim is exactly the
+			// replay this check exists to stop, and 503 asks the sender to
+			// retry, which a provider does.
+			h.log().Error("pipelinetriggers: inbound delivery claim failed", "err", claimErr)
+			record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
+				"delivery log unavailable")
+			writeError(w, http.StatusServiceUnavailable, "this trigger could not be checked")
+			return
+		case state == deliveryInFlight:
+			record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
+				"this delivery is already being admitted")
+			w.Header().Set("Retry-After", deliveryRetryAfterSeconds)
+			writeError(w, http.StatusServiceUnavailable, "this delivery is already being admitted; retry it shortly")
+			return
+		case state == deliveryAdmitted:
+			// The SAME answer the first copy got, and no second run. The
+			// caller has proved it holds this exact signed delivery, so
+			// handing back the run it started is no disclosure.
+			versionID := previous.VersionID
+			if versionID == 0 {
+				versionID = trigger.VersionID
+			}
+			record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID,
+				"a repeated delivery; answered with the run it already started")
+			writeAccepted(w, projectID, runOutcome{
+				ExecutionID:      previous.ExecutionID,
+				ConversationUUID: previous.ConversationUUID,
+				VersionID:        versionID,
+			})
+			return
+		}
+	}
+
 	outcome, err := h.admit(r.Context(), schema, runRequest{
 		ProjectID:   projectID,
 		ActorUserID: trigger.CreatedBy,
 		VersionID:   trigger.VersionID,
 		Input:       body.Input,
 		Origin:      OriginWebhook,
+		// Legacy issue 6656: a trigger may start an ordinary agent too. The
+		// payload and the variables are read only on that branch. The
+		// trigger's issued kind must still match the version (run.go).
+		Kinds:         pipelinesAndAgents,
+		Payload:       providerPayload(trigger, r.Header, raw),
+		PayloadSource: payloadSource{Provider: trigger.Provider, Event: event},
+		Variables:     variables,
+		TriggerID:     trigger.ID,
+		TriggerKind:   storedTargetKind(trigger),
 	})
+	if deliveryKey != "" {
+		if err != nil {
+			h.releaseDelivery(r.Context(), schema, trigger.TokenID, deliveryKey)
+		} else {
+			h.completeDelivery(r.Context(), schema, trigger.TokenID, deliveryKey, outcome)
+		}
+	}
 	switch {
 	case errors.Is(err, ErrRunForbidden):
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
@@ -251,34 +346,96 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrVersionNotRunnable):
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
-			"the pipeline version is gone or is not a pipeline")
+			"the version is gone")
 		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	case errors.Is(err, ErrTriggerKindChanged):
+		// The one refusal: the credential is not usable for what the
+		// version is now. The audit row names the cause and the repair.
+		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the version is no longer the kind this trigger was issued for; rotate the trigger to re-issue it")
+		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	case errors.Is(err, ErrRunLimited):
+		// The credential was accepted, so naming the limit is no oracle.
+		record(http.StatusTooManyRequests, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the agent run limit for this trigger is reached")
+		w.Header().Set("Retry-After", agentTriggerRetryAfterSeconds)
+		writeError(w, http.StatusTooManyRequests,
+			"this trigger has started too many agent runs recently, or too many are still running; retry later")
 		return
 	case errors.Is(err, ErrInputTooLarge):
 		record(http.StatusBadRequest, projectID, trigger.CreatedBy, trigger.VersionID, "input too large")
-		writeError(w, http.StatusBadRequest, "the run input is too large")
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("`input` is too large: it may hold at most %d KiB of text", maxRunInput/1024))
+		return
+	case errors.Is(err, ErrInvalidInput):
+		// 422 and the field's name. The credential was accepted, so this is
+		// a statement about the BODY the caller chose, and it is no oracle.
+		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID, "input is not valid")
+		writeError(w, http.StatusUnprocessableEntity,
+			"`input` is not valid: it must be UTF-8 text without NUL characters")
+		return
+	case errors.Is(err, ErrAgentInputRequired):
+		// 422 and the field's name, for the reason ErrInvalidInput gives. An
+		// agent answers a message, so a call with no `input` and no payload
+		// has nothing for it to answer.
+		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID,
+			"an agent run needs input")
+		writeError(w, http.StatusUnprocessableEntity,
+			"`input` is required: this trigger starts an agent, and an agent needs text or a payload to read")
 		return
 	case errors.Is(err, ErrRuntimeUnavailable):
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
 			"no agent runtime on this deployment")
-		writeError(w, http.StatusServiceUnavailable, "this deployment cannot run pipelines")
+		writeError(w, http.StatusServiceUnavailable, "this deployment cannot run pipelines or agents")
 		return
 	case err != nil:
 		h.log().Error("pipelinetriggers: inbound run failed",
 			"project_id", projectID, "version_id", trigger.VersionID, "err", err)
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
 			"the run could not be started")
-		writeError(w, http.StatusServiceUnavailable, "the pipeline run could not be started")
+		writeError(w, http.StatusServiceUnavailable, "the run could not be started")
 		return
 	}
 
 	h.stampTriggerUse(r.Context(), schema, trigger.ID)
-	record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID, "")
+	record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID,
+		admittedNote(outcome.InputSource, variablesNote))
 
 	// 202, not 200: the answer is that the run was ADMITTED. It has not
 	// finished, and it will not finish inside this request. The events URL is
 	// how the caller follows it, which is what issue 192 asks the response to
 	// return.
+	writeAccepted(w, projectID, outcome)
+}
+
+// storedTargetKind is the kind a trigger row was issued for. A row with no
+// kind predates 0142's DEFAULT and was minted for a pipeline.
+func storedTargetKind(trigger triggerRow) string {
+	if trigger.TargetKind == "" {
+		return TargetKindPipeline
+	}
+	return trigger.TargetKind
+}
+
+// admittedNote is the audit reason of an admitted call: empty for an
+// ordinary pipeline run, and a statement of where an agent's input came from
+// and what was ignored otherwise.
+func admittedNote(inputSource, variablesNote string) string {
+	notes := make([]string, 0, 2)
+	if inputSource == inputSourcePayload {
+		notes = append(notes, "the agent input is the sender's payload, given as untrusted data")
+	}
+	if variablesNote != "" {
+		notes = append(notes, variablesNote)
+	}
+	return strings.Join(notes, "; ")
+}
+
+// writeAccepted is the 202 body, for an admitted run and for a repeated
+// delivery answered with the run its first copy admitted.
+func writeAccepted(w http.ResponseWriter, projectID int64, outcome runOutcome) {
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"execution_id":    outcome.ExecutionID,
 		"conversation_id": outcome.ConversationUUID,
@@ -296,7 +453,13 @@ func EventsURL(projectID int64, executionID string) string {
 	return fmt.Sprintf("/api/v2/executions/%d/%s/events", projectID, executionID)
 }
 
-// presentedSecret reads the credential from the three accepted carriers.
+// presentedSecret reads the credential from the four accepted carriers.
+//
+// `X-Gitlab-Token` is GitLab's: a GitLab webhook's SECRET TOKEN is sent
+// verbatim in it, and GitLab cannot be made to send it anywhere else. Before
+// legacy issue 6664 a GitLab sender therefore had no way to present the
+// secret except the query string. It is a carrier for a bearer trigger only;
+// a signing trigger reads no carrier at all (inboundCredentialAccepted).
 func presentedSecret(r *http.Request) string {
 	if header := r.Header.Get("Authorization"); header != "" {
 		if value, found := strings.CutPrefix(header, "Bearer "); found {
@@ -304,6 +467,9 @@ func presentedSecret(r *http.Request) string {
 		}
 	}
 	if header := strings.TrimSpace(r.Header.Get(TriggerTokenHeader)); header != "" {
+		return header
+	}
+	if header := strings.TrimSpace(r.Header.Get(GitLabTokenHeader)); header != "" {
 		return header
 	}
 	return strings.TrimSpace(r.URL.Query().Get(TriggerTokenQueryParam))
@@ -319,7 +485,7 @@ func presentedSecret(r *http.Request) string {
 func (h *Handler) inboundCredentialAccepted(
 	r *http.Request, trigger triggerRow, raw []byte,
 ) (accepted bool, unavailable string) {
-	if trigger.AuthMode != AuthModeHMACSHA256 {
+	if !modeSigns(trigger.AuthMode) {
 		presented := presentedSecret(r)
 		if presented == "" {
 			return false, ""
@@ -349,6 +515,9 @@ func (h *Handler) inboundCredentialAccepted(
 	if err != nil {
 		return false, "the stored credential for this trigger could not be read"
 	}
+	if trigger.AuthMode == AuthModeStandardWebhooks {
+		return standardWebhooksSignatureMatches(r.Header, raw, secret, time.Now()), ""
+	}
 	return signatureMatches(presented, raw, secret), ""
 }
 
@@ -373,16 +542,32 @@ func readInboundRaw(r *http.Request) ([]byte, error) {
 	return io.ReadAll(limited)
 }
 
-// inboundBodyWithinCap applies the cap the STORED row's mode calls for.
+// inboundBodyWithinCap applies the cap the STORED row calls for.
 //
-// Signing triggers keep everything `readInboundRaw` was willing to read;
-// everything else is held to the 64 KiB a decorative body has no reason to
+// The question is not "does this mode sign" but "who shapes the body". A
+// signing trigger's body is the sender's own payload, and so is a GitLab
+// SECRET-TOKEN trigger's: its mode is `token`, but what arrives is GitLab's
+// event JSON — a push listing up to twenty commits with their file lists, a
+// merge request carrying its description and changes — which passes 64 KiB as
+// easily as the GitHub payloads `maxSignedInboundBody` describes. Holding it to
+// the bearer cap answered those deliveries 413 after the lookup, GitLab marked
+// the webhook failed, and the pipeline never ran: #970's defect again, on the
+// preset meant for GitLab.
+//
+// Everything else — a custom bearer trigger, whose body a person or a script
+// of ours writes — is held to the 64 KiB a decorative body has no reason to
 // exceed.
 func inboundBodyWithinCap(trigger triggerRow, raw []byte) bool {
-	if trigger.AuthMode == AuthModeHMACSHA256 {
+	if senderShapesBody(trigger) {
 		return true
 	}
 	return int64(len(raw)) <= maxInboundBody
+}
+
+// senderShapesBody reports whether the trigger's body is a provider's own
+// event payload rather than one written for this route.
+func senderShapesBody(trigger triggerRow) bool {
+	return modeSigns(trigger.AuthMode) || trigger.Provider == ProviderGitLab || trigger.Provider == ProviderGitHub
 }
 
 // decodeInboundBody reads the accepted fields out of the raw bytes.
@@ -393,16 +578,34 @@ func inboundBodyWithinCap(trigger triggerRow, raw []byte) bool {
 // this service's contract — refusing it would break integrations over a field
 // the pipeline never reads. A GitHub push payload is exactly that case: it is
 // valid JSON with no `input` key at all.
+//
+// `input` is NOT CUT here. It used to be cut at maxRunInput BYTES, which split
+// a multi-byte character: a valid 18000-byte `input` of '€' became 16384 bytes
+// that were not UTF-8, and the sender was told 422 "`input` is not valid" for
+// a body that was fine. It also made admit's ErrInputTooLarge unreachable, so
+// an agent's explicit `input` was silently shortened. An `input` over the
+// limit now reaches admit whole and is refused there with 400, which names the
+// limit. Nothing is run on a text the caller did not send.
 func decodeInboundBody(raw []byte) inboundBody {
 	var body inboundBody
 	if len(raw) == 0 {
 		return body
 	}
 	_ = json.Unmarshal(raw, &body)
-	if len(body.Input) > maxRunInput {
-		body.Input = body.Input[:maxRunInput]
-	}
 	return body
+}
+
+// bodyVariables decodes the body's `variables` object. Anything that is not a
+// JSON object supplies no variables.
+func bodyVariables(body inboundBody) map[string]json.RawMessage {
+	if len(body.Variables) == 0 {
+		return nil
+	}
+	var variables map[string]json.RawMessage
+	if err := json.Unmarshal(body.Variables, &variables); err != nil {
+		return nil
+	}
+	return variables
 }
 
 // recordInbound writes the `centry.audit_events` row for one inbound call.
@@ -416,7 +619,7 @@ func decodeInboundBody(raw []byte) inboundBody {
 // string, and a credential written into a table the admin page renders would
 // outlive every rotation.
 func (h *Handler) recordInbound(
-	r *http.Request, started time.Time, status int,
+	r *http.Request, started time.Time, status int, entityType string,
 	projectID, userID, versionID int64, reason string,
 ) {
 	if h == nil || h.recorder == nil {
@@ -437,7 +640,7 @@ func (h *Handler) recordInbound(
 		StatusCode: &statusCode,
 		DurationMS: &elapsed,
 		IsError:    status >= http.StatusBadRequest,
-		EntityType: "pipeline",
+		EntityType: entityType,
 	}
 	if projectID > 0 {
 		event.ProjectID = audit.ID(projectID)

@@ -110,7 +110,7 @@ function sameDebugVisit(previous: CodeDebugProof, next: CodeDebugProof): boolean
     proof.attempt, proof.node_id, proof.activation_id, proof.request_sha256]);
   return identity(previous) === identity(next);
 }
-/** Worker emits this inert receipt without tool start. Ordinary unmatched ends remain inert. */
+/** Accept a completion-only Code receipt through its strict proof and generation checks. */
 function reduceCodeDebugCompletion(
   history: readonly ChatMessage[], frame: ChatStreamFrame, index: number, current: ChatMessage,
 ): readonly ChatMessage[] {
@@ -140,6 +140,48 @@ function reduceCodeDebugCompletion(
   return replaceAt(history, index, { toolActions: existing
     ? replaceToolAction(current, runId, action => ({ ...action, ...completed }))
     : [...((current.toolActions ?? []) as readonly ToolAction[]), completed] });
+}
+
+/** The processing timeline entry an `agent_tool_start` frame creates. */
+function newToolAction(frame: ChatStreamFrame, runId: string): ToolAction {
+  const metadata = toolMetadata(frame);
+  const hierarchy = normalizeExecutionHierarchy(metadata, frame.response_metadata);
+  const toolkit = toolkitIdentity(frame, metadata);
+  // Built imperatively, not with conditional spreads: spreading a
+  // `{name: X} | {}` union infers `name?: X | undefined`, which
+  // `exactOptionalPropertyTypes` rejects against `SubAgentGroupable`'s
+  // "absent or string". Same convention as
+  // `useToolkitChatSocket.hooks.ts:79-90`.
+  const draft: Record<string, unknown> = {
+    id: runId,
+    type: TOOL_ACTION_TYPES.Tool,
+    status: ToolActionStatus.processing,
+    message: '',
+    ...hierarchy,
+    toolInputs: frame.response_metadata?.tool_inputs,
+    toolOutputs: frame.response_metadata?.tool_outputs,
+    toolMeta: { ...metadata, toolkit_type: toolkit.type, toolkit_name: toolkit.name, ...hierarchy },
+    created_at: frame.response_metadata?.timestamp_start ?? frame.created_at,
+  };
+  const displayName = toolDisplayName(frame, metadata);
+  if (displayName !== undefined) draft['name'] = displayName;
+  if (typeof metadata['original_name'] === 'string') draft['original_name'] = metadata['original_name'];
+  return draft as unknown as ToolAction;
+}
+
+/**
+ * The message with a timeline entry for `runId`, synthesized from an END frame
+ * when its start never arrived (#6832).
+ *
+ * A dropped connection or a replay that began past the start used to leave an
+ * end with nothing to update, so the tool vanished from the live trace and
+ * the thinking section drew empty separators until a reload. The end frame
+ * carries the same identity fields as the start, so the entry is built from
+ * it, and the end then settles it like any other.
+ */
+function withToolAction(message: ChatMessage, frame: ChatStreamFrame, runId: string): ChatMessage {
+  if (findToolAction(message, runId)) return message;
+  return { ...message, toolActions: [...((message.toolActions ?? []) as readonly ToolAction[]), newToolAction(frame, runId)] };
 }
 
 /**
@@ -176,27 +218,7 @@ export function reduceToolFrame(
         });
       }
 
-      const toolkit = toolkitIdentity(frame, metadata);
-      // Built imperatively, not with conditional spreads: spreading a
-      // `{name: X} | {}` union infers `name?: X | undefined`, which
-      // `exactOptionalPropertyTypes` rejects against `SubAgentGroupable`'s
-      // "absent or string". Same convention as
-      // `useToolkitChatSocket.hooks.ts:79-90`.
-      const draft: Record<string, unknown> = {
-        id: runId,
-        type: TOOL_ACTION_TYPES.Tool,
-        status: ToolActionStatus.processing,
-        message: '',
-        ...hierarchy,
-        toolInputs: frame.response_metadata?.tool_inputs,
-        toolOutputs: frame.response_metadata?.tool_outputs,
-        toolMeta: { ...metadata, toolkit_type: toolkit.type, toolkit_name: toolkit.name, ...hierarchy },
-        created_at: frame.response_metadata?.timestamp_start ?? frame.created_at,
-      };
-      const displayName = toolDisplayName(frame, metadata);
-      if (displayName !== undefined) draft['name'] = displayName;
-      if (typeof metadata['original_name'] === 'string') draft['original_name'] = metadata['original_name'];
-      const created = draft as unknown as ToolAction;
+      const created = newToolAction(frame, runId);
       return replaceAt(history, index, {
         toolActions: [...((current.toolActions ?? []) as readonly ToolAction[]), created],
         ...(threadId !== undefined ? { threadId } : {}),
@@ -209,14 +231,17 @@ export function reduceToolFrame(
     case SocketMessageType.AgentToolEnd:
     case SocketMessageType.AgentToolError: {
       if (index === -1) return history;
-      const current = history[index];
+      const original = history[index];
       const runId = frame.response_metadata?.tool_run_id;
-      if (!current || !runId) return history;
+      if (!original || !runId) return history;
       const debug = codeDebugToolMeta(frame.response_metadata);
-      if (Object.hasOwn(debug, 'code_debug_v1') || findToolAction(current, runId)?.toolMeta?.['code_debug_v1'] !== undefined) {
-        return type === SocketMessageType.AgentToolEnd ? reduceCodeDebugCompletion(history, frame, index, current) : history;
+      if (runId.startsWith('code-debug-') || Object.hasOwn(debug, 'code_debug_v1') || findToolAction(original, runId)?.toolMeta?.['code_debug_v1'] !== undefined) {
+        return type === SocketMessageType.AgentToolEnd ? reduceCodeDebugCompletion(history, frame, index, original) : history;
       }
-      if (!findToolAction(current, runId)) return history;
+      // This frame created the action: its start (and maybe earlier chunks)
+      // never arrived (#6832).
+      const synthesized = findToolAction(original, runId) === undefined;
+      const current = withToolAction(original, frame, runId);
       const metadata = toolMetadata(frame);
       const isError = type === SocketMessageType.AgentToolError;
       if (isError && frame.response_metadata?.tool_output_chunk_v1 === undefined) {
@@ -241,7 +266,23 @@ export function reduceToolFrame(
           let toolOutputs = previous;
           const chunk = frame.response_metadata?.tool_output_chunk_v1;
           const assembled = chunk === undefined ? undefined : appendToolOutputChunk(previous, output, chunk, action['toolOutputChunk']);
-          if (chunk !== undefined && assembled === undefined) return action;
+          if (chunk !== undefined && assembled === undefined) {
+            // A chunk that cannot be assembled onto an action THIS frame
+            // created (the start and the earlier chunks were lost) can never
+            // complete. Settle it as a partial result rather than leave it
+            // spinning; later chunks of the run then change nothing.
+            return synthesized
+              ? {
+                ...action,
+                ...normalizeExecutionHierarchy(metadata, action, action.toolMeta),
+                toolOutputPartial: true,
+                status: isError ? ToolActionStatus.error : ToolActionStatus.complete,
+                ...(isError ? { isError: true } : {}),
+                ended_at: frame.response_metadata?.timestamp_finish ?? frame.created_at,
+                toolMeta: { ...action.toolMeta, ...metadata },
+              }
+              : action;
+          }
           if (assembled && assembled.output === previous && assembled.chunk === action['toolOutputChunk']) return action;
           // A CHUNKED result (#956) is finished from the chunks that preceded
           // this frame, never from its `tool_output` — which is the empty

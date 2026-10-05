@@ -462,6 +462,15 @@ func TestAMemberIsResolvedByIdExternalIdOrAddressAndRefusedOtherwise(t *testing.
 
 	_, err = store.ResolveMember(ctx, "nobody@corp.com")
 	require.ErrorAs(t, err, &UnknownMemberError{})
+
+	// N3: a platform principal resolves WITH a refusal (by address or by id),
+	// so a grant can refuse it and a removal can still name it.
+	system := seedUser(t, pool, "system_user_5@centry.user")
+	for _, value := range []string{"system_user_5@centry.user", fmt.Sprint(system)} {
+		resolved, err := store.ResolveMember(ctx, value)
+		require.ErrorIs(t, err, ErrProtected, value)
+		require.Equal(t, system, resolved)
+	}
 }
 
 // A numeric member value can name one account by id and another by external id.
@@ -676,4 +685,29 @@ func newGroupPool(t *testing.T) *pgxpool.Pool {
 	}
 
 	return pool
+}
+
+func TestAPatchCanReplaceAGroupsExternalIDInTheSameTransactionAsMembers(t *testing.T) {
+	pool := newGroupPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	project := seedProject(t, pool, "Platform", 0)
+	alice := seedUser(t, pool, "alice@corp.com")
+	binding, err := store.CreateBinding(ctx, "Platform Team", project, "editor")
+	require.NoError(t, err)
+
+	group, err := store.ApplyGroupOperations(ctx, binding.ID, []GroupOperation{
+		{Kind: GroupSetExternalID, ExternalID: "grp-9"},
+		{Kind: GroupAddMembers, Members: []int{alice}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "grp-9", group.ExternalID)
+	require.Len(t, group.Members, 1)
+
+	group, err = store.ApplyGroupOperations(ctx, binding.ID, []GroupOperation{
+		{Kind: GroupSetExternalID, ExternalID: ""},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "", group.ExternalID)
 }

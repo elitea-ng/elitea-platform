@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiTab` (R-T12). Ported from
@@ -37,6 +38,9 @@ export const MuiTab: EliteaComponents['MuiTab'] = {
     root: ({ theme, ownerState }) => {
       const isIconOnly = ownerState.label === '' || ownerState.label == null;
       return {
+        // Tabs are `labelMedium` everywhere (typography spec §2) — MUI's
+        // stock tab font is the 14px uppercase `button` variant.
+        ...typeScale(theme.typography.labelMedium),
         padding: `${theme.spacing(1)} ${theme.spacing(2)} ${theme.spacing(1)} ${theme.spacing(2)}`,
         borderRadius: `${theme.vars.shape.radiusMd} ${theme.vars.shape.radiusMd} 0 0`,
         minHeight: 0,

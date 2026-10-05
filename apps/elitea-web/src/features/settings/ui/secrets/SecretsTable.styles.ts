@@ -39,6 +39,15 @@ export const tableStyles: Record<string, SxProps<Theme>> = {
     justifyContent: 'center',
     height: '100%',
   },
+  /* Failed list (SecretsLoadError) — sits where the grid would. */
+  loadError: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '1rem',
+    minHeight: '12rem',
+  },
   /* Pagination footer */
   pagination: {
     display: 'flex',
@@ -51,11 +60,11 @@ export const tableStyles: Record<string, SxProps<Theme>> = {
     display: 'flex',
     alignItems: 'center',
     gap: '0.5rem',
-    fontSize: ({ typography }) => typography.headingMedium.fontSize,
+    // The pagination role is labelSmall, as MuiTablePagination (spec §2).
+    typography: 'labelSmall',
     color: 'text.secondary',
   },
   pageInfo: {
-    fontSize: ({ typography }) => typography.headingMedium.fontSize,
     color: 'text.secondary',
   },
 };

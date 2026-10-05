@@ -149,7 +149,7 @@ export function ServiceDescriptorDecisionDialog({
               )}
         </DialogContentText>
         {decision === null ? null : (
-          <Typography variant="body2" color="text.secondary" sx={{ marginBottom: '1rem' }}>
+          <Typography variant="bodyMedium" component="p" color="text.secondary" sx={{ marginBottom: '1rem' }}>
             {decision.descriptor.provider_name}
             {shortDigest(decision.descriptor)}
           </Typography>

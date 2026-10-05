@@ -66,4 +66,44 @@ describe('TabButtonItem', () => {
     // No tooltip popup is reachable without the wrapper being present at all.
     expect(queryByRole('tooltip')).not.toBeInTheDocument();
   });
+
+  it('applies an ARRAY sx (object and function entries) together with fullWidth', () => {
+    const { getByRole } = renderWithTheme(
+      <ToggleButtonGroup
+        value="list"
+        exclusive
+      >
+        <TabButtonItem
+          item={{ value: 'list', label: 'List' }}
+          fullWidth
+          disableTooltip
+          sx={[{ height: '31px' }, () => ({ opacity: 0.5 })]}
+        />
+      </ToggleButtonGroup>,
+    );
+    const style = getComputedStyle(getByRole('button', { name: 'List' }));
+    expect(style.height).toBe('31px');
+    expect(style.opacity).toBe('0.5');
+    // The equal-share sizing layered underneath the caller's styles is kept.
+    expect(style.width).toBe('100%');
+  });
+
+  it('applies a function sx together with fullWidth', () => {
+    const { getByRole } = renderWithTheme(
+      <ToggleButtonGroup
+        value="list"
+        exclusive
+      >
+        <TabButtonItem
+          item={{ value: 'list', label: 'List' }}
+          fullWidth
+          disableTooltip
+          sx={() => ({ height: '29px' })}
+        />
+      </ToggleButtonGroup>,
+    );
+    const style = getComputedStyle(getByRole('button', { name: 'List' }));
+    expect(style.height).toBe('29px');
+    expect(style.width).toBe('100%');
+  });
 });

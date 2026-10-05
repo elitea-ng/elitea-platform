@@ -30,14 +30,17 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { formatSmallUsd } from '@/shared/lib/money';
 
-import { useProjectUsage, type ProjectUsage } from './api/projectUsageApi';
+import { useProjectUsage, type ProjectUsage, type UsageScope } from './api/projectUsageApi';
 
 const DASH = '—';
 
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return DASH;
-  return `$${value.toFixed(2)}`;
+  // Not `toFixed(2)`: a sub-cent spend is real spend, and `$0.00` would claim
+  // none (#6682).
+  return formatSmallUsd(value);
 }
 
 /** The bar's colour: past the project's own warning threshold, then past 100%. */
@@ -53,12 +56,12 @@ function UsageFigure({ label, value }: { readonly label: string; readonly value:
       <Typography variant="labelMedium" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="h6">{value}</Typography>
+      <Typography variant="headingSmall" component="p">{value}</Typography>
     </Box>
   );
 }
 
-function UsageBody({ usage }: { readonly usage: ProjectUsage }) {
+function UsageBody({ usage, scope }: { readonly usage: ProjectUsage; readonly scope: UsageScope }) {
   const percentUsed = usage.percent_used;
   const warningPct = usage.warning_pct ?? 80;
   const unlimited = percentUsed === null || percentUsed === undefined;
@@ -86,10 +89,12 @@ function UsageBody({ usage }: { readonly usage: ProjectUsage }) {
 
       {unlimited ? (
         <Typography variant="bodyMedium" color="text.secondary">
-          {t(
-            'settings.usage.noCeiling',
-            'This project has no enforced spend ceiling this period.',
-          )}
+          {scope === 'user'
+            ? t('settings.usage.noMemberCeiling', 'You have no enforced spend ceiling in this project this period.')
+            : t(
+                'settings.usage.noCeiling',
+                'This project has no enforced spend ceiling this period.',
+              )}
         </Typography>
       ) : (
         <Box sx={styles.bar} data-testid="settings-usage-bar">
@@ -139,24 +144,40 @@ function UsageBody({ usage }: { readonly usage: ProjectUsage }) {
 
 interface UsageProps {
   readonly projectId?: string | undefined;
+  /** `user` shows the caller's own member budget (#6732). */
+  readonly scope?: UsageScope | undefined;
 }
 
-const Usage = memo(({ projectId }: UsageProps) => {
-  const query = useProjectUsage(projectId);
+const Usage = memo(({ projectId, scope = 'project' }: UsageProps) => {
+  const query = useProjectUsage(projectId, scope);
 
   return (
-    <Box sx={styles.container} data-testid="settings-usage">
+    <Box sx={styles.container} data-testid="settings-usage" data-scope={scope}>
+      {scope === 'user' ? (
+        <Typography variant="bodyMedium" color="text.secondary" data-testid="settings-usage-member-scope">
+          {t('settings.usage.memberScope', 'Your own usage against your budget in this project.')}
+        </Typography>
+      ) : null}
       {query.isLoading ? <LinearProgress data-testid="settings-usage-loading" /> : null}
 
       {/* Reported as the failure it is. An empty panel renders identically to
-          "this project has spent nothing", which is a different claim (#130). */}
-      {query.isError ? (
+          "this project has spent nothing", which is a different claim (#130).
+          The blocking panel is for when there is NOTHING to show. A refetch
+          that fails over figures already on screen (a Refresh click, a window
+          refocus, a remount past the stale time) keeps those figures and says
+          they are stale; a Refresh click also raises its toast (#6672). */}
+      {query.isError && query.data === undefined ? (
         <Alert severity="error" data-testid="settings-usage-error">
           {t('settings.usage.error', 'Failed to load usage for this project.')}
         </Alert>
       ) : null}
+      {query.isError && query.data !== undefined ? (
+        <Alert severity="warning" data-testid="settings-usage-stale">
+          {t('settings.usage.stale', 'Showing the last loaded figures; they could not be updated.')}
+        </Alert>
+      ) : null}
 
-      {query.data !== undefined ? <UsageBody usage={query.data} /> : null}
+      {query.data !== undefined ? <UsageBody usage={query.data} scope={scope} /> : null}
     </Box>
   );
 });

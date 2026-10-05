@@ -14,6 +14,7 @@ import * as entity from './index';
 const PUBLIC_SURFACE = [
   'authorDisplayName',
   'isCurrentUserAuthor',
+  'isDeletedAuthor',
   'isSameAuthor',
 ] as const;
 

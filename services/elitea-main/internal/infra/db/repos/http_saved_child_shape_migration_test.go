@@ -8,7 +8,7 @@ import (
 )
 
 func TestHTTPChildShapeMigrationRequiresEveryPopulatedScopeField(t *testing.T) {
-	raw, err := platformmigrations.Files.ReadFile("shared/0141_execution_saved_child_scopes.sql")
+	raw, err := platformmigrations.Files.ReadFile("shared/0152_execution_saved_child_scopes.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -55,11 +55,18 @@ type triggerRow struct {
 	AuthMode        string
 	SignatureHeader string
 	Provider        string
-	CreatedBy       int64
-	CreatedAt       time.Time
-	RotatedAt       *time.Time
-	RevokedAt       *time.Time
-	LastUsedAt      *time.Time
+	// TargetKind, EventFilter and AllowVariableOverrides are 0142's: the
+	// kind of version the credential was issued for, the provider events it
+	// admits (nil admits every event), and whether a caller may re-value the
+	// agent's declared variables.
+	TargetKind             string
+	EventFilter            []string
+	AllowVariableOverrides bool
+	CreatedBy              int64
+	CreatedAt              time.Time
+	RotatedAt              *time.Time
+	RevokedAt              *time.Time
+	LastUsedAt             *time.Time
 }
 
 // scheduleRow is one `pipeline_schedules` row.
@@ -97,7 +104,12 @@ const (
 // id derived from the secret would let anyone holding a URL recover a
 // constraint on the secret, and a secret derived from the id would be no secret
 // at all.
-func newCredential() (tokenID, secret string, hash []byte, err error) {
+//
+// A Standard Webhooks trigger gets its secret in that specification's own
+// form, `whsec_` + standard base64 of the key bytes. A conforming sender (a
+// GitLab signing token among them) decodes exactly that form, and
+// standardWebhooksKey reads it back the same way.
+func newCredential(mode triggerAuthMode) (tokenID, secret string, hash []byte, err error) {
 	var encoded string
 	idBytes := make([]byte, tokenIDBytes)
 	if _, err = rand.Read(idBytes); err != nil {
@@ -115,6 +127,9 @@ func newCredential() (tokenID, secret string, hash []byte, err error) {
 	// it, which is why both call sites go through these two functions and
 	// neither hashes anything itself.
 	encoded = base64.RawURLEncoding.EncodeToString(secretBytes)
+	if mode.AuthMode == AuthModeStandardWebhooks {
+		encoded = standardWebhooksSecretPrefix + base64.StdEncoding.EncodeToString(secretBytes)
+	}
 	return hex.EncodeToString(idBytes), encoded, secretDigest(encoded), nil
 }
 
@@ -140,6 +155,7 @@ func vaultSecretName(tokenID string) string {
 
 const triggerColumns = `id, application_id, version_id, token_id, token_hash, secret_name,
 	auth_mode, signature_header, provider,
+	target_kind, event_filter, allow_variable_overrides,
 	created_by, created_at, rotated_at, revoked_at, last_used_at`
 
 func scanTrigger(row pgx.Row) (triggerRow, error) {
@@ -148,6 +164,7 @@ func scanTrigger(row pgx.Row) (triggerRow, error) {
 		&trigger.ID, &trigger.ApplicationID, &trigger.VersionID, &trigger.TokenID,
 		&trigger.TokenHash, &trigger.SecretName,
 		&trigger.AuthMode, &trigger.SignatureHeader, &trigger.Provider,
+		&trigger.TargetKind, &trigger.EventFilter, &trigger.AllowVariableOverrides,
 		&trigger.CreatedBy, &trigger.CreatedAt,
 		&trigger.RotatedAt, &trigger.RevokedAt, &trigger.LastUsedAt,
 	); err != nil {
@@ -185,15 +202,21 @@ func (h *Handler) triggerByTokenID(ctx context.Context, schema, tokenID string) 
 // alone would keep a mode the caller has just replaced — "rotate this trigger
 // as a plain token one" would silently keep verifying signatures — and the
 // settings dialog offers exactly that change through this one route.
+//
+// So are the three 0142 columns. `target_kind` in particular: a rotation is
+// an explicit re-issue by a writer, so it records the kind the version has
+// NOW. That is how a trigger refused because its version changed kind is
+// brought back into use.
 func (h *Handler) upsertTrigger(
 	ctx context.Context, schema string, applicationID, versionID, actorID int64,
-	tokenID string, hash []byte, secretName string, mode triggerAuthMode,
+	tokenID string, hash []byte, secretName string, mode triggerAuthMode, controls triggerControls,
 ) (triggerRow, error) {
 	return scanTrigger(h.pool.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.pipeline_triggers
 	(application_id, version_id, token_id, token_hash, secret_name, created_by,
-	 auth_mode, signature_header, provider)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	 auth_mode, signature_header, provider,
+	 target_kind, event_filter, allow_variable_overrides)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (version_id) DO UPDATE SET
 	token_id = EXCLUDED.token_id,
 	token_hash = EXCLUDED.token_hash,
@@ -202,12 +225,16 @@ ON CONFLICT (version_id) DO UPDATE SET
 	auth_mode = EXCLUDED.auth_mode,
 	signature_header = EXCLUDED.signature_header,
 	provider = EXCLUDED.provider,
+	target_kind = EXCLUDED.target_kind,
+	event_filter = EXCLUDED.event_filter,
+	allow_variable_overrides = EXCLUDED.allow_variable_overrides,
 	rotated_at = now(),
 	revoked_at = NULL,
 	revoked_by = NULL
 RETURNING %s`, schema, triggerColumns),
 		applicationID, versionID, tokenID, hash, secretName, actorID,
-		mode.AuthMode, mode.SignatureHeader, mode.Provider))
+		mode.AuthMode, mode.SignatureHeader, mode.Provider,
+		controls.TargetKind, controls.EventFilter, controls.AllowVariableOverrides))
 }
 
 // revokeTrigger stamps the row rather than deleting it. It is idempotent: a

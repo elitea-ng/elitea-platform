@@ -94,7 +94,7 @@ function ProjectActivityContent({
     >
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
         <Box>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          <Typography variant="headingSmall" component="h2">
             {t('pages.admin.projects.activity.heading', 'Project activity')}
           </Typography>
           <Typography variant="bodyMedium" color="text.secondary">

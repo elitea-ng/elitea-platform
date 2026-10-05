@@ -1,8 +1,9 @@
 //! Claim-bound remote MCP toolsets backed by ADK-Rust's native MCP client.
 //!
 //! Main owns the frozen server definition. The worker validates that exact
-//! authority, establishes one Streamable HTTP session without redirects or
-//! automatic request replay, asks ADK to discover the server catalog, and
+//! authority, establishes one Streamable HTTP session that follows only a few
+//! same-origin redirects and never replays a request automatically, asks ADK
+//! to discover the server catalog (or reuses a TTL-bounded cached listing), and
 //! wraps the resulting ADK tools with Elitea policy, metadata and result
 //! bounds. Main may also claim-materialize one fixed prebuilt HTTP definition.
 //! Arbitrary stdio processes remain outside this worker.
@@ -24,7 +25,7 @@ use adk_rust::tool::mcp::rmcp::transport::streamable_http_client::{
 };
 use adk_rust::tool::{McpToolset, SimpleToolContext};
 use adk_rust::{
-    AdkError, ErrorCategory, ErrorComponent, ReadonlyContext, RetryHint, Tool, ToolContext, Toolset,
+    AdkError, ErrorCategory, ErrorComponent, ReadonlyContext, Tool, ToolContext, Toolset,
 };
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
@@ -34,6 +35,10 @@ use super::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
 };
 use super::invocation::admit_materialized_toolset;
+use super::mcp_error::{McpErrorRedaction, model_visible_mcp_error};
+use super::mcp_tool_cache::{
+    CachedMcpTool, LiveMcpTools, McpToolDescriptor, McpToolListCache, McpToolListKey,
+};
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
 
@@ -57,6 +62,12 @@ const MAX_AUTH_METADATA_STRING_BYTES: usize = 4 * 1_024;
 const MAX_STATIC_HEADERS: usize = 64;
 const MAX_HEADER_NAME_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 16 * 1_024;
+const DEFAULT_CACHE_TTL_SECONDS: u64 = 300;
+const MIN_CACHE_TTL_SECONDS: u64 = 60;
+const MAX_CACHE_TTL_SECONDS: u64 = 3_600;
+/// A sub-path mount commonly redirects `/mcp` to `/mcp/`; more hops than this
+/// is a loop or a login bounce, neither of which is an MCP endpoint.
+const MAX_REDIRECT_HOPS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum McpMaterializationErrorCode {
@@ -65,6 +76,10 @@ pub(crate) enum McpMaterializationErrorCode {
     ResourceExhausted,
     AuthorizationRequired,
     DependencyUnavailable,
+    /// The URL names the deprecated HTTP+SSE transport (`…/sse`) and the
+    /// server refuses it (405/410). Retrying cannot succeed; the toolkit must
+    /// be pointed at the streamable HTTP endpoint (`…/mcp`) instead.
+    RetiredSseEndpoint,
 }
 
 /// A stable, data-free remote MCP assembly failure.
@@ -110,18 +125,26 @@ impl fmt::Display for McpMaterializationError {
                 "the MCP server requires delegated authorization"
             }
             McpMaterializationErrorCode::DependencyUnavailable => "the MCP server is unavailable",
+            McpMaterializationErrorCode::RetiredSseEndpoint => RETIRED_SSE_MESSAGE,
         })
     }
 }
 
 impl std::error::Error for McpMaterializationError {}
 
+/// Data-free text for [`McpMaterializationErrorCode::RetiredSseEndpoint`],
+/// shared with the assembly error mappers so every surface says the same.
+pub(crate) const RETIRED_SSE_MESSAGE: &str = "the MCP server no longer serves the legacy HTTP+SSE \
+     endpoint; HTTP+SSE is not supported, configure the server's streamable HTTP /mcp endpoint";
+
 /// Validated, immutable connection settings for one direct remote MCP server.
 ///
 /// This value intentionally has no `Debug` implementation because endpoints
 /// may contain tenant-identifying paths. A continuation access token is accepted
-/// only from Main's claim-fetched token map and applied to the exact frozen URL;
-/// static headers require a Main-materialized prebuilt toolkit type.
+/// only from Main's claim-fetched token map and applied to the exact frozen URL.
+/// Static headers come from the toolkit (a direct `mcp` toolkit's own headers,
+/// such as a PAT) or from Main's materialized prebuilt definition; both pass
+/// the same validation, and transport-owned headers are refused.
 pub(crate) struct RemoteMcpConfig {
     toolkit_name: String,
     toolkit_type: String,
@@ -132,6 +155,8 @@ pub(crate) struct RemoteMcpConfig {
     requested_scopes: Vec<String>,
     static_headers: reqwest_mcp::header::HeaderMap,
     access_token: Option<Zeroizing<String>>,
+    /// `None` when `enable_caching` is false: every materialization lists.
+    tool_list_ttl: Option<Duration>,
 }
 
 impl RemoteMcpConfig {
@@ -155,7 +180,7 @@ impl RemoteMcpConfig {
         )?);
         let selected_tools = parse_selected_tools(settings)?;
         let excluded_tools = parse_excluded_tools(settings)?;
-        let static_headers = parse_static_headers(settings, prebuilt)?;
+        let static_headers = parse_static_headers(settings)?;
         let server_name = if prebuilt {
             Some(
                 settings
@@ -171,7 +196,7 @@ impl RemoteMcpConfig {
         let access_token = if reference.is_internal_builder() {
             // The actor credential comes from Main's claim materializer. A
             // delegated token must not replace this execution's actor identity.
-            if !static_headers.contains_key(reqwest_mcp::header::AUTHORIZATION) {
+            if !configured_authorization(&static_headers) {
                 return Err(unsupported_authority());
             }
             None
@@ -184,10 +209,15 @@ impl RemoteMcpConfig {
                 prebuilt,
             )?
         };
-        settings.get("enable_caching").map_or(Ok(true), |value| {
+        let enable_caching = settings.get("enable_caching").map_or(Ok(true), |value| {
             value.as_bool().ok_or_else(invalid_configuration)
         })?;
-        parse_bounded_integer(settings.get("cache_ttl"), 300, 60, 3_600)?;
+        let cache_ttl = parse_bounded_integer(
+            settings.get("cache_ttl"),
+            DEFAULT_CACHE_TTL_SECONDS,
+            MIN_CACHE_TTL_SECONDS,
+            MAX_CACHE_TTL_SECONDS,
+        )?;
         if settings
             .get("ssl_verify")
             .is_some_and(|value| value != &Value::Bool(true))
@@ -204,7 +234,33 @@ impl RemoteMcpConfig {
             requested_scopes,
             static_headers,
             access_token,
+            // An internal builder's bearer is minted per execution, so its
+            // listing could never be reused: caching it would only pin memory.
+            tool_list_ttl: (enable_caching && !reference.is_internal_builder())
+                .then(|| Duration::from_secs(cache_ttl)),
         })
+    }
+
+    /// The identity a cached tool listing is valid for: toolkit, endpoint and
+    /// the exact credentials sent. A different PAT, token or header is a
+    /// different listing, so one caller never sees another caller's catalog.
+    fn tool_list_key(&self) -> Result<McpToolListKey, McpMaterializationError> {
+        let headers = self.request_headers()?;
+        let mut header_fields = headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_bytes()))
+            .collect::<Vec<_>>();
+        header_fields.sort_unstable();
+        let mut fields: Vec<&[u8]> = vec![
+            self.toolkit_type.as_bytes(),
+            self.toolkit_name.as_bytes(),
+            self.endpoint.as_bytes(),
+        ];
+        for (name, value) in &header_fields {
+            fields.push(name.as_bytes());
+            fields.push(value);
+        }
+        Ok(McpToolListKey::from_fields(&fields))
     }
 
     #[must_use]
@@ -237,9 +293,20 @@ impl RemoteMcpConfig {
         &self.excluded_tools
     }
 
+    /// A configured `Authorization` header (a PAT) wins over a delegated
+    /// OAuth token, matching Load Tools in Main and the Python SDK's
+    /// `setdefault`, so discovery and execution act as one identity (#6691).
+    ///
+    /// Only a non-blank header counts, as in Main's `mcpDiscoveryHeaders`: a
+    /// blank one is replaced by the delegated token, so Load Tools and a run
+    /// never disagree about which identity is used.
     fn request_headers(&self) -> Result<reqwest_mcp::header::HeaderMap, McpMaterializationError> {
         let mut headers = self.static_headers.clone();
+        if configured_authorization(&headers) {
+            return Ok(headers);
+        }
         if let Some(token) = self.access_token() {
+            headers.remove(reqwest_mcp::header::AUTHORIZATION);
             let mut bearer = Zeroizing::new(String::with_capacity("Bearer ".len() + token.len()));
             bearer.push_str("Bearer ");
             bearer.push_str(token);
@@ -255,9 +322,24 @@ impl RemoteMcpConfig {
         self.access_token.as_deref().map(String::as_str)
     }
 
+    /// The values a failed call must not echo to the model: every static
+    /// header value, the delegated token, and the endpoint (demo issue 3).
+    fn error_redaction(&self) -> McpErrorRedaction {
+        let headers = self
+            .static_headers
+            .values()
+            .filter_map(|value| value.to_str().ok());
+        McpErrorRedaction::new(headers.chain(self.access_token()), &self.endpoint)
+    }
+
     #[cfg(test)]
     pub(crate) fn access_token_for_test(&self) -> Option<&str> {
         self.access_token()
+    }
+
+    #[must_use]
+    pub(crate) const fn tool_list_ttl(&self) -> Option<Duration> {
+        self.tool_list_ttl
     }
 
     #[cfg(test)]
@@ -265,6 +347,23 @@ impl RemoteMcpConfig {
         &self,
     ) -> Result<reqwest_mcp::header::HeaderMap, McpMaterializationError> {
         self.request_headers()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parse_for_test(
+        reference: &FrozenToolReference<'_>,
+        mcp_tokens: &Map<String, Value>,
+    ) -> Result<Self, McpMaterializationError> {
+        Self::parse(reference, mcp_tokens)
+    }
+
+    /// Points a parsed config at a plain-HTTP test server. Production
+    /// parsing refuses anything but HTTPS.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_endpoint_for_test(mut self, endpoint: &str) -> Self {
+        endpoint.clone_into(&mut self.endpoint);
+        self
     }
 }
 
@@ -278,6 +377,34 @@ pub(crate) trait McpConnector: Send + Sync {
         &self,
         config: &RemoteMcpConfig,
     ) -> Result<Arc<dyn Toolset>, McpMaterializationError>;
+
+    /// Connect and, when the connection can call a tool by name without
+    /// listing first, also return that caller. Only such a connection can
+    /// serve a cached tool listing; the default never does.
+    async fn connect_session(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<McpSession, McpMaterializationError> {
+        Ok(McpSession {
+            toolset: self.connect(config).await?,
+            reuses_listings: false,
+        })
+    }
+}
+
+/// One established MCP connection.
+pub(crate) struct McpSession {
+    pub(crate) toolset: Arc<dyn Toolset>,
+    /// Whether this connection may serve a cached listing: its toolset must
+    /// list lazily on the session when a cached tool is first called.
+    pub(crate) reuses_listings: bool,
+}
+
+/// `true` when the headers carry a non-blank `Authorization` value.
+fn configured_authorization(headers: &reqwest_mcp::header::HeaderMap) -> bool {
+    headers
+        .get(reqwest_mcp::header::AUTHORIZATION)
+        .is_some_and(|value| !value.as_bytes().iter().all(u8::is_ascii_whitespace))
 }
 
 /// Secure Streamable HTTP connector for ADK's native [`McpToolset`].
@@ -296,17 +423,18 @@ impl McpConnector for AdkHttpMcpConnector {
         &self,
         config: &RemoteMcpConfig,
     ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
-        let mut client = reqwest_mcp::Client::builder()
-            .https_only(true)
-            .redirect(reqwest_mcp::redirect::Policy::none())
-            .retry(reqwest_mcp::retry::never())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(config.timeout());
-        let headers = config.request_headers()?;
-        if !headers.is_empty() {
-            client = client.default_headers(headers);
-        }
-        let client = client.build().map_err(|_| invalid_configuration())?;
+        self.connect_session(config)
+            .await
+            .map(|session| session.toolset)
+    }
+
+    async fn connect_session(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<McpSession, McpMaterializationError> {
+        let client = session_client_builder(config)?
+            .build()
+            .map_err(|_| invalid_configuration())?;
         let transport_config = StreamableHttpClientTransportConfig::with_uri(config.endpoint())
             .max_sse_event_size(MAX_SSE_EVENT_BYTES)
             .reinit_on_expired_session(false);
@@ -318,10 +446,102 @@ impl McpConnector for AdkHttpMcpConnector {
                     authorization_required_with_metadata(config, error.auth_challenge()).await,
                 );
             }
+            Ok(Err(error)) if retired_sse_failure(config.endpoint(), &error) => {
+                return Err(retired_sse_endpoint());
+            }
             Err(_) | Ok(Err(_)) => return Err(dependency_unavailable()),
         };
-        Ok(Arc::new(McpToolset::new(running)))
+        Ok(McpSession {
+            toolset: Arc::new(McpToolset::new(running)),
+            reuses_listings: true,
+        })
     }
+}
+
+/// The HTTP client every MCP session uses: HTTPS only, the request headers
+/// (static headers and the bearer) as defaults, no automatic replay, and
+/// redirects limited to the frozen endpoint's origin. Factored out so tests
+/// exercise exactly what `connect_session` builds.
+pub(crate) fn session_client_builder(
+    config: &RemoteMcpConfig,
+) -> Result<reqwest_mcp::ClientBuilder, McpMaterializationError> {
+    let origin = reqwest_mcp::Url::parse(config.endpoint()).map_err(|_| invalid_configuration())?;
+    let mut client = reqwest_mcp::Client::builder()
+        .https_only(true)
+        .redirect(same_origin_redirect_policy(origin))
+        .retry(reqwest_mcp::retry::never())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(config.timeout());
+    let headers = config.request_headers()?;
+    if !headers.is_empty() {
+        client = client.default_headers(headers);
+    }
+    Ok(client)
+}
+
+/// Follow at most [`MAX_REDIRECT_HOPS`] redirects, and only while every hop
+/// keeps the frozen endpoint's scheme, host and port. The claim-bound
+/// authority is the origin, so a same-origin hop (`/mcp` -> `/mcp/`) keeps it
+/// and any other hop (a login page, another host) is refused.
+pub(crate) fn same_origin_redirect_policy(
+    origin: reqwest_mcp::Url,
+) -> reqwest_mcp::redirect::Policy {
+    reqwest_mcp::redirect::Policy::custom(move |attempt| {
+        if redirect_allowed(&origin, attempt.url(), attempt.previous().len()) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
+/// `previous` counts the requests already sent, the original included.
+pub(crate) fn redirect_allowed(
+    origin: &reqwest_mcp::Url,
+    next: &reqwest_mcp::Url,
+    previous: usize,
+) -> bool {
+    previous <= MAX_REDIRECT_HOPS
+        && next.scheme() == origin.scheme()
+        && next.host_str() == origin.host_str()
+        && next.port_or_known_default() == origin.port_or_known_default()
+        && next.username().is_empty()
+        && next.password().is_none()
+}
+
+/// A `/sse` URL refused with 405 or 410 is a retired HTTP+SSE endpoint. The
+/// status is read from the transport's error chain; the text is never copied
+/// anywhere.
+fn retired_sse_failure(endpoint: &str, error: &(dyn std::error::Error + 'static)) -> bool {
+    if !names_sse_endpoint(endpoint) {
+        return false;
+    }
+    let mut source = Some(error);
+    while let Some(current) = source {
+        let text = current.to_string();
+        if text.contains("HTTP 405") || text.contains("HTTP 410") {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
+
+pub(crate) fn names_sse_endpoint(endpoint: &str) -> bool {
+    reqwest_mcp::Url::parse(endpoint).is_ok_and(|url| {
+        url.path()
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .ends_with("/sse")
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn retired_sse_failure_for_test(
+    endpoint: &str,
+    error: &(dyn std::error::Error + 'static),
+) -> bool {
+    retired_sse_failure(endpoint, error)
 }
 
 /// Connect and discover every admitted direct remote MCP toolkit.
@@ -372,8 +592,8 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     let mut authorization = DelegatedAuthorizationCatalog::default();
     for reference in references {
         let config = RemoteMcpConfig::parse(reference, mcp_tokens)?;
-        let discovered = match connector.connect(&config).await {
-            Ok(discovered) => discovered,
+        let session = match connector.connect_session(&config).await {
+            Ok(session) => session,
             Err(error) if error.code() == McpMaterializationErrorCode::AuthorizationRequired => {
                 let requirement = error
                     .authorization()
@@ -421,13 +641,9 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
             }
             Err(error) => return Err(error),
         };
-        let context: Arc<dyn ReadonlyContext> =
-            Arc::new(SimpleToolContext::new("elitea_mcp_discovery"));
-        let tools = tokio::time::timeout(config.timeout(), discovered.tools(context))
-            .await
-            .map_err(|_| dependency_unavailable())?
-            .map_err(|_| dependency_unavailable())?;
+        let (tools, listing) = discover_tools(&config, &session).await?;
         let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
+        let redaction = Arc::new(config.error_redaction());
         let wrapped = tools
             .into_iter()
             .map(|tool| {
@@ -435,6 +651,7 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
                     tool,
                     reference.toolkit_name(),
                     config.timeout(),
+                    Arc::clone(&redaction),
                 )?) as Arc<dyn Tool>)
             })
             .collect::<Result<Vec<_>, McpMaterializationError>>()?;
@@ -445,9 +662,91 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
             wrapped,
         )
         .map_err(|error| materialized_toolset_error(error.code()))?;
+        // Cached only once the listing passed selection, the per-tool bounds
+        // and admission: a listing this run refused is never kept for the next.
+        if let Some(listing) = listing {
+            listing.store();
+        }
         toolsets.push(Arc::new(admitted) as Arc<dyn Toolset>);
     }
     Ok((toolsets, authorization))
+}
+
+/// The process-wide tool-listing cache that honours `enable_caching` and
+/// `cache_ttl` (#6691). It holds descriptors only, never a connection, so a
+/// cached run still opens its own session and authenticates as itself.
+static TOOL_LIST_CACHE: std::sync::LazyLock<McpToolListCache> =
+    std::sync::LazyLock::new(McpToolListCache::default);
+
+/// A fresh listing waiting to be cached until the run has validated it.
+struct PendingListing {
+    key: McpToolListKey,
+    ttl: Duration,
+    descriptors: Vec<McpToolDescriptor>,
+}
+
+impl PendingListing {
+    fn store(self) {
+        TOOL_LIST_CACHE.insert(
+            self.key,
+            self.descriptors,
+            tokio::time::Instant::now() + self.ttl,
+        );
+    }
+}
+
+async fn discover_tools(
+    config: &RemoteMcpConfig,
+    session: &McpSession,
+) -> Result<(Vec<Arc<dyn Tool>>, Option<PendingListing>), McpMaterializationError> {
+    let cache = match config.tool_list_ttl() {
+        Some(ttl) if session.reuses_listings => Some((ttl, config.tool_list_key()?)),
+        _ => None,
+    };
+    if let Some((_, key)) = &cache
+        && let Some(descriptors) = TOOL_LIST_CACHE.get(key, tokio::time::Instant::now())
+    {
+        let live = Arc::new(LiveMcpTools::new(
+            Arc::clone(&session.toolset),
+            config.timeout(),
+        ));
+        let tools = descriptors
+            .iter()
+            .map(|descriptor| {
+                Arc::new(CachedMcpTool::new(descriptor.clone(), Arc::clone(&live))) as Arc<dyn Tool>
+            })
+            .collect();
+        return Ok((tools, None));
+    }
+    let context: Arc<dyn ReadonlyContext> =
+        Arc::new(SimpleToolContext::new("elitea_mcp_discovery"));
+    let tools = tokio::time::timeout(config.timeout(), session.toolset.tools(context))
+        .await
+        .map_err(|_| dependency_unavailable())?
+        .map_err(|_| dependency_unavailable())?;
+    let pending = cache
+        .filter(|_| tools.len() <= MAX_DISCOVERED_TOOLS)
+        .map(|(ttl, key)| PendingListing {
+            key,
+            ttl,
+            descriptors: tools
+                .iter()
+                .map(|tool| McpToolDescriptor::from_tool(tool.as_ref()))
+                .collect(),
+        });
+    Ok((tools, pending))
+}
+
+#[cfg(test)]
+pub(crate) fn tool_list_cache_for_test() -> &'static McpToolListCache {
+    &TOOL_LIST_CACHE
+}
+
+#[cfg(test)]
+pub(crate) fn tool_list_key_for_test(
+    config: &RemoteMcpConfig,
+) -> Result<McpToolListKey, McpMaterializationError> {
+    config.tool_list_key()
 }
 
 fn materialized_toolset_error(
@@ -572,6 +871,7 @@ struct BoundedMcpTool {
     read_only: bool,
     concurrency_safe: bool,
     timeout: Duration,
+    redaction: Arc<McpErrorRedaction>,
 }
 
 impl BoundedMcpTool {
@@ -579,6 +879,7 @@ impl BoundedMcpTool {
         inner: Arc<dyn Tool>,
         toolkit_name: &str,
         timeout: Duration,
+        redaction: Arc<McpErrorRedaction>,
     ) -> Result<Self, McpMaterializationError> {
         let description = selection_description(inner.as_ref(), toolkit_name)?;
         Ok(Self {
@@ -591,6 +892,7 @@ impl BoundedMcpTool {
             inner,
             description: description.into_boxed_str(),
             timeout,
+            redaction,
         })
     }
 }
@@ -641,7 +943,7 @@ impl Tool for BoundedMcpTool {
         let value = tokio::time::timeout(self.timeout, self.inner.execute(context, arguments))
             .await
             .map_err(|_| mcp_timeout())?
-            .map_err(|error| sanitize_mcp_error(&error))?;
+            .map_err(|error| model_visible_mcp_error(&error, &self.name, &self.redaction))?;
         validate_result(&value).map_err(|_| invalid_mcp_result())?;
         Ok(value)
     }
@@ -716,7 +1018,6 @@ fn parse_requested_scopes(
 
 fn parse_static_headers(
     settings: &Map<String, Value>,
-    prebuilt: bool,
 ) -> Result<reqwest_mcp::header::HeaderMap, McpMaterializationError> {
     let Some(raw) = settings.get("headers") else {
         return Ok(reqwest_mcp::header::HeaderMap::new());
@@ -728,9 +1029,9 @@ fn parse_static_headers(
     if values.is_empty() {
         return Ok(reqwest_mcp::header::HeaderMap::new());
     }
-    if !prebuilt {
-        return Err(unsupported_authority());
-    }
+    // A direct `mcp` toolkit's own headers (for example a PAT, #6691) pass
+    // the same validation as a prebuilt definition's: transport-owned headers
+    // are refused and values stay bounded. The Python SDK sends them too.
     if values.len() > MAX_STATIC_HEADERS {
         return Err(resource_exhausted());
     }
@@ -1206,20 +1507,6 @@ impl Write for BoundedWriter {
     }
 }
 
-fn sanitize_mcp_error(error: &AdkError) -> AdkError {
-    AdkError::new(
-        ErrorComponent::Tool,
-        error.category,
-        "mcp.tool.failed",
-        "the remote MCP tool failed",
-    )
-    .with_retry(RetryHint {
-        should_retry: false,
-        retry_after_ms: None,
-        max_attempts: Some(1),
-    })
-}
-
 fn mcp_timeout() -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
@@ -1255,6 +1542,13 @@ const fn unsupported_authority() -> McpMaterializationError {
 const fn resource_exhausted() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::ResourceExhausted,
+        authorization: None,
+    }
+}
+
+const fn retired_sse_endpoint() -> McpMaterializationError {
+    McpMaterializationError {
+        code: McpMaterializationErrorCode::RetiredSseEndpoint,
         authorization: None,
     }
 }

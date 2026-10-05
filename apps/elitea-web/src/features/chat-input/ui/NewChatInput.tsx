@@ -148,6 +148,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
     inputRef: userInputRef,
     isStreaming: state.isStreaming,
     isTTSPlaying: voice.isTTSPlaying,
+    onError: voice.onError,
   });
 
   useNewChatInputImperativeHandle({ ref, userInputRef, pauseForRegeneration });

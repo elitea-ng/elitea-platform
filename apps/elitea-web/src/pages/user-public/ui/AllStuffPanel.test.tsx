@@ -122,7 +122,7 @@ describe('AllStuffPanel', () => {
     });
     await waitFor(() => expect(screen.getByText('A Pipeline')).toBeInTheDocument());
     expect(screen.getByText('Classic Agent')).toBeInTheDocument();
-    const headings = screen.getAllByRole('heading', { level: 3 });
+    const headings = screen.getAllByRole('heading', { level: 2 });
     expect(headings.map((h) => h.textContent)).toEqual(['A Pipeline', 'Classic Agent']);
   });
 

@@ -104,32 +104,9 @@ export interface VoiceButtonProps {
   onRecordingChange?: (isRecording: boolean) => void;
   onError?: (message: string) => void;
   inputRef?: RefObject<VoiceButtonInputHandle | null>;
-  projectId?: string;
+  projectId?: string | undefined;
 }
 
-
-/** Maps a speech-recognition error code to human-readable text — split out of `handleVoiceError` purely so each message can carry its own `t()` call. Unmapped codes (e.g. 'no-speech'/'aborted') resolve to `undefined`, same as the plain-object lookup this replaces. */
-function voiceErrorMessage(error: string): string | undefined {
-  switch (error) {
-    case 'not-allowed':
-      return t(
-        'widgets.chat.voiceButton.errorNotAllowed',
-        'Microphone access denied. Please allow microphone access in your browser settings.',
-      );
-    case 'audio-capture':
-      return t(
-        'widgets.chat.voiceButton.errorAudioCapture',
-        'No microphone found. Please connect a microphone and try again.',
-      );
-    case 'network':
-      return t(
-        'widgets.chat.voiceButton.errorNetwork',
-        'Voice input requires an internet connection. Please check your connection and try again.',
-      );
-    default:
-      return undefined;
-  }
-}
 
 interface VoiceCursorRefs {
   readonly preCursor: RefObject<string>;
@@ -241,7 +218,9 @@ export const VoiceButton = memo(
 
       const handleVoiceError = useCallback(
         (error: string) => {
-          const message = voiceErrorMessage(error);
+          // A microphone failure class or a server transcription failure gets
+          // the shared voice message (`features/chat-input`'s `shared/lib/voiceProblems.ts`).
+          const message = voiceHooks.voiceErrorMessage(error);
           // 'no-speech'/'aborted' are silently ignored — not user-facing errors (baseline parity).
           if (message) onError?.(message);
         },

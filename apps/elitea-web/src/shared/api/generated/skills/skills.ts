@@ -56,6 +56,7 @@ import type {
   ApplicationSkillsList,
   AttachPublicSkill200,
   AttachPublicSkillBody,
+  ClientUpgradeRequiredResponse,
   ErrorResponse,
   GenerateSkillDraftRequest,
   IconGalleryPage,
@@ -465,6 +466,11 @@ export type listApplicationSkillsResponse403 = {
   status: 403;
 };
 
+export type listApplicationSkillsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listApplicationSkillsResponseSuccess =
   listApplicationSkillsResponse200 & {
     headers: Headers;
@@ -473,6 +479,7 @@ export type listApplicationSkillsResponseError = (
   | listApplicationSkillsResponse400
   | listApplicationSkillsResponse401
   | listApplicationSkillsResponse403
+  | listApplicationSkillsResponse426
 ) & {
   headers: Headers;
 };
@@ -530,7 +537,8 @@ export const getListApplicationSkillsQueryKey = (
 
 export const getListApplicationSkillsQueryOptions = <
   TData = Awaited<ReturnType<typeof listApplicationSkills>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   appVersionId: number,
@@ -579,11 +587,12 @@ export type ListApplicationSkillsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listApplicationSkills>>
 >;
 export type ListApplicationSkillsQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse;
 
 export function useListApplicationSkills<
   TData = Awaited<ReturnType<typeof listApplicationSkills>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   appVersionId: number,
@@ -611,7 +620,8 @@ export function useListApplicationSkills<
 };
 export function useListApplicationSkills<
   TData = Awaited<ReturnType<typeof listApplicationSkills>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   appVersionId: number,
@@ -639,7 +649,8 @@ export function useListApplicationSkills<
 };
 export function useListApplicationSkills<
   TData = Awaited<ReturnType<typeof listApplicationSkills>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   appVersionId: number,
@@ -663,7 +674,8 @@ export function useListApplicationSkills<
 
 export function useListApplicationSkills<
   TData = Awaited<ReturnType<typeof listApplicationSkills>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   appVersionId: number,

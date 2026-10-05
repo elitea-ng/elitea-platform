@@ -884,7 +884,7 @@ services:
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
-      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/forward-auth/auth_oidc/callback"
+      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/auth/oidc/callback"
       COOKIE_SECURE: "false"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). deploy/runtime/auth.form.yml's
@@ -938,6 +938,10 @@ services:
       # routes deliberately do NOT accept cookies
       # (internal/api/production_runtime.go:31-37).
       ELITEA_AUTH_CONFIG_FILE: /etc/elitea/auth.form.yml
+      # The document above is structural (runtime, edge, PATs); nobody signs in
+      # through its Form users — the browser uses oidc-mock. Stated off rather
+      # than left to the default so the intent survives a default change.
+      ELITEA_FORM_LOGIN_ENABLED: "false"
 
       # ── Current Configurations (issue #281) ────────────────────────────────
       # Agent dispatch composes through dependencies.CurrentConfigurations, nil

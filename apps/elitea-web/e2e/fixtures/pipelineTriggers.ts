@@ -62,6 +62,9 @@ import { API_BASE } from './api';
 /** The header name `inbound.go::TriggerTokenHeader` reads. */
 export const TRIGGER_TOKEN_HEADER = 'X-Elitea-Trigger-Token';
 
+/** GitLab's secret-token header (`authmode.go::GitLabTokenHeader`) — a bearer carrier since legacy issue 6664. */
+export const GITLAB_TOKEN_HEADER = 'X-Gitlab-Token';
+
 /** The query parameter `inbound.go::TriggerTokenQueryParam` reads — the last-resort carrier. */
 export const TRIGGER_TOKEN_QUERY_PARAM = 'token';
 
@@ -76,7 +79,7 @@ export const TRIGGER_REFUSAL = 'this trigger cannot be used';
 export const TRIGGER_NO_RUNTIME = 'this deployment cannot run pipelines';
 
 /** How the secret is presented. `none` sends no credential at all. */
-export type WebhookCarrier = 'bearer' | 'header' | 'query' | 'none';
+export type WebhookCarrier = 'bearer' | 'header' | 'gitlab' | 'query' | 'none';
 
 /** One inbound trigger, as create/rotate and reveal answer it (`triggers.go::triggerView`). */
 export interface InboundTrigger {
@@ -286,6 +289,7 @@ export async function sendWebhook(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (carrier === 'bearer') headers['Authorization'] = `Bearer ${secret}`;
   if (carrier === 'header') headers[TRIGGER_TOKEN_HEADER] = secret;
+  if (carrier === 'gitlab') headers[GITLAB_TOKEN_HEADER] = secret;
   const url =
     carrier === 'query'
       ? `${BASE_URL}${trigger.url}?${TRIGGER_TOKEN_QUERY_PARAM}=${encodeURIComponent(secret)}`
@@ -340,6 +344,33 @@ export async function sendSignedWebhook(
   const digest = probe.signature ?? `sha256=${createHmac('sha256', probe.secret).update(probe.body).digest('hex')}`;
   return sender.post(`${BASE_URL}${trigger.url}`, {
     headers: { 'content-type': 'application/json', [probe.header ?? GITHUB_SIGNATURE_HEADER]: digest },
+    data: probe.body,
+  });
+}
+
+/**
+ * Send one request the way a GitLab webhook with a SIGNING TOKEN sends it: the
+ * Standard Webhooks headers, with `webhook-signature: v1,<base64>` over
+ * `webhook-id.webhook-timestamp.body`, keyed by the base64 key behind the
+ * secret's `whsec_` prefix. Computed HERE, for the reason `sendSignedWebhook`
+ * states. `signedAt` defaults to now; pass an old time for the replay case.
+ */
+export async function sendStandardWebhook(
+  sender: APIRequestContext,
+  trigger: Pick<InboundTrigger, 'url'>,
+  probe: { readonly secret: string; readonly body: string; readonly signedAt?: Date },
+): Promise<APIResponse> {
+  const id = `msg_${String(Date.now())}_${String(Math.floor(Math.random() * 1e6))}`;
+  const timestamp = String(Math.floor((probe.signedAt ?? new Date()).getTime() / 1000));
+  const key = Buffer.from(probe.secret.replace(/^whsec_/, ''), 'base64');
+  const signature = createHmac('sha256', key).update(`${id}.${timestamp}.${probe.body}`).digest('base64');
+  return sender.post(`${BASE_URL}${trigger.url}`, {
+    headers: {
+      'content-type': 'application/json',
+      'webhook-id': id,
+      'webhook-timestamp': timestamp,
+      'webhook-signature': `v1,${signature}`,
+    },
     data: probe.body,
   });
 }

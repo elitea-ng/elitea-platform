@@ -141,6 +141,59 @@ export function findServicePrompt(page: AiEditConfigurationPageWire | undefined,
   return typeof prompt === 'string' ? prompt : '';
 }
 
+/* ── GET /configurations/models/{projectId} (the project default model) ──── */
+
+/** The part of the LLM model catalogue "Edit with AI" reads. */
+interface AiEditModelCatalogueWire {
+  readonly default_model_name?: string | null;
+  /**
+   * True when `default_model_name` is the default an admin configured. False
+   * (or absent, on a server that predates the field) when it is only the
+   * catalogue's first item.
+   */
+  readonly default_model_configured?: boolean;
+}
+
+/**
+ * The project's CURRENT default LLM model, read when "Edit with AI" opens
+ * (legacy issue 6872). The agent version's own `model_name` is the default
+ * that was current when the agent was created, so it goes stale when an admin
+ * changes the project default.
+ */
+export async function getProjectModelCatalogue(
+  projectId: string | number,
+  signal?: AbortSignal,
+): Promise<AiEditModelCatalogueWire> {
+  const params = new URLSearchParams({ section: 'llm', include_shared: 'true' });
+  return fetchData<AiEditModelCatalogueWire>(`/configurations/models/${String(projectId)}?${params.toString()}`, signal ? { signal } : {});
+}
+
+function catalogueDefaultName(catalogue: AiEditModelCatalogueWire | undefined): string {
+  const name = catalogue?.default_model_name;
+  return typeof name === 'string' ? name.trim() : '';
+}
+
+/**
+ * The CONFIGURED default model name in a catalogue answer, else `''`. A
+ * project with no configured default still gets a `default_model_name`: the
+ * catalogue's first item. That item is no one's choice, so it is not
+ * returned here.
+ */
+function projectDefaultModelName(catalogue: AiEditModelCatalogueWire | undefined): string {
+  return catalogue?.default_model_configured === true ? catalogueDefaultName(catalogue) : '';
+}
+
+/**
+ * The model "Edit with AI" runs on, in this order (legacy issue 6872):
+ *
+ *  1. the project's CONFIGURED default (an admin chose it, and it is current);
+ *  2. the agent version's own model (the agent's author chose it);
+ *  3. the catalogue's first-item default (better than no model at all).
+ */
+export function aiEditModelName(catalogue: AiEditModelCatalogueWire | undefined, versionModel: string): string {
+  return projectDefaultModelName(catalogue) || versionModel || catalogueDefaultName(catalogue);
+}
+
 /* ── POST /elitea_core/predict_llm/prompt_lib/{projectId} (blocking) ─────── */
 
 export interface AiEditLlmSettings {

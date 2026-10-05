@@ -99,7 +99,7 @@ export function MaintenanceSplash({ maintenance }: MaintenanceSplashProps): Reac
         }}
       >
         <ConstructionIcon color="warning" fontSize="large" />
-        <Typography variant="h5" component="h1" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {maintenance.title}
         </Typography>
         <Typography variant="bodyMedium" color="text.secondary" component="div">

@@ -897,7 +897,7 @@ def _main_public_rule_contract(
         for ordinal, (identifier, pattern) in enumerate(
             zip(
                 (
-                    "config.forward_auth",
+                    "config.browser_auth",
                     "config.application_icon",
                     "config.datasource_icon",
                     "config.prompt_icon",
@@ -1133,11 +1133,11 @@ def _requirement_version(text: str, package: str) -> str:
 def _route_composition(deployment: dict[str, Any]) -> dict[str, Any]:
     auth_server_path = deployment["pylon_auth_selected"]["server.path"]
     context_url_prefix = auth_server_path.rstrip("/") or "/"
-    exposure_prefixes = deployment["pylon_main"]["forward_auth_exposure"][
+    exposure_prefixes = deployment["pylon_main"]["browser_auth_exposure"][
         "exposure.handle.prefixes"
     ]
     if len(exposure_prefixes) != 1:
-        raise ValueError("reviewed forward-auth exposure must have exactly one prefix")
+        raise ValueError("reviewed browser-auth exposure must have exactly one prefix")
     external_base_path = exposure_prefixes[0].rstrip("/") or "/"
     if external_base_path != context_url_prefix:
         raise ValueError(
@@ -1152,8 +1152,8 @@ def _route_composition(deployment: dict[str, Any]) -> dict[str, Any]:
         "auth_pylon_context_url_prefix": context_url_prefix,
         "auth_pylon_server_path": auth_server_path,
         "composition_chain": [
-            "pylon_main Auth before_request attempts auth_authorize; the configured /forward-auth public rule keeps negative decisions non-blocking",
-            "pylon_main exposure accepts the configured /forward-auth prefix",
+            "pylon_main Auth before_request attempts auth_authorize; the configured /auth public rule keeps negative decisions non-blocking",
+            "pylon_main exposure accepts the configured /auth prefix",
             "exposure forwards the original WSGI path to the pylon_auth process",
             "pylon_auth strips its context URL prefix before app-router dispatch",
             "ModuleDescriptor registers Auth Core at its configured blueprint prefix",
@@ -1237,7 +1237,7 @@ def _http_outcomes(
             "dynamic_headers_excluded": ["Content-Length", "Date"],
         },
         {
-            "id": "forward_auth.missing_forwarded_header",
+            "id": "browser_auth.missing_forwarded_header",
             "request": {"method": "GET", "route": routes["auth"]},
             "response": {
                 "body": "Flask redirect HTML",
@@ -1246,7 +1246,7 @@ def _http_outcomes(
             },
         },
         {
-            "id": "forward_auth.rpc_success",
+            "id": "browser_auth.rpc_success",
             "request": {
                 "method": "GET",
                 "route": routes["auth"],
@@ -1259,7 +1259,7 @@ def _http_outcomes(
             },
         },
         {
-            "id": "forward_auth.noop_success",
+            "id": "browser_auth.noop_success",
             "request": {
                 "method": "GET",
                 "route": routes["auth"],
@@ -1268,7 +1268,7 @@ def _http_outcomes(
             "response": {"body": "OK", "identity_headers": [], "status": 200},
         },
         {
-            "id": "forward_auth.empty_target",
+            "id": "browser_auth.empty_target",
             "request": {
                 "method": "GET",
                 "precondition": (
@@ -1281,7 +1281,7 @@ def _http_outcomes(
             "response": {"location": denied, "status": 302},
         },
         {
-            "id": "forward_auth.unknown_target",
+            "id": "browser_auth.unknown_target",
             "request": {
                 "method": "GET",
                 "route": routes["auth"],
@@ -1290,7 +1290,7 @@ def _http_outcomes(
             "response": {"location": denied, "status": 302},
         },
         {
-            "id": "forward_auth.invalid_credential",
+            "id": "browser_auth.invalid_credential",
             "request": {"method": "GET", "route": routes["auth"]},
             "code_capable_branches": [
                 "matching public rule plus an accepted target mapper returns its success response",
@@ -1304,7 +1304,7 @@ def _http_outcomes(
             },
         },
         {
-            "id": "forward_auth.no_authentication",
+            "id": "browser_auth.no_authentication",
             "request": {"method": "GET", "route": routes["auth"]},
             "tracked_effective_branches": [
                 "a done and unexpired browser session returns 200 through the selected success mapper",
@@ -1511,9 +1511,9 @@ def _optional_runtime_config_inventory(centry_root: Path) -> list[dict[str, Any]
 def _behavior_contracts() -> list[dict[str, Any]]:
     return [
         {
-            "id": "browser.forward_auth.get",
+            "id": "browser.auth.get",
             "method": "GET",
-            "route": "/forward-auth/auth",
+            "route": "/auth/auth",
             "input": {
                 "required_headers": [
                     "X-Forwarded-Method",
@@ -1552,18 +1552,18 @@ def _behavior_contracts() -> list[dict[str, Any]]:
         {
             "id": "browser.login.get",
             "method": "GET",
-            "route": "/forward-auth/login",
+            "route": "/auth/login",
             "input": {"query": {"target_to": "optional signed target token"}},
             "side_effects": ["clear authentication context in the current server-side session"],
             "outcome": (
-                "dispatch configured auth_provider; Form redirects to /forward-auth/auth_form/login"
+                "dispatch configured auth_provider; Form redirects to /auth/auth_form/login"
             ),
             "default_target": "signed configured default_login_url",
         },
         {
             "id": "form.login.get",
             "method": "GET",
-            "route": "/forward-auth/auth_form/login",
+            "route": "/auth/auth_form/login",
             "input": {
                 "query": {
                     "error": "presence, regardless of value, shows the invalid-credential alert",
@@ -1572,7 +1572,7 @@ def _behavior_contracts() -> list[dict[str, Any]]:
             },
             "outcome": {
                 "content": "configured login template, default login.html",
-                "form_action": "/forward-auth/auth_form/authorize",
+                "form_action": "/auth/auth_form/authorize",
                 "hidden_fields": ["target"],
                 "visible_fields": ["login", "password"],
             },
@@ -1580,7 +1580,7 @@ def _behavior_contracts() -> list[dict[str, Any]]:
         {
             "id": "form.authorize.post",
             "method": "POST",
-            "route": "/forward-auth/auth_form/authorize",
+            "route": "/auth/auth_form/authorize",
             "input": {
                 "content_type": "HTML form",
                 "fields": {
@@ -1612,7 +1612,7 @@ def _behavior_contracts() -> list[dict[str, Any]]:
                 "redirect": "verified target token URL, or configured default_login_url on any verification error",
             },
             "failure": {
-                "location": "/forward-auth/auth_form/login?error=true",
+                "location": "/auth/auth_form/login?error=true",
                 "target_preserved": False,
             },
         },
@@ -1651,7 +1651,7 @@ def _behavior_contracts() -> list[dict[str, Any]]:
         {
             "id": "browser.logout.get",
             "method": "GET",
-            "route": "/forward-auth/logout",
+            "route": "/auth/logout",
             "input": {"query": {"target_to": "optional signed target token"}},
             "provider_selection": (
                 "session provider when registered, otherwise configured default provider"
@@ -1662,7 +1662,7 @@ def _behavior_contracts() -> list[dict[str, Any]]:
         {
             "id": "form.logout.get",
             "method": "GET",
-            "route": "/forward-auth/auth_form/logout",
+            "route": "/auth/auth_form/logout",
             "input": {"query": {"target_to": "missing becomes empty string"}},
             "side_effects": [
                 "destroy old server-side session",
@@ -1676,7 +1676,7 @@ def _behavior_contracts() -> list[dict[str, Any]]:
         {
             "id": "browser.info.get",
             "method": "GET",
-            "route": "/forward-auth/info",
+            "route": "/auth/info",
             "input": {"query": ["scope", "target"]},
             "outcome": {
                 "target_absent": "registered no-op mapper returns the raw six-field authentication context as JSON",
@@ -1817,12 +1817,12 @@ def _behavior_contracts() -> list[dict[str, Any]]:
                 "allow_auth_traversal defaults true: an invalid credential can continue to a valid browser session; without a valid session a matching public rule succeeds, otherwise the request is denied rather than redirected"
             ),
             "http_route_difference": (
-                "Auth Core HTTP /forward-auth/auth immediately delegates invalid credentials to access_denied_reply(source): a matching public rule with an accepted target mapper succeeds, otherwise it denies, and it never traverses the browser session"
+                "Auth Core HTTP /auth/auth immediately delegates invalid credentials to access_denied_reply(source): a matching public rule with an accepted target mapper succeeds, otherwise it denies, and it never traverses the browser session"
             ),
             "migration_transport": (
                 "after pylon_main and pylon_auth merge, auth_authorize becomes a direct "
                 "typed in-process call; the internal Redis RPC and its Redis success cache "
-                "disappear, while HTTP /forward-auth/auth remains the ingress contract"
+                "disappear, while HTTP /auth/auth remains the ingress contract"
             ),
             "transport_failure": (
                 "on a cache miss, pylon_main catches any auth_authorize RPC-call exception, installs a synthetic public principal regardless of local public rules, and continues; permission-decorated handlers may still deny that principal, while undecorated/public-principal flows proceed"
@@ -1951,14 +1951,14 @@ def _security_dispositions() -> list[dict[str, str]]:
             "migration": "remove_internal_only",
             "requirement": (
                 "direct in-process typed calls in the merged monolith; no internal "
-                "auth_authorize RPC or associated Redis result cache remains; retain HTTP "
-                "/forward-auth/auth for ingress compatibility, and add no root /auth alias "
+                "auth_authorize RPC or associated Redis result cache remains; retain the HTTP ingress check "
+                "route, and add no alias for it "
                 "without a separate reviewed contract"
             ),
         },
         {
             "id": "info.disclosure",
-            "baseline": "/forward-auth/info has no local authentication check and target absent returns raw authentication context JSON",
+            "baseline": "/auth/info has no local authentication check and target absent returns raw authentication context JSON",
             "migration": "correct",
             "requirement": "classify consumers, authorize access, and return a typed redacted projection; do not mount the raw mapper contract by default",
         },
@@ -1976,13 +1976,13 @@ def _ui_contract(logout_consumer_sources: list[str]) -> dict[str, Any]:
             ),
         },
         "logout_consumers": [
-            "Admin UI sidebar assigns same-origin /forward-auth/logout",
-            "settings action assigns same-origin /forward-auth/logout",
-            "sidebar user action assigns same-origin /forward-auth/logout",
+            "Admin UI sidebar assigns same-origin /auth/logout",
+            "settings action assigns same-origin /auth/logout",
+            "sidebar user action assigns same-origin /auth/logout",
         ],
         "logout_consumer_sources": logout_consumer_sources,
         "reauthentication": {
-            "detection": "a fetch redirect URL containing both /forward-auth/ and /login",
+            "detection": "a fetch redirect URL containing both /auth/ and /login",
             "callback_route": "/auth-callback",
             "callback_query": "auth_state must survive the authentication return target unchanged",
             "success_channels": ["same-origin postMessage", "BroadcastChannel", "localStorage"],
@@ -2041,7 +2041,7 @@ def _deployment_contract(
     auth_selected = _selected_auth_pylon(auth_pylon_text)
     main_selected = _selected_main_pylon(main_pylon_text)
     expected_auth_selected = {
-        "application.APPLICATION_ROOT": "/forward-auth/",
+        "application.APPLICATION_ROOT": "/auth/",
         "application.PERMANENT_SESSION_LIFETIME": "${COOKIES_LIFETIME}",
         "application.PREFERRED_URL_SCHEME": "${APP_PROTO}",
         "application.SERVER_NAME": "${APP_HOST}",
@@ -2055,7 +2055,7 @@ def _deployment_contract(
         "exposure.event_node.type": "RedisEventNode",
         "exposure.expose": "true",
         "rpc.redis_configured": True,
-        "server.path": "/forward-auth/",
+        "server.path": "/auth/",
         "server.proxy.x_for": "1",
         "server.proxy.x_host": "1",
         "server.proxy.x_proto": "1",
@@ -2067,7 +2067,7 @@ def _deployment_contract(
     if main_selected != {
         "exposure.event_node.type": "RedisEventNode",
         "exposure.handle.enabled": "true",
-        "exposure.handle.prefixes": ["/forward-auth"],
+        "exposure.handle.prefixes": ["/auth"],
     }:
         raise ValueError("reviewed pylon_main alias changed")
     if auth_core.get("auth_provider") != "form" or auth_main.get("auth_mode") != "rpc":
@@ -2131,7 +2131,7 @@ def _deployment_contract(
         "pylon_main": {
             "allow_cors": True,
             "auth_mode": auth_main.get("auth_mode"),
-            "forward_auth_exposure": main_selected,
+            "browser_auth_exposure": main_selected,
             "public_uri_rules": auth_main.get("public_uri_rules"),
         },
         "public_rule_ownership": _main_public_rule_contract(
@@ -2225,13 +2225,13 @@ def build_catalog(
         [
             f"ui/{path}"
             for path in _tracked_literal_paths(
-                repos["ui"], "/forward-auth/logout", ("src/",)
+                repos["ui"], "/auth/logout", ("src/",)
             )
         ]
         + [
             f"admin_ui/{path}"
             for path in _tracked_literal_paths(
-                repos["admin_ui"], "/forward-auth/logout", ("frontend/src/",)
+                repos["admin_ui"], "/auth/logout", ("frontend/src/",)
             )
         ]
     )
@@ -2242,7 +2242,7 @@ def build_catalog(
     ]
     if logout_consumer_sources != expected_logout_sources:
         raise ValueError(
-            "reviewed direct /forward-auth/logout consumer set changed: "
+            "reviewed direct /auth/logout consumer set changed: "
             f"{logout_consumer_sources!r}"
         )
 
@@ -2415,7 +2415,7 @@ def build_catalog(
             "centry/pylon_main/configs/auth.yml#auth_gate_allowlist",
             "centry/pylon_main/configs/elitea_core.yml#public_route_override_allowlist",
             "centry/pylon_main/configs/shared.yml#cors_allowlist",
-            "centry/pylon_main/pylon.yml#forward_auth_exposure_allowlist",
+            "centry/pylon_main/pylon.yml#browser_auth_exposure_allowlist",
             "elitea_core/config.yml#public_route_allowlist",
             "runtime_interface_litellm/config.yml#public_route_allowlist",
         ],
@@ -2477,7 +2477,7 @@ def build_catalog(
                     )
                 )
             ),
-            "centry/pylon_main/pylon.yml#forward_auth_exposure_allowlist": _canonical_sha256(
+            "centry/pylon_main/pylon.yml#browser_auth_exposure_allowlist": _canonical_sha256(
                 _selected_main_pylon(
                     (roots["centry"] / "pylon_main/pylon.yml").read_text(encoding="utf-8")
                 )
@@ -2527,7 +2527,7 @@ def build_catalog(
                 "Auth Init login processor business rules",
                 "Auth mapper info behavior",
                 "Pylon server-side session/cookie mechanics",
-                "tracked Centry forward-auth composition",
+                "tracked Centry browser-auth composition",
                 "tracked Main-local configured and dynamic public-rule registrations",
                 "EliteaUI browser-auth consumers",
                 "Admin UI logout consumer",

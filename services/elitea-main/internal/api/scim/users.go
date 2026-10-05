@@ -37,6 +37,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -96,6 +97,25 @@ func (b userBody) resolveUserName() string {
 	return ""
 }
 
+// nameProblem applies the maxNameLength cap PATCH applies, so POST and PUT
+// cannot store what PATCH refuses.
+func (b userBody) nameProblem() *patchProblem {
+	if problem := nameTooLong("displayName", strings.TrimSpace(b.DisplayName)); problem != nil {
+		return problem
+	}
+	if b.Name == nil {
+		return nil
+	}
+	for attribute, value := range map[string]string{
+		"name.formatted": b.Name.Formatted, "name.givenName": b.Name.GivenName, "name.familyName": b.Name.FamilyName,
+	} {
+		if problem := nameTooLong(attribute, strings.TrimSpace(value)); problem != nil {
+			return problem
+		}
+	}
+	return nil
+}
+
 // resolveDisplayName picks the name to show.
 func (b userBody) resolveDisplayName() string {
 	if name := strings.TrimSpace(b.DisplayName); name != "" {
@@ -117,16 +137,26 @@ func (b userBody) toUser(activeDefault bool) scimdirectory.User {
 	if b.Active != nil {
 		active = *b.Active
 	}
-	return scimdirectory.User{
+	user := scimdirectory.User{
 		ExternalID:  strings.TrimSpace(b.ExternalID),
 		UserName:    b.resolveUserName(),
 		DisplayName: b.resolveDisplayName(),
-		Active:      active,
+		// A name composed from the parts fills an empty display name only; it
+		// never overwrites one the client manages through `displayName`.
+		DisplayNameDerived: strings.TrimSpace(b.DisplayName) == "",
+		Active:             active,
 		// Carried through so the store can tell an explicit flag from a
 		// default. Create uses it to leave an operator's manual suspension
 		// alone on a re-sync; see scimdirectory.Create.
 		ActiveStated: b.Active != nil,
 	}
+	if b.Name != nil {
+		user.NameStated = true
+		user.GivenName = strings.TrimSpace(b.Name.GivenName)
+		user.FamilyName = strings.TrimSpace(b.Name.FamilyName)
+		user.FormattedName = strings.TrimSpace(b.Name.Formatted)
+	}
+	return user
 }
 
 /* ── read ──────────────────────────────────────────────────────────────── */
@@ -160,7 +190,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	resources := make([]any, 0, len(users))
 	for _, user := range users {
-		resources = append(resources, userResource(user))
+		resources = append(resources, projectResource(userResource(user), r))
 	}
 	body := listResponse(resources, total, len(resources))
 	body["startIndex"] = startIndex
@@ -209,7 +239,7 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreFailure(w, err, "read user")
 		return
 	}
-	writeJSON(w, http.StatusOK, userResource(user))
+	writeJSON(w, http.StatusOK, projectResource(userResource(user), r))
 }
 
 /* ── write ─────────────────────────────────────────────────────────────── */
@@ -232,12 +262,16 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 			"userName is required, or a primary email to use as one")
 		return
 	}
+	if problem := body.nameProblem(); problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
+		return
+	}
 	// A create with no `active` means active. An identity provider that pushes
 	// a new joiner rarely states it, and defaulting to suspended would create
 	// every account locked out.
 	user, err := h.directory.Create(r.Context(), body.toUser(true))
 	if err != nil {
-		h.writeStoreFailure(w, err, "create user")
+		h.writeWriteFailure(w, r, 0, false, err, "create user")
 		return
 	}
 	w.Header().Set("Location", BasePath+"/Users/"+strconv.Itoa(user.ID))
@@ -262,13 +296,17 @@ func (h *Handler) ReplaceUser(w http.ResponseWriter, r *http.Request) {
 			"userName is required, or a primary email to use as one")
 		return
 	}
+	if problem := body.nameProblem(); problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
+		return
+	}
 	// A PUT with no `active` means active, for the same reason: a replace is
 	// the whole resource, and an omitted flag on a person the provider is
 	// actively managing means they are there. Replace has no adoption branch,
 	// so it writes `suspended` unconditionally and needs no ActiveStated.
 	user, err := h.directory.Replace(r.Context(), id, body.toUser(true))
 	if err != nil {
-		h.writeStoreFailure(w, err, "replace user")
+		h.writeWriteFailure(w, r, id, body.Active != nil && !*body.Active, err, "replace user")
 		return
 	}
 	writeJSON(w, http.StatusOK, userResource(user))
@@ -284,7 +322,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.directory.SetActive(r.Context(), id, false); err != nil {
-		h.writeStoreFailure(w, err, "deactivate user")
+		h.writeWriteFailure(w, r, id, true, err, "deactivate user")
 		return
 	}
 	// 204, as the specification requires. The body would be ignored anyway, and
@@ -313,18 +351,9 @@ type patchOperation struct {
 
 // PatchUser answers `PATCH /Users/{id}`.
 //
-// # Why only `active`
-//
-// The PATCH message is a small expression language of its own: `add`, `remove`
-// and `replace` against attribute paths with optional value filters. Almost
-// every identity provider uses exactly one of its shapes — turning `active` off
-// when somebody leaves, and back on when they return — and that is the shape
-// that carries the security consequence.
-//
-// Anything else is REFUSED with the path named, not accepted and dropped. A
-// PATCH that answered 200 without applying its change would tell an identity
-// provider that a rename or a deactivation had taken effect when it had not, and
-// the provider would never send it again.
+// The operations are interpreted by applyUserOperations (patch_user.go): every
+// attribute the platform stores is applied, every attribute it does not is
+// accepted and dropped, and the whole request is persisted once or not at all.
 func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	if !h.ready(w) {
 		return
@@ -345,89 +374,31 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	active, resolved, problem := resolveActivePatch(request.Operations)
-	if problem != "" {
-		writeError(w, http.StatusNotImplemented, "invalidPath", problem)
+	before, err := h.directory.Get(r.Context(), id)
+	if err != nil {
+		h.writeStoreFailure(w, err, "read user")
 		return
 	}
-	if !resolved {
+	patch := newUserPatch(before)
+	if problem := applyUserOperations(patch, request.Operations); problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
+		return
+	}
+	changes, changed := patch.changes(before)
+	if !changed {
 		// Every operation was understood and none of them changed anything this
 		// service stores. The resource is returned unchanged, which is a true
 		// answer: nothing was refused and nothing was applied.
-		user, err := h.directory.Get(r.Context(), id)
-		if err != nil {
-			h.writeStoreFailure(w, err, "read user")
-			return
-		}
-		writeJSON(w, http.StatusOK, userResource(user))
+		writeJSON(w, http.StatusOK, userResource(before))
 		return
 	}
 
-	user, err := h.directory.SetActive(r.Context(), id, active)
+	user, err := h.directory.ApplyUserChanges(r.Context(), id, changes)
 	if err != nil {
-		h.writeStoreFailure(w, err, "patch user")
+		h.writeWriteFailure(w, r, id, changes.Active != nil && !*changes.Active, err, "patch user")
 		return
 	}
 	writeJSON(w, http.StatusOK, userResource(user))
-}
-
-// resolveActivePatch reads the operations and returns the `active` value they
-// ask for.
-//
-// It returns a non-empty problem for an operation this service cannot apply.
-// The two accepted shapes are both in the wild:
-//
-//	{"op":"replace","path":"active","value":false}
-//	{"op":"replace","value":{"active":false}}
-//
-// The second is what Entra ID sends, and a handler that only knew the first
-// would silently ignore every deactivation from it.
-func resolveActivePatch(operations []patchOperation) (active, resolved bool, problem string) {
-	for _, operation := range operations {
-		if !strings.EqualFold(operation.Op, "replace") && !strings.EqualFold(operation.Op, "add") {
-			return false, false, "this directory applies only replace and add operations, " +
-				"and only to the active attribute"
-		}
-		// The path is matched case-insensitively (SCIM attribute names are), but
-		// the CLIENT'S spelling is what the refusal echoes: an operator reading
-		// their provider's log needs the attribute as they configured it, not a
-		// folded copy they then cannot find.
-		path := strings.TrimSpace(operation.Path)
-		switch strings.ToLower(path) {
-		case "active":
-			var value bool
-			if err := json.Unmarshal(operation.Value, &value); err != nil {
-				// Some clients send the string "False". Accepting it is not
-				// leniency for its own sake: refusing would leave the account
-				// active after the provider believed it had deactivated it.
-				var text string
-				if json.Unmarshal(operation.Value, &text) != nil {
-					return false, false, "the active attribute needs a boolean value"
-				}
-				value = strings.EqualFold(text, "true")
-			}
-			active, resolved = value, true
-		case "":
-			// A pathless operation carries an object of attributes.
-			var attributes struct {
-				Active *bool `json:"active"`
-			}
-			if err := json.Unmarshal(operation.Value, &attributes); err != nil {
-				return false, false, "the operation value could not be read"
-			}
-			if attributes.Active != nil {
-				active, resolved = *attributes.Active, true
-			}
-			// Other attributes in the object are left alone. A pathless
-			// operation is how a provider sends a whole profile update, and
-			// refusing the request because it also carried a display name would
-			// stop the deactivation this handler exists to apply.
-		default:
-			return false, false, "this directory can patch only the active attribute; " +
-				"send a PUT to change " + path
-		}
-	}
-	return active, resolved, ""
 }
 
 /* ── shared ────────────────────────────────────────────────────────────── */
@@ -453,6 +424,47 @@ func decodeUser(w http.ResponseWriter, r *http.Request) (userBody, bool) {
 	return body, true
 }
 
+// writeWriteFailure is writeStoreFailure for a WRITE to user `id` (0 when the
+// write names no existing account, as on a create).
+//
+// A refusal on a protected account (scimdirectory.ProtectedError) is answered
+// 403 `mutability` with a detail that says what to do, AND recorded in the
+// audit trail with the same sentence. The trail matters most for the one case
+// the refusal is by design and recurring: an identity provider deprovisioning
+// a person who has since become an administrator. The directory may not
+// suspend administrators, so the provider retries and logs 403 until an
+// operator removes the role; the trail is where that operator finds out why
+// the person still has access.
+func (h *Handler) writeWriteFailure(
+	w http.ResponseWriter, r *http.Request, id int, deprovision bool, err error, operation string,
+) {
+	if !errors.Is(err, scimdirectory.ErrProtected) {
+		h.writeStoreFailure(w, err, operation)
+		return
+	}
+	detail := protectedDetail(err, deprovision)
+	annotation := audit.Annotation{Action: detail, EntityType: "user"}
+	if id > 0 {
+		annotation.EntityID = audit.ID(int64(id))
+	}
+	audit.Annotate(r.Context(), annotation)
+	slog.Warn("SCIM: refused a write to a protected account", "operation", operation, "user_id", id,
+		"reason", detail)
+	writeError(w, http.StatusForbidden, "mutability", detail)
+}
+
+// protectedDetail is the sentence a protected-account refusal carries.
+func protectedDetail(err error, deprovision bool) string {
+	var protected *scimdirectory.ProtectedError
+	if !errors.As(err, &protected) {
+		return "SCIM write refused: this account is not managed through SCIM"
+	}
+	if deprovision {
+		return "SCIM deprovisioning refused: " + protected.Reason
+	}
+	return "SCIM write refused: " + protected.Reason
+}
+
 // writeStoreFailure maps a store outcome to a SCIM response.
 //
 // The cause is LOGGED and never returned. These responses go to an identity
@@ -462,6 +474,8 @@ func (h *Handler) writeStoreFailure(w http.ResponseWriter, err error, operation 
 	switch {
 	case errors.Is(err, scimdirectory.ErrNotFound):
 		writeError(w, http.StatusNotFound, "", "no such user")
+	case errors.Is(err, scimdirectory.ErrProtected):
+		writeError(w, http.StatusForbidden, "mutability", protectedDetail(err, false))
 	case errors.Is(err, scimdirectory.ErrConflict):
 		// `uniqueness` is the code a client switches on to decide it should
 		// look the existing resource up rather than retry the create.

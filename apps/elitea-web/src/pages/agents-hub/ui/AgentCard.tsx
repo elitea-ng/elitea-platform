@@ -1,4 +1,4 @@
-/* oxlint-disable i18next/no-literal-string, elitea/ad-hoc-font-size -- Wave-2 prototype: UI copy not yet through i18n shim (S8), ad-hoc font-size from ported baseline. REMOVER: S8 + token pass. */
+/* oxlint-disable i18next/no-literal-string -- Wave-2 prototype: UI copy not yet through i18n shim (S8). REMOVER: S8. */
 /**
  * Agent Card — displays a single agent in the hub grid.
  *
@@ -109,7 +109,7 @@ const styles: Record<string, SxProps<Theme>> = {
   },
   author: {
     color: 'text.secondary',
-    fontSize: '0.75rem',
+    fontSize: (theme: Theme) => theme.typography.bodySmall.fontSize,
   },
 };
 

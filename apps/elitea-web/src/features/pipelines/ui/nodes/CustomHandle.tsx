@@ -250,7 +250,7 @@ export const CustomHandle = memo(function CustomHandle(props: CustomHandleProps)
       {isExpanded && (
         <>
           <Typography
-            variant="labelTiny"
+            variant="labelSmall"
             color="text.secondary"
           >
             {finalLabel}

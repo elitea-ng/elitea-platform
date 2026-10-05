@@ -203,6 +203,13 @@ export const getListConfigurationModelsResponseMock = (
       ]),
       undefined,
     ]),
+    description: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 40 } }),
+        null,
+      ]),
+      undefined,
+    ]),
     type: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -264,6 +271,10 @@ export const getListConfigurationModelsResponseMock = (
   ]),
   default_model_project_id: faker.helpers.arrayElement([
     faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  default_model_configured: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
     undefined,
   ]),
   low_tier_default_model_name: faker.helpers.arrayElement([

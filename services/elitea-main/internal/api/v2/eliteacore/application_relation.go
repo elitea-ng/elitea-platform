@@ -3,6 +3,7 @@ package eliteacore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -260,10 +261,31 @@ func deleteApplicationToolReferences(ctx context.Context, q relationQuerier, sch
 // integer end to end. The previous map[string]any body put ids through
 // fmt.Sprintf("%v", float64), which renders 1234567 as "1.234567e+06" and a
 // missing id as "<nil>" — both refused by Postgres, both surfacing as 500s.
+//
+// The contract (v2.yaml ApplicationRelationUpdateRequest) and legacy pylon
+// both accept an id as a JSON number OR a numeric string ("42"). A plain
+// *int64 refused the string form with 400, so each id decodes through
+// relationID, which takes either form and still refuses anything else.
 type applicationRelationRequest struct {
-	ApplicationID *int64 `json:"application_id"`
-	VersionID     *int64 `json:"version_id"`
-	HasRelation   bool   `json:"has_relation"`
+	ApplicationID *relationID `json:"application_id"`
+	VersionID     *relationID `json:"version_id"`
+	HasRelation   bool        `json:"has_relation"`
+}
+
+// relationID is a positive id sent as a JSON number or a numeric string. A
+// JSON null leaves the pointer field nil (encoding/json never calls the
+// method for null), so the "required" check below still sees it as missing.
+type relationID int64
+
+var errInvalidRelationID = errors.New("relation id must be a positive integer or numeric string")
+
+func (id *relationID) UnmarshalJSON(raw []byte) error {
+	value, present, err := decodeOptionalPositiveInt32(raw)
+	if err != nil || !present {
+		return errInvalidRelationID
+	}
+	*id = relationID(value)
+	return nil
 }
 
 // UpdateApplicationRelation attaches (or detaches) the CHILD agent named by
@@ -298,7 +320,7 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		})
 		return
 	}
-	parentVersionID := *body.VersionID
+	parentVersionID := int64(*body.VersionID)
 
 	ownerProjectID, err := strconv.Atoi(projectID)
 	if err != nil || ownerProjectID <= 0 {
@@ -320,9 +342,10 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 	// (every attach mints a fresh tool_id, so no unique constraint can
 	// catch the race after the fact).
 	var parentStatus string
+	var parentApplicationID int64
 	err = transaction.QueryRow(ctx, fmt.Sprintf(
-		`SELECT COALESCE(status, '') FROM %s.application_versions WHERE id = $1 FOR UPDATE`, s),
-		parentVersionID).Scan(&parentStatus)
+		`SELECT COALESCE(status, ''), application_id FROM %s.application_versions WHERE id = $1 FOR UPDATE`, s),
+		parentVersionID).Scan(&parentStatus, &parentApplicationID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the parent version does not exist"})
@@ -330,6 +353,14 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		}
 		slog.ErrorContext(ctx, "application relation: parent version read failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation lookup failed"})
+		return
+	}
+	// The body names the parent twice. A version of ANOTHER application must
+	// not be edited because a client sent a stale or wrong application_id.
+	if parentApplicationID != int64(*body.ApplicationID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "the parent version does not belong to application_id",
+		})
 		return
 	}
 	if parentStatus == "published" || parentStatus == "embedded" {

@@ -56,7 +56,7 @@ const OnboardingTour = memo(() => {
           sx={styles.tourFullScreenButton}
           aria-label="View tour in full screen"
         >
-          <FullscreenOutlinedIcon sx={{ fontSize: 20 }} />
+          <FullscreenOutlinedIcon fontSize="small" />
         </IconButton>
         <Box sx={styles.container}>
           <TourContent
@@ -140,7 +140,8 @@ const styles = {
     marginLeft: '0rem',
   },
   closeIcon: {
-    fontSize: '1rem',
+    width: '1rem',
+    height: '1rem',
   },
   tourDialogPaper: {
     backgroundColor: 'background.default',

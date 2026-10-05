@@ -724,12 +724,20 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	default_secrets   → secrets.WithPlatformDefaultSecretPolicy, wired by
 	//	                    api/router.go. Shared REST and MCP vault handlers hide
 	//	                    default names and refuse changes without X-SECRET.
+	//	native_client_policy → platformconfig.LoadNativeClientPolicy through
+	//	                    the one cached internal/application/nativepolicy
+	//	                    reader: the discovery document's public subset and
+	//	                    per-client minimums, the `client_policy` of every
+	//	                    native token response, and the 426 minimum-version
+	//	                    gate (apimw.ClientVersion and the native token
+	//	                    endpoint) — ADR-0025 WP4
 	want := map[string]bool{
 		"resources": true, "mcp_configuration": true, "branding": true,
 		"agent_publishing": true, "skill_publishing": true,
 		"voice_features": true, "support_assistant": true,
 		"guardrails": true, "dedicated_banner": true,
 		"maintenance": true, "analytics": true, "default_secrets": true,
+		"native_client_policy": true,
 	}
 	for id := range want {
 		if !available[id] {

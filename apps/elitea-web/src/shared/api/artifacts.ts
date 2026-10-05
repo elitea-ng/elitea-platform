@@ -184,6 +184,11 @@ export async function uploadArtifactObject(params: UploadArtifactObjectParams): 
     const errorBody = await parseJsonBody(response);
     return { ok: false, error: { kind: 'http', status: response.status, url: response.url, body: errorBody } };
   }
+  // Read the answer to the end even though nothing here uses it. The API
+  // answers `Cache-Control: no-store`, so the HTTP cache no longer drains an
+  // unread body: left unread, the request never finishes loading (Chromium
+  // never reports it complete, and the connection is held until GC).
+  await response.arrayBuffer().catch(() => undefined);
   return { ok: true, status: response.status, data: undefined, headers: response.headers };
 }
 

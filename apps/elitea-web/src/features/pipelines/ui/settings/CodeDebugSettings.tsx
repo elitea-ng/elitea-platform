@@ -1,5 +1,5 @@
 import { useContext, type ReactNode } from 'react';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
@@ -15,7 +15,7 @@ export function CodeDebugSettings({ id, disabled }: Props): ReactNode {
   if (!context || !node || (node.type !== undefined && node.type.toLowerCase() !== 'code')) return null;
   return <Stack className="nodrag nopan" spacing={0.5}>
     <FormControlLabel label={t('pipelines.flowEditor.codeNode.debug', 'Debug')}
-      control={<Checkbox checked={node['debug'] === true} disabled={disabled}
+      control={<BaseCheckbox checked={node['debug'] === true} disabled={disabled}
         onChange={(_, checked) => {
           if (!disabled) updateYamlNode(id, 'debug', checked, context.yamlJsonObject, context.setYamlJsonObject);
         }} />} />

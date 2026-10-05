@@ -105,10 +105,52 @@ func grantDatabase(ctx context.Context, connection Connection, database string, 
 	return exec(ctx, connection, "grant project database", statement)
 }
 
+// grantPublicSchema gives role full use of the project database's public
+// schema, for the objects that exist now AND for the ones the provisioning
+// administrator creates later.
+//
+// #6642: "GRANT ... ON ALL TABLES" covers only tables that already exist. When
+// LangGraph's PostgresSaver.setup() later ran as the administrator, it created
+// checkpoint_migrations, checkpoints, checkpoint_blobs and checkpoint_writes
+// with no grant to the project role, and every prediction in that project then
+// failed with "permission denied for table checkpoint_migrations".
+//
+// The default privileges are set FIRST, so a table the administrator creates
+// between these statements is covered by one or the other. ALTER DEFAULT
+// PRIVILEGES without FOR ROLE applies to objects created by the executing
+// role, which is the administrator this connection authenticates as.
+//
+// WHAT THIS DOES AND DOES NOT REACH. It runs only when Provisioner.provision
+// runs. In production that is project creation: the one caller
+// (runtimecomposition.ProjectVectorStore) asks for ProvisionIfMissing, and
+// ProjectPgvectorService returns before any SQL when the project's vault
+// already holds complete material. Nothing calls ProvisionRepair or
+// ProvisionForceRecreate today. So:
+//
+//   - a project created from now on gets the default privileges. In the
+//     database-role mode the worker connects as the project role, which then
+//     owns the checkpoint* tables it creates; the default privileges matter
+//     for tables an administrator creates in that database (a pylon-era
+//     worker, a manual setup, or the existing-admin-user mode).
+//
+//   - an EXISTING project, including every project migrated from pylon, is
+//     NOT re-granted: there is no wired reprovision path. A deployment that
+//     already shows "permission denied for table checkpoint_migrations" must
+//     be repaired by hand, connected to the project's database
+//     ("project_<id>") as the role that owns the checkpoint* tables:
+//
+//     GRANT ALL ON ALL TABLES IN SCHEMA public TO "project_<id>_user";
+//     GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "project_<id>_user";
+//     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "project_<id>_user";
+//     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "project_<id>_user";
+//
+// They are this function's statements minus the schema grant, all idempotent.
 func grantPublicSchema(ctx context.Context, connection Connection, role string) error {
 	quotedRole := quoteIdentifier(role)
 	statements := [...]string{
 		"GRANT ALL ON SCHEMA public TO " + quotedRole,
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO " + quotedRole,
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO " + quotedRole,
 		"GRANT ALL ON ALL TABLES IN SCHEMA public TO " + quotedRole,
 		"GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO " + quotedRole,
 	}

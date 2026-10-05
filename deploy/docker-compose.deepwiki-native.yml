@@ -1,0 +1,35 @@
+# The Rust-native DeepWiki engine sidecar on the standalone stack (ADR-0026).
+#
+# An overlay for docker-compose.standalone-full.yml (STANDALONE_OVERLAY, see
+# deploy/scripts/standalone-stack.sh). It replaces the PYTHON engine sidecar
+# with the Rust one on the same socket and volume, and tells the Go host it
+# is talking to the native engine, so GET /health reports `runner: native`.
+# Nothing else in the stack changes — that is the claim being tested.
+#
+# Phase 1 of ADR-0026 serves the fixture engine only, so the DeepWiki
+# browser journeys run against canned results exactly as they do with the
+# Python sidecar:
+#
+#   STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml \
+#     deploy/scripts/standalone-stack.sh up
+services:
+  elitea-deepwiki:
+    environment:
+      ELITEA_DEEPWIKI_RUNNER: "native"
+
+  elitea-deepwiki-engine:
+    image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:standalone
+    build: !override
+      context: ..
+      dockerfile: services/elitea-deepwiki-engine/Containerfile
+    # The image's own ENTRYPOINT/CMD (`elitea-deepwiki-engine serve`); the
+    # base file's Python entrypoint is reset.
+    entrypoint: !reset null
+    environment:
+      ELITEA_DEEPWIKI_RUNNER: "fixture"
+      ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "${DEEPWIKI_FIXTURE_STEP_SECONDS:-1}"
+      ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
+    healthcheck:
+      # Distroless: no shell, no python. The binary probes its own socket
+      # with GET /engine/health.
+      test: ["CMD", "/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]

@@ -134,7 +134,7 @@ export function AdminServiceDescriptors() {
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
-      <Typography variant="h5" sx={{ fontWeight: 600 }}>
+      <Typography variant="headingLarge" component="h1">
         {t('pages.admin.serviceDescriptors.title', 'Service Descriptors')}
       </Typography>
 
@@ -168,7 +168,7 @@ export function AdminServiceDescriptors() {
           guessed `record` would be a reassuring word on an enforcing
           deployment. */}
       {query.isSuccess && query.data.posture !== undefined ? (
-        <Typography variant="body2" color="text.secondary" data-testid="admin-admission-posture">
+        <Typography variant="bodyMedium" component="p" color="text.secondary" data-testid="admin-admission-posture">
           {query.data.posture === 'enforce'
             ? t(
                 'pages.admin.serviceDescriptors.posture.enforce',

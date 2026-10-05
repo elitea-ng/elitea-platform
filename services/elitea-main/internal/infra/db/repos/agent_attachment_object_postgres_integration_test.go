@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/extract"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -217,15 +218,16 @@ func TestCurrentAttachmentObjectRepositoryEnforcesItsPostgresGates(t *testing.T)
 	// BEFORE the bytes are fetched.
 	if _, err := repository.ReadAttachmentObject(
 		ctx, project, bucketName, key, int64(len(body)-1),
-	); !errors.Is(err, storage.ErrContentRejected) {
-		t.Fatalf("over-cap read err = %v, want ErrContentRejected", err)
+	); !errors.Is(err, storage.ErrContentRejected) || attachmentRefusalReason(err) != extract.ReasonTooLarge {
+		t.Fatalf("over-cap read err = %v, want a too_large refusal", err)
 	}
 	if store.gets != gets {
 		t.Fatalf("an over-cap object was fetched before its length was checked")
 	}
 
 	// …and a metadata row that disagrees with the bytes is refused rather than
-	// resolved in favour of either side.
+	// resolved in favour of either side. It is an error, not a property of
+	// the file: in particular it is not "too large".
 	if _, err := objects.UpsertObject(ctx, NewObjectInput{
 		BucketID: systemBucket.ID, Key: key,
 		ByteLength: int64(len(body)) + 10, MediaType: "text/plain",
@@ -234,7 +236,31 @@ func TestCurrentAttachmentObjectRepositoryEnforcesItsPostgresGates(t *testing.T)
 	}
 	if _, err := repository.ReadAttachmentObject(
 		ctx, project, bucketName, key, 128*1024,
-	); !errors.Is(err, storage.ErrContentRejected) {
-		t.Fatalf("length-drift read err = %v, want ErrContentRejected", err)
+	); err == nil || errors.Is(err, storage.ErrContentRejected) || errors.Is(err, storage.ErrContentNotFound) {
+		t.Fatalf("length-drift read err = %v, want a server error", err)
 	}
+
+	// An empty upload is "empty", never "too large".
+	if _, err := objects.UpsertObject(ctx, NewObjectInput{
+		BucketID: systemBucket.ID, Key: key, ByteLength: 0, MediaType: "text/plain",
+	}); err != nil {
+		t.Fatalf("rewrite attachment object row: %v", err)
+	}
+	gets = store.gets
+	if _, err := repository.ReadAttachmentObject(
+		ctx, project, bucketName, key, 128*1024,
+	); attachmentRefusalReason(err) != extract.ReasonEmpty {
+		t.Fatalf("empty read err = %v, want an empty refusal", err)
+	}
+	if store.gets != gets {
+		t.Fatalf("an empty object was fetched")
+	}
+}
+
+func attachmentRefusalReason(err error) extract.Reason {
+	var refusal *storage.AttachmentUnreadableError
+	if errors.As(err, &refusal) {
+		return refusal.Reason
+	}
+	return ""
 }

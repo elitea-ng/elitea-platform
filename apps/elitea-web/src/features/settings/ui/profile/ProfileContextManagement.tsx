@@ -101,6 +101,7 @@ export function ProfileContextManagement({
 
                 <Box sx={styles.field}>
                   <InfoLabelWithTooltip
+                    variant="labelMedium"
                     label={t('settings.profile.contextManagement.preserveRecentMessages', 'Preserve Recent Messages')}
                     tooltip={t('settings.profile.contextManagement.preserveRecentMessagesTooltip', 'Preferred number of recent messages to keep verbatim. Large messages may be summarized to free context. The current request and active tool exchanges remain protected.')}
                   />

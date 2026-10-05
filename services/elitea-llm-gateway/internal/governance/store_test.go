@@ -338,6 +338,10 @@ func TestCheckBudget_UnderBudgetAllow(t *testing.T) {
 	if dec.Degraded {
 		t.Fatal("should not be degraded when NATS is up")
 	}
+	// The audio routes refuse an unpriced model only for a budgeted project.
+	if !dec.Budgeted {
+		t.Fatal("a project with a hard limit must report Budgeted")
+	}
 }
 
 // TestCheckBudget_OverBudgetBlock402: NATS up, counter ≥ limit → Block402.
@@ -431,6 +435,9 @@ func TestCheckBudget_NoBudgetRow_Unlimited(t *testing.T) {
 	}
 	if dec.Verdict != failmode.Allow {
 		t.Fatalf("unlimited project must be Allow, got %v", dec.Verdict)
+	}
+	if dec.Budgeted {
+		t.Fatal("an unlimited project must not report Budgeted")
 	}
 }
 

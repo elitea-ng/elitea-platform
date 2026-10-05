@@ -28,22 +28,20 @@
 import { memo } from 'react';
 
 import AddIcon from '@mui/icons-material/Add';
-import SearchIcon from '@mui/icons-material/Search';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import FormControlLabel from '@mui/material/FormControlLabel';
-import InputAdornment from '@mui/material/InputAdornment';
 import Snackbar from '@mui/material/Snackbar';
 import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { AccordionConstants } from '@/shared/lib/constants';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
+import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 
 import { useLongTermMemoryManagement } from '../../lib/memory/useLongTermMemoryManagement';
 import { formatMemoryTags } from '../../lib/memory/longTermMemoryHelpers';
@@ -89,13 +87,13 @@ export const LongTermMemoryManagement = memo(function LongTermMemoryManagement({
                     label={t('settings.longTermMemory.masterToggle', 'Use my memories in chat')}
                   />
                   <Box sx={styles.controlsRowRight}>
-                    <TextField
-                      size="small"
-                      placeholder={t('settings.longTermMemory.searchPlaceholder', 'Search memories')}
+                    <SimpleSearchBar
                       value={memoryState.search}
-                      onChange={(event) => memoryState.setSearch(event.target.value)}
-                      slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> } }}
+                      onChange={memoryState.setSearch}
+                      placeholder={t('settings.longTermMemory.searchPlaceholder', 'Search memories')}
+                      aria-label={t('settings.longTermMemory.searchPlaceholder', 'Search memories')}
                       data-testid="long-term-memory-search"
+                      sx={styles.search}
                     />
                     {memoryState.canWrite && (
                       <Button
@@ -127,7 +125,7 @@ export const LongTermMemoryManagement = memo(function LongTermMemoryManagement({
                 {memoryState.isBulkToggling && (
                   <Box sx={styles.bulkProgress}>
                     <CircularProgress size={16} />
-                    <Typography variant="bodySmall2">{t('settings.longTermMemory.bulkToggling', 'Updating all memories…')}</Typography>
+                    <Typography variant="bodySmall">{t('settings.longTermMemory.bulkToggling', 'Updating all memories…')}</Typography>
                   </Box>
                 )}
 
@@ -209,6 +207,7 @@ const styles = {
     alignItems: 'center',
     gap: '0.5rem',
   },
+  search: { width: '15rem' },
   bulkProgress: {
     display: 'flex',
     alignItems: 'center',

@@ -408,7 +408,7 @@ func TestMCPSyncToolsStoresTheToolsAndToolsListServesThem(t *testing.T) {
 
 	syncRouter := chi.NewRouter()
 	syncRouter.Post("/api/v2/elitea_core/mcp_sync_tools/prompt_lib/{projectID}",
-		eliteacore.NewHandler(pool).MCPSyncTools)
+		newLoopbackSyncHandler(pool).MCPSyncTools)
 
 	body := fmt.Sprintf(`{"url":%q,"toolkit_type":"mcp_confluence"}`, remote.URL)
 	recorder := do(t, syncRouter, http.MethodPost,
@@ -480,7 +480,7 @@ func TestMCPSyncToolsReplacesTheStoredToolSet(t *testing.T) {
 
 	syncRouter := chi.NewRouter()
 	syncRouter.Post("/api/v2/elitea_core/mcp_sync_tools/prompt_lib/{projectID}",
-		eliteacore.NewHandler(pool).MCPSyncTools)
+		newLoopbackSyncHandler(pool).MCPSyncTools)
 
 	sync := func(tools string) {
 		t.Helper()
@@ -549,7 +549,7 @@ func TestFailedDiscoveryKeepsTheStoredToolSet(t *testing.T) {
 
 	syncRouter := chi.NewRouter()
 	syncRouter.Post("/api/v2/elitea_core/mcp_sync_tools/prompt_lib/{projectID}",
-		eliteacore.NewHandler(pool).MCPSyncTools)
+		newLoopbackSyncHandler(pool).MCPSyncTools)
 
 	recorder := do(t, syncRouter, http.MethodPost,
 		"/api/v2/elitea_core/mcp_sync_tools/prompt_lib/"+homeProject,
@@ -613,4 +613,12 @@ func TestToolsListReadsTheCallerFromTheRequestContext(t *testing.T) {
 	if strconv.FormatInt(personalProject, 10) == homeProject {
 		t.Fatalf("personal project collided with the current project")
 	}
+}
+
+// newLoopbackSyncHandler is the eliteacore handler with a plain HTTP client.
+// The fake MCP servers here listen on 127.0.0.1, which the production
+// default client refuses (the MCP egress guard); WithHTTPClient is the
+// documented override for tests.
+func newLoopbackSyncHandler(pool *pgxpool.Pool) *eliteacore.Handler {
+	return eliteacore.NewHandler(pool, eliteacore.WithHTTPClient(&http.Client{}))
 }

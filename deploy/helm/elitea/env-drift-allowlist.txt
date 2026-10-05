@@ -78,7 +78,7 @@ SKIP_MIGRATIONS
 # --- #390: the variable was the sole production switch for a fifth credential
 # --- source that took X-Auth-Type/X-Auth-Id as the whole credential and never
 # --- ran the principal check. Do not add it back for elitea-main. The
-# --- ForwardAuth trusted-CIDR list is a different boundary and comes from the
+# --- edge auth trusted-CIDR list is a different boundary and comes from the
 # --- auth configuration file (browserauth.TrustedProxyConfig), not from an
 # --- environment variable. services/elitea-llm-gateway keeps its own,
 # --- unrelated TRUSTED_PROXY_CIDRS and its own allowlist.

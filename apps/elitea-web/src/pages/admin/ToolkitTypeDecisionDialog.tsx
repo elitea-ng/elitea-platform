@@ -151,7 +151,7 @@ export function ToolkitTypeDecisionDialog({
           )}
         </DialogContentText>
         {toolkitType === null ? null : (
-          <Typography variant="body2" color="text.secondary" sx={{ marginBottom: '1rem' }}>
+          <Typography variant="bodyMedium" component="p" color="text.secondary" sx={{ marginBottom: '1rem' }}>
             {toolkitType.label} · {toolkitType.type}
           </Typography>
         )}
@@ -167,7 +167,7 @@ export function ToolkitTypeDecisionDialog({
               label={
                 <span>
                   {choice.label()}
-                  <Typography variant="caption" color="text.secondary" component="div">
+                  <Typography variant="bodySmall" color="text.secondary" component="div">
                     {choice.help()}
                   </Typography>
                 </span>

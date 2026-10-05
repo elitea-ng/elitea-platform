@@ -83,8 +83,8 @@ services:
     # MOUNT EACH FILE, AND NOT THE DIRECTORY (#378).
     #
     # traefik/index-routes.yml is deliberately absent from this list. Every
-    # router in that file names the `go-main-forward-auth` middleware, and that
-    # middleware calls http://elitea-main:8080/internal/forward-auth/main. The
+    # router in that file names the `go-main-auth` middleware, and that
+    # middleware calls http://elitea-main:8080/internal/auth/main. The
     # elitea-main service above does NOT set ELITEA_AUTH_CONFIG_FILE, so it
     # composes no production authentication and it registers no such path.
     # Traefik then returns the authenticator's non-2xx answer to the caller.
@@ -100,7 +100,7 @@ services:
     # definitions loaded means a future Go route needs one edit and not two,
     # which is how the missing definitions of #338 happened.
     #
-    # services/elitea-main/tests/deployedge/edge_forward_auth_test.go reads the
+    # services/elitea-main/tests/deployedge/edge_auth_target_test.go reads the
     # volume list below and fails when it stops matching the configuration set
     # the edge gate checks. Run it with `task deploy:check-edge`.
     volumes:

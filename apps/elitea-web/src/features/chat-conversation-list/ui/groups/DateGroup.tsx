@@ -123,7 +123,7 @@ export function DateGroup({ group, renderConversationItem, isExpanded, onToggleE
           */}
         <Typography
           component="span"
-          variant="subtitle2"
+          variant="labelMedium"
           // `text.default` (#A9B7C1 in dark), not `text.secondary` — this
           // pack defines `text.secondary` as pure #FFFFFF, so the group
           // heading rendered brighter than the conversation names under it.

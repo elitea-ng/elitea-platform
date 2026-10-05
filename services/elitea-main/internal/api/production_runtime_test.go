@@ -231,3 +231,73 @@ func forwardedRuntimeRequest(method, target, remoteAddress string) *http.Request
 	request.Header.Set("X-Auth-ID", "7")
 	return request
 }
+
+type productionRuntimeTokenValidatorFunc func(context.Context, string) (auth.User, error)
+
+func (function productionRuntimeTokenValidatorFunc) ValidateToken(ctx context.Context, token string) (auth.User, error) {
+	return function(ctx, token)
+}
+
+// TestProductionRuntimeRoutesAcceptAPersonalAccessToken is #289 (regression
+// finding F2). A personal access token starts a turn on the agent-start route,
+// which takes the group's credentials, and the events URL that start answers
+// with must accept the SAME token. Before the fix the group's Validator was
+// dropped here, so a bearer was refused 401 `token_rejected` on the events
+// stream of a run it had just admitted.
+func TestProductionRuntimeRoutesAcceptAPersonalAccessToken(t *testing.T) {
+	handlerCalls := 0
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		handlerCalls++
+		principal, ok := auth.RuntimePrincipalFromContext(request.Context())
+		if !ok || principal.UserID != "10" {
+			t.Errorf("runtime principal = %+v, present=%v", principal, ok)
+		}
+		source, _ := auth.AuthenticationSourceFromContext(request.Context())
+		if source != auth.AuthenticationSourceToken && source != auth.AuthenticationSourceAPIKey {
+			t.Errorf("authentication source = %d, want token or API key", source)
+		}
+		writer.WriteHeader(http.StatusOK)
+	})
+	validator := productionRuntimeTokenValidatorFunc(func(_ context.Context, token string) (auth.User, error) {
+		if token != "pat-of-user-10" {
+			return auth.User{}, auth.ErrCredentialRejected
+		}
+		return auth.User{ID: "10", UserID: "10", TokenID: "3", AuthType: "token"}, nil
+	})
+	principal := productionRuntimePrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
+		return user, nil
+	})
+	peer := productionRuntimePeerVerifierFunc(func(*http.Request) error { return errors.New("no edge here") })
+	routes, err := NewProductionRuntimeRoutes(handler, handler, principal, peer, apimw.AuthConfig{
+		Validator:          validator,
+		PrincipalValidator: principal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(RouterConfig{ProductionRuntime: routes})
+
+	const eventsPath = "/api/v2/executions/6/c878ec191be8ebb35feb4315a65f695f/events"
+	for _, test := range []struct {
+		name, method, path, header, value string
+		want                              int
+	}{
+		{"bearer PAT on the events stream", http.MethodGet, eventsPath, "Authorization", "Bearer pat-of-user-10", http.StatusOK},
+		{"API key on the events stream", http.MethodGet, eventsPath, "X-API-Key", "pat-of-user-10", http.StatusOK},
+		{"bearer PAT on configuration validation", http.MethodPost, "/api/v2/configurations/validation/6/revision-1", "Authorization", "Bearer pat-of-user-10", http.StatusOK},
+		{"an unknown bearer is still refused", http.MethodGet, eventsPath, "Authorization", "Bearer someone-else", http.StatusUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, nil)
+			request.Header.Set(test.header, test.value)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+	if handlerCalls != 3 {
+		t.Fatalf("handler calls = %d, want 3 (the refused bearer must not reach it)", handlerCalls)
+	}
+}

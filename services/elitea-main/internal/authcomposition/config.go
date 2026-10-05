@@ -20,7 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
 )
@@ -144,6 +144,10 @@ type IdentityConfig struct {
 	// contract deliberately cannot introduce a second Auth DSN or schema.
 	InitialGlobalAdmins []string                 `yaml:"initial_global_admins"`
 	ProjectEnrollment   *ProjectEnrollmentConfig `yaml:"project_enrollment"`
+	// AdoptSCIMUsers lets a first login on this plane adopt an account a SCIM
+	// client provisioned (identityrepo.AdoptionGuard). Off by default: turn it
+	// on only when this plane's provider is the one paired with the SCIM client.
+	AdoptSCIMUsers bool `yaml:"adopt_scim_users"`
 }
 
 type ProjectEnrollmentConfig struct {

@@ -29,12 +29,13 @@ import { useEffect, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import FormHelperText from '@mui/material/FormHelperText';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 
@@ -136,7 +137,7 @@ function OidcFields({
       />
       <FormControlLabel
         control={
-          <Checkbox
+          <BaseCheckbox
             checked={form.requireEmailVerified}
             onChange={(event) => {
               update('requireEmailVerified', event.target.checked);
@@ -196,7 +197,7 @@ function SecretFields({
       {isEdit && hasSealedSecret ? (
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.clearSecret}
               onChange={(event) => {
                 update('clearSecret', event.target.checked);
@@ -302,6 +303,46 @@ export function AdminIdentityProviderDialog({
           </MenuItem>
         </TextField>
 
+        <TextField
+          label={t('pages.admin.identityProviders.dialog.loginDomains', 'Login domains')}
+          value={form.loginDomains}
+          onChange={(event) => {
+            update('loginDomains', event.target.value);
+          }}
+          fullWidth
+          placeholder={t(
+            'pages.admin.identityProviders.dialog.loginDomainsPlaceholder',
+            'example.com, example.org',
+          )}
+          helperText={t(
+            'pages.admin.identityProviders.dialog.loginDomainsHelp',
+            'Optional. Separate domains with commas. On the sign-in page, a person who types a work email in one of these domains goes to this provider.',
+          )}
+          slotProps={{ htmlInput: { 'data-testid': 'identity-provider-login-domains' } }}
+        />
+
+        <FormControlLabel
+          control={
+            <BaseCheckbox
+              checked={form.adoptScimUsers}
+              onChange={(event) => {
+                update('adoptScimUsers', event.target.checked);
+              }}
+              slotProps={{ input: { 'aria-describedby': 'identity-provider-adopt-scim-help' } }}
+            />
+          }
+          label={t(
+            'pages.admin.identityProviders.dialog.adoptScimUsers',
+            'Users provisioned by SCIM may sign in through this provider',
+          )}
+        />
+        <FormHelperText id="identity-provider-adopt-scim-help">
+          {t(
+            'pages.admin.identityProviders.dialog.adoptScimUsersHelp',
+            'Turn this on only for the provider paired with your SCIM client (for example Entra ID). When it is off, a first sign-in through this provider cannot take over an account SCIM created.',
+          )}
+        </FormHelperText>
+
         {form.kind === 'oidc' ? (
           <OidcFields form={form} update={update} />
         ) : (
@@ -317,7 +358,7 @@ export function AdminIdentityProviderDialog({
 
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.enabled}
               onChange={(event) => {
                 update('enabled', event.target.checked);

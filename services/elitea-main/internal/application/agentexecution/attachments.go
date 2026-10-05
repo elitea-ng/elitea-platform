@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -302,6 +303,27 @@ var inlineAttachmentImageMediaTypes = map[string]string{
 	".webp": "image/webp",
 }
 
+// InlineAttachmentImageMaxBytes is the largest image (raw bytes) a turn hands
+// to the model as an image — what a client is told in the discovery
+// document's attachment policy (client contract 1.1).
+func InlineAttachmentImageMaxBytes() int64 { return int64(maxInlineAttachmentImageBytes) }
+
+// InlineAttachmentImageDownscale reports whether an inline-format image over
+// InlineAttachmentImageMaxBytes is downscaled to fit rather than announced
+// by name only (attachments_downscale.go).
+const InlineAttachmentImageDownscale = true
+
+// InlineAttachmentImageFormats lists the extensions handed to the model as
+// images, sorted.
+func InlineAttachmentImageFormats() []string {
+	formats := make([]string, 0, len(inlineAttachmentImageMediaTypes))
+	for extension := range inlineAttachmentImageMediaTypes {
+		formats = append(formats, extension)
+	}
+	sort.Strings(formats)
+	return formats
+}
+
 // CurrentAttachmentImageReader reads one stored chat attachment's bytes at
 // ADMISSION time, inside the project the turn was authorized for.
 //
@@ -330,7 +352,9 @@ type inlineAttachmentImage struct {
 	dataURL string
 	// refusal is appended to the header chunk's own text. A model that is told
 	// "a picture is attached" and shown nothing answers as though it had seen
-	// it; a model told the picture could not be embedded does not.
+	// it; a model told the picture could not be embedded does not. When the
+	// picture WAS embedded after a downscale, it is that note instead, so the
+	// model knows fine detail may be missing.
 	refusal string
 	// extract asks for the DOCUMENT extraction marker on the header chunk, so
 	// the worker reads the file the way it reads a PDF. For an image that
@@ -359,12 +383,25 @@ func inlineAttachmentImageFor(
 	if !inlineable {
 		return inlineAttachmentImage{
 			refusal: "NOTE: this image is in a format that cannot be sent to the model directly " +
-				"(only PNG, JPEG, GIF and WebP are). Its contents may be read with a file-reading tool.",
+				"(only PNG, JPEG, GIF and WebP are). It is not shown to you as an image.",
+			extract: true,
+		}
+	}
+	// The raw size this image may embed at: the per-image cap, or what the
+	// turn's budget has left once base64 (4 bytes per 3) is paid for.
+	rawLimit := maxInlineAttachmentImageBytes
+	if budget != nil {
+		rawLimit = min(rawLimit, max(*budget, 0)/4*3)
+	}
+	if rawLimit < minInlineAttachmentImageBytes {
+		return inlineAttachmentImage{
+			refusal: "NOTE: this image was not embedded because the turn's other attachments " +
+				"already use the space available for images. It is not shown to you as an image.",
 			extract: true,
 		}
 	}
 	content, err := reader.ReadCurrentAttachmentImage(
-		ctx, projectID, ref.Bucket, ref.Name, int64(maxInlineAttachmentImageBytes),
+		ctx, projectID, ref.Bucket, ref.Name, int64(maxInlineAttachmentSourceBytes),
 	)
 	if err != nil || len(content) == 0 {
 		// Over the reader's own cap, absent, or a store that is having a bad
@@ -373,26 +410,41 @@ func inlineAttachmentImageFor(
 		// see my screenshot" is otherwise indistinguishable from a bug.
 		return inlineAttachmentImage{
 			refusal: "NOTE: this image could not be embedded for the model (it is larger than " +
-				strconv.Itoa(maxInlineAttachmentImageBytes/1024) +
-				" KiB, or its bytes could not be read). Its contents may be read with a file-reading tool.",
+				strconv.Itoa(maxInlineAttachmentSourceBytes>>20) +
+				" MiB, or its bytes could not be read). It is not shown to you as an image.",
 			extract: true,
 		}
 	}
-	encoded := base64.StdEncoding.EncodeToString(content)
-	cost := len(encoded)
-	if budget != nil {
-		if cost > *budget {
+	note := ""
+	if len(content) > rawLimit {
+		// Too large as stored: fit it (client contract 1.1). A picture that
+		// cannot be decoded, has too many pixels, or does not fit even at the
+		// floor size is announced and read, as before.
+		downscaled, err := downscaleInlineImage(ctx, content, rawLimit)
+		if err != nil {
 			return inlineAttachmentImage{
-				refusal: "NOTE: this image was not embedded because the turn's other attachments " +
-					"already use the space available for images. Its contents may be read with a " +
-					"file-reading tool.",
+				refusal: "NOTE: this image could not be embedded for the model (it is too large to " +
+					"downscale to the " + strconv.Itoa(rawLimit/1024) + " KiB available, or it could not " +
+					"be decoded). It is not shown to you as an image.",
 				extract: true,
 			}
 		}
-		*budget -= cost
+		content, mediaType = downscaled.jpeg, "image/jpeg"
+		note = "NOTE: this image was downscaled from " +
+			strconv.Itoa(downscaled.sourceWidth) + "x" + strconv.Itoa(downscaled.sourceHeight) + " to " +
+			strconv.Itoa(downscaled.downscaledWidth) + "x" + strconv.Itoa(downscaled.downscaledHeight) +
+			" pixels to fit the model's input; fine detail may be lost."
 	}
-	return inlineAttachmentImage{dataURL: "data:" + mediaType + ";base64," + encoded}
+	encoded := base64.StdEncoding.EncodeToString(content)
+	if budget != nil {
+		*budget -= len(encoded)
+	}
+	return inlineAttachmentImage{dataURL: "data:" + mediaType + ";base64," + encoded, refusal: note}
 }
+
+// minInlineAttachmentImageBytes is the smallest allowance worth trying to fit
+// an image into; a 256-pixel JPEG rarely encodes below it.
+const minInlineAttachmentImageBytes = 4 << 10
 
 // attachmentImageChunk is the `{"type":"image_url"}` chunk both workers already
 // admit (`_ADMITTED_CHUNK_TYPES` / the `image_url` arm of
@@ -407,6 +459,23 @@ func attachmentImageChunk(dataURL string) map[string]any {
 		"image_url": map[string]any{"url": dataURL},
 	}
 }
+
+// attachmentHeaderNote is the one sentence the header makes about the file's
+// content, and it must be TRUE on every runtime.
+//
+// It replaced pylon's three lines ("File content may be EMBEDDED in the next
+// message chunk ... the full text is already included ... File reading tools
+// are available if needed"). Those claimed a complete text and a file-reading
+// tool that the native runtime did not have, so a model shown only this header
+// answered about a PDF it had never read. Both workers now ALWAYS follow the
+// header with either the content (marked complete or partial) or a note that
+// says why the file could not be read
+// (services/elitea-worker-rust/src/agents/attachments.rs,
+// services/elitea-worker-python/src/elitea_worker/agents/attachments.py), so
+// this sentence only points at that chunk and makes no promise of its own.
+const attachmentHeaderNote = "NOTE: The next message chunk holds this file's content as the platform " +
+	"read it, or a note that says which part could not be read and why. " +
+	"Do not describe content that you were not shown."
 
 // attachmentContentScaffold is the creation-time `content` chunk, in pylon's
 // shape (utils/attachments.py:288-320, DocumentToModelProcessor.process): a
@@ -444,9 +513,7 @@ func attachmentContentScaffold(
 		"Filename: " + ref.Name,
 		"filepath: " + filepath,
 		"",
-		"NOTE: File content may be EMBEDDED in the next message chunk.",
-		"If embedded content is provided below, please review it first - the full text is already included.",
-		"File reading tools are available if needed for specific operations (search, partial access), but prefer embedded content when available.",
+		attachmentHeaderNote,
 	}
 	// An image that could NOT be embedded says so here. Without this line the
 	// model is told a picture is attached, shown nothing, and answers as

@@ -80,7 +80,7 @@ The variable is empty by default, so a fresh install stays unprivileged until yo
 
 <Steps>
 <Step title="Sign in">
-Open the deployment in your browser and sign in through your identity provider (or the Form plane, if configured). If your reference matches an `ELITEA_INITIAL_GLOBAL_ADMINS` entry, you land with a global administrator role.
+Open the deployment in your browser and sign in through your identity provider (or the Form plane, if you set `ELITEA_FORM_LOGIN_ENABLED=true` — it is off by default). If your reference matches an `ELITEA_INITIAL_GLOBAL_ADMINS` entry, you land with a global administrator role.
 </Step>
 <Step title="Create your first project">
 Open the admin console at `/admin/app/projects` and create a project. Project *creation* is administrator-only — but a member does not have to wait on you to ask: the project switcher's **+ Request a project** files a request an administrator approves or rejects from the App Requests page (see [Projects](/admin/projects)), the same way application-access requests already work.
@@ -99,6 +99,7 @@ In your project, open Settings → AI Providers (`/settings/create-configuration
 | `/admin/app` | The admin console |
 | `/app/{projectId}/mcp/…` | Elitea's own MCP server, for external MCP clients |
 | `/api/v2/scim/v2` | SCIM provisioning, if you connect an identity provider that supports it |
+| `/api/v2/scim/oauth/token` | The OAuth 2.0 token endpoint for SCIM clients that use the client credentials grant |
 
 Observability runs over OpenTelemetry through elitea-main's collector proxy — there is no Langfuse or other third-party APM integration.
 

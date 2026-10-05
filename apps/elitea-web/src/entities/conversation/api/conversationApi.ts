@@ -1,5 +1,5 @@
-import { continueStaticPipeline } from '@/shared/api/generated/static-continuation/static-continuation';
-import { StaticPipelineRootContinuation, StaticPipelineToolsContinuation, StaticPipelineLeafDecision, StaticPipelineContinuationReceipt } from '@/shared/api/generated/model';
+import { continueChatExecution } from '@/shared/api/generated/chat/chat';
+import { StaticPipelineRootContinuation, StaticPipelineToolsContinuation, StaticPipelineLeafDecision, StaticPipelineContinuationReceipt, type ChatContinueRequest, type EditorTestRunsPage } from '@/shared/api/generated/model';
 /** Conversation adapters retain existing routes and ordinary chat behavior.
  * OpenAPI now documents atomic create, detail, and typed editor Test recovery.
  * Remaining mutation adapters use the same generated fetch transport.
@@ -7,8 +7,6 @@ import { StaticPipelineRootContinuation, StaticPipelineToolsContinuation, Static
 import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
-
-import type { EditorTestRunsPage } from '@/shared/api/generated/model';
 
 import type { ChatParticipantWire } from '../lib/wire';
 
@@ -292,7 +290,7 @@ export async function continueAgentExecution(params: ContinueAgentExecutionParam
       ? StaticPipelineRootContinuation.strict().parse(body)
       : StaticPipelineToolsContinuation.strict().parse({ ...body, static_decisions: Array.isArray(body['static_decisions']) ? body['static_decisions'].map(decision => StaticPipelineLeafDecision.strict().parse(decision)) : body['static_decisions'] });
     if (request.project_id !== Number(projectId) || request.conversation_uuid !== conversationUuid) throw new Error('Static continuation scope mismatch');
-    const receipt=await continueStaticPipeline(Number(projectId),conversationUuid,request,{execution_contract:AGENT_CONTINUE_STATIC_CONTRACT});
+    const receipt=await continueChatExecution(String(projectId),conversationUuid,request satisfies ChatContinueRequest,{execution_contract:AGENT_CONTINUE_STATIC_CONTRACT});
     const accepted = StaticPipelineContinuationReceipt.strict().parse(receipt.data);
     if (accepted.response_message_id !== request.message_id) throw new Error('Static continuation response mismatch');
     return accepted;

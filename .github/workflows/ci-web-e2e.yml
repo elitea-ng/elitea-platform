@@ -109,6 +109,9 @@ on:
       - ".github/actions/**"
       - "deploy/**"
       - "docker-bake.hcl"
+      # The `native-client-conformance` job's own subject: the black-box
+      # ADR-0025 suite it runs against the stack.
+      - "conformance/nativeclient/**"
       - ".github/workflows/ci-web-e2e.yml"
   push:
     branches:
@@ -134,6 +137,9 @@ on:
       - ".github/actions/**"
       - "deploy/**"
       - "docker-bake.hcl"
+      # The `native-client-conformance` job's own subject: the black-box
+      # ADR-0025 suite it runs against the stack.
+      - "conformance/nativeclient/**"
       - ".github/workflows/ci-web-e2e.yml"
     # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.
     # A GITHUB_TOKEN-created tag starts no workflow run, so this arm has never
@@ -269,7 +275,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -561,7 +567,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -705,7 +711,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -865,7 +871,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -985,7 +991,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -1129,7 +1135,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -1182,6 +1188,51 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  native-client-conformance:
+    name: Native client conformance (ADR-0025)
+    # The black-box Go suite in conformance/nativeclient, run as a native app
+    # would run it against a deployment: discovery from the origin alone, the
+    # RFC 8252 sign-in through the deployment's own pages (OIDC, and SAML
+    # through an identity provider the suite runs and authors), refresh
+    # rotation and reuse, chat idempotency on question_id, event-stream
+    # resume, the changes_since deltas, the minimum client version and device
+    # revocation — plus the "no client registered, no endpoints" leg first.
+    #
+    # The FULL standalone stack, because a chat turn needs the runtime plane,
+    # the worker and the mock model. deploy/scripts/native-conformance.sh owns
+    # the lifecycle (overlay, seeds, suite, logs on failure, teardown); its
+    # header says why there is no Form sign-in leg on this stack. Its own
+    # compose project and port, like the other stack jobs here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache-dependency-path: conformance/nativeclient/go.sum
+      - name: Build the stack images (shared cache)
+        # The same bake every standalone-stack job here uses: the images are
+        # this commit's, from the shared content-addressed layer cache, and
+        # asserted present before compose runs (STANDALONE_SKIP_BUILD=1 below).
+        uses: ./.github/actions/build-stack-images
+        with:
+          compose-files: |
+            docker-compose.standalone-full.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+          targets: standalone
+          mount-cache-suffix: python
+      - name: Run the conformance suite against a fresh standalone stack
+        working-directory: ${{ github.workspace }}
+        env:
+          COMPOSE_BIN: docker compose
+          CI: "true"
+          STANDALONE_SKIP_BUILD: "1"
+          STANDALONE_PROJECT: elitea-native-conformance-ci
+          STANDALONE_PORT: "8088"
+        run: bash deploy/scripts/native-conformance.sh run
+
   index-stream:
     name: Index definition-of-done journey (#93)
     # Issue #485. `apps/elitea-web/scripts/index-stream-e2e.sh` ran in no
@@ -1202,7 +1253,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -1288,7 +1339,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
@@ -1524,7 +1575,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)

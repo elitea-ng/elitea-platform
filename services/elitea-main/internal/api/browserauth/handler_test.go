@@ -17,7 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
@@ -280,15 +280,16 @@ func TestFormPageUsesSelfContainedCurrentPresentation(t *testing.T) {
 		`data-auth-form="form"`,
 		`class="card card-signin"`,
 		`class="form-control"`,
-		`action="/forward-auth/auth_form/authorize"`,
+		`action="/auth/form/authorize"`,
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("login page is missing current Form marker %q", marker)
 		}
 	}
 	for _, forbidden := range []string{
-		"<link", "<script", " src=", "http://", "https://", "highly-sensitive-password",
-		// No pack: no brand stylesheet, no logo, and the page names the product.
+		"<link", " src=", "http://", "https://", "highly-sensitive-password",
+		// No pack: no brand stylesheet and no logo image; the built-in logo
+		// is inline SVG.
 		"<style></style>", `class="brand-logo"`,
 	} {
 		if strings.Contains(body, forbidden) {
@@ -308,6 +309,7 @@ func TestFormPageUsesSelfContainedCurrentPresentation(t *testing.T) {
 	if !strings.Contains(csp, "style-src "+wantSource) || strings.Contains(csp, "'unsafe-inline'") {
 		t.Fatalf("CSP = %q, want exact embedded-style hash %s", csp, wantSource)
 	}
+	assertScriptPinned(t, body, csp)
 }
 
 func TestFormPageRejectsMissingCookieWithoutRendering(t *testing.T) {
@@ -488,14 +490,14 @@ func TestFormLifecycleAcrossRealHTTPAndApplicationBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forwardRequest := coreRequest("/forward-auth/auth?target=rpc")
+	forwardRequest := coreRequest("/auth/check?target=rpc")
 	forwardRequest.AddCookie(authenticatedCookies[0])
 	forwardRecorder := httptest.NewRecorder()
 	core.ServeHTTP(forwardRecorder, forwardRequest)
 	if forwardRecorder.Code != http.StatusOK || forwardRecorder.Header().Get("X-Auth-Type") != "user" ||
 		forwardRecorder.Header().Get("X-Auth-ID") != "71" ||
 		forwardRecorder.Header().Get("X-Auth-Reference") != "-" {
-		t.Fatalf("forward-auth status=%d headers=%v", forwardRecorder.Code, forwardRecorder.Header())
+		t.Fatalf("edge-auth status=%d headers=%v", forwardRecorder.Code, forwardRecorder.Header())
 	}
 
 	restartRequest := httptest.NewRequest(http.MethodGet, BasePath+LoginPath+"?target_to=%2Fagain", nil)
@@ -575,12 +577,39 @@ func TestFormAuthorizeMapsCredentialAndDependencyFailuresGenerically(t *testing.
 	t.Run("credential", func(t *testing.T) {
 		handler, dependencies := newTestHandler(t)
 		dependencies.flow.completeErr = browserapp.ErrUnauthenticated
+		dependencies.flow.completeResult = browserapp.CompleteResult{}
 		recorder := authorize(t, handler, dependencies, "unknown-user", "secret-canary")
 		if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != BasePath+LoginPath+"?error=true" {
 			t.Fatalf("status = %d location = %q", recorder.Code, recorder.Header().Get("Location"))
 		}
 		if strings.Contains(recorder.Body.String(), "unknown-user") || strings.Contains(recorder.Body.String(), "secret-canary") {
 			t.Fatalf("response leaked credential input: %q", recorder.Body.String())
+		}
+	})
+
+	// ADR-0025 §3.9: a wrong password keeps the return target, so a typo on
+	// the way to a deep link (or a native sign-in's consent page) does not
+	// strand the user on the default landing page.
+	t.Run("credential keeps the return target", func(t *testing.T) {
+		handler, dependencies := newTestHandler(t)
+		dependencies.flow.completeErr = browserapp.ErrUnauthenticated
+		dependencies.flow.completeResult = browserapp.CompleteResult{
+			ReturnTarget: "/api/v2/auth/native/authorize/continue?request=abc",
+		}
+		recorder := authorize(t, handler, dependencies, "unknown-user", "secret-canary")
+		want := BasePath + LoginPath + "?error=true&target_to=%2Fapi%2Fv2%2Fauth%2Fnative%2Fauthorize%2Fcontinue%3Frequest%3Dabc"
+		if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != want {
+			t.Fatalf("status = %d location = %q, want %q", recorder.Code, recorder.Header().Get("Location"), want)
+		}
+	})
+
+	t.Run("credential drops a non-canonical target", func(t *testing.T) {
+		handler, dependencies := newTestHandler(t)
+		dependencies.flow.completeErr = browserapp.ErrUnauthenticated
+		dependencies.flow.completeResult = browserapp.CompleteResult{ReturnTarget: "https://evil.example/"}
+		recorder := authorize(t, handler, dependencies, "unknown-user", "secret-canary")
+		if recorder.Header().Get("Location") != BasePath+LoginPath+"?error=true" {
+			t.Fatalf("location = %q", recorder.Header().Get("Location"))
 		}
 	})
 
@@ -599,7 +628,7 @@ func TestFormAuthorizeMapsCredentialAndDependencyFailuresGenerically(t *testing.
 //
 // THE DEFECT. An unauthenticated visit to /app/ asks for the login page twice:
 // the SPA router redirects, and the first API call answers 302 to the same
-// place. Each GET of /forward-auth/login mints a new session cookie and a new
+// place. Each GET of /auth/login mints a new session cookie and a new
 // transaction, so the two begins race and the last Set-Cookie wins. The form on
 // screen then carries a transaction the server no longer accepts. Complete
 // answers ErrTransactionRejected.

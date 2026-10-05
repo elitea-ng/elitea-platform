@@ -40,6 +40,7 @@ import type { ChatConversation } from '../lib/hooks/pipelineChat.types';
  */
 export interface ChatPanelSlotProps {
   readonly settings: Readonly<Record<string, unknown>>;
+  readonly restore?: { readonly conversationId: string | undefined; readonly onComplete: () => void } | undefined;
   readonly disableChat: boolean;
   readonly ref: Ref<ChatBoxSlotHandle> | undefined;
 }
@@ -51,6 +52,7 @@ export interface ChatBoxSlotHandle {
 }
 
 export interface ChatPanelProps {
+  readonly restore?: ChatPanelSlotProps['restore'];
   readonly settings: Readonly<Record<string, unknown>> & { readonly isStreaming?: boolean; readonly activeConversation?: ChatConversation | null };
   readonly display?: string | undefined;
   readonly onCollapsed?: ((collapsed: boolean) => void) | undefined;
@@ -136,7 +138,7 @@ function buildContextBudgetSlotProps(
 }
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel(props, ref): ReactNode {
-  const { settings, display, onCollapsed, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
+  const { restore, settings, display, onCollapsed, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
   const { isStreaming, activeConversation } = settings;
   const boxRef = useRef<ChatBoxSlotHandle | null>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -172,8 +174,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
   const disableChat = Boolean(settings['disableChat']) || isPipelineDirty;
 
   const slotProps = useMemo<ChatPanelSlotProps>(
-    () => ({ settings, disableChat, ref: boxRef }),
-    [settings, disableChat],
+    () => ({ settings, disableChat, ref: boxRef, restore }),
+    [settings, disableChat, restore],
   );
   const contextBudgetSlotProps = buildContextBudgetSlotProps(activeConversation, setActiveConversation);
 

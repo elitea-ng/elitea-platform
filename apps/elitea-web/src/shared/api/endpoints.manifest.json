@@ -3196,6 +3196,34 @@
       "usedBy": [
         "features/chat-messages/ui/chat-box/MessageFeedbackControl.tsx"
       ]
+    },
+    {
+      "$comment": "Voice read-aloud and the settings voice preview. The /llm data plane (elitea-main's session-authenticated proxy to elitea-llm-gateway), not /api/v2: the path is resolved beside /api/v2 (HttpRequestOptions.originRoot). The answer is raw audio (binary: true). Replaced the socket.io tts_* events, which had no server.",
+      "id": "voice.synthesizeSpeech",
+      "method": "POST",
+      "path": "/llm/v1/audio/speech",
+      "originRoot": true,
+      "operationId": null,
+      "source": "handwritten",
+      "responseSchema": "ArrayBuffer",
+      "fixture": null,
+      "usedBy": [
+        "shared/api/voiceTransport.ts"
+      ]
+    },
+    {
+      "$comment": "Voice dictation and speaking mode: one multipart WAV upload per utterance. The /llm data plane, resolved beside /api/v2 (HttpRequestOptions.originRoot). Replaced the socket.io asr_* events, which had no server.",
+      "id": "voice.transcribeAudio",
+      "method": "POST",
+      "path": "/llm/v1/audio/transcriptions",
+      "originRoot": true,
+      "operationId": null,
+      "source": "handwritten",
+      "responseSchema": "{ text: string }",
+      "fixture": null,
+      "usedBy": [
+        "shared/api/voiceTransport.ts"
+      ]
     }
   ]
 }

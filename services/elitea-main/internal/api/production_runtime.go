@@ -19,10 +19,20 @@ type ProductionRuntimeRoutes struct {
 	executionEvents http.Handler
 }
 
-// browser carries the BROWSER half of the credential set these routes accept,
-// and it is the /api/v2 group's own apimw.AuthConfig. Only the cookie fields
-// are read from it; the token validators are deliberately dropped, so these
-// two routes stay narrower than the group.
+// group is the /api/v2 group's own apimw.AuthConfig. These two routes read
+// every credential the group reads: the session cookie fields AND the token
+// validator.
+//
+// THE TOKEN VALIDATOR USED TO BE DROPPED HERE ON PURPOSE, to keep these two
+// routes "narrower than the group". That narrowing had no caller it protected
+// and one it broke (#289, regression finding F2): a personal access token
+// starts a turn on the agent-start route (group credentials) and is then
+// refused 401 `token_rejected` on the events stream of the SAME execution,
+// because a nil Validator rejects every bearer. An SDK or a server-side
+// client could admit a run and never read its result. Widening to the token
+// does not widen what a caller may SEE: the events handler authorizes each
+// request against the execution's project and capability, exactly as it does
+// for a session.
 //
 // It is a whole AuthConfig rather than the loose fields it used to be —
 // `sessionSecret string` — because a browser cookie must be read the SAME WAY
@@ -38,7 +48,7 @@ type ProductionRuntimeRoutes struct {
 // admitted with 200 and then no terminal event at all.
 //
 // An edge-only deployment still passes the zero AuthConfig and behaves exactly
-// as before: no cookie of any shape is read.
+// as before: no cookie of any shape and no bearer token is read.
 //
 // The browser is admitted here at all because the chat surface reads the
 // execution-events stream with an EventSource, which can send a cookie and
@@ -60,7 +70,7 @@ func NewProductionRuntimeRoutes(
 	executionEvents http.Handler,
 	principalValidator apimw.PrincipalValidator,
 	forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier,
-	browser apimw.AuthConfig,
+	group apimw.AuthConfig,
 ) (*ProductionRuntimeRoutes, error) {
 	if validation == nil || executionEvents == nil || principalValidator == nil || forwardedIdentityVerifier == nil {
 		return nil, ErrInvalidProductionRuntimeRoutes
@@ -69,12 +79,15 @@ func NewProductionRuntimeRoutes(
 	authenticate := apimw.Auth(apimw.AuthConfig{
 		PrincipalValidator:        principalValidator,
 		ForwardedIdentityVerifier: forwardedIdentityVerifier,
+		// The bearer and API-key validator (#289). A nil one admits no token,
+		// which is how a PAT came to start a run it could not follow.
+		Validator: group.Validator,
 		// The three cookie fields, copied together. apimw.Auth reads exactly
 		// these when it finds an `elitea_session` cookie; a copy that took
 		// fewer of them is the defect described above.
-		SessionSecret:              browser.SessionSecret,
-		SessionStore:               browser.SessionStore,
-		RejectLegacySessionCookies: browser.RejectLegacySessionCookies,
+		SessionSecret:              group.SessionSecret,
+		SessionStore:               group.SessionStore,
+		RejectLegacySessionCookies: group.RejectLegacySessionCookies,
 	})
 	return &ProductionRuntimeRoutes{
 		validation:      authenticate(requireRuntimePrincipal(validation)),

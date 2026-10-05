@@ -32,11 +32,6 @@ INSERT INTO public.auth_core__user_provider (user_id, provider_ref)
 VALUES (sqlc.arg(user_id)::integer, sqlc.arg(provider_ref)::text)
 ON CONFLICT (provider_ref) DO NOTHING;
 
--- name: AddNewAuthUserToRootGroup :execrows
-INSERT INTO public.auth_core__user_group (user_id, group_id)
-VALUES (sqlc.arg(user_id)::integer, 1)
-ON CONFLICT (user_id, group_id) DO NOTHING;
-
 -- name: TouchProvisionedAuthUser :one
 UPDATE public.auth_core__user
 SET

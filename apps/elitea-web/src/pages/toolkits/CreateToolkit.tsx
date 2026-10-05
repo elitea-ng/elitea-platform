@@ -345,7 +345,7 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
           >
             <ArrowBackIcon fontSize="small" />
           </IconButton>
-          <Typography variant="headingSmall">{title}</Typography>
+          <Typography variant="headingLarge" component="h1">{title}</Typography>
         </Box>
         {editToolDetail && (
           <CreateToolkitToolTabBar

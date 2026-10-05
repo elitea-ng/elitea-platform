@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
@@ -107,7 +108,15 @@ type Message struct {
 	// message_items"), so an always-present empty array would make every
 	// message claim an items list it does not have.
 	MessageItems []map[string]any `json:"message_items,omitempty"`
-	CreatedAt    time.Time        `json:"created_at"`
+	// A turn still in flight (#6654): `is_streaming` and the execution it
+	// runs as (`task_id`), the two keys the details route's message groups
+	// already carry. The chat page seeds from THIS route, and a reload
+	// mid-turn reattaches to the execution only when its last row names it.
+	// Both are OMITTED for a settled row, so a finished transcript reads
+	// exactly as before.
+	IsStreaming bool      `json:"is_streaming,omitempty"`
+	TaskID      *string   `json:"task_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 	// When this group was last REWRITTEN, which for an assistant row is the
 	// moment its text was finalized — including the finalize of a
 	// REGENERATION, which rewrites the row in place
@@ -247,7 +256,8 @@ type Repository interface {
 	ListMessageGroups(ctx context.Context, projectID, conversationID string, limit int, sortOrder string) ([]map[string]any, error)
 	ListParticipants(ctx context.Context, projectID, conversationID string) ([]Participant, error)
 	AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error
-	AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error
+	// AddParticipants returns the participant id of each body, in order.
+	AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error)
 	RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error
 	UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error
 	BatchUpdateEntitySettings(ctx context.Context, projectID, conversationID string, settings []map[string]any) error
@@ -301,6 +311,7 @@ type Handler struct {
 	attachments     AttachmentStore
 	userDefaults    UserContextDefaults
 	events          EventEmitter
+	candidates      ParticipantCandidateStore
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
@@ -450,23 +461,28 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Build the query with optional filtering by source & participant entity
 	visibility, args := access.Predicate(s, "c", 1, chatauthority.Listing)
-	baseWhere := "WHERE " + visibility
+	// The list filters are kept apart from the visibility predicate because
+	// the delta (changes_since) needs them apart: a conversation the caller
+	// can still see but that no longer matches the filter has left THIS list
+	// (an `access_lost` tombstone), which is a different event from losing
+	// sight of it.
+	filters := "TRUE"
 	argIdx := len(args) + 1
 
 	if source != "" {
-		baseWhere += fmt.Sprintf(" AND c.source = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.source = $%d", argIdx)
 		args = append(args, source)
 		argIdx++
 	}
 
 	// Filter by entity_meta_id + entity_name via conversation.meta->'single_participant'
 	if entityMetaID != "" {
-		baseWhere += fmt.Sprintf(" AND c.meta->'single_participant'->'entity_meta'->>'id' = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.meta->'single_participant'->'entity_meta'->>'id' = $%d", argIdx)
 		args = append(args, entityMetaID)
 		argIdx++
 	}
 	if entityName != "" {
-		baseWhere += fmt.Sprintf(" AND c.meta->'single_participant'->>'entity_name' = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.meta->'single_participant'->>'entity_name' = $%d", argIdx)
 		args = append(args, entityName)
 		argIdx++
 	}
@@ -482,7 +498,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"total": 0, "rows": []any{}})
 			return
 		}
-		baseWhere += fmt.Sprintf(" AND c.author_id = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.author_id = $%d", argIdx)
 		args = append(args, callerID)
 		argIdx++
 	}
@@ -503,10 +519,25 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	// hidden conversation into the ordinary list. Anything else — including
 	// the absent parameter every existing caller sends — takes the default.
 	if r.URL.Query().Get("hidden") == "only" {
-		baseWhere += " AND c.meta->>'is_hidden' = 'true'"
+		filters += " AND c.meta->>'is_hidden' = 'true'"
 	} else {
 		// Exclude hidden conversations
-		baseWhere += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
+		filters += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
+	}
+
+	baseWhere := "WHERE " + visibility + " AND " + filters
+
+	if raw, delta := changesync.Requested(r.URL.Query()); delta {
+		h.listChanges(w, r, pool, conversationChangesQuery{
+			schema:     s,
+			projectID:  projectID,
+			visibility: visibility,
+			filters:    filters,
+			args:       args,
+			admin:      access.Admin,
+			raw:        raw,
+		})
+		return
 	}
 
 	// Count total
@@ -519,13 +550,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch conversations
 	args = append(args, limit, offset)
-	q := fmt.Sprintf(`
-		SELECT c.id, c.name, c.created_at, COALESCE(c.updated_at, c.created_at), c.meta,
-			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
-		FROM %s.chat_conversations c
+	q := conversationSelectSQL(s, false) + fmt.Sprintf(`
 		%s
 		ORDER BY c.created_at DESC, c.id DESC
-		LIMIT $%d OFFSET $%d`, s, s, baseWhere, argIdx, argIdx+1)
+		LIMIT $%d OFFSET $%d`, baseWhere, argIdx, argIdx+1)
 
 	rows, err := pool.Query(ctx, q, args...)
 	if err != nil {
@@ -536,32 +564,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	result := []map[string]any{}
 	for rows.Next() {
-		var id int
-		var name string
-		var createdAt, updatedAt time.Time
-		var metaBytes []byte
-		var msgCount int
-		if err := rows.Scan(&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount); err != nil {
+		row, _, err := scanConversationRow(rows, false)
+		if err != nil {
 			apierr.Write(w, err)
 			return
-		}
-
-		var meta map[string]any
-		if metaBytes != nil {
-			_ = json.Unmarshal(metaBytes, &meta) // internal DB column; nil map on error is handled below
-		}
-		if meta == nil {
-			meta = map[string]any{}
-		}
-
-		row := map[string]any{
-			"id":                   id,
-			"name":                 name,
-			"created_at":           createdAt.Format("2006-01-02T15:04:05.000000"),
-			"updated_at":           updatedAt.Format("2006-01-02T15:04:05.000000"),
-			"meta":                 meta,
-			"duration":             -1,
-			"message_groups_count": msgCount,
 		}
 		result = append(result, row)
 	}
@@ -584,6 +590,39 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		apierr.Write(w, err)
 		return
+	}
+
+	var testRuns *EditorTestRunsPage
+	if r.URL.Query().Get("editor_test_runs") == "true" {
+		limit, offset := 20, 0
+		var parseErr error
+		if raw := r.URL.Query().Get("runs_limit"); raw != "" {
+			limit, parseErr = strconv.Atoi(raw)
+		}
+		if parseErr != nil || limit < 1 || limit > 50 {
+			apierr.Write(w, apierr.BadRequest("invalid editor Test run limit"))
+			return
+		}
+		if raw := r.URL.Query().Get("runs_offset"); raw != "" {
+			offset, parseErr = strconv.Atoi(raw)
+		}
+		if parseErr != nil || offset < 0 || offset > 10000 {
+			apierr.Write(w, apierr.BadRequest("invalid editor Test run offset"))
+			return
+		}
+		reader, ok := h.repo.(interface {
+			EditorTestRuns(context.Context, string, string, int, int) (EditorTestRunsPage, error)
+		})
+		if !ok {
+			apierr.Write(w, apierr.Internal("editor Test history unavailable"))
+			return
+		}
+		page, err := reader.EditorTestRuns(r.Context(), projectID, conv.ID, limit, offset)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		testRuns = &page
 	}
 
 	// Every downstream lookup keys off `conv.ID`, not the path segment: the
@@ -625,6 +664,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// absent key read as "public" would withdraw the control from every
 		// conversation.
 		"is_private": conv.IsPrivate == nil || *conv.IsPrivate,
+	}
+
+	if testRuns != nil {
+		resp["editor_test_runs"] = *testRuns
 	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
@@ -726,11 +769,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.events != nil {
-		h.events.Emit(r.Context(), projectID, "conversation.created", map[string]any{
-			"conversation_id": created.ID,
-			"name":            created.Name,
-			"created_by":      created.CreatedBy,
-		})
+		payload := map[string]any{"conversation_id": created.ID, "name": created.Name, "created_by": created.CreatedBy}
+		if created.Source == EditorTestSource {
+			payload["source"] = EditorTestSource
+			payload["is_hidden"] = true
+		}
+		h.events.Emit(r.Context(), projectID, "conversation.created", payload)
 	}
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -952,6 +996,13 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
+
+	// `changes_since` switches to the delta (ADR-0025 WP6). Absent, the
+	// legacy page below is served unchanged.
+	if raw, delta := changesync.Requested(r.URL.Query()); delta {
+		h.listMessageChanges(w, r, projectID, conversationID, raw)
+		return
+	}
 
 	resp, err := h.repo.ListMessages(r.Context(), projectID, conversationID, parseMessagesQuery(r.URL.Query()))
 	if err != nil {
@@ -1325,18 +1376,44 @@ func (h *Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.repo.AddParticipants(r.Context(), projectID, conversationID, bodyList); err != nil {
+	addedIDs, err := h.repo.AddParticipants(r.Context(), projectID, conversationID, bodyList)
+	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
 
-	// Return the participants list from DB
+	// Answer with the participants of THIS request only, in request order.
+	// Legacy returns `[serialize(p) for p in result_details]`, the rows it
+	// added or found. This handler used to return the whole conversation, and
+	// the web callers that treat the answer as "the added rows"
+	// (useAddNewParticipants, the create-from-chat attach, the toolkit
+	// chat helper) then merged or reported every existing participant again.
 	participants, err := h.repo.ListParticipants(r.Context(), projectID, conversationID)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, participants)
+	writeJSON(w, http.StatusOK, participantsInRequestOrder(participants, addedIDs))
+}
+
+// participantsInRequestOrder picks the rows named by ids, in the order of
+// ids, once each. A body that names one entity twice yields one row.
+func participantsInRequestOrder(all []Participant, ids []int) []Participant {
+	byID := make(map[int]Participant, len(all))
+	for _, participant := range all {
+		byID[participant.ID] = participant
+	}
+	added := make([]Participant, 0, len(ids))
+	seen := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		participant, ok := byID[id]
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		added = append(added, participant)
+	}
+	return added
 }
 
 // GetParticipant reads only a participant mapped to an actor-visible conversation.

@@ -96,6 +96,18 @@ const OXLINT_CASES = [
   ['R-T9', 'elitea/raw-px-spacing (jsPlugins)', 'elitea(raw-px-spacing)'],
   ['R-T10', 'elitea/ad-hoc-radius (jsPlugins)', 'elitea(ad-hoc-radius)'],
   ['R-T11', 'elitea/ad-hoc-font-size (jsPlugins)', 'elitea(ad-hoc-font-size)'],
+  // Typography spec rev. 2 §4.1: one RED fixture per value shape the
+  // hardened R-T11 reports, each against the same GREEN set of allowed shapes.
+  ['R-T11-VAR', 'elitea/ad-hoc-font-size — var(--el-font-*) shorthand used as a size', 'elitea(ad-hoc-font-size)'],
+  ['R-T11-TEMPLATE', 'elitea/ad-hoc-font-size — template-literal size', 'elitea(ad-hoc-font-size)'],
+  ['R-T11-CALL', 'elitea/ad-hoc-font-size — computed size (pxToRem/calc helper)', 'elitea(ad-hoc-font-size)'],
+  ['R-T11-IDENT', 'elitea/ad-hoc-font-size — identifier size', 'elitea(ad-hoc-font-size)'],
+  ['R-T11-COND', 'elitea/ad-hoc-font-size — conditional with an ad-hoc operand', 'elitea(ad-hoc-font-size)'],
+  ['R-T11-STOCK', 'elitea/ad-hoc-font-size — member read of a MUI stock variant', 'elitea(ad-hoc-font-size)'],
+  // GREEN here is the proof that `oxlint-disable-next-line
+  // elitea/ad-hoc-font-size` suppresses through the jsPlugins bridge.
+  ['R-T11-DISABLE', 'elitea/ad-hoc-font-size — per-line oxlint-disable passes the jsPlugins bridge', 'elitea(ad-hoc-font-size)'],
+  ['R-T13', 'elitea/no-stock-typography-variant (jsPlugins)', 'elitea(no-stock-typography-variant)'],
   ['R-L4', 'elitea/no-export-all (jsPlugins)', 'elitea(no-export-all)'],
   ['R-S2', 'elitea/no-module-scope-store (jsPlugins)', 'elitea(no-module-scope-store)'],
   ['R-M1', 'elitea/no-vi-mock (jsPlugins; __mocks__ override)', 'elitea(no-vi-mock)'],

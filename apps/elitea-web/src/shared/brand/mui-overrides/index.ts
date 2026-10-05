@@ -12,13 +12,17 @@ import { MuiChip } from './MuiChip';
 import { MuiCssBaseline } from './MuiCssBaseline';
 import { MuiDataGrid } from './MuiDataGrid';
 import { MuiDialog } from './MuiDialog';
+import { MuiDialogTitle } from './MuiDialogTitle';
 import { MuiDrawer } from './MuiDrawer';
 import { MuiFormControl } from './MuiFormControl';
 import { MuiFormControlLabel } from './MuiFormControlLabel';
 import { MuiFormHelperText } from './MuiFormHelperText';
+import { MuiFormLabel } from './MuiFormLabel';
 import { MuiIconButton } from './MuiIconButton';
 import { MuiInput } from './MuiInput';
+import { MuiInputLabel } from './MuiInputLabel';
 import { MuiList } from './MuiList';
+import { MuiListItemText } from './MuiListItemText';
 import { MuiMenu } from './MuiMenu';
 import { MuiMenuItem } from './MuiMenuItem';
 import { MuiOutlinedInput } from './MuiOutlinedInput';
@@ -27,6 +31,7 @@ import { MuiRadio } from './MuiRadio';
 import { MuiSelect } from './MuiSelect';
 import { MuiSwitch } from './MuiSwitch';
 import { MuiTab } from './MuiTab';
+import { MuiTableCell } from './MuiTableCell';
 import { MuiTablePagination } from './MuiTablePagination';
 import { MuiTabs } from './MuiTabs';
 import { MuiTextField } from './MuiTextField';
@@ -55,6 +60,9 @@ import { MuiTypography } from './MuiTypography';
  * `MuiTypography` (R-C2 — not one of the baseline's 30 keys; see that
  * file's own doc comment). The platform-parity wave adds `MuiAccordion` —
  * not a baseline key either, see `MuiAccordion.ts`'s own doc comment.
+ * The typography spec (rev. 2) adds `MuiDialogTitle`, `MuiTableCell`,
+ * `MuiListItemText`, `MuiInputLabel` and `MuiFormLabel`: the stock-variant slots that kept
+ * rendering at MUI's own sizes after the type scale was aliased.
  *
  * The trailing `as EliteaComponents` is one reviewed, necessary cast:
  * `Components<Theme>`'s entries are `MuiX?: ComponentsOverrides['MuiX']`
@@ -83,13 +91,17 @@ export function muiOverrides(): EliteaComponents {
     MuiCssBaseline,
     MuiDataGrid,
     MuiDialog,
+    MuiDialogTitle,
     MuiDrawer,
     MuiFormControl,
     MuiFormControlLabel,
     MuiFormHelperText,
+    MuiFormLabel,
     MuiIconButton,
     MuiInput,
+    MuiInputLabel,
     MuiList,
+    MuiListItemText,
     MuiMenu,
     MuiMenuItem,
     MuiOutlinedInput,
@@ -98,6 +110,7 @@ export function muiOverrides(): EliteaComponents {
     MuiSelect,
     MuiSwitch,
     MuiTab,
+    MuiTableCell,
     MuiTablePagination,
     MuiTabs,
     MuiTextField,

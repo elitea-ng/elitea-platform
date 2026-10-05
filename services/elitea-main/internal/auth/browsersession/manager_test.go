@@ -120,7 +120,7 @@ func newTestManager(t *testing.T, policy Policy) (*Manager, *memoryStore, *clock
 // TestSessionLifecycle is the whole contract in one table: a fresh session
 // authenticates, an idle one does not, one past its absolute deadline does not,
 // and a revoked one does not — and each refusal NAMES itself, because the
-// middleware and `/forward-auth/info` both switch on which one it was.
+// middleware and `/auth/info` both switch on which one it was.
 func TestSessionLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -300,7 +300,7 @@ func TestRevokeUserEndsEverySessionOfOneAccount(t *testing.T) {
 }
 
 // TestCookieFormatsCannotBeConfused is the discriminator the middleware and
-// `/forward-auth/info` both depend on. A legacy value must never look like a
+// `/auth/info` both depend on. A legacy value must never look like a
 // server-side identifier, or the wrong reader runs and every browser is
 // refused.
 func TestCookieFormatsCannotBeConfused(t *testing.T) {

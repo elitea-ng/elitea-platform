@@ -128,6 +128,17 @@ describe('SettingsRedirect — static leaf routes (mount shape: explicit file, n
     expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/project-params');
   });
 
+  // ADR-0025 WP3: the drawer's "Devices" row must land on its own page through
+  // the REAL generated tree — the composition a unit test of the page alone
+  // cannot see.
+  it('does NOT redirect away from /settings/devices on a fresh mount', async () => {
+    const router = mountAt('/settings/devices');
+
+    await expectSettledAt(router, '/settings/devices');
+
+    expect(router.state.matches.at(-1)?.routeId).toBe('/_shell/settings/devices');
+  });
+
   it('does NOT redirect away from /settings/analytics on a fresh mount', async () => {
     const router = mountAt('/settings/analytics');
 

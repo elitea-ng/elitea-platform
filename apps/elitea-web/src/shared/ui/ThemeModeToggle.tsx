@@ -56,7 +56,16 @@ const SYSTEM_MODE = 'system';
  * `defaultMode: 'system'`), could not be reached or even seen once a scheme
  * had been chosen.
  */
-const ThemeModeToggle = memo(() => {
+interface ThemeModeToggleProps {
+  /**
+   * Fill the container instead of the fixed 6.25rem-per-button width, for a
+   * narrow host such as the admin rail (13.75rem less padding). Icons are
+   * dropped so the three labels stay readable; each button keeps its tooltip.
+   */
+  readonly fullWidth?: boolean;
+}
+
+const ThemeModeToggle = memo(({ fullWidth = false }: ThemeModeToggleProps) => {
   const { mode, setMode } = useColorScheme();
 
   const onChange = useCallback(
@@ -69,23 +78,23 @@ const ThemeModeToggle = memo(() => {
   const items = useMemo<TabGroupButtonItem[]>(() => [
     {
       value: SYSTEM_MODE,
-      icon: <ContrastIcon />,
+      icon: fullWidth ? undefined : <ContrastIcon />,
       label: t('shared.ui.themeModeToggle.system', 'System'),
       tooltip: t('shared.ui.themeModeToggle.systemTooltip', 'Follow the system theme'),
     },
     {
       value: ThemeModeOptions.Dark,
-      icon: <MoonIcon />,
+      icon: fullWidth ? undefined : <MoonIcon />,
       label: t('shared.ui.themeModeToggle.dark', 'Dark'),
       tooltip: t('shared.ui.themeModeToggle.darkTooltip', 'Dark theme'),
     },
     {
       value: ThemeModeOptions.Light,
-      icon: <SunIcon />,
+      icon: fullWidth ? undefined : <SunIcon />,
       label: t('shared.ui.themeModeToggle.light', 'Light'),
       tooltip: t('shared.ui.themeModeToggle.lightTooltip', 'Light theme'),
     },
-  ], []);
+  ], [fullWidth]);
 
   return (
     <TabGroupButton
@@ -94,7 +103,8 @@ const ThemeModeToggle = memo(() => {
       onChange={onChange}
       size="small"
       ariaLabel={t('shared.ui.themeModeToggle.ariaLabel', 'Theme')}
-      itemSx={themeModeToggleItemSx}
+      itemSx={fullWidth ? fullWidthItemSx : themeModeToggleItemSx}
+      {...(fullWidth ? { fullWidth: true, sx: fullWidthGroupSx } : {})}
     />
   );
 });
@@ -110,6 +120,9 @@ const ThemeModeToggle = memo(() => {
  * reads no lint waiver.
  */
 const themeModeToggleItemSx = { minWidth: '6.25rem' };
+
+const fullWidthGroupSx = { width: '100%' };
+const fullWidthItemSx = { paddingInline: 0.5 };
 
 ThemeModeToggle.displayName = 'ThemeModeToggle';
 

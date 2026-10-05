@@ -120,6 +120,8 @@ export function Apps() {
   return (
     <Box sx={pageSx}>
       <PageHeader
+        title={t('apps.tabs.ariaLabel', 'Apps')}
+        titleComponent="h1"
         tabs={{
           items: [
             { value: 'configured', label: t('apps.tabs.applications', 'Applications'), icon: <ApplicationsIcon /> },

@@ -42,11 +42,20 @@
  * the client's 150 MB fallback instead of the project's configured limit.
  * ─────────────────────────────────────────────────────────────────────────────
  */
+import { mkdir, truncate, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import JSZip from 'jszip';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import {
+  RIG_SEEDED_CHAT_LIMITS,
+  isLiveTarget,
+  nonDiscriminatingOutcome,
+  uploadLimitPlan,
+} from '../../../scripts/lib/e2e-live-assumptions.mjs';
 
 /**
  * Fixed, reused bucket names. `AUTOTEST_PREFIX` ('autotest_') is deliberately
@@ -286,7 +295,7 @@ test.describe('J20 artifacts lifecycle', () => {
      * Let the first load FINISH before asking for a second one.
      *
      * `page.goto` resolves on `load`, and this app keeps working after that: it
-     * pulls ~50 lazy route chunks and issues its boot calls (`/forward-auth/
+     * pulls ~50 lazy route chunks and issues its boot calls (`/auth/
      * info`, `/social/author`, the permission list, the project list). Reloading
      * into that traffic made WebKit cancel its own fresh navigation and start it
      * again, which Playwright reports on the FIRST attempt as
@@ -478,9 +487,13 @@ test.describe('J20 artifacts lifecycle', () => {
    * is deliberately NOT "a request was made": `e2e-stack.sh` seeds
    * `chat_max_file_upload_size_mb = 1` into the ADMIN vault (see the seed for
    * why not project 1's), a value chosen because it differs from the reader's
-   * own default, so a client that receives the config rejects a 2 MiB file and
-   * a client that does not accepts it. The rejection sentence is
-   * `buildArtifactUploadPlan`'s (`useArtifactUpload.ts:45`).
+   * own default, so a client that receives the config rejects a file one MiB
+   * over the served limit (2 MiB on the rig) and a client that does not
+   * accepts it. The sizes are derived from what the server serves
+   * (`uploadLimitPlan`, `scripts/lib/e2e-live-assumptions.mjs`), so the same
+   * journey runs against a deployment with its own limits — and is skipped,
+   * saying why, on one that serves the client's own defaults. The rejection
+   * sentence is `buildArtifactUploadPlan`'s (`useArtifactUpload.ts:45`).
    *
    * Mutation-checked: adding `page.route('**\/chat_config/**', abort)` — the
    * browser-side equivalent of the 404 this endpoint used to return — makes
@@ -495,35 +508,58 @@ test.describe('J20 artifacts lifecycle', () => {
     const projectId = await selectedProjectId(page);
     await seedBucketWithFiles(request, projectId);
 
-    // 1. The route is served at all, with the seeded limits — which also
-    //    exercises `lookupCurrentChatInteger`'s admin-regular fallback, since
-    //    project 1's own vault is seeded empty. Every
-    //    key is asserted: the response shape is the contract `readUploadLimit`
-    //    reads, and all five values differ from the reader's own defaults
-    //    (10/150/150/10/3), so a defaults-only body cannot satisfy this.
+    // 1. The route is served at all, with every key of the contract
+    //    `readUploadLimit` reads as a positive integer. The limits are READ
+    //    from the server, not repeated here: the rig seeds 1/2/6/4/5 into the
+    //    admin vault (exercising `lookupCurrentChatInteger`'s admin-regular
+    //    fallback), but a deployed instance serves whatever its operators set,
+    //    and the claim under test — the client enforces what the server
+    //    served — does not depend on which numbers those are.
     const config = await request.get(`/api/v2/elitea_core/chat_config/prompt_lib/${projectId}`);
     expect(config.status(), await config.text()).toBe(200);
-    expect(await config.json()).toEqual({
-      chat_max_upload_count: 4,
-      chat_max_upload_size_mb: 5,
-      chat_max_file_upload_size_mb: 1,
-      chat_max_image_upload_count: 2,
-      chat_max_image_upload_size_mb: 6,
-    });
+    const served: unknown = await config.json();
+    // On the rig the body is asserted EXACTLY, every key: all five seeded
+    // values differ from the reader's defaults (10/150/150/10/3), so a body
+    // the admin-regular fallback did not reach — on any one key — fails here.
+    if (!isLiveTarget(process.env)) expect(served).toEqual(RIG_SEEDED_CHAT_LIMITS);
+    const plan = uploadLimitPlan(served);
+    if (!plan.ok) throw new Error(plan.reason);
+    // A served file limit the client's own 150 MB fallback would enforce just
+    // the same (150, or more) cannot tell a client that read the config from
+    // one that did not, so steps 2-3 have nothing to prove. A live deployment
+    // there is skipped, saying why; on the rig (and in live triage) it is a
+    // FAILURE — the rig seeds 1 MB for exactly this reason.
+    if (!plan.discriminating) {
+      if (nonDiscriminatingOutcome(process.env) === 'skip') {
+        test.skip(true, `deployment: chat_config: ${plan.reason}`);
+        return;
+      }
+      throw new Error(`chat_config cannot discriminate on this target: ${plan.reason}`);
+    }
 
-    // 2. The artifacts feature ACTS on it. 2 MiB is over the seeded 1 MB limit
-    //    and far under the client's 150 MB fallback, so only a client that
-    //    received the config rejects this file.
+    // 2. The artifacts feature ACTS on it. One MiB over the served limit and
+    //    under the client's 150 MB fallback, so only a client that received
+    //    the config rejects this file.
     await page.goto(`${BASE_URL}/app/artifacts?bucket=${READ_BUCKET}`);
     await page.waitForURL('**/artifacts**', { timeout: 15_000 });
     await expect(page.getByRole('row').filter({ hasText: SECOND_FILE_NAME })).toBeVisible({ timeout: 15_000 });
 
     const oversizedName = 'j20f-oversized-art.bin';
-    await page.locator('input[type="file"]').setInputFiles({
-      name: oversizedName,
-      mimeType: 'application/octet-stream',
-      buffer: Buffer.alloc(2 * 1024 * 1024, 7),
-    });
+    if (plan.oversizedViaFile) {
+      // Playwright refuses a buffer of 50 MiB or more; a file by path has no
+      // such cap. Sparse, so a large limit costs no real disk.
+      const oversizedPath = test.info().outputPath(oversizedName);
+      await mkdir(path.dirname(oversizedPath), { recursive: true });
+      await writeFile(oversizedPath, '');
+      await truncate(oversizedPath, plan.oversizedBytes);
+      await page.locator('input[type="file"]').setInputFiles(oversizedPath);
+    } else {
+      await page.locator('input[type="file"]').setInputFiles({
+        name: oversizedName,
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.alloc(plan.oversizedBytes, 7),
+      });
+    }
     // The upload-path dialog is the real flow: nothing is planned until it is
     // confirmed (Artifacts.tsx:278-284).
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
@@ -543,7 +579,7 @@ test.describe('J20 artifacts lifecycle', () => {
     await page.locator('input[type="file"]').setInputFiles({
       name: acceptedName,
       mimeType: 'application/octet-stream',
-      buffer: Buffer.alloc(512 * 1024, 3),
+      buffer: Buffer.alloc(plan.acceptedBytes, 3),
     });
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await expect(page.getByRole('row').filter({ hasText: acceptedName })).toBeVisible({ timeout: 30_000 });

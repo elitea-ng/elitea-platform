@@ -13,11 +13,13 @@ import { useCallback, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 import { AddButton } from '@/shared/ui/AddButton';
+import { ShareIcon } from '@/shared/ui/icons/share-icon';
 
 import { useEvalDatasetMutations, useEvalDatasets } from '../model/useEvalRuns';
 import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
@@ -27,14 +29,38 @@ import { EvaluationStatus } from './EvaluationStatus';
 
 const rootSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
 const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
-const rowSx: SxProps<Theme> = {
+/*
+ * The WHOLE row is the hover area and the click target (legacy issue 6700).
+ * On hover the dataset name takes the link colour, which is the light blue in
+ * the dark theme and the dark blue in the light theme, so the name reads as
+ * clickable. The button's own chrome is reset: a native <button> otherwise
+ * draws its platform border and background over the row.
+ */
+const DATASET_NAME_CLASS = 'evaluation-dataset-name';
+const rowSx: SxProps<Theme> = (theme: Theme) => ({
   display: 'flex',
   alignItems: 'center',
   gap: '0.75rem',
+  width: '100%',
   padding: '0.5rem 0.75rem',
+  border: 0,
+  background: 'none',
+  color: 'inherit',
+  font: 'inherit',
+  textAlign: 'left',
   borderRadius: 'var(--el-shape-radiusSm, 4px)',
   cursor: 'pointer',
-};
+  [`&:hover .${DATASET_NAME_CLASS}, &:focus-visible .${DATASET_NAME_CLASS}`]: {
+    color: theme.vars.palette.text.link,
+  },
+});
+const nameGroupSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.375rem', minWidth: 0 };
+const sharedIconSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'flex',
+  flexShrink: 0,
+  color: theme.vars.palette.icon.fill.default,
+  '& svg': { width: '1rem', height: '1rem' },
+});
 const centeredSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', padding: '2rem' };
 
 export interface EvaluationDatasetsViewProps {
@@ -115,7 +141,25 @@ export function EvaluationDatasetsView(props: EvaluationDatasetsViewProps): Reac
           aria-pressed={selectedId === dataset.id}
           onClick={() => setSelectedId(selectedId === dataset.id ? undefined : dataset.id)}
         >
-          <Typography variant="bodyMedium">{dataset.name}</Typography>
+          {/*
+            The "shared" icon sits to the LEFT of the name, so a list of
+            names stays aligned on its first letter whether or not a dataset
+            is shared.
+          */}
+          <Box sx={nameGroupSx}>
+            {dataset.is_shared && (
+              // The Tooltip gives the span its accessible name as well as
+              // the hover text, so the icon is not a bare picture.
+              <Tooltip title={t('features.agentEvaluation.datasets.shared', 'Shared dataset')}>
+                <Box component="span" sx={sharedIconSx} data-testid={`evaluation-dataset-shared-${dataset.id}`}>
+                  <ShareIcon aria-hidden />
+                </Box>
+              </Tooltip>
+            )}
+            <Typography variant="bodyMedium" className={DATASET_NAME_CLASS}>
+              {dataset.name}
+            </Typography>
+          </Box>
           {/*
             `case_count` is the STORED count and not the length of the page the
             detail read returns. A badge built from the page would report a

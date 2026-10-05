@@ -95,3 +95,27 @@ func TestMissingFromSpecStillDiscriminatesMethodAndShape(t *testing.T) {
 		t.Fatalf("want both entries missing, got %+v", missing)
 	}
 }
+
+// TestMissingFromSpecLeavesTheLLMDataPlaneOut covers the one family of entries
+// the /api/v2 document cannot describe: the UI's /llm calls, resolved beside the
+// API base (originRoot). The flag excuses only /llm/ paths. Without the flag,
+// or with it on any other path, the entry is still reported, so the flag is no
+// way around describing an /api/v2 endpoint.
+func TestMissingFromSpecLeavesTheLLMDataPlaneOut(t *testing.T) {
+	t.Parallel()
+
+	endpoints := []oapiserver.ManifestEndpoint{
+		{ID: "voice.synthesizeSpeech", Method: "POST", Path: "/llm/v1/audio/speech", OriginRoot: true},
+		{ID: "voice.unflagged", Method: "POST", Path: "/llm/v1/audio/transcriptions"},
+		{ID: "secrets.flagged", Method: "GET", Path: "/secrets/secrets/{mode}/{projectID}", OriginRoot: true},
+	}
+
+	missing := oapiserver.MissingFromSpec(nil, endpoints)
+	got := make([]string, 0, len(missing))
+	for _, ep := range missing {
+		got = append(got, ep.ID)
+	}
+	if len(got) != 2 || got[0] != "voice.unflagged" || got[1] != "secrets.flagged" {
+		t.Fatalf("want [voice.unflagged secrets.flagged] reported, got %v", got)
+	}
+}

@@ -32,7 +32,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
-import { ensureProjectSelected } from '../../fixtures/project';
+import { DEFAULT_PROJECT_NAME, ensureProjectSelected } from '../../fixtures/project';
 
 function createButton(page: Page) {
   return page.getByTestId('sidebar-create-button');
@@ -117,7 +117,7 @@ test('CB03: the label survives a project switch on the same section', async ({ p
 
   // Back, still "Agent".
   await gotoAndWaitForButton(page, '/app/agents/all');
-  await ensureProjectSelected(page, 'Default Project');
+  await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
   await expect(createButton(page)).toHaveText('Agent');
 
   await checkA11y(page);

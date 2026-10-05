@@ -35,7 +35,7 @@ func TestInternalProjectContextLifecycleMatchesCurrentBuilderContract(t *testing
 	}, http.StatusOK)
 	if created.ID == nil || created.Content != "Use project-specific billing rules." || created.Enabled ||
 		created.ActivationDescription == nil || *created.ActivationDescription != "billing incidents" ||
-		created.UpdatedAt != nil {
+		created.UpdatedAt == nil {
 		t.Fatalf("created project context = %#v", created)
 	}
 

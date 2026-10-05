@@ -44,7 +44,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import Alert from '@mui/material/Alert';
 import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -199,7 +199,7 @@ export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
           </Typography>
           {rows.length > 0 && (
             <Box sx={bulkHeaderControlsSx}>
-              <Checkbox
+              <BaseCheckbox
                 size="small"
                 checked={allSelected}
                 indeterminate={someSelected && !allSelected}
@@ -240,7 +240,7 @@ export function BucketAccessDialog(props: BucketAccessDialogProps): ReactNode {
 
         {rows.map((row) => (
           <Box key={row.userId} sx={rowSx} data-testid={`bucket-access-row-${row.userId}`}>
-            <Checkbox
+            <BaseCheckbox
               size="small"
               checked={selectedUserIds.has(row.userId)}
               disabled={props.isSaving}

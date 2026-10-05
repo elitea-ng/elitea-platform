@@ -63,7 +63,7 @@ export const flowEditorStateDrawerButtonSx: SxProps<Theme> = (theme: Theme) => (
   background: theme.vars.palette.background.tabPanel,
   color: theme.vars.palette.text.secondary,
   gap: theme.spacing(0.75),
-  fontSize: theme.typography.body2.fontSize,
+  fontSize: theme.typography.bodyMedium.fontSize,
   fontWeight: 400,
   '&:hover': {
     background: theme.vars.palette.background.dataGrid.main,

@@ -266,7 +266,7 @@ func writeSessionExpired(w http.ResponseWriter, r *http.Request) {
 	if canonical, err := browserflow.CanonicalReturnTarget(r.URL.Query().Get("target_to")); err == nil {
 		target = canonical
 	}
-	loginURL := "/forward-auth/login?target_to=" + url.QueryEscape(target)
+	loginURL := SignInPath + "?target_to=" + url.QueryEscape(target)
 	w.Header().Set("Location", loginURL)
 	writeSessionJSON(w, http.StatusUnauthorized, map[string]any{
 		"authenticated": false,

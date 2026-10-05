@@ -87,8 +87,13 @@ describe('versionCreatorLabel / versionMetaLine', () => {
     expect(versionCreatorLabel(version({ author: { email: 'alice@example.com' } }))).toBe('alice@example.com');
   });
 
-  it('is undefined when neither is known', () => {
+  it('is undefined when the version has no author', () => {
     expect(versionCreatorLabel(version())).toBeUndefined();
+  });
+
+  it('says "Deleted user" when the author account is gone (#6702)', () => {
+    expect(versionCreatorLabel(version({ author: { name: '', email: '' } }))).toBe('Deleted user');
+    expect(versionCreatorLabel(version({ author: {} }))).toBe('Deleted user');
   });
 
   it('joins creator and timestamp with " · " when both are known', () => {

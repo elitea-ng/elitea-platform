@@ -87,7 +87,7 @@ export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
 
   return (
     <DrawerPage>
-      <Typography variant="headingMedium" sx={titleSx}>
+      <Typography variant="headingLarge" component="h1" sx={titleSx}>
         {t('pages.admin.tasks.title', 'Tasks')}
       </Typography>
       <Typography variant="bodyMedium" color="text.secondary" sx={subtitleSx}>

@@ -61,6 +61,13 @@ type UsageSummary struct {
 	// a project with no traffic has a Health with zero totals and empty
 	// breakdowns, which is a different and true statement.
 	Health *Health `json:"health,omitempty"`
+
+	// Automated is the window's unattended activity, one row per trigger
+	// origin (schedule, webhook, index). ActiveUsers, ActiveMembers,
+	// DailyActivity's active users and TopUsers EXCLUDE these calls; the
+	// totals above include them (legacy issues 6802 and 6881). Nil when this
+	// database cannot tell the origins apart (shared 0140 has not run).
+	Automated []AutomatedActivity `json:"automated,omitempty"`
 }
 
 // Health is the reliability and latency view of the same window.

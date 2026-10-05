@@ -639,7 +639,7 @@
       "icon_url": null,
       "label": "Cloud AWS",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the aws toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the aws toolkit."
     },
     "name_required": true,
     "properties": {
@@ -693,7 +693,7 @@
       "icon_url": "azure-icon.svg",
       "label": "Cloud Azure",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the azure toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the azure toolkit."
     },
     "name_required": true,
     "properties": {
@@ -755,7 +755,7 @@
       "icon_url": null,
       "label": "Azure Search",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the azure_search toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the azure_search toolkit."
     },
     "name_required": true,
     "properties": {
@@ -851,7 +851,7 @@
         }
       },
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the bigquery toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the bigquery toolkit."
     },
     "name_required": true,
     "properties": {
@@ -1378,7 +1378,7 @@
         }
       },
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the delta_lake toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the delta_lake toolkit."
     },
     "name_required": true,
     "properties": {
@@ -1586,7 +1586,7 @@
       "icon_url": "google.svg",
       "label": "Cloud GCP",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the gcp toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the gcp toolkit."
     },
     "name_required": true,
     "properties": {
@@ -2117,7 +2117,7 @@
       "icon_url": null,
       "label": "Cloud Kubernetes",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the k8s toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the k8s toolkit."
     },
     "name_required": true,
     "properties": {
@@ -2170,7 +2170,7 @@
       "icon_url": null,
       "label": "Local GIT",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the localgit toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the localgit toolkit."
     },
     "name_required": true,
     "properties": {
@@ -3613,7 +3613,7 @@
       "icon_url": null,
       "label": "Yet Another Gmail",
       "unavailable": true,
-      "unavailable_reason": "the admitted Python worker image does not carry the dependencies of the yagmail toolkit"
+      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the yagmail toolkit."
     },
     "name_required": true,
     "properties": {

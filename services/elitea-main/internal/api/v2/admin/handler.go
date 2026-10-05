@@ -24,6 +24,9 @@ type Handler struct {
 	// The brand-pack resolver the Branding surface reads and invalidates
 	// (branding.go). Nil unless WithBranding is applied.
 	branding BrandingResolver
+	// nativePolicy is the cached native client policy a save of the
+	// native_client_policy section invalidates (native_client_policy.go).
+	nativePolicy PolicyInvalidator
 	// The brand asset store the upload route writes (branding.go). Nil unless
 	// WithBrandingAssets is applied with an available store.
 	brandingAssets *v2branding.AssetStore
@@ -55,6 +58,10 @@ type Handler struct {
 	// WithSCIMGroupBindings is applied, and those routes answer 503 while it
 	// is — never an empty list, which would read as "no group is bound".
 	scimGroupBindings SCIMGroupBindingStore
+	// The dedicated SCIM client credentials (scim_clients.go, shared migration
+	// 0134). Nil unless WithSCIMClients is applied, and those routes answer
+	// 503 while it is.
+	scimClients SCIMClientStore
 	// The toolkit TYPE availability policy behind `Admin › Toolkits`
 	// (toolkit_types.go, shared migration 0114). Nil unless
 	// WithToolkitTypePolicy is applied, and those routes answer 503 while it

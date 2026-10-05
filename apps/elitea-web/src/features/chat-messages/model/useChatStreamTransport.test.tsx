@@ -1558,3 +1558,174 @@ describe("editor Test observer recovery", () => {
     expect(registry.getSources()).toHaveLength(0);
   });
 });
+
+describe('reattach after a reload mid-turn (#6654)', () => {
+  it('resets only the accepted replay and waits for the same generation final result', async () => {
+    const generation = '5b9a0f4b-1bfd-4462-b96f-b7362db5b9bc';
+    const seeded: ChatMessage = {
+      ...pendingAssistant(), content: '...', taskId: 'exec-1', questionId: QUESTION_ID,
+      toolActions: [{ id: 'seed-tool', name: 'search', status: 'complete' } as never],
+    };
+    const { api, history, Probe } = harness([userQuestion(), seeded]);
+    render(<Probe />);
+    act(() => {
+      api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1',
+        responseMessageId: MESSAGE_ID, questionId: QUESTION_ID });
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    await act(() => registry.emit('execution.node_event', nodeEvent({ type: 'agent_start',
+      execution_generation: generation, question_id: 'another-question' })));
+    expect(history.current[1]).toBe(seeded);
+    act(() => {
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_start', execution_generation: generation }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', execution_generation: generation, content: 'partial answer' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'full_message', execution_generation: 'e6c5c930-202b-4c09-b7ac-6d6de2b1c77c', content: 'stale answer' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'pipeline_finish', execution_generation: generation }));
+    });
+    expect(history.current[1]).toMatchObject({ content: 'partial answer', executionGeneration: generation, questionId: QUESTION_ID });
+    expect(history.current[1]?.toolActions ?? []).toHaveLength(0);
+    expect(registry.getOpen()).toHaveLength(1);
+    await act(() => registry.emit('execution.node_event', nodeEvent({ type: 'full_message', execution_generation: generation, content: 'authoritative answer' })));
+    expect(history.current).toHaveLength(2);
+    expect(history.current[1]).toMatchObject({ content: 'authoritative answer', isStreaming: false, questionId: QUESTION_ID });
+    expect(registry.getOpen()).toHaveLength(0);
+  });
+
+  it('replays the seeded in-flight turn from cursor 0 into the same message, once', async () => {
+    const seeded: ChatMessage = { ...pendingAssistant(), content: '...', taskId: 'exec-1', questionId: QUESTION_ID };
+    const { api, history, Probe } = harness([userQuestion(), seeded]);
+    render(<Probe />);
+
+    let opened: boolean | undefined;
+    act(() => {
+      opened = api.current?.reattach({
+        projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1',
+        responseMessageId: MESSAGE_ID, questionId: QUESTION_ID,
+      });
+    });
+    expect(opened).toBe(true);
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    // No cursor: the server replays the execution from its first frame.
+    expect(registry.getOpen()[0]?.url).toBe(EVENTS_URL);
+    // The seeded row stays as it was until the replay delivers a frame.
+    expect(history.current[1]).toBe(seeded);
+
+    act(() => {
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_start' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', content: 'MOCK: ' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', content: 'final answer' }));
+      registry.emit('execution.node_event', nodeEvent({ type: 'pipeline_finish', content: 'MOCK: final answer' }));
+    });
+    expect(history.current).toHaveLength(2);
+    expect(history.current[1]?.content).toBe('MOCK: final answer');
+    expect(history.current[1]?.isStreaming).toBe(false);
+    expect(history.current[1]?.questionId).toBe(QUESTION_ID);
+  });
+
+  it('clears the seeded turn in the update that applies the first replayed frame', async () => {
+    const seeded: ChatMessage = {
+      ...pendingAssistant(), content: '...', taskId: 'exec-1', questionId: QUESTION_ID,
+      toolActions: [{ id: 'seed-tool', name: 'search', status: 'complete' } as never],
+    };
+    const { api, history, Probe } = harness([userQuestion(), seeded]);
+    render(<Probe />);
+    act(() => {
+      api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1', responseMessageId: MESSAGE_ID });
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => {
+      registry.emit('execution.node_event', nodeEvent({ type: 'agent_llm_chunk', content: 'answer' }));
+    });
+    // Not "...answer", and the seeded tool row is not kept twice.
+    expect(history.current[1]?.content).toBe('answer');
+    expect(history.current[1]?.toolActions ?? []).toHaveLength(0);
+  });
+
+  it('gives up a reattach that fails before it opens, and leaves the seeded row', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // A viewer without models.chat.messages.create gets 403 on the events
+      // route: EventSource reports it only as an error, before any open.
+      const seeded: ChatMessage = { ...pendingAssistant(), content: '...', taskId: 'exec-1', questionId: QUESTION_ID };
+      const { api, history, Probe } = harness([userQuestion(), seeded]);
+      render(<Probe />);
+      act(() => {
+        api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1', responseMessageId: MESSAGE_ID });
+      });
+      await waitFor(() => expect(api.current?.isStreaming).toBe(true));
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+
+      act(() => {
+        registry.fail();
+      });
+
+      // The composer is released and nothing retries.
+      await waitFor(() => expect(api.current?.isStreaming).toBe(false));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(registry.getSources()).toHaveLength(1);
+      expect(registry.getOpen()).toHaveLength(0);
+      // Still the seed's own object, so the settled refetch may replace it.
+      expect(history.current[1]).toBe(seeded);
+
+      // Ownership is gone: a later reattach of a new turn is accepted.
+      let opened: boolean | undefined;
+      act(() => {
+        opened = api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1', responseMessageId: MESSAGE_ID });
+      });
+      expect(opened).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps retrying a reattach whose stream opened before it dropped', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const seeded: ChatMessage = { ...pendingAssistant(), content: '...', taskId: 'exec-1' };
+      const { api, Probe } = harness([userQuestion(), seeded]);
+      render(<Probe />);
+      act(() => {
+        api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-1', responseMessageId: MESSAGE_ID });
+      });
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+      act(() => {
+        registry.emit('open');
+        registry.fail();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(api.current?.isStreaming).toBe(true);
+      expect(registry.getSources().length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses a malformed execution id without subscribing', () => {
+    const { api, Probe } = harness([userQuestion(), { ...pendingAssistant(), taskId: '..' }]);
+    render(<Probe />);
+    let opened: boolean | undefined;
+    act(() => {
+      opened = api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: '..', responseMessageId: MESSAGE_ID });
+    });
+    expect(opened).toBe(false);
+    expect(registry.getSources()).toHaveLength(0);
+    expect(api.current?.isStreaming).toBe(false);
+  });
+
+  it('opens nothing while this transport already owns a run', async () => {
+    okStart();
+    const { api, Probe } = harness();
+    render(<Probe />);
+    await started(api);
+    let opened: boolean | undefined;
+    act(() => {
+      opened = api.current?.reattach({ projectId: 7, conversationUuid: 'uuid-1', executionId: 'exec-2', responseMessageId: 'other' });
+    });
+    expect(opened).toBe(false);
+    expect(registry.getOpen()).toHaveLength(1);
+  });
+});

@@ -1447,7 +1447,7 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
 mod taxonomy_tests {
     use super::assembly_failure;
     use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
-    use crate::protocol::output::RuntimeFailureKind;
+    use crate::protocol::output::{ModelBudgetScope, RuntimeFailureKind};
 
     #[test]
     fn model_failures_preserve_actionable_reasons() {
@@ -1466,7 +1466,15 @@ mod taxonomy_tests {
             ),
             (
                 "model_gateway.budget_exhausted",
-                RuntimeFailureKind::ModelBudgetExhausted,
+                RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown),
+            ),
+            (
+                "model_gateway.project_budget_exhausted",
+                RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project),
+            ),
+            (
+                "model_gateway.member_budget_exhausted",
+                RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member),
             ),
             (
                 "model_gateway.rejected",

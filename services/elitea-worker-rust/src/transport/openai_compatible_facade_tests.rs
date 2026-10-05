@@ -605,6 +605,90 @@ async fn large_system_instruction_reaches_openai_messages_intact() {
     assert_eq!(body["messages"][1]["content"], "explain this");
 }
 
+/// Demo issue 1: Qwen's chat template in vLLM refuses a system message that is
+/// not first ("System message must be at the beginning."). Every system
+/// `Content` — the skill catalogue, project context, checkpoint authority, a
+/// context note between turns — must reach the wire inside ONE leading
+/// instruction message, with or without frozen agent instructions, and with
+/// attachment images and tool history around it.
+#[tokio::test(flavor = "current_thread")]
+async fn every_system_content_merges_into_one_leading_instruction_message() {
+    for with_instruction in [true, false] {
+        let (client, captured) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(
+                test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+            )],
+            test_model_gateway_config(),
+        )
+        .expect("model gateway client");
+        let mut invocation = test_model_facade_invocation();
+        if !with_instruction {
+            invocation.system_instruction.clear();
+        }
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                invocation,
+            )
+            .expect("bound model");
+        let image = Content {
+            role: "user".to_owned(),
+            parts: vec![
+                Part::Text {
+                    text: "first question about the file".to_owned(),
+                },
+                Part::InlineData {
+                    mime_type: "image/png".to_owned(),
+                    data: b"\x89PNG\r\n\x1a\nautotest".to_vec(),
+                    uri: None,
+                    annotations: None,
+                },
+            ],
+        };
+        let request = tool_request(vec![
+            Content::new("system")
+                .with_text("\nAvailable skill: Contracts. Use load_skill to read it.\n"),
+            Content::new("system").with_text("checkpoint authority"),
+            image,
+            Content::new("model").with_text("first answer"),
+            Content::new("system").with_text("context note between turns"),
+            Content::new("user").with_text("follow-up question"),
+        ]);
+
+        drain(
+            bound
+                .generate_for_test(request)
+                .await
+                .expect("model response stream"),
+        )
+        .await
+        .expect("valid SSE");
+
+        let captured = captured.lock().expect("captured requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&captured[0].body).expect("model request JSON");
+        let messages = body["messages"].as_array().expect("messages");
+        let roles: Vec<_> = messages
+            .iter()
+            .map(|message| message["role"].as_str().expect("role"))
+            .collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user"], "{body}");
+        let expected = format!(
+            "{}Available skill: Contracts. Use load_skill to read it.\n\n\
+             checkpoint authority\n\ncontext note between turns",
+            if with_instruction {
+                "review carefully\nbe concise\n\n"
+            } else {
+                ""
+            }
+        );
+        assert_eq!(messages[0]["content"], expected.as_str());
+        assert_eq!(messages[1]["content"][1]["type"], "image_url");
+        assert_eq!(messages[3]["content"], "follow-up question");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn tool_declarations_calls_and_results_round_trip_across_model_turns() {
     tool_history_round_trip(false).await;
@@ -938,6 +1022,55 @@ async fn request_profile_and_local_bounds_fail_before_network() {
     };
     assert_eq!(error.code, "model_gateway.request_too_large");
     assert!(captured.lock().expect("captured requests").is_empty());
+}
+
+/// Demo issue 1: the provider's reason for a 400 is the operator's only clue.
+/// It is logged in a bounded, single-line form; the returned error keeps the
+/// stable code and never carries the provider text.
+#[tokio::test(flavor = "current_thread")]
+async fn provider_rejection_detail_is_bounded_and_stays_out_of_the_error() {
+    use super::openai_compatible_facade::rejection_detail;
+    let body = br#"{"error":{"message":"System message must be at the beginning.\n","type":"BadRequestError"}}"#;
+    assert_eq!(
+        rejection_detail(body).as_deref(),
+        Some("System message must be at the beginning.")
+    );
+    assert_eq!(
+        rejection_detail(br#"{"error":"plain refusal"}"#).as_deref(),
+        Some("plain refusal")
+    );
+    let long = format!(r#"{{"error":{{"message":"{}"}}}}"#, "x".repeat(4_000));
+    assert_eq!(
+        rejection_detail(long.as_bytes()).map(|d| d.len()),
+        Some(240)
+    );
+    assert_eq!(rejection_detail(b"not json"), None);
+    assert_eq!(rejection_detail(br#"{"error":{"message":"  "}}"#), None);
+
+    let response = Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .version(Version::HTTP_2)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::new(Full::new(Bytes::from_static(body))))
+        .expect("rejection response");
+    let (client, _) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+        panic!("a 400 must fail")
+    };
+    assert_eq!(error.category, ErrorCategory::InvalidInput);
+    assert_eq!(error.code, "model_gateway.rejected");
+    assert!(!format!("{error:?} {error}").contains("System message"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2011,4 +2144,134 @@ async fn an_image_part_this_runtime_will_not_send_refuses_the_request() {
         captured.lock().expect("captured requests").is_empty(),
         "nothing may reach the provider"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn budget_refusal_names_the_refusing_scope_without_leaking_the_body() {
+    // #6732: the gateway's gate names the refusing budget in error.scope. The
+    // worker keeps only the scope, so the chat can say whose budget ran out.
+    for (body, expected_code) in [
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","scope":"member","message":"secret member text"}}"#[..],
+            "model_gateway.member_budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","message":"secret member text"}}"#[..],
+            "model_gateway.member_budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","scope":"project","message":"secret project text"}}"#[..],
+            "model_gateway.project_budget_exhausted",
+        ),
+        // A provider's own quota/billing refusal, rewritten by the gateway to
+        // the shared type and code but with no scope: no Elitea ceiling refused.
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","message":"secret provider text"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"budget_exceeded","code":"insufficient_quota","scope":"provider","message":"secret provider text"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+        (
+            &br#"{"error":{"type":"insufficient_quota","message":"secret provider text"}}"#[..],
+            "model_gateway.budget_exhausted",
+        ),
+    ] {
+        let response = Response::builder()
+            .status(StatusCode::PAYMENT_REQUIRED)
+            .version(Version::HTTP_2)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::new(Full::new(Bytes::from_static(body))))
+            .expect("status response");
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(response)],
+            test_model_gateway_config(),
+        )
+        .expect("model gateway client");
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                test_model_facade_invocation(),
+            )
+            .expect("bound model");
+        let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+            panic!("a budget refusal must fail")
+        };
+        assert_eq!(error.category, ErrorCategory::InvalidInput);
+        assert_eq!(error.code, expected_code);
+        assert!(!error.retry.should_retry);
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains(TOKEN));
+    }
+}
+
+fn budget_refusal_response(body: Body) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::PAYMENT_REQUIRED)
+        .version(Version::HTTP_2)
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .expect("budget refusal response")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_budget_refusal_body_keeps_the_unscoped_refusal() {
+    // The 402 body is read through a 4 KiB limit. A valid member body padded
+    // past the limit must not parse, so the refusal stays unscoped.
+    let mut body = String::from(
+        r#"{"error":{"type":"budget_exceeded","code":"member_budget_exceeded","scope":"member","message":""#,
+    );
+    body.push_str(&"x".repeat(8 * 1024));
+    body.push_str(r#""}}"#);
+    assert!(serde_json::from_str::<serde_json::Value>(&body).is_ok());
+    let response = budget_refusal_response(Body::new(Full::new(Bytes::from(body))));
+    let (client, _) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+        panic!("a budget refusal must fail")
+    };
+    assert_eq!(error.code, "model_gateway.budget_exhausted");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time() {
+    // A 402 body that never completes must not hang the turn: the read is
+    // bounded by response_header_timeout.
+    let pending = tokio_stream::pending::<Result<Frame<Bytes>, Infallible>>();
+    let response = budget_refusal_response(Body::new(StreamBody::new(pending)));
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_millis(20);
+    let (client, _) =
+        test_model_gateway_client(vec![TestModelGatewayOutcome::Response(response)], config)
+            .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        bound.generate_for_test(test_model_request("request")),
+    )
+    .await
+    .expect("the 402 body read must be bounded by the response header timeout");
+    let Err(error) = outcome else {
+        panic!("a budget refusal must fail")
+    };
+    assert_eq!(error.code, "model_gateway.budget_exhausted");
 }

@@ -8,13 +8,15 @@ import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 
 import { t } from '@/shared/i18n';
+import { formatSmallUsd } from '@/shared/lib/money';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
 import { BriefcaseIcon } from '@/shared/ui/icons/briefcase-icon';
 import { TabGroupButton } from '@/shared/ui/TabGroupButton';
 
 import { useProjectAnalyticsQuery, useProjectCostsQuery } from '../api/useAnalytics';
-import { ANALYTICS_TAB, DATE_FILTER_PRESETS } from '../lib/constants';
+import { ANALYTICS_TAB, CUSTOM_DATE_PRESET, DATE_FILTER_PRESETS, DEFAULT_DATE_PRESET } from '../lib/constants';
+import { fmtBilledPeriod } from '../lib/format';
 import { presetToDateRange, toIsoRange } from '../model/dateRange';
 import { AnalyticsTabContent } from './components/AnalyticsTabContent';
 import { DateRangeField } from './components/DateRangeField';
@@ -118,22 +120,12 @@ const contentAreaSx: SxProps<Theme> = {
   position: 'relative',
 };
 
-/**
- * Two fraction digits, not the accumulator's full NUMERIC precision. The stored
- * figure is exact to the nano-USD (a real total is `2.00000001`), and a KPI tile
- * is not the place a reader needs the ninth decimal — /analytics_costs' own
- * response carries it for anyone who does.
- */
-const currencyFormat = new Intl.NumberFormat(undefined, {
-  style: 'currency',
-  currency: 'USD',
-  maximumFractionDigits: 2,
-});
-
 export function AnalyticsContainer({ projectId, projectName }: AnalyticsContainerProps): ReactNode {
-  const [selectedPreset, setSelectedPreset] = useState<string>('1');
-  const [dateFrom, setDateFrom] = useState<Date>(() => presetToDateRange(1, new Date()).from);
-  const [dateTo, setDateTo] = useState<Date>(() => new Date());
+  const [selectedPreset, setSelectedPreset] = useState<string>(DEFAULT_DATE_PRESET.value);
+  // One `now` for both bounds, so the initial pair cannot straddle midnight.
+  const [initialRange] = useState(() => presetToDateRange(DEFAULT_DATE_PRESET.days, new Date()));
+  const [dateFrom, setDateFrom] = useState<Date>(initialRange.from);
+  const [dateTo, setDateTo] = useState<Date>(initialRange.to);
   const [fromOpen, setFromOpen] = useState(false);
   const [toOpen, setToOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<number>(ANALYTICS_TAB.overview);
@@ -178,8 +170,17 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
     // print a zero for an unmeasured figure, and this one would have done the
     // opposite.
     if (kpis === undefined || !kpis.spend_available) return undefined;
-    return currencyFormat.format(kpis.total_cost);
+    // `formatSmallUsd`, not two fraction digits: a short window's spend is
+    // routinely below a cent, and `$0.00` would claim nothing was spent (#6682).
+    return formatSmallUsd(kpis.total_cost);
   }, [costs.data]);
+  // The figure is per BILLING PERIOD, matched by overlap: under `Today` it is
+  // the month to date. The tile names the period so it is not read as the
+  // window's spend.
+  const totalCostPeriod = useMemo(
+    () => (costs.data === undefined ? undefined : fmtBilledPeriod(costs.data.periods)),
+    [costs.data],
+  );
 
   const handlePresetChange = useCallback((value: string) => {
     const preset = DATE_FILTER_PRESETS.find((candidate) => candidate.value === value);
@@ -189,6 +190,31 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
     setDateFrom(nextRange.from);
     setDateTo(nextRange.to);
   }, []);
+
+  // A hand-edited bound is a Custom range: it keeps the exact time picked and
+  // no preset button claims it any more (#6791).
+  const handleFromChange = useCallback((value: Date) => {
+    setSelectedPreset(CUSTOM_DATE_PRESET.value);
+    setDateFrom(value);
+  }, []);
+
+  const handleToChange = useCallback((value: Date) => {
+    setSelectedPreset(CUSTOM_DATE_PRESET.value);
+    setDateTo(value);
+  }, []);
+
+  // `Custom` is shown only while a custom range is active; it is a status, not
+  // a choice — clicking it is a no-op in `handlePresetChange`.
+  const presetItems = useMemo(
+    () =>
+      [...DATE_FILTER_PRESETS, ...(selectedPreset === CUSTOM_DATE_PRESET.value ? [CUSTOM_DATE_PRESET] : [])].map(
+        (preset) => ({
+          value: preset.value,
+          label: t(`analytics.datePreset.${preset.value}`, preset.label),
+        }),
+      ),
+    [selectedPreset],
+  );
 
   const handleTabChange = useCallback((_event: SyntheticEvent, newTab: number) => {
     setPendingUserId(null);
@@ -225,18 +251,19 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
       </Box>
       <Box sx={filterBarSx}>
         <TabGroupButton
-          items={DATE_FILTER_PRESETS.map((preset) => ({
-            value: preset.value,
-            label: t(`analytics.datePreset.${preset.value}`, preset.label),
-          }))}
+          items={presetItems}
           value={selectedPreset}
           onChange={handlePresetChange}
+          // A preset is relative to `now`, computed once on click. Clicking the
+          // selected one again re-applies it, so a page left open past midnight
+          // can move `Today` onto the new day (a no-op for Custom).
+          onReselect={handlePresetChange}
         />
         <Box sx={dateFieldsRowSx}>
           <DateRangeField
             label={t('analytics.dateRange.from', 'From:')}
             value={dateFrom}
-            onChange={setDateFrom}
+            onChange={handleFromChange}
             open={fromOpen}
             onOpen={() => setFromOpen(true)}
             onClose={() => setFromOpen(false)}
@@ -245,7 +272,7 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
           <DateRangeField
             label={t('analytics.dateRange.to', 'To:')}
             value={dateTo}
-            onChange={setDateTo}
+            onChange={handleToChange}
             open={toOpen}
             onOpen={() => setToOpen(true)}
             onClose={() => setToOpen(false)}
@@ -275,6 +302,7 @@ export function AnalyticsContainer({ projectId, projectName }: AnalyticsContaine
             isError={isError}
             error={error}
             totalCost={totalCost}
+            totalCostPeriod={totalCostPeriod}
             data={data}
             projectId={projectId}
             dateFrom={range.dateFrom}

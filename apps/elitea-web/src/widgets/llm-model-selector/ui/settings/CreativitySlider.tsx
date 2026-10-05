@@ -22,8 +22,8 @@ export const CreativitySlider = memo(({ temperature, onChange }: CreativitySlide
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="body2">{temperatureLabel}</Typography>
-        <Typography variant="body2">{temperature?.toFixed(2)}</Typography>
+        <Typography variant="bodyMedium" component="p">{temperatureLabel}</Typography>
+        <Typography variant="bodyMedium" component="p">{temperature?.toFixed(2)}</Typography>
       </Box>
       <Slider
         value={typeof temperature === 'number' ? temperature : DEFAULT_TEMPERATURE}

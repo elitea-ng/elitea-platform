@@ -141,7 +141,7 @@ describe('EvaluationRunsView', () => {
   it('offers only ai dimensions to score against', async () => {
     mockPermissions(ALL_RUN_PERMISSIONS);
     mockSupportingReads({
-      datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2 }],
+      datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2, active_case_count: 2 }],
       dimensions: [
         dimensionRow(),
         dimensionRow({ id: '4', name: 'JSON shape', allowed_engines: ['code'] }),
@@ -164,7 +164,7 @@ describe('EvaluationRunsView', () => {
   it('names the reason a run cannot be started yet', async () => {
     mockPermissions(ALL_RUN_PERMISSIONS);
     mockSupportingReads({
-      datasets: [{ id: '5', name: 'Empty set', description: '', application_id: null, is_shared: false, case_count: 0 }],
+      datasets: [{ id: '5', name: 'Empty set', description: '', application_id: null, is_shared: false, case_count: 0, active_case_count: 0 }],
       dimensions: [dimensionRow()],
     });
 
@@ -180,7 +180,7 @@ describe('EvaluationRunsView', () => {
     mockPermissions(ALL_RUN_PERMISSIONS);
     let sent: unknown;
     mockSupportingReads({
-      datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2 }],
+      datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2, active_case_count: 2 }],
       dimensions: [dimensionRow()],
     });
     server.use(
@@ -218,7 +218,7 @@ describe('EvaluationRunsView', () => {
   it('shows the server’s 501 refusal text when a dimension cannot be scored', async () => {
     mockPermissions(ALL_RUN_PERMISSIONS);
     mockSupportingReads({
-      datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2 }],
+      datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2, active_case_count: 2 }],
       dimensions: [dimensionRow()],
     });
     server.use(
@@ -451,8 +451,9 @@ describe('EvaluationRunsView', () => {
     mockPermissions(ALL_RUN_PERMISSIONS);
     mockSupportingReads({
       datasets: [
-        { id: '5', name: 'Empty set', description: '', application_id: null, is_shared: false, case_count: 0 },
-        { id: '6', name: 'Full set', description: '', application_id: null, is_shared: false, case_count: 2 },
+        { id: '5', name: 'Empty set', description: '', application_id: null, is_shared: false, case_count: 0, active_case_count: 0 },
+        { id: '6', name: 'Full set', description: '', application_id: null, is_shared: false, case_count: 2, active_case_count: 2 },
+        { id: '7', name: 'Excluded set', description: '', application_id: null, is_shared: false, case_count: 3, active_case_count: 0 },
       ],
       dimensions: [
         dimensionRow(),
@@ -476,6 +477,12 @@ describe('EvaluationRunsView', () => {
     await userEvent.click(screen.getByRole('combobox'));
     await userEvent.click(await screen.findByRole('option', { name: 'Empty set' }));
     expect(screen.getByTestId('run-start-error')).toHaveTextContent('has no cases');
+
+    // 2b. Cases, every one excluded. The server refuses this start with a 422;
+    //     the form says so first instead of offering a button that always fails.
+    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(await screen.findByRole('option', { name: 'Excluded set' }));
+    expect(screen.getByTestId('run-start-error')).toHaveTextContent('Every case in this dataset is excluded');
 
     // 3. A usable dataset, but nothing to score against.
     await userEvent.click(screen.getByRole('combobox'));

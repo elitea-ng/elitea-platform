@@ -1,4 +1,4 @@
-import { FORM_LOGIN_PATH, OIDC_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
+import { FORM_LOGIN_PATH, SSO_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
 
 /**
  * Where to send a browser that is not logged in.
@@ -8,17 +8,17 @@ import { FORM_LOGIN_PATH, OIDC_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
  * the other, never both). They expose different entry points, and this module
  * exists because the app previously knew only one of them:
  *
- *   OIDC plane  `/forward-auth/info`, `/forward-auth/auth_oidc/login`
- *   Form plane  `/forward-auth/login` -> `/forward-auth/auth_form/login`
+ *   OIDC plane  `/auth/info`, `/auth/login` (the SSO sign-in page)
+ *   Form plane  `/auth/login` -> `/auth/form/login`
  *
- * The Form plane serves no `/forward-auth/info` at all, so on a Form
+ * The Form plane serves no `/auth/info` at all, so on a Form
  * deployment the session probe 404s, the app concludes "not logged in" — which
  * is right — and then had nowhere to send the user. The measured result was a
  * permanent `<RoutePending />` spinner on every deep link, with the login form
  * one redirect away and nothing performing it.
  *
  * So the plane is INFERRED from the probe rather than configured: a 404 from
- * `/forward-auth/info` means that endpoint is not mounted, which means the Form
+ * `/auth/info` means that endpoint is not mounted, which means the Form
  * plane. Anything else means the OIDC plane answered. That keeps a single build
  * of this app correct on both, with no new runtime-config key to set wrong.
  */
@@ -26,7 +26,7 @@ import { FORM_LOGIN_PATH, OIDC_LOGIN_PATH, TARGET_TO_PARAM } from './constants';
 export type AuthPlane = 'form' | 'oidc';
 
 /**
- * `status` is the HTTP status of the `/forward-auth/info` probe, or undefined
+ * `status` is the HTTP status of the `/auth/info` probe, or undefined
  * when the request never produced one (network failure). Only 404 identifies
  * the Form plane: a 401 is the OIDC plane saying "no session", which is a
  * different answer and must not switch planes.
@@ -36,7 +36,10 @@ export function authPlaneFromProbeStatus(status: number | undefined): AuthPlane 
 }
 
 export function loginPathForPlane(plane: AuthPlane): string {
-  return plane === 'form' ? FORM_LOGIN_PATH : OIDC_LOGIN_PATH;
+  // Both planes now start at `/auth/login`. The SSO plane serves the
+  // sign-in page there (OIDC, SAML or both); the Form plane opens its login
+  // transaction there. The plane is still inferred, for the popup and tests.
+  return plane === 'form' ? FORM_LOGIN_PATH : SSO_LOGIN_PATH;
 }
 
 /**
@@ -57,7 +60,7 @@ export function buildLoginUrl(plane: AuthPlane, returnTo: string): string {
  * The login URL the app shell navigates to when the server states that the
  * session expired.
  *
- * `named` is the `login_url` `/forward-auth/info` answered with. It is USED —
+ * `named` is the `login_url` `/auth/info` answered with. It is USED —
  * the server knows which browser plane is mounted — but its `target_to` is
  * REPLACED with the page the browser is actually on. The probe is an XHR
  * issued from wherever the user happens to be, so the server sees no page to

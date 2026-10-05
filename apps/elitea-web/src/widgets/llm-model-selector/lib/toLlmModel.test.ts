@@ -31,6 +31,13 @@ describe('toLlmModel', () => {
     expect('supports_reasoning' in result).toBe(false);
   });
 
+  it('carries a trimmed description and drops a blank or non-text one', () => {
+    expect(toLlmModel({ name: 'gpt', description: '  Fast for everyday tasks ' } as never).description).toBe('Fast for everyday tasks');
+    expect('description' in toLlmModel({ name: 'gpt', description: '   ' } as never)).toBe(false);
+    expect('description' in toLlmModel({ name: 'gpt', description: null } as never)).toBe(false);
+    expect('description' in toLlmModel({ name: 'gpt', description: 7 } as never)).toBe(false);
+  });
+
   it('ignores a catalogue field of the wrong type', () => {
     const result = toLlmModel({ name: 'gpt', shared: 'yes', max_output_tokens: '4096' } as never);
     expect('shared' in result).toBe(false);

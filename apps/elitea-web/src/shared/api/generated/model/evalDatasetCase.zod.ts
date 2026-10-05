@@ -59,6 +59,11 @@ export const EvalDatasetCase = zod
       ),
     source_type: zod.enum(["manual", "import", "conversation"]),
     order_index: zod.int(),
+    excluded: zod
+      .boolean()
+      .describe(
+        "`true` keeps the case in the dataset but out of every new run. A run start freezes the active case ids into its snapshot.\n",
+      ),
     created_at: zod.string().optional(),
     updated_at: zod.string().optional(),
   })

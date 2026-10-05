@@ -11,6 +11,7 @@ describe('PERMISSIONS', () => {
     expect(PERMISSIONS.pipelines.list).toBe('models.applications.public_applications.list');
     expect(PERMISSIONS.users.delete).toBe('configuration.users.users.delete');
     expect(PERMISSIONS.projectContext.edit).toBe('models.project_context.edit');
+    expect(PERMISSIONS.projectSettings.edit).toBe('models.project_settings.edit');
     expect(PERMISSIONS.secrets.unsecret).toBe('configuration.secrets.secret.unsecret');
     expect(PERMISSIONS.artifacts.buckets.view).toBe('configuration.artifacts.buckets.view');
     expect(PERMISSIONS.toolkits.export).toBe('models.applications.tools.export');

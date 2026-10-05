@@ -17,6 +17,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -30,6 +31,7 @@ const (
 	CurrentContinuationContract              = "agent.continue.hitl.v1"
 	CurrentAuthorizationContinuationContract = "agent.continue.authorization.v1"
 	CurrentOutputLimitContinuationContract   = "agent.continue.output-limit.v1"
+	CurrentStaticContinuationContract        = "agent.continue.static.v1"
 	CurrentApplicationStartMode              = auth.PermissionModeDefault
 	CurrentApplicationStartPermission        = "models.chat.messages.create"
 	CurrentRegenerationPermission            = "models.chat.conversations.regenerate"
@@ -199,20 +201,22 @@ type currentRegenerationBody struct {
 }
 
 type currentContinuationBody struct {
-	ProjectID              int64           `json:"project_id"`
-	ConversationUUID       string          `json:"conversation_uuid"`
-	MessageID              string          `json:"message_id"`
-	ThreadID               string          `json:"thread_id"`
-	HITLResume             bool            `json:"hitl_resume"`
-	HITLAction             string          `json:"hitl_action"`
-	HITLValue              json.RawMessage `json:"hitl_value"`
-	HITLDecisions          json.RawMessage `json:"hitl_decisions"`
-	MCPTokens              json.RawMessage `json:"mcp_tokens"`
-	IgnoredMCPServers      json.RawMessage `json:"ignored_mcp_servers"`
-	UserDeclinedMCPServers json.RawMessage `json:"user_declined_mcp_servers"`
-	UserInput              string          `json:"user_input"`
-	AuthorizationRequestID string          `json:"authorization_request_id"`
-	AuthorizationAction    string          `json:"authorization_action"`
+	StaticDecisions        []agentexecutionapp.CurrentStaticLeafDecision `json:"static_decisions"`
+	StaticPauseID          string                                        `json:"static_pause_id"`
+	ProjectID              int64                                         `json:"project_id"`
+	ConversationUUID       string                                        `json:"conversation_uuid"`
+	MessageID              string                                        `json:"message_id"`
+	ThreadID               string                                        `json:"thread_id"`
+	HITLResume             bool                                          `json:"hitl_resume"`
+	HITLAction             string                                        `json:"hitl_action"`
+	HITLValue              json.RawMessage                               `json:"hitl_value"`
+	HITLDecisions          json.RawMessage                               `json:"hitl_decisions"`
+	MCPTokens              json.RawMessage                               `json:"mcp_tokens"`
+	IgnoredMCPServers      json.RawMessage                               `json:"ignored_mcp_servers"`
+	UserDeclinedMCPServers json.RawMessage                               `json:"user_declined_mcp_servers"`
+	UserInput              string                                        `json:"user_input"`
+	AuthorizationRequestID string                                        `json:"authorization_request_id"`
+	AuthorizationAction    string                                        `json:"authorization_action"`
 }
 
 func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter, request *http.Request) {
@@ -284,6 +288,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 
+	origin := startTriggerOrigin(user)
 	var outcome agentexecutionapp.CurrentApplicationStartOutcome
 	switch contract {
 	case CurrentApplicationStartContract:
@@ -302,6 +307,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				Attachments:      attachments,
 				MentionedUserIDs: mentioned,
 				MentionsEveryone: body.SendingToEveryone,
+				TriggerOrigin:    origin,
 			},
 		)
 	case CurrentAdhocStartContract:
@@ -316,9 +322,12 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				ProjectID: projectID, ActorUserID: actorUserID,
 				ConversationUUID: conversationID, TargetParticipantID: body.ParticipantID,
 				QuestionID: body.QuestionID, UserInput: body.Payload.UserInput,
-				InteractionUUID: body.InteractionUUID,
-				LLMSettings:     bytes.Clone(body.LLMSettings),
-				Attachments:     attachments,
+				InteractionUUID:  body.InteractionUUID,
+				LLMSettings:      bytes.Clone(body.LLMSettings),
+				Attachments:      attachments,
+				MentionedUserIDs: mentioned,
+				MentionsEveryone: body.SendingToEveryone,
+				TriggerOrigin:    origin,
 			},
 		)
 	}
@@ -434,7 +443,7 @@ func (handler *currentApplicationStartHandler) Continue(writer http.ResponseWrit
 	contract := request.URL.Query().Get("execution_contract")
 	if !ok || (contract != CurrentContinuationContract &&
 		contract != CurrentAuthorizationContinuationContract &&
-		contract != CurrentOutputLimitContinuationContract) {
+		contract != CurrentOutputLimitContinuationContract && contract != CurrentStaticContinuationContract) {
 		writeError(writer, http.StatusBadRequest, "Invalid agent continuation request")
 		return
 	}
@@ -457,6 +466,9 @@ func (handler *currentApplicationStartHandler) Continue(writer http.ResponseWrit
 	request.Body = http.MaxBytesReader(writer, request.Body, maxCurrentApplicationStartBody)
 	var body currentContinuationBody
 	decoder := json.NewDecoder(request.Body)
+	if contract == CurrentStaticContinuationContract {
+		decoder.DisallowUnknownFields()
+	}
 	if err := decoder.Decode(&body); err != nil {
 		var maxBytes *http.MaxBytesError
 		if errors.As(err, &maxBytes) {
@@ -480,7 +492,26 @@ func (handler *currentApplicationStartHandler) Continue(writer http.ResponseWrit
 		ConversationUUID: conversationID, ResponseMessageID: body.MessageID,
 		ThreadID: body.ThreadID,
 	}
+	if contract != CurrentStaticContinuationContract && (body.StaticPauseID != "" || len(body.StaticDecisions) != 0) {
+		writeUnsupported(writer)
+		return
+	}
 	switch contract {
+	case CurrentStaticContinuationContract:
+		if body.HITLResume || body.HITLAction != "" || !absentJSON(body.HITLValue) || !absentJSON(body.HITLDecisions) ||
+			!absentJSON(body.MCPTokens) || !absentJSON(body.IgnoredMCPServers) || !absentJSON(body.UserDeclinedMCPServers) ||
+			body.AuthorizationRequestID != "" || body.AuthorizationAction != "" {
+			writeUnsupported(writer)
+			return
+		}
+		continuation.Kind = agentexecutionapp.CurrentContinuationStatic
+		continuation.StaticDecisions = body.StaticDecisions
+		continuation.StaticPauseID = body.StaticPauseID
+		continuation.StaticInputText = body.UserInput
+		if continuation.Validate() != nil {
+			writeUnsupported(writer)
+			return
+		}
 	case CurrentOutputLimitContinuationContract:
 		if body.ThreadID != "" || body.HITLResume || body.HITLAction != "" ||
 			!absentJSON(body.HITLValue) || !absentJSON(body.HITLDecisions) ||
@@ -887,4 +918,16 @@ func parseStartAttachments(
 		refs = append(refs, ref)
 	}
 	return refs, true
+}
+
+// startTriggerOrigin is how a start through this route began (shared 0140).
+// The browser composer authenticates with a session; an access token is a
+// programmatic client (the SDK, a script, a PAT caller). Both are a person
+// acting, so the analytics active-user reads count both. The origin only
+// tells them apart on the execution row and in /analytics_execution.
+func startTriggerOrigin(user auth.User) executiondomain.TriggerOrigin {
+	if user.TokenID != "" || strings.EqualFold(user.AuthType, "token") {
+		return executiondomain.TriggerOriginAPI
+	}
+	return executiondomain.TriggerOriginManual
 }

@@ -20,6 +20,18 @@
     "retryable": false
   },
   {
+    "code": "MODEL_BUDGET_EXHAUSTED",
+    "public_code": "PROJECT_BUDGET_EXHAUSTED",
+    "message": "The shared model budget of this project is exhausted. Requests are unavailable until the budget resets or an administrator raises the limit.",
+    "retryable": false
+  },
+  {
+    "code": "MODEL_BUDGET_EXHAUSTED",
+    "public_code": "MEMBER_BUDGET_EXHAUSTED",
+    "message": "Your budget in this project is exhausted. Requests are unavailable until the budget resets or an administrator raises your limit.",
+    "retryable": false
+  },
+  {
     "code": "MODEL_REQUEST_REJECTED",
     "message": "The model service rejected this request. Check the selected model and its settings, or ask an administrator to inspect the execution logs.",
     "retryable": false

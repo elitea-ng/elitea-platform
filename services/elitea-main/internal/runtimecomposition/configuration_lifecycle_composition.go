@@ -89,7 +89,7 @@ func NewCurrentConfigurationLifecycleReconciler(
 	if err != nil {
 		return nil, err
 	}
-	return configurationapp.NewCurrentConfigurationLifecycleEffectsReconciler(
+	reconciler, err := configurationapp.NewCurrentConfigurationLifecycleEffectsReconciler(
 		resolution,
 		status,
 		renames,
@@ -99,4 +99,14 @@ func NewCurrentConfigurationLifecycleReconciler(
 			PublicProjectID:     configurations.publicProjectID,
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	// A delete through the mutation route releases the stored defaults that
+	// name the deleted project model (#6826), as the compatibility route does.
+	defaults, err := configurations.NewPlatformModelDefaults(pool, nil)
+	if err != nil {
+		return nil, fmt.Errorf("compose the deleted model default release: %w", err)
+	}
+	return reconciler.WithDeletedModelDefaults(defaults), nil
 }

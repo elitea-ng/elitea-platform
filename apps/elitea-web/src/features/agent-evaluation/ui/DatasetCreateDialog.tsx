@@ -92,7 +92,7 @@ export function DatasetCreateDialog(props: DatasetCreateDialogProps): ReactNode 
             onChange={(event) => setDescription(event.target.value)}
           />
           {displayedError !== undefined && (
-            <Typography role="alert" variant="body2" color="error" data-testid="dataset-create-error">
+            <Typography role="alert" variant="bodyMedium" component="p" color="error" data-testid="dataset-create-error">
               {displayedError}
             </Typography>
           )}

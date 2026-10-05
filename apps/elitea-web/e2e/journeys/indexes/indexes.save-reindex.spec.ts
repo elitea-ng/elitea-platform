@@ -52,6 +52,7 @@ import { expect, test } from '@playwright/test';
 import type { Page, Route } from '@playwright/test';
 
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { skipWhenIndexTypesAbsent } from '../../fixtures/deployment';
 import { BASE_URL } from '../../../playwright.config';
 
 /** The rail's list request. */
@@ -195,6 +196,12 @@ const saveAndReindex = (panel: ReturnType<Page['getByTestId']>) => panel.getByTe
  */
 test.beforeEach(() => {
   test.setTimeout(150_000);
+});
+
+/* A deployed instance with ELITEA_INDEX_TYPES_ENABLED off has nothing to index:
+ * skipped there, never on the rig (`fixtures/deployment.ts`). */
+test.beforeEach(async ({ request }) => {
+  await skipWhenIndexTypesAbsent(request);
 });
 
 test.afterAll(async ({ browser }) => {

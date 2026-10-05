@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
@@ -597,6 +598,29 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 		return conversations.Conversation{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if source == conversations.EditorTestSource {
+		identity, err := conversations.EditorTestIdentity(conv, access.ActorID, projectID)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+		var allowed bool
+		if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.application_versions WHERE id=$1 AND application_id=$2)`, s), identity.ApplicationVersionID, identity.ApplicationID).Scan(&allowed); err != nil {
+			return conversations.Conversation{}, err
+		}
+		if !allowed {
+			return conversations.Conversation{}, apierr.NotFound("saved application version not found")
+		}
+		meta = maps.Clone(meta)
+		meta[conversations.EditorTestSource] = identity
+		meta["is_hidden"] = true
+		private = true
+		encodedMeta, err = json.Marshal(meta)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+	} else if _, reserved := meta[conversations.EditorTestSource]; reserved {
+		return conversations.Conversation{}, apierr.BadRequest("editor Test identity is server owned")
+	}
 	var c conversations.Conversation
 	var metaBytes []byte
 	err = tx.QueryRow(ctx, fmt.Sprintf(`INSERT INTO %s.chat_conversations (name,author_id,is_private,meta,source,instructions)
@@ -621,7 +645,7 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 			return conversations.Conversation{}, apierr.BadRequest("invalid participant metadata")
 		}
 		body := map[string]any{"entity_name": participant.EntityName, "entity_meta": participant.EntityMeta, "entity_settings": participant.EntitySettings}
-		if err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
+		if _, err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
 			return conversations.Conversation{}, err
 		}
 	}
@@ -659,6 +683,13 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 }
 
 func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+	current, err := r.Get(ctx, projectID, conversationID)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	if err := conversations.PreserveEditorTestUpdate(current, &conv); err != nil {
+		return conversations.Conversation{}, err
+	}
 	s := schema(projectID)
 
 	if conv.IsPrivate != nil && !*conv.IsPrivate && publicproject.IDString() == projectID {
@@ -777,6 +808,9 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	c.FolderID = folderID
 	c.Meta = decodeConversationMeta(metaBytes)
 	c.IsPrivate = &isPrivate
+	if current.Source == conversations.EditorTestSource {
+		c.Source = current.Source
+	}
 	return c, nil
 }
 
@@ -875,6 +909,15 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 		return nil, fmt.Errorf("conversations: delete: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	// Sync cascade (ADR-0025 WP6, tenant 0144): the conversation's own
+	// tombstone means "drop every message", so the per-message tombstones and
+	// parent bumps the triggers would write for the deletes below are
+	// suppressed for this transaction. Participant removals are still
+	// recorded: they are who a private conversation's deletion is shown to.
+	if _, err := transaction.Exec(ctx, `SELECT set_config('elitea.sync_cascade', 'conversation', true)`); err != nil {
+		return nil, fmt.Errorf("conversations: delete: sync cascade: %w", err)
+	}
 
 	if _, err := transaction.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.chat_participant_mapping WHERE conversation_id = $1`, s), id); err != nil {
 		return nil, fmt.Errorf("conversations: delete participant mapping: %w", err)
@@ -1022,41 +1065,54 @@ func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte
 // ON CONFLICT does not catch that, because the two transactions hold different
 // participant ids.
 func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conversationID string, body map[string]any) error {
-	return r.AddParticipants(ctx, projectID, conversationID, []map[string]any{body})
+	_, err := r.AddParticipants(ctx, projectID, conversationID, []map[string]any{body})
+	return err
 }
 
-// AddParticipants preserves the current all-or-nothing batch boundary.
-func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) error {
+// AddParticipants preserves the current all-or-nothing batch boundary. It
+// returns the participant id of each body, in request order. An entity that
+// was already a participant returns its existing id; legacy's POST answers
+// with those same rows (get_or_create_one), not the whole conversation.
+func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error) {
+	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
+		return nil, err
+	}
 	if len(bodies) > 100 {
-		return apierr.BadRequest("at most 100 participants are allowed")
+		return nil, apierr.BadRequest("at most 100 participants are allowed")
 	}
 
 	s := schema(projectID)
 
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	transaction, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("conversations: add participant: %w", err)
+		return nil, fmt.Errorf("conversations: add participant: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
+	participantIDs := make([]int, 0, len(bodies))
 	for _, body := range bodies {
-		if err := addConversationParticipant(ctx, transaction, s, id, body); err != nil {
-			return err
+		participantID, err := addConversationParticipant(ctx, transaction, s, id, body)
+		if err != nil {
+			return nil, err
 		}
+		participantIDs = append(participantIDs, participantID)
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("conversations: add participant commit: %w", err)
+		return nil, fmt.Errorf("conversations: add participant commit: %w", err)
 	}
-	return nil
+	return participantIDs, nil
 }
 
 func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error {
+	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
+		return err
+	}
 	s := schema(projectID)
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
@@ -1088,6 +1144,9 @@ func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, co
 }
 
 func (r *ConversationsRepo) UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error {
+	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
+		return err
+	}
 	s := schema(projectID)
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
@@ -1125,23 +1184,87 @@ func (r *ConversationsRepo) SelectConversation(ctx context.Context, projectID, c
 	if err != nil {
 		return err
 	}
-	// Schema: id, user_id, conversation_id (no unique on user_id, so delete+insert)
+	// Schema: id, user_id, conversation_id (no unique on user_id, so delete+insert).
+	//
+	// Issue #6674. The DELETE and the INSERT ran as two autocommit statements,
+	// so a concurrent unselect, or a select of another conversation, could
+	// leave the user with zero or two selection rows. A conversation deleted
+	// after resolveConversationID failed the INSERT on the foreign key and
+	// answered 500. Both statements now run in one transaction. The INSERT
+	// re-reads the conversation, so a deleted one inserts zero rows, and a
+	// foreign-key refusal (23503) also maps to 404.
+	//
+	// One transaction alone does not stop two concurrent selects from both
+	// inserting: under READ COMMITTED the second DELETE does not see the row
+	// the first INSERT committed. lockUserSelection serialises every select
+	// and deselect of one user in one tenant before the DELETE.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("conversations: select conversation begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockUserSelection(ctx, tx, s, userID); err != nil {
+		return err
+	}
 	delQ := fmt.Sprintf(`DELETE FROM %s.chat_selected_conversations WHERE user_id = $1`, s)
-	if _, err := r.pool.Exec(ctx, delQ, userID); err != nil {
+	if _, err := tx.Exec(ctx, delQ, userID); err != nil {
 		return fmt.Errorf("conversations: select conversation delete old: %w", err)
 	}
-	insQ := fmt.Sprintf(`INSERT INTO %s.chat_selected_conversations (conversation_id, user_id) VALUES ($1, $2)`, s)
-	if _, err := r.pool.Exec(ctx, insQ, id, userID); err != nil {
+	insQ := fmt.Sprintf(`INSERT INTO %[1]s.chat_selected_conversations (conversation_id, user_id)
+		SELECT c.id, $2 FROM %[1]s.chat_conversations c WHERE c.id = $1`, s)
+	tag, err := tx.Exec(ctx, insQ, id, userID)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return apierr.NotFound("conversation not found")
+		}
 		return fmt.Errorf("conversations: select conversation insert: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apierr.NotFound("conversation not found")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		if isForeignKeyViolation(err) {
+			return apierr.NotFound("conversation not found")
+		}
+		return fmt.Errorf("conversations: select conversation commit: %w", err)
+	}
+	return nil
+}
+
+// isForeignKeyViolation reports a PostgreSQL foreign_key_violation (23503).
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// lockUserSelection takes a transaction-scoped advisory lock on the
+// (tenant schema, user) selection slot. chat_selected_conversations has no
+// unique index on user_id (tenant migration 0126), so this lock is what keeps
+// a user at most one selection row.
+func lockUserSelection(ctx context.Context, tx pgx.Tx, tenantSchema, userID string) error {
+	key := tenantSchema + ":chat_selected_conversations:" + userID
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+		return fmt.Errorf("conversations: lock selection: %w", err)
 	}
 	return nil
 }
 
 func (r *ConversationsRepo) DeselectConversation(ctx context.Context, projectID, userID string) error {
 	s := schema(projectID)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("conversations: deselect conversation begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockUserSelection(ctx, tx, s, userID); err != nil {
+		return err
+	}
 	q := fmt.Sprintf(`DELETE FROM %s.chat_selected_conversations WHERE user_id = $1`, s)
-	if _, err := r.pool.Exec(ctx, q, userID); err != nil {
+	if _, err := tx.Exec(ctx, q, userID); err != nil {
 		return fmt.Errorf("conversations: deselect conversation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("conversations: deselect conversation commit: %w", err)
 	}
 	return nil
 }
@@ -2294,127 +2417,18 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 		pageFilter = fmt.Sprintf(filter, 4)
 	}
 
-	q := fmt.Sprintf(`
-		SELECT mg.id, mg.conversation_id, COALESCE(mg.uuid::text, ''),
-			p.entity_name, mg.meta, mg.created_at, mg.updated_at,
-			mg.author_participant_id, mg.sent_to_id, mg.reply_to_id,
-			COALESCE((
-				SELECT string_agg(mt.content,
-                    CASE WHEN COALESCE(mg.meta ->> 'output_limit_sequence', '') ~ '^[1-9][0-9]*$'
-                        THEN '' ELSE E'\n' END
-                    ORDER BY mi.order_index, mi.id)
-				FROM %s.chat_message_items mi
-				JOIN %s.chat_messages_text mt ON mt.id = mi.id
-				WHERE mi.message_group_id = mg.id AND mi.item_type = 'text_message'
-			), '')
-		FROM %s.chat_message_group mg
-		JOIN %s.chat_participants p ON p.id = mg.author_participant_id
+	q := messageSelectSQL(s, false) + fmt.Sprintf(`
 		WHERE mg.conversation_id = $1%s
 		ORDER BY %s
-		LIMIT $2 OFFSET $3`, s, s, s, s, pageFilter, orderBy)
+		LIMIT $2 OFFSET $3`, pageFilter, orderBy)
 
 	rows, err := r.pool.Query(ctx, q, append([]any{id, limit, offset}, filterArgs...)...)
 	if err != nil {
 		return conversations.MessagesListResponse{}, fmt.Errorf("conversations: list messages: %w", err)
 	}
-	defer rows.Close()
-
-	items := []conversations.Message{}
-	// Index-aligned with `items`: the numeric group id each row was built
-	// from, which the attachment projection below keys on. Kept beside the
-	// slice rather than re-parsed out of `Message.ID` (a string on the wire)
-	// so the join reads the id the database returned, not a round trip
-	// through its decimal spelling.
-	groupIDs := []int{}
-	for rows.Next() {
-		var m conversations.Message
-		var meta []byte
-		var entityName string
-		var groupID int
-		// A scan failure used to `continue`, so an unreadable row silently
-		// dropped a message out of the transcript.
-		// `updated_at` is nullable, so it is scanned into the pointer the wire
-		// field is: a group that has never been rewritten states no update
-		// time rather than claiming one.
-		if err := rows.Scan(&groupID, &m.ConversationID, &m.UUID, &entityName, &meta, &m.CreatedAt,
-			&m.UpdatedAt, &m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content); err != nil {
-			return conversations.MessagesListResponse{}, fmt.Errorf("conversations: scan message: %w", err)
-		}
-		m.ID = strconv.Itoa(groupID)
-		if meta != nil {
-			_ = json.Unmarshal(meta, &m.Metadata) // best-effort: DB column is trusted JSON
-		}
-		// Map entity_name to role
-		if entityName == "user" {
-			m.Role = "user"
-		} else {
-			m.Role = "assistant"
-		}
-		m.ContentType = "text"
-		items = append(items, m)
-		groupIDs = append(groupIDs, groupID)
-	}
-	if err := rows.Err(); err != nil {
-		return conversations.MessagesListResponse{}, fmt.Errorf("conversations: list messages: %w", err)
-	}
-
-	// The files each question was sent with (#606 read path, part 2).
-	//
-	// This projection is what the CHAT PAGE reads: useChatPageData.ts hands
-	// these rows to ChatBox as `message_groups`, and `UserMessage`'s
-	// `findAttachmentItems` filters them for `attachment_message` items. Until
-	// this join existed the route answered every row with no items at all, so a
-	// reloaded conversation showed the question and silently dropped the file
-	// that rode it — while the details route, reading the SAME rows through
-	// ListMessageGroups, returned it. Two projections of one transcript
-	// disagreeing is the defect; the second one is now this.
-	//
-	// TEXT ITEMS ARE DELIBERATELY NOT INCLUDED. This route already collapses
-	// each group's text into `content` (the string_agg above), which every
-	// client reads as the message body; re-emitting the same text as items
-	// would give two sources for one sentence and let them drift. Attachments
-	// and CANVASES have no such representation here — they exist in this
-	// response only as items — so they are what this carries.
-	//
-	// The canvas half is the same gap as the attachment half, one route later
-	// (issue 853). `content` above aggregates `text_message` items ALONE, and
-	// this projection carried attachments alone, so a canvas carved out of an
-	// answer was invisible to the chat page in both halves of this response at
-	// once: its text was not in `content` and its item was not in
-	// `message_items`. The details route (ListMessageGroups) served it and this
-	// one did not — two projections of one transcript disagreeing, which is the
-	// defect the attachment note above already names. A frontend opener alone
-	// could not have closed it: there was nothing in this payload to open.
-	if len(groupIDs) > 0 {
-		byGroup, err := r.attachmentItemsByGroup(ctx, s, groupIDs)
-		if err != nil {
-			return conversations.MessagesListResponse{}, err
-		}
-		canvasByGroup, err := r.canvasItemsByGroup(ctx, s, groupIDs)
-		if err != nil {
-			return conversations.MessagesListResponse{}, err
-		}
-		for i := range items {
-			// One list per group, in the order the items are STORED. Each
-			// projection is ordered on its own, so concatenating them would
-			// put every attachment before every canvas whatever the message
-			// actually looks like; `order_index` is what says where the canvas
-			// sits, and a client rendering the items in the order given must
-			// be given the right one.
-			merged := append(append([]map[string]any{}, byGroup[groupIDs[i]]...), canvasByGroup[groupIDs[i]]...)
-			if len(merged) == 0 {
-				continue
-			}
-			sort.SliceStable(merged, func(a, b int) bool {
-				left, leftOK := merged[a]["order_index"].(int)
-				right, rightOK := merged[b]["order_index"].(int)
-				if !leftOK || !rightOK {
-					return false
-				}
-				return left < right
-			})
-			items[i].MessageItems = merged
-		}
+	items, _, err := r.scanMessageRows(ctx, s, rows, false)
+	if err != nil {
+		return conversations.MessagesListResponse{}, err
 	}
 
 	totalPages := total / limit
@@ -2908,7 +2922,7 @@ func nilIfEmpty(s string) *string {
 }
 
 // addConversationParticipant writes a participant and mapping in the caller's transaction.
-func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) error {
+func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) (int, error) {
 	entityName, _ := body["entity_name"].(string)
 	entityMetaMap, _ := body["entity_meta"].(map[string]any)
 	entityMeta, _ := json.Marshal(body["entity_meta"])
@@ -2925,10 +2939,10 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 		if err = transaction.QueryRow(ctx, insert,
 			entityName, entityMeta, participantDisplayMeta(entityName, entityMetaMap),
 		).Scan(&participantID); err != nil {
-			return fmt.Errorf("conversations: create participant: %w", err)
+			return 0, fmt.Errorf("conversations: create participant: %w", err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("conversations: add participant lookup: %w", err)
+		return 0, fmt.Errorf("conversations: add participant lookup: %w", err)
 	}
 
 	// ON CONFLICT names the COLUMNS, not the constraint.
@@ -2945,7 +2959,7 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
 		VALUES ($1, $2, $3::jsonb) ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
 	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
-		return fmt.Errorf("conversations: add participant mapping: %w", err)
+		return 0, fmt.Errorf("conversations: add participant mapping: %w", err)
 	}
 
 	// Stamp `meta.single_participant` for the entity types run-history
@@ -2969,15 +2983,15 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 			"entity_settings": body["entity_settings"],
 		})
 		if err != nil {
-			return fmt.Errorf("conversations: encode single_participant: %w", err)
+			return 0, fmt.Errorf("conversations: encode single_participant: %w", err)
 		}
 		metaUpdate := fmt.Sprintf(`UPDATE %s.chat_conversations
 			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('single_participant', $1::jsonb)
 			WHERE id = $2`, s)
 		if _, err := transaction.Exec(ctx, metaUpdate, singleParticipant, id); err != nil {
-			return fmt.Errorf("conversations: stamp single_participant: %w", err)
+			return 0, fmt.Errorf("conversations: stamp single_participant: %w", err)
 		}
 	}
 
-	return nil
+	return participantID, nil
 }

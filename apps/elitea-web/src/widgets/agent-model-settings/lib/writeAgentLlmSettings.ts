@@ -41,9 +41,9 @@ export interface ChosenCatalogueModel {
 /**
  * Whatever tunables the caller is carrying: the version's current settings,
  * or the settings dialog's own values. `LLMSettingsValues` also carries
- * `steps_limit` and `webhook_secret`; neither is read here, and that is
- * deliberate — the agent's step limit belongs to `version_details.meta`
- * where `ApplicationAdvanceSettings` already owns it.
+ * `steps_limit`, which is not read here, and that is deliberate — the
+ * agent's step limit belongs to `version_details.meta` where
+ * `ApplicationAdvanceSettings` already owns it.
  */
 export interface AgentLlmTunables {
   readonly max_tokens?: number | string | undefined;

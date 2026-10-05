@@ -31,10 +31,9 @@ export interface SidebarHeaderProps {
  * custom `assets.logoMark` shows that image here; the default pack shows the
  * compiled orb.
  *
- * `SidebarConnectionDot` self-degrades to nothing when no
- * `SocketClientContext.Provider` is mounted (see its own header) — always
- * rendered here, never conditionally, so it activates automatically once
- * `app/` wires the provider.
+ * `SidebarConnectionDot` renders nothing until a live SSE channel reports
+ * its health (see its own header) — always rendered here, never
+ * conditionally, so it appears as soon as one does.
  */
 export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderProps): ReactNode {
   return (

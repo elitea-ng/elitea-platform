@@ -1,6 +1,7 @@
 package evaluation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -49,6 +50,14 @@ const (
 // the only thing between a paste of a thousand rows and a bill nobody
 // authorised. The refusal names the limit; it is not a silent truncation,
 // which would store a dataset that reads as complete and is not.
+//
+// The cap counts EVERY stored case, excluded ones included. That is a
+// decision, not an accident: AddCase accepts `excluded: true`, so a cap on
+// active cases alone would let a caller grow the table without bound and then
+// include the rows one at a time, each include needing a cap check of its own.
+// One total bound is the rule that cannot be walked around. The 409 says so,
+// and the dataset carries both `case_count` and `active_case_count`, so a
+// client can tell "full" apart from "nothing to run".
 const MaxCasesPerDataset = 10
 
 // MaxDatasetNameLength matches the column width and the dimension editor's own
@@ -59,6 +68,39 @@ const MaxDatasetNameLength = 128
 // text and both are sent to a model once per run, so an unbounded field is a
 // cost and a context-window failure rather than only a storage question.
 const MaxCaseInputBytes = 32 << 10 // 32 KiB
+
+// MaxCaseVariablesBytes bounds the JSON encoding of one case's template
+// variables. They are substituted into the input, so they reach the model on
+// every run just as the input does. It is measured with HTML escaping OFF
+// (see encodedVariablesSize): `<`, `>` and `&` are one byte each, so a
+// template map heavy in HTML or XML is not counted at six bytes a character.
+const MaxCaseVariablesBytes = 32 << 10 // 32 KiB
+
+// jsonEscapeExpansion is the most wire bytes JSON can spend on one decoded
+// byte: a control character (or any byte a client chooses to escape) is sent
+// as `\u00XX`, six bytes. Python's json.dumps with its default
+// ensure_ascii=True sends every non-ASCII character this way, so two-byte
+// Cyrillic costs three wire bytes a decoded byte, and control characters six.
+const jsonEscapeExpansion = 6
+
+// writeBodyOverheadBytes covers the keys, quotes and the small fields
+// (names, enums, numbers) of an evaluation write body.
+const writeBodyOverheadBytes = 64 << 10 // 64 KiB
+
+// MaxWriteBodyBytes bounds every evaluation write body BEFORE it is decoded.
+// The field caps are checked only after the whole body is in memory, so
+// without this bound a caller could stream any amount into the process first.
+//
+// The field caps count DECODED bytes and this bound counts WIRE bytes, so it
+// is sized for the worst escaping: six wire bytes for every decoded byte of
+// the largest set of capped fields one body can carry (a case's input,
+// expected output and variables, or a dimension's rubric and code), plus the
+// overhead. A body whose fields are within their caps reaches the field caps
+// unless it pads itself with insignificant whitespace past this bound.
+const MaxWriteBodyBytes = jsonEscapeExpansion*max(
+	2*MaxCaseInputBytes+MaxCaseVariablesBytes,
+	MaxDimensionDescriptionBytes+MaxDimensionCodeBytes,
+) + writeBodyOverheadBytes // 640 KiB
 
 // Dataset is one stored dataset row.
 //
@@ -80,9 +122,14 @@ type Dataset struct {
 	// reads `case_count` for the list badge and `cases_truncated` to say the
 	// page is short. A client that counted the page would report a 200-case
 	// dataset as having 200 when the page size is 200 and it has 900.
-	CaseCount int    `json:"case_count"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	CaseCount int `json:"case_count"`
+	// ActiveCaseCount is the stored count of cases that are NOT excluded, i.e.
+	// the cases a run would execute. A dataset whose every case is excluded
+	// has a non-zero case_count and nothing to run; the run start refuses it
+	// with a 422, and this field lets a client say so before the request.
+	ActiveCaseCount int    `json:"active_case_count"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 // DatasetDetail is the ONE dataset read: the summary plus a page of cases.
@@ -120,8 +167,12 @@ type DatasetCase struct {
 	ExpectedOutput *string `json:"expected_output"`
 	SourceType     string  `json:"source_type"`
 	OrderIndex     int     `json:"order_index"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	// Excluded keeps the case in the dataset but out of every NEW run. The
+	// run start freezes the active case ids into the snapshot, so a toggle
+	// after a run starts does not change that run.
+	Excluded  bool   `json:"excluded"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // DatasetWriteInput is the create/update body.
@@ -163,6 +214,9 @@ type CaseWriteInput struct {
 	Input          string         `json:"input"`
 	Variables      map[string]any `json:"variables"`
 	ExpectedOutput *string        `json:"expected_output"`
+	// Excluded is a pointer so that an absent key keeps the stored flag. A
+	// text edit that omitted it must not include an excluded case again.
+	Excluded *bool `json:"excluded,omitempty"`
 }
 
 // Normalize trims the input and replaces a nil variable map with an empty one.
@@ -198,10 +252,31 @@ func (input CaseWriteInput) Validate() error {
 	// marshalled reaches PostgreSQL as a driver error, i.e. a 500 for a caller
 	// error, and json.Marshal is the only thing that can tell the two apart
 	// before the write.
-	if _, err := json.Marshal(input.Variables); err != nil {
+	size, err := encodedVariablesSize(input.Variables)
+	if err != nil {
 		return apierr.BadRequest("variables must be a JSON object of scalar values")
 	}
+	if size > MaxCaseVariablesBytes {
+		return apierr.BadRequest(fmt.Sprintf("variables must be at most %d bytes as JSON", MaxCaseVariablesBytes))
+	}
 	return nil
+}
+
+// encodedVariablesSize is the length of the variables' compact JSON encoding
+// with HTML escaping off.
+//
+// json.Marshal escapes `<`, `>` and `&` as `\u003c` and friends, six bytes for
+// a one-byte character, so measuring its output would refuse a 10 KiB template
+// map heavy in HTML or XML as "over 32 KiB". The encoder's trailing newline is
+// not part of the value and is not counted.
+func encodedVariablesSize(variables map[string]any) (int, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(variables); err != nil {
+		return 0, err
+	}
+	return len(bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))), nil
 }
 
 // DatasetListFilter narrows the dataset listing to one agent's datasets plus
@@ -244,5 +319,10 @@ type DatasetRepository interface {
 
 	AddCase(ctx context.Context, projectID, datasetID string, input CaseWriteInput) (DatasetCase, error)
 	UpdateCase(ctx context.Context, projectID, datasetID, caseID string, input CaseWriteInput) (DatasetCase, error)
+	// SetCaseExcluded writes the exclusion flag and NOTHING else. It is what
+	// an update body holding only `excluded` runs, so including or excluding a
+	// case cannot write a client's cached copy of the case text back over an
+	// edit made since that copy was read.
+	SetCaseExcluded(ctx context.Context, projectID, datasetID, caseID string, excluded bool) (DatasetCase, error)
 	DeleteCase(ctx context.Context, projectID, datasetID, caseID string) error
 }

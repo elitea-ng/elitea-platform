@@ -44,7 +44,7 @@ export interface HttpConfig {
    * with the login URL it named.
    *
    * ONLY THE APP SHELL'S OWN SESSION PROBE SUPPLIES IT, and that is the whole
-   * design. `/forward-auth/info` answers `401 {"error":{"code":
+   * design. `/auth/info` answers `401 {"error":{"code":
    * "session_expired"}}` when a cookie was presented and no longer works
    * (services/elitea-main/docs/browser-sessions.md). That answer is about the
    * SESSION, so acting on it — a full-page navigation to the identity
@@ -98,6 +98,16 @@ export interface HttpRequestOptions {
   query?: Readonly<Record<string, string | number | boolean | undefined>>;
   /** A peripheral poll whose 401 must NOT escalate to re-auth — see `features/notifications/api/notifications.ts` for the logout loop this exists to stop. */
   background?: boolean;
+  /**
+   * Resolve `path` beside the API base, not under it: the `/llm` data plane
+   * is a sibling of `/api/v2`. The base's trailing `/api/v2` is removed and any
+   * path prefix before it is kept, as `shared/lib/api-url.ts`'s
+   * `toOpenAiBaseUrl` does, so `https://host/elitea/api/v2` gives
+   * `https://host/elitea/llm/...`.
+   */
+  originRoot?: boolean;
+  /** Read a SUCCESSFUL body as an `ArrayBuffer` (audio). A failure body still parses as JSON or text. */
+  binary?: boolean;
 }
 
 export interface HttpClient {
@@ -194,13 +204,19 @@ function serializeBody(method: HttpMethod, body: unknown, url: string): string |
   }
 }
 
+/** The base URL with its trailing `/api/v2` removed: the root that `/llm` and `/api/v2` share. A path prefix before `/api/v2` stays. */
+function siblingRoot(base: URL): string {
+  return base.origin + base.pathname.replace(/(\/api\/v2)?\/?$/, '');
+}
+
 interface PreparedRequest {
   url: string;
   init: RequestInit;
 }
 
 function prepare(cfg: HttpConfig, credentials: RequestCredentials, method: HttpMethod, path: string, options: HttpRequestOptions): PreparedRequest {
-  const url = buildUrl(new URL(cfg.baseUrl, window.location.origin).toString(), path, options.query);
+  const base = new URL(cfg.baseUrl, window.location.origin);
+  const url = buildUrl(options.originRoot === true ? siblingRoot(base) : base.toString(), path, options.query);
   const headers = new Headers(options.headers);
   const body = serializeBody(method, options.body, url);
   if (body !== undefined && typeof options.body !== 'string' && !isPreEncodedBody(options.body) && !headers.has('Content-Type')) {
@@ -241,7 +257,10 @@ function fromException<T>(cause: unknown, url: string): HttpResult<T> {
   return failure({ kind: 'network', url, message: `http: request to ${url} failed: ${message}`, cause });
 }
 
-async function toResult<T>(response: Response): Promise<HttpResult<T>> {
+async function toResult<T>(response: Response, binary = false): Promise<HttpResult<T>> {
+  if (binary && response.ok) {
+    return { ok: true, status: response.status, data: (await response.arrayBuffer()) as T, headers: response.headers };
+  }
   const text = await response.text();
   let body: unknown = text === '' ? undefined : text;
   if (text !== '' && (response.headers.get('content-type') ?? '').includes('application/json')) {
@@ -362,7 +381,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       if (needsReauth(response)) return authRefusal<T>(response);
     }
 
-    return toResult<T>(response);
+    return toResult<T>(response, options.binary === true);
   }
 
   return {

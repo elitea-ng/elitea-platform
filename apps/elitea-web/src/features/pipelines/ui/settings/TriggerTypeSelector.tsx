@@ -142,10 +142,9 @@ function TriggerRowList({ entries, disabled, onEdit, onDelete }: TriggerRowListP
  *    with its own edit and delete action, because both can be on at once and
  *    a single-valued control cannot say so.
  *  - the Webhook modal shows the endpoint URL and the credential the backend
- *    hands back, with reveal/rotate/revoke -- there is no GitHub/GitLab/
- *    Custom signature mode in the Go inbound route (one bearer secret,
- *    constant-time compared), so those options are gone rather than wired to
- *    nothing.
+ *    hands back, with reveal/rotate/revoke, and the per-trigger mode the Go
+ *    inbound route verifies: Custom, GitHub, GitLab secret token and GitLab
+ *    signing token (#970, legacy issue 6664).
  *
  * OTHER DEVIATIONS FROM BASELINE:
  *  1. `useFormikContext()` -> explicit `versionId`/`versionInstructions`
@@ -226,6 +225,7 @@ export function TriggerTypeSelector(props: TriggerTypeSelectorProps): ReactNode 
         webhookUrl={surface.webhookUrl}
         secretValue={surface.revealedSecret}
         authMode={surface.webhookAuthMode}
+        provider={surface.webhookProvider}
         signatureHeader={surface.webhookSignatureHeader}
         isLoading={surface.isUpdating}
         onReveal={() => {

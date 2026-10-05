@@ -10,6 +10,10 @@ export const usersPageStyles = {
     flexDirection: 'column' as const,
     overflow: 'hidden',
     gap: '0.75rem',
+    // The 1.5rem gutter DrawerPageHeader gives every other settings page, so
+    // the title, table and toolbar stop sitting flush against the settings
+    // drawer's divider (and the Invite button against the window edge).
+    padding: '0 1.5rem',
   },
   header: {
     display: 'flex',
@@ -21,7 +25,6 @@ export const usersPageStyles = {
     flexWrap: 'wrap' as const,
   },
   title: {
-    fontWeight: 600,
     margin: 0,
   },
   toolbar: {

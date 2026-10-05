@@ -41,13 +41,63 @@
  */
 import * as zod from "zod";
 
-export const ConversationParticipant = zod.object({
-  id: zod.string().optional(),
-  entity_name: zod.string().optional(),
-  entity_meta: zod.record(zod.string(), zod.unknown()).optional(),
-  entity_settings: zod.record(zod.string(), zod.unknown()).nullish(),
-  meta: zod.record(zod.string(), zod.unknown()).nullish(),
-});
+export const ConversationParticipant = zod
+  .object({
+    id: zod.int(),
+    entity_name: zod
+      .string()
+      .describe(
+        "`user`, `application`, `toolkit`, `llm` and similar; read it, do not enumerate it.",
+      ),
+    entity_meta: zod
+      .object({
+        id: zod
+          .int()
+          .optional()
+          .describe(
+            "The entity id (user, application, pipeline or toolkit). Absent for `llm` and `dummy`.",
+          ),
+        project_id: zod
+          .int()
+          .optional()
+          .describe(
+            "The project that owns an application, pipeline or toolkit.",
+          ),
+        model_name: zod
+          .string()
+          .optional()
+          .describe("An `llm` participant's model."),
+      })
+      .nullish()
+      .describe(
+        "The stable keys are typed below; every other key is the kind's own. For a `user` participant `id` is the USER id — the value a chat send's `user_ids` mention list carries — never the participant row id.",
+      ),
+    entity_settings: zod
+      .object({
+        version_id: zod
+          .int()
+          .optional()
+          .describe(
+            "The application or pipeline version a chat send to this participant runs.",
+          ),
+      })
+      .nullish(),
+    meta: zod
+      .object({
+        user_name: zod
+          .string()
+          .optional()
+          .describe("A `user` participant's display name."),
+        name: zod
+          .string()
+          .optional()
+          .describe("Every other kind's display name."),
+      })
+      .nullish(),
+  })
+  .describe(
+    "One participant of a conversation (a user, an agent or pipeline, a toolkit, a model). NOTE(W2): internal/api/v2/conversations/handler.go:240 (`Participant`).\n",
+  );
 
 export type ConversationParticipant = zod.input<typeof ConversationParticipant>;
 export type ConversationParticipantOutput = zod.output<

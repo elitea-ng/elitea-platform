@@ -51,7 +51,7 @@ function LayerChip({ label, contributes }: { readonly label: string; readonly co
 export function BrandingLayersPanel({ layers, values }: BrandingLayersPanelProps) {
   return (
     <Box component="section" aria-labelledby="branding-layers-heading" data-testid="branding-layers" sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <Typography id="branding-layers-heading" variant="h6" component="h2">
+      <Typography id="branding-layers-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.layers.title', 'Layers')}
       </Typography>
       <Typography variant="bodySmall" color="text.secondary">

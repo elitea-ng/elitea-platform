@@ -42,6 +42,10 @@ type CurrentApplicationTurn struct {
 	ResponseMessageID    string
 	QuestionMeta         json.RawMessage
 	UserInput            string
+	// AllowEmptyUserInput carries CurrentApplicationStartRequest's flag onto
+	// the turn, so the repository's re-validation admits the same empty input
+	// the use case admitted.
+	AllowEmptyUserInput bool
 	// Attachments are the `attachment_message` items written onto the QUESTION
 	// group in the same transaction (#606). Empty for a turn with no files.
 	Attachments []CurrentTurnAttachment
@@ -52,7 +56,7 @@ func (turn CurrentApplicationTurn) Validate() error {
 		turn.ApplicationID <= 0 || turn.ApplicationVersionID <= 0 ||
 		!validUUID(turn.ConversationUUID) || !validUUID(turn.QuestionID) ||
 		!validUUID(turn.QuestionItemID) || !validUUID(turn.ResponseMessageID) ||
-		!validCurrentAgentText(turn.UserInput, maxCurrentAgentUserInputBytes) ||
+		!validCurrentAgentInput(turn.UserInput, turn.AllowEmptyUserInput) ||
 		!validJSONObject(turn.QuestionMeta) ||
 		!validCurrentTurnAttachments(turn.Attachments) {
 		return ErrInvalidCurrentAgentStart
@@ -112,6 +116,16 @@ type CurrentApplicationStartRequest struct {
 	TargetParticipantID int64
 	QuestionID          string
 	UserInput           string
+	// AllowEmptyUserInput admits an EMPTY UserInput. Only the unattended
+	// entry points set it — an inbound pipeline trigger and a pipeline
+	// schedule (internal/api/v2/pipelinetriggers). A webhook that only says
+	// "something happened" carries no text, and a schedule may have none
+	// configured. Both used to fail this Validate and surface as an opaque
+	// 503 "the pipeline run could not be started" (regression finding
+	// UI-PD-3). A typed chat turn never sets it: an empty composer message is
+	// still refused. Skill projection sends "continue" to the model for an
+	// empty input, which is what a pipeline started from its entry node needs.
+	AllowEmptyUserInput bool
 	InteractionUUID     string
 	MCPTokens           json.RawMessage
 	// Attachments carries `payload.attachments` from the start body: the
@@ -130,12 +144,20 @@ type CurrentApplicationStartRequest struct {
 	// re-resolved server-side, so a stale or tampered client cannot notify
 	// somebody who is not in the project.
 	MentionsEveryone bool
+	// TriggerOrigin is how this run started (shared 0140): empty for the chat
+	// composer, `api` for an MCP client, `schedule` or `webhook` for the
+	// unattended pipeline entry points. The analytics active-user reads use
+	// it to stop counting a person as active because a cron job ran under
+	// their name (legacy issues 6802 and 6881). It never changes what the
+	// run does, who it runs as, or who pays for it.
+	TriggerOrigin executiondomain.TriggerOrigin
 }
 
 func (request CurrentApplicationStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID <= 0 ||
+		!request.TriggerOrigin.Valid() ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
-		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
+		!validCurrentAgentInput(request.UserInput, request.AllowEmptyUserInput) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
 		!validCurrentMCPTokens(request.MCPTokens) {
 		return ErrInvalidCurrentAgentStart
@@ -316,6 +338,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ClientMessageID: responseMessageID,
 		SIOEvent:        "chat_predict",
 		Input:           input,
+		TriggerOrigin:   request.TriggerOrigin,
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:     request.ConversationUUID,
@@ -324,7 +347,8 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			ApplicationVersionID: target.ApplicationVersionID,
 			QuestionID:           request.QuestionID, QuestionItemID: questionItemID,
 			ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
-			UserInput: request.UserInput, Attachments: attachments,
+			UserInput: request.UserInput, AllowEmptyUserInput: request.AllowEmptyUserInput,
+			Attachments: attachments,
 		},
 	})
 	if err != nil {
@@ -338,7 +362,14 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// sent and stored by the time this runs, so a failure here leaves a
 	// conversation that is correct and a colleague who was not told — which is
 	// the pre-#977 behaviour, not a new failure mode.
-	service.notifyMentionedUsers(ctx, request)
+	//
+	// Only a NEW admission notifies. A replay of the same question_id is a
+	// client retrying a response it lost (a mobile outbox does exactly this),
+	// and it is the same message: notifying again would ring the same bell
+	// once per retry.
+	if outcome.Created {
+		service.notifyMentionedUsers(ctx, request)
+	}
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,
@@ -635,7 +666,22 @@ func currentApplicationRuntimeLLM(version map[string]any) ([]byte, error) {
 	return result, nil
 }
 
+// validUUID admits exactly the canonical lowercase spelling. question_id is
+// the turn's idempotency key and is compared as a string, while the database
+// stores it as a uuid: an upper-case spelling of the same id would be a
+// second key for one stored question. API_CONTRACT.md promises clients a 400
+// for it (ADR-0025 coordinator decision 14).
 func validUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == value
+}
+
+// validStoredUUID is the rule for an id read back from storage rather than
+// sent by a client: any case spelling of a canonical UUID. Turns admitted
+// before validUUID became lowercase-only stored their question_id verbatim as
+// the execution generation, and a paused one must still continue. The value is
+// not normalised: downstream compares it as a string with what was stored.
+func validStoredUUID(value string) bool {
 	parsed, err := uuid.Parse(value)
 	return err == nil && parsed.String() == strings.ToLower(value)
 }
@@ -644,6 +690,16 @@ var currentTurnNamespace = uuid.MustParse("71581f1e-fb1b-4d50-a9db-8ebd4b47db76"
 
 func currentTurnUUID(questionID, role string) string {
 	return uuid.NewSHA1(currentTurnNamespace, []byte(questionID+"\x00"+role)).String()
+}
+
+// validCurrentAgentInput is the user-input rule for an application start. An
+// empty value passes only when the caller opted in (AllowEmptyUserInput);
+// every other rule — size, UTF-8, no NUL — applies either way.
+func validCurrentAgentInput(value string, allowEmpty bool) bool {
+	if value == "" {
+		return allowEmpty
+	}
+	return validCurrentAgentText(value, maxCurrentAgentUserInputBytes)
 }
 
 func validCurrentAgentText(value string, limit int) bool {

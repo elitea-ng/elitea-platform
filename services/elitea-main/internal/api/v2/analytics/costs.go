@@ -61,6 +61,7 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -182,7 +183,11 @@ func (h *CostsHandler) Costs(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"error": "project id must be a positive integer"})
 		return
 	}
-	from, to := dateWindow(r.URL.Query(), h.clock)
+	from, to, err := dateWindow(r.URL.Query(), h.clock)
+	if err != nil {
+		writeInvalidDateRange(w)
+		return
+	}
 	ctx := r.Context()
 
 	// ONE snapshot for both reads.
@@ -269,7 +274,14 @@ func (h *CostsHandler) Costs(w http.ResponseWriter, r *http.Request) {
 // Overview tab paints volume from one endpoint and cost from this one, side by
 // side, and two windows that default or clamp differently put two numbers about
 // two different weeks on one screen with nothing saying so.
-func dateWindow(query url.Values, clock func() time.Time) (from, to time.Time) {
+//
+// A window whose start is LATER than its end is refused with
+// errInvalidDateRange (legacy issue 6738). It used to reach the queries as it
+// was, and every half-open predicate below matched nothing, so the page showed
+// an empty dashboard that looked like a project with no traffic. That covers a
+// date_from later than date_to, and a date_from in the future with no date_to.
+// An EQUAL start and end is an empty window, not an invalid one.
+func dateWindow(query url.Values, clock func() time.Time) (from, to time.Time, err error) {
 	parsedFrom, hasFrom := parseDate(query.Get("date_from"))
 	parsedTo, hasTo := parseDate(query.Get("date_to"))
 
@@ -286,10 +298,26 @@ func dateWindow(query url.Values, clock func() time.Time) (from, to time.Time) {
 	default:
 		from, to = parsedFrom, parsedTo
 	}
+	if from.After(to) {
+		return time.Time{}, time.Time{}, errInvalidDateRange
+	}
 	if to.Sub(from) > maxDateRangeDays*24*time.Hour {
 		from = to.AddDate(0, 0, -maxDateRangeDays)
 	}
-	return from.UTC(), to.UTC()
+	return from.UTC(), to.UTC(), nil
+}
+
+// errInvalidDateRange is a window whose start is later than its end.
+var errInvalidDateRange = errors.New("analytics: date_from is later than date_to")
+
+// writeInvalidDateRange answers a reversed window with 400. The code is
+// machine-readable, so the client can mark the date fields rather than parse
+// the prose; the shape is the one writeRepoFailure uses for a bad project id.
+func writeInvalidDateRange(w http.ResponseWriter) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": "date_from must not be later than date_to",
+		"code":  "invalid_date_range",
+	})
 }
 
 func parseDate(raw string) (time.Time, bool) {

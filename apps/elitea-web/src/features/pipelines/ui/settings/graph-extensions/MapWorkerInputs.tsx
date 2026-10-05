@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useContext } from 'react';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
@@ -60,7 +60,7 @@ export function MapWorkerInputs({ owner, disabled }: MapWorkerInputsProps): Reac
   return <Stack spacing={1}>
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.ownedInputScope', 'Worker inputs belong only to {{worker}}. Parent State remains unchanged.', { worker: workerId })}</Typography>
     {worker.type === 'state_modifier' && approved.map((key) => <FormControlLabel key={key} label={key}
-      control={<Checkbox className="nodrag nopan" disabled={disabled} checked={selected.includes(key)}
+      control={<BaseCheckbox className="nodrag nopan" disabled={disabled} checked={selected.includes(key)}
         onChange={(_, checked) => changeInput(key, checked)} />} />)}
     {worker.type === 'agent' && <AgentTask worker={worker} channels={approved} disabled={disabled}
       change={(mapping) => context.setYamlJsonObject(patchGraphExtensionNode(context.yamlJsonObject, workerId,

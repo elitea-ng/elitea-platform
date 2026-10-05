@@ -269,13 +269,11 @@ export function ToolkitsOperationButtons({
         aria-labelledby="alert-dialog-title"
         aria-describedby="alert-dialog-description"
       >
+        {/* The text sits directly in DialogTitle (the `<h2>`, headingMedium
+            + text.secondary via MuiDialogTitle) — no inner Typography to
+            override its size or nest a second heading inside it. */}
         <DialogTitle id="alert-dialog-title">
-          <Typography
-            color="text.secondary"
-            variant="headingSmall"
-          >
-            {t('features.toolkits.toolkitsOperationButtons.missingDataTitle', 'Some fields have missing or invalid data!')}
-          </Typography>
+          {t('features.toolkits.toolkitsOperationButtons.missingDataTitle', 'Some fields have missing or invalid data!')}
         </DialogTitle>
         <DialogContent>
           <DialogContentText id="alert-dialog-description">

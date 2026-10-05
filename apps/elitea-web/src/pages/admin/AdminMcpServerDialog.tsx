@@ -27,7 +27,7 @@ import { useEffect, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -243,7 +243,7 @@ export function AdminMcpServerDialog({
 
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.enabled}
               onChange={(event) => {
                 update('enabled', event.target.checked);
@@ -322,7 +322,7 @@ function McpSecretFields({
       {hasStoredSecret ? (
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.clearSecret}
               onChange={(event) => {
                 onUpdate('clearSecret', event.target.checked);

@@ -12,6 +12,8 @@ import { screen, waitFor, type RenderResult } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { http, HttpResponse } from 'msw';
+
 import { server } from '../../../test/setup';
 
 import {
@@ -120,4 +122,19 @@ describe('RunHistoryPanel', () => {
     await user.click(screen.getByTestId('run-history-close'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it('requests only caller-owned hidden editor Test contexts when Test scope is selected', async () => {
+  let query = '';
+  configureGeneratedClient({ baseUrl: '/api/v2' });
+  server.use(http.get('/api/v2/elitea_core/conversations/prompt_lib/7', ({ request }) => {
+    query = new URL(request.url).search;
+    return HttpResponse.json(EMPTY_LISTING);
+  }));
+  renderPanel(<RunHistoryPanel projectId="7" entityName="application" entityId="12" editorTest onClose={vi.fn()} />);
+  await waitFor(() => expect(query).not.toBe(''));
+  const params = new URLSearchParams(query);
+  expect(params.get('source')).toBe('editor_test');expect(params.get('hidden')).toBe('only');expect(params.get('mine')).toBe('true');
+  expect(params.get('entity_meta_id')).toBe('12');
 });

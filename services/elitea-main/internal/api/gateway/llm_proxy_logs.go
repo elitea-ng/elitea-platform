@@ -178,7 +178,7 @@ func (h *LLMProxyHandler) Logs(w http.ResponseWriter, r *http.Request) {
 // module. The number is compiled on both sides — deliberately not configurable,
 // so a deployment cannot turn a log into an unbounded table — which makes drift
 // a code change that edits one and not the other.
-const requestLogRetentionDays = 30
+const requestLogRetentionDays = 92
 
 // LogSummary is the window's shape.
 type LogSummary struct {

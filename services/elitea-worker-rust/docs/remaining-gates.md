@@ -888,3 +888,18 @@ All workspace integration is deferred until after full worker completion and doe
 The current worktree changes still require selective Code delivery to PR #1014 and CI at the pushed head.
 Preserve working shared foundations with their imported modules, tests, migrations and protocol companions.
 Do not strip or stash dependencies merely because their future feature acceptance is deferred.
+
+### Main reconciliation and deployment boundary
+
+Code integration is published in commit `f8a1499d128cfe226500bc33a0bbef1d465ec4fa` on PR #1014.
+The reconciliation with Main `06122d5fec5d023d693a945aa0a326f417cbe0df` preserves both chat implementations and working Code foundations.
+API regeneration identifies omitted editor Test server companions; the combined source includes their admission, restoration, and trace contracts.
+Client generation must match those authoritative contracts before delivery.
+
+Both branches use shared migration versions 0134 through 0141.
+Published Main migration bytes remain unchanged; the Code migrations move unchanged to versions 0145 through 0152.
+The rehearsal records the former Code versions and requires a controlled migration transition before deployment.
+This transition must preserve retained execution state and verify backup restoration before any live change.
+Main's updated Form sign-in default also requires an explicit operator setting for rehearsals that use Form authentication.
+The conflict-resolution checks do not change live services or the migration ledger.
+Code acceptance remains open until the replacement cohort passes its remaining runtime gates.

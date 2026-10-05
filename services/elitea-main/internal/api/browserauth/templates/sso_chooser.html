@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    {{template "head" .}}
+    <title>Sign in to {{.Brand.ProductName}}</title>
+  </head>
+  <body class="auth-login-page" data-auth-form="sso">
+    {{template "backdrop"}}
+    <div class="auth-shell">
+      {{template "brand" .Brand}}
+      <main class="card card-signin" aria-labelledby="sign-in-title">
+        <div class="form-signin">
+          <h1 id="sign-in-title">Sign in</h1>
+          <p class="lede">Continue to {{.Brand.ProductName}}</p>
+          {{if .Error}}<p class="login-error" role="alert" data-testid="sso-error">{{template "error-icon"}}<span>{{.Error}}</span></p>{{end}}
+          <ul class="provider-list">
+            {{range .Providers}}<li>
+              <a class="provider-button{{if .LastUsed}} is-last-used{{end}}" href="{{.Href}}" data-provider="{{.ID}}">
+                {{template "provider-icon" .Icon}}
+                <span class="provider-label">Continue with {{.DisplayName}}</span>
+                {{if .LastUsed}}<span class="last-used-badge">Last used</span>{{end}}
+              </a>
+            </li>{{end}}
+          </ul>
+          {{if .ShowEmail}}
+          <div class="divider" role="separator" aria-label="or"><span aria-hidden="true">or</span></div>
+          <form class="email-form" action="/auth/login/continue" method="post">
+            <label class="field-label" for="email">Work email</label>
+            <input class="form-control" type="email" id="email" name="email" value="{{.Email}}" placeholder="name@company.com" autocomplete="username" inputmode="email" spellcheck="false" autocapitalize="none" required{{if .EmailError}} aria-invalid="true" aria-describedby="email-error"{{end}}>
+            {{if .EmailError}}<p class="field-error" id="email-error" role="alert">{{.EmailError}}</p>{{end}}
+            <input type="hidden" name="target_to" value="{{.Target}}">
+            <button class="sign-in-button" type="submit">Continue</button>
+          </form>
+          {{end}}
+        </div>
+      </main>
+    </div>
+    {{template "theme-toggle"}}
+  </body>
+</html>

@@ -32,6 +32,15 @@ const MAX_TOOLKIT_AUTH_URL_BYTES: usize = 4096;
 pub(crate) const TOOLKIT_AUTHORIZATION_REQUIRED_MESSAGE: &str =
     "Authorization is required to run this tool.";
 
+/// The budget that refused a model call (#6732). The gateway names it in its
+/// 402 refusal; `Unknown` covers a refusal that did not say.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelBudgetScope {
+    Unknown,
+    Project,
+    Member,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeFailureKind {
     UnsupportedCapability,
@@ -59,7 +68,7 @@ pub enum RuntimeFailureKind {
     ModelTimeout,
     ModelRateLimited,
     ModelAccessDenied,
-    ModelBudgetExhausted,
+    ModelBudgetExhausted(ModelBudgetScope),
     ModelRequestRejected,
     ModelResponseInvalid,
     ContextBudgetExceeded,
@@ -636,7 +645,15 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("model_gateway.unauthorized" | "model_gateway.forbidden") => {
             RuntimeFailureKind::ModelAccessDenied
         }
-        Some("model_gateway.budget_exhausted") => RuntimeFailureKind::ModelBudgetExhausted,
+        Some("model_gateway.budget_exhausted") => {
+            RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown)
+        }
+        Some("model_gateway.project_budget_exhausted") => {
+            RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project)
+        }
+        Some("model_gateway.member_budget_exhausted") => {
+            RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member)
+        }
         Some(
             "model_gateway.rejected"
             | "model_gateway.invalid_request"
@@ -815,9 +832,21 @@ pub(crate) fn runtime_error_policy(
             "The model service denied access. Ask an administrator to check the model credentials and project permissions.",
             false,
         ),
-        RuntimeFailureKind::ModelBudgetExhausted => (
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown) => (
             RuntimeErrorCodeV1::ModelBudgetExhausted,
             "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.",
+            false,
+        ),
+        // Main maps these two registered messages to the public codes
+        // PROJECT_BUDGET_EXHAUSTED and MEMBER_BUDGET_EXHAUSTED (#6732).
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project) => (
+            RuntimeErrorCodeV1::ModelBudgetExhausted,
+            "The shared model budget of this project is exhausted. Requests are unavailable until the budget resets or an administrator raises the limit.",
+            false,
+        ),
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member) => (
+            RuntimeErrorCodeV1::ModelBudgetExhausted,
+            "Your budget in this project is exhausted. Requests are unavailable until the budget resets or an administrator raises your limit.",
             false,
         ),
         RuntimeFailureKind::ModelRequestRejected => (
@@ -898,7 +927,9 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::ModelTimeout,
         RuntimeFailureKind::ModelRateLimited,
         RuntimeFailureKind::ModelAccessDenied,
-        RuntimeFailureKind::ModelBudgetExhausted,
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown),
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project),
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member),
         RuntimeFailureKind::ModelRequestRejected,
         RuntimeFailureKind::ModelResponseInvalid,
         RuntimeFailureKind::ContextBudgetExceeded,

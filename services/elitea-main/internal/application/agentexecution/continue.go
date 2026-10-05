@@ -151,7 +151,7 @@ func (target CurrentContinuationTarget) Validate() error {
 		target.TargetParticipantID <= 0 || !validUUID(target.QuestionID) ||
 		!validCurrentAgentText(target.UserInput, maxCurrentAgentUserInputBytes) ||
 		target.ThreadID == "" || len(target.ThreadID) > 256 || strings.ContainsRune(target.ThreadID, '\x00') ||
-		!validUUID(target.ExecutionGeneration) ||
+		!validStoredUUID(target.ExecutionGeneration) ||
 		(kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
 			kind != CurrentContinuationOutputLimit && kind != CurrentContinuationStatic) {
 		return ErrUnsupportedCurrentAgentStart
@@ -482,7 +482,7 @@ func (turn CurrentContinueTurn) ProjectionResponseID() string {
 func (turn CurrentContinueTurn) Validate() error {
 	if turn.ProjectID <= 0 || turn.ActorUserID <= 0 || turn.TargetParticipantID <= 0 ||
 		!validUUID(turn.ConversationUUID) || !validUUID(turn.QuestionID) ||
-		!validUUID(turn.ResponseMessageID) || !validUUID(turn.ExecutionGeneration) ||
+		!validUUID(turn.ResponseMessageID) || !validStoredUUID(turn.ExecutionGeneration) ||
 		turn.ThreadID == "" || len(turn.ThreadID) > 256 || strings.ContainsRune(turn.ThreadID, '\x00') {
 		return ErrInvalidCurrentAgentStart
 	}

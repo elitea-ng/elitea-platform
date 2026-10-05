@@ -40,18 +40,10 @@ export interface PipelineChatSlotContext {
  * The file keeps its two other jobs — assembling the slot object and holding
  * the editor's error boundary — and no longer claims anything is missing.
  *
- * `renderRunHistory` (issue #868) is real now too: `@/entities/run-history`
- * exists (it did not when the paragraph above was first written), and
- * `RunHistoryPanel` is the same component `pages/toolkits` and
- * `pages/agents` wire into their own run-history slots — the conversation
- * list and trace view are entity-agnostic, keyed only by `entity_name` +
- * `entity_meta_id`. `onRestoreConversation` is threaded straight through to
- * `RunHistoryPanel`; nothing downstream of `usePipelineChat` consumes a
- * restored conversation id yet (same disclosed, partially-ported state
- * `features/agents/ui/ConfigurationTab.tsx`'s own doc comment records for
- * its identical prop) — restoring history into the live test-chat pane is
- * therefore a NEW gap this file discloses rather than one it silently
- * closes.
+ * Test History uses the shared panel with an explicit editor Test scope.
+ * Its selected conversation passes through ChatPanel into PipelineTestChat.
+ * Restoration reads durable records and attaches the existing observer.
+ * Other editors retain their original History behavior.
  */
 
 /**
@@ -75,9 +67,10 @@ export function buildPipelineConfigurationTabSlots(
 ): ConfigurationTabProps['slots'] {
   return {
     renderConfigurationForm: () => <EditPipelineConfigurationPanel {...panel} />,
-    renderChat: ({ settings, disableChat, ref }) => (
+    renderChat: ({ settings, disableChat, ref, restore }) => (
       <PipelineTestChat
         settings={settings}
+        restore={restore}
         disableChat={disableChat || panel.isDirty}
         slotRef={ref}
         identity={chat.identity}
@@ -88,6 +81,7 @@ export function buildPipelineConfigurationTabSlots(
       <RunHistoryPanel
         projectId={panel.projectId}
         entityName="application"
+        editorTest
         entityId={runApplicationId}
         onClose={onClose}
         onRestoreConversation={(conversationId) => onRestoreConversation(conversationId)}

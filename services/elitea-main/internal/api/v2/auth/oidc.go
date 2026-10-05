@@ -18,6 +18,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -89,6 +90,10 @@ type OIDCHandler struct {
 	// deployment configured only through the admin page.
 	envRuntime *oidcRuntime
 
+	// envOption is the environment fallback's sign-in page entry
+	// (OIDC_DISPLAY_NAME, OIDC_LOGIN_DOMAINS). Read once, with envRuntime.
+	envOption LoginOption
+
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*oidcRuntime
 }
@@ -116,6 +121,7 @@ func NewOIDCHandler(ctx context.Context, cfg *OIDCConfig, pool *pgxpool.Pool, se
 			return nil, err
 		}
 		handler.envRuntime = environment
+		handler.envOption = oidcEnvironmentOption()
 	}
 	return handler, nil
 }
@@ -220,8 +226,13 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   300,
 	})
 
-	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue,
-		oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier))
+	authOptions := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier)}
+	// The sign-in page passes the address a person typed, so the identity
+	// provider can pre-fill it (OpenID Connect Core 3.1.2.1 `login_hint`).
+	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
+		authOptions = append(authOptions, oauth2.SetAuthURLParam("login_hint", hint))
+	}
+	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue, authOptions...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -365,6 +376,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// Exchange authorization code for tokens
 	code := r.URL.Query().Get("code")
 	if code == "" {
+		if r.URL.Query().Get("error") != "" {
+			// The identity provider ended the login without a code: the person
+			// cancelled, or the provider refused them. The state was verified
+			// above, so this callback belongs to a login this browser started.
+			// Send the browser back to the sign-in page with a generic error
+			// and the same return target. The provider's own error text is
+			// not echoed: it is attacker-influenced input.
+			slog.Warn("OIDC: the identity provider returned an error instead of a code",
+				"error", r.URL.Query().Get("error"))
+			_, _ = h.consumeCodeVerifier(w, r)
+			http.Redirect(w, r, SignInErrorURL(targetTo), http.StatusFound)
+			return
+		}
 		http.Error(w, "missing authorization code", http.StatusBadRequest)
 		return
 	}
@@ -428,6 +452,9 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One spelling for every comparison that follows: the account lookup, the
+	// first-login grant list and the session. See normalizeAssertedEmail.
+	claims.Email = normalizeAssertedEmail(claims.Email)
 	if claims.Email == "" {
 		slog.Error("OIDC: no email in claims", "sub", claims.Sub)
 		http.Error(w, "email claim required", http.StatusBadRequest)
@@ -444,7 +471,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, err := h.provisionUser(ctx, claims.Sub, claims.Email, claims.Name,
-		claims.EmailVerified, runtime.requireEmailVerified)
+		claims.EmailVerified, runtime.requireEmailVerified, runtime.adoptSCIMUsers)
 	if err != nil {
 		if errors.Is(err, errUserSuspended) {
 			slog.Warn("OIDC: suspended user attempted login", "email", claims.Email)
@@ -518,6 +545,20 @@ func oidcRequiresVerifiedEmail() bool {
 	return strings.EqualFold(os.Getenv("OIDC_REQUIRE_EMAIL_VERIFIED"), "true")
 }
 
+// oidcAdoptsSCIMUsers reports whether the ENVIRONMENT-configured OIDC provider
+// may adopt a SCIM-provisioned account on a first login.
+//
+// The default is OFF. A provider authored on the admin Authentication page
+// carries its own `adopt_scim_users`; this variable stands in for it only on the
+// environment fallback, which has no document. See
+// identityproviders.SAMLDocument.AdoptSCIMUsers for why the default refuses.
+//
+// A LITERAL name, for the same env-drift-check.sh reason as above.
+// deploy/helm/elitea/values.yaml carries the matching knob.
+func oidcAdoptsSCIMUsers() bool {
+	return strings.EqualFold(os.Getenv("OIDC_ADOPT_SCIM_USERS"), "true")
+}
+
 // verifiedEmailClaim answers the address that an `email:` entry of
 // `initial_global_admins` may be compared against, and "" when there is none.
 //
@@ -568,6 +609,7 @@ func (h *OIDCHandler) provisionUser(
 	sub, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
+	adoptSCIMUsers bool,
 ) (string, error) {
 	providerRef := OIDCProviderRefPrefix + sub
 
@@ -577,7 +619,8 @@ func (h *OIDCHandler) provisionUser(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	userID, err := resolveProvisionedUser(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail)
+	userID, err := resolveProvisionedUserFor(
+		ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
 	if err != nil {
 		return "", err
 	}
@@ -608,6 +651,9 @@ func (h *OIDCHandler) WithFirstLoginPolicy(policy FirstLoginPolicy) *OIDCHandler
 // resolveProvisionedUser is provisionUser inside one transaction. The split
 // lets a test assert the resolution ORDER without a database. The subject
 // lookup must come first. The email fallback must run only after it misses.
+//
+// It is resolveProvisionedUserFor with adoptSCIMUsers OFF, the safe default: a
+// SCIM-provisioned account is not adopted.
 func resolveProvisionedUser(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -615,6 +661,23 @@ func resolveProvisionedUser(
 	emailVerified *bool,
 	requireVerifiedEmail bool,
 ) (int, error) {
+	return resolveProvisionedUserFor(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, false)
+}
+
+// resolveProvisionedUserFor is resolveProvisionedUser for a provider whose
+// `adopt_scim_users` setting is known. See joinAccountByEmail.
+func resolveProvisionedUserFor(
+	ctx context.Context,
+	tx pgx.Tx,
+	providerRef, email, name string,
+	emailVerified *bool,
+	requireVerifiedEmail bool,
+	adoptSCIMUsers bool,
+) (int, error) {
+	// Applied here as well as at each handler, so no caller of the resolution
+	// can compare an address in a spelling the directory does not store.
+	email = normalizeAssertedEmail(email)
+
 	// Serializes two concurrent first logins for the same subject, so only one
 	// of them creates the link. Mirrors AcquireAuthProviderAdvisoryLock.
 	if _, err := tx.Exec(ctx,
@@ -630,7 +693,7 @@ func resolveProvisionedUser(
 	if linked {
 		return userID, nil
 	}
-	return joinAccountByEmail(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail)
+	return joinAccountByEmail(ctx, tx, providerRef, email, name, emailVerified, requireVerifiedEmail, adoptSCIMUsers)
 }
 
 // reuseLinkedAccount returns the account this provider subject already owns.
@@ -662,10 +725,13 @@ func reuseLinkedAccount(
 		return 0, false, errUserSuspended
 	}
 
+	// A change of CASE only is not a change of address. The stored spelling is
+	// kept, so an account whose row predates normalisation does not collide
+	// with a lower-case row and refuse a login that worked before.
 	_, err = tx.Exec(ctx,
 		`UPDATE auth_core__user
 		 SET last_login = now(),
-		     email = $2,
+		     email = CASE WHEN lower(email) = lower($2) THEN email ELSE $2 END,
 		     name = COALESCE(NULLIF(name, ''), $3)
 		 WHERE id = $1`,
 		userID, email, name,
@@ -703,13 +769,14 @@ func reuseLinkedAccount(
 //     receipt, not a federated identity, and an invited person must be able to
 //     sign in for the first time.
 const (
-	OIDCProviderRefPrefix = "oidc:"
-	SAMLProviderRefPrefix = "saml:"
+	OIDCProviderRefPrefix = identityrepo.OIDCProviderRefPrefix
+	SAMLProviderRefPrefix = identityrepo.SAMLProviderRefPrefix
 )
 
-// federatedRefPatterns is FederatedRefPrefixes as SQL LIKE patterns.
+// federatedRefPatterns is FederatedRefPrefixes as SQL LIKE patterns. It is
+// identityrepo's list: the adoption guard is shared with the Form plane.
 func federatedRefPatterns() []string {
-	return []string{OIDCProviderRefPrefix + "%", SAMLProviderRefPrefix + "%"}
+	return identityrepo.FederatedRefPatterns()
 }
 
 // joinAccountByEmail handles a subject that has never signed in here. It is the
@@ -726,30 +793,49 @@ func federatedRefPatterns() []string {
 // providers; letting an assertion from one adopt an account the other owns makes
 // either one able to take over the other's accounts by asserting an address.
 // The operator resolves it, which is what the 409 says.
+//
+// A SCIM-PROVISIONED ACCOUNT IS ADOPTED ONLY BY A PROVIDER THAT SAYS SO. An
+// account with an `elitea_auth.scim_users` record and no federated link was
+// created (or is managed) by the directory, and its address is the directory's
+// statement about a person. Any configured provider asserting that address — a
+// GitHub connector behind Dex, a social login, a SAML IdP that verifies
+// nothing about the address — would otherwise take the account. So the
+// adoption runs only when the asserting provider has `adopt_scim_users`
+// (adoptSCIMUsers here; OIDC_ADOPT_SCIM_USERS for the environment-configured
+// provider). Otherwise the login is refused with the same conflict.
 func joinAccountByEmail(
 	ctx context.Context,
 	tx pgx.Tx,
 	providerRef, email, name string,
 	emailVerified *bool,
 	requireVerifiedEmail bool,
+	adoptSCIMUsers bool,
 ) (int, error) {
 	if requireVerifiedEmail && (emailVerified == nil || !*emailVerified) {
 		return 0, errEmailNotVerified
 	}
 
+	// The address is matched WITHOUT regard to case. SCIM stores a lower-case
+	// userName (scimdirectory.NormalizeUserName), pylon stored what the
+	// identity provider sent, and `email` is unique only as typed. The CTE
+	// picks the stored spelling of an existing account, an exact match first,
+	// so the upsert below conflicts with that row instead of inserting a
+	// second account for the same person.
 	var userID int
 	err := tx.QueryRow(ctx,
-		`INSERT INTO auth_core__user (email, name, last_login)
-		 VALUES ($1, $2, now())
+		`WITH existing AS (
+		     SELECT email FROM auth_core__user
+		     WHERE lower(email) = lower($1::text)
+		     ORDER BY (email = $1::text) DESC, id
+		     LIMIT 1
+		 )
+		 INSERT INTO auth_core__user (email, name, last_login)
+		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now()
 		 ON CONFLICT (email) DO UPDATE SET last_login = now()
 		 WHERE auth_core__user.suspended = false
-		   AND NOT EXISTS (
-		       SELECT 1 FROM auth_core__user_provider AS bound
-		       WHERE bound.user_id = auth_core__user.id
-		         AND bound.provider_ref LIKE ANY ($3)
-		   )
+		   AND `+identityrepo.AdoptionGuard("auth_core__user.id", 3, 4)+`
 		 RETURNING id`,
-		email, name, federatedRefPatterns(),
+		email, name, federatedRefPatterns(), adoptSCIMUsers,
 	).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The address matched a row the conflict clause refused. Read which of
@@ -798,7 +884,10 @@ func joinAccountByEmail(
 func refusedEmailReason(ctx context.Context, tx pgx.Tx, email string) error {
 	var suspended bool
 	err := tx.QueryRow(ctx,
-		`SELECT suspended FROM auth_core__user WHERE email = $1`,
+		`SELECT suspended FROM auth_core__user
+		 WHERE lower(email) = lower($1::text)
+		 ORDER BY (email = $1::text) DESC, id
+		 LIMIT 1`,
 		email,
 	).Scan(&suspended)
 	if err == nil && suspended {

@@ -63,6 +63,8 @@ CREATE TABLE elitea_runtime.execution_jobs (
     admitted_at timestamptz NOT NULL,
     settled_at timestamptz,
     terminal_error_code text,
+    -- shared/0140_execution_trigger_origin.sql
+    trigger_origin text NOT NULL DEFAULT 'manual',
     PRIMARY KEY (execution_id, generation),
     UNIQUE (idempotency_scope, idempotency_key),
     UNIQUE (execution_id, generation, capability_id, input_bundle_id)

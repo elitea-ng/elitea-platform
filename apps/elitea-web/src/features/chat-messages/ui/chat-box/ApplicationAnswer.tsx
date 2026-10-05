@@ -44,6 +44,7 @@ import { ChatContinue } from '../chat-continue/ChatContinue';
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import type { HitlInterrupt } from '../chat-hitl-actions/ChatHitlActions';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
+import { BudgetUsageLink } from '../error-trace/BudgetUsageLink';
 import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
 
@@ -236,7 +237,7 @@ export function ApplicationAnswer({
       }}
     >
       {isSwarmChild && swarmAgentName ? (
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+        <Typography variant="bodySmall" sx={{ color: 'text.secondary' }}>
           {swarmAgentName}
         </Typography>
       ) : (
@@ -305,6 +306,7 @@ export function ApplicationAnswer({
             <>
               {renderedContent}
               {!!exception && <ErrorTrace error={exception} />}
+              {!!exception && <BudgetUsageLink code={answer.failureCode} />}
             </>
           )}
 
@@ -345,7 +347,7 @@ export function ApplicationAnswer({
                     animation: 'pulse 1.5s infinite',
                   }}
                 />
-                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                <Typography variant="bodyMedium" component="p" sx={{ color: 'text.secondary' }}>
                   {isStreaming ? 'Streaming...' : 'Loading...'}
                 </Typography>
               </Box>

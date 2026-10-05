@@ -322,7 +322,7 @@ export function EditPipeline(): ReactNode {
     <FormProvider {...form}>
       <Box sx={pageSx}>
         <Box sx={tabBarSx}>
-          <Typography variant="headingSmall">
+          <Typography variant="headingLarge" component="h1">
             {detail ? pipelineDetailDisplayName(detail) : t('pages.pipelines.editPipeline.title', 'Pipeline')}
           </Typography>
           {/*

@@ -25,6 +25,8 @@ export interface SimpleSearchBarProps {
   debounceMs?: number;
   sx?: SxProps<Theme>;
   'data-testid'?: string;
+  /** The accessible name of the input. The placeholder is not a label: it disappears as soon as the user types. */
+  'aria-label'?: string;
 }
 
 const containerSx = (theme: Theme) => ({
@@ -38,6 +40,12 @@ const containerSx = (theme: Theme) => ({
   paddingBlock: theme.spacing(0.75),
   paddingInline: theme.spacing(1.5),
   transition: 'background-color 0.2s ease-in-out, border-color 0.2s ease-in-out',
+  // #6646: one hover state for every search box in the app. The callers used
+  // to bring their own (a MUI outlined TextField, a bare InputBase), so the
+  // hover differed from page to page.
+  '&:hover': {
+    borderColor: theme.vars.palette.border.inputHover,
+  },
   '&:focus-within': {
     borderColor: theme.vars.palette.border.flowNode,
     backgroundColor: theme.vars.palette.background.userInputBackgroundActive,
@@ -54,7 +62,17 @@ const inputSx = (theme: Theme) => ({
   },
 });
 
-const iconSx = (theme: Theme) => ({ color: theme.vars.palette.icon.fill.default });
+/**
+ * #6646: one icon size and one colour. The callers drew the glyph at 16px,
+ * 18px and 20px, in three different colours; `fontSize="small"` alone
+ * leaves the size to MUI's 20px default.
+ */
+const iconSx = (theme: Theme) => ({
+  width: '1rem',
+  height: '1rem',
+  flexShrink: 0,
+  color: theme.vars.palette.icon.fill.default,
+});
 
 /**
  * A pill-shaped search input with a leading search icon and `Escape`-to-clear.
@@ -86,6 +104,7 @@ export function SimpleSearchBar({
   debounceMs = 300,
   sx,
   'data-testid': dataTestId,
+  'aria-label': ariaLabel,
 }: SimpleSearchBarProps): ReactNode {
   const [draft, setDraft] = useState(value);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -158,7 +177,8 @@ export function SimpleSearchBar({
   return (
     <Box sx={combineSx(containerSx, sx)}>
       <SearchIcon
-        fontSize="small"
+        aria-hidden
+        data-testid="simple-search-bar-icon"
         sx={iconSx}
       />
       <MuiInputBase
@@ -167,7 +187,10 @@ export function SimpleSearchBar({
         onKeyDown={handleKeyDown}
         placeholder={placeholder ?? t('shared.ui.simpleSearchBar.placeholder', 'Search...')}
         sx={inputSx}
-        inputProps={dataTestId !== undefined ? { 'data-testid': dataTestId } : undefined}
+        inputProps={{
+          ...(dataTestId !== undefined ? { 'data-testid': dataTestId } : {}),
+          ...(ariaLabel !== undefined ? { 'aria-label': ariaLabel } : {}),
+        }}
       />
     </Box>
   );

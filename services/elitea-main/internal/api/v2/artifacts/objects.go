@@ -674,6 +674,12 @@ func (h *Handler) streamObject(w http.ResponseWriter, r *http.Request, ref stora
 		contentType = mimeFromExtension(key)
 	}
 	w.Header().Set("Content-Type", contentType)
+	// An object is an authenticated, per-user answer: no shared cache may keep
+	// it, and the browser may not either. Stated here rather than left to the
+	// mount's NoStore middleware, so every mount of this function (the REST
+	// download and the S3-compatible GET) carries it. no-cache would buy
+	// nothing: this handler does not answer If-None-Match with a 304.
+	w.Header().Set("Cache-Control", "private, no-store")
 	// Advertise range support on every download, not only on a 206. A client
 	// that probes with a HEAD or a first full GET decides from this header
 	// whether it may resume.

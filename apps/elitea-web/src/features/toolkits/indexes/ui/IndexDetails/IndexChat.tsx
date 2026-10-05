@@ -93,13 +93,13 @@ function FullScreenToggle(props: { isFullScreenChat: boolean; setIsFullScreenCha
   return isFullScreenChat ? (
     <Tooltip title={t('features.toolkits.indexChat.exitFullscreen', 'Exit fullscreen mode')}>
       <IconButton onClick={() => setIsFullScreenChat(false)}>
-        <FullscreenExitOutlinedIcon sx={(theme) => ({ fontSize: theme.typography.pxToRem(16) })} />
+        <FullscreenExitOutlinedIcon sx={{ width: '1rem', height: '1rem' }} />
       </IconButton>
     </Tooltip>
   ) : (
     <Tooltip title={t('features.toolkits.indexChat.fullscreen', 'Fullscreen mode')}>
       <IconButton onClick={() => setIsFullScreenChat(true)}>
-        <FullscreenOutlinedIcon sx={(theme) => ({ fontSize: theme.typography.pxToRem(16) })} />
+        <FullscreenOutlinedIcon sx={{ width: '1rem', height: '1rem' }} />
       </IconButton>
     </Tooltip>
   );

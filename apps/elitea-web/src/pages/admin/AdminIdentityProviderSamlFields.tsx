@@ -15,7 +15,7 @@
  * checked on every response. Offering those as controls would be offering a
  * deployment the choice to be insecure.
  */
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import TextField from '@mui/material/TextField';
 
@@ -108,7 +108,7 @@ export function SamlFields({
         // at the identity provider, built from this same row.
         helperText={t(
           'pages.admin.identityProviders.dialog.acsUrlHelp',
-          'This deployment serves it at /forward-auth/auth_saml/acs. Service provider metadata is served at /forward-auth/auth_saml/metadata once this provider is live.',
+          'This deployment serves it at /auth/saml/acs. Service provider metadata is served at /auth/saml/metadata once this provider is live.',
         )}
       />
       <TextField
@@ -145,7 +145,7 @@ export function SamlFields({
       />
       <FormControlLabel
         control={
-          <Checkbox
+          <BaseCheckbox
             checked={form.signAuthnRequests}
             onChange={(event) => {
               update('signAuthnRequests', event.target.checked);

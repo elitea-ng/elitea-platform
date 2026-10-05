@@ -8,18 +8,22 @@ import type { EliteaComponents } from '../theme-types';
  * `headingLarge`/`headingMedium`/`headingSmall` must render as real heading
  * elements, not `<span>`.
  *
- * `h1`/`h2`/`h3` is a size-ordered default mapping (`headingLarge` is the
- * biggest of the three, so it maps to the highest-ranked tag); any call
- * site embedded in a context where that specific level is wrong for the
- * surrounding document outline can still override it locally with the
- * standard `component="h4"` prop — `variantMapping` only sets the default.
+ * The mapping follows the outline of typography spec §3, not the size order:
+ * `headingLarge` is the page title (`<h1>`), and everything directly under
+ * it — section, card and drawer titles (`headingSmall`), dialog and
+ * empty-state titles (`headingMedium`) — is an `<h2>`. A `headingSmall`
+ * `<h3>` default put every card and section title one level below a page
+ * title with no `<h2>` between them, which axe reports as `heading-order`
+ * on every tabbed page once `PageHeader` rendered its `<h1>`. A call site
+ * nested deeper in the outline still overrides locally with
+ * `component="h3"` — `variantMapping` only sets the default.
  */
 export const MuiTypography: EliteaComponents['MuiTypography'] = {
   defaultProps: {
     variantMapping: {
       headingLarge: 'h1',
       headingMedium: 'h2',
-      headingSmall: 'h3',
+      headingSmall: 'h2',
     },
   },
 };

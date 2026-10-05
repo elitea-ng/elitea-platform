@@ -17,7 +17,7 @@ export function ContinuationError({ error, partialOutput, children }: Continuati
       <Alert severity="warning">
         <AlertTitle>{t('chatMessages.continuation.incomplete', 'The model response is incomplete')}</AlertTitle>
         {typeof error === 'string' ? error : t('chatMessages.continuation.failed', 'Automatic continuation could not finish the response.')}
-        <Typography variant="body2" sx={{ mt: 1 }}>
+        <Typography variant="bodyMedium" component="p" sx={{ mt: 1 }}>
           {t('chatMessages.continuation.guidance', 'Increase the output limit in Model settings, or ask for a smaller part of the task, then try again.')}
         </Typography>
       </Alert>

@@ -278,3 +278,82 @@ A second fresh UI request completes all four languages in 20 seconds and retains
 The guarded restart helper misses the short active broker cutpoint and refuses before killing Worker.
 No current-cohort Worker fault or recovery is proved by either of these attempts.
 Earlier service-loss proofs retain their original recorded images and boundaries.
+
+## Update from Main: 2026-10-05
+
+Commit `f8a1499d128cfe226500bc33a0bbef1d465ec4fa` publishes the selected Code integration.
+Its binary scan passes across 11,235 tracked files.
+The original worktree retains 113 changed files, with an additional private backup.
+The source checks above apply to that commit unless this section states otherwise.
+
+Main `06122d5fec5d023d693a945aa0a326f417cbe0df` introduces conflicts in Rust, Main, generated clients, and Web.
+An isolated checkout resolves these conflicts before the original worktree changes.
+The combined source must retain Code identity, recovery, debug metadata, and Main's updated chat and attachment behavior.
+
+Both branches allocate shared migrations 0134 through 0141.
+Main's published migrations keep their versions and exact SQL bytes.
+The unmerged Code migrations move to forward slots 0145 through 0152 without SQL changes.
+The existing rehearsal already records the former Code versions.
+It cannot directly apply this reconciled migration corpus without a controlled transition.
+The merge does not rewrite its ledger, change running images, or prove an upgraded deployment.
+
+Normal client generation also exposes missing OpenAPI definitions for existing Code and static-continuation types.
+The owning contract must supply these definitions before regeneration.
+Generated clients must retain the existing metadata and Main's new contract fields.
+Final combined-source checks and pushed-head CI remain separate from the earlier frozen checks.
+
+Regeneration exposes a source-selection omission in the earlier Code delivery.
+The Web editor Test caller uses metadata whose server admission and restoration companions remained outside the selected Main source.
+Compilation alone did not identify this missing behavior.
+The reconciliation includes the required editor lifecycle, trace identity, and empty-Stop companions from preserved source.
+It also retains Main's participant, attachment, and conversation changes.
+The existing static continuation caller uses Main's single continuation route with typed request alternatives.
+This correction does not introduce a duplicate route or claim acceptance for deferred graph features.
+
+Editor Test history also needs its existing mounting companions.
+The reconciled Web source connects History selection to the exact admitted run and restores its original conversation without creating another execution.
+Ordinary History remains available through its existing path.
+The server reads restoration state in one read-only snapshot and binds trace reads to actor, project, execution, generation, and response identity.
+Code recovery metadata identifies a paused run even when its desired state is suspended and its execution state remains running.
+
+Main's new checkbox component replaces five obsolete imports in retained Code and graph foundations.
+Their values, handlers, disabled states, and default-false authoring policy remain unchanged.
+The continuation schema retains the legacy common fields and finite typed alternatives.
+The strict additive compatibility check remains enabled, and normal generators produce both server and browser types.
+
+### Reconciled source checks
+
+Worker and Supervisor pass formatting, strict Clippy, rustdoc, and the complete locked, offline, all-target, all-feature test command.
+The test reports 2,066 passing outcomes, zero failures, and 63 ignored outcomes.
+Eighteen passing outcomes return early without database or process-test settings; 2,048 other outcomes remain.
+The original 2-MiB sensitive-HITL test still passes without a larger stack.
+
+Main's full service-free suite passes in 141.107 seconds: 186 packages with tests, 21 packages without tests, and zero failures.
+It reports 13,153 passing test and subtest events and 1,914 skipped events.
+Vet, strict client compatibility, guarded contract-lock update, and normal server and browser generation pass.
+Generation produces no byte drift. All 307 incoming operation identities remain unchanged, with 443 combined schemas and no unresolved local references.
+All 150 incoming migration SQL files retain their exact bytes.
+
+The strict local skip checker fails because this service-free run has 1,875 undeclared service-dependent skips; 39 skips match the declared ledger.
+The merge does not broaden the ledger to conceal missing infrastructure.
+Editor PostgreSQL acceptance remains unrun locally.
+Its dedicated CI job supplies an isolated PostgreSQL 18 fixture and makes missing configuration, failures, and skips fatal.
+Thirteen offline tests for that CI runner and receipt guard pass; they do not prove database acceptance.
+
+Web passes full TypeScript, full lint with warnings denied, and the production application build.
+All 74 affected suites pass: 1,025 tests, zero failures, and zero skips.
+The test command uses two workers. The production build takes 20.179 seconds locally.
+These are combined-source checks, without new browser or deployed-image acceptance.
+
+Protocol format, lint, build, and compatibility checks against incoming Main pass.
+The Worker, sandbox, and Kubernetes sandbox Helm render guards pass.
+Thirty-four Code packaging and deployment-material tests pass.
+Runner source and pinned dependencies remain unchanged from `f8a1499`; its earlier checks retain their stated host and platform boundaries.
+Pushed-head CI must verify the resulting merge commit separately.
+
+### Preserved unfinished work
+
+The original 113 changed files are saved in stash `b7f78424bc61786af1450321071edb412ad406e5`.
+The stash label is `preserve unfinished graph work before main reconciliation 2026-10-05`.
+Independent read-back verifies every saved file against its original digest and private backup.
+The stash remains intact. Its graph changes require selective reconciliation with the updated Main source before further delivery.

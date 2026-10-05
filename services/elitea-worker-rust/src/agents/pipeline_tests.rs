@@ -4554,6 +4554,89 @@ async fn printer_uses_the_common_runner_as_a_nonterminal_result_then_resumes_fro
     assert_eq!(replay.code(), NativeAgentAssemblyErrorCode::InvalidInput);
 }
 
+/// Demo issue 5: the Printer says "type anything to resume", and Main sends
+/// what the user types as an ORDINARY start (no `should_continue`). That text
+/// must resume the paused run at the reset node, as the SDK does, and not start
+/// a new run at the entry point. After the run completes, the next ordinary
+/// message starts a fresh run again.
+#[tokio::test]
+async fn ordinary_message_after_a_printer_pause_resumes_the_paused_run() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let checkpointer = Arc::new(MemoryCheckpointer::new());
+    let assembler =
+        PipelineNativeAgentAssembler::with_state(Arc::clone(&sessions), checkpointer.clone());
+    let fresh = printer_pipeline_request("start", false);
+    let private_thread = private_pipeline_session_id(&fresh);
+    assert_fresh_printer_pause(&assembler, &fresh).await;
+
+    let typed = printer_pipeline_request("done", false);
+    let mut invocation = assembler
+        .assemble(authorized_execution(&typed, "execution/typed"))
+        .await
+        .expect("ordinary message resumes the Printer pause");
+    invocation
+        .project_start(timestamp(2))
+        .expect("resume browser start");
+    let (mut run, mut projector, completion) = invocation.start().expect("resume start");
+    let completed = run
+        .next_event()
+        .await
+        .expect("completion event")
+        .expect("completion marker");
+    let progress = projector
+        .project(&completed)
+        .expect("completion projection")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(progress.len(), 4);
+    assert_eq!(progress[1]["content"], "done");
+    assert!(run.next_event().await.expect("completed EOS").is_none());
+    let selected = completion.select().await.expect("completion selection");
+    let output = projector
+        .finish_after_eos(selected, timestamp(3))
+        .expect("terminal result")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect::<Vec<_>>();
+    assert_eq!(output[0]["type"], "pipeline_finish");
+    assert_eq!(output[0]["content"], "done");
+
+    let checkpoint = checkpointer
+        .load(&private_thread)
+        .await
+        .expect("checkpoint read")
+        .expect("terminal checkpoint");
+    // One run: the entry point did not run again for "done".
+    assert_eq!(
+        checkpoint.state.get("messages"),
+        Some(&json!([
+            {"role": "user", "content": "start"},
+            {"role": "user", "content": "done"}
+        ]))
+    );
+
+    // The run is complete, so the next ordinary message (a new execution, as
+    // in production) runs from the entry point and pauses at the Printer again.
+    let again = printer_pipeline_request("again", false);
+    let invocation = assembler
+        .assemble(authorized_execution(&again, "execution/again"))
+        .await
+        .expect("fresh assembly after completion");
+    let (mut run, _, _) = invocation.start().expect("fresh start");
+    let event = run
+        .next_event()
+        .await
+        .expect("event")
+        .expect("Printer pause");
+    assert!(
+        event
+            .provider_metadata
+            .contains_key(super::graph::PRINTER_PAUSE_METADATA_KEY)
+    );
+    assert!(run.next_event().await.expect("pause EOS").is_none());
+}
+
 #[tokio::test]
 async fn state_modifier_result_survives_common_runner_projection_and_eos_completion() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());

@@ -84,7 +84,7 @@ const NewParticipantCard = memo(({ participant, onClick, alreadyExists = false, 
       title={
         <>
           <Typography variant="labelSmall" sx={{ fontWeight: 700 }}>{participant.name}</Typography>
-          <Typography variant="bodySmall2">{participant.description ?? ''}</Typography>
+          <Typography variant="bodySmall">{participant.description ?? ''}</Typography>
         </>
       }
     >

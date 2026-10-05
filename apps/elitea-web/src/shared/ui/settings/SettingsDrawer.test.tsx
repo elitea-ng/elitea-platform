@@ -39,6 +39,7 @@ const EVERY_TAB_ID = [
   'ai-personality',
   'memory',
   'tokens',
+  'devices',
   'notifications',
 ] as const;
 

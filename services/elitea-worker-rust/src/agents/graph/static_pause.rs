@@ -216,6 +216,15 @@ pub(crate) struct PipelineTextContinuation {
 }
 
 impl PipelineTextContinuation {
+    /// Build the Printer continuation for an ordinary message.
+    #[must_use]
+    pub(crate) const fn ordinary_message() -> Self {
+        Self {
+            printer: PrinterContinuation::ordinary_message(),
+            expected_pause_id: None,
+        }
+    }
+
     pub(crate) fn from_payload(
         payload: &AgentExecutionPayload,
     ) -> Result<Self, PipelineResumeError> {

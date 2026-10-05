@@ -89,4 +89,25 @@ describe('BaseCheckbox', () => {
     );
     expect(getByRole('checkbox')).toHaveAttribute('data-indeterminate', 'true');
   });
+
+  it("merges a caller's slotProps.input instead of replacing the slot", () => {
+    const { getByRole } = renderWithTheme(
+      <BaseCheckbox
+        indeterminate
+        slotProps={{ input: { 'aria-label': 'select all', 'aria-describedby': 'help' } }}
+      />,
+    );
+    const input = getByRole('checkbox', { name: 'select all' });
+    expect(input).toHaveAttribute('aria-describedby', 'help');
+    if (!(input instanceof HTMLInputElement)) throw new Error('expected a native checkbox input');
+    // The native property BaseCheckbox's own input ref sets — lost when a
+    // caller's slotProps used to be spread over the whole slot.
+    expect(input.indeterminate).toBe(true);
+  });
+
+  it('draws its own outline icon when unchecked (the theme hides stock MUI icons)', () => {
+    const { container } = renderWithTheme(<BaseCheckbox aria-label="agree" />);
+    expect(container.querySelector('svg')).not.toBeNull();
+    expect(container.querySelector('[data-testid="CheckBoxOutlineBlankIcon"]')).toBeNull();
+  });
 });

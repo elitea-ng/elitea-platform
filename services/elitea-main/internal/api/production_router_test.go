@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,7 +47,7 @@ import (
 // route-tree interactions with the rest of the router.
 func reviewedRoutesRouter(cfg RouterConfig) chi.Router {
 	r := chi.NewRouter()
-	mountReviewedProductionRoutes(r, cfg)
+	mountReviewedProductionRoutes(r, cfg, nil)
 	return r
 }
 
@@ -293,7 +294,7 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 	browser.Get("/login", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	browser.Post("/auth_form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
+	browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
 	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -310,12 +311,17 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 		path   string
 		want   int
 	}{
-		{http.MethodGet, "/forward-auth/login", http.StatusNoContent},
-		{http.MethodPost, "/forward-auth/auth_form/authorize", http.StatusNoContent},
-		{http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent},
-		{http.MethodGet, "/forward-auth/auth", http.StatusNotFound},
-		{http.MethodGet, "/forward-auth/info", http.StatusNotFound},
-		{http.MethodPost, "/internal/forward-auth/main", http.StatusMethodNotAllowed},
+		// The Form router is served under /auth with the prefix stripped
+		// (auth_paths.go). The stub registers no core check, so /auth/check
+		// reaches it and finds nothing. The old prefix is not mounted.
+		{http.MethodGet, "/auth/login", http.StatusNoContent},
+		{http.MethodPost, "/auth/form/authorize", http.StatusNoContent},
+		{http.MethodPost, "/auth/auth_form/authorize", http.StatusNotFound},
+		{http.MethodGet, "/forward-" + "auth/login", http.StatusNotFound},
+		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
+		{http.MethodGet, "/auth/check", http.StatusNotFound},
+		{http.MethodGet, "/auth/info", http.StatusNotFound},
+		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
 	} {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -357,9 +363,9 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 		path   string
 		want   int
 	}{
-		{http.MethodGet, "/forward-auth/login", http.StatusNoContent},
-		{http.MethodGet, "/internal/forward-auth/main", http.StatusNoContent},
-		{http.MethodPost, "/internal/forward-auth/main", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/auth/login", http.StatusNoContent},
+		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
+		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/api/v2/elitea_core/messages/prompt_lib/2/conversation", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/regenerate/prompt_lib/2/message", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/continue_predict/prompt_lib/2/conversation", http.StatusAccepted},
@@ -1693,6 +1699,11 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		// or moves anything else out of it, this snapshot is what says so.
 		SharedChatStore:      dbrepos.NewSharedChatLinksRepo(pool),
 		SharedChatTranscript: dbrepos.NewSharedChatLinksRepo(pool),
+		// main.go builds the native authorization server whenever a pool
+		// exists (ADR-0025 WP2): five root routes that answer 404 until a
+		// client is registered, and the three admin registry routes.
+		NativeClients: nativeauth.NewRegistry(nil, pool),
+		NativeStore:   nativeauth.NewStore(pool, nativeauth.Config{}),
 	}
 	router := NewRouter(cfg)
 
@@ -1703,6 +1714,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	got := routeSet.Patterns()
 
 	want := []string{
+		"DELETE /api/v2/admin/gateway/default_model/",
 		"DELETE /api/v2/admin/gateway/governance/{id}",
 		"DELETE /api/v2/admin/gateway/models/{id}",
 		"DELETE /api/v2/admin/gateway/platform_models/{configID}",
@@ -1711,13 +1723,17 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/admin/mcp_prebuilt_servers/administration/{key}",
 		"DELETE /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"DELETE /api/v2/admin/modes/administration",
+		"DELETE /api/v2/admin/native_clients/administration/{clientID}",
+		"DELETE /api/v2/admin/native_devices/administration/{deviceID}",
 		"DELETE /api/v2/admin/roles/{scope}/{mode}",
+		"DELETE /api/v2/admin/scim_clients/administration/{id}",
 		"DELETE /api/v2/admin/scim_group_bindings/administration/{id}",
 		"DELETE /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID}",
 		"DELETE /api/v2/admin/users/{mode}/{projectID}",
 		"DELETE /api/v2/artifacts/bucket_permissions/{projectID}",
 		"DELETE /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"DELETE /api/v2/artifacts/objects/{projectID}/{bucket}/*",
+		"DELETE /api/v2/auth/native/devices/{deviceID}",
 		"DELETE /api/v2/auth/token/{tokenUUID}",
 		"DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID}",
 		"DELETE /api/v2/configurations/configuration/{projectID}/{configID}",
@@ -1761,6 +1777,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/social/pin/prompt_lib/{projectID}/{entityType}/{entityID}",
 		"DELETE /api/v2/webhooks/prompt_lib/{projectID}/{webhookID}",
 		"DELETE /artifacts/s3/{bucket}/*",
+		"GET /.well-known/elitea-client",
 		"GET /api/docs",
 		"GET /api/openapi.json",
 		"GET /api/openapi.yaml",
@@ -1772,10 +1789,12 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/branding/package/administration/versions",
 		"GET /api/v2/admin/email/administration",
 		"GET /api/v2/admin/gateway/*/budget-alerts",
+		"GET /api/v2/admin/gateway/default_model/",
 		"GET /api/v2/admin/gateway/governance",
 		"GET /api/v2/admin/gateway/logs",
 		"GET /api/v2/admin/gateway/models",
 		"GET /api/v2/admin/gateway/platform_models/",
+		"GET /api/v2/admin/gateway/platform_models/{configID}/default_usage",
 		"GET /api/v2/admin/gateway/providers/",
 		"GET /api/v2/admin/gateway/status",
 		"GET /api/v2/admin/gateway/usage",
@@ -1786,6 +1805,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}",
 		"GET /api/v2/admin/moderation_statuses/administration",
 		"GET /api/v2/admin/modes/administration",
+		"GET /api/v2/admin/native_clients/administration",
+		"GET /api/v2/admin/native_devices/administration",
 		"GET /api/v2/admin/permissions/{scope}/{mode}",
 		"GET /api/v2/admin/plugin_config_schemas/{mode}",
 		"GET /api/v2/admin/plugin_config_suggestions/{mode}/{key}",
@@ -1797,6 +1818,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/runtime_plugin/{mode}/{pluginName}",
 		"GET /api/v2/admin/runtime_remote/{mode}",
 		"GET /api/v2/admin/runtime_remote_config/{mode}/{pluginID}",
+		"GET /api/v2/admin/scim_clients/administration",
 		"GET /api/v2/admin/scim_group_bindings/administration",
 		"GET /api/v2/admin/scim_group_bindings/administration/project_roles/{projectID}",
 		"GET /api/v2/admin/system_info/prompt_lib",
@@ -1813,11 +1835,15 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"GET /api/v2/artifacts/objects/{projectID}/{bucket}",
 		"GET /api/v2/artifacts/objects/{projectID}/{bucket}/*",
+		"GET /api/v2/auth/native/authorize",
+		"GET /api/v2/auth/native/authorize/continue",
+		"GET /api/v2/auth/native/devices",
 		"GET /api/v2/auth/permissions/prompt_lib/{projectID}",
 		"GET /api/v2/auth/token/",
 		"GET /api/v2/auth/token/{tokenUUID}",
 		"GET /api/v2/branding/assets/{kind}/{file}",
 		"GET /api/v2/branding/bootstrap.js",
+		"GET /api/v2/branding/pack.json",
 		"GET /api/v2/configurations/available/",
 		"GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID}",
 		"GET /api/v2/configurations/configuration/{projectID}/{configID}",
@@ -1839,6 +1865,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/analytics_agent_detail/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/analytics_agents/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/analytics_costs/prompt_lib/{projectID}",
+		"GET /api/v2/elitea_core/analytics_execution/prompt_lib/{projectID}/{executionID}",
 		"GET /api/v2/elitea_core/analytics_tool_detail/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/analytics_tools/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/analytics_user_detail/prompt_lib/{projectID}",
@@ -1846,6 +1873,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/application/prompt_lib/{projectID}/{applicationID}",
 		"GET /api/v2/elitea_core/application_relation/prompt_lib/{projectID}/{appID}/{versionID}",
 		"GET /api/v2/elitea_core/applications/prompt_lib/{projectID}",
+		"GET /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"GET /api/v2/elitea_core/audit/{mode}",
 		"GET /api/v2/elitea_core/audit_heatmap/{mode}",
 		"GET /api/v2/elitea_core/audit_trace_heatmap/{mode}",
@@ -1860,6 +1888,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/default_icons/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/default_version/prompt_lib/{projectID}/{applicationID}",
+		"GET /api/v2/elitea_core/eval_run_analytics/prompt_lib/{projectID}/{runID}",
 		"GET /api/v2/elitea_core/export_import/prompt_lib/{projectID}/{entityID}",
 		"GET /api/v2/elitea_core/export_toolkit/prompt_lib/{projectID}/{toolkitID}",
 		"GET /api/v2/elitea_core/feedbacks/default/{projectID}",
@@ -1874,6 +1903,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/message_trace/prompt_lib/{projectID}/{stepID}",
 		"GET /api/v2/elitea_core/message_traces/prompt_lib/{projectID}/{conversationID}",
 		"GET /api/v2/elitea_core/messages/prompt_lib/{projectID}/{conversationID}",
+		"GET /api/v2/elitea_core/participant_candidates/prompt_lib/{projectID}/{conversationID}",
 		"GET /api/v2/elitea_core/permissions/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/platform_settings/prompt_lib",
 		"GET /api/v2/elitea_core/platform_settings/prompt_lib/{projectID}",
@@ -1939,7 +1969,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/scim/v2/Groups",
 		"GET /api/v2/scim/v2/Groups/{id}",
 		"GET /api/v2/scim/v2/ResourceTypes",
+		"GET /api/v2/scim/v2/ResourceTypes/{id}",
 		"GET /api/v2/scim/v2/Schemas",
+		"GET /api/v2/scim/v2/Schemas/{id}",
 		"GET /api/v2/scim/v2/ServiceProviderConfig",
 		"GET /api/v2/scim/v2/Users",
 		"GET /api/v2/scim/v2/Users/{id}",
@@ -1972,9 +2004,12 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /icons/{projectID}/{filename}",
 		"GET /readyz",
 		"GET /startupz",
+		"HEAD /.well-known/elitea-client",
 		"HEAD /api/v2/artifacts/objects/{projectID}/{bucket}/*",
 		"HEAD /api/v2/branding/assets/{kind}/{file}",
 		"HEAD /api/v2/branding/bootstrap.js",
+		"HEAD /api/v2/branding/pack.json",
+		"HEAD /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"HEAD /artifacts/s3/{bucket}/*",
 		"PATCH /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"PATCH /api/v2/elitea_core/application_relation/prompt_lib/{projectID}/{appID}/{versionID}",
@@ -2019,6 +2054,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/admin/roles/{scope}/{mode}",
 		"POST /api/v2/admin/runtime_pylons/{mode}",
 		"POST /api/v2/admin/runtime_remote_config/{mode}/{pluginID}",
+		"POST /api/v2/admin/scim_clients/administration",
+		"POST /api/v2/admin/scim_clients/administration/{id}/revoke",
+		"POST /api/v2/admin/scim_clients/administration/{id}/rotate",
 		"POST /api/v2/admin/scim_group_bindings/administration",
 		"POST /api/v2/admin/toolkit_types/administration/bulk",
 		"POST /api/v2/admin/user_invite/administration",
@@ -2032,6 +2070,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/artifacts/grants/{projectID}/{grantID}:completeMultipart",
 		"POST /api/v2/artifacts/objects/{projectID}/{bucket}",
 		"POST /api/v2/artifacts/objects/{projectID}/{bucket}:batchDelete",
+		"POST /api/v2/auth/native/authorize/decision",
+		"POST /api/v2/auth/native/revoke",
+		"POST /api/v2/auth/native/token",
 		"POST /api/v2/auth/token/",
 		"POST /api/v2/configurations/check_connection/{mode}/{projectID}/{configType}",
 		"POST /api/v2/configurations/check_connection/{projectID}/{configType}",
@@ -2110,6 +2151,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/versions/prompt_lib/{projectID}/{applicationID}",
 		"POST /api/v2/projects/group/prompt_lib/{projectID}",
 		"POST /api/v2/projects/project/{mode}",
+		"POST /api/v2/scim/oauth/token",
 		"POST /api/v2/scim/v2/Groups",
 		"POST /api/v2/scim/v2/Users",
 		"POST /api/v2/secrets/hide/{mode}/{projectID}/{name}",
@@ -2134,6 +2176,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/branding/administration",
 		"PUT /api/v2/admin/email/administration",
 		"PUT /api/v2/admin/gateway/*/budget-alerts",
+		"PUT /api/v2/admin/gateway/default_model/",
 		"PUT /api/v2/admin/gateway/governance/{id}",
 		"PUT /api/v2/admin/gateway/models",
 		"PUT /api/v2/admin/gateway/platform_models/{configID}",
@@ -2142,6 +2185,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/maintenance/{mode}",
 		"PUT /api/v2/admin/mcp_prebuilt_servers/administration/{key}",
 		"PUT /api/v2/admin/moderation_status/administration",
+		"PUT /api/v2/admin/native_clients/administration/{clientID}",
 		"PUT /api/v2/admin/permissions/{scope}/{mode}",
 		"PUT /api/v2/admin/plugin_config_values/administration/{plugin}",
 		"PUT /api/v2/admin/project_suspend/{mode}/{projectID}",
@@ -2303,13 +2347,13 @@ func TestProductionAuthCandidatesRejectEveryForgedCredentialShape(t *testing.T) 
 }
 
 func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.T) {
-	// #243: this used to assert every /forward-auth/* path was unmounted
+	// #243: this used to assert every /auth/* path was unmounted
 	// (404) for a "complete" production config. That was only true because
 	// the config exploited RouterConfig's flat SessionHandler/OIDCHandler
 	// fields (as opposed to the Auth.SessionHandler/Auth.OIDCHandler fields
 	// cmd/elitea-main/main.go actually sets) to dodge
 	// prototypeCompatibilityRequested and land on the dead "reviewed
-	// production router" branch, which never wired /forward-auth at all.
+	// production router" branch, which never wired /auth at all.
 	// Real deployments with OIDC session auth configured (main.go's
 	// oidcSessionHandler/oidcOIDCHandler, wired through Auth.SessionHandler)
 	// already served every one of these paths before #243, same as after —
@@ -2322,30 +2366,30 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		path   string
 		want   int
 	}{
-		// Not a registered route at all: "/forward-auth/auth" (the Traefik
-		// ForwardAuth check) is a top-level "/auth" route, distinct from the
-		// "/forward-auth/*" browser session group.
-		{method: http.MethodGet, path: "/forward-auth/auth", want: http.StatusNotFound},
-		{method: http.MethodHead, path: "/forward-auth/auth", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth", want: http.StatusNotFound},
+		// Not a registered route at all: "/auth/check" (the Traefik
+		// EdgeAuth check) is a top-level "/auth" route, distinct from the
+		// "/auth/*" browser session group.
+		{method: http.MethodGet, path: "/auth/check", want: http.StatusNotFound},
+		{method: http.MethodHead, path: "/auth/check", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/check", want: http.StatusNotFound},
 		// GET redirects into the login flow; only GET is registered.
-		{method: http.MethodGet, path: "/forward-auth/login", want: http.StatusFound},
-		{method: http.MethodHead, path: "/forward-auth/login", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/login", want: http.StatusFound},
+		{method: http.MethodHead, path: "/auth/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/login", want: http.StatusMethodNotAllowed},
 		// Legacy form-auth login/authorize are never mounted: SessionHandler
-		// wires the OIDC session flow only (see router.go's "/forward-auth"
+		// wires the OIDC session flow only (see router.go's "/auth"
 		// Route block), not the legacy form-auth handlers.
-		{method: http.MethodGet, path: "/forward-auth/auth_form/login", want: http.StatusNotFound},
-		{method: http.MethodHead, path: "/forward-auth/auth_form/login", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth_form/login", want: http.StatusNotFound},
-		{method: http.MethodPost, path: "/forward-auth/auth_form/authorize", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth_form/authorize", want: http.StatusNotFound},
-		{method: http.MethodGet, path: "/forward-auth/logout", want: http.StatusFound},
-		{method: http.MethodHead, path: "/forward-auth/logout", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/logout", want: http.StatusMethodNotAllowed},
-		{method: http.MethodGet, path: "/forward-auth/auth_form/logout", want: http.StatusFound},
-		{method: http.MethodHead, path: "/forward-auth/auth_form/logout", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/auth_form/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/form/login", want: http.StatusNotFound},
+		{method: http.MethodHead, path: "/auth/form/login", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/form/login", want: http.StatusNotFound},
+		{method: http.MethodPost, path: "/auth/form/authorize", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/form/authorize", want: http.StatusNotFound},
+		{method: http.MethodGet, path: "/auth/logout", want: http.StatusFound},
+		{method: http.MethodHead, path: "/auth/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/form/logout", want: http.StatusFound},
+		{method: http.MethodHead, path: "/auth/form/logout", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/form/logout", want: http.StatusMethodNotAllowed},
 		// GET 503s here because newCompleteProductionRouter's OIDCHandler is a
 		// zero-value test double: it holds neither an environment runtime nor a
 		// provider store, so it resolves no identity provider and says so. A
@@ -2356,26 +2400,32 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		// crash with a refusal that names the condition. Pinned exactly rather
 		// than accepted as "any non-2xx", so a change back to a crash does not
 		// slip past either.
-		{method: http.MethodGet, path: "/forward-auth/auth_oidc/login", want: http.StatusServiceUnavailable},
-		{method: http.MethodHead, path: "/forward-auth/auth_oidc/login", want: http.StatusMethodNotAllowed},
-		{method: http.MethodOptions, path: "/forward-auth/auth_oidc/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/oidc/login", want: http.StatusServiceUnavailable},
+		{method: http.MethodHead, path: "/auth/oidc/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodOptions, path: "/auth/oidc/login", want: http.StatusMethodNotAllowed},
 		// Not a registered route: the OIDC callback path is "auth_oidc/callback",
 		// not "auth_oidc/login_callback".
-		{method: http.MethodGet, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
-		{method: http.MethodHead, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
-		{method: http.MethodPost, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
-		{method: http.MethodOptions, path: "/forward-auth/auth_oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodGet, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodHead, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodPost, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
+		{method: http.MethodOptions, path: "/auth/oidc/login_callback", want: http.StatusNotFound},
 		// SAML. All three refuse with 503 here: the handler holds no provider
 		// store, so it federates nothing and says so. None of them can answer a
 		// success without a verified assertion, which is what this test is for.
-		{method: http.MethodGet, path: "/forward-auth/auth_saml/metadata", want: http.StatusServiceUnavailable},
-		{method: http.MethodGet, path: "/forward-auth/auth_saml/login", want: http.StatusServiceUnavailable},
-		{method: http.MethodPost, path: "/forward-auth/auth_saml/acs", want: http.StatusServiceUnavailable},
+		{method: http.MethodGet, path: "/auth/saml/metadata", want: http.StatusServiceUnavailable},
+		{method: http.MethodGet, path: "/auth/saml/login", want: http.StatusServiceUnavailable},
+		{method: http.MethodPost, path: "/auth/saml/acs", want: http.StatusServiceUnavailable},
 		// The assertion consumer service is POST-only: the authentication
 		// request asks for the HTTP-POST binding, and a GET here would be a
 		// login attempt carrying the assertion in the URL.
-		{method: http.MethodGet, path: "/forward-auth/auth_saml/acs", want: http.StatusMethodNotAllowed},
-		{method: http.MethodPost, path: "/forward-auth/auth_saml/login", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, path: "/auth/saml/acs", want: http.StatusMethodNotAllowed},
+		{method: http.MethodPost, path: "/auth/saml/login", want: http.StatusMethodNotAllowed},
+		// The sign-in page's continue route. With no usable provider it
+		// sends the browser to the fallback login route; a POST that is not
+		// a form is refused before anything else.
+		{method: http.MethodGet, path: "/auth/login/continue?provider=oidc", want: http.StatusSeeOther},
+		{method: http.MethodPost, path: "/auth/login/continue", want: http.StatusUnsupportedMediaType},
+		{method: http.MethodPut, path: "/auth/login/continue", want: http.StatusMethodNotAllowed},
 	}
 
 	for _, route := range routes {

@@ -16,11 +16,40 @@ import { defineConfig, type PluginOption, type UserConfig } from 'vite';
 // forward-compat notice would break `tsc --noEmit`. Vite resolves the
 // extensionless form today regardless of that loader setting.
 import { remarkMermaid } from './src/entries/docs/mdx/remark-mermaid';
+import { nestCatalogue } from './src/shared/i18n/nestCatalogue';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import svgr from 'vite-plugin-svgr';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 const resolvePath = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
+
+/**
+ * Emit the i18n catalogue (`src/shared/i18n/en.json`) as a tree, keys sorted.
+ *
+ * The whole catalogue ships in the initial set of both the app and the
+ * admin entry (see shared/i18n/README.md — one bundle, no namespace split),
+ * so its gzip size is initial-bundle size. Two steps, both at build time so
+ * en.json itself never takes a whole-file rewrite:
+ *  - sorted: the file keeps the order `scripts/i18n-backfill.mjs` preserves
+ *    (new keys appended), which leaves later-added keys away from their
+ *    dotted-prefix neighbours. Measured 2026-10-04, sorting alone took the
+ *    admin initial set down 0.6 KiB gzip.
+ *  - nested: each dotted prefix is written once instead of once per key
+ *    (`src/shared/i18n/nestCatalogue.ts`). Measured 2026-10-05, the catalogue
+ *    goes from 68.2 to 59.6 KiB gzip. i18next reads `t('a.b.c')` from either
+ *    shape, and the keys that cannot nest stay flat; `nestCatalogue.test.ts`
+ *    resolves every key through a real i18next instance to prove it.
+ * This changes bytes, not behaviour. Unit tests (vitest's own plugin list)
+ * still read the flat file.
+ */
+const compactI18nCatalogue = (): PluginOption => ({
+  name: 'elitea:compact-i18n-catalogue',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!id.endsWith('/src/shared/i18n/en.json')) return null;
+    return { code: JSON.stringify(nestCatalogue(JSON.parse(code) as Record<string, string>)), map: null };
+  },
+});
 
 /**
  * Five build targets (spec §7.4), selected via `vite build --mode <target>`:
@@ -61,6 +90,7 @@ const resolvePath = (p: string): string => fileURLToPath(new URL(p, import.meta.
  */
 export default defineConfig(({ mode }): UserConfig => {
   const basePlugins: PluginOption[] = [
+    compactI18nCatalogue(),
     react(),
     // React Compiler (spec §2.1): plugin-react 6 removed its `babel` option, so
     // the compiler is wired via @rolldown/plugin-babel + reactCompilerPreset().
@@ -245,7 +275,7 @@ export default defineConfig(({ mode }): UserConfig => {
  *                   carries `vite_server_url`, `vite_public_project_id` and
  *                   the socket settings; with it missing the app boots with an
  *                   undefined config rather than an error.
- *  - `/forward-auth`, `/auth`  the sign-in redirect chain.
+ *  - `/auth`         the sign-in redirect chain.
  *  - `/socket.io`   upgraded, not just forwarded (`ws: true`).
  *
  * Cookies work across the port change because a cookie's origin is its DOMAIN,
@@ -260,7 +290,6 @@ function devServerProxy(): NonNullable<UserConfig['server']> {
     proxy: {
       '/api/v2': forward,
       '/llm': forward,
-      '/forward-auth': forward,
       '/auth': forward,
       '/socket.io': { ...forward, ws: true },
       // A REGEX, matching `config.js` at ANY depth. `index.html` loads it as

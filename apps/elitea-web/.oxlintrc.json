@@ -172,7 +172,9 @@
           { "name": "@mui/material", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
           { "name": "@mui/system", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
           { "name": "@mui/styles", "message": "R-T4: legacy @mui/styles is banned" },
-          { "name": "@mui/icons-material", "message": "R-I1: no barrel import — import per icon: @mui/icons-material/Close" }
+          { "name": "@mui/icons-material", "message": "R-I1: no barrel import — import per icon: @mui/icons-material/Close" },
+          { "name": "@mui/material/Checkbox", "message": "R-T12: use BaseCheckbox from @/shared/ui/BaseCheckbox — the theme's MuiCheckbox skin paints only the app's outline icons (fill: none), so MUI's stock filled icons render INVISIBLE when unchecked" },
+          { "name": "@mui/material", "importNames": ["Checkbox"], "message": "R-T12: use BaseCheckbox from @/shared/ui/BaseCheckbox (the stock icons render invisible under the theme)" }
         ]
       }
     ],
@@ -186,6 +188,7 @@
     "elitea/raw-px-spacing": "error",
     "elitea/ad-hoc-radius": "error",
     "elitea/ad-hoc-font-size": "error",
+    "elitea/no-stock-typography-variant": "error",
     "elitea/no-export-all": "error",
     "elitea/no-module-scope-store": "error",
     "elitea/no-vi-mock": "error",
@@ -404,6 +407,26 @@
       }
     },
     {
+      // R-T12 scope: BaseCheckbox is the one wrapper around MUI's Checkbox, and
+      // the theme-surface fixture renders the bare component the override skins.
+      "files": ["src/shared/ui/BaseCheckbox/BaseCheckbox.tsx", "src/shared/brand/__tests__/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              { "name": "axios", "message": "R-A2: axios is banned" },
+              { "name": "@emotion/react", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
+              { "name": "@mui/material", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
+              { "name": "@mui/system", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
+              { "name": "@mui/styles", "message": "R-T4: legacy @mui/styles is banned" },
+              { "name": "@mui/icons-material", "message": "R-I1: no barrel import" }
+            ]
+          }
+        ]
+      }
+    },
+    {
       // R-T1 scope: raw colour literals are legal ONLY in the token package.
       "files": ["src/shared/brand/tokens/**"],
       "rules": { "elitea/no-raw-color": "off" }
@@ -412,6 +435,14 @@
       // R-T7 scope: theme.palette.* is legal only inside shared/brand/.
       "files": ["src/shared/brand/**"],
       "rules": { "elitea/no-theme-palette": "off" }
+    },
+    {
+      // R-T11 scope: the type scale is DEFINED here — the one file that turns
+      // the brand pack's baseSize/scale into rem sizes (and MUI's own base
+      // `fontSize`), and the module that implements `typeScale()`. Every
+      // other file reads the sizes they build.
+      "files": ["src/shared/brand/typography.ts", "src/shared/brand/typeScale.ts"],
+      "rules": { "elitea/ad-hoc-font-size": "off" }
     },
     {
       // R-T6 scope: internal MUI selectors are legal only in the override package.
@@ -530,6 +561,7 @@
         "elitea/raw-px-spacing": "off",
         "elitea/ad-hoc-radius": "off",
         "elitea/ad-hoc-font-size": "off",
+        "elitea/no-stock-typography-variant": "off",
         // tsgolint synthesizes a default project for files outside
         // tsconfig.json's include (src/, vite.config.ts), so untyped .mjs
         // tooling would drown in no-unsafe-* noise. The type-aware gate is
@@ -566,33 +598,6 @@
         "typescript/unbound-method": "off",
         "typescript/use-unknown-in-catch-callback-variable": "off",
         "typescript/no-deprecated": "off"
-      }
-    },
-    {
-      // TEMPORARY (Wave 2 — remove when t() shim and token refactoring land):
-      // F1's Wave-2 chat-messages unit is the largest C-unit by LOC (~11,915)
-      // and predates the i18n layer; eslint-disable-next-line comments do not
-      // propagate through the jsPlugins bridge (eslint-plugin-i18next), making
-      // per-line suppressions ineffective. Also disables elitea fencing rules
-      // (raw-color, spacing, radius, font-size, MUI selectors) that were
-      // introduced after this code was written. TypeScript type-aware rules
-      // stay enforced — the coverage gate (§6.3) must not be gamed.
-      // Some typescript type-aware rules are also disabled for chat-messages
-      // because the API wire types are intentionally loose (unknown) and the
-      // type guards used to narrow them trigger tsgolint false-positives.
-      "files": ["src/features/chat-messages/**"],
-      "rules": {
-        "complexity": "off",
-        "max-lines": "off",
-        "i18next/no-literal-string": "off",
-        "elitea/no-raw-color": "off",
-        "elitea/no-mui-internal-selector": "off",
-        "elitea/raw-px-spacing": "off",
-        "elitea/ad-hoc-radius": "off",
-        "elitea/ad-hoc-font-size": "off",
-        "typescript/no-unsafe-assignment": "off",
-        "typescript/no-unsafe-member-access": "off",
-        "typescript/no-unnecessary-type-assertion": "off"
       }
     },
     {
@@ -664,8 +669,7 @@
         "elitea/no-mui-internal-selector": "off",
         "elitea/no-theme-palette": "off",
         "elitea/raw-px-spacing": "off",
-        "elitea/ad-hoc-radius": "off",
-        "elitea/ad-hoc-font-size": "off"
+        "elitea/ad-hoc-radius": "off"
       }
     },
     {
@@ -734,8 +738,10 @@
       // and predates the i18n layer; eslint-disable-next-line comments do not
       // propagate through the jsPlugins bridge (eslint-plugin-i18next), making
       // per-line suppressions ineffective. Also disables elitea fencing rules
-      // (raw-color, spacing, radius, font-size, MUI selectors) that were
-      // introduced after this code was written. TypeScript type-aware rules
+      // (raw-color, spacing, radius, MUI selectors) that were introduced
+      // after this code was written. R-T11 (font size) is NOT exempt any more:
+      // the typography spec (rev. 2) moved this unit onto the type scale, and
+      // this block used to be duplicated (merged into this one entry). TypeScript type-aware rules
       // stay enforced — the coverage gate (§6.3) must not be gamed.
       // eslint(complexity) and eslint(max-lines) are also disabled because
       // Wave 2 functions/files predate these fences; budget checks are
@@ -752,7 +758,6 @@
         "elitea/no-mui-internal-selector": "off",
         "elitea/raw-px-spacing": "off",
         "elitea/ad-hoc-radius": "off",
-        "elitea/ad-hoc-font-size": "off",
         "typescript/no-unsafe-assignment": "off",
         "typescript/no-unsafe-member-access": "off",
         "typescript/no-unnecessary-type-assertion": "off"

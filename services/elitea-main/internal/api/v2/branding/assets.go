@@ -18,7 +18,7 @@ package branding
 // The digest in the path is the SHA-256 of the bytes: the URL is a content
 // address, so it is cached for a year as immutable and an upload of the same
 // bytes twice is one object. It sits under /api/v2 like bootstrap.js so every
-// deployed edge already forwards it and the forward-auth public rule is the
+// deployed edge already forwards it and the edge-auth public rule is the
 // only edge change.
 //
 // # What is refused, and why the download route hardens anyway

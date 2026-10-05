@@ -12,7 +12,7 @@ export function ContextBudgetModeControl({ value, onChange, disabled = false }: 
 }) {
   return (
     <Box data-testid="context-budget-mode-control" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Typography variant="bodySmall">{t('contextBudget.mode.title', 'Context window')}</Typography>
+      <Typography variant="labelMedium">{t('contextBudget.mode.title', 'Context window')}</Typography>
       <RadioButtonGroup
         aria-label={t('contextBudget.mode.title', 'Context window')}
         value={value}
@@ -23,7 +23,7 @@ export function ContextBudgetModeControl({ value, onChange, disabled = false }: 
           { value: 'full', label: t('contextBudget.mode.full', 'Full'), description: t('contextBudget.mode.fullHelp', 'Use the model’s full context window. Larger requests may cost more.') },
         ]}
       />
-      <Typography variant="bodySmall2" color="text.secondary">
+      <Typography variant="bodySmall" color="text.secondary">
         {t('contextBudget.mode.reserveHelp', 'Output and a safety margin are reserved inside the window. When automatic summarization is enabled, compaction starts at 90% of usable input.')}
       </Typography>
     </Box>

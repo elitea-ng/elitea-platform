@@ -8,9 +8,10 @@
  * below: `deploy/docker-compose.e2e.yml:38` sets `VITE_SOCKET_SERVER: ""`,
  * so the app installs the noop socket client whose connection state is the
  * hardcoded literal `disconnected`. Any assertion about live socket
- * connection/reconnect behaviour (the sidebar's `sidebar-connection-dot`
- * included) would be asserting against a constant, not against the product.
- * Neither journey in this file depends on it.
+ * connection/reconnect behaviour would be asserting against a constant, not
+ * against the product. (The sidebar's `sidebar-connection-dot` no longer reads
+ * socket.io — it reports the SSE channel; chat.attachments.spec.ts J26.3 covers
+ * it.) Neither journey in this file depends on it.
  */
 import { test, expect } from '@playwright/test';
 
@@ -34,8 +35,10 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
   // builds opened the callback route DIRECTLY, which cannot re-authenticate on
   // a stack that does not gate the SPA at the edge (the popup is simply served
   // the app, its session probe reports "no session", and the flight rejects).
-  // The popup now opens `/forward-auth/auth_oidc/login` with the callback
-  // route as `target_to`, which is the flow the assertions below drive.
+  // The popup now opens `/auth/login` (the SSO sign-in page) with the
+  // callback route as `target_to`. With the stack's one OIDC provider it
+  // redirects to `/auth/oidc/login` and keeps the target, which
+  // is the flow the assertions below drive.
 
   await page.goto(BASE_URL + '/app/');
   await page.waitForURL('**/chat**', { timeout: 15_000 });
@@ -57,7 +60,7 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
   // The provider's own authorize page, not merely "the popup went somewhere":
   // `oidc.localhost:<port>` is the alias elitea-main hands out (see
   // `deploy/docker-compose.e2e-standalone.yml`). A popup that stalled on the
-  // app's own `/forward-auth/auth_oidc/login` hop — or on an error page,
+  // app's own `/auth/oidc/login` hop — or on an error page,
   // which is what happened while the issuer was an unresolvable compose
   // hostname — does not match.
   //

@@ -47,6 +47,7 @@ import Typography from "@mui/material/Typography";
 import { t } from "@/shared/i18n";
 
 import { AdminIdentityProviderDialog } from "./AdminIdentityProviderDialog";
+import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
 import { AdminScimGroupBindingsEditor } from "./AdminScimGroupBindingsEditor";
 import { ProviderTable } from "./AdminIdentityProviderTable";
 import { configFailureReason } from "./api/adminConfigurationApi";
@@ -200,7 +201,7 @@ export function AdminIdentityProvidersEditor() {
       {/* Stated once, on the page, rather than discovered when a save appears to
           do nothing. Editing a live provider takes effect on the next login;
           introducing the first one on a deployment that federated none needs a
-          restart, because which browser-auth plane owns /forward-auth is fixed
+          restart, because which browser-auth plane owns /auth is fixed
           at boot. */}
       <Alert
         severity="info"
@@ -261,6 +262,10 @@ export function AdminIdentityProvidersEditor() {
           because it is the other half of one story: a provider federates the
           login, and SCIM pushes the directory. A section of its own would put
           two halves of the same configuration on two screens. */}
+      <Divider sx={{ mt: "0.5rem" }} />
+      {/* The SCIM credential comes first: an identity provider needs one
+          before any group it pushes can be bound. */}
+      <AdminScimClientsEditor />
       <Divider sx={{ mt: "0.5rem" }} />
       <AdminScimGroupBindingsEditor />
 

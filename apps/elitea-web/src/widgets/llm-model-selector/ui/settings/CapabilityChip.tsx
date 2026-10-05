@@ -30,7 +30,6 @@ export const CapabilityChip = memo(({ type, showTooltip = false }: CapabilityChi
       label={label}
       size="small"
       sx={(theme) => ({
-        fontSize: theme.typography.labelTiny.fontSize,
         height: '1.25rem',
         bgcolor:
           type === 'vision'

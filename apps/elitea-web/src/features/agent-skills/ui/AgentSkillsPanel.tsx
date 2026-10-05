@@ -49,6 +49,11 @@ export interface AgentSkillsPanelProps {
   readonly sx?: SxProps<Theme>;
 }
 
+/** Split out of `AgentSkillsPanel` for its complexity budget. */
+function canAttachSkill(disabled: boolean, versionId: number | undefined, isFull: boolean): boolean {
+  return !disabled && versionId !== undefined && !isFull;
+}
+
 export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, sx }: AgentSkillsPanelProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [query, setQuery] = useState('');
@@ -59,7 +64,11 @@ export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, sx
   const skills = useAgentSkills(projectId, versionId);
   const picker = useSkillPicker(projectId, query, anchorEl !== null);
 
-  const canAttach = !disabled && versionId !== undefined && !skills.isFull;
+  const canAttach = canAttachSkill(disabled, versionId, skills.isFull);
+
+  // UI-DC-2: a deployment with skills switched off serves no skills route.
+  // Hide the section: an always-empty "0/5" with an error helps nobody.
+  if (skills.isUnavailable) return null;
   const attachedIds = new Set(skills.attached.map((skill) => skill.id));
 
   return (

@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { RenderResult } from '@testing-library/react';
+import { waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,6 +47,39 @@ describe('AnalyticsTools', () => {
       />,
     );
     expect(await findByText('web_search')).toBeInTheDocument();
+  });
+
+  // Demo issue 6: rows from two toolkits that expose a tool of the same name
+  // stay apart on the server, so the table names the toolkit of each row. A
+  // row recorded before the producers named their toolkit shows a dash.
+  it('names the toolkit of each row and searches by it', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/analytics_tools/prompt_lib/7`, () =>
+        HttpResponse.json({
+          tool_dimension_available: true,
+          items: [
+            { toolkit_id: '17', toolkit_name: 'my_github', tool_name: 'search', run_count: 5, avg_duration_ms: 10, error_rate: 0 },
+            { toolkit_id: '', toolkit_name: 'docs_mcp', tool_name: 'search', run_count: 3, avg_duration_ms: 10, error_rate: 0 },
+            { toolkit_id: '', toolkit_name: '', tool_name: 'legacy_tool', run_count: 1, avg_duration_ms: 10, error_rate: 0 },
+          ],
+        }),
+      ),
+    );
+    const { findByText, getByText, getByPlaceholderText, queryByText } = renderScreen(
+      <AnalyticsTools
+        projectId="7"
+        dateFrom={RANGE.dateFrom}
+        dateTo={RANGE.dateTo}
+      />,
+    );
+    expect(await findByText('my_github')).toBeInTheDocument();
+    expect(getByText('docs_mcp')).toBeInTheDocument();
+    expect(getByText('Toolkit')).toBeInTheDocument();
+
+    await userEvent.type(getByPlaceholderText('Search by tool or toolkit name'), 'docs_mcp');
+    await waitFor(() => expect(queryByText('my_github')).not.toBeInTheDocument());
+    expect(getByText('docs_mcp')).toBeInTheDocument();
+    expect(queryByText('legacy_tool')).not.toBeInTheDocument();
   });
 
   // ── The window-availability branch (issue 618).

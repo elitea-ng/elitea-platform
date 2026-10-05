@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -40,7 +41,8 @@ const (
 	// Unlike the three headers above it is not resolved from this process's own
 	// middleware: the caller that knows it is the runtime worker, which sends
 	// it inbound. The edge therefore READS it off the inbound request, validates
-	// its shape, and re-emits it as part of the signed tuple — see
+	// its shape, checks that it names a live execution of the caller
+	// (ExecutionVerifier), and re-emits it as part of the signed tuple — see
 	// executionIDFromHeader.
 	HeaderExecutionID = "X-Elitea-Execution-Id"
 	// HeaderSignature carries "sha256=<hex>" over the canonical identity tuple.
@@ -140,23 +142,30 @@ func (id identity) signVersion(secret []byte, version string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-// executionIDFromHeader reads and validates the inbound execution id.
+// executionIDFromHeader reads and validates the SHAPE of the inbound
+// execution id.
 //
 // An INVALID value yields "", which drops the dimension for that request rather
-// than refusing it. That is deliberate: the execution id decorates analytics
-// and decides nothing — not routing, not authorization, not billing — so a
-// malformed one costs a row in a breakdown, while refusing would let a bad
-// header break the product's most visible path.
+// than refusing it. A malformed id costs a row in a breakdown, while refusing
+// would let a bad header break the product's most visible path.
 //
 // The charset is restrictive because the value is re-emitted as a HEADER and
 // then signed: a CR or LF in it would be header injection on the outbound
 // request, and nothing outside this set belongs in an id the runtime minted.
 //
-// A caller CAN put an id here for an execution it did not make. That is
-// contained by resolving the id at READ time inside the project the log row
-// already names (analytics.go): an id from another project resolves to nothing,
-// and one from the caller's own project attributes to an agent that caller can
-// already see. It is never an authorization input.
+// A `:` is refused although the log column allows it. Ids with a `:` are
+// reserved for attributions elitea-main signs IN PROCESS: the evaluation
+// orchestrator's `eval:<run>:case:<case>` and `eval:<run>:judge:<case>`
+// (internal/api/v2/evaluation/attribution.go). Those calls go to the gateway
+// directly and never through this edge. A runtime execution id is a hex or
+// UUID token with no `:`. So an inbound value with a `:` names an evaluation
+// run, and the analytics reads would add the caller's spend to that run.
+//
+// The shape is not enough. The analytics reads DECIDE things from this id:
+// the trigger origin of the execution it names removes a call from every
+// active-user figure, and the per-execution read adds the call to that run's
+// spend. So injectIdentity also asks an ExecutionVerifier, when one is set,
+// whether the id names a live execution of the caller.
 func executionIDFromHeader(h http.Header) string {
 	value := h.Get(HeaderExecutionID)
 	if value == "" || len(value) > maxExecutionIDLen {
@@ -166,12 +175,51 @@ func executionIDFromHeader(h http.Header) string {
 		c := value[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '-', c == '_', c == '.', c == ':':
+		case c == '-', c == '_', c == '.':
 		default:
 			return ""
 		}
 	}
 	return value
+}
+
+// ExecutionVerifier decides whether a caller may attribute a /llm call to an
+// execution id.
+//
+// The runtime worker calls /llm with the execution actor's own access token,
+// so the edge cannot tell the worker from that person's SDK client by the
+// credential. What it can check is the execution: the id must name an
+// execution of the resolved project, that execution must run as the caller,
+// and it must still be live (not settled, or settled moments ago). A person
+// can then attribute calls only to their own run, while it runs.
+//
+// VerifyExecution returns false, nil for an id that fails the rule. An error
+// is a failed lookup, and the edge drops the id for it too: attribution is
+// never worth failing a model call for.
+type ExecutionVerifier interface {
+	VerifyExecution(ctx context.Context, projectID, userID, executionID string) (bool, error)
+}
+
+// executionVerifyTimeout bounds the lookup on the request path.
+const executionVerifyTimeout = 2 * time.Second
+
+// verifiedExecutionID applies verifier to executionID. A nil verifier keeps
+// the shape check only, which is the behaviour of a deployment with no
+// database behind the edge.
+func verifiedExecutionID(ctx context.Context, verifier ExecutionVerifier, id identity, executionID string) string {
+	if executionID == "" || verifier == nil {
+		return executionID
+	}
+	if id.projectID == "" || id.userID == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, executionVerifyTimeout)
+	defer cancel()
+	ok, err := verifier.VerifyExecution(ctx, id.projectID, id.userID, executionID)
+	if err != nil || !ok {
+		return ""
+	}
+	return executionID
 }
 
 // stripIdentityHeaders removes any caller-supplied authentication and identity
@@ -182,7 +230,7 @@ func executionIDFromHeader(h http.Header) string {
 // Stripped headers:
 //   - X-Elitea-* (signed identity injected below; strip first to avoid leaking
 //     any client-spoofed value)
-//   - X-Auth-Type / X-Auth-Id / X-Auth-Reference (Traefik forward-auth headers)
+//   - X-Auth-Type / X-Auth-Id / X-Auth-Reference (Traefik edge-auth headers)
 //   - Authorization, X-Api-Key (bearer / API-key credentials)
 //   - Cookie (session cookies; must not reach the downstream gateway)
 //   - X-Project-Id / OpenAI-Organization (the edge project selector; the edge
@@ -207,7 +255,7 @@ func stripIdentityHeaders(h http.Header) {
 		h.Del(name)
 	}
 
-	// Traefik forward-auth headers that the auth middleware reads; remove so the
+	// Traefik edge-auth headers that the auth middleware reads; remove so the
 	// gateway never sees inbound authentication context.
 	h.Del("X-Auth-Type")
 	h.Del("X-Auth-Id")
@@ -221,8 +269,9 @@ func stripIdentityHeaders(h http.Header) {
 
 // injectIdentity strips any client-supplied identity headers on out, then sets
 // the edge-resolved identity. When secret is non-empty and a project is present
-// it also attaches the HMAC signature.
-func injectIdentity(ctx context.Context, out http.Header, secret []byte) {
+// it also attaches the HMAC signature. verifier, when set, decides whether the
+// inbound execution id is kept (ExecutionVerifier).
+func injectIdentity(ctx context.Context, out http.Header, secret []byte, verifier ExecutionVerifier) {
 	// READ BEFORE STRIP. stripIdentityHeaders deletes every X-Elitea-* header,
 	// this one included, and `out` is a copy of the inbound headers — so the
 	// caller-supplied execution id has to be taken (and validated) here, before
@@ -234,7 +283,7 @@ func injectIdentity(ctx context.Context, out http.Header, secret []byte) {
 	stripIdentityHeaders(out)
 
 	id := identityFromContext(ctx)
-	id.executionID = executionID
+	id.executionID = verifiedExecutionID(ctx, verifier, id, executionID)
 	if id.projectID != "" {
 		out.Set(HeaderProjectID, id.projectID)
 	}

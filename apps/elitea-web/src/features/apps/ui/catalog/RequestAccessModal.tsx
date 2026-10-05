@@ -141,7 +141,6 @@ export function RequestAccessModal({ application, isSubmitting, onClose, onSubmi
       open={open}
       variant="simple"
       title={t('apps.requestAccessModal.title', 'Request Access')}
-      header={{ titleVariant: 'headingMedium' }}
       content={content}
       onClose={handleClose}
       actions={{ node: actions }}

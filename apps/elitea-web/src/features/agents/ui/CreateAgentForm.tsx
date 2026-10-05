@@ -166,7 +166,7 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
           />
           {name.focused && name.atMax && (
             <Typography
-              variant="labelTiny"
+              variant="labelSmall"
               sx={nameCharactersLabelSx}
             >
               {t('features.agents.createAgentForm.nameCharactersLeft', ' 0 is left from {{max}} characters', { max: MAX_NAME_LENGTH })}
@@ -200,7 +200,7 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
         <CharacterCounter
           value={description.value}
           maxLength={MAX_DESCRIPTION_LENGTH}
-          textVariant="labelTiny"
+          textVariant="labelSmall"
           visible={description.focused && description.value.length > 0}
           sx={descriptionCharactersLabelSx}
           data-testid="agent-description-counter"

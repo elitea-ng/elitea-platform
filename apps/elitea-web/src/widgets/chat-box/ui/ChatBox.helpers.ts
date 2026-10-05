@@ -182,7 +182,6 @@ export function deriveChatBoxInputState(flags: {
   readonly isConversationSending: boolean | undefined;
   readonly isStreaming: boolean;
   readonly hasChatInput: boolean;
-  readonly isProcessingSymbols: boolean;
   readonly hasPendingHitlInterrupt: boolean;
   readonly hasPendingNodeRecovery?: boolean;
   readonly isActiveParticipantBroken: boolean; readonly isActiveParticipantWithdrawn?: boolean; // #972
@@ -193,7 +192,8 @@ export function deriveChatBoxInputState(flags: {
   const disabledSend =
     !flags.hasChatInput ||
     isComposerBusy ||
-    flags.isProcessingSymbols ||
+    // An open "#" agent/pipeline picker does NOT disable Send (#6774). It
+    // did, and with no picker on screen a "#" froze the composer for good.
     flags.hasPendingHitlInterrupt || flags.hasPendingNodeRecovery ||
     flags.isActiveParticipantBroken || Boolean(flags.isActiveParticipantWithdrawn);
   const isDraftInputBusy = flags.isEditorTest

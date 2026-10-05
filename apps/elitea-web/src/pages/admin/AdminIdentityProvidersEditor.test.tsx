@@ -30,7 +30,12 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminIdentityProvidersEditor } from './AdminIdentityProvidersEditor';
-import { normalizeProviderKey, resolveProviderSecretForSave } from './adminIdentityProviderForm';
+import {
+  isLoginDomain,
+  normalizeProviderKey,
+  resolveProviderSecretForSave,
+  splitLoginDomains,
+} from './adminIdentityProviderForm';
 import { renderAdminRoute } from './__tests__/testRouter';
 
 const PROVIDERS = [
@@ -44,7 +49,7 @@ const PROVIDERS = [
     oidc: {
       issuer: 'https://idp.example.com',
       client_id: 'elitea',
-      redirect_uri: 'https://elitea.example.com/forward-auth/auth_oidc/callback',
+      redirect_uri: 'https://elitea.example.com/auth/oidc/callback',
       scopes: ['openid', 'profile', 'email'],
       require_email_verified: false,
     },
@@ -59,7 +64,7 @@ const PROVIDERS = [
       idp_entity_id: 'https://idp.example.com/metadata',
       idp_sso_url: 'https://idp.example.com/sso',
       sp_entity_id: 'https://elitea.example.com/saml',
-      acs_url: 'https://elitea.example.com/forward-auth/auth_saml/acs',
+      acs_url: 'https://elitea.example.com/auth/saml/acs',
       idp_certificates: [],
     },
   },
@@ -209,10 +214,61 @@ describe('Admin › Authentication › identity providers', () => {
     expect(screen.getByTestId('identity-provider-save')).toBeInTheDocument();
   });
 
+  it('sends the login domains inside the document its kind names', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    const domains = await screen.findByTestId('identity-provider-login-domains');
+    await user.type(domains, 'Corp.example.com, @example.org');
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    await waitFor(() => {
+      expect(writes()).toHaveLength(1);
+    });
+    const body = writes()[0]?.body as Record<string, unknown>;
+    const oidc = body['oidc'] as Record<string, unknown>;
+    expect(oidc['login_domains']).toEqual(['corp.example.com', 'example.org']);
+  });
+
+  it('sends adopt_scim_users, off unless the operator turns it on', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    const adopt = await screen.findByRole('checkbox', {
+      name: 'Users provisioned by SCIM may sign in through this provider',
+    });
+    expect(adopt).not.toBeChecked();
+    expect(adopt).toHaveAccessibleDescription(/paired with your SCIM client/);
+    await user.click(adopt);
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    await waitFor(() => {
+      expect(writes()).toHaveLength(1);
+    });
+    const body = writes()[0]?.body as Record<string, unknown>;
+    const oidc = body['oidc'] as Record<string, unknown>;
+    expect(oidc['adopt_scim_users']).toBe(true);
+    expect(body['saml']).toBeUndefined();
+  });
+
+  it('refuses a login domain that is not a domain name before it saves', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    await user.type(await screen.findByTestId('identity-provider-login-domains'), 'localhost');
+    await user.click(screen.getByTestId('identity-provider-save'));
+
+    expect(await screen.findByText(/is not a domain name/)).toBeInTheDocument();
+    expect(writes()).toHaveLength(0);
+  });
+
   it('states that a first provider needs a restart, before a save appears to do nothing', async () => {
     renderAdminRoute(<AdminIdentityProvidersEditor />);
 
-    // Which browser-auth plane owns /forward-auth is fixed at boot, so adding
+    // Which browser-auth plane owns /auth is fixed at boot, so adding
     // the first provider to a deployment that federated none cannot mount its
     // routes under the running process. Saying so on the page is the difference
     // between a documented limit and a screen that looks broken.
@@ -240,5 +296,17 @@ describe('identity provider form rules', () => {
     expect(normalizeProviderKey('corporate-okta')).toBe('corporate_okta');
     expect(normalizeProviderKey('  CORPORATE__OKTA  ')).toBe('corporate_okta');
     expect(normalizeProviderKey('---')).toBe('');
+  });
+
+  it('splits and checks login domains the way the server does', () => {
+    expect(splitLoginDomains(' A.example.com,b.example.com\n@A.example.com ')).toEqual([
+      'a.example.com',
+      'b.example.com',
+    ]);
+    expect(splitLoginDomains('')).toEqual([]);
+    expect(isLoginDomain('contoso.onmicrosoft.com')).toBe(true);
+    expect(isLoginDomain('localhost')).toBe(false);
+    expect(isLoginDomain('-bad.example.com')).toBe(false);
+    expect(isLoginDomain('a..example.com')).toBe(false);
   });
 });

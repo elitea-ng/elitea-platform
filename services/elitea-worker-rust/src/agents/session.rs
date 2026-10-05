@@ -49,7 +49,7 @@ use super::direct_hitl::{
 use super::events::{
     AgentEventProjectionContext, AgentEventProjectionError, AgentEventProjectionErrorCode,
     AgentEventProjector, ApplicationToolPresentationCatalog, CompletedAgentBrowserOutput,
-    OrdinaryProjectionInput, PipelineProjectionInput,
+    OrdinaryProjectionInput, PipelineProjectionInput, ToolkitAttributionCatalog,
 };
 use super::graph::compiler::PipelineDefinition;
 use super::graph::resume::{PipelineResumeError, PipelineResumeErrorCode};
@@ -273,6 +273,8 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// Tools two toolsets both published, and what each is called now (#983).
     /// Named in the session's opening notice beside the two above.
     renamed_tools: Vec<RenamedTool>,
+    /// The toolkit each bound tool came from, named on its browser frames.
+    toolkit_attribution: ToolkitAttributionCatalog,
     application_runtime: ApplicationRuntimeProjection,
     instruction_plan: super::instruction_authority::InstructionPlan,
 }
@@ -293,6 +295,7 @@ impl OrdinaryRuntimeBindings {
             internal_tools: InternalToolCatalog::empty(),
             skipped_application_children: Vec::new(),
             renamed_tools: Vec::new(),
+            toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
         }
     }
@@ -323,6 +326,12 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) fn with_renamed_tools(mut self, renamed: Vec<RenamedTool>) -> Self {
         self.renamed_tools = renamed;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_toolkit_attribution(mut self, catalog: ToolkitAttributionCatalog) -> Self {
+        self.toolkit_attribution = catalog;
         self
     }
 
@@ -1612,6 +1621,7 @@ pub(super) async fn assemble_pipeline_native(
             })
             .unwrap_or_default(),
     );
+    let start = promote_printer_pause(start, &state, &plan, &printer_catalog).await?;
     let text_resume = matches!(&start, PipelineNativeStart::Text(_));
     let checkpoint_recovery = matches!(&start, PipelineNativeStart::Checkpoint);
     let resume = resolve_pipeline_start(
@@ -1877,6 +1887,68 @@ async fn resolve_pipeline_start(
             )
         }
     })
+}
+
+/// Demo issue 5: a Printer pause tells the user "To resume the pipeline -
+/// type anything...", but Main sends the typed text as an ordinary (fresh)
+/// start, so the run restarted at the entry point. Resume instead when this
+/// thread's session ends at the exact latest Printer checkpoint, as the SDK
+/// does for any ordinary input at a static interrupt. Every other state keeps
+/// the fresh run. The probe reads only this claim's own session and
+/// checkpoint, which Main already authorized for this conversation.
+async fn promote_printer_pause(
+    start: PipelineNativeStart,
+    state: &PipelineStateServices,
+    plan: &OrdinaryNativeAgentPlan,
+    printer_catalog: &super::graph::PrinterPauseCatalog,
+) -> Result<PipelineNativeStart, NativeAgentAssemblyError> {
+    use super::graph::resume::PrinterContinuation;
+    if !matches!(start, PipelineNativeStart::Fresh) || printer_catalog.is_empty() {
+        return Ok(start);
+    }
+    let session = match state
+        .sessions
+        .get(GetRequest {
+            app_name: APP_NAME.to_owned(),
+            user_id: plan.user_id.to_string(),
+            session_id: plan.session_id.to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+    {
+        Ok(session) => session,
+        Err(error) if error.code == "session.not_found" => return Ok(start),
+        Err(_) => return Err(dependency_unavailable()),
+    };
+    match PrinterContinuation::ordinary_message()
+        .resolve(
+            super::graph::resume::PrinterResumeContext::new(
+                session.as_ref(),
+                state.checkpointer.as_ref(),
+                ROOT_AGENT_NAME,
+                plan.session_id.as_ref(),
+                printer_catalog,
+            ),
+            &plan
+                .user_content
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    adk_rust::Part::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .await
+    {
+        Ok(_) => Ok(PipelineNativeStart::Text(
+            super::graph::static_pause::PipelineTextContinuation::ordinary_message(),
+        )),
+        Err(error) if PrinterContinuation::probe_means_fresh_run(&error) => Ok(start),
+        Err(error) => Err(pipeline_resume_error(&error)),
+    }
 }
 
 async fn restore_pipeline_session(
@@ -2226,6 +2298,7 @@ fn build_runtime_agent(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
+        toolkit_attribution,
         application_runtime,
         instruction_plan,
     } = runtime;
@@ -2303,7 +2376,8 @@ fn build_runtime_agent(
         delegated_authorization,
         application_tools,
     )
-    .map_err(projection_configuration)?;
+    .map_err(projection_configuration)?
+    .with_toolkit_attribution(toolkit_attribution);
     Ok((agent, projector))
 }
 
@@ -2418,6 +2492,7 @@ async fn prepare_direct_resume(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
+        toolkit_attribution,
         application_runtime,
         instruction_plan,
     } = runtime;
@@ -2509,7 +2584,8 @@ async fn prepare_direct_resume(
             },
         )
         .with_internal_tools(internal_tools)
-        .with_instruction_plan(instruction_plan),
+        .with_instruction_plan(instruction_plan)
+        .with_toolkit_attribution(toolkit_attribution),
         parallel_applications,
     })
 }

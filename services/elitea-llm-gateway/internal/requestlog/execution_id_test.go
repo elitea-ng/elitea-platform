@@ -48,8 +48,8 @@ func TestWriteBatch_BindsTheExecutionID(t *testing.T) {
 	if len(db.args) != columnsPerRow {
 		t.Fatalf("bound %d args for %d columns; a mismatch shifts every later column", len(db.args), columnsPerRow)
 	}
-	// Last position, matching the column list's own last entry.
-	if got := db.args[columnsPerRow-1]; got != "exec-9" {
+	// The position the column list gives it.
+	if got := db.args[executionIDColumn]; got != "exec-9" {
 		t.Fatalf("execution_id bound as %v, want exec-9", got)
 	}
 }
@@ -69,7 +69,7 @@ func TestWriteBatch_AbsentExecutionIDIsNULL(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := db.args[columnsPerRow-1]; got != nil {
+	if got := db.args[executionIDColumn]; got != nil {
 		t.Fatalf("an absent execution id bound as %#v, want SQL NULL", got)
 	}
 }

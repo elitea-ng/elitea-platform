@@ -127,8 +127,8 @@ func TestRepeatedFormLoginsWriteNothingNew(t *testing.T) {
 
 /* ── the two requests a browser makes ──────────────────────────────────── */
 
-// completeFormLogin performs the real pair: GET /forward-auth/login, then POST
-// /forward-auth/auth_form/authorize with the cookie and transaction the first
+// completeFormLogin performs the real pair: GET /auth/login, then POST
+// /auth/form/authorize with the cookie and transaction the first
 // response handed out. It returns the user id the rotated session carries, so
 // the id under test is the one the login itself authenticated.
 func completeFormLogin(
@@ -225,7 +225,7 @@ func newFormLoginHandler(
 		t.Fatal(err)
 	}
 	provider, err := browserapp.NewFormProvider(
-		[]byte(`{"users":[{"login":"admin","password":"highly-sensitive-password"}]}`))
+		[]byte(`{"users":[{"login":"admin","password":"highly-sensitive-password","email":"admin@example.test"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

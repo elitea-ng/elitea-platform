@@ -48,7 +48,7 @@ test('forking a master agent with a sub-agent attached copies the sub-agent too,
 
   try {
     expect(
-      (await attachSubAgent(request, parent.versionId, { applicationId: sub.id, versionId: sub.versionId })).ok(),
+      (await attachSubAgent(request, parent, { applicationId: sub.id, versionId: sub.versionId })).ok(),
     ).toBe(true);
 
     const exported = await exportBundle(request, parent.id, { fork: true });

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 func TestParseAcceptsOneCompleteFormSnapshot(t *testing.T) {
@@ -37,9 +37,9 @@ func TestMainConfiguredPublicRulesReturnsTypedDetachedRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 4 || rules[0].Name != "config.forward_auth" ||
+	if len(rules) != 4 || rules[0].Name != "config.edge_auth" ||
 		len(rules[0].Conditions) != 1 || rules[0].Conditions[0].Field != forwardapp.SourceURI ||
-		rules[0].Conditions[0].Pattern != `/forward\-auth/.*` {
+		rules[0].Conditions[0].Pattern != `/auth/.*` {
 		t.Fatalf("unexpected rules: %+v", rules)
 	}
 	rules[0].Name = "mutated"
@@ -48,7 +48,7 @@ func TestMainConfiguredPublicRulesReturnsTypedDetachedRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again[0].Name != "config.forward_auth" || again[0].Conditions[0].Pattern != `/forward\-auth/.*` {
+	if again[0].Name != "config.edge_auth" || again[0].Conditions[0].Pattern != `/auth/.*` {
 		t.Fatalf("configuration aliased returned rules: %+v", again[0])
 	}
 }
@@ -137,8 +137,8 @@ func TestParseRejectsAmbiguousOrExecutableYAML(t *testing.T) {
 		),
 		"nested duplicate field": strings.Replace(
 			validConfigYAML,
-			"        - field: uri\n          pattern: '/forward\\-auth/.*'",
-			"        - field: uri\n          field: host\n          pattern: '/forward\\-auth/.*'",
+			"        - field: uri\n          pattern: '/auth/.*'",
+			"        - field: uri\n          field: host\n          pattern: '/auth/.*'",
 			1,
 		),
 		"JSON duplicate field": `{"schema_version":"elitea.auth.form.v1","schema_version":"duplicate"}`,
@@ -348,10 +348,10 @@ mappers:
   contract: elitea.auth_mappers.tracked.v1
 authorization:
   main_configured_public_rules:
-    - name: config.forward_auth
+    - name: config.edge_auth
       conditions:
         - field: uri
-          pattern: '/forward\-auth/.*'
+          pattern: '/auth/.*'
     - name: config.application_icon
       conditions:
         - field: uri

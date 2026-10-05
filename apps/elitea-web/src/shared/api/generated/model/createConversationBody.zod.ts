@@ -40,24 +40,11 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { ConversationParticipant } from "./conversationParticipant.zod";
+import { ConversationCreateRequest } from "./conversationCreateRequest.zod";
 
-export const createConversationBodyParticipantsMax = 100;
-
-export const CreateConversationBody = zod
-  .object({
-    name: zod.string(),
-    is_private: zod.boolean().optional(),
-    source: zod.string().optional(),
-    meta: zod.record(zod.string(), zod.unknown()).optional(),
-    participants: zod
-      .array(ConversationParticipant)
-      .max(createConversationBodyParticipantsMax)
-      .optional(),
-  })
-  .describe(
-    "editor_test requires exactly one saved application participant in this project. Main derives actor/project, validates the exact version, and forces private hidden visibility. Clients must not supply reserved editor_test metadata.\n",
-  );
+export const CreateConversationBody = ConversationCreateRequest.describe(
+  "editor_test requires exactly one saved application participant in this project. Main derives actor/project, validates the exact version, and forces private hidden visibility. Clients must not supply reserved editor_test metadata.\n",
+);
 
 export type CreateConversationBody = zod.input<typeof CreateConversationBody>;
 export type CreateConversationBodyOutput = zod.output<

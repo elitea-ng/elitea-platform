@@ -74,12 +74,12 @@ describe('StateVariableList', () => {
   // it actually lands on the rendered root.
   it('sizes the "Context" add button off the bodySmall typography fontSize', () => {
     renderWithTheme(<StateVariableList {...baseProps()} />);
-    expect(screen.getByRole('button', { name: 'Context' })).toHaveStyle({
-      // jsdom@30 resolves rem against the root font size before reporting a
-      // computed length (jsdom@29 echoed the declaration back), so the computed
-      // value is px while the theme still declares rem.
-      fontSize: remToPx(theme.typography.bodySmall.fontSize),
-    });
+    // jsdom@30 resolves rem against the root font size before reporting a
+    // computed length (jsdom@29 echoed the declaration back), so the computed
+    // value is px while the theme still declares rem.
+    expect(getComputedStyle(screen.getByRole('button', { name: 'Context' })).fontSize).toBe(
+      remToPx(theme.typography.bodySmall.fontSize),
+    );
   });
 
   it('cancels (does not add) the create row when blurred with an empty name', () => {

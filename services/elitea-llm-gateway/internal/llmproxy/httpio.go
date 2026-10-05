@@ -77,6 +77,9 @@ type openAIErrorFields struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
+	// Scope is set only by writeBudgetRefusal on a gate-decided budget
+	// refusal. See budgetScopeFieldProject.
+	Scope string `json:"scope,omitempty"`
 }
 
 // writeError writes an OpenAI-shaped error body at the given status.
@@ -149,9 +152,24 @@ func statusAndType(bErr *schemas.BifrostError) (int, string, string) {
 		return http.StatusForbidden, orDefault(errType, "permission_error"), "forbidden"
 	case status == http.StatusServiceUnavailable:
 		return http.StatusServiceUnavailable, orDefault(errType, "api_error"), code
+	case code == unsupportedOperationCode && (bErr.StatusCode == nil || *bErr.StatusCode == 0):
+		return http.StatusNotImplemented, orDefault(errType, "invalid_request_error"), code
 	}
 	return status, orDefault(errType, "api_error"), code
 }
+
+// unsupportedOperationCode is the code bifrost puts on the refusal a provider
+// adapter gives for an operation it does not implement
+// (providers/utils.NewUnsupportedOperationError). The refusal carries no HTTP
+// status, so it used to reach the caller as a 500 `api_error`. That reads as a
+// crash. The browser voice client (and any other caller) cannot then tell "this
+// provider cannot synthesise speech" from "the gateway failed".
+//
+// It is answered 501 instead. The status says the operation is not
+// implemented for this model's provider; a retry does not help. Only the
+// status-less refusal is remapped: an UPSTREAM that answers with a status of
+// its own keeps that status.
+const unsupportedOperationCode = "unsupported_operation"
 
 // isBudgetError recognises budget exhaustion signalled either as HTTP 402 or by
 // a budget-shaped type/code on a 4xx.

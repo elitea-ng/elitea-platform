@@ -817,3 +817,51 @@ func validCurrentStartBody() string {
 func validCurrentAdhocStartBody() string {
 	return `{"payload":{"user_input":"hello from main chat"},"project_id":7,"conversation_uuid":"8bc66e50-46c4-4e2c-94ec-daec6c596ac0","question_id":"ee92ccbd-3312-4c72-b20b-fddf224e7c0e","interaction_uuid":"31df012a-300d-4722-9be2-521d987c63a8","attachments_info":[],"llm_settings":{"model_name":"model","model_project_id":7},"mcp_tokens":{}}`
 }
+
+func TestCurrentStaticContinuationUsesASeparateContractAndOriginalResponse(t *testing.T) {
+	useCase := &currentStartUseCaseStub{outcome: agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: "static-resume", CommandID: "static-command", ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a", Created: true}}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	body := `{"project_id":7,"conversation_uuid":"8bc66e50-46c4-4e2c-94ec-daec6c596ac0","message_id":"30e0913e-10d4-43db-b8d0-c7b79480935a","static_pause_id":"pipeline-static:sha256:` + strings.Repeat("a", 64) + `","user_input":"continue"}`
+	request := currentContinuationRequest(body)
+	query := request.URL.Query()
+	query.Set("execution_contract", CurrentStaticContinuationContract)
+	request.URL.RawQuery = query.Encode()
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, request)
+	got := useCase.continuationRequest
+	if response.Code != http.StatusOK || useCase.continuationCalls != 1 || got.Kind != agentexecutionapp.CurrentContinuationStatic || got.StaticInputText != "continue" || got.Action != "" || len(got.HITLDecisions) != 0 || got.StaticPauseID == "" {
+		t.Fatalf("status=%d request=%+v", response.Code, got)
+	}
+}
+func TestCurrentStaticContinuationRefusesMixedHITLAndUnboundText(t *testing.T) {
+	for _, suffix := range []string{`,"hitl_resume":true`, `,"hitl_action":"approve"`, `,"static_pause_id":""`} {
+		useCase := &currentStartUseCaseStub{}
+		route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+		body := `{"project_id":7,"conversation_uuid":"8bc66e50-46c4-4e2c-94ec-daec6c596ac0","message_id":"30e0913e-10d4-43db-b8d0-c7b79480935a","static_pause_id":"pipeline-static:sha256:` + strings.Repeat("a", 64) + `","user_input":"continue"` + suffix + `}`
+		request := currentContinuationRequest(body)
+		query := request.URL.Query()
+		query.Set("execution_contract", CurrentStaticContinuationContract)
+		request.URL.RawQuery = query.Encode()
+		response := httptest.NewRecorder()
+		route.ServeHTTP(response, request)
+		if response.Code == http.StatusOK || useCase.continuationCalls != 0 {
+			t.Fatalf("mixed request admitted: %s", suffix)
+		}
+	}
+}
+
+func TestCurrentStaticContinuationCarriesAnExplicitParallelLeafSelection(t *testing.T) {
+	useCase := &currentStartUseCaseStub{outcome: agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: "static-leaf", CommandID: "command-leaf", ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a", Created: true}}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	body := `{"project_id":7,"conversation_uuid":"8bc66e50-46c4-4e2c-94ec-daec6c596ac0","message_id":"30e0913e-10d4-43db-b8d0-c7b79480935a","static_decisions":[{"pause_id":"pipeline-static:sha256:` + strings.Repeat("a", 64) + `","child_thread_id":"child-1","tool_call_id":"call-1","action":"continue","value":"next"}]}`
+	request := currentContinuationRequest(body)
+	query := request.URL.Query()
+	query.Set("execution_contract", CurrentStaticContinuationContract)
+	request.URL.RawQuery = query.Encode()
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, request)
+	got := useCase.continuationRequest
+	if response.Code != http.StatusOK || len(got.StaticDecisions) != 1 || got.StaticDecisions[0].ToolCallID != "call-1" || got.StaticPauseID != "" || got.StaticInputText != "" || len(got.HITLDecisions) != 0 {
+		t.Fatalf("status=%d request=%+v", response.Code, got)
+	}
+}

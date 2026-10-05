@@ -17,7 +17,7 @@ import (
 // DEFECT: ServeSPA read the `elitea_session` cookie and nothing else.
 //
 // The runtime deployment does not issue that cookie. A browser logs in at
-// /forward-auth/login, which stores an opaque server-side session under
+// /auth/login, which stores an opaque server-side session under
 // `elitea_browser_auth` and projects the principal onto the upstream request as
 // X-Auth-* headers (deploy/runtime/platform-edge-dynamic.yml
 // `authResponseHeaders`). The cookie lookup found nothing on every load, so the
@@ -249,7 +249,7 @@ func TestServeSPA_ForwardedIdentitySurvivesAnEmailLookupFailure(t *testing.T) {
 }
 
 // The cookie path must keep working for a deployment that authenticates
-// through internal/api/v2/auth's OIDC handler instead of the forward-auth edge.
+// through internal/api/v2/auth's OIDC handler instead of the auth edge.
 func TestServeSPA_SessionCookieStillResolvesWhenNoHeadersArrive(t *testing.T) {
 	t.Parallel()
 

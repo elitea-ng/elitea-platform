@@ -75,7 +75,7 @@ export function SkillEditorHeader(props: SkillEditorHeaderProps): ReactNode {
   return (
     <Box sx={headerSx}>
       <Box sx={titleSx}>
-        <Typography variant="headingSmall">{props.skill.name}</Typography>
+        <Typography variant="headingLarge" component="h1">{props.skill.name}</Typography>
         {props.versions.length > 0 && (
           <AgentPipelineVersionSelector
             versions={versionOptions}

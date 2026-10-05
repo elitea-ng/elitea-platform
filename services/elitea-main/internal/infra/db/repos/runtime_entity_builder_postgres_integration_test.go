@@ -79,3 +79,26 @@ func TestRuntimeEntityBuilderRejectsInvalidSkillAuthorBeforeOpeningStorage(t *te
 		})
 	}
 }
+
+// TestRuntimeProjectContextFirstWriteStampsUpdatedAt pins UI-PD-4 on the
+// runtime path (content_server -> WriteRuntimeProjectContext). The INSERT
+// named created_at only, and the column has no default, so a context first
+// written from chat stored updated_at NULL.
+func TestRuntimeProjectContextFirstWriteStampsUpdatedAt(t *testing.T) {
+	pool := newSkillsTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	repo, err := NewCurrentRuntimeEntityBuilderRepository(pool)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `DELETE FROM p_1.configuration WHERE type = 'project_context'`)
+	require.NoError(t, err)
+	require.NoError(t, repo.WriteRuntimeProjectContext(ctx, 1, "first save from chat", true))
+
+	var nullUpdatedAt, rows int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE updated_at IS NULL), count(*)
+		FROM p_1.configuration WHERE type = 'project_context'`).Scan(&nullUpdatedAt, &rows))
+	require.Equal(t, 1, rows)
+	require.Zero(t, nullUpdatedAt, "the first runtime save stored updated_at NULL")
+}

@@ -120,7 +120,17 @@ class SdkValidationOutcome:
 
 
 class SdkBudgetExceeded(Exception):
-    """Data-free marker for an exact SDK budget policy rejection."""
+    """Data-free marker for an exact SDK budget policy rejection.
+
+    It carries only the refusing scope, ``"project"``, ``"member"`` or
+    ``"unknown"`` (#6732), so the chat can say whose budget ran out. A
+    provider's own quota refusal is ``"unknown"``: no Elitea ceiling refused
+    it. The SDK message never crosses.
+    """
+
+    def __init__(self, scope: str = "unknown") -> None:
+        super().__init__()
+        self.scope = scope if scope in ("project", "member") else "unknown"
 
 
 @contextmanager
@@ -146,7 +156,7 @@ def _sdk_budget_boundary() -> Any:
         yield
     except Exception as error:
         if _is_sdk_budget_exceeded(error):
-            raise SdkBudgetExceeded() from None
+            raise SdkBudgetExceeded(_sdk_budget_scope(error)) from None
         raise
 
 
@@ -1678,6 +1688,48 @@ def _current_index_tool_name_compatibility(
         migrated.append("list_indexes")
     settings["selected_tools"] = migrated
     return result
+
+
+_GATEWAY_BUDGET_SCOPES = frozenset({"project", "member"})
+_MAX_BUDGET_CAUSE_DEPTH = 8
+
+
+def _sdk_budget_scope(error: Exception) -> str:
+    """Name the budget that refused the call: ``project``, ``member`` or ``unknown``.
+
+    The SDK names the member ceiling ``member_budget_exceeded``. It resolves
+    every other code to its project default, and that includes a provider's
+    own quota refusal, which the gateway rewrites to the same
+    ``budget_exceeded``/``insufficient_quota`` body as its project gate. Only
+    the gateway's ``error.scope`` field tells the two apart, so read it from
+    the provider error the SDK chained as ``__cause__``. With no such field the
+    scope is ``unknown`` and the worker reports the unscoped refusal, which
+    also points at provider billing.
+    """
+
+    if getattr(error, "scope", None) == "member_budget_exceeded":
+        return "member"
+    seen: set[int] = set()
+    current: BaseException | None = error
+    for _ in range(_MAX_BUDGET_CAUSE_DEPTH):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        scope = _gateway_budget_scope(getattr(current, "body", None))
+        if scope is not None:
+            return scope
+        current = current.__cause__ or current.__context__
+    return "unknown"
+
+
+def _gateway_budget_scope(body: Any) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("error") if isinstance(body.get("error"), dict) else body
+    if detail.get("type") != "budget_exceeded":
+        return None
+    scope = detail.get("scope")
+    return scope if isinstance(scope, str) and scope in _GATEWAY_BUDGET_SCOPES else None
 
 
 def _is_sdk_budget_exceeded(error: Exception) -> bool:

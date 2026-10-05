@@ -51,8 +51,6 @@ export function stopModelAudio(refs: ModelTtsRefs): void {
   refs.allChunksReceived.current = false;
   refs.charTimeline.current = null;
   refs.sentenceWaypoints.current = [];
-  refs.pendingChunk.current = null;
-  refs.newSentence.current = true;
   if (refs.schedulerTimer.current !== null) clearInterval(refs.schedulerTimer.current);
   refs.schedulerTimer.current = null;
   refs.pcmQueue.current = [];
@@ -67,7 +65,7 @@ export function stopModelAudio(refs: ModelTtsRefs): void {
  * transfer occasionally produces 1-4 byte trailing fragments at sentence
  * boundaries, which pop audibly if scheduled as standalone buffers.
  */
-export function enqueueSamples(refs: ModelTtsRefs, samples: Float32Array<ArrayBuffer>, sampleRate = 24000): void {
+export function enqueueSamples(refs: ModelTtsRefs, samples: Float32Array<ArrayBuffer>, sampleRate = 24000, charEnd?: number): void {
   refs.sampleRate.current = sampleRate;
   const QUANTUM = 128;
   const queue = refs.pcmQueue.current;
@@ -76,11 +74,30 @@ export function enqueueSamples(refs: ModelTtsRefs, samples: Float32Array<ArrayBu
     const merged = new Float32Array(last.samples.length + samples.length);
     merged.set(last.samples, 0);
     merged.set(samples, last.samples.length);
-    queue[queue.length - 1] = { samples: merged, sampleRate };
+    queue[queue.length - 1] = { samples: merged, sampleRate, charEnd: charEnd ?? last.charEnd };
   } else {
-    queue.push({ samples, sampleRate });
+    queue.push({ samples, sampleRate, charEnd });
   }
   refs.totalEnqueuedSamples.current += samples.length;
+}
+
+/**
+ * Records the highlight waypoints of a chunk at the time it is scheduled, in
+ * playback time (seconds since `playStartTime`). The audio length alone is not
+ * enough: when the next sentence's request returns after the current sentence
+ * ends, the next buffer starts late and leaves a gap. A waypoint from the
+ * audio length would put the highlight ahead of the audio by that gap.
+ * `gapEndTime` is the late start time; an extra waypoint there holds the
+ * highlight at the previous sentence end until the audio continues.
+ */
+function recordWaypoints(refs: ModelTtsRefs, segment: PendingPcmChunk, gapEndTime: number | null): void {
+  const playStart = refs.playStartTime.current;
+  if (segment.charEnd === undefined || playStart === null) return;
+  const waypoints = refs.sentenceWaypoints.current;
+  if (gapEndTime !== null) {
+    waypoints.push({ charPos: waypoints.at(-1)?.charPos ?? 0, audioTime: gapEndTime - playStart });
+  }
+  waypoints.push({ charPos: segment.charEnd, audioTime: refs.nextStartTime.current - playStart });
 }
 
 function schedulePendingSegments(refs: ModelTtsRefs, ctx: AudioContext, scheduleUntil: number): void {
@@ -94,10 +111,13 @@ function schedulePendingSegments(refs: ModelTtsRefs, ctx: AudioContext, schedule
       source.buffer = buffer;
       source.connect(refs.masterGain.current ?? ctx.destination);
 
-      const startTime = Math.max(refs.nextStartTime.current, ctx.currentTime);
+      const previousEnd = refs.nextStartTime.current;
+      const started = refs.playStartTime.current !== null;
+      const startTime = Math.max(previousEnd, ctx.currentTime);
       if (refs.playStartTime.current === null) refs.playStartTime.current = startTime;
       source.start(startTime);
       refs.nextStartTime.current = startTime + buffer.duration;
+      recordWaypoints(refs, segment, started && startTime > previousEnd ? startTime : null);
 
       refs.scheduledSources.current.push(source);
       source.onended = () => {

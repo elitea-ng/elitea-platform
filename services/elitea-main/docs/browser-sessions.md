@@ -25,7 +25,7 @@ Three properties were therefore impossible.
    open all day held the same credential as one used continuously.
 3. **A provider record.** SAML single logout names the assertion's
    `SessionIndex`, and OIDC end-session names the session it is ending. A
-   signed cookie carries neither, so `/forward-auth/auth_saml/logout` is
+   signed cookie carries neither, so `/auth/saml/logout` is
    mounted as a LOCAL clear only.
 
 The smoke run after 1.60.0 found the user-visible half of the same gap: an
@@ -66,7 +66,7 @@ must not run for a week believing it did.
 
 ### Revocation and the touch throttle
 
-`GET /forward-auth/logout` (and its `/auth_form/logout` and `/auth_oidc/logout`
+`GET /auth/logout` (and its `/auth/form/logout` and `/auth/oidc/logout`
 aliases) revokes the row before it clears the cookie. Revocation keeps the
 first revocation's timestamp, so a browser retry does not rewrite when the
 session ended. `Manager.RevokeUser` ends every session of one account.
@@ -88,7 +88,7 @@ all. Postgres is present in every deployment.
 
 ## The SPA contract
 
-`GET /forward-auth/info` has three answers, and they are not
+`GET /auth/info` has three answers, and they are not
 interchangeable.
 
 | Condition | Status | Body |
@@ -133,7 +133,7 @@ A deployment that upgrades holds unexpired signed cookies issued by the previous
 release. They keep working:
 
 * `apimw.Auth` reads a value without the `s1.` prefix with the old HMAC reader.
-* `/forward-auth/info` does the same.
+* `/auth/info` does the same.
 * Every NEW sign-in mints a server session.
 
 The longest a legacy cookie survives on its own is 24 hours, which is its `exp`.
@@ -149,7 +149,7 @@ one that ships this.
 
 * **SAML single logout.** The row now carries the `SessionIndex` a
   `LogoutRequest` must name, which is what made single logout unbuildable
-  before. `/forward-auth/auth_saml/logout` still clears the local session only,
+  before. `/auth/saml/logout` still clears the local session only,
   and `internal/api/router.go` says so.
 * **OIDC end-session.** Same shape: the row records the provider, and nothing
   yet calls the provider's `end_session_endpoint`.

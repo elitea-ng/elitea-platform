@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,9 @@ var currentAgentToolMetadataKeys = [...]string{
 	"original_name",
 	"toolkit_name",
 	"toolkit_type",
+	// toolkit_id is the frozen toolkit row id the worker bound the tool from
+	// (demo issue 6). It is optional: an older worker sends only the name.
+	"toolkit_id",
 }
 
 var currentAgentTransientInputKeys = map[string]struct{}{
@@ -1089,6 +1093,10 @@ func normalizeCurrentAgentMetadataValue(key string, value any) (any, bool) {
 		flag, ok := value.(bool)
 		return flag, ok
 	}
+	if key == "toolkit_id" {
+		id, ok := currentAgentToolkitID(value)
+		return id, ok
+	}
 	return normalizeCurrentAgentHierarchyValue(key, value)
 }
 
@@ -1210,9 +1218,11 @@ func (p *postgresCurrentAgentTraceProjector) recordAgentToolCalls(
 			ProjectID: projectID,
 			Source:    ToolCallSourceAgentTurn,
 			SourceRef: strconv.FormatInt(messageGroupID, 10) + ":" + row.runID,
-			// No toolkit id. The worker's tool metadata carries a toolkit NAME
-			// and TYPE and no id (currentAgentToolMetadataKeys), and resolving
-			// the name back to a row here would store a guess as a fact.
+			// The toolkit id is the WORKER's: the native worker names the
+			// frozen toolkit row it bound the tool from (demo issue 6). A
+			// frame without one stores NULL. Resolving the name back to a row
+			// here would store a guess as a fact, so it is never done.
+			ToolkitID:   currentAgentToolkitIDAttr(row.attrs),
 			ToolkitName: currentAgentToolkitAttr(row.attrs, "toolkit_name"),
 			ToolkitType: currentAgentToolkitAttr(row.attrs, "toolkit_type"),
 			ToolName:    row.toolName,
@@ -1244,6 +1254,29 @@ func currentAgentToolkitAttr(attrs map[string]any, key string) string {
 	}
 	toolMeta := currentAgentMap(attrs, "tool_meta")
 	return currentAgentString(currentAgentMap(toolMeta, "metadata")[key])
+}
+
+// currentAgentToolkitIDAttr reads the optional toolkit id out of the same two
+// nested places as currentAgentToolkitAttr. Zero means "not named".
+func currentAgentToolkitIDAttr(attrs map[string]any) int64 {
+	if id, ok := currentAgentToolkitID(currentAgentMap(attrs, "metadata")["toolkit_id"]); ok {
+		return id
+	}
+	toolMeta := currentAgentMap(attrs, "tool_meta")
+	id, _ := currentAgentToolkitID(currentAgentMap(toolMeta, "metadata")["toolkit_id"])
+	return id
+}
+
+// currentAgentToolkitID accepts a positive whole number in any shape a JSON
+// decode or a jsonb round trip produces. Anything else is not an id.
+func currentAgentToolkitID(value any) (int64, bool) {
+	if number, ok := value.(float64); ok {
+		if number <= 0 || number != math.Trunc(number) || number > math.MaxInt64/2 {
+			return 0, false
+		}
+		return int64(number), true
+	}
+	return currentAgentPositiveInteger(value)
 }
 
 // toolRecordsAvailable probes the analytics record table, caching only the

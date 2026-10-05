@@ -277,7 +277,11 @@ func (h *Handler) mapModel(
 		// The authored governance plane runs LAST, on the resolved target: a
 		// routing rule may rewrite it, and the model allowlist then judges what
 		// the request will actually dispatch to (policy_gate.go).
-		return h.applyPolicy(w, ctx, provider, model)
+		if !h.applyPolicy(w, ctx, provider, model) {
+			return false
+		}
+		applyDialRequestShape(ctx)
+		return true
 	case modelNotAdvertised:
 		h.logger.WarnContext(ctx, "model is not configured for this project",
 			"project_id", projectID, "model", *model)
@@ -304,6 +308,37 @@ func (h *Handler) mapModel(
 			"project_id", projectID, "model", *model, "metric", MetricModelMapRefusedLookupFailed)
 		writeModelCatalogueUnavailable(w)
 		return false
+	}
+}
+
+// applyDialRequestShape converts a chat completion into a Responses request
+// when the dispatched model uses the AI DIAL `openai` protocol (legacy issue
+// #6707). DIAL serves the OpenAI family on /openai/v1/responses only: its
+// /openai/v1/chat/completions route answers 404. bifrost/core performs the
+// conversion, and converts the answer (and every stream chunk) back to the
+// chat shape, when the context carries BifrostContextKeyChangeRequestType.
+// core acts on this value on the chat paths only, so a request of another type is
+// not changed by it.
+//
+// It reads the protocol from the pin AFTER the governance plane ran. A routing
+// rule that rewrites the target clears the pin (policy_gate.go), so the
+// protocol of the model the caller asked for never changes the shape of a
+// request that goes somewhere else.
+func applyDialRequestShape(ctx *schemas.BifrostContext) {
+	link, ok := ctx.Value(account.ContextKeyLinkedCredential).(account.LinkedCredential)
+	if !ok || !link.DialProtocol.ConvertsChatToResponses() {
+		return
+	}
+	ctx.SetValue(schemas.BifrostContextKeyChangeRequestType, schemas.ResponsesRequest)
+}
+
+// markDispatchKind records the operation this request dispatches. The account
+// builds the AI DIAL deployment route from it (legacy issue #6707): DIAL
+// serves a chat completion and an embedding on different deployment paths,
+// and core resolves the key before it calls the provider.
+func markDispatchKind(ctx *schemas.BifrostContext, kind account.DispatchKind) {
+	if ctx != nil {
+		ctx.SetValue(account.ContextKeyDispatchKind, kind)
 	}
 }
 

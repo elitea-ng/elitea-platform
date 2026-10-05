@@ -3,6 +3,8 @@
 pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
 pub(crate) mod assembly;
+pub(crate) mod attachment_context;
+pub(crate) mod attachment_tools;
 pub(crate) mod attachments;
 pub(crate) mod context_budget;
 mod context_compaction;
@@ -35,6 +37,8 @@ pub(crate) mod variables;
 mod application_pipeline_tests;
 #[cfg(test)]
 mod assembly_tests;
+#[cfg(test)]
+mod client_frames_tests;
 #[cfg(test)]
 mod context_management_tests;
 #[cfg(test)]

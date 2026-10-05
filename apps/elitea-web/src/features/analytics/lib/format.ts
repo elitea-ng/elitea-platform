@@ -5,6 +5,8 @@
  * shared by every analytics screen.
  */
 
+import { formatSmallUsd } from '@/shared/lib/money';
+
 /**
  * Formats a count as `1.2M` / `3.4K` / a plain integer string.
  * `null`/`undefined` render `'0'` (byte-for-byte baseline behaviour).
@@ -49,25 +51,17 @@ export const UNAVAILABLE_METRIC = '–';
 /**
  * Formats a USD amount for a tile or a table cell.
  *
- * Two fraction digits are not enough here. A cost estimate over a short window
- * is routinely below one cent — the reference deployment shows `$0.000189` for
- * three calls — and two digits render every such figure as `$0.00`, which reads
- * as "this project spent nothing". So an amount below one cent keeps six
- * digits, which is the precision the reference screen shows.
+ * Delegates to `formatSmallUsd` (`shared/lib/money.ts`): below one cent keeps
+ * six digits (the reference deployment shows `$0.000189` for three calls), and
+ * a non-zero amount below that prints `< $0.000001` instead of `$0.00`
+ * (#6682) — two digits read as "this project spent nothing".
  *
  * This is a DISPLAY conversion and the only place a cost becomes a float. The
  * exact decimal stays on the wire: the server computes every figure in
  * PostgreSQL NUMERIC and publishes it unrounded.
  */
 export function fmtUsd(value: number | null | undefined): string {
-  if (value == null) return '$0.00';
-  const digits = value !== 0 && Math.abs(value) < 0.01 ? 6 : 2;
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: digits,
-  }).format(value);
+  return formatSmallUsd(value ?? 0);
 }
 
 /**
@@ -93,4 +87,41 @@ export function fmtTimestamp(value: unknown): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/** The part of an `/analytics_costs` period row the billed-period label reads. */
+export interface BilledPeriod {
+  readonly scope: string;
+  readonly period_start: string;
+  readonly period_end: string;
+}
+
+/**
+ * The calendar dates the COST tile's figure actually covers, or `undefined`
+ * when no project-scope row says.
+ *
+ * `/analytics_costs` sums every PROJECT-scope accumulator row that OVERLAPS the
+ * window, and each row is a whole billing period (a month). So under `Today`
+ * the figure is the month's spend to date, not today's — and the tile has to
+ * say which dates it is about rather than borrow the window's.
+ *
+ * Periods are UTC calendar months (`period_end` exclusive), so the dates are
+ * formatted in UTC: in a negative-offset browser local time would print the
+ * 1st as the last day of the previous month.
+ */
+export function fmtBilledPeriod(periods: readonly BilledPeriod[]): string | undefined {
+  let start: number | undefined;
+  let end: number | undefined;
+  for (const period of periods) {
+    if (period.scope !== 'project') continue;
+    const from = Date.parse(period.period_start);
+    const to = Date.parse(period.period_end);
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) continue;
+    start = start === undefined ? from : Math.min(start, from);
+    end = end === undefined ? to : Math.max(end, to);
+  }
+  if (start === undefined || end === undefined) return undefined;
+  const format = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
+  // `period_end` is exclusive: the last day covered ends one instant before it.
+  return format.formatRange(new Date(start), new Date(end - 1));
 }

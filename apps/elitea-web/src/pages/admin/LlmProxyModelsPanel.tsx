@@ -45,6 +45,7 @@ import {
   type UnpricedLlmModel,
   type UsageWindow,
 } from './api/adminLlmProxyApi';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 /**
  * Renders a price, distinguishing "no rate" from zero.
@@ -114,7 +115,7 @@ export function UnpricedModelsAlert({
               flexWrap: 'wrap',
             }}
           >
-            <Typography variant="bodySmall" sx={{ fontFamily: 'monospace' }}>
+            <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
               {model.provider} / {model.model_name}
             </Typography>
             <Typography variant="bodySmall" color="text.secondary">
@@ -176,7 +177,7 @@ export function ModelCatalogueTable({
           {items.map((row) => (
             <TableRow key={row.id} hover>
               <TableCell>{row.provider}</TableCell>
-              <TableCell sx={{ fontFamily: 'monospace' }}>{row.model_name}</TableCell>
+              <TableCell sx={{ fontFamily: monoFontFamily }}>{row.model_name}</TableCell>
               <TableCell align="right">{priceLabel(row.input_cost_per_1m_tokens)}</TableCell>
               <TableCell align="right">{priceLabel(row.output_cost_per_1m_tokens)}</TableCell>
               <TableCell align="right">{row.requests}</TableCell>

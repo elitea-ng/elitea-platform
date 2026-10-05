@@ -741,13 +741,19 @@ main:
       key: brand-pack.json
       mountPath: /etc/elitea/brand-pack.json
 
+  # The memory limit covers attachment text extraction. elitea-main runs up
+  # to two extractions at once, one of them a PDF in a WebAssembly sandbox
+  # with a 160 MiB memory ceiling. Their peak (extract.PeakMemoryBytes) plus
+  # 256 MiB for the rest of the process must fit, and
+  # internal/runtimecomposition/attachment_memory_chart_test.go fails when
+  # this limit is lowered below that.
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 1Gi
 
   # Arbitrary env vars for the elitea-main container. The whole map is rendered
   # into the ConfigMap (templates/configmap.yaml) and consumed via envFrom, so
@@ -936,6 +942,12 @@ main:
     # common single-domain deployment is guarded with no extra configuration.
     # Empty here leaves that convenience path off; see the note above — with
     # ELITEA_SELF_LLM_ORIGINS also empty, §2.6 guard #1 is inert.
+    #
+    # It is also the deployment's PUBLIC ORIGIN for ADR-0025: the discovery
+    # document (/.well-known/elitea-client) and /api/v2/branding/pack.json make
+    # their URLs absolute against it (internal/publicorigin). Empty there means
+    # "derive the origin from each request's Host" with `Vary`, which is fine
+    # for a single-host install; set it on any deployment native clients use.
     DEPLOYMENT_URL: ""
 
     # --- OIDC email policy ------------------------------------------------------
@@ -953,6 +965,31 @@ main:
     # those. An explicit `"email_verified": false` is refused whatever this says.
     # Turn it on when your provider always sends the claim.
     OIDC_REQUIRE_EMAIL_VERIFIED: ""
+
+    # Set "true" to let the ENVIRONMENT-configured OIDC provider's first login
+    # adopt an account a SCIM client provisioned (internal/api/v2/auth/oidc.go,
+    # joinAccountByEmail). Empty (the default) refuses it with 409, because any
+    # provider asserting a directory-provisioned address would otherwise take
+    # that person's account. Turn it on only when this provider is the one
+    # paired with your SCIM client (for example Entra ID for Entra provisioning).
+    # A provider authored on the admin Authentication page has its own
+    # "Users provisioned by SCIM may sign in through this provider" setting.
+    OIDC_ADOPT_SCIM_USERS: ""
+
+    # --- Sign-in page: environment-configured OIDC provider ---------------------
+    # These two apply ONLY to the OIDC provider set through the environment
+    # (OIDC_ISSUER_URL and friends). A provider authored on the admin
+    # Authentication page carries its own display name and login domains, and
+    # an enabled authored provider wins over the environment.
+    #
+    # OIDC_DISPLAY_NAME labels the sign-in page button: "Continue with <name>".
+    # Empty uses "Single sign-on". Example: "GitHub".
+    OIDC_DISPLAY_NAME: ""
+    # OIDC_LOGIN_DOMAINS lists the email domains, separated by commas, that the
+    # sign-in page's "Work email" field sends to this provider. Each entry must
+    # be a domain name such as example.com; an invalid list is logged and
+    # ignored. Empty means the provider is reached only by its button.
+    OIDC_LOGIN_DOMAINS: ""
 
     # --- Browser session lifetimes (shared migration 0117) ----------------------
     # The `elitea_session` cookie now carries an opaque identifier and nothing
@@ -981,6 +1018,79 @@ main:
     # them alive sets this to "true". The longest such a cookie survives on its
     # own is 24 hours.
     ELITEA_SESSION_REJECT_LEGACY_COOKIES: ""
+
+    # --- SCIM 2.0 provisioning (shared migration 0135) -------------------------
+    # BREAKING CHANGE: SCIM no longer accepts personal access tokens. Create a
+    # SCIM client under Admin > Configuration > Authentication > SCIM
+    # provisioning, and configure the identity provider with it:
+    #   Tenant URL      https://<host>/api/v2/scim/v2
+    #   Token endpoint  https://<host>/api/v2/scim/oauth/token  (OAuth2 only)
+    # A "Secret token (Bearer)" client gives one secret for the identity
+    # provider's "Secret token" field. An "OAuth2 client credentials" client
+    # gives a client identifier and a client secret. See
+    # apps/elitea-web/src/entries/docs/content/admin/authentication.mdx.
+    #
+    # Maintenance mode does NOT pause SCIM: a SCIM client has no administration
+    # permissions, so the maintenance gate does not apply to it. Pause
+    # provisioning in the identity provider to freeze the directory.
+    #
+    # ELITEA_SCIM_ACCESS_TOKEN_TTL is the lifetime of an access token the token
+    # endpoint issues to an OAuth2 client. A Go duration between 5m and 24h.
+    # Empty means 1h. A value outside the range stops the boot.
+    ELITEA_SCIM_ACCESS_TOKEN_TTL: ""
+
+    # --- Native authorization (ADR-0025 WP2) ----------------------------------
+    # Lifetimes of the tokens a registered native (mobile or desktop) client
+    # receives from /api/v2/auth/native/token. Each is a Go duration; empty
+    # takes the default; a value outside its range STOPS the boot.
+    #   ELITEA_NATIVE_ACCESS_TOKEN_TTL           access token, 5m..1h, default 15m
+    #   ELITEA_NATIVE_REFRESH_IDLE_TTL           a device unused this long must sign
+    #                                            in again, 24h..2160h, default 720h;
+    #                                            stamped per device at sign-in, so a
+    #                                            change applies to new devices only
+    #   ELITEA_NATIVE_SESSION_MAX_LIFETIME       absolute cap per device, 0 (none,
+    #                                            the default) or 24h..8760h
+    #   ELITEA_NATIVE_REFRESH_REDELIVERY_WINDOW  how long a refresh token that was
+    #                                            just used still returns the SAME new
+    #                                            pair (a response lost on a mobile
+    #                                            network must not wipe the device),
+    #                                            0 (strict) or 1s..5m, default 30s
+    # NATIVE_CLIENTS_PATH names an optional file (JSON or YAML) of registered
+    # clients — [{client_id, display_name, redirect_uris, enabled}] — under the
+    # admin editor's database rows. Once any client is registered, DEPLOYMENT_URL
+    # MUST be set: it is the issuer every native sign-in carries.
+    ELITEA_NATIVE_ACCESS_TOKEN_TTL: ""
+    ELITEA_NATIVE_REFRESH_IDLE_TTL: ""
+    ELITEA_NATIVE_SESSION_MAX_LIFETIME: ""
+    ELITEA_NATIVE_REFRESH_REDELIVERY_WINDOW: ""
+    NATIVE_CLIENTS_PATH: ""
+
+    # ELITEA_TRUSTED_PROXY_CIDRS lists the proxies (ingress, gateway) whose
+    # X-Forwarded-For is believed, as comma-separated CIDRs, for example the
+    # pod network "10.42.0.0/16". The SCIM token endpoint keys its failure
+    # limit on (client id, caller address) and needs the real caller behind
+    # the ingress. It is merged with the Form document's trusted_proxy_cidrs,
+    # so set it on an OIDC-only or SAML-only install. Empty: the caller
+    # address is unknown, the endpoint verifies every secret before it
+    # throttles, and the boot logs a WARN.
+    ELITEA_TRUSTED_PROXY_CIDRS: ""
+
+    # --- Local username/password (Form) sign-in --------------------------------
+    # OFF unless "true". A deployment signs people in through OIDC or SAML and
+    # provisions them through SCIM; the Form users file
+    # (fileConfig.authConfig, `provider.form.users_json_file`) is NOT a sign-in
+    # path while this is off. The authentication document is still read — the
+    # gateway edge, PAT validation and the runtime depend on it — but no
+    # /auth/form route is mounted and no configured password is accepted, and
+    # the pod logs that the configured Form users are ignored.
+    #
+    # "true" mounts the Form login page when no single sign-on plane is
+    # configured (OIDC wins /auth when both are). Any value other than
+    # true/false/1/0 (any letter case) stops the boot. Empty means false.
+    #
+    # BREAKING in this release: Form sign-in used to be on whenever an
+    # authentication document was configured. See docs/UPGRADING.md.
+    ELITEA_FORM_LOGIN_ENABLED: ""
 
     # --- The first administrator, on a single-sign-on-only deployment -----------
     # Comma-separated provider references that are granted the administration
@@ -1038,6 +1148,13 @@ main:
     # cmd/elitea-main/brand_pack_config.go; mounted by fileConfig.brandPack
     # above. Discovered unwired while verifying S17's env-drift gate.
     BRAND_PACK_PATH: ""
+
+    # Who operates this deployment, published in the anonymous discovery
+    # document at /.well-known/elitea-client (ADR-0025 decision 1):
+    # "saas" | "self_hosted". Empty means self_hosted. Any other value REFUSES
+    # to start, so a typo never publishes the wrong kind to every client.
+    # Read in cmd/elitea-main/deployment_kind_config.go.
+    ELITEA_DEPLOYMENT_KIND: "self_hosted"
 
     # --- Outbound e-mail (ADR-0024 WP7; gap G7) ---------------------------------
     # These are the BOOTSTRAP DEFAULTS, not the whole configuration. Since gap
@@ -1259,6 +1376,27 @@ main:
     # bitbucket.org, *.atlassian.net). Set it to reach a self-hosted GitLab or
     # Jira — the value REPLACES that default, it does not extend it.
     ELITEA_TOOLKIT_CHECK_ALLOWLIST: ""
+    # The SSRF guard of the MCP OAuth and DCR proxies, which POST to a token
+    # or registration endpoint the caller sends and which a project viewer may
+    # call. EMPTY IS FAIL-CLOSED: every private, loopback and link-local
+    # address is refused, before the request and again at dial time. Name a
+    # private identity provider here (egresslib grammar: hosts, `*.` wildcards,
+    # CIDR blocks). Link-local and multicast stay refused whatever it says.
+    # The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
+    ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: ""
+
+    # --- Outbound MCP requests made by Main (Load Tools, metadata reads) ---
+    #
+    # Main dials a tenant-chosen MCP URL, and the issuer URLs that server's
+    # metadata names, with its own network identity. Every dial resolves the
+    # host and refuses loopback, private-network, link-local (cloud metadata)
+    # and multicast addresses. Same grammar and split as
+    # ELITEA_WEBHOOK_EGRESS_ALLOWLIST: an entry that names a private range or
+    # host (for example `10.0.0.0/8`) lets tenants reach private MCP servers;
+    # link-local and multicast stay refused whatever this says. Unset refuses
+    # every private destination. The OAuth and DCR proxies are governed by
+    # ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST above.
+    ELITEA_MCP_EGRESS_ALLOWLIST: ""
     # The origin the Inventory provider calls back to for artifacts and models.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
     # Inventory tools that only read an existing graph still work, and the
@@ -2066,6 +2204,12 @@ scheduler:
     # keeps repeating with the ceiling raised, the next step is monthly RANGE
     # partitioning of the table on `timestamp` — not a bigger number here.
     AUDIT_RETENTION_MAX_BATCHES: "50"
+    # Incremental-sync tombstone retention (ADR-0025 WP6): how long the
+    # deletion and lost-access records behind `changes_since` are kept. 97 is
+    # the FLOOR — the longest offline_retention_days (90) plus a week, the
+    # window elitea-main still serves a cursor for — and a lower value is
+    # raised to it with a warning. Raise it only to keep tombstones longer.
+    SYNC_TOMBSTONE_RETENTION_DAYS: "97"
 
     # Tracing (issue #250): same OTLP collector endpoint and kill switch as
     # the `main.env` map — see that chart's values.yaml for the
@@ -3397,7 +3541,7 @@ worker:
 
   # The worker's platform_origin. A one-route Traefik whose only job is to
   # terminate TLS with a certificate the worker trusts (the runtime CA) and
-  # forward to elitea-main, plus forward-auth on the execution-events stream —
+  # forward to elitea-main, plus edge-auth on the execution-events stream —
   # the one route that accepts no credential a client can present.
   #
   # It is NOT the public edge. It has no route from the Gateway and is reachable

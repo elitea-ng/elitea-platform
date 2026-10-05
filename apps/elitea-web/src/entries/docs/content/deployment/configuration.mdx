@@ -9,9 +9,10 @@ Once the chart has installed and you have signed in as the first administrator (
 
 Configure identity providers under **Configuration › Authentication** in the admin console — see [Authentication](/admin/authentication) for the click-through. What matters at the deployment level:
 
+- **Sign-in is OIDC or SAML.** The local username/password (Form) sign-in is **off by default**: `main.env.ELITEA_FORM_LOGIN_ENABLED` must be `"true"` for the Form users file to be a sign-in path. With it off, the authentication document is still read (the gateway edge and the runtime depend on it), but no Form login page is mounted and no configured password is accepted. Every Form user needs a real address (`email`, or `attributes.email`); one without is refused at sign-in. See `docs/UPGRADING.md` in the platform repository.
 - **The first global admin** is a chart/environment setting, not a console one — `identity.initial_global_admins` in the auth document, or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS`. See the Helm install guide.
 - **An OIDC-only install now gets the configuration plane.** Before, only a Form authentication document (`ELITEA_AUTH_CONFIG_FILE`) composed the principal validator the configuration write path needs; now `env.OIDC_ISSUER_URL` alone composes it too, as long as `ELITEA_AI_PROJECT_ID` is set. A deployment with no authentication at all is still refused, in both the chart and the binary.
-- **SCIM** provisions accounts and groups at `/api/v2/scim/v2`, authenticated with a personal access token; the console side is only the group-to-role binding (see [Authentication](/admin/authentication#bind-scim-groups-to-a-project-role)).
+- **SCIM** provisions accounts and groups at `/api/v2/scim/v2`. It authenticates with a dedicated SCIM client credential (a bearer secret, or OAuth2 client credentials at `/api/v2/scim/oauth/token`), not with a personal access token. Create the client and bind groups to project roles in the console (see [Authentication](/admin/authentication#connect-an-identity-provider-with-scim)). `ELITEA_SCIM_ACCESS_TOKEN_TTL` sets the access token lifetime (default `1h`).
 
 ## The first global administrator
 
@@ -61,6 +62,13 @@ Governs where a tenant-created webhook may dial. **Unset is the safe default**: 
 This variable is not a named key in `values.yaml` — set it like any other elitea-main environment variable:
 ```bash
 --set-string main.env.ELITEA_WEBHOOK_EGRESS_ALLOWLIST="10.0.0.0/8"
+```
+</Tab>
+<Tab title="Remote MCP — ELITEA_MCP_EGRESS_ALLOWLIST">
+Governs where elitea-main may dial for a Remote MCP server: **Load Tools**, the OAuth and client-registration proxies, and the authorization metadata those servers name. It uses the same grammar and the same split as the webhook allowlist. **Unset refuses** every loopback, RFC 1918 and ULA destination, and each connection re-resolves the host before it dials. Name a private range (for example `10.0.0.0/8`) to let users reach MCP servers on your internal network. Link-local and multicast addresses stay refused whatever this variable says.
+
+```bash
+--set-string main.env.ELITEA_MCP_EGRESS_ALLOWLIST="10.0.0.0/8"
 ```
 </Tab>
 </Tabs>

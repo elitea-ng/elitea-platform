@@ -16,6 +16,7 @@ import (
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
@@ -617,6 +618,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// from inside the router call.
 	meter := overhead.Attach(ctx, t0)
 	bifReq := req.ToBifrostChatRequest(ctx)
+	markDispatchKind(ctx, account.DispatchChat)
 
 	// Map the caller's model id onto the provider's own model name (issue #317)
 	// BEFORE the budget gate, so the gate and the provider see the same name.
@@ -667,6 +669,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
 		in, out := usageFromChatResponse(resp)
+		recordLoggedCacheTokens(ctx, resp.Usage)
 		h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 	}
 }
@@ -697,6 +700,7 @@ func (h *Handler) TextCompletion(w http.ResponseWriter, r *http.Request) {
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
 		in, out := usageFromTextCompletionResponse(resp)
+		recordLoggedCacheTokens(ctx, resp.Usage)
 		h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 	}
 }
@@ -712,6 +716,7 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bifReq := req.ToBifrostEmbeddingRequest(ctx)
+	markDispatchKind(ctx, account.DispatchEmbedding)
 
 	// Issue #317: map the caller's model id before the gate and the provider.
 	if !h.mapModel(w, ctx, &bifReq.Provider, &bifReq.Model) {
@@ -776,6 +781,7 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	// FIX #3: bill the unary response after writing to the client.
 	if bErr == nil && resp != nil {
 		in, out := usageFromResponsesResponse(resp)
+		recordLoggedResponsesCacheTokens(ctx, resp.Usage)
 		h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 	}
 }
@@ -878,6 +884,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	// Write the response first, then bill asynchronously (FIX #18).
 	writeJSON(w, http.StatusOK, anthropic.ToAnthropicResponsesResponse(ctx, resp))
 	in, out := usageFromResponsesResponse(resp)
+	recordLoggedResponsesCacheTokens(ctx, resp.Usage)
 	h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
 }
 

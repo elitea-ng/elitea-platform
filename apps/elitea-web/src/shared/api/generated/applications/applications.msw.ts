@@ -112,6 +112,7 @@ export const getListEvalDatasetsResponseMock = (
     application_id: faker.helpers.arrayElement([faker.number.int(), null]),
     is_shared: faker.datatype.boolean(),
     case_count: faker.number.int(),
+    active_case_count: faker.number.int(),
     created_at: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -138,6 +139,7 @@ export const getCreateEvalDatasetResponseMock = (
   application_id: faker.helpers.arrayElement([faker.number.int(), null]),
   is_shared: faker.datatype.boolean(),
   case_count: faker.number.int(),
+  active_case_count: faker.number.int(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -161,6 +163,7 @@ export const getGetEvalDatasetResponseMock = (): EvalDatasetDetail => ({
     application_id: faker.helpers.arrayElement([faker.number.int(), null]),
     is_shared: faker.datatype.boolean(),
     case_count: faker.number.int(),
+    active_case_count: faker.number.int(),
     created_at: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -189,6 +192,7 @@ export const getGetEvalDatasetResponseMock = (): EvalDatasetDetail => ({
         "conversation",
       ] as const),
       order_index: faker.number.int(),
+      excluded: faker.datatype.boolean(),
       created_at: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -215,6 +219,7 @@ export const getUpdateEvalDatasetResponseMock = (
   application_id: faker.helpers.arrayElement([faker.number.int(), null]),
   is_shared: faker.datatype.boolean(),
   case_count: faker.number.int(),
+  active_case_count: faker.number.int(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -243,6 +248,7 @@ export const getAddEvalDatasetCaseResponseMock = (
     "conversation",
   ] as const),
   order_index: faker.number.int(),
+  excluded: faker.datatype.boolean(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -271,6 +277,7 @@ export const getUpdateEvalDatasetCaseResponseMock = (
     "conversation",
   ] as const),
   order_index: faker.number.int(),
+  excluded: faker.datatype.boolean(),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -5751,7 +5758,11 @@ export const getGetPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5759,7 +5770,22 @@ export const getGetPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  events: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  allow_variable_overrides: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
     undefined,
   ]),
   ...overrideResponse,
@@ -5803,7 +5829,11 @@ export const getRotatePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5811,7 +5841,22 @@ export const getRotatePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  events: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  allow_variable_overrides: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
     undefined,
   ]),
   ...overrideResponse,
@@ -5855,7 +5900,11 @@ export const getRevokePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5863,7 +5912,22 @@ export const getRevokePipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  events: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  allow_variable_overrides: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
     undefined,
   ]),
   ...overrideResponse,
@@ -5907,7 +5971,11 @@ export const getRevealPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["token", "hmac_sha256"] as const),
+    faker.helpers.arrayElement([
+      "token",
+      "hmac_sha256",
+      "standard_webhooks_hmac",
+    ] as const),
     undefined,
   ]),
   signature_header: faker.helpers.arrayElement([
@@ -5915,7 +5983,22 @@ export const getRevealPipelineInboundTriggerResponseMock = (
     undefined,
   ]),
   provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github"] as const),
+    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  events: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    undefined,
+  ]),
+  allow_variable_overrides: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
     undefined,
   ]),
   ...overrideResponse,
@@ -8008,11 +8091,13 @@ export const getDeletePipelineScheduleMockHandler = (
 export const getRunPipelineInboundTriggerMockHandler = (
   overrideResponse?:
     | PipelineInboundTriggerRunAccepted
+    | void
     | ((
         info: Parameters<Parameters<typeof http.post>[1]>[0],
       ) =>
-        | Promise<PipelineInboundTriggerRunAccepted>
-        | PipelineInboundTriggerRunAccepted),
+        | Promise<PipelineInboundTriggerRunAccepted | void>
+        | PipelineInboundTriggerRunAccepted
+        | void),
   options?: RequestHandlerOptions,
 ) => {
   return http.post(
@@ -8020,14 +8105,15 @@ export const getRunPipelineInboundTriggerMockHandler = (
     async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
       await delay(0);
 
-      return HttpResponse.json(
+      const resolvedBody =
         overrideResponse !== undefined
           ? typeof overrideResponse === "function"
             ? await overrideResponse(info)
             : overrideResponse
-          : getRunPipelineInboundTriggerResponseMock(),
-        { status: 202 },
-      );
+          : getRunPipelineInboundTriggerResponseMock();
+      return resolvedBody === undefined
+        ? new HttpResponse(null, { status: 204 })
+        : HttpResponse.json(resolvedBody, { status: 202 });
     },
     options,
   );
@@ -8036,11 +8122,13 @@ export const getRunPipelineInboundTriggerMockHandler = (
 export const getRunPipelineInboundTriggerForProviderMockHandler = (
   overrideResponse?:
     | PipelineInboundTriggerRunAccepted
+    | void
     | ((
         info: Parameters<Parameters<typeof http.post>[1]>[0],
       ) =>
-        | Promise<PipelineInboundTriggerRunAccepted>
-        | PipelineInboundTriggerRunAccepted),
+        | Promise<PipelineInboundTriggerRunAccepted | void>
+        | PipelineInboundTriggerRunAccepted
+        | void),
   options?: RequestHandlerOptions,
 ) => {
   return http.post(
@@ -8048,14 +8136,15 @@ export const getRunPipelineInboundTriggerForProviderMockHandler = (
     async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
       await delay(0);
 
-      return HttpResponse.json(
+      const resolvedBody =
         overrideResponse !== undefined
           ? typeof overrideResponse === "function"
             ? await overrideResponse(info)
             : overrideResponse
-          : getRunPipelineInboundTriggerForProviderResponseMock(),
-        { status: 202 },
-      );
+          : getRunPipelineInboundTriggerForProviderResponseMock();
+      return resolvedBody === undefined
+        ? new HttpResponse(null, { status: 204 })
+        : HttpResponse.json(resolvedBody, { status: 202 });
     },
     options,
   );

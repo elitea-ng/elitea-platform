@@ -436,7 +436,7 @@ adminTest(
 
         // ── Surfaces 3 and 4: the login page and the e-mails ──────────────
         // Neither is reachable in a browser on this stack (OIDC owns
-        // /forward-auth, and there is no relay), so they are read the way an
+        // /auth, and there is no relay), so they are read the way an
         // operator reviews them: the branding package renders both through
         // the production renderers (`browserauth.RenderLoginPreview`, the
         // mail composer) under the pack that is live right now.
@@ -447,8 +447,10 @@ adminTest(
         const login = await zip.file('preview/login.html')?.async('string');
         expect(login, 'preview/login.html is in the package').toBeTruthy();
         expect(login).toContain(`<title>${name} login</title>`);
-        // The hue reaches the sign-in button as a hash-pinned inline style.
-        expect(login).toContain(`.sign-in-button{background:${hue};`);
+        // The hue reaches both colour schemes' accent (the sign-in button,
+        // the focus halo, the ring art) as hash-pinned custom properties.
+        expect(login).toContain(`--brand-light:${hue};`);
+        expect(login).toContain(`--brand-dark:${hue};`);
         // No full logo was uploaded, so the page falls back to the name.
         expect(login).toContain(`<p class="brand-name">${name}</p>`);
         expect(login).toContain(`href="${favicon}"`);

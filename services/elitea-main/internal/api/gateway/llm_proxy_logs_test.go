@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -182,7 +183,7 @@ func TestTheRetentionFigureMatchesWhatTheGatewayEnforces(t *testing.T) {
 	if match == nil {
 		t.Fatal("could not find requestlog.RetentionWindow; the restatement here cannot be checked")
 	}
-	if match[1] != "30" {
+	if match[1] != strconv.Itoa(requestLogRetentionDays) {
 		t.Errorf("the gateway retains request logs for %s days; this surface publishes %d",
 			match[1], requestLogRetentionDays)
 	}

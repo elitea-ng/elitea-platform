@@ -18,6 +18,7 @@ use super::application_tools::{
     ApplicationToolDependencies, materialize_application_toolset, skipped_application_children,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
+use super::events::ToolkitAttributionCatalog;
 use super::internal_tools::ASK_USER_TOOLSET_NAME;
 use super::internal_tools::BuilderToolAuthority;
 use super::runtime::{
@@ -196,6 +197,7 @@ impl OrdinaryNativeAgentAssembler {
         checkpoint_recovery: bool,
     ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
         let RedeemedOrdinaryNativeAssembly {
+            attachment_library,
             sandbox_authority,
             profile,
             plan,
@@ -233,6 +235,7 @@ impl OrdinaryNativeAgentAssembler {
                     .as_ref()
                     .zip(sandbox_authority)
                     .map(|(factory, authority)| factory.bind(authority)),
+                attachment_library,
             )
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
@@ -277,6 +280,7 @@ impl OrdinaryNativeAgentAssembler {
         model_scopes: super::model_scope::ModelScopeSessions,
         conversation_thread_id: String,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
+        attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -312,6 +316,12 @@ impl OrdinaryNativeAgentAssembler {
             Arc::clone(runtime_context),
         ))));
         toolsets.extend(profile.instruction_plan().toolsets());
+        // The attachment tools exist only when a document of this turn was
+        // shown as an overview; the note in the prompt offers them by name.
+        let has_attachment_tools = attachment_library.is_some();
+        if let Some(library) = &attachment_library {
+            toolsets.push(library.toolset());
+        }
         let mut application_runtime = ApplicationRuntimeProjection::default();
         // #973: read BEFORE materialization, off the same snapshot it reads.
         // A saved PIPELINE child IS built here now, so the reference scan only
@@ -353,6 +363,7 @@ impl OrdinaryNativeAgentAssembler {
         let reserved_toolsets = BTreeSet::from([
             ASK_USER_TOOLSET_NAME.to_owned(),
             super::instruction_authority::TOOLSET_NAME.to_owned(),
+            super::attachment_tools::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
         ]);
         let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
@@ -371,6 +382,23 @@ impl OrdinaryNativeAgentAssembler {
                 exposed: exposed.to_owned(),
             })
             .collect();
+        // Demo issue 6: name each bound tool's toolkit on its frames, so the
+        // tool-call record Main writes (and the Analytics Tools tab) is not
+        // left with an empty toolkit. Nested applications carry their own
+        // presentation and are not toolkits here.
+        let toolkit_attribution = ToolkitAttributionCatalog::from_bindings(
+            tool_snapshot
+                .iter()
+                .filter(|reference| reference.kind() != FrozenToolKind::Application)
+                .map(|reference| {
+                    (
+                        reference.toolkit_name(),
+                        reference.tool_id(),
+                        reference.tool_type(),
+                    )
+                }),
+            binding.bindings(),
+        );
         let toolsets = binding.into_toolsets();
         if !skipped_applications.is_empty() {
             tracing::warn!(
@@ -384,6 +412,7 @@ impl OrdinaryNativeAgentAssembler {
             && delegated_authorization.is_empty()
             && internal_tools.is_empty()
             && profile.instruction_plan().is_empty()
+            && !has_attachment_tools
         {
             NativeToolExecutionMode::ParallelApplications
         } else {
@@ -399,7 +428,8 @@ impl OrdinaryNativeAgentAssembler {
             .with_internal_tools(internal_tools)
             .with_instruction_plan(profile.instruction_plan().clone())
             .with_skipped_application_children(skipped_applications)
-            .with_renamed_tools(renamed_tools),
+            .with_renamed_tools(renamed_tools)
+            .with_toolkit_attribution(toolkit_attribution),
             fresh_execution_mode,
         ))
     }
@@ -544,7 +574,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             // alone rather than failing the turn.
             tracing::Span::current().record("stage", "attachments");
             let assembly = assembly
-                .resolve_attachment_contents(self.platform.as_ref())
+                .resolve_attachment_contents(self.platform.as_ref(), true)
                 .await;
             tracing::Span::current().record("stage", "admission");
             let redeemed = self
@@ -727,7 +757,8 @@ pub(super) fn mcp_materialization_error(
         McpMaterializationErrorCode::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        McpMaterializationErrorCode::UnsupportedAuthority => {
+        McpMaterializationErrorCode::UnsupportedAuthority
+        | McpMaterializationErrorCode::RetiredSseEndpoint => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         McpMaterializationErrorCode::AuthorizationRequired => {
@@ -740,8 +771,12 @@ pub(super) fn mcp_materialization_error(
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
+    let message = if error.code() == McpMaterializationErrorCode::RetiredSseEndpoint {
+        crate::toolkits::RETIRED_SSE_MESSAGE
+    } else {
+        "the native MCP toolsets could not be materialized"
+    };
     // #982: the requirement travels with the error so the lifecycle can name
     // the toolkit that challenged instead of failing the turn anonymously.
-    NativeAgentAssemblyError::new(code, "the native MCP toolsets could not be materialized")
-        .with_authorization(error.authorization().cloned())
+    NativeAgentAssemblyError::new(code, message).with_authorization(error.authorization().cloned())
 }

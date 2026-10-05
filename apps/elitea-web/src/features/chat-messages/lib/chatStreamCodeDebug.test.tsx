@@ -116,8 +116,19 @@ describe('completion-only Code debug trace', () => {
     expect(applyChatStreamFrame(unfenced, debugFrame())).toBe(unfenced);
   });
 
-  it('keeps ordinary unmatched completions inert', () => {
-    expect(applyChatStreamFrame(initial, { type: 'agent_tool_end', message_id: response, execution_generation: browserGeneration,
-      response_metadata: { tool_run_id: 'ordinary', tool_name: 'search', tool_output: 'result' } })).toBe(initial);
+  it('renders ordinary completion-only tools without Code debug receipts', () => {
+    const history = applyChatStreamFrame(initial, { type: 'agent_tool_end', message_id: response, execution_generation: browserGeneration,
+      response_metadata: { tool_run_id: 'ordinary', tool_name: 'search', tool_output: 'result' } });
+    expect(actions(history)).toHaveLength(1);
+    expect(actions(history)[0]).toMatchObject({ id: 'ordinary', name: 'search', status: ToolActionStatus.complete, toolOutputs: 'result' });
+    expect(actions(history)[0]?.toolMeta).not.toHaveProperty('code_debug_v1');
+  });
+
+  it('rejects a Code debug completion whose proof copies are both missing', () => {
+    const frame = debugFrame();
+    const attrs = frame.response_metadata!;
+    expect(applyChatStreamFrame(initial, { ...frame, response_metadata: {
+      ...attrs, metadata: {}, tool_meta: { ...attrs.tool_meta, metadata: {} },
+    } })).toBe(initial);
   });
 });

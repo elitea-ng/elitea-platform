@@ -156,6 +156,14 @@ type AttachmentStore interface {
 	// DeleteAttachmentObjects removes the metadata rows naming keys. Bytes
 	// are the caller's job and must go FIRST — see DeleteAttachments.
 	DeleteAttachmentObjects(ctx context.Context, bucketID int64, keys []string) error
+	// AttachmentObject reads the metadata row of one stored attachment:
+	// the bucket is the project's reserved SYSTEM bucket of that name, and
+	// a row exists for exactly key. Anything else is storage.ErrNotFound —
+	// the same three gates the runtime's attachment reader applies
+	// (repos.CurrentAttachmentObjectRepository), so a download and a turn
+	// agree about which object a name addresses. DownloadAttachment is its
+	// only caller.
+	AttachmentObject(ctx context.Context, projectID int64, bucketName, key string) (AttachmentObjectInfo, error)
 
 	UpsertAttachmentChunk(ctx context.Context, projectID int64, conversationID, fileID string, chunkIndex, totalChunks int32, fileName, contentType string, body []byte) error
 	CountAttachmentChunks(ctx context.Context, projectID int64, conversationID, fileID string) (int64, error)

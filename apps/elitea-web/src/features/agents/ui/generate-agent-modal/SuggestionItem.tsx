@@ -103,7 +103,7 @@ export function SuggestionItem({ item, checked, onToggle, entityType }: Suggesti
           </Typography>
           {showSecondary && (
             <Typography
-              variant="bodySmall2"
+              variant="bodySmall"
               sx={secondaryTextSx}
               noWrap
             >

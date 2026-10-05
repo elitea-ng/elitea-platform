@@ -62,16 +62,16 @@ export function ChatEmptyGreeting({ userName }: ChatEmptyGreetingProps): ReactNo
       {name !== undefined && (
         <Typography
           component="p"
-          variant="h6"
-          sx={{ color: 'primary.main', fontWeight: 600, textAlign: 'center' }}
+          variant="headingLarge"
+          sx={{ color: 'primary.main', textAlign: 'center' }}
         >
           {t('widgets.chatBox.greeting', 'Hello, {{name}}!', { name })}
         </Typography>
       )}
       <Typography
         component="p"
-        variant="h6"
-        sx={{ color: 'text.secondary', fontWeight: 700, textAlign: 'center' }}
+        variant="headingMedium"
+        sx={{ color: 'text.secondary', textAlign: 'center' }}
       >
         {t('widgets.chatBox.greetingPrompt', 'What can I do for you today?')}
       </Typography>

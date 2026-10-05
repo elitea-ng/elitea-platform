@@ -105,7 +105,7 @@ function SensitiveToolParams({ toolArgs }: SensitiveToolParamsProps): ReactNode 
         sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, cursor: 'pointer' }}
       >
         <Typography
-          variant="caption"
+          variant="bodySmall"
           sx={{ fontWeight: 600, color: 'text.secondary' }}
         >
           {/* eslint-disable-next-line i18next/no-literal-string — collapsible section label */}
@@ -123,13 +123,13 @@ function SensitiveToolParams({ toolArgs }: SensitiveToolParamsProps): ReactNode 
               sx={{ display: 'flex', gap: 1 }}
             >
               <Typography
-                variant="caption"
+                variant="bodySmall"
                 sx={{ fontWeight: 600, color: 'text.secondary', flexShrink: 0 }}
               >
                 {key}:
               </Typography>
               <Typography
-                variant="caption"
+                variant="bodySmall"
                 sx={{ color: 'text.primary', wordBreak: 'break-word' }}
               >
                 {value === SENSITIVE_PARAM_MASK
@@ -179,7 +179,8 @@ function SensitiveToolCard({
       }}
     >
       <Typography
-        variant="subtitle2"
+        variant="labelMedium"
+        component="h6"
         sx={{ color: 'warning.dark', fontWeight: 600 }}
       >
         {/* eslint-disable-next-line i18next/no-literal-string — HITL authorization card title */}
@@ -187,14 +188,15 @@ function SensitiveToolCard({
       </Typography>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
         <Typography
-          variant="caption"
+          variant="bodySmall"
           sx={{ color: 'warning.dark' }}
         >
           {/* eslint-disable-next-line i18next/no-literal-string — HITL authorization card copy */}
           Agent is about to perform:
         </Typography>
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           sx={{ fontWeight: 600 }}
         >
           {/* eslint-disable-next-line i18next/no-literal-string — fallback for a missing tool label */}
@@ -206,7 +208,7 @@ function SensitiveToolCard({
       )}
       {hitlInterrupt.policy_message && (
         <Typography
-          variant="caption"
+          variant="bodySmall"
           sx={{ color: 'warning.dark', fontStyle: 'italic' }}
         >
           {hitlInterrupt.policy_message}
@@ -337,7 +339,8 @@ export function ChatHitlActions({
     >
       {hitlInterrupt.message && (
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           sx={{ mb: 1, color: 'warning.dark' }}
         >
           {hitlInterrupt.message}

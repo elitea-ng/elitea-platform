@@ -41,7 +41,16 @@ const NEW_HUE = `#${'e8461a'}`;
 const LOGO_PATH = '/api/v2/branding/assets/logo-full/0123abcd.svg';
 
 const STORED: BrandingSettings = {
-  values: { ...emptyBrandingValues(), product_name: 'Acme', base_size: 15 },
+  // The server answers every section key, the unedited ones too — a package
+  // import's hand-tuned scheme tokens and the e-mail sender name.
+  values: {
+    ...emptyBrandingValues(),
+    product_name: 'Acme',
+    base_size: 15,
+    scheme_tokens: { light: { 'text.primary': `#${'101010'}` }, dark: {} },
+    sender_name: 'Acme Mail',
+    support_email: '',
+  },
   layers: { file: false, database: true },
   effective: {
     ...DEFAULT_BRAND_PACK,
@@ -232,13 +241,20 @@ describe('AdminBranding', () => {
     expect(screen.getByTestId('branding-save')).toBeEnabled();
   });
 
-  it('resets every key to inherit after a confirmation', async () => {
+  it('resets every key to inherit after a confirmation, the unedited ones too', async () => {
     renderBranding();
     await productName();
     await userEvent.click(screen.getByTestId('branding-reset'));
     await userEvent.click(await screen.findByTestId('branding-reset-confirm'));
     await waitFor(() => expect(savedBodies).toHaveLength(1));
-    expect(savedBodies[0]).toEqual(emptyBrandingValues());
+    // The server upserts only the keys it is sent: a reset that omitted
+    // `scheme_tokens` left every imported colour in place (live, 2026-10-05).
+    expect(savedBodies[0]).toEqual({
+      ...emptyBrandingValues(),
+      scheme_tokens: {},
+      sender_name: '',
+      support_email: '',
+    });
     expect(await screen.findByTestId('branding-toast-success')).toHaveTextContent('Branding reset');
   });
 });

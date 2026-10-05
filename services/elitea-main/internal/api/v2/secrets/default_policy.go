@@ -79,12 +79,12 @@ func (p defaultSecretPolicy) suppressed(vault vaultData, r *http.Request) bool {
 	if !p.suppress {
 		return false
 	}
-	expected, found := vault.Secrets[SecretsHeaderValueName]
-	if !found {
-		expected, found = vault.HiddenSecrets[SecretsHeaderValueName]
-	}
+	// A header value stored as a JSON number, boolean, null or structure is
+	// no value: its text is guessable (`X-SECRET: null`), and pylon compares
+	// the Python value, which no header string equals. Fail closed.
+	expected, _, usable := vault.credential(SecretsHeaderValueName)
 	supplied := r.Header.Get("X-SECRET")
-	return !found || expected == "" || supplied == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(supplied)) != 1
+	return !usable || expected == "" || supplied == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(supplied)) != 1
 }
 
 func (p defaultSecretPolicy) refuse(w http.ResponseWriter, r *http.Request, vault vaultData, names ...string) bool {

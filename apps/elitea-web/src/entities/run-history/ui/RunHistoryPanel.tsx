@@ -8,16 +8,9 @@
  * already supported this filter, see `internal/api/v2/conversations/
  * handler.go`'s `List`).
  *
- * `onRestoreConversation`, when supplied, adds a "Restore" action per row.
- * It is omitted where the caller's editor has no live chat pane to restore
- * into — toolkits' `ConfigurationTab` run-history slot carries no such
- * callback at all, and pipelines' does but nothing downstream of
- * `usePipelineChat` currently consumes a restored conversation id either
- * (the SAME disclosed, partially-ported state `features/agents/ui/
- * ConfigurationTab.tsx`'s own doc comment records for its identical
- * `onRestoreConversation` prop). The prop is still threaded through
- * faithfully — a caller wiring a real restore path later needs no change
- * here.
+ * `onRestoreConversation` adds Restore for callers with a chat pane.
+ * Editor Test uses its own durable run list and exact receipt trace.
+ * Other callers retain their existing conversation History.
  */
 import { useMemo, useState, type ReactNode } from 'react';
 
@@ -33,6 +26,7 @@ import type { ConversationSummary } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
+import { EditorTestRunHistoryPanel } from './EditorTestRunHistoryPanel';
 import { RunHistoryList } from './RunHistoryList';
 import { RunHistoryTrace } from './RunHistoryTrace';
 
@@ -41,6 +35,7 @@ export type RunHistoryEntityName = 'application' | 'toolkit';
 
 export interface RunHistoryPanelProps {
   readonly projectId: string | undefined;
+  readonly editorTest?: boolean;
   readonly entityName: RunHistoryEntityName;
   readonly entityId: string | number | undefined;
   readonly onClose: () => void;
@@ -120,7 +115,7 @@ function RunHistoryPanelBody({
   );
 }
 
-export function RunHistoryPanel({
+function ConversationRunHistoryPanel({
   projectId,
   entityName,
   entityId,
@@ -172,4 +167,12 @@ export function RunHistoryPanel({
       />
     </Box>
   );
+}
+
+
+/** Delegate only the explicit editor Test scope to its durable receipt History. */
+export function RunHistoryPanel(props: RunHistoryPanelProps): ReactNode {
+  return props.editorTest
+    ? <EditorTestRunHistoryPanel {...props} />
+    : <ConversationRunHistoryPanel {...props} />;
 }

@@ -170,7 +170,9 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
               minHeight: '100%',
               outline: 'none',
               color: theme.vars.palette.text.primary,
-              fontSize: '0.9375rem',
+              // Long-form prose: bodyMedium at the 1.6 prose leading
+              // (typography spec §1), not an off-ladder 15px.
+              fontSize: theme.typography.bodyMedium.fontSize,
               lineHeight: 1.6,
             },
             '& .ProseMirror table': {
@@ -194,7 +196,7 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
               color: theme.vars.palette.text.secondary,
             },
             '& .ProseMirror code': {
-              fontFamily: 'monospace',
+              fontFamily: theme.typography.fontFamilyMono,
               backgroundColor: theme.vars.palette.background.aiAnswerBkg,
               borderRadius: theme.vars.shape.radiusSm,
               padding: '0.125rem 0.25rem',

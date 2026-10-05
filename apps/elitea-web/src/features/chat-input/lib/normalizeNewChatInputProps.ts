@@ -91,12 +91,14 @@ export function resolveVoice(voice: NewChatInputVoiceProps | undefined): {
   readonly onSpeakingModeToggle: NewChatInputVoiceProps['onSpeakingModeToggle'];
   readonly isTTSPlaying: boolean;
   readonly isRecording: boolean;
+  readonly onError: NewChatInputVoiceProps['onError'];
 } {
   return {
     isSpeakingMode: voice?.isSpeakingMode ?? false,
     onSpeakingModeToggle: voice?.onSpeakingModeToggle,
     isTTSPlaying: voice?.isTTSPlaying ?? false,
     isRecording: voice?.isRecording ?? false,
+    onError: voice?.onError,
   };
 }
 

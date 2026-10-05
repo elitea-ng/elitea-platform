@@ -40,7 +40,7 @@ func TestCookiePolicyRoundTripAndExactDeletion(t *testing.T) {
 		t.Fatalf("set cookie = %+v", set)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/check", nil)
 	request.AddCookie(set)
 	got, err := policy.Read(request)
 	if err != nil || got != sessionID {

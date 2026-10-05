@@ -14,6 +14,8 @@ mod families;
 mod invocation;
 mod materialize;
 mod mcp;
+mod mcp_error;
+mod mcp_tool_cache;
 mod policy;
 mod snapshot;
 mod tool_binding;
@@ -40,7 +42,7 @@ pub(crate) use materialize::{
 };
 pub(crate) use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
+    RETIRED_SSE_MESSAGE, materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 #[cfg(test)]
 pub(crate) use mcp::{RemoteMcpConfig, mcp_authorization_required_fixture};

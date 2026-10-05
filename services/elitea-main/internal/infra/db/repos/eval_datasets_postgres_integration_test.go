@@ -30,8 +30,13 @@ import (
 // refuses is a rule with a hole in it for every other writer.
 func newEvalDatasetsRouter(t *testing.T) http.Handler {
 	t.Helper()
-	pool := newMigratedPostgresIntegrationPool(t)
-	handler := evaluation.NewDatasetHandler(NewEvalDatasetsRepo(pool))
+	return newEvalDatasetsRouterOn(NewEvalDatasetsRepo(newMigratedPostgresIntegrationPool(t)))
+}
+
+// newEvalDatasetsRouterOn mounts the dataset routes over a given repository,
+// for a test that also reads the same pool through another repository.
+func newEvalDatasetsRouterOn(repo *EvalDatasetsRepo) http.Handler {
+	handler := evaluation.NewDatasetHandler(repo)
 
 	r := chi.NewRouter()
 	r.Get("/eval_datasets/prompt_lib/{projectID}", handler.List)

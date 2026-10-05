@@ -550,6 +550,16 @@ impl Llm for EliteaOpenAiCompatibleModel {
                     "the model gateway transport is unavailable",
                 )
             })?;
+            if response.status() == StatusCode::PAYMENT_REQUIRED
+                && response.version() == Version::HTTP_2
+            {
+                return Err(budget_refusal(response, self.config.response_header_timeout).await);
+            }
+            if is_generic_rejection(response.status()) && response.version() == Version::HTTP_2 {
+                return Err(
+                    rejection_with_detail(response, self.config.response_header_timeout).await,
+                );
+            }
             validate_response_head(&response)?;
             Ok(model_response_stream(
                 response,
@@ -642,21 +652,26 @@ fn encode_request_body(
         "model".to_owned(),
         serde_json::Value::String(invocation.model_name.clone()),
     );
-    let mut messages =
-        Vec::with_capacity(contents.len() + usize::from(!invocation.system_instruction.is_empty()));
-    if !invocation.system_instruction.is_empty() {
+    let mut messages = Vec::with_capacity(contents.len() + 1);
+    // Send exactly one instruction message, and send it first. Chat templates
+    // such as Qwen's (vLLM) refuse a system message that is not the first
+    // message ("System message must be at the beginning."). The frozen agent
+    // instructions and each system `Content` that a callback added (the skill
+    // catalogue from `agents/instruction_authority.rs`, checkpoint authority,
+    // context notes) therefore merge into the leading message, in order. The
+    // Anthropic facade applies the same rule through its `system` blocks.
+    let system = leading_system_text(&invocation.system_instruction, contents)?;
+    if !system.is_empty() {
         messages.push(serde_json::json!({
             "role": instruction_role(&invocation.model_name),
-            "content": invocation.system_instruction,
+            "content": system,
         }));
     }
     for (index, content) in contents.iter().enumerate() {
-        append_openai_messages(
-            content,
-            index + 1 == contents.len(),
-            &mut messages,
-            instruction_role(&invocation.model_name),
-        )?;
+        if content.role == "system" {
+            continue;
+        }
+        append_openai_messages(content, index + 1 == contents.len(), &mut messages)?;
     }
     body.insert("messages".to_owned(), serde_json::Value::Array(messages));
     if !request.tools.is_empty() {
@@ -883,25 +898,39 @@ fn validate_tool_declaration(name: &str, declaration: &serde_json::Value) -> Res
     Ok(())
 }
 
+/// The single leading instruction text: the frozen agent instructions, then
+/// the text of each system `Content` in request order, with a blank line
+/// between sections. A system `Content` with a non-text part refuses the
+/// request.
+fn leading_system_text(instruction: &str, contents: &[Content]) -> Result<String, AdkError> {
+    let mut sections = Vec::new();
+    if !instruction.is_empty() {
+        sections.push(instruction.to_owned());
+    }
+    for content in contents.iter().filter(|content| content.role == "system") {
+        let text = content
+            .parts
+            .iter()
+            .map(|part| match part {
+                Part::Text { text } => Ok(text.as_str()),
+                _ => Err(invalid_llm_request()),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+        let text = text.trim_matches('\n');
+        if !text.is_empty() {
+            sections.push(text.to_owned());
+        }
+    }
+    Ok(sections.join("\n\n"))
+}
+
 fn append_openai_messages(
     content: &Content,
     is_last: bool,
     messages: &mut Vec<serde_json::Value>,
-    system_role: &str,
 ) -> Result<(), AdkError> {
     match content.role.as_str() {
-        "system" => {
-            let text = content
-                .parts
-                .iter()
-                .map(|part| match part {
-                    Part::Text { text } => Ok(text.as_str()),
-                    _ => Err(invalid_llm_request()),
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .join("\n");
-            messages.push(serde_json::json!({"role": system_role, "content": text}));
-        }
         "user" => {
             // The bare-string form is for the ONE case it is right for: a last
             // message that is a single text part. A turn carrying an attached
@@ -1153,6 +1182,139 @@ fn build_http_request(
     authorization.set_sensitive(true);
     headers.insert(AUTHORIZATION, authorization);
     Ok(request)
+}
+
+/// The most of a 402 body the worker reads to learn the refusing budget.
+const MAX_BUDGET_REFUSAL_BYTES: usize = 4096;
+
+/// The most characters of a provider rejection message the worker logs.
+const MAX_REJECTION_DETAIL_CHARS: usize = 240;
+
+/// True for the client-error statuses that `validate_response_head` reports as
+/// the generic `model_gateway.rejected` (400, 404, 413, 422 ...).
+pub(super) fn is_generic_rejection(status: StatusCode) -> bool {
+    status.is_client_error()
+        && !matches!(
+            status,
+            StatusCode::UNAUTHORIZED
+                | StatusCode::FORBIDDEN
+                | StatusCode::REQUEST_TIMEOUT
+                | StatusCode::TOO_MANY_REQUESTS
+                | StatusCode::PAYMENT_REQUIRED
+                | StatusCode::CONFLICT
+        )
+}
+
+/// Demo issue 1: a provider rejection (for example vLLM's
+/// "System message must be at the beginning.") reached operators only as
+/// `model_gateway.rejected`. Read at most `MAX_BUDGET_REFUSAL_BYTES` of the
+/// body, take `error.message`, and log a bounded, single-line copy for
+/// operators. The detail never enters the returned error, the SSE stream or a
+/// durable message: provider text is not a safe caller-facing value.
+pub(super) async fn rejection_with_detail(
+    response: Response<Body>,
+    read_timeout: Duration,
+) -> AdkError {
+    let status = response.status().as_u16();
+    let body = http_body_util::Limited::new(response.into_body(), MAX_BUDGET_REFUSAL_BYTES);
+    let bytes = match timeout(read_timeout, body.collect()).await {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        _ => Bytes::new(),
+    };
+    if let Some(detail) = rejection_detail(&bytes) {
+        tracing::warn!(
+            event = "model_gateway_rejected_detail",
+            status,
+            detail = %detail,
+        );
+    }
+    model_error(
+        ErrorCategory::InvalidInput,
+        "model_gateway.rejected",
+        "the model gateway rejected the admitted request",
+    )
+}
+
+/// The bounded operator copy of `error.message` (or a bare string `error`).
+pub(super) fn rejection_detail(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    let message = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| error.as_str())?;
+    let detail: String = message
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX_REJECTION_DETAIL_CHARS)
+        .collect();
+    let detail = detail.trim().to_owned();
+    (!detail.is_empty()).then_some(detail)
+}
+
+/// Classify a 402 budget refusal by the scope the gateway names (#6732).
+///
+/// The gateway's own gate writes
+/// `{"error":{"type":"budget_exceeded","code":...,"scope":"project"|"member"}}`
+/// (`budget_gate.go`). A provider's quota or billing refusal reaches the worker
+/// as the same type and `insufficient_quota` code, but with no `scope`, so only
+/// `scope` (or the gate-only member code) names a ceiling. Every other budget
+/// body keeps the unscoped refusal, which points at provider billing too.
+/// Only the scope leaves this function; the body itself is never logged or
+/// forwarded. A body that cannot be read in time, is larger than
+/// `MAX_BUDGET_REFUSAL_BYTES`, or does not have that shape keeps the unscoped
+/// refusal. Both facades (OpenAI-compatible and native Anthropic) call it.
+pub(super) async fn budget_refusal(response: Response<Body>, read_timeout: Duration) -> AdkError {
+    let body = http_body_util::Limited::new(response.into_body(), MAX_BUDGET_REFUSAL_BYTES);
+    let bytes = match timeout(read_timeout, body.collect()).await {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        _ => Bytes::new(),
+    };
+    budget_refusal_error(&bytes)
+}
+
+pub(super) fn budget_refusal_error(body: &[u8]) -> AdkError {
+    match budget_refusal_scope(body) {
+        Some(BudgetRefusalScope::Member) => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.member_budget_exhausted",
+            "the member model budget is exhausted",
+        ),
+        Some(BudgetRefusalScope::Project) => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.project_budget_exhausted",
+            "the project model budget is exhausted",
+        ),
+        None => model_error(
+            ErrorCategory::InvalidInput,
+            "model_gateway.budget_exhausted",
+            "the model budget is exhausted",
+        ),
+    }
+}
+
+enum BudgetRefusalScope {
+    Project,
+    Member,
+}
+
+fn budget_refusal_scope(body: &[u8]) -> Option<BudgetRefusalScope> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    if error.get("type")?.as_str()? != "budget_exceeded" {
+        return None;
+    }
+    match (
+        error.get("scope").and_then(serde_json::Value::as_str),
+        error.get("code").and_then(serde_json::Value::as_str),
+    ) {
+        (Some("member"), _) | (None, Some("member_budget_exceeded")) => {
+            Some(BudgetRefusalScope::Member)
+        }
+        (Some("project"), _) => Some(BudgetRefusalScope::Project),
+        // A provider's own quota refusal: no ceiling of this platform refused.
+        _ => None,
+    }
 }
 
 pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), AdkError> {

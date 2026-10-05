@@ -585,7 +585,9 @@ func (h *Handler) selectedConversationID(ctx context.Context, projectID string) 
 		return nil
 	}
 	visibility, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
-	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %s.chat_selected_conversations selected JOIN %s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %s LIMIT 1`, schema, schema, visibility)
+	// A user has at most one selection row now (#6674), but rows written by
+	// an older race may still be duplicated. The newest row wins.
+	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %s.chat_selected_conversations selected JOIN %s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %s ORDER BY selected.id DESC LIMIT 1`, schema, schema, visibility)
 	var selID int
 	if err := h.pool.QueryRow(ctx, q, args...).Scan(&selID); err != nil {
 		return nil

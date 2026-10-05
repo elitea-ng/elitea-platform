@@ -58,6 +58,9 @@ func TestCurrentAdhocStartBuildsCurrentMainChatInputAndTurn(t *testing.T) {
 	if resolver.adhocCalls != 1 || len(resolver.adhocRequests) != 1 || len(freezer.calls) != 1 {
 		t.Fatalf("resolver calls=%d requests=%d freezer=%d", resolver.adhocCalls, len(resolver.adhocRequests), len(freezer.calls))
 	}
+	if submitted.TriggerOrigin != "" {
+		t.Fatalf("a composer start carried trigger origin %q", submitted.TriggerOrigin)
+	}
 	input := submitted.Input
 	if input.GetThreadId() != request.ConversationUUID ||
 		input.GetConversationId() != request.ConversationUUID ||
@@ -186,5 +189,39 @@ func validCurrentAdhocStartRequest() CurrentAdhocStartRequest {
   "model_name":"requested","model_project_id":9,"temperature":0.2,
   "api_key":"must-not-cross","base_url":"https://caller.invalid"
 }`),
+	}
+}
+
+// question_id is the admission idempotency key: only its canonical lowercase
+// spelling is admitted (ADR-0025 coordinator decision 14, API_CONTRACT.md).
+func TestCurrentAdhocStartRequestRequiresCanonicalLowercaseUUIDs(t *testing.T) {
+	if err := validCurrentAdhocStartRequest().Validate(); err != nil {
+		t.Fatalf("the canonical request: %v", err)
+	}
+	for name, mutate := range map[string]func(*CurrentAdhocStartRequest){
+		"upper-case question_id": func(r *CurrentAdhocStartRequest) {
+			r.QuestionID = "E35ED323-212A-4B79-A6D4-8FAC7CBEB9F6"
+		},
+		"mixed-case question_id": func(r *CurrentAdhocStartRequest) {
+			r.QuestionID = "e35ed323-212a-4b79-a6d4-8FAC7CBEB9F6"
+		},
+		"braced question_id": func(r *CurrentAdhocStartRequest) {
+			r.QuestionID = "{e35ed323-212a-4b79-a6d4-8fac7cbeb9f6}"
+		},
+		"urn question_id": func(r *CurrentAdhocStartRequest) {
+			r.QuestionID = "urn:uuid:e35ed323-212a-4b79-a6d4-8fac7cbeb9f6"
+		},
+		"unhyphenated question_id": func(r *CurrentAdhocStartRequest) {
+			r.QuestionID = "e35ed323212a4b79a6d48fac7cbeb9f6"
+		},
+		"upper-case conversation_uuid": func(r *CurrentAdhocStartRequest) {
+			r.ConversationUUID = "8BC66E50-46C4-4E2C-94EC-DAEC6C596AC0"
+		},
+	} {
+		request := validCurrentAdhocStartRequest()
+		mutate(&request)
+		if err := request.Validate(); !errors.Is(err, ErrInvalidCurrentAgentStart) {
+			t.Errorf("%s: Validate() = %v, want ErrInvalidCurrentAgentStart", name, err)
+		}
 	}
 }

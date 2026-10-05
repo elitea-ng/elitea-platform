@@ -283,6 +283,10 @@ func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, eventType st
 		LastError:    outcome.LastError,
 		Payload:      body,
 	}); err != nil {
+		if errors.Is(err, ErrWebhookGone) {
+			slog.Debug("webhook: delivery not logged, the webhook was deleted", "webhook", wh.ID)
+			return
+		}
 		slog.Error("webhook: log delivery", "err", err, "webhook", wh.ID)
 	}
 }
@@ -387,6 +391,14 @@ func signBody(secret string, body []byte) string {
 // apierr.NotFound rather than a plain error so apierr.Write answers 404
 // rather than a bare 500.
 var ErrDeliveryNotFound = apierr.NotFound("webhook: delivery not found")
+
+// ErrWebhookGone is what DeliveryRepository.Create returns when the webhook
+// the delivery belongs to was deleted while the attempt ran (the
+// webhook_deliveries_webhook_id_fkey foreign key refused the row). It is a
+// 404 for the synchronous Redeliver caller and an expected, debug-level
+// outcome for the asynchronous path: the delivery log of a webhook that no
+// longer exists has nothing to hold the row.
+var ErrWebhookGone = apierr.NotFound("webhook: webhook not found")
 
 // Redeliver resends a previously logged delivery's EXACT payload to the
 // webhook's CURRENT url and secret, and logs a NEW Delivery row rather than

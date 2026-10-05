@@ -20,6 +20,10 @@
  *    Trail page gave elitea-main a real audit API whose four endpoints all take
  *    `user_id`; this page's row control opens `./UserActivityDrawer` over it.
  *    It shipped disabled only because the VIEW was missing, never the data.
+ *  - **devices** — the account's native (mobile/desktop) device sessions,
+ *    ADR-0025 WP3. The row control opens `./AdminUserDevicesDrawer`, which
+ *    lists them and revokes any live one. Shown only to an operator holding
+ *    `admin.auth.users`, the permission the device routes require.
  *  - **export** — real, and the one place this port deliberately differs in
  *    FORMAT from the reference: it writes CSV, not .xlsx, because this app
  *    carries no spreadsheet dependency (see `./adminUsersCsv`). The control
@@ -34,7 +38,7 @@
  * see `./adminUiConfig`. Every mutation is authorised server-side on each
  * request; the flags here only decide what is worth rendering.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import DeleteIcon from '@mui/icons-material/Delete';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
@@ -55,10 +59,16 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminBulkInviteDialog } from './AdminBulkInviteDialog';
-import { AdminUsersTable } from './AdminUsersTable';
+import { AdminUserDevicesDrawer } from './AdminUserDevicesDrawer';
+import { AdminUsersTable, type AdminUserRowActions } from './AdminUsersTable';
+import type { AdminUserRow } from './api/adminUsersApi';
+import { adminUiShowsControlFor } from './adminUiConfig';
 import { UserActivityDrawer } from './UserActivityDrawer';
 import { ADMIN_USERS_PAGE_SIZE, useAdminUsersPage } from './useAdminUsersPage';
 
+
+/** The permission the native device routes require (router.go `requireAdminUsers`). */
+const ADMIN_USERS_PERMISSION = 'admin.auth.users';
 
 export function AdminUsers() {
   const state = useAdminUsersPage();
@@ -67,6 +77,17 @@ export function AdminUsers() {
   // Invites, beside the global user list, and the picker it needs is the very
   // list this page already holds.
   const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
+  // The devices drawer (ADR-0025 WP3). Its permission is the one the device
+  // routes require — `admin.auth.users`, the one that gates suspension — so
+  // the control is offered on both tabs to exactly the operators the server
+  // will answer.
+  const [devicesUser, setDevicesUser] = useState<AdminUserRow | null>(null);
+  const showsDevices = adminUiShowsControlFor(ADMIN_USERS_PERMISSION);
+  const baseRowActions = state.rowActions;
+  const rowActions = useMemo<AdminUserRowActions>(
+    () => ({ ...baseRowActions, onOpenDevices: showsDevices ? setDevicesUser : undefined }),
+    [baseRowActions, showsDevices],
+  );
 
   const { total, page, deleteIds, rows } = state;
   const lastPage = total === 0 ? 0 : Math.ceil(total / ADMIN_USERS_PAGE_SIZE) - 1;
@@ -89,7 +110,7 @@ export function AdminUsers() {
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+        <Typography variant="headingLarge" component="h1">
           {t('pages.admin.users.title', 'Users')}
         </Typography>
         {/*
@@ -190,7 +211,7 @@ export function AdminUsers() {
             sortField={state.sortField}
             sortDirection={state.sortDirection}
             onSort={state.onSort}
-            rowActions={state.rowActions}
+            rowActions={rowActions}
             canAssignSuperAdmin={state.canAssignSuperAdmin}
             pendingIds={state.pendingIds}
           />
@@ -231,6 +252,8 @@ export function AdminUsers() {
       <AdminBulkInviteDialog open={bulkInviteOpen} onClose={() => setBulkInviteOpen(false)} />
 
       <UserActivityDrawer user={state.activityUser} onClose={state.onCloseActivity} />
+
+      <AdminUserDevicesDrawer user={devicesUser} onClose={() => setDevicesUser(null)} />
     </DrawerPage>
   );
 }

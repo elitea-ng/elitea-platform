@@ -1,15 +1,35 @@
 ---
 title: "Elitea MCP server"
-description: "Connect an external MCP client (VS Code, Claude Code) to Elitea's own MCP server over streamable HTTP."
+description: "Connect an external MCP client (Claude Code, Cursor, VS Code, Claude Desktop) to Elitea's own MCP server over streamable HTTP."
 ---
 
 Elitea is itself an MCP server: any client that speaks the Model Context Protocol can call your tagged agents, pipelines and toolkit tools as MCP tools. The transport is streamable HTTP — a single `POST` endpoint that answers `initialize`, `tools/list` and `tools/call`. There is no SSE stream and no stdio server: a `GET` on the endpoint answers "The server does not offer an SSE stream at this endpoint."
 
 ## Prerequisites
 
-- Your project's MCP endpoint: `https://<your-elitea-host>/app/<projectID>/mcp`.
-- A [personal access token](/getting-started/create-personal-access-token), sent as `Authorization: Bearer <token>`. The server authenticates every request as that token's owner and scopes results to projects they belong to.
-- At least one agent or pipeline tagged `mcp`, or a toolkit with tools marked "available by MCP" (see [Make tools available by MCP](/integrations/mcp/make-tools-available-by-mcp)) — otherwise `tools/list` returns an empty, but correct, list.
+- Your project's MCP endpoint: `https://<your-elitea-host>/app/<projectID>/mcp`. Find the project ID in the project switcher or in the address bar of the app.
+- A personal access token. Send it as `Authorization: Bearer <token>`. See [Create a token](#create-a-token).
+- Membership in the project. The server authenticates every request as the token owner. A token owner who is not a member of `<projectID>` gets `403 forbidden`.
+- At least one agent or pipeline tagged `mcp`, or a toolkit with tools marked "available by MCP" (see [Make tools available by MCP](/integrations/mcp/make-tools-available-by-mcp)). Otherwise `tools/list` returns an empty list. An empty list is a correct answer.
+- MCP exposure on the deployment. An administrator can turn it off. Then every request gets `403` with "MCP exposure is disabled on this deployment".
+
+## Create a token
+
+<Steps>
+<Step title="Open Personal tokens">
+Go to **Settings → Personal tokens** (`/settings/tokens`).
+</Step>
+<Step title="Generate the token">
+Click **+**. Give the token a name, for example `mcp-claude-code`. Set an expiration date. Click **Generate**.
+</Step>
+<Step title="Copy the token">
+Copy the value immediately. The dialog shows it only once. For more detail, see [Create a personal access token](/getting-started/create-personal-access-token).
+</Step>
+</Steps>
+
+<Warning>
+The token gives the same access as your account. Do not commit a client configuration file that contains the token. Use one token for each client, so that you can revoke one client without the others.
+</Warning>
 
 ## Tag an agent or pipeline for MCP
 
@@ -27,7 +47,37 @@ If the agent has several tagged versions, the newest tagged one is the one serve
 
 ## Connect a client
 
+The server speaks the streamable HTTP transport only. Every client below sends `POST` requests to the endpoint with a static `Authorization` header.
+
 <Tabs>
+<Tab title="Claude Code">
+Run this command once:
+
+```bash
+claude mcp add --transport http elitea \
+  https://<your-elitea-host>/app/<projectID>/mcp \
+  --header "Authorization: Bearer <your-token>"
+```
+
+Add `--scope user` to make the server available in all your projects. Run `claude mcp list` to make sure that the server connects. In a session, type `/mcp` to see the Elitea tools.
+</Tab>
+<Tab title="Cursor">
+Add a server entry to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "elitea": {
+      "type": "http",
+      "url": "https://<your-elitea-host>/app/<projectID>/mcp",
+      "headers": { "Authorization": "Bearer <your-token>" }
+    }
+  }
+}
+```
+
+Open **Cursor Settings → MCP** and make sure that the `elitea` server shows a green status and its tools.
+</Tab>
 <Tab title="VS Code">
 Add a server entry to `.vscode/mcp.json` (workspace) or your user `mcp.json` (global):
 
@@ -43,14 +93,34 @@ Add a server entry to `.vscode/mcp.json` (workspace) or your user `mcp.json` (gl
 }
 ```
 
-Reload the MCP server list, then select tools from your Elitea project in Copilot Chat's Agent mode.
+Reload the MCP server list. Then select tools from your Elitea project in Copilot Chat's Agent mode.
 </Tab>
-<Tab title="Claude Code">
-```bash
-claude mcp add --transport http elitea \
-  https://<your-elitea-host>/app/<projectID>/mcp \
-  --header "Authorization: Bearer <your-token>"
+<Tab title="Claude Desktop">
+Claude Desktop custom connectors do not send a static `Authorization` header. Use the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge. The bridge runs locally, adds the header, and forwards each request to Elitea. It needs Node.js 18 or later.
+
+Open **Settings → Developer → Edit Config**. Add this entry to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "elitea": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://<your-elitea-host>/app/<projectID>/mcp",
+        "--transport",
+        "http-only",
+        "--header",
+        "Authorization:${ELITEA_AUTH}"
+      ],
+      "env": { "ELITEA_AUTH": "Bearer <your-token>" }
+    }
+  }
+}
 ```
+
+Restart Claude Desktop. The header value is in `env` because some platforms split an argument that contains a space. `--transport http-only` stops the bridge from a retry with the older SSE transport, which this server does not support.
 </Tab>
 </Tabs>
 
@@ -58,7 +128,7 @@ claude mcp add --transport http elitea \
 
 ```mermaid
 sequenceDiagram
-    participant Client as MCP client (VS Code / Claude Code)
+    participant Client as MCP client (Claude Code, Cursor, VS Code, Claude Desktop)
     participant Elitea as Elitea MCP server
     Client->>Elitea: initialize
     Elitea-->>Client: capabilities
@@ -79,5 +149,13 @@ Two agents that sanitize to the same tool name collapse into one entry in `tools
 </Note>
 
 <Note>
-A client that opens a GET (SSE) connection to the endpoint gets a 405, not a stream. If your client only supports the older SSE transport, it can't connect here — use a client that speaks streamable HTTP.
+The endpoint accepts `POST` only. A client that opens a `GET` (SSE) connection gets `405` with "The server does not offer an SSE stream at this endpoint". A client that supports only the older SSE transport cannot connect. Use a client that speaks streamable HTTP.
 </Note>
+
+| Response | Cause | Action |
+| --- | --- | --- |
+| `401 unauthorized` | The token is missing, expired or revoked. | Create a new token and update the client configuration. |
+| `403 forbidden` | The token owner is not a member of the project. | Ask a project administrator to add you, or use a project ID that you are a member of. |
+| `403` "MCP exposure is disabled on this deployment" | An administrator turned off MCP exposure. | Ask the administrator to turn it on. |
+| `405` "The server does not offer an SSE stream at this endpoint" | The client sent `GET` to open an SSE stream. | Configure the client for the HTTP transport, not SSE. |
+| Empty `tools/list` | No agent or pipeline has the `mcp` tag, and no toolkit tool is available by MCP. | Add the `mcp` tag, as in [Tag an agent or pipeline for MCP](#tag-an-agent-or-pipeline-for-mcp). |

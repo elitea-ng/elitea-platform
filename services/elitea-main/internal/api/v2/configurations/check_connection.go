@@ -155,14 +155,29 @@ type checkConnectionRequestBody struct {
 	// STRING from one screen and as a nested JSON OBJECT from another, and the
 	// gateway accepts both shapes (its jsonTextField).
 	VertexCredentials any `json:"vertex_credentials,omitempty"`
+
+	// Model is set by the llm_model check only (model_connection_check.go).
+	// A set Model makes the gateway send one real completion instead of the
+	// credential listing.
+	Model string `json:"model,omitempty"`
+	// UseAnthropicEndpoints is the credential's use_anthropic_endpoints flag.
+	// The runtime then speaks the Anthropic dialect to a vLLM-class upstream,
+	// so the gateway's model probe does too.
+	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints,omitempty"`
+	// DialProtocol is the llm_model's data.dial_protocol (legacy issue #6707).
+	// The llm_model check sets it for an ai_dial credential only. The gateway's
+	// model probe then posts to the route the runtime uses for that protocol.
+	DialProtocol string `json:"dial_protocol,omitempty"`
 }
 
 // checkConnectionResponseBody is the gateway's reply (mirrors
 // elitea-llm-gateway/internal/llmproxy.checkConnectionResponse).
 type checkConnectionResponseBody struct {
-	Success bool   `json:"success"`
-	Reason  string `json:"reason"`
-	Detail  string `json:"detail"`
+	Success   bool   `json:"success"`
+	Reason    string `json:"reason"`
+	Detail    string `json:"detail"`
+	Probe     string `json:"probe"`
+	LatencyMS int64  `json:"latency_ms"`
 }
 
 // connectionCheckMessages maps the gateway's safe reason vocabulary to the
@@ -193,7 +208,12 @@ func connectionCheckMessageFor(reason, detail string) string {
 // (internal/llmproxy.SignIdentityHeaders) so the gateway's verifySignature
 // accepts it. It never dials the provider itself — see the package doc above.
 type GatewayConnectionChecker struct {
-	httpClient     *http.Client
+	httpClient *http.Client
+	// modelHTTPClient carries the llm_model probe. The gateway bounds that
+	// probe at 30 s, so this client waits longer than httpClient does; the
+	// transport is the same.
+	modelHTTPClient *http.Client
+
 	baseURL        string
 	identitySecret []byte
 	// projectID is threaded through Check by the caller (the projectID URL
@@ -209,9 +229,10 @@ type GatewayConnectionChecker struct {
 // used — the identical construction the /llm reverse proxy uses.
 func NewGatewayConnectionChecker(gatewayBaseURL string, transport http.RoundTripper, identitySecret string) *GatewayConnectionChecker {
 	return &GatewayConnectionChecker{
-		httpClient:     &http.Client{Transport: transport, Timeout: 12 * time.Second},
-		baseURL:        strings.TrimRight(gatewayBaseURL, "/"),
-		identitySecret: []byte(identitySecret),
+		httpClient:      &http.Client{Transport: transport, Timeout: 12 * time.Second},
+		modelHTTPClient: &http.Client{Transport: transport, Timeout: modelConnectionCheckClientTimeout},
+		baseURL:         strings.TrimRight(gatewayBaseURL, "/"),
+		identitySecret:  []byte(identitySecret),
 	}
 }
 
@@ -319,6 +340,14 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 
 	if err := validateNotSelfReferential(data, selfLLMOrigins()); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+
+	// An llm_model is not a credential: it NAMES one. Its test resolves that
+	// credential on the server and asks the model itself to answer
+	// (model_connection_check.go).
+	if configType == llmModelConfigurationType {
+		h.checkLLMModelConnection(w, r, projectID, data)
 		return
 	}
 

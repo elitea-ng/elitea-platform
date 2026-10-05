@@ -9,6 +9,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/brandpackage"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"log/slog"
 	"net/http"
 	"os"
@@ -318,6 +319,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	webhookDestinationGuard := webhook.NewDestinationGuard(webhookAllowlist)
 
+	// The MCP OAuth and DCR proxies POST to a URL from the request body, and
+	// a project viewer may call them (#6885). The same DNS-aware, dial-time
+	// guard applies. ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST is unset by default,
+	// which refuses every private, loopback and link-local identity provider.
+	// An operator with a private IdP names it there. A malformed entry fails
+	// startup, as for the webhook allowlist above.
+	mcpOAuthAllowlist, err := webhook.ParseDestinationAllowlist(
+		splitEnvList(os.Getenv("ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST")))
+	if err != nil {
+		return fmt.Errorf("parse ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: %w", err)
+	}
+	mcpAuthorizationEgressGuard := webhook.NewDestinationGuard(mcpOAuthAllowlist)
+
 	webhookDeliveries := webhookDeliveriesRepository(pool)
 	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
 	domainEvents := events.NewPublisher(events.NoopBus{}, webhookDispatcher)
@@ -389,6 +403,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// The local username/password sign-in. OFF unless explicitly enabled:
+	// a deployment signs people in through OIDC or SAML (and provisions them
+	// through SCIM). The authentication document is still read either way —
+	// the gateway edge, PAT validation and the runtime depend on it.
+	formSignInEnabled, err := formSignInEnabledFromEnv(os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	if formSignInEnabled && !authEnabled {
+		logger.Warn("ELITEA_FORM_LOGIN_ENABLED=true has no effect without ELITEA_AUTH_CONFIG_FILE: " +
+			"Form sign-in needs the authentication document that names its users file")
+	}
 	// The brand pack resolver is built ONCE, here, because two composition
 	// roots consume it: the login page inside the Form graph and the
 	// bootstrap/admin routes inside the router (ADR-0024).
@@ -400,6 +426,24 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PackPath: brandPack.Path,
 		Pool:     pool,
 	})
+	// ADR-0025 WP1: the discovery document and the brand pack JSON are
+	// anonymous documents with absolute URLs. Both settings are read once.
+	deploymentKind, err := deploymentKindFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load deployment kind: %w", err)
+	}
+	publicOrigin, err := publicOriginFromEnv(os.LookupEnv, logger)
+	if err != nil {
+		return fmt.Errorf("load public origin: %w", err)
+	}
+	// ADR-0025 WP2: the native authorization server. Built whenever a pool
+	// exists, so its routes are mounted and answer 404 until a client is
+	// registered; the access-token validator joins the API group, the /auth
+	// edge endpoint and the Form graph's gateway edge below.
+	native, err := nativeAuthFromEnv(ctx, os.Getenv, pool, publicOrigin, logger)
+	if err != nil {
+		return fmt.Errorf("load native authorization: %w", err)
+	}
 
 	// Outbound e-mail (ADR-0024 WP7, gap G7). The environment is the BOOTSTRAP
 	// DEFAULT; the admin E-mail page's rows lay over it, and the resolver
@@ -414,6 +458,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	mailSettings, err := mailerConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("load outbound e-mail settings: %w", err)
+	}
+	// The SCIM access token lifetime (shared migration 0135). A value that is
+	// not a duration, or is outside 5m..24h, stops the boot and names the
+	// variable, rather than running with a lifetime nobody chose.
+	scimAccessTokenTTL, err := scimclient.AccessTokenTTLFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("load SCIM settings: %w", err)
 	}
 	// ONE store and ONE resolver, shared by the composer that sends and the
 	// admin surface that writes (wired through api.Config.EmailSettings).
@@ -438,6 +489,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose outbound e-mail: %w", err)
 	}
 
+	// The Form document's trusted proxy CIDRs, kept for the SCIM token
+	// endpoint's caller-address resolver, which every plane builds below.
+	var authDocumentTrustedProxyCIDRs []string
 	if authEnabled {
 		if err := pool.Ping(ctx); err != nil {
 			return fmt.Errorf("verify authentication PostgreSQL dependency: %w", err)
@@ -446,6 +500,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if loadErr != nil {
 			return fmt.Errorf("load production Form authentication: %w", loadErr)
 		}
+		authDocumentTrustedProxyCIDRs = append([]string(nil), authConfig.TrustedProxyCIDRs...)
 		// The document is the PRIMARY source, so the list has one meaning on
 		// whichever browser plane ends up mounted.
 		firstLoginPolicy = v2auth.FirstLoginPolicy{
@@ -455,6 +510,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			PostgreSQL:           pool,
 			MainRoutePublicRules: api.CurrentMainRoutePublicRules(),
 			Brand:                brandingResolver,
+			FormSignInEnabled:    formSignInEnabled,
+			NativeTokens:         native.graphTokens(),
 		})
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
@@ -464,20 +521,26 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				runErr = fmt.Errorf("close production Form authentication: %w", err)
 			}
 		}()
-		productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainForwardAuth())
+		if formGraph.FormSignInEnabled() {
+			logFormUserConfiguration(logger, formGraph.FormUsers())
+			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
+		} else {
+			logFormSignInDisabled(logger, formGraph.FormUsers())
+			productionAuth, err = api.NewEdgeOnlyProductionAuthRoutes(formGraph.MainEdgeAuth())
+		}
 		if err != nil {
 			return fmt.Errorf("mount production Form authentication: %w", err)
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
 		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
 		authReadiness = formGraph
-		logger.Info("production Form authentication enabled")
+		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
 	// Wire OIDC browser-session authentication when OIDC_ISSUER_URL is set.
 	// SessionHandler and OIDCHandler are independent of the FormGraph path and
 	// can coexist with it (both populate RouterConfig.Auth) — but only because
-	// internal/api/production_router.go now resolves the /forward-auth prefix to
+	// internal/api/production_router.go now resolves the /auth prefix to
 	// ONE owner. Composing both used to panic chi at startup; see the comment
 	// there before assuming any second browser-auth plane can simply be added.
 	var oidcSessionHandler *v2auth.SessionHandler
@@ -496,7 +559,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// Whether the routes are MOUNTED stays a boot decision, and it has to:
 	// internal/api/production_router.go allows exactly one browser-auth plane to
-	// own /forward-auth, so which plane owns it cannot change under a running
+	// own /auth, so which plane owns it cannot change under a running
 	// process. What the mounted routes DO is resolved per request, so editing,
 	// replacing or disabling a provider needs no restart — only introducing the
 	// first one on a deployment that had none does.
@@ -536,9 +599,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// document at all, and it is exactly the shape that cannot make an
 		// administrator any other way. Fall back to the environment there, and
 		// only there, so the document stays the single source when it exists.
-		if len(firstLoginPolicy.InitialGlobalAdmins) == 0 {
-			firstLoginPolicy.InitialGlobalAdmins = v2auth.InitialGlobalAdminsFromEnv()
-		}
+		firstLoginPolicy = singleSignOnFirstLoginPolicy(firstLoginPolicy, v2auth.InitialGlobalAdminsFromEnv)
 		// The server-side browser session (migrations/shared/0117).
 		//
 		// ONE manager for every plane. The session handler, the OIDC plane, the
@@ -593,7 +654,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// authoring the first SAML provider on a deployment that already
 		// federates OIDC needs no restart. The reverse — a deployment with NO
 		// browser plane at boot — still does, because which plane owns
-		// /forward-auth is fixed there (internal/api/production_router.go).
+		// /auth is fixed there (internal/api/production_router.go).
 		oidcSAMLHandler = v2auth.NewSAMLHandler(
 			pool, appSecretKey, identityProviderStore, vault,
 			os.Getenv("COOKIE_SECURE") != "false",
@@ -602,6 +663,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
 	}
+
+	// A deployment where nobody can sign in through a browser is legal (an
+	// API-only install), but it is never what a first install meant.
+	if oidcSessionHandler == nil && (formGraph == nil || !formGraph.FormSignInEnabled()) {
+		logger.Warn("no browser sign-in is enabled: configure OIDC (OIDC_ISSUER_URL) or an identity provider, " +
+			"or set ELITEA_FORM_LOGIN_ENABLED=true to use the Form users file")
+	}
+
+	// People whom an earlier release signed in as `<login>@centry.user`. A
+	// warning only; see warnReservedDomainSignInAccounts.
+	warnReservedDomainSignInAccounts(ctx, logger, pool)
 
 	// ONE call site, placed AFTER both assignments above.
 	//
@@ -653,7 +725,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if secretKey := os.Getenv("APPLICATION_SECRET_KEY"); secretKey != "" && pool != nil {
 		sessionTokens = authsvc.NewLocalValidator(pool, secretKey)
 	}
-	apiGroupAuth := apiGroupAuthConfig(
+	apiGroupAuth := withNativeTokens(apiGroupAuthConfig(
 		formGraph,
 		principalValidator,
 		forwardedIdentityVerifier,
@@ -662,7 +734,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		os.Getenv("APPLICATION_SECRET_KEY"),
 		oidcSessionHandler != nil,
 		sessionManager,
-	)
+	), native.apiTokens())
 
 	// The browser-only routes: the project switcher, the notification list and
 	// the notification event stream.
@@ -726,7 +798,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Both answered `401 missing authorization header` to a browser holding a
 	// valid session: their AuthConfig carried the forwarded-identity verifier
 	// and no SessionSecret, and deploy/traefik/dynamic.yml strips every
-	// inbound X-Auth-* header and runs no forwardAuth, so forwarded identity
+	// inbound X-Auth-* header and runs no edgeAuth, so forwarded identity
 	// never arrives and cannot be made to. The avatar route is what renders
 	// the user menu, so the failure was visible on every page.
 	//
@@ -819,12 +891,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment")
 	}
 	var currentIndexTypes *indextypesapi.CurrentIndexTypesRoute
+	var attachmentExtensions []string
 	if currentIndexTypesSettings.Enabled {
 		currentIndexTypesSnapshot, snapshotErr :=
 			runtimecomposition.LoadPinnedCurrentIndexTypesSnapshot()
 		if snapshotErr != nil {
 			return fmt.Errorf("load pinned current index-types snapshot: %w", snapshotErr)
 		}
+		attachmentExtensions = currentIndexTypesSnapshot.AttachmentExtensions()
 		currentIndexTypes, err = indextypesapi.NewCurrentIndexTypesRoute(
 			currentIndexTypesSnapshot,
 			apiGroupAuth,
@@ -921,6 +995,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// assigned inside the branch that composes it, and the variable is a nil
 	// INTERFACE everywhere else.
 	var projectVectorStore projectprovisioning.ProjectVectorStore
+	// The platform default model (#6826). Declared as the interface the router
+	// takes and assigned only from a non-nil service, so no typed nil reaches
+	// the router's nil checks.
+	var platformModelDefaults api.PlatformModelDefaults
 	// The save-time credential gate for the toolkit write path (#613). It is
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
@@ -1083,6 +1161,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 		if err != nil {
 			return fmt.Errorf("compose current Configurations model-default route: %w", err)
+		}
+		// The secrets handler is the one vault creator (#399). It creates the
+		// public project's vault on a fresh install, where migrations made
+		// the project without the provisioner.
+		modelDefaults, modelDefaultsErr := currentConfigurationsRoot.NewPlatformModelDefaults(
+			pool,
+			v2secrets.NewHandler(pool),
+		)
+		if modelDefaultsErr != nil {
+			return fmt.Errorf("compose the platform default model: %w", modelDefaultsErr)
+		}
+		if modelDefaults != nil {
+			platformModelDefaults = modelDefaults
 		}
 		// The status_ok decision for the compatibility write routes (#457).
 		//
@@ -1645,14 +1736,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			publicRoutes.ExecutionEvents,
 			principalValidator,
 			forwardedIdentityVerifier,
-			// The browser's only credential for the events stream: an
-			// EventSource sends a cookie and nothing else (#93). The GROUP's
-			// own credential set is handed over whole, so a session is
-			// accepted here on exactly the terms it is accepted everywhere
-			// else — including the server-side session store, which the
-			// literal that used to stand here did not carry. Only the cookie
-			// fields are read; NewProductionRuntimeRoutes drops the token
-			// validators, so these two routes stay narrower than the group.
+			// The GROUP's own credential set, handed over whole. A browser's
+			// EventSource sends a cookie and nothing else (#93), and an SDK or
+			// a server-side client follows the run it started with the SAME
+			// personal access token it started it with (#289). Both are
+			// accepted here on exactly the terms they are accepted on every
+			// other /api/v2 route — including the server-side session store,
+			// which the literal that used to stand here did not carry, and the
+			// token validator, which NewProductionRuntimeRoutes used to drop.
 			//
 			// A deployment with no authentication plane hands over the zero
 			// AuthConfig, whose SessionSecret is empty. That is the same
@@ -1673,7 +1764,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// exercised from a browser at all.
 		//
 		// Additive: the peer verifier and principal validator come with the
-		// same value, so the worker and the forward-auth edge authenticate
+		// same value, so the worker and the auth edge authenticate
 		// exactly as before, and each route still resolves permissions through
 		// the RBAC resolver it is given.
 		//
@@ -1926,6 +2017,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
 			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
 			Logger:         logger,
+			// The analytics reads decide active users and run spend from
+			// the inbound execution id, so the edge keeps it only for a live
+			// execution of the caller.
+			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool),
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)
@@ -2013,10 +2108,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		orchestrator := v2evaluation.NewOrchestrator(
 			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
 		// Started with the PROCESS context, so the workers and the recovery
-		// sweep stop on SIGTERM. A run in flight then leaves its row `running`
-		// with a fresh heartbeat, and the next process re-queues it once the
-		// heartbeat goes stale — which is what makes a restart lose nothing.
+		// sweep stop on SIGTERM. A run in flight then hands its row back to
+		// `created`, and the next process resumes it at startup; a process
+		// that dies without that write is re-queued once its heartbeat goes
+		// stale — which is what makes a restart lose nothing.
 		orchestrator.Start(ctx)
+		// Deferred AFTER `defer pool.Close()`, so it runs BEFORE it: the
+		// workers write their shutdown release while the pool is still open.
+		defer orchestrator.Stop(evalShutdownTimeout)
 		evalOrchestrator = orchestrator
 	}
 
@@ -2098,7 +2197,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// controls that the server refuses with 403 on each click.
 			Resolver: legacyrbac.NewPostgresResolver(pool),
 			// The runtime deployment authenticates the browser at
-			// /forward-auth/login, which sets `elitea_browser_auth` and projects
+			// /auth/login, which sets `elitea_browser_auth` and projects
 			// the principal as X-Auth-*. Without this verifier the handler has
 			// no way to read that identity, injects an empty permission list,
 			// and the SPA renders a sidebar with no items — see adminui's
@@ -2172,10 +2271,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		patSigner = formGraph
 	}
 
+	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
+	if err != nil {
+		return fmt.Errorf("load SCIM caller-address settings: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
+		DeploymentKind:               deploymentKind,
+		PublicOrigin:                 publicOrigin,
+		NativeClients:                native.registry,
+		NativeStore:                  native.store,
+		NativePolicy:                 native.policy(pool),
+		NativeAccess:                 native.validator,
+		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                       mailComposer,
 		EmailSettings:                emailResolver,
 		BrandingPackages:             brandingPackages,
@@ -2207,6 +2318,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ProductionRuntime:             productionRuntime,
 		CurrentProjectInfo:            currentProjectInfo,
 		CurrentIndexTypes:             currentIndexTypes,
+		AttachmentExtensions:          attachmentExtensions,
 		CurrentApplicationSkills:      currentApplicationSkills,
 		CurrentPromptContextReads:     currentPromptContextReads,
 		CurrentProjectList:            currentProjectList,
@@ -2234,6 +2346,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitDiscovery:           toolkitDiscovery,
 		PipelineTriggers:           pipelineTriggers,
 		AuditRecorder:              auditRecorder,
+		SCIMAccessTokenTTL:         scimAccessTokenTTL,
+		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentNodeRecovery:        currentNodeRecovery,
 		CurrentApplicationTask:     currentApplicationTask,
@@ -2257,6 +2371,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ConfigStoredResolver:       configStoredResolver,
 		ObjectStore:                objectStore,
 		ProjectVectorStore:         projectVectorStore,
+		PlatformModelDefaults:      platformModelDefaults,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*
 		// route, and creating an agent from the UI 404s (#115).
@@ -2307,10 +2422,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// #876's second half — see this variable's own composition comment,
 		// above, for why its Bus is a no-op and its one Sink is the webhook
 		// Dispatcher.
-		DomainEvents:            domainEvents,
-		WebhookDeliveries:       webhookDeliveries,
-		WebhookDispatcher:       webhookDispatcher,
-		WebhookDestinationGuard: webhookDestinationGuard,
+		DomainEvents:                domainEvents,
+		WebhookDeliveries:           webhookDeliveries,
+		WebhookDispatcher:           webhookDispatcher,
+		WebhookDestinationGuard:     webhookDestinationGuard,
+		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
 	})
 
 	// NOTE(#126): the Socket.IO prototype server (internal/api/socketio) is
@@ -2513,6 +2629,10 @@ func analyticsRepository(pool *pgxpool.Pool) v2analytics.Repository {
 }
 
 const maxAuthConfigPathBytes = 4096
+
+// evalShutdownTimeout bounds how long shutdown waits for the evaluation
+// workers to write their release. Each release write has its own 5 s bound.
+const evalShutdownTimeout = 10 * time.Second
 
 func configuredAuthConfigPath(lookup func(string) (string, bool)) (string, bool, error) {
 	if lookup == nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,14 +13,14 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
-// MainForwardAuthPath is an internal gateway address, not a browser-facing
+// MainEdgeAuthPath is an internal gateway address, not a browser-facing
 // compatibility alias. The gateway calls it before forwarding every request
 // to the current Main during the incremental cutover.
-const MainForwardAuthPath = "/internal/forward-auth/main"
+const MainEdgeAuthPath = "/internal/auth/main"
 
 const (
 	mainDecisionTimeout = 15 * time.Second
@@ -42,11 +43,11 @@ type MainConfig struct {
 	// PublicOrigin is the origin a BROWSER reaches this deployment on, and it
 	// is what makes this handler's redirects usable.
 	//
-	// The redirects below were relative. A ForwardAuth response is consumed by
+	// The redirects below were relative. An EdgeAuth response is consumed by
 	// the EDGE, not by the browser, and an edge resolves a relative Location
 	// against the address it called — which is this service's INTERNAL
 	// address. Traefik handed browsers
-	//   http://elitea-main.elitea.svc.cluster.local:8080/forward-auth/login?...
+	//   http://elitea-main.elitea.svc.cluster.local:8080/auth/login?...
 	// and the browser answered ERR_NAME_NOT_RESOLVED, because that name exists
 	// only inside the cluster. Every deployment that puts this endpoint behind
 	// a proxy hits this, which is every deployment that uses it at all.
@@ -182,6 +183,18 @@ func (h *MainHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			writeProblem(writer, http.StatusServiceUnavailable)
 		}
 	case forwardapp.DecisionDeny:
+		if bearerCredential(request.Header) {
+			// A bearer caller is a program, not a browser: a 302 to the
+			// access-denied PAGE tells a native client nothing (ADR-0025
+			// WP3). A revoked native device session gets the ADR's
+			// device_revoked answer, any other refused bearer a plain 401.
+			if decision.Reason == forwardapp.ReasonCredentialRevoked {
+				apimw.WriteDeviceRevoked(writer)
+				return
+			}
+			writeBearerRejected(writer)
+			return
+		}
 		http.Redirect(writer, request, h.absoluteTarget(h.accessDeniedTarget), http.StatusFound)
 	case forwardapp.DecisionLogin:
 		query := url.Values{"target_to": {forwarded.URI}}
@@ -199,7 +212,7 @@ func writeMainIdentity(writer http.ResponseWriter, decision forwardapp.Decision)
 		return false
 	}
 	// Both headers are emitted for every allow decision. This makes the
-	// ForwardAuth response authoritative over caller-supplied profile headers
+	// EdgeAuth response authoritative over caller-supplied profile headers
 	// and distinguishes an explicit null projection from a missing/mixed-version
 	// contract.
 	writer.Header().Set(MainAvatarStateHeader, avatarState)
@@ -222,7 +235,7 @@ func writeMainIdentity(writer http.ResponseWriter, decision forwardapp.Decision)
 		return false
 	}
 	writer.Header().Set("X-Auth-Reference", "-")
-	writeForwardAuthOK(writer)
+	writeEdgeAuthOK(writer)
 	return true
 }
 
@@ -290,4 +303,22 @@ func validMainAvatarValue(value string) bool {
 func nullJSON(value json.RawMessage) bool {
 	value = bytes.TrimSpace(value)
 	return len(value) == 0 || bytes.Equal(value, []byte("null"))
+}
+
+// bearerCredential reports an `Authorization: Bearer` credential on the
+// request: the caller is an API client, and a deny must be a 401 it can read.
+func bearerCredential(headers http.Header) bool {
+	value := headers.Get("Authorization")
+	scheme, _, ok := strings.Cut(value, " ")
+	return ok && strings.EqualFold(scheme, "Bearer")
+}
+
+// writeBearerRejected is the 401 the API's own Auth middleware writes for a
+// refused bearer token, so a client sees the same refusal through the edge.
+func writeBearerRejected(writer http.ResponseWriter) {
+	writer.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusUnauthorized)
+	_, _ = writer.Write([]byte(`{"error":{"message":"token validation failed","type":"authentication_error","code":"token_rejected"}}` + "\n"))
 }

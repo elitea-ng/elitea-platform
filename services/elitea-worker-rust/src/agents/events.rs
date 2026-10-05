@@ -350,6 +350,96 @@ pub(crate) struct ApplicationToolPresentationCatalog {
     by_tool_name: BTreeMap<String, ApplicationToolPresentation>,
 }
 
+/// The toolkit each provider-visible tool name was bound from.
+///
+/// Main projects a tool-call frame into `elitea_runtime.tool_call_records`, and
+/// the Analytics Tools tab groups by toolkit. The frame is the only place that
+/// knows which toolkit produced a call. Without this catalog every MCP or
+/// configured-toolkit row reached Main with an empty `toolkit_name`, and two
+/// toolkits that expose a tool of the same name merged into one row.
+///
+/// The values come from Main's frozen tool snapshot (the toolkit row id, its
+/// name and its type), never from the provider. They carry no settings.
+#[derive(Clone, Default)]
+pub(crate) struct ToolkitAttributionCatalog {
+    by_tool_name: BTreeMap<String, ToolkitAttribution>,
+}
+
+#[derive(Clone)]
+struct ToolkitAttribution {
+    id: Option<u64>,
+    name: String,
+    kind: String,
+}
+
+impl ToolkitAttributionCatalog {
+    /// Record the toolkit of one provider-visible tool name. A value that is
+    /// not a safe display identity is not recorded: attribution is
+    /// observability, and it must not fail a turn.
+    pub(crate) fn insert(
+        &mut self,
+        provider_tool_name: &str,
+        toolkit_id: Option<u64>,
+        toolkit_name: &str,
+        toolkit_type: &str,
+    ) {
+        let safe = |value: &str| {
+            !value.is_empty()
+                && value.len() <= MAX_CONTEXT_TEXT_BYTES
+                && !value.chars().any(char::is_control)
+        };
+        if !valid_tool_identity(provider_tool_name) || !safe(toolkit_name) || !safe(toolkit_type) {
+            return;
+        }
+        self.by_tool_name.insert(
+            provider_tool_name.to_owned(),
+            ToolkitAttribution {
+                id: toolkit_id.filter(|id| *id > 0),
+                name: toolkit_name.to_owned(),
+                kind: toolkit_type.to_owned(),
+            },
+        );
+    }
+
+    /// Join the frozen toolkit references (`toolkit_name`, toolkit row id,
+    /// toolkit type) with the binding plan (`toolset_name`, logical tool name,
+    /// provider-visible name). A toolset with no frozen reference (an internal
+    /// toolset such as `ask_user` or the skill loader) gets no attribution.
+    pub(crate) fn from_bindings<'a>(
+        references: impl IntoIterator<Item = (&'a str, Option<u64>, &'a str)>,
+        bindings: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    ) -> Self {
+        let toolkits: BTreeMap<&str, (Option<u64>, &str)> = references
+            .into_iter()
+            .map(|(name, id, kind)| (name, (id, kind)))
+            .collect();
+        let mut catalog = Self::default();
+        for (toolset_name, _logical_name, provider_name) in bindings {
+            if let Some((toolkit_id, toolkit_type)) = toolkits.get(toolset_name) {
+                catalog.insert(provider_name, *toolkit_id, toolset_name, toolkit_type);
+            }
+        }
+        catalog
+    }
+
+    fn get(&self, provider_tool_name: &str) -> Option<&ToolkitAttribution> {
+        self.by_tool_name.get(provider_tool_name)
+    }
+}
+
+impl ToolkitAttribution {
+    fn insert_into(&self, metadata: &mut Value) {
+        let Value::Object(object) = metadata else {
+            return;
+        };
+        object.insert("toolkit_name".to_owned(), json!(self.name));
+        object.insert("toolkit_type".to_owned(), json!(self.kind));
+        if let Some(toolkit_id) = self.id {
+            object.insert("toolkit_id".to_owned(), json!(toolkit_id));
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ApplicationToolPresentation {
     display_name: String,
@@ -656,6 +746,7 @@ struct ActiveToolCall {
     application: Option<ApplicationToolPresentation>,
     sibling_ordinal: Option<usize>,
     pipeline_node_name: Option<String>,
+    toolkit: Option<ToolkitAttribution>,
 }
 
 #[derive(Clone)]
@@ -725,6 +816,9 @@ impl CompletedAgentBrowserOutput {
 struct OrdinaryModelEvent {
     content: String,
     thinking: String,
+    /// `false` for a provider delta (`partial`), which always appends; `true`
+    /// for the aggregated final response, which may restate the whole turn.
+    aggregate: bool,
     closes_turn: bool,
     output_limited: bool,
     timestamp: String,
@@ -750,6 +844,7 @@ pub(crate) struct AgentEventProjector {
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     application_tools: ApplicationToolPresentationCatalog,
+    toolkit_attribution: ToolkitAttributionCatalog,
     descendants: BTreeMap<String, DescendantAgentProjector>,
     pipeline_result: Option<String>,
     static_pause_proof: Option<Value>,
@@ -767,6 +862,9 @@ struct ContinuationOverlap {
     raw_content: String,
     removed_prefix_bytes: Option<usize>,
     injected_separator: bool,
+    /// Bytes of the projected text already returned. `project` returns only
+    /// what lies beyond them, so the caller can append it as a delta.
+    emitted_bytes: usize,
 }
 
 impl ContinuationOverlap {
@@ -776,15 +874,36 @@ impl ContinuationOverlap {
             raw_content: String::new(),
             removed_prefix_bytes: None,
             injected_separator: false,
+            emitted_bytes: 0,
         }
     }
 
+    /// Fold one model event into the continuation and return the NEW projected
+    /// text: the part of the trimmed continuation that no earlier call
+    /// returned. Returning the whole projection made every partial after the
+    /// overlap buffer flushed re-append everything streamed so far.
     fn project(
         &mut self,
         current: String,
+        aggregate: bool,
         closes_turn: bool,
     ) -> Result<String, AgentEventProjectionError> {
-        let (raw_content, _) = merge_stream_value(&self.raw_content, current)?;
+        let projected = self.projection(current, aggregate, closes_turn)?;
+        let delta = projected
+            .get(self.emitted_bytes..)
+            .map(ToOwned::to_owned)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        self.emitted_bytes = projected.len();
+        Ok(delta)
+    }
+
+    fn projection(
+        &mut self,
+        current: String,
+        aggregate: bool,
+        closes_turn: bool,
+    ) -> Result<String, AgentEventProjectionError> {
+        let (raw_content, _) = merge_stream_value(&self.raw_content, current, aggregate)?;
         self.raw_content = raw_content;
         if self.removed_prefix_bytes.is_none() {
             if !closes_turn && self.raw_content.chars().count() <= MAX_CONTINUATION_OVERLAP_CHARS {
@@ -868,6 +987,7 @@ impl AgentEventProjector {
             sensitive_tools,
             delegated_authorization,
             application_tools,
+            toolkit_attribution: ToolkitAttributionCatalog::default(),
             descendants: BTreeMap::new(),
             pipeline_result: None,
             static_pause_proof: None,
@@ -877,6 +997,14 @@ impl AgentEventProjector {
             checkpoint_recovery: false,
             node_recovery_paused: false,
         })
+    }
+
+    /// Attach the toolkit of each bound tool, so every tool frame names the
+    /// toolkit that produced it (see [`ToolkitAttributionCatalog`]).
+    #[must_use]
+    pub(crate) fn with_toolkit_attribution(mut self, catalog: ToolkitAttributionCatalog) -> Self {
+        self.toolkit_attribution = catalog;
+        self
     }
 
     /// Restored generation replaces its interrupted browser attempt. The
@@ -2211,6 +2339,7 @@ impl AgentEventProjector {
                     OrdinaryModelEvent {
                         content: text.clone(),
                         thinking: String::new(),
+                        aggregate: true,
                         closes_turn: true,
                         output_limited: false,
                         timestamp: event
@@ -2301,14 +2430,22 @@ impl AgentEventProjector {
                 return Err(AgentEventProjectionError::invalid_state());
             }
         };
+        // A non-partial event restates the turn only when nothing streamed
+        // before it (ADK's non-streaming final event). After partial deltas,
+        // every provider's terminal event (OpenAI-compatible, Gemini,
+        // Anthropic, the output-continuation scope) carries only its own
+        // delta, so it appends like any other: stripping the text so far as a
+        // "restated prefix" lost leading characters (#6675).
+        let aggregate = model_event.aggregate && !matches!(self.state, ProjectionState::Active(_));
         let model_content = if let Some(overlap) = self.continuation_overlap.as_mut() {
-            overlap.project(model_event.content, model_event.closes_turn)?
+            overlap.project(model_event.content, aggregate, model_event.closes_turn)?
         } else {
             model_event.content
         };
-        let (next_content, content_delta) = merge_stream_value(previous_content, model_content)?;
+        let (next_content, content_delta) =
+            merge_stream_value(previous_content, model_content, aggregate)?;
         let (next_thinking, thinking_delta) =
-            merge_stream_value(previous_thinking, model_event.thinking)?;
+            merge_stream_value(previous_thinking, model_event.thinking, aggregate)?;
         let next_timestamp_start = timestamp_start.to_owned();
 
         let mut batch = ProjectedAgentEventBatch::new();
@@ -2527,6 +2664,7 @@ impl AgentEventProjector {
                     .get(call.name)
                     .map(|_| replay_ordinal.unwrap_or(index + 1)),
                 pipeline_node_name: pipeline_node_name.clone(),
+                toolkit: self.toolkit_attribution.get(call.name).cloned(),
             };
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
@@ -5040,6 +5178,7 @@ fn ordinary_model_event(
         return Ok(Some(OrdinaryModelEvent {
             content: String::new(),
             thinking: String::new(),
+            aggregate: false,
             closes_turn: true,
             output_limited,
             timestamp: event
@@ -5066,6 +5205,7 @@ fn ordinary_model_event(
     Ok(Some(OrdinaryModelEvent {
         content,
         thinking,
+        aggregate: !event.llm_response.partial,
         closes_turn,
         output_limited,
         timestamp: event
@@ -5411,10 +5551,29 @@ fn tool_entry(
             }),
         );
     } else if let Some(node_name) = active.pipeline_node_name.as_deref() {
-        let metadata = json!({
+        let mut metadata = json!({
             "langgraph_node": node_name,
             "original_name": node_name,
         });
+        if let Some(toolkit) = active.toolkit.as_ref() {
+            toolkit.insert_into(&mut metadata);
+        }
+        let Value::Object(object) = &mut entry else {
+            return entry;
+        };
+        object.insert("metadata".to_owned(), metadata.clone());
+        object.insert(
+            "tool_meta".to_owned(),
+            json!({
+                "name": active.name,
+                "metadata": metadata,
+            }),
+        );
+    } else if let Some(toolkit) = active.toolkit.as_ref() {
+        // A plain toolkit tool (configured or MCP). Main reads these keys into
+        // the tool-call record that the Analytics Tools tab groups by.
+        let mut metadata = json!({});
+        toolkit.insert_into(&mut metadata);
         let Value::Object(object) = &mut entry else {
             return entry;
         };
@@ -5642,10 +5801,24 @@ fn validate_invocation_id(value: &str) -> Result<(), AgentEventProjectionError> 
     validate_event_id(value)
 }
 
+/// Fold one model event into the turn so far, returning the new turn text and
+/// the delta to stream.
+///
+/// A partial event is a provider delta and always appends: a delta that
+/// happens to start with the text so far (`"a"`, `"a"`, `"ab"`) is new text,
+/// not a restatement, and treating it as one dropped leading characters
+/// (#6675). Only an aggregate (non-partial) event may restate the turn, and
+/// then only the part beyond the text already streamed is new.
 fn merge_stream_value(
     previous: &str,
     current: String,
+    aggregate: bool,
 ) -> Result<(String, String), AgentEventProjectionError> {
+    if !aggregate {
+        let mut accumulated = previous.to_owned();
+        extend_bounded(&mut accumulated, &current)?;
+        return Ok((accumulated, current));
+    }
     if previous.is_empty() {
         if current.len() > MAX_COMPLETED_CONTENT_BYTES {
             return Err(AgentEventProjectionError {
@@ -5797,6 +5970,7 @@ mod scoped_static_inventory_tests {
                     application: catalog.get("saved_pipeline").cloned(),
                     sibling_ordinal: Some(1),
                     pipeline_node_name: None,
+                    toolkit: None,
                 },
             );
             root.descendants.insert(

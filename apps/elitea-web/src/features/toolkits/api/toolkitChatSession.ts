@@ -61,12 +61,20 @@ export async function createToolkitConversation(input: Readonly<Record<string, u
   return data === undefined ? {} : { data };
 }
 
-/** `createToolkitConversationWithParticipant`'s `addParticipant` seam — `{projectId, id, participants}`. */
+/**
+ * `createToolkitConversationWithParticipant`'s `addParticipant` seam — `{projectId, id, participants}`.
+ *
+ * The route takes the participant ARRAY as the whole body (or one bare
+ * participant object), the same as legacy `chat.api.js` and
+ * `participantApi.addParticipantIntoConversation`. A `{participants: [...]}`
+ * wrapper reads as ONE participant with no `entity_meta`, and the server
+ * refuses it with 400.
+ */
 export async function addToolkitConversationParticipant(input: Readonly<Record<string, unknown>>): Promise<AddParticipantResult> {
   const { projectId, id, participants } = input;
   const data = await fetchData<NonNullable<AddParticipantResult['data']> | undefined>(
     `/elitea_core/participants/prompt_lib/${String(projectId)}/${String(id)}`,
-    { method: 'POST', body: JSON.stringify({ participants }), headers: JSON_HEADERS },
+    { method: 'POST', body: JSON.stringify(participants), headers: JSON_HEADERS },
   );
   return data === undefined ? {} : { data };
 }

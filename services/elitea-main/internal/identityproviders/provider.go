@@ -122,6 +122,14 @@ type OIDCDocument struct {
 	// says. Many providers omit the claim, so requiring it is a deployment
 	// choice and not a default.
 	RequireEmailVerified bool `json:"require_email_verified"`
+
+	// LoginDomains are the email domains whose users sign in through this
+	// provider. See SAMLDocument.LoginDomains.
+	LoginDomains []string `json:"login_domains,omitempty"`
+
+	// AdoptSCIMUsers lets this provider's FIRST login adopt an account a SCIM
+	// client provisioned. See SAMLDocument.AdoptSCIMUsers.
+	AdoptSCIMUsers bool `json:"adopt_scim_users"`
 }
 
 // Two fields that a reader might expect here are absent on purpose, because
@@ -194,6 +202,32 @@ type SAMLDocument struct {
 
 	// ClockSkewSeconds is the tolerance applied to assertion time conditions.
 	ClockSkewSeconds int `json:"clock_skew_seconds"`
+
+	// LoginDomains are the email domains whose users sign in through this
+	// provider. The sign-in page reads them for home-realm discovery: a person
+	// types a work address, and the page sends them to the provider that lists
+	// its domain. Empty means the provider is reached only by its own button.
+	//
+	// The list is ROUTING, not authorisation. A person whose address is not
+	// listed can still press the provider's button, and the provider decides.
+	// Validate stores each entry lower-cased and refuses one that is not a
+	// host name.
+	LoginDomains []string `json:"login_domains,omitempty"`
+
+	// AdoptSCIMUsers lets this provider's FIRST login adopt an account a SCIM
+	// client provisioned (one with an `elitea_auth.scim_users` record and no
+	// federated link yet). It is OFF by default.
+	//
+	// A first login joins an existing account by the asserted address
+	// (internal/api/v2/auth/oidc.go joinAccountByEmail). A SAML assertion
+	// states nothing about whether that address is verified, and an OIDC
+	// provider may omit `email_verified`. So without this flag ANY configured
+	// provider — a GitHub connector behind Dex, a social login — that asserts a
+	// directory-provisioned address would take that person's account. The
+	// operator turns it on for the provider PAIRED with the SCIM client (Entra
+	// ID's SAML or OIDC app for Entra's provisioning), and leaves it off for
+	// every other.
+	AdoptSCIMUsers bool `json:"adopt_scim_users"`
 }
 
 // MaxClockSkewSeconds bounds the tolerance either kind may author.

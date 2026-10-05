@@ -61,6 +61,7 @@ const IconButtonAny = IconButton as React.ComponentType<
 import { buildAgentShareLink } from '../helpers';
 
 import { AgentConversationStarters } from './AgentConversationStarters';
+import { AgentDescription } from './AgentDescription';
 import AgentHubLike from './AgentHubLike';
 import { AgentWelcomeMessage } from './AgentWelcomeMessage';
 import { useAgentVersionDetail } from '../useAgentVersionDetail';
@@ -267,9 +268,10 @@ const AgentModal = memo(({ open, onClose, agent, onStartConversation }: AgentMod
             <Typography variant="headingMedium" color="text.secondary">
               {name}
             </Typography>
-            <Typography variant="bodySmall2" sx={descriptionSx(isSmallHeight)}>
-              {description}
-            </Typography>
+            <AgentDescription
+              description={description}
+              isSmallHeight={isSmallHeight}
+            />
             <Typography
               variant="bodySmall"
               onClick={() => setShowContext(true)}
@@ -362,20 +364,6 @@ const contentSx = (isSmall: boolean): SxProps<Theme> => ({
   flex: 1,
   minHeight: 0,
   overflow: isSmall ? 'auto' : 'hidden',
-});
-
-const descriptionSx = (isSmall: boolean): SxProps<Theme> => ({
-  textAlign: 'center',
-  color: 'text.metrics',
-  ...(isSmall
-    ? { width: '100%' }
-    : {
-        height: '2.5rem',
-        display: '-webkit-box',
-        WebkitLineClamp: 2,
-        WebkitBoxOrient: 'vertical',
-        overflow: 'hidden',
-      }),
 });
 
 const sectionsContainerSx = (isSmall: boolean): SxProps<Theme> => ({

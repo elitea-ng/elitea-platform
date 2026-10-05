@@ -21,12 +21,14 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import { useTheme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
 import { SortableHeaderCell } from './AuditTableParts';
 import type { AdminScheduleRow } from './api/adminSchedulesApi';
 import type { ScheduleSort, ScheduleSortField } from './useAdminSchedulesPage';
+import { monoFontFamily } from '@/shared/brand/typeScale';
 
 export interface SchedulesTableProps {
   readonly rows: readonly AdminScheduleRow[];
@@ -62,6 +64,7 @@ function CronCell({
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const theme = useTheme();
 
   // Focused programmatically rather than with `autoFocus`, which jsx-a11y bans
   // for the case it is actually bad at — a control grabbing focus on page load.
@@ -79,7 +82,7 @@ function CronCell({
 
   if (!onCronChange) {
     return (
-      <Typography variant="bodySmall" sx={{ fontFamily: 'monospace' }}>
+      <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
         {row.cron}
       </Typography>
     );
@@ -92,7 +95,7 @@ function CronCell({
         type="button"
         underline="hover"
         onClick={() => setDraft(row.cron)}
-        sx={{ fontFamily: 'monospace' }}
+        sx={{ fontFamily: monoFontFamily }}
       >
         {row.cron}
       </Link>
@@ -115,7 +118,7 @@ function CronCell({
           // nested MUI class selector: R-T6 keeps MUI internals out of call
           // sites, and the theme gate greps for those class names in COMMENTS
           // too — so this one deliberately does not name the one it replaced.
-          style: { fontFamily: 'monospace' },
+          style: { fontFamily: theme.typography.fontFamilyMono },
         },
       }}
       onChange={(event) => setDraft(event.target.value)}
@@ -216,7 +219,7 @@ export function SchedulesTable({
                 />
               </TableCell>
               <TableCell>
-                <Typography component="span" variant="bodySmall" sx={{ fontFamily: 'monospace' }}>
+                <Typography component="span" variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
                   {row.rpc_func}
                 </Typography>
               </TableCell>

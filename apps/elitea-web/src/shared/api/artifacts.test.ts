@@ -74,6 +74,16 @@ describe('uploadArtifactObject', () => {
     expect(new URL(sink[0]!.url).searchParams.get('overwrite')).toBe('true');
   });
 
+  it('reads the 201 answer to the end — a no-store answer left unread never finishes loading', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    server.use(objectUploadOk());
+    const result = await uploadArtifactObject({ baseUrl: '/api/v2', projectId: 'p1', bucket: 'bucket', fileKey: 'a.txt', file: new Blob(['x']) });
+    expect(result.ok).toBe(true);
+    const response: unknown = await fetchSpy.mock.results.at(-1)?.value;
+    if (!(response instanceof Response)) throw new Error('upload did not call fetch');
+    expect(response.bodyUsed).toBe(true);
+  });
+
   /**
    * The part itself is asserted on the `FormData` handed to `fetch`, not on
    * the serialised request body: jsdom's `FormData`/`Blob` and Node's undici

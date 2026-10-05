@@ -1,6 +1,6 @@
 package api
 
-import forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+import forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 
 // CurrentMainRoutePublicRules is the compatibility catalog of every Main-plane
 // route that answers without a browser session. It holds two groups.
@@ -12,7 +12,7 @@ import forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/inte
 // Each future Go route owner should take over its entry when that route moves.
 //
 // The `go.*` rules belong to routes that router.go itself registers outside
-// every authentication group. A forward-auth edge asks this policy before the
+// every authentication group. A auth edge asks this policy before the
 // request reaches the router. A route that is public in router.go and absent
 // here gets a 302 to the login form. A browser sub-resource
 // (a <script src>, an <img src>) carries no credential, so it must stay public
@@ -52,6 +52,9 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// alternative covers the content-addressed ?v=<etag> URL that
 		// branding.Handler hands out for the immutable cache entry.
 		uriRule("go.branding.bootstrap", `^/api/v2/branding/bootstrap\.js(\?.*)?$`),
+		// The same pack as JSON for native clients (ADR-0025 decision 2):
+		// read before sign-in to brand the sign-in screen. Same ?v= shape.
+		uriRule("go.branding.pack_json", `^/api/v2/branding/pack\.json(\?.*)?$`),
 		// Uploaded brand assets: <img src>, <link rel="icon"> and @font-face
 		// fetches carry no credential. The path is content-addressed
 		// (kind/<sha256>.<ext>) and the handler admits nothing else.
@@ -66,6 +69,29 @@ func CurrentMainRoutePublicRules() []forwardapp.PublicRule {
 		// each dependency's state. The query alternative covers a monitor's
 		// cache-busting parameter.
 		uriRule("go.health.healthz", `^/healthz(\?.*)?$`),
+		// The discovery document (ADR-0025 decision 1): how a client given
+		// only an origin learns how to sign in, so it can carry no
+		// credential. Exact path, no query: the document takes no parameter.
+		uriRule("go.discovery.well_known", `^/\.well-known/elitea-client$`),
+		// SCIM 2.0 (shared migration 0135). router.go mounts both outside
+		// the session Auth group, because a SCIM caller is an identity
+		// provider with a SCIM client credential and never has a browser
+		// session. The token endpoint is how such a client gets a credential;
+		// the SCIM tree runs its own check (internal/api/scim/auth.go) and
+		// refuses a request without a SCIM client credential with 401. A rule
+		// that sent either to the login form would break every identity
+		// provider at the edge.
+		uriRule("go.scim.token", `^/api/v2/scim/oauth/token$`),
+		// Native authorization (ADR-0025 WP2). A native client calls these
+		// before it holds any credential; the user's browser reaches
+		// /authorize from the app. The authorize pattern deliberately does
+		// NOT match /authorize/continue or /authorize/decision: those need
+		// the browser session, and the edge's own 302 to the sign-in page is
+		// what starts the sign-in when there is none.
+		uriRule("go.native.authorize", `^/api/v2/auth/native/authorize(\?.*)?$`),
+		uriRule("go.native.token", `^/api/v2/auth/native/token$`),
+		uriRule("go.native.revoke", `^/api/v2/auth/native/revoke$`),
+		uriRule("go.scim.v2", `^/api/v2/scim/v2(/[^?]*)?(\?.*)?$`),
 		// API documentation predates any session.
 		uriRule("go.openapidocs.spec_yaml", `^/api/openapi\.yaml$`),
 		uriRule("go.openapidocs.spec_json", `^/api/openapi\.json$`),

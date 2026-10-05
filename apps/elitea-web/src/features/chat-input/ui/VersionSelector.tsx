@@ -110,7 +110,7 @@ function RefreshVersionsHeader({
   return (
     <Box sx={refreshWrapperSx}>
       <Typography
-        variant="labelTiny"
+        variant="labelSmall"
         sx={versionsLabelSx}
       >
         {t('chatInput.versionSelector.versions', 'Versions')}

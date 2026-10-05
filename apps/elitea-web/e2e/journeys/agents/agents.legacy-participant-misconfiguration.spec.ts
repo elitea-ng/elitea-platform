@@ -78,7 +78,7 @@ test('parent agent shows a misconfiguration warning in Chat when its nested sub-
   const parentName = uniqueName('parent');
   const child = await createAgentWithVersion(page.request, childName, { instructions: 'Child.' });
   const parent = await createAgentWithVersion(page.request, parentName, { instructions: 'Parent.' });
-  const attach = await attachSubAgent(page.request, parent.versionId, {
+  const attach = await attachSubAgent(page.request, parent, {
     applicationId: child.id,
     versionId: child.versionId,
   });

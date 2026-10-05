@@ -125,7 +125,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 				user, err := validateToken(r.Context(), cfg, apiKey)
 				if err != nil {
-					writeCredentialRefusal(w, r, sourceAPIKey, reasonTokenRejected)
+					writeTokenRefusal(w, r, sourceAPIKey, cfg, err)
 					return
 				}
 				user, err = validatePrincipal(r.Context(), cfg, user)
@@ -220,7 +220,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 
 			user, err := validateToken(r.Context(), cfg, token)
 			if err != nil {
-				writeCredentialRefusal(w, r, sourceToken, reasonTokenRejected)
+				writeTokenRefusal(w, r, sourceToken, cfg, err)
 				return
 			}
 
@@ -261,7 +261,7 @@ func writeJSONError(w http.ResponseWriter, status int, errType, code, message st
 // Exported so the admin-UI HTML handler resolves the SAME identity this
 // middleware does. That handler used to read the `elitea_session` cookie and
 // nothing else, and the runtime deployment does not issue that cookie: the
-// browser logs in through /forward-auth/login, which stores an opaque
+// browser logs in through /auth/login, which stores an opaque
 // server-side session under `elitea_browser_auth` and projects the principal
 // onto the upstream request as X-Auth-* (deploy/runtime/platform-edge-dynamic
 // .yml `authResponseHeaders`). The handler therefore injected an empty
@@ -365,6 +365,7 @@ func validatePrincipal(ctx context.Context, cfg AuthConfig, user auth.User) (aut
 
 func serveAuthenticated(next http.Handler, w http.ResponseWriter, r *http.Request, user auth.User, source auth.AuthenticationSource) {
 	ctx := auth.ContextWithAuthenticatedUser(r.Context(), user, source)
+	ctx, next = withScheduledGates(ctx, next)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -427,10 +428,43 @@ const (
 	// neither Bearer nor Basic.
 	reasonAuthorizationSchemeUnsupported = "authorization_scheme_unsupported"
 	// reasonTokenRejected — the validator refused the bearer token or the
-	// API key. It does NOT distinguish an unknown token from a store that
-	// could not answer; validateToken returns one error for both.
+	// API key: an unknown, expired, revoked or badly signed credential.
 	reasonTokenRejected = "token_rejected"
+	// reasonTokenValidatorAbsent — this AuthConfig carries no Validator, so
+	// no bearer token or API key can be read at all. A composition defect,
+	// and the class behind #289 and regression findings F2 and C2. The LOG
+	// names it; the caller gets the token_rejected answer, because the fact
+	// is about the server and not about the credential.
+	reasonTokenValidatorAbsent = "token_validator_not_configured"
+	// reasonTokenStoreUnavailable — the validator could not ANSWER: the
+	// token repository or its signing key is unavailable. Nothing about the
+	// credential was read, so it is a 503 and not a 401 (see
+	// writeTokenRefusal).
+	reasonTokenStoreUnavailable = "token_store_unavailable"
+	// reasonDeviceRevoked — a native access token whose device session was
+	// revoked, expired or deactivated (ADR-0025). 401 device_revoked.
+	reasonDeviceRevoked = "device_revoked"
 )
+
+// DeviceRevokedBody is the ADR-0025 `device_revoked` answer (coordinator
+// decision 8). It is deliberately FLAT — `{"error":"device_revoked"}` — unlike
+// the nested envelope every other refusal here uses, so a native client tells
+// "wipe local data" (`error` is the string device_revoked) from "refresh once"
+// (`error` is an object) without parsing a code.
+var DeviceRevokedBody = map[string]string{
+	"error":             "device_revoked",
+	"error_description": "This device's sign-in was revoked. Sign in again.",
+}
+
+// WriteDeviceRevoked answers 401 device_revoked with the RFC 6750 challenge.
+// The native token endpoint and the gateway edges write the same answer.
+func WriteDeviceRevoked(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token", error_description="device_revoked"`)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(DeviceRevokedBody)
+}
 
 // logCredentialRefusal writes the one line the credential branches had none
 // of, and it is the whole of this change: no status, body or branch moves.
@@ -503,7 +537,7 @@ func credentialRefusalAnswer(source, reason string) (code, message string) {
 		return reasonAuthorizationHeaderMalformed, "invalid basic auth encoding"
 	case reasonAuthorizationSchemeUnsupported:
 		return reasonAuthorizationSchemeUnsupported, "unsupported authorization scheme"
-	case reasonTokenRejected:
+	case reasonTokenRejected, reasonTokenValidatorAbsent:
 		if source == sourceAPIKey {
 			return reasonTokenRejected, "invalid api key"
 		}
@@ -523,6 +557,40 @@ func writeCredentialRefusal(w http.ResponseWriter, r *http.Request, source, reas
 	logCredentialRefusal(r, source, reason)
 	code, message := credentialRefusalAnswer(source, reason)
 	writeJSONError(w, http.StatusUnauthorized, "authentication_error", code, message)
+}
+
+// writeTokenRefusal answers a bearer token or API key that validateToken did
+// not accept.
+//
+// THE STATUS FOLLOWS THE CAUSE, as it already does for a principal and for a
+// server-side session. A validator that could not reach its store says so
+// with auth.ErrCredentialValidationUnavailable, and that is a 503 with
+// Retry-After: nothing about the credential was read. It used to be the same
+// 401 `token_rejected` a revoked token gets, so a database hiccup told an SDK
+// that its valid token was wrong, and a person reading the response could not
+// tell a dependency fault from a bad credential (regression finding C2).
+//
+// A nil Validator stays a 401 for the caller. It is logged under its own
+// reason so an operator can tell it apart from a genuinely refused token.
+func writeTokenRefusal(w http.ResponseWriter, r *http.Request, source string, cfg AuthConfig, err error) {
+	switch {
+	case cfg.Validator == nil:
+		writeCredentialRefusal(w, r, source, reasonTokenValidatorAbsent)
+	case errors.Is(err, auth.ErrDeviceRevoked):
+		// A NATIVE credential whose device session is gone (ADR-0025
+		// decision 4). Only a validator that recognised a native token can
+		// produce this error, so no existing caller sees the new body.
+		logCredentialRefusal(r, source, reasonDeviceRevoked)
+		WriteDeviceRevoked(w)
+	case errors.Is(err, auth.ErrCredentialValidationUnavailable):
+		logCredentialRefusal(r, source, reasonTokenStoreUnavailable)
+		slog.ErrorContext(r.Context(), "the token store could not be read", "err", err)
+		w.Header().Set("Retry-After", "5")
+		writeJSONError(w, http.StatusServiceUnavailable,
+			"server_error", reasonTokenStoreUnavailable, "token store unavailable")
+	default:
+		writeCredentialRefusal(w, r, source, reasonTokenRejected)
+	}
 }
 
 // The reason each refusal names. The three are the whole vocabulary, and they

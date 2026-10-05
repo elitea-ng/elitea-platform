@@ -128,7 +128,7 @@ function AnswerQuestionsControl({
       {stepped && (
         <Typography
           data-testid="hitl-answer-progress"
-          variant="caption"
+          variant="bodySmall"
           sx={{ color: 'text.secondary' }}
         >
           {t('chatMessages.hitlAnswer.progress', 'Question {{current}} of {{total}}', {
@@ -234,14 +234,16 @@ export function ClarifyingQuestionCard({
       }}
     >
       <Typography
-        variant="subtitle2"
+        variant="labelMedium"
+        component="h6"
         sx={{ color: 'warning.dark', fontWeight: 600 }}
       >
         {t('chatMessages.hitlAnswer.title', 'The agent needs an answer to continue')}
       </Typography>
       {questions.length === 0 && message && (
         <Typography
-          variant="body2"
+          variant="bodyMedium"
+          component="p"
           sx={{ color: 'text.primary' }}
         >
           {message}

@@ -14,7 +14,7 @@
 import { useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
@@ -82,6 +82,14 @@ function runStartBlockedReason(props: {
       'This dataset has no cases. Add at least one before starting a run.',
     );
   }
+  // Every case excluded: the dataset has cases and nothing to run. The server
+  // refuses this start with a 422, so the form says so before the request.
+  if (dataset !== undefined && dataset.active_case_count === 0) {
+    return t(
+      'features.agentEvaluation.runs.allCasesExcluded',
+      'Every case in this dataset is excluded. Include at least one before starting a run.',
+    );
+  }
   if (props.dimensionIds.length === 0) {
     return t('features.agentEvaluation.runs.needDimension', 'Choose at least one dimension to score against.');
   }
@@ -136,7 +144,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
         <FormControlLabel
           key={dimension.id}
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={dimensionIds.includes(dimension.id)}
               data-testid={`run-dimension-${dimension.id}`}
               onChange={() => toggle(dimension.id)}
@@ -165,7 +173,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
       </BaseBtn>
 
       {(startError ?? blockedReason) !== undefined && (
-        <Typography role="alert" variant="body2" color="error" data-testid="run-start-error">
+        <Typography role="alert" variant="bodyMedium" component="p" color="error" data-testid="run-start-error">
           {startError ?? blockedReason}
         </Typography>
       )}

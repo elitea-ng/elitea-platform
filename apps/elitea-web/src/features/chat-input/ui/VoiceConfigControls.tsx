@@ -7,7 +7,6 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
-import type { SocketClient } from '@/shared/api/socket/client';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import type { SingleSelectOption } from '@/shared/ui/SingleSelectMenuItem';
@@ -34,7 +33,8 @@ export interface VoiceConfigControlsProps {
   readonly onConfigChange: (updates: VoiceConfigUpdate) => void;
   readonly hasModelTTS: boolean;
   readonly ttsModel: TtsModel | null;
-  readonly socket: SocketClient | null;
+  /** The project the user works in: a model preview bills it. */
+  readonly projectId: string | undefined;
   readonly browserVoices: readonly SpeechSynthesisVoice[];
   readonly voices: readonly (TtsVoice | SpeechSynthesisVoice)[];
   readonly isPlaying?: boolean | undefined;
@@ -50,7 +50,7 @@ function toVoiceOption(voice: TtsVoice | SpeechSynthesisVoice, hasModelTTS: bool
 }
 
 export function VoiceConfigControls(props: VoiceConfigControlsProps): ReactNode {
-  const { config, onConfigChange, hasModelTTS, ttsModel, socket, browserVoices, voices, isPlaying } = props;
+  const { config, onConfigChange, hasModelTTS, ttsModel, projectId, browserVoices, voices, isPlaying } = props;
 
   const previewVoiceConfig = useMemo(
     () => ({
@@ -64,7 +64,7 @@ export function VoiceConfigControls(props: VoiceConfigControlsProps): ReactNode 
 
   const { speak: previewSpeak, isPlaying: isPreviewPlaying } = useTextToSpeech({
     ttsModel: hasModelTTS ? ttsModel : null,
-    socket,
+    projectId,
     voiceConfig: previewVoiceConfig,
   });
 
@@ -108,7 +108,7 @@ export function VoiceConfigControls(props: VoiceConfigControlsProps): ReactNode 
       )}
       <Box sx={sliderRowSx}>
         <Typography
-          variant="bodySmall2"
+          variant="bodySmall"
           sx={sliderLabelSx}
         >
           {t('features.chatInput.voiceConfigControls.speedLabel', 'Speed')}
@@ -128,7 +128,7 @@ export function VoiceConfigControls(props: VoiceConfigControlsProps): ReactNode 
       </Box>
       <Box sx={sliderRowSx}>
         <Typography
-          variant="bodySmall2"
+          variant="bodySmall"
           sx={sliderLabelSx}
         >
           {t('features.chatInput.voiceConfigControls.volumeLabel', 'Volume')}

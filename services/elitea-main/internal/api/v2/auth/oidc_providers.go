@@ -46,9 +46,9 @@ package auth
 //
 // # What still needs a restart, stated rather than hidden
 //
-// Mounting the `/forward-auth/auth_oidc/*` routes at all is a boot decision:
+// Mounting the `/auth/oidc/*` routes at all is a boot decision:
 // `internal/api/production_router.go` allows exactly one browser-auth plane to
-// own `/forward-auth`, so which plane owns it cannot change under a running
+// own `/auth`, so which plane owns it cannot change under a running
 // process. Authoring the FIRST OIDC provider on a deployment that had none
 // therefore needs a restart. Editing, replacing, or disabling one does not. The
 // admin save path says which of the two happened.
@@ -94,6 +94,11 @@ type oidcRuntime struct {
 	// stops a first login. An explicit `false` is refused whatever this says;
 	// see Callback.
 	requireEmailVerified bool
+
+	// adoptSCIMUsers lets a first login adopt a SCIM-provisioned account. See
+	// identityproviders.SAMLDocument.AdoptSCIMUsers; the environment fallback
+	// reads OIDC_ADOPT_SCIM_USERS.
+	adoptSCIMUsers bool
 
 	// origin names where this runtime came from, for the log line only. An
 	// operator debugging a login needs to know whether the deployment used the
@@ -219,6 +224,7 @@ func (h *OIDCHandler) buildRuntime(
 		},
 		verifier:             discovered.Verifier(&oidc.Config{ClientID: document.ClientID}),
 		requireEmailVerified: document.RequireEmailVerified,
+		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
 	}, nil
 }
@@ -243,6 +249,7 @@ func newOIDCRuntimeFromEnvironment(ctx context.Context, cfg *OIDCConfig) (*oidcR
 		},
 		verifier:             provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
 		requireEmailVerified: oidcRequiresVerifiedEmail(),
+		adoptSCIMUsers:       oidcAdoptsSCIMUsers(),
 		origin:               "environment",
 	}, nil
 }
@@ -251,7 +258,7 @@ func newOIDCRuntimeFromEnvironment(ctx context.Context, cfg *OIDCConfig) (*oidcR
 //
 // The composition root calls it at boot to decide whether to MOUNT the OIDC
 // browser routes at all — a decision that cannot be made per request, because
-// exactly one browser-auth plane may own `/forward-auth`.
+// exactly one browser-auth plane may own `/auth`.
 //
 // A read failure is returned, not swallowed. A deployment that cannot read its
 // provider table must not silently start as an unfederated one.

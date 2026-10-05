@@ -61,20 +61,45 @@ export function hasUnsettledTurn(history: readonly ChatMessage[]): boolean {
 }
 
 /**
+ * May a settled refetch replace the live transcript's in-flight last turn?
+ *
+ * Only when no stream ever wrote to that turn: the live copy is still an
+ * object a seed drew (#6654). That is the reload-mid-turn case: the
+ * first seed drew the turn as streaming, nothing settled it, and the old rule
+ * kept that placeholder over every later refetch, even one holding the final
+ * answer. A turn a stream owns is a NEW object (the reducer and the reattach
+ * reset both copy it), and its stream may lag the database: replacing it with
+ * the persisted text and then folding the late chunks onto that text would
+ * print them twice. DEFECT 2's rule stands for that turn.
+ */
+export function seedSettlesLiveTurn(
+  live: readonly ChatMessage[],
+  seed: readonly ChatMessage[],
+  wasSeeded: (message: ChatMessage) => boolean,
+): boolean {
+  const last = live[live.length - 1];
+  if (last === undefined || !wasSeeded(last)) return false;
+  const persisted = seed.find((message) => message.id === last.id);
+  return persisted !== undefined && persisted.isStreaming !== true && persisted.isLoading !== true;
+}
+
+/**
  * The chat history to keep when the re-seed effect fires.
  *
  * @param live  the transcript on screen now (streamed tokens included)
  * @param seed  the transcript rebuilt from the conversation-messages query
  * @param switchedConversation  the reader really moved to a different conversation
+ * @param wasSeeded  whether a message object came from a seed, for `seedSettlesLiveTurn`
  */
 export function resolveSeededChatHistory(
   live: readonly ChatMessage[],
   seed: readonly ChatMessage[],
   switchedConversation: boolean,
+  wasSeeded: (message: ChatMessage) => boolean = () => false,
 ): readonly ChatMessage[] {
   if (switchedConversation) return seed;
   if (live.length === 0) return seed;
   if (seed.length === 0) return live;
-  if (hasUnsettledTurn(live)) return live;
+  if (hasUnsettledTurn(live) && !seedSettlesLiveTurn(live, seed, wasSeeded)) return live;
   return seed;
 }

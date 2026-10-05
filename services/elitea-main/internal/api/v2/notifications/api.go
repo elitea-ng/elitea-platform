@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
@@ -165,6 +166,10 @@ func (handler *currentNotificationAPIHandler) list(writer http.ResponseWriter, r
 	userID, ok := currentNotificationRequestUserID(request.Context())
 	if !ok {
 		writeCurrentNotificationAPIError(writer, http.StatusUnauthorized, "Authentication required")
+		return
+	}
+	if raw, delta := changesync.Requested(request.URL.Query()); delta {
+		handler.listChanges(writer, request, userID, raw)
 		return
 	}
 	filter, onlyTotal, err := currentNotificationListFilter(request)
@@ -489,4 +494,73 @@ func writeCurrentNotificationJSON(writer http.ResponseWriter, status int, value 
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+// currentNotificationDeltaExcluded are the legacy list parameters a delta
+// refuses: the delta is the caller's WHOLE notification set (is_seen is in
+// every row), so a filter would make a row that leaves it indistinguishable
+// from one that did not change, and paging and sorting are the cursor's job.
+var currentNotificationDeltaExcluded = []string{
+	"offset", "only_new", "only_total", "search", "event_type", "sort_by", "sort_order",
+}
+
+// listChanges answers `changes_since` (ADR-0025 WP6): the legacy row shape
+// and `total` (the caller's whole notification count now), plus tombstones,
+// the next cursor and has_more.
+func (handler *currentNotificationAPIHandler) listChanges(
+	writer http.ResponseWriter,
+	request *http.Request,
+	userID int64,
+	raw string,
+) {
+	store, ok := handler.store.(notificationapp.ChangesStore)
+	if !ok {
+		writeCurrentNotificationJSON(writer, http.StatusNotImplemented, changesync.ErrorBody{
+			Error: "not_implemented", Message: "changes_since is not supported by this composition",
+		})
+		return
+	}
+	query := request.URL.Query()
+	for _, name := range currentNotificationDeltaExcluded {
+		if query.Has(name) {
+			writeCurrentNotificationJSON(writer, http.StatusBadRequest, changesync.ErrorBody{
+				Error: "invalid_sync_request", Message: name + " cannot be combined with changes_since",
+			})
+			return
+		}
+	}
+	limit, err := changesync.Limit(query)
+	if err != nil {
+		writeCurrentNotificationJSON(writer, http.StatusBadRequest, changesync.ErrorBody{
+			Error: "invalid_limit", Message: "limit must be a positive integer",
+		})
+		return
+	}
+	page, err := store.ListChanges(request.Context(), userID, raw, limit)
+	if status, body, refused := changesync.HTTPError(err); refused {
+		writeCurrentNotificationJSON(writer, status, body)
+		return
+	}
+	if err != nil {
+		writeCurrentNotificationAPIError(writer, http.StatusInternalServerError, "Notification request failed")
+		return
+	}
+	total, err := handler.store.Count(request.Context(), userID, notificationapp.ListFilter{
+		SortBy: "created_at", SortOrder: "desc", Limit: 1,
+	})
+	if err != nil {
+		writeCurrentNotificationAPIError(writer, http.StatusInternalServerError, "Notification request failed")
+		return
+	}
+	rows := make([]currentNotificationResponse, 0, len(page.Rows))
+	for _, notification := range page.Rows {
+		rows = append(rows, currentNotificationDTO(notification, true))
+	}
+	writeCurrentNotificationJSON(writer, http.StatusOK, struct {
+		Total      int64                         `json:"total"`
+		Rows       []currentNotificationResponse `json:"rows"`
+		Tombstones []changesync.Tombstone        `json:"tombstones"`
+		NextCursor string                        `json:"next_cursor"`
+		HasMore    bool                          `json:"has_more"`
+	}{Total: total, Rows: rows, Tombstones: page.Tombstones, NextCursor: page.NextCursor, HasMore: page.HasMore})
 }

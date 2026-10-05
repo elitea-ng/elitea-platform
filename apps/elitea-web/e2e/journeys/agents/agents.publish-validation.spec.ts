@@ -34,11 +34,12 @@ import {
   deleteAgent,
   detachSubAgent,
   PUBLISHABLE_TAGS,
-  readProjectModels,
+  readCatalogueModels,
   readVersion,
   resolveCatalogueProjectId,
   unpublishAllVersions,
 } from '../../fixtures/api';
+import { neverOnLiveTarget } from '../../fixtures/deployment';
 
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 
@@ -81,7 +82,7 @@ test.describe('publish validation: code-based rules', () => {
   /* onetest: ELITEA-0159 — main + sub-agent both on a valid shared Public model raise no llm_settings finding */
   test('an agent and its sub-agent on a valid shared Public model raise no LLM finding', async ({ request }) => {
     const catalogueProjectId = await resolveCatalogueProjectId(request);
-    const models = await readProjectModels(request, catalogueProjectId);
+    const models = await readCatalogueModels(request, catalogueProjectId);
     expect(models.length, 'the catalogue project serves no model').toBeGreaterThan(0);
     const model = models[0];
 
@@ -101,7 +102,7 @@ test.describe('publish validation: code-based rules', () => {
       model: { modelName: model.name, modelProjectId: catalogueProjectId },
     });
     try {
-      const attached = await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId });
+      const attached = await attachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId });
       expect(attached.ok(), await attached.text()).toBe(true);
 
       const { status, body } = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}`);
@@ -166,8 +167,8 @@ test.describe('publish validation: code-based rules', () => {
       instructions: 'TODO: placeholder pipeline body — a subpipeline\'s own content must never be visited',
     });
     try {
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: subAgent.id, versionId: subAgent.versionId })).ok()).toBe(true);
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: subPipeline.id, versionId: subPipeline.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: subAgent.id, versionId: subAgent.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: subPipeline.id, versionId: subPipeline.versionId })).ok()).toBe(true);
 
       const { body } = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}`);
       const all = [...(body.critical_issues ?? []), ...(body.warnings ?? []), ...(body.recommendations ?? [])];
@@ -196,7 +197,7 @@ test.describe('publish validation: code-based rules', () => {
     // v1 (the base version) is left with empty instructions on purpose.
     const child = await createAgentWithVersion(request, childName, { instructions: '' });
     try {
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
       const first = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}a`);
       const firstCritical = first.body.critical_issues ?? [];
       expect(
@@ -216,9 +217,9 @@ test.describe('publish validation: code-based rules', () => {
       // it would leave two sub-agent references to the same application (and
       // a spurious "not unique" name finding neither version earned).
       expect(
-        (await detachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok(),
+        (await detachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId })).ok(),
       ).toBe(true);
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: secondVersionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: child.id, versionId: secondVersionId })).ok()).toBe(true);
 
       const second = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}b`);
       const secondCritical = second.body.critical_issues ?? [];
@@ -261,7 +262,7 @@ test.describe('publish validation: code-based rules', () => {
     const parent = await createAgentWithVersion(request, parentName, { instructions: PASSABLE_INSTRUCTIONS });
     const child = await createAgentWithVersion(request, 'AB', { instructions: PASSABLE_INSTRUCTIONS });
     try {
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
       const { body } = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}`);
       const warnings = body.warnings ?? [];
       expect(
@@ -313,7 +314,7 @@ test.describe('publish validation: code-based rules', () => {
       'TODO: describe', // 15 chars, placeholder text, under the documented 30-char minimum
     );
     try {
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
       const { body } = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}`);
       const critical = body.critical_issues ?? [];
       expect(
@@ -350,6 +351,8 @@ test.describe('publish validation: code-based rules', () => {
      (Warning, e.g. "v1"/"v2") ARE all real, server-enforced checks — the ONE row this case documents that is
      NOT implemented (a semantic-versioning Suggestion) is noted separately and does not block this port. */
   test('version name format, uniqueness and the generic-name blocklist are all enforced', async ({ request }) => {
+    // The uniqueness probe publishes for real.
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
     const agent = await createAgentWithVersion(request, uniqueName('vername'), {
       instructions: PASSABLE_INSTRUCTIONS,
       // #913 — an untagged version is a Critical now, and the publish route
@@ -401,7 +404,7 @@ test.describe('publish validation: code-based rules', () => {
     const parent = await createAgentWithVersion(request, uniqueName('placeholderparent'), { instructions: placeholder });
     const child = await createAgentWithVersion(request, uniqueName('placeholderchild'), { instructions: placeholder });
     try {
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
       const { body } = await validate(request, parent.versionId, `rel${String(Date.now()).slice(-6)}`);
       const critical = body.critical_issues ?? [];
       expect(
@@ -426,6 +429,7 @@ test.describe('publish validation: code-based rules', () => {
      and is out of scope for this chromium-lane file; the structural guarantee below makes that outcome
      deterministic without running it. */
   test("a published agent's catalogue twin carries no tool attachments; the author's own copy is unchanged", async ({ request }) => {
+    neverOnLiveTarget("publishes into the deployment's public catalogue");
     const parentName = uniqueName('snapshotparent');
     const parent = await createAgentWithVersion(request, parentName, {
       instructions: PASSABLE_INSTRUCTIONS,
@@ -435,7 +439,7 @@ test.describe('publish validation: code-based rules', () => {
     });
     const child = await createAgentWithVersion(request, uniqueName('snapshotchild'), { instructions: PASSABLE_INSTRUCTIONS });
     try {
-      expect((await attachSubAgent(request, parent.versionId, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
+      expect((await attachSubAgent(request, parent, { applicationId: child.id, versionId: child.versionId })).ok()).toBe(true);
       const before = await readVersion(request, parent.id, parent.versionId);
       expect(before.tools.length, 'the fixture needs a real sub-agent attachment to prove exclusion').toBeGreaterThan(0);
 
@@ -488,6 +492,7 @@ test.describe('publish validation: code-based rules', () => {
     page,
     request,
   }) => {
+    // live-safe: opens the wizard and stops at publish_validate; never presses Publish.
     const agent = await createAgentWithVersion(request, uniqueName('continuebtn'), {
       instructions: PASSABLE_INSTRUCTIONS,
       // #913 — an untagged version is a Critical now, and the publish route
@@ -550,6 +555,7 @@ test.describe('publish validation: code-based rules', () => {
      single-page Preparation step, not the case's literal 3-step stepper with separate instruction copy) — reached
      from a Publish control that is present and enabled for an editor in the agent's own action/lifecycle menu. */
   test('the Publish version modal opens with a version name field, terms and the agreement checkbox', async ({ page, request }) => {
+    // live-safe: only opens the modal and reads its fields.
     const agent = await createAgentWithVersion(request, uniqueName('modalfields'), { instructions: PASSABLE_INSTRUCTIONS });
     try {
       await page.goto(`${BASE_URL}/app/agents/all/${agent.id}`);

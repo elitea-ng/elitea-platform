@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -100,10 +101,48 @@ type adminUIConfig struct {
 	UserName      string   `json:"user_name"`
 	UserEmail     string   `json:"user_email"`
 	Permissions   []string `json:"permissions"`
+	// Access says WHY `permissions` is what it is, because an empty list alone
+	// cannot: it is injected for a user who holds no administration role, for
+	// a caller with no (or an expired) session, and for a lookup that failed.
+	// The SPA treats those three differently (refuse / sign in / try again).
+	// Presentation only, like `permissions`: every admin route re-checks.
+	Access string `json:"access"`
 	// Roles is always empty. The resolver reports permissions only, and no
 	// bundle reads this field. It stays in the payload so an older admin
 	// bundle that reads `roles` gets an empty list, never "super_admin".
 	Roles []string `json:"roles"`
+}
+
+// The four values of adminUIConfig.Access.
+const (
+	// accessGranted: a resolved user holds at least one administration permission.
+	accessGranted = "granted"
+	// accessDenied: the user was resolved (or refused as suspended) and holds
+	// no administration permission.
+	accessDenied = "denied"
+	// accessUnauthenticated: there is no usable session or forwarded identity.
+	accessUnauthenticated = "unauthenticated"
+	// accessUnavailable: the answer could not be obtained (store or resolver
+	// fault). It says nothing about the user.
+	accessUnavailable = "unavailable"
+)
+
+// classifyResolverError maps a resolver refusal onto an Access value. Only
+// the two "the store ANSWERED: no" errors are a denial; every other error is a
+// fault, and a fault must never be shown to an operator as "you are not allowed"
+// (see auth.ErrPrincipalUnavailable for the same rule on the 401/5xx split).
+func classifyResolverError(err error) string {
+	if errors.Is(err, auth.ErrPermissionDenied) || errors.Is(err, auth.ErrPrincipalInactive) {
+		return accessDenied
+	}
+	return accessUnavailable
+}
+
+func accessFor(permissions []string) string {
+	if len(permissions) > 0 {
+		return accessGranted
+	}
+	return accessDenied
 }
 
 func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +151,8 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 		ViteBaseURI:   h.cfg.BasePath,
 		Permissions:   []string{},
 		Roles:         []string{},
+		// No identity found yet. Every branch below that finds one overwrites it.
+		Access: accessUnauthenticated,
 	}
 
 	// Read the operator from the request, then resolve the permissions that
@@ -122,7 +163,7 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 	//
 	//  1. The identity the edge PROJECTED onto this request as X-Auth-*, proven
 	//     to have crossed the header-stripping ingress. The runtime deployment
-	//     logs a browser in at /forward-auth/login, which stores an opaque
+	//     logs a browser in at /auth/login, which stores an opaque
 	//     server-side session under `elitea_browser_auth` — a different cookie,
 	//     with a different shape, from a different store. No `elitea_session`
 	//     cookie exists on that browser at all, so source 2 found nothing, the
@@ -158,7 +199,9 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 		// comes from the database — after the resolver has confirmed the user is
 		// real and active, never before, so a spoofed ID cannot be used to probe
 		// for addresses.
-		if userID, permissions, resolved := h.resolveForwarded(r.Context(), principal); resolved {
+		userID, permissions, access := h.resolveForwarded(r.Context(), principal)
+		cfg.Access = access
+		if userID > 0 {
 			cfg.UserID = userID
 			cfg.Permissions = permissions
 			if email := h.lookupEmail(r.Context(), userID); email != "" {
@@ -172,7 +215,10 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 		// claims at all, so reading only the HMAC form would leave every
 		// OIDC-authenticated operator with an empty sidebar — the same defect
 		// the comment above records, from the other side.
-		if userID, email, ok := h.sessionIdentity(r, cookie.Value); ok {
+		userID, email, state := h.sessionIdentity(r, cookie.Value)
+		cfg.Access = state
+		if state == "" {
+			cfg.Access = accessUnauthenticated
 			if email != "" {
 				cfg.UserEmail = email
 				cfg.UserName = email
@@ -184,7 +230,7 @@ func (h *Handler) ServeSPA(w http.ResponseWriter, r *http.Request) {
 			// guards for no reason.
 			if userID > 0 {
 				cfg.UserID = userID
-				cfg.Permissions = h.resolvePermissions(r.Context(), userID)
+				cfg.Permissions, cfg.Access = h.resolvePermissions(r.Context(), userID)
 			}
 		}
 	}
@@ -313,9 +359,9 @@ func spaContentSecurityPolicy(inlineScript string) string {
 // It returns an empty list on ANY error, a refusal included. The injected list
 // is a presentation hint for the admin SPA, so an empty list hides controls.
 // It never grants anything: every admin route resolves the permissions again.
-func (h *Handler) resolvePermissions(ctx context.Context, userID int64) []string {
+func (h *Handler) resolvePermissions(ctx context.Context, userID int64) ([]string, string) {
 	if h.cfg.Resolver == nil {
-		return []string{}
+		return []string{}, accessUnavailable
 	}
 	resolution, err := h.cfg.Resolver.ResolvePermissions(
 		ctx,
@@ -326,12 +372,12 @@ func (h *Handler) resolvePermissions(ctx context.Context, userID int64) []string
 	if err != nil {
 		slog.DebugContext(ctx, "admin ui: permission resolution refused or failed",
 			"user_id", userID, "error", err)
-		return []string{}
+		return []string{}, classifyResolverError(err)
 	}
 	if resolution.Permissions == nil {
-		return []string{}
+		return []string{}, accessDenied
 	}
-	return resolution.Permissions
+	return resolution.Permissions, accessFor(resolution.Permissions)
 }
 
 // resolveForwarded resolves the permissions of a principal an authenticating
@@ -343,12 +389,12 @@ func (h *Handler) resolvePermissions(ctx context.Context, userID int64) []string
 // the owning user. Taking `X-Auth-ID` as a user ID would read a token's ID as a
 // user's on every token-authenticated load.
 //
-// `resolved` is false whenever the resolver refused — an absent, suspended or
-// unmatched principal — and the caller then injects nothing, not a partial
-// identity.
-func (h *Handler) resolveForwarded(ctx context.Context, principal auth.User) (int64, []string, bool) {
+// The returned user ID is 0 whenever the resolver refused or failed — an
+// absent, suspended or unmatched principal — and the caller then injects no
+// identity, not a partial one. The third value is the Access reason.
+func (h *Handler) resolveForwarded(ctx context.Context, principal auth.User) (int64, []string, string) {
 	if h.cfg.Resolver == nil {
-		return 0, nil, false
+		return 0, nil, accessUnavailable
 	}
 	resolution, err := h.cfg.Resolver.ResolvePermissions(
 		ctx, principal, auth.PermissionModeAdministration, "",
@@ -366,16 +412,16 @@ func (h *Handler) resolveForwarded(ctx context.Context, principal auth.User) (in
 		// resolution branch refused — and carries none of the input.
 		slog.DebugContext(ctx, "admin ui: forwarded permission resolution refused or failed",
 			"is_token", principal.TokenID != "", "error", err)
-		return 0, nil, false
+		return 0, nil, classifyResolverError(err)
 	}
 	if resolution.UserID <= 0 {
-		return 0, nil, false
+		return 0, nil, accessDenied
 	}
 	permissions := resolution.Permissions
 	if permissions == nil {
 		permissions = []string{}
 	}
-	return resolution.UserID, permissions, true
+	return resolution.UserID, permissions, accessFor(permissions)
 }
 
 // lookupEmail returns the operator's address, or "" when there is no lookup
@@ -425,20 +471,30 @@ func sessionClaimUserID(claims map[string]any) (int64, bool) {
 // SPA's shell, not an API: it degrades to the empty permission list, which
 // hides every control, and the operator is sent to the login start by the
 // SPA's own session probe.
-func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, string, bool) {
+//
+// The third value is "" when a session was read, and otherwise the Access
+// reason: a session the store answered is gone (missing, revoked, expired,
+// idle, malformed) is unauthenticated; a store fault is unavailable.
+func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, string, string) {
 	if h.cfg.Sessions != nil && browsersession.LooksServerSide(value) {
 		session, err := h.cfg.Sessions.Validate(r.Context(), value)
 		if err != nil {
-			return 0, "", false
+			if errors.Is(err, browsersession.ErrNotFound) || errors.Is(err, browsersession.ErrRevoked) ||
+				errors.Is(err, browsersession.ErrExpired) || errors.Is(err, browsersession.ErrIdle) ||
+				errors.Is(err, browsersession.ErrMalformedCookie) {
+				return 0, "", accessUnauthenticated
+			}
+			slog.WarnContext(r.Context(), "admin ui: browser session store failed", "error", err)
+			return 0, "", accessUnavailable
 		}
-		return session.UserID, session.Email, true
+		return session.UserID, session.Email, ""
 	}
 	if h.cfg.SecretKey == "" {
-		return 0, "", false
+		return 0, "", accessUnauthenticated
 	}
 	claims := h.verifySession(value)
 	if claims == nil {
-		return 0, "", false
+		return 0, "", accessUnauthenticated
 	}
 	// The minting code writes the claim as `uid`. The old code read `user_id`,
 	// so window.admin_ui_config.user_id was null on every page load. See
@@ -447,7 +503,7 @@ func (h *Handler) sessionIdentity(r *http.Request, value string) (int64, string,
 	// if it is there.
 	userID, _ := sessionClaimUserID(claims)
 	email, _ := claims["email"].(string)
-	return userID, email, true
+	return userID, email, ""
 }
 
 func (h *Handler) verifySession(token string) map[string]any {

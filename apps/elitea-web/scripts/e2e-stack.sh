@@ -627,6 +627,13 @@ CROSS JOIN (VALUES
     ('models.applications.tool.details'),
     ('models.applications.tool.patch'),
     ('models.applications.tools.export'),
+    -- #6885: the MCP OAuth and DCR proxies (`mcp_oauth_proxy`,
+    -- `mcp_dcr_proxy`) are gated on the agent RUN permission, which shared
+    -- 0105 grants to all three roles centrally. Project 1 carries per-project
+    -- rows, which suppress that central fallback, so it is listed here too.
+    -- Absent, every persona gets 403 from the gate before the handler's own
+    -- "MCP exposure is disabled" answer (admin.features journey).
+    ('models.applications.predict.post'),
     -- `.details` is the LIST permission for the indexes rail
     -- (`internal/api/v2/indexing/index_meta.go:18`) and a DIFFERENT string
     -- from `.edit`. Project 1 carries per-project rows, so the central
@@ -794,6 +801,18 @@ CROSS JOIN (VALUES
     ('models.promptlib_shared.tags.list')
 ) AS p(permission)
 WHERE r.project_id = 1
+ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+-- #6789: the project settings writes (name, icon) are gated on
+-- `models.project_settings.edit`, which shared/0136 grants to the
+-- default-mode ADMIN only. 0136's per-project delivery runs before this seed,
+-- so it cannot reach the rows written above. This block grants it to project
+-- 1's admin role only, the same split 0136 makes. The editor and viewer stay
+-- without it. Project 99 copies project 1's rows below, so it inherits this.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 1, r.id, 'models.project_settings.edit'
+FROM auth_core__project_role r
+WHERE r.project_id = 1 AND r.name = 'admin'
 ON CONFLICT (project_id, role_id, permission) DO NOTHING;
 
 -- Assign e2e-admin as project admin, e2e-member as project editor.

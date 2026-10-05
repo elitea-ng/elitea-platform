@@ -367,6 +367,21 @@ fn sanitize_tool_error(error: &AdkError) -> AdkError {
     {
         return authorization;
     }
+    // Demo issue 3: a remote MCP failure keeps its bounded, redacted
+    // description (`mcp_error.rs`), so the model can explain it or recover.
+    if super::mcp_error::is_model_visible_mcp_error(error) {
+        return AdkError::new(
+            ErrorComponent::Tool,
+            error.category,
+            super::mcp_error::MCP_TOOL_ERROR_RESULT_CODE,
+            error.message.clone(),
+        )
+        .with_retry(RetryHint {
+            should_retry: false,
+            retry_after_ms: None,
+            max_attempts: Some(1),
+        });
+    }
     let (code, message) = match error.category {
         ErrorCategory::InvalidInput => (
             "tool.execution.invalid_input",

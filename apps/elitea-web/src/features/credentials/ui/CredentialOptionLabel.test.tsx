@@ -76,4 +76,23 @@ describe('CredentialOptionLabel', () => {
     const reload = screen.getByTestId('credential-reload-button');
     expect(reload).toBeDisabled();
   });
+
+  it('puts the row actions before the attention icon, which comes last (#6632)', () => {
+    renderWithTheme(
+      <CredentialOptionLabel
+        isPersonal={false}
+        label="Team credential"
+        credentialUrl="https://example.test/credentials/1"
+        isInvalid
+        onRevalidate={() => {}}
+      />,
+    );
+    const indicator = screen.getByTestId('credential-status-indicator');
+    const actions = screen.getByTestId('credential-option-actions');
+    expect(actions.contains(screen.getByTestId('credential-open-in-new-tab-button'))).toBe(true);
+    expect(actions.contains(screen.getByTestId('credential-reload-button'))).toBe(true);
+    // DOCUMENT_POSITION_FOLLOWING: the indicator comes after the actions.
+    expect(actions.compareDocumentPosition(indicator) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(indicator.parentElement?.lastElementChild).toBe(indicator);
+  });
 });

@@ -51,7 +51,7 @@ Last updated: 2026-09-07
 ## Phase 0: Auth, Infra, Contracts ✅
 
 ### Delivered
-- **Auth middleware** (`internal/api/middleware/auth.go`) — Traefik forward-auth headers + Bearer/Basic decode + Redis cache (SHA-256 key, 60s TTL) + RPC delegation to pylon_auth
+- **Auth middleware** (`internal/api/middleware/auth.go`) — Traefik edge-auth headers + Bearer/Basic decode + Redis cache (SHA-256 key, 60s TTL) + RPC delegation to pylon_auth
 - **RBAC middleware** (`internal/api/middleware/rbac.go`) — permission expansion (dot-separated prefixes) + set intersection
 - **Auth RPC client** (`internal/infra/authsvc/rpc.go`) — Redis pub/sub RPC to pylon_auth, 2s timeout, reply channels
 - **Event bus** (`internal/infra/redis/events.go`) — publish/subscribe with typed Event struct

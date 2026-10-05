@@ -89,6 +89,7 @@ export function ProfilePersonalization({ onAutoSaveRequested }: ProfilePersonali
           <Box sx={styles.accordionContent}>
             <Box sx={styles.section}>
               <InfoLabelWithTooltip
+                variant="labelMedium"
                 label={t('settings.defaultPersonality', 'Default Personality')}
                 tooltip={t('settings.selectDefaultPersonality', 'Select the default assistant personality for your conversations')}
               />

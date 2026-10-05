@@ -85,6 +85,7 @@ updates:
       - /gen/go
       - /libs/proto/gen/go
       - /tools/uictl
+      - /conformance/nativeclient
     schedule:
       interval: weekly
       day: saturday
@@ -107,6 +108,7 @@ updates:
       - /services/elitea-worker-rust
       - /services/elitea-code-runner
       - /services/elitea-code-runner/adapters/rust
+      - /services/elitea-deepwiki-engine
     schedule:
       interval: weekly
       day: saturday

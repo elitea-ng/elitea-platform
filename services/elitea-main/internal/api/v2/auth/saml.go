@@ -68,6 +68,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,9 +83,10 @@ import (
 )
 
 const (
-	SAMLMetadataPath = "/forward-auth/auth_saml/metadata"
-	SAMLLoginPath    = "/forward-auth/auth_saml/login"
-	SAMLACSPath      = "/forward-auth/auth_saml/acs"
+	// The SAML routes (internal/api/auth_paths.go).
+	SAMLMetadataPath = "/auth/saml/metadata"
+	SAMLLoginPath    = "/auth/saml/login"
+	SAMLACSPath      = "/auth/saml/acs"
 
 	// samlRequestCookie holds the identifier of ONE authentication request,
 	// with the redirect target, MAC-signed. See the InResponseTo note above:
@@ -204,7 +206,7 @@ func (h *SAMLHandler) resolve(w http.ResponseWriter, r *http.Request) (*samlRunt
 	return runtime, true
 }
 
-// Metadata answers `GET /forward-auth/auth_saml/metadata`.
+// Metadata answers `GET /auth/saml/metadata`.
 //
 // It is the document an operator uploads at the identity provider, and it is
 // SERVED rather than pasted together by hand there: entity ID, ACS URL, NameID
@@ -232,7 +234,7 @@ func (h *SAMLHandler) Metadata(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(document)
 }
 
-// Login answers `GET /forward-auth/auth_saml/login`.
+// Login answers `GET /auth/saml/login`.
 func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.resolve(w, r)
 	if !ok {
@@ -272,11 +274,7 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		// Lax, not Strict: the identity provider POSTs the assertion back to
-		// this origin from its own, and a Strict cookie is not sent on that
-		// navigation — the login would fail with a missing request cookie on
-		// every attempt.
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.requestCookieSameSite(),
 		MaxAge:   samlRequestLifetime,
 	})
 
@@ -290,10 +288,23 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
 		return
 	}
+	// The sign-in page passes the address a person typed. Microsoft Entra ID
+	// reads a `login_hint` query parameter on its SAML endpoint and pre-fills
+	// its sign-in form. The parameter is APPENDED, not merged through
+	// url.Values: re-encoding would reorder the query, and a signed redirect
+	// is verified over the exact SAMLRequest, RelayState and SigAlg bytes.
+	// An identity provider that does not know the parameter ignores it.
+	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
+		separator := "&"
+		if !strings.Contains(authURL, "?") {
+			separator = "?"
+		}
+		authURL += separator + "login_hint=" + url.QueryEscape(hint)
+	}
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// ACS answers `POST /forward-auth/auth_saml/acs`.
+// ACS answers `POST /auth/saml/acs`.
 func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.resolve(w, r)
 	if !ok {
@@ -333,13 +344,14 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email, name := samlIdentity(assertion, runtime.document)
+	email = normalizeAssertedEmail(email)
 	if email == "" {
 		slog.Error("SAML: the assertion carries no email address", "provider", runtime.origin)
 		http.Error(w, "email attribute required", http.StatusBadRequest)
 		return
 	}
 
-	userID, err := h.provisionUser(r.Context(), assertion.NameID, email, name)
+	userID, err := h.provisionUser(r.Context(), assertion.NameID, email, name, runtime.document.AdoptSCIMUsers)
 	if err != nil {
 		h.writeProvisioningFailure(w, err, email)
 		return
@@ -367,6 +379,26 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
+// requestCookieSameSite picks the SameSite attribute of the request cookie.
+//
+// Identity providers return the assertion with the HTTP-POST binding: a
+// cross-site, top-level POST to the ACS. Browsers send neither Strict nor Lax
+// cookies on that request, so the binding cookie must be SameSite=None, which
+// browsers accept only together with Secure. The cookie is HttpOnly, signed and
+// single use, so None adds no exposure the binding does not already have.
+//
+// Without secureCookies (plain-http development) None would be rejected
+// outright, so Lax is kept: the cookie is stored, but the browser will not
+// return it on the cross-site POST. SAML POST binding therefore needs https.
+// The clearing write must carry the same attributes as the original or the
+// browser keeps the old cookie.
+func (h *SAMLHandler) requestCookieSameSite() http.SameSite {
+	if h.secureCookies {
+		return http.SameSiteNoneMode
+	}
+	return http.SameSiteLaxMode
+}
+
 // consumeRequestCookie clears the request cookie and returns what it held.
 //
 // It is cleared UNCONDITIONALLY and before the assertion is examined, which is
@@ -382,7 +414,7 @@ func (h *SAMLHandler) consumeRequestCookie(
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secureCookies,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: h.requestCookieSameSite(),
 		MaxAge:   -1,
 	})
 	cookie, err := r.Cookie(samlRequestCookie)
@@ -580,7 +612,12 @@ func samlAttribute(assertion *saml2.AssertionInfo, authored string, fallbacks []
 // address already. If a future SAML document gains an explicit operator flag
 // that marks its address attribute trusted, this is the ONE call site that
 // reads it.
-func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name string) (string, error) {
+//
+// `adoptSCIMUsers` is the provider's `adopt_scim_users`: whether this first
+// login may adopt a SCIM-provisioned account. See joinAccountByEmail.
+func (h *SAMLHandler) provisionUser(
+	ctx context.Context, nameID, email, name string, adoptSCIMUsers bool,
+) (string, error) {
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return "", err
@@ -588,7 +625,7 @@ func (h *SAMLHandler) provisionUser(ctx context.Context, nameID, email, name str
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	providerRef := SAMLProviderRefPrefix + nameID
-	userID, err := resolveProvisionedUser(ctx, tx, providerRef, email, name, nil, false)
+	userID, err := resolveProvisionedUserFor(ctx, tx, providerRef, email, name, nil, false, adoptSCIMUsers)
 	if err != nil {
 		return "", err
 	}

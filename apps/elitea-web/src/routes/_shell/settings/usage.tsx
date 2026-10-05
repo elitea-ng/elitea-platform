@@ -1,5 +1,6 @@
 /**
  * `/settings/usage` — this project's current-period spend against its budget.
+ * `?scope=user` shows the caller's own member budget instead (#6732).
  *
  * The tab is gated on `cost_budgets_enabled` in `settings-layout.tsx`, but the
  * ROUTE has to exist unconditionally: a file route is registered at build time,
@@ -14,11 +15,14 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { RouteError, RoutePending } from '@/routes/-ui/RouteStatus';
+import { pickParams } from '@/routes/-search/params';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import Usage from '@/pages/settings/Usage';
+import { UsageRefreshButton } from '@/pages/settings/UsageRefreshButton';
 
 export const Route = createFileRoute('/_shell/settings/usage')({
+  validateSearch: pickParams('scope'),
   pendingComponent: RoutePending,
   errorComponent: RouteError,
   component: SettingsUsagePage,
@@ -26,11 +30,16 @@ export const Route = createFileRoute('/_shell/settings/usage')({
 
 function SettingsUsagePage() {
   const projectId = useSelectedProjectStore((s) => s.project?.id ?? '');
+  const { scope } = Route.useSearch();
   return (
     <Paper elevation={0} sx={styles.root}>
-      <DrawerPageHeader title={t('routes.settings.usage.title', 'Usage')} showBorder />
+      <DrawerPageHeader
+        title={t('routes.settings.usage.title', 'Usage')}
+        showBorder
+        extraContent={<UsageRefreshButton projectId={projectId} scope={scope} />}
+      />
       <Box sx={styles.content}>
-        <Usage projectId={projectId} />
+        <Usage projectId={projectId} scope={scope} />
       </Box>
     </Paper>
   );

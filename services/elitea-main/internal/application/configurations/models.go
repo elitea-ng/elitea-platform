@@ -26,8 +26,11 @@ const (
 // shapes. Pointer fields distinguish a present false/zero value from a field
 // that is absent for another section.
 type CurrentModelCatalogItem struct {
-	Name            string  `json:"name"`
-	DisplayName     *string `json:"display_name,omitempty"`
+	Name        string  `json:"name"`
+	DisplayName *string `json:"display_name,omitempty"`
+	// Description is the llm_model's optional one-line description
+	// (model_description.go). It is display text for the pickers only.
+	Description     *string `json:"description,omitempty"`
 	ProjectID       int32   `json:"project_id"`
 	Shared          bool    `json:"shared"`
 	ContextWindow   *int    `json:"context_window,omitempty"`
@@ -74,6 +77,13 @@ type CurrentModelCatalogDefaults struct {
 	Model    CurrentModelDefaultSources
 	LowTier  CurrentModelDefaultSources
 	HighTier CurrentModelDefaultSources
+	// Platform is the platform default model (#6826). It is the second step
+	// of the precedence in platform_default_model.go: it applies when the
+	// project's own stored default does not resolve in the caller's
+	// catalogue. Model.Public already carries the same value for a project
+	// that stored no default of its own; this field covers a project whose
+	// own default names a model that was deleted, disabled or withdrawn.
+	Platform CurrentModelDefault
 }
 
 type CurrentModelCatalogRequest struct {
@@ -91,6 +101,14 @@ type CurrentModelCatalogResponse struct {
 	Items                 []CurrentModelCatalogItem `json:"items"`
 	DefaultModelName      *string                   `json:"default_model_name"`
 	DefaultModelProjectID *int32                    `json:"default_model_project_id"`
+	// DefaultModelConfigured is true when DefaultModelName is the default an
+	// admin configured (for the project, or for the platform). It is false
+	// when no configured default is in the catalogue and DefaultModelName is
+	// only the first item. A caller that has a better fallback than "the
+	// first model" (Edit with AI has the agent's own model) reads it. It is
+	// omitted when false, so the legacy response shape stays byte-identical
+	// for a project with no configured default.
+	DefaultModelConfigured bool `json:"default_model_configured,omitempty"`
 
 	LowTierDefaultModelName      *string `json:"low_tier_default_model_name,omitempty"`
 	LowTierDefaultModelProjectID any     `json:"low_tier_default_model_project_id,omitempty"`
@@ -140,7 +158,7 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 		items = deduplicateCurrentModelItems(request.Section, granted, items, true)
 	}
 
-	defaultName, defaultProjectID := selectCurrentModelDefault(items, resolveCurrentModelDefault(request.Defaults.Model), true, nil)
+	defaultName, defaultProjectID := selectCurrentModelCatalogDefault(items, request.Defaults)
 	for index := range items {
 		items[index].Default = defaultName != nil && defaultProjectID != nil &&
 			items[index].Name == *defaultName && items[index].ProjectID == *defaultProjectID
@@ -151,6 +169,8 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 	response.Items = items
 	response.DefaultModelName = defaultName
 	response.DefaultModelProjectID = defaultProjectID
+	response.DefaultModelConfigured = currentModelDefaultMatches(defaultName, defaultProjectID, resolveCurrentModelDefault(request.Defaults.Model)) ||
+		currentModelDefaultMatches(defaultName, defaultProjectID, request.Defaults.Platform)
 	if request.Section == CurrentModelSectionLLM {
 		populateCurrentLLMTierDefaults(&response, items, request.Defaults)
 	}
@@ -218,6 +238,7 @@ func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCat
 		return item
 	}
 
+	item.Description = nil
 	item.ContextWindow = nil
 	item.MaxOutputTokens = nil
 	item.MaxInputTokens = nil
@@ -246,6 +267,46 @@ func currentModelBoolDefault(value *bool, fallback bool) *bool {
 		return &copied
 	}
 	return &fallback
+}
+
+// selectCurrentModelCatalogDefault applies the default-model precedence that
+// platform_default_model.go documents: the project's stored default, then the
+// platform default, then the first catalogue model. Each step must name a
+// model in THIS catalogue, so a dangling id is never returned.
+func selectCurrentModelCatalogDefault(
+	items []CurrentModelCatalogItem,
+	defaults CurrentModelCatalogDefaults,
+) (*string, *int32) {
+	name, projectID := selectCurrentModelDefault(items, resolveCurrentModelDefault(defaults.Model), false, nil)
+	if name != nil {
+		return name, projectID
+	}
+	return selectCurrentModelDefault(items, defaults.Platform, true, nil)
+}
+
+// currentModelDefaultMatches reports whether the selected default is the
+// configured default named by want. An empty want never matches, so the
+// first-item fallback is never reported as configured.
+func currentModelDefaultMatches(name *string, projectID *int32, want CurrentModelDefault) bool {
+	return name != nil && projectID != nil && want.Name != "" &&
+		*name == want.Name && strconv.FormatInt(int64(*projectID), 10) == want.ProjectID
+}
+
+// currentProjectModelDefaultUnresolved reports a project whose OWN stored
+// default names a model the response did not select. Only that case needs the
+// platform default: a project with no stored default already fell back to it
+// through Model.Public.
+func currentProjectModelDefaultUnresolved(
+	defaults CurrentModelCatalogDefaults,
+	response CurrentModelCatalogResponse,
+) bool {
+	own := defaults.Model.Project
+	if own.Name == "" || own.ProjectID == "" {
+		return false
+	}
+	return response.DefaultModelName == nil || response.DefaultModelProjectID == nil ||
+		*response.DefaultModelName != own.Name ||
+		strconv.FormatInt(int64(*response.DefaultModelProjectID), 10) != own.ProjectID
 }
 
 func resolveCurrentModelDefault(sources CurrentModelDefaultSources) CurrentModelDefault {

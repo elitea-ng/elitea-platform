@@ -18,6 +18,7 @@ import { noModuleScopeStore } from './rules/no-module-scope-store.mjs';
 import { noMuiInternalSelector } from './rules/no-mui-internal-selector.mjs';
 import { noRawColor } from './rules/no-raw-color.mjs';
 import { noRawWebstorage } from './rules/no-raw-webstorage.mjs';
+import { noStockTypographyVariant } from './rules/no-stock-typography-variant.mjs';
 import { noThemePalette } from './rules/no-theme-palette.mjs';
 import { noViMock } from './rules/no-vi-mock.mjs';
 import { rawPxSpacing } from './rules/raw-px-spacing.mjs';
@@ -36,6 +37,7 @@ export default {
     'raw-px-spacing': rawPxSpacing, //         R-T9
     'ad-hoc-radius': adHocRadius, //           R-T10
     'ad-hoc-font-size': adHocFontSize, //      R-T11
+    'no-stock-typography-variant': noStockTypographyVariant, // R-T13
     'no-export-all': noExportAll, //           R-L4
     'no-module-scope-store': noModuleScopeStore, // R-S2
     'no-vi-mock': noViMock, //                 R-M1

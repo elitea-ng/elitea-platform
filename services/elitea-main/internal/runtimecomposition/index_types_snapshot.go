@@ -152,6 +152,27 @@ func (snapshot *CurrentIndexTypesSnapshot) GetCurrentIndexTypes(
 	return cloneCurrentIndexTypes(snapshot.categories), nil
 }
 
+// AttachmentExtensions is every extension the pinned SDK loaders read
+// (document, image and code categories) plus `.svg`, the one the web
+// composer adds to the catalogue it derives from the same three maps
+// (apps/elitea-web/src/entities/attachment/api/allowedTypes.ts). It is what
+// the discovery document's attachment policy offers a client when this
+// catalogue is served.
+func (snapshot *CurrentIndexTypesSnapshot) AttachmentExtensions() []string {
+	if snapshot == nil {
+		return nil
+	}
+	extensions := []string{".svg"}
+	for _, category := range []map[string]string{
+		snapshot.categories.DocumentTypes, snapshot.categories.ImageTypes, snapshot.categories.CodeTypes,
+	} {
+		for extension := range category {
+			extensions = append(extensions, extension)
+		}
+	}
+	return extensions
+}
+
 func validCurrentIndexTypeCategory(category map[string]string) bool {
 	for extension, mimeType := range category {
 		if !validCurrentIndexTypeExtension(extension) ||

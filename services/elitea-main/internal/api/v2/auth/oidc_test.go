@@ -359,6 +359,39 @@ func TestTheEmailFallbackCanRequireAVerifiedAddress(t *testing.T) {
 	}
 }
 
+// The environment-configured provider adopts SCIM-provisioned accounts only
+// when OIDC_ADOPT_SCIM_USERS says so; unset (the default) is off.
+func TestTheEnvironmentProviderAdoptsSCIMUsersOnlyWhenTold(t *testing.T) {
+	t.Setenv("OIDC_ADOPT_SCIM_USERS", "")
+	if oidcAdoptsSCIMUsers() {
+		t.Fatal("an unset OIDC_ADOPT_SCIM_USERS turned SCIM adoption on")
+	}
+	t.Setenv("OIDC_ADOPT_SCIM_USERS", "TRUE")
+	if !oidcAdoptsSCIMUsers() {
+		t.Fatal("OIDC_ADOPT_SCIM_USERS=TRUE did not turn SCIM adoption on")
+	}
+}
+
+// The SCIM adoption guard is part of the email upsert's conflict clause, and
+// the provider's setting is bound to it. Which rows it refuses is proved
+// against PostgreSQL in provisioning_postgres_integration_test.go.
+func TestTheEmailFallbackCarriesTheSCIMAdoptionGuard(t *testing.T) {
+	tx := &scriptedTx{rows: []scriptedRow{
+		{err: pgx.ErrNoRows},
+		{values: []any{11}},
+		{values: []any{11}},
+	}}
+	if _, err := resolveProvisionedUserFor(
+		context.Background(), tx, "oidc:sub-F", "fay@corp.com", "Fay", nil, false, true,
+	); err != nil {
+		t.Fatalf("resolveProvisionedUserFor: %v", err)
+	}
+	index := statementIndex(t, tx, "ON CONFLICT (email)")
+	if index < 0 || !strings.Contains(tx.statements[index], "elitea_auth.scim_users") {
+		t.Fatalf("the email upsert does not consult the SCIM record: %v", tx.statements)
+	}
+}
+
 // A LINKED subject is not held to the address rule. Its account is decided by
 // the subject, so the claim decides nothing there.
 func TestALinkedSubjectIsNotHeldToTheVerifiedAddressRule(t *testing.T) {
@@ -407,7 +440,7 @@ func TestTheNonceMustMatchTheLoginInThisBrowser(t *testing.T) {
 		"neither side has a nonce":   {cookie: "", tokenNonce: "", want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/callback", nil)
+			request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback", nil)
 			if testCase.cookie != "" {
 				request.AddCookie(&http.Cookie{Name: oidcNonceCookie, Value: testCase.cookie})
 			}
@@ -422,7 +455,7 @@ func TestTheNonceMustMatchTheLoginInThisBrowser(t *testing.T) {
 // against a second callback.
 func TestTheNonceCookieIsClearedOnEveryCallback(t *testing.T) {
 	handler := &OIDCHandler{}
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/callback", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback", nil)
 	request.AddCookie(&http.Cookie{Name: oidcNonceCookie, Value: "n-1"})
 	recorder := httptest.NewRecorder()
 

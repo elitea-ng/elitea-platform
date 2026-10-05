@@ -16,7 +16,7 @@ import { server } from '../test/setup';
 
 import { createSessionStore, sessionAuthContext, useSessionStore } from './session-store';
 
-const INFO = '/forward-auth/info';
+const INFO = '/auth/info';
 const API_BASE = '/api/v2';
 const AUTHOR = `${API_BASE}/social/author/`;
 
@@ -29,14 +29,14 @@ function author(personalProjectId?: string) {
 
 describe('createSessionStore', () => {
   /*
-   * The Form plane mounts no /forward-auth/info at all
+   * The Form plane mounts no /auth/info at all
    * (internal/api/production_router.go mounts one plane or the other), so on a
    * Form deployment the probe 404s. Concluding "not logged in" from that alone
    * sent a browser holding a perfectly good Form session cookie back to the
    * login form on every load — and, with the boot redirect in App.tsx, into a
    * loop. /social/author answers on both planes.
    */
-  it('recovers the session from /social/author when /forward-auth/info is absent', async () => {
+  it('recovers the session from /social/author when /auth/info is absent', async () => {
     server.use(
       http.get(INFO, () => new HttpResponse(null, { status: 404 })),
       author('proj-9'),
@@ -62,7 +62,7 @@ describe('createSessionStore', () => {
   });
 
   /*
-   * A 401 from /forward-auth/info is the OIDC plane saying "no session". It
+   * A 401 from /auth/info is the OIDC plane saying "no session". It
    * must NOT trigger the Form fallback, and it must keep its own status so the
    * boot redirect picks the OIDC login path rather than the Form one.
    */
@@ -81,7 +81,7 @@ describe('createSessionStore', () => {
     expect(store.getState().loaded).toBe(false);
   });
 
-  it('populates the user from an authenticated /forward-auth/info response', async () => {
+  it('populates the user from an authenticated /auth/info response', async () => {
     server.use(
       http.get(INFO, () => HttpResponse.json({ authenticated: true, user_id: 'u-42' })),
       author('proj-9'),
@@ -95,7 +95,7 @@ describe('createSessionStore', () => {
 
   /*
    * The #166 regression guard. `personal_project_id` was filled with the USER
-   * ID — `/forward-auth/info` returns no project id at all, so the field was
+   * ID — `/auth/info` returns no project id at all, so the field was
    * fabricated. `NotificationButton` then opened an SSE subscription scoped to
    * a project the user is generally not a member of and was refused with a
    * 403, which EventSource does not retry. This asserts the two values are
@@ -130,7 +130,7 @@ describe('createSessionStore', () => {
 
   it('still resolves the user when the author probe fails', async () => {
     // A failed author probe must not log the user out — identity comes from
-    // /forward-auth/info alone.
+    // /auth/info alone.
     server.use(
       http.get(INFO, () => HttpResponse.json({ authenticated: true, user_id: 'u-42' })),
       http.get(AUTHOR, () => new HttpResponse(null, { status: 500 })),

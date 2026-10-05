@@ -16,7 +16,7 @@ import { server } from '../test/setup';
  * DEFECT: `createAuthPopupController` built its popup URL from the module
  * constant `OIDC_LOGIN_PATH`, and App passed no plane at all.
  * `services/elitea-main/internal/api/router.go` registers
- * `/forward-auth/auth_oidc/login` inside `if cfg.OIDCHandler != nil`, so a
+ * `/auth/oidc/login` inside `if cfg.OIDCHandler != nil`, so a
  * form-auth deployment has no such route. When the session cookie expired in
  * an open tab, the popup loaded `404 page not found`, `/app/auth-callback`
  * never ran, no result was posted on postMessage, on the BroadcastChannel or
@@ -62,10 +62,10 @@ describe('App re-auth popup plane', () => {
       return { closed: false, close: (): void => {} };
     });
 
-    // 404 on `/forward-auth/info` is what identifies the Form plane: that
+    // 404 on `/auth/info` is what identifies the Form plane: that
     // endpoint is not mounted there at all.
     server.use(
-      http.get('/forward-auth/info', () => new HttpResponse(null, { status: 404 })),
+      http.get('/auth/info', () => new HttpResponse(null, { status: 404 })),
       http.get('/api/v2/social/author/', () => new HttpResponse(null, { status: 401 })),
       http.all('*', () => new HttpResponse(null, { status: 401 })),
     );
@@ -81,7 +81,7 @@ describe('App re-auth popup plane', () => {
 
     await waitFor(() => expect(opened).toHaveLength(1));
     const popupUrl = new URL(opened[0] ?? '', 'http://localhost');
-    expect(popupUrl.pathname).toBe('/forward-auth/login');
+    expect(popupUrl.pathname).toBe('/auth/login');
     // The callback route, correlated by `auth_state`. The base path is empty
     // in this environment; production prefixes it with `/app`.
     expect(popupUrl.searchParams.get('target_to')).toContain('/auth-callback?auth_state=');

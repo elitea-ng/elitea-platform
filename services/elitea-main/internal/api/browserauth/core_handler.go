@@ -10,11 +10,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/net/http/httpguts"
 
-	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/forwardauth"
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
-const AuthPath = "/auth"
+// AuthPath is the Form plane's core check, `/auth/check`. It is not `/auth`
+// itself, which is the single sign-on plane's edge auth check (router.go).
+const AuthPath = "/check"
 
 // CredentialHeader preserves the configured other_auth_headers order from the
 // current service. Only the two current credential handlers are accepted.
@@ -223,7 +225,7 @@ const (
 
 func (h *CoreHandler) writeSuccess(writer http.ResponseWriter, decision forwardapp.Decision) successDisposition {
 	if !decision.Source.TargetPresent {
-		writeForwardAuthOK(writer)
+		writeEdgeAuthOK(writer)
 		return successWritten
 	}
 
@@ -265,7 +267,7 @@ func (h *CoreHandler) writeSuccess(writer http.ResponseWriter, decision forwarda
 		// data path.
 		return successDenied
 	}
-	writeForwardAuthOK(writer)
+	writeEdgeAuthOK(writer)
 	return successWritten
 }
 
@@ -278,7 +280,7 @@ func (h *CoreHandler) writeLogin(writer http.ResponseWriter, request *http.Reque
 	http.Redirect(writer, request, BasePath+LoginPath+"?"+query.Encode(), http.StatusFound)
 }
 
-func writeForwardAuthOK(writer http.ResponseWriter) {
+func writeEdgeAuthOK(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write([]byte("OK"))

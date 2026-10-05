@@ -129,7 +129,7 @@ describe('the guard after a real session boot', () => {
   it('redirects to /onboarding for a user the server says has no chat permission', async () => {
     stubValidConfig();
     server.use(
-      http.get('/forward-auth/info', () => HttpResponse.json({ authenticated: true, user_id: 'u-42' })),
+      http.get('/auth/info', () => HttpResponse.json({ authenticated: true, user_id: 'u-42' })),
       http.get(`${API_BASE}/social/author/`, () => HttpResponse.json({ id: 'u-42', personal_project_id: 'p-9' })),
       http.get(`${API_BASE}/auth/permissions/prompt_lib/:projectId`, () =>
         HttpResponse.json([{ name: 'models.chat.folders.get', enabled: false }]),

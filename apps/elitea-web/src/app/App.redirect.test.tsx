@@ -71,7 +71,7 @@ describe('App boot redirect', () => {
     // session. MSW handlers, not a stubbed fetch: setup.ts runs the server
     // with onUnhandledRequest:'error', which a global stub never reaches.
     server.use(
-      http.get('/forward-auth/info', () => new HttpResponse(null, { status: 404 })),
+      http.get('/auth/info', () => new HttpResponse(null, { status: 404 })),
       http.get('/api/v2/social/author/', () => new HttpResponse(null, { status: 401 })),
       http.all('*', () => new HttpResponse(null, { status: 401 })),
     );
@@ -85,9 +85,9 @@ describe('App boot redirect', () => {
     // boot redirect asked for the FORM login entry point.
     await waitFor(() => {
       const targets = assigned.map((raw) => new URL(raw, 'http://localhost'));
-      // Not /forward-auth/auth_form/login: that one 400s without a
-      // transaction id, which only /forward-auth/login creates.
-      const login = targets.find((url) => url.pathname === '/forward-auth/login');
+      // Not /auth/form/login: that one 400s without a
+      // transaction id, which only /auth/login creates.
+      const login = targets.find((url) => url.pathname === '/auth/login');
       expect(login, `no Form login in ${JSON.stringify(assigned)}`).toBeDefined();
       expect(login?.searchParams.get('target_to')).toBe('/');
     });
@@ -100,7 +100,7 @@ describe('App boot redirect', () => {
     const assigned: string[] = [];
     vi.stubGlobal('open', () => null);
     server.use(
-      http.get('/forward-auth/info', () => new HttpResponse(null, { status: 404 })),
+      http.get('/auth/info', () => new HttpResponse(null, { status: 404 })),
       http.all('*', () => new HttpResponse(null, { status: 401 })),
     );
     stubLocationAssign(assigned);
@@ -136,7 +136,7 @@ describe('App boot redirect', () => {
     server.use(
       // 200 `authenticated: false` is what the server really answers a browser
       // that presents no cookie at all — see internal/api/v2/auth/session.go.
-      http.get('/forward-auth/info', () => HttpResponse.json({ authenticated: false })),
+      http.get('/auth/info', () => HttpResponse.json({ authenticated: false })),
       http.all('*', () => new HttpResponse(null, { status: 401 })),
     );
     stubLocationAssign(assigned);
@@ -153,7 +153,7 @@ describe('App boot redirect', () => {
    * "no session".
    *
    * The browser cancels every in-flight request the moment it starts leaving a
-   * page, and `/forward-auth/info` is issued from App's boot effect. A reload
+   * page, and `/auth/info` is issued from App's boot effect. A reload
    * during boot therefore aborted it, and the redirect below then fought the
    * navigation already under way: `page.reload()` failed with "Frame load
    * interrupted" and the browser landed on the OIDC authorize page.
@@ -168,7 +168,7 @@ describe('App boot redirect', () => {
     const assigned: string[] = [];
     vi.stubGlobal('open', () => null);
     server.use(
-      http.get('/forward-auth/info', () => HttpResponse.error()),
+      http.get('/auth/info', () => HttpResponse.error()),
       http.all('*', () => new HttpResponse(null, { status: 401 })),
     );
     stubLocationAssign(assigned);

@@ -13,7 +13,7 @@ import { clearNamespace } from '../../lib/storage';
 import { FORM_LOGIN_PATH, LOGOUT_PATH, TARGET_TO_PARAM } from './constants';
 
 /**
- * The logout hand-off target. It is `/forward-auth/login`.
+ * The logout hand-off target. It is `/auth/login`.
  *
  * Read the constant name as "the browser login entry point", not "the form
  * plane only". Both authentication planes register this one path, and no
@@ -21,7 +21,7 @@ import { FORM_LOGIN_PATH, LOGOUT_PATH, TARGET_TO_PARAM } from './constants';
  *  - Form plane: `browserauth.LoginPath` opens a login transaction
  *    (`internal/api/browserauth/handler.go`).
  *  - OIDC plane: `internal/api/router.go` answers it with a 302 to
- *    `/forward-auth/auth_oidc/login`.
+ *    `/auth/oidc/login`.
  *
  * The `target_to`-dropping caveat on `FORM_LOGIN_PATH` applies to the re-auth
  * popup, which must carry `auth_state` back to the callback route. A logout
@@ -32,7 +32,7 @@ const BROWSER_LOGIN_PATH = FORM_LOGIN_PATH;
 export interface LogoutDeps {
   /** Navigation seam; default assigns `window.location.href`. */
   redirect?: (url: string) => void;
-  /** Origin the forward-auth logout URL is built on; default page origin. */
+  /** Origin the edge-auth logout URL is built on; default page origin. */
   origin?: string;
 }
 
@@ -41,7 +41,7 @@ export interface LogoutDeps {
  *
  * MEASURED DEFECT, not a precaution (issue #482). A logout does not end the
  * document: the browser stays on the app page for the whole redirect chain
- * `/forward-auth/logout` → `/forward-auth/auth_oidc/login` → the provider's
+ * `/auth/logout` → `/auth/oidc/login` → the provider's
  * authorize endpoint. The logout endpoint clears the session cookie on the
  * first hop, so any request the page still has open then answers 401. That
  * 401 reaches `shared/api/http.ts`'s `runReauth()`, which starts a re-auth
@@ -70,21 +70,21 @@ export function isLoggingOut(): boolean {
 /**
  * Clears the entire `el.` namespace (local + session), then hands the browser
  * to the backend logout (old UserButton.jsx:32 preserved:
- * `{origin}/forward-auth/logout`) with the browser login entry point
- * `/forward-auth/login` as its `target_to`.
+ * `{origin}/auth/logout`) with the browser login entry point
+ * `/auth/login` as its `target_to`.
  *
  * The target is PLANE-NEUTRAL, and that is a correction (see
  * `BROWSER_LOGIN_PATH` above). The earlier revision named
- * `/forward-auth/auth_oidc/login` here. `internal/api/router.go` registers
+ * `/auth/oidc/login` here. `internal/api/router.go` registers
  * that path inside `if cfg.OIDCHandler != nil`, so a form-auth deployment has
- * no such route. There the chain ran `/forward-auth/logout` → 302
- * `/forward-auth/auth_form/logout` → 302 `/forward-auth/auth_oidc/login` →
+ * no such route. There the chain ran `/auth/logout` → 302
+ * `/auth/form/logout` → 302 `/auth/oidc/login` →
  * chi's bare `404 page not found`. The user was signed out and parked on a
  * plain-text dead end with no link back.
  *
  * The `target_to` is what makes JRNY-004's "…and the login screen is reached"
  * true, and it is BEHAVIOURAL parity with the old app rather than a new idea.
- * The old app sent the browser to a bare `/forward-auth/logout` and still
+ * The old app sent the browser to a bare `/auth/logout` and still
  * arrived at a login screen, because the old deployment gated the SPA at the
  * edge: the post-logout landing (`/` → the app) was itself answered with an
  * OIDC redirect. This stack does not gate `/app/*` at the edge (measured —
@@ -96,8 +96,8 @@ export function isLoggingOut(): boolean {
  * `browserflow.CanonicalReturnTarget` requires.
  *
  * Verified against the running E2E stack, as a real browser navigation chain:
- * `/forward-auth/logout?target_to=…` → 302 `/forward-auth/login` → 302
- * `/forward-auth/auth_oidc/login` → 302 the provider's `/oauth2/authorize`.
+ * `/auth/logout?target_to=…` → 302 `/auth/login` → 302
+ * `/auth/oidc/login` → 302 the provider's `/oauth2/authorize`.
  * The OIDC end state is the same as before; one 302 hop is added. (On that
  * stack the last hop then fails DNS. The issuer is the compose hostname
  * `oidc-mock`, which the host browser cannot resolve. The same artifact

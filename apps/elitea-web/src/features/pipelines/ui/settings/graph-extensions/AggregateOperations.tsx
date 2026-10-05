@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Stack from '@mui/material/Stack';
 import { t } from '@/shared/i18n';
@@ -51,7 +51,7 @@ function AggregateOperationRow({ row, index, disabled, change, remove }: Aggrega
     {operation === 'collect_rows' && <SplitRetentionFields value={row['retain']} defaultMode="all" disabled={disabled}
       change={(retain) => change({ ...row, retain })} />}
     {operation === 'collect' && <FormControlLabel label={t('pipelines.graphExtensions.mergeLists', 'Flatten collected lists {{index}}', numbered)}
-      control={<Checkbox className="nodrag nopan" disabled={disabled} checked={row['merge_lists'] === true}
+      control={<BaseCheckbox className="nodrag nopan" disabled={disabled} checked={row['merge_lists'] === true}
         onChange={(_, merge_lists) => change({ ...row, merge_lists })} />} />}
     <Button disabled={disabled} onClick={remove}>{t('pipelines.graphExtensions.removeOperation', 'Remove operation {{index}}', numbered)}</Button>
   </Stack>;

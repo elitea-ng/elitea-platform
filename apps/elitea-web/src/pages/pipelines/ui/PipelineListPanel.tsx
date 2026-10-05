@@ -29,7 +29,7 @@ export interface PipelineListRow {
   readonly id: string;
   readonly name: string;
   readonly description: string;
-  readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string }[];
+  readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string; readonly deleted?: boolean }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
   /**

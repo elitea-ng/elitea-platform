@@ -143,19 +143,22 @@ describe('extractAuthServerMetadata', () => {
     expect(result.authorization_endpoint).toBe('https://direct-a');
   });
 
-  it('falls back to constructing GitHub-style endpoints from authorization_servers[0] when nothing else has both endpoints', () => {
-    const result = extractAuthServerMetadata({ authorization_servers: ['https://github.com/login/oauth/'] });
-    expect(result.authorization_endpoint).toBe('https://github.com/login/oauth/authorize');
-    expect(result.token_endpoint).toBe('https://github.com/login/oauth/access_token');
+  // #6689: Stripe's issuer `https://access.stripe.com/mcp` used to become the
+  // invented `https://access.stripe.com/mcp/authorize`. No endpoint is ever
+  // fabricated from an issuer URL any more.
+  it('never fabricates endpoints from authorization_servers[0] when discovery found none', () => {
+    expect(() => extractAuthServerMetadata({ authorization_servers: ['https://access.stripe.com/mcp'] })).toThrow(
+      'Authorization server metadata is missing endpoints',
+    );
   });
 
-  it('the fallback MERGES onto a partial oauth_authorization_server rather than discarding it', () => {
-    const result = extractAuthServerMetadata({
-      oauth_authorization_server: { issuer: 'keep-me' }, // missing both endpoints
-      authorization_servers: ['https://github.com/login/oauth'],
-    });
-    expect(result.issuer).toBe('keep-me');
-    expect(result.authorization_endpoint).toBe('https://github.com/login/oauth/authorize');
+  it('does not fill a partial oauth_authorization_server with invented endpoints', () => {
+    expect(() =>
+      extractAuthServerMetadata({
+        oauth_authorization_server: { issuer: 'https://access.stripe.com/mcp' }, // missing both endpoints
+        authorization_servers: ['https://access.stripe.com/mcp'],
+      }),
+    ).toThrow('Authorization server metadata is missing endpoints');
   });
 
   it('throws NO_AUTH_SERVERS when nothing at all is usable', () => {

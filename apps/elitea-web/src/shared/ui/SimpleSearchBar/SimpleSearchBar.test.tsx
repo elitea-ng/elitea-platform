@@ -1,7 +1,7 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithTheme } from '../lib/testTheme';
+import { remToPx, renderWithTheme } from '../lib/testTheme';
 import { SimpleSearchBar } from '.';
 
 /**
@@ -249,5 +249,42 @@ describe('SimpleSearchBar', () => {
       />,
     );
     expect(getByTestId('search-input')).toBeInTheDocument();
+  });
+});
+
+describe('SimpleSearchBar — one look for every search box (#6646)', () => {
+  it('draws the search glyph at 16px, hidden from assistive technology', () => {
+    const { getByTestId } = renderWithTheme(
+      <SimpleSearchBar
+        value=""
+        onChange={() => {}}
+      />,
+    );
+    const icon = getByTestId('simple-search-bar-icon');
+    expect(icon).toHaveAttribute('aria-hidden', 'true');
+    // jsdom@30 resolves rem against the root font size before reporting it.
+    expect(icon).toHaveStyle({ width: remToPx('1rem'), height: remToPx('1rem') });
+  });
+
+  it('names the input with aria-label when the caller gives one', () => {
+    const { getByRole } = renderWithTheme(
+      <SimpleSearchBar
+        value=""
+        onChange={() => {}}
+        aria-label="Search users"
+      />,
+    );
+    expect(getByRole('textbox', { name: 'Search users' })).toBeInTheDocument();
+  });
+
+  it('keeps data-testid on the input element itself', () => {
+    const { getByTestId } = renderWithTheme(
+      <SimpleSearchBar
+        value=""
+        onChange={() => {}}
+        data-testid="my-search"
+      />,
+    );
+    expect(getByTestId('my-search').tagName).toBe('INPUT');
   });
 });

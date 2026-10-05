@@ -62,6 +62,7 @@ import { useAddEntityParticipant } from './hooks/useAddEntityParticipant';
 import { useActiveParticipantSelection } from './hooks/useActiveParticipantSelection';
 import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizationRefs';
 import { useChatBoxSend } from './hooks/useChatBoxSend';
+import { useReattachSeededTurn } from './hooks/useReattachSeededTurn';
 import { useStableRef } from './hooks/useStableRef';
 
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
@@ -116,7 +117,7 @@ const ChatBoxInner = memo(function ChatBox({
 
   // Socket client + read-aloud (TTS)
   const socketClient = useSocketClient(); const voiceFeedback = useChatBoxVoiceFeedback(); // #932/#934: VoiceButton's recording flag + its error messages, which had no caller at all
-  const readAloud = voiceHooks.useReadAloud({ projectId: projectIdString, socket: socketClient });
+  const readAloud = voiceHooks.useReadAloud({ projectId: projectIdString, onError: voiceFeedback.onError }); // read-aloud failures share the dictation error toast
   const lifecycle = data.lifecycle;
 
   // Mirror the live, socket-synced history out to the parent's own mirror, when one
@@ -152,12 +153,18 @@ const ChatBoxInner = memo(function ChatBox({
   // create-conversation-first and upload-attachments-first adapters.
   // `startStreamedExecution` reports whether the transport took the run, so
   // `sendQuestion` knows not to ALSO emit `chat_predict`.
-  const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, stopStreamedExecution, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
+  // LLM model list + selection. Before the send: a configured model saved with
+  // no project id runs in the project the picker resolved.
+  const { modelsList, selectedLlmModel, handleSelectModel, configuredModelProjectId } = useChatBoxModelSelection({
+    projectId, selectedModel: data.selectedModel, llm, setSelectedModel: data.setSelectedModel,
+  });
+  const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, reattachStreamedExecution, stopStreamedExecution, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend, editorTest,
+    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest,
   });
+  useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution }); // #6654: a reload mid-turn observes the run again
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
   // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
@@ -204,13 +211,6 @@ const ChatBoxInner = memo(function ChatBox({
     },
   });
 
-  // LLM model list + selection
-  const { modelsList, selectedLlmModel, handleSelectModel } = useChatBoxModelSelection({
-    projectId,
-    selectedModelName: data.selectedModel?.name,
-    llm,
-    setSelectedModel: data.setSelectedModel,
-  });
 
 
   // Version selection (real fetch + persist) + auto-recovery
@@ -240,7 +240,6 @@ const ChatBoxInner = memo(function ChatBox({
     isConversationSending,
     isStreaming,
     hasChatInput: !!chatInputRef.current,
-    isProcessingSymbols: state.keyDown.isProcessingSymbols,
     hasPendingHitlInterrupt: data.hasPendingHitlInterrupt,
     hasPendingNodeRecovery: Boolean(currentNodeRecoveryBinding(messages)),
     isActiveParticipantBroken: state.isActiveParticipantBroken,
@@ -331,6 +330,7 @@ const ChatBoxInner = memo(function ChatBox({
             projectId: projectIdString,
             onSelectUser: handleSelectUserMention,
             onSelectTool: handleSelectSkillTool,
+            onAddParticipant: entityParticipantActions.onSelectParticipant,
           })}
         />
         {contextIndicator}
@@ -351,7 +351,7 @@ const ChatBoxInner = memo(function ChatBox({
           })}
           attachments={buildChatBoxAttachmentProps(data.attachments, areAttachmentsDisabled)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
-          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying, isRecording: voiceFeedback.isRecording }}
+          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying, isRecording: voiceFeedback.isRecording, onError: voiceFeedback.onError }}
           slots={buildChatBoxInputSlots({
             attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: areAttachmentsDisabled },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },

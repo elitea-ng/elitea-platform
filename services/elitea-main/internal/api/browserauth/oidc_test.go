@@ -50,7 +50,7 @@ func TestOIDCBeginDefaultsToBoundedPostAfterAdmissionAndStateAllocation(t *testi
 	expectedParameters := map[string]string{
 		"response_type":         "code",
 		"client_id":             "elitea",
-		"redirect_uri":          "https://elitea.example/forward-auth/auth_oidc/login_callback",
+		"redirect_uri":          "https://elitea.example/auth/oidc/login_callback",
 		"scope":                 "openid profile email",
 		"state":                 dependencies.flow.beginResult.TransactionID,
 		"nonce":                 dependencies.protocol.authorization.Correlation.Nonce,
@@ -145,7 +145,7 @@ func TestOIDCBeginExplicitGETRedirectsWithEquivalentBoundParameters(t *testing.T
 	if location.Scheme != "https" || location.Host != "issuer.example" ||
 		parameters.Get("prompt") != "login" || parameters.Get("response_type") != "code" ||
 		parameters.Get("client_id") != "elitea" ||
-		parameters.Get("redirect_uri") != "https://elitea.example/forward-auth/auth_oidc/login_callback" ||
+		parameters.Get("redirect_uri") != "https://elitea.example/auth/oidc/login_callback" ||
 		parameters.Get("scope") != "openid profile email" ||
 		parameters.Get("state") != dependencies.flow.beginResult.TransactionID ||
 		parameters.Get("nonce") != dependencies.protocol.authorization.Correlation.Nonce ||
@@ -957,7 +957,7 @@ func newOIDCProtocolStub(events *[]string) *oidcProtocolStub {
 			Endpoint:            "https://issuer.example/authorize",
 			ResponseType:        "code",
 			ClientID:            "elitea",
-			RedirectURI:         "https://elitea.example/forward-auth/auth_oidc/login_callback",
+			RedirectURI:         "https://elitea.example/auth/oidc/login_callback",
 			Scope:               "openid profile email",
 			CodeChallengeMethod: OIDCPKCEChallengeS256,
 		},

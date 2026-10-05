@@ -97,8 +97,9 @@ test('ELITEA-0725: an MCP toolkit attaches to a chat conversation as a participa
 
     const attached = (await attachResponse.json()) as readonly ParticipantRow[];
     const expectedToolkit = [{ id: mcp.id, projectId: DEFAULT_PROJECT_ID, type: 'mcp' }];
-    expect(attached.map((participant) => participant.entity_name).sort()).toEqual(['dummy', 'toolkit', 'user']);
-    expect(toolkitIdentities(attached), 'the complete attach response must contain exactly the MCP row it created').toEqual(expectedToolkit);
+    // The attach answers with the rows of THIS request only (legacy parity, F5).
+    expect(attached.map((participant) => participant.entity_name)).toEqual(['toolkit']);
+    expect(toolkitIdentities(attached), 'the attach response must contain exactly the MCP row it created').toEqual(expectedToolkit);
 
     const conversationResponse = await page.request.get(
       `${API_BASE}/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${conversationId}`,

@@ -1,3 +1,4 @@
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { t } from "@/shared/i18n";
 import {
   useStaticPipelineContinuation,
@@ -10,7 +11,6 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   FormControlLabel,
   Stack,
   TextField,
@@ -63,7 +63,7 @@ export function StaticPipelineContinueControls({
             <FormControlLabel
               key={leaf.proof.pause_id}
               control={
-                <Checkbox
+                <BaseCheckbox
                   disabled={busy}
                   checked={selected.includes(leaf.proof.pause_id)}
                   onChange={(_, checked) =>

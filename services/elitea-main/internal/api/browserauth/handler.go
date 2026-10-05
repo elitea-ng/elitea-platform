@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	_ "embed"
-	"encoding/base64"
 	"errors"
 	"html/template"
 	"mime"
@@ -22,13 +21,17 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
+// The browser authentication URLs, relative to BasePath: `/auth/login`,
+// `/auth/form/login` and so on. `/auth` itself (no trailing segment) is the
+// edge auth check (router.go). The browser routes are below it.
 const (
-	BasePath          = "/forward-auth"
+	BasePath = "/auth"
+
 	LoginPath         = "/login"
 	LogoutPath        = "/logout"
-	FormLoginPath     = "/auth_form/login"
-	FormAuthorizePath = "/auth_form/authorize"
-	FormLogoutPath    = "/auth_form/logout"
+	FormLoginPath     = "/form/login"
+	FormAuthorizePath = "/form/authorize"
+	FormLogoutPath    = "/form/logout"
 
 	DefaultMaxFormBodyBytes = int64(8 << 10)
 	maxMaxFormBodyBytes     = int64(64 << 10)
@@ -43,13 +46,14 @@ var (
 //go:embed templates/login.html
 var loginTemplateSource string
 
-//go:embed templates/login.css
-var loginStyleSource string
-
-var loginStyleCSPSource = func() string {
-	digest := sha256.Sum256([]byte(loginStyleSource))
-	return "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
-}()
+// loginPage is the Form page template's data.
+type loginPage struct {
+	Target string
+	Error  bool
+	Style  template.CSS
+	Script template.JS
+	Brand  loginBrand
+}
 
 type Flow interface {
 	Begin(context.Context, browserapp.BeginRequest) (browserapp.BeginResult, error)
@@ -128,7 +132,7 @@ func NewHandler(
 	if config.MaxFormBodyBytes < 1024 || config.MaxFormBodyBytes > maxMaxFormBodyBytes {
 		return nil, ErrInvalidHandlerConfiguration
 	}
-	loginTemplate, err := template.New("login.html").Parse(loginTemplateSource)
+	loginTemplate, err := parseAuthPage("login.html", loginTemplateSource)
 	if err != nil {
 		return nil, ErrInvalidHandlerConfiguration
 	}
@@ -162,6 +166,12 @@ func (h *Handler) registerRoutes(router chi.Router) {
 	router.MethodFunc(http.MethodOptions, FormAuthorizePath, options("POST, OPTIONS"))
 	h.registerReadRoute(router, LogoutPath, h.beginLogout)
 	h.registerReadRoute(router, FormLogoutPath, h.logout)
+}
+
+// FormPaths are every route of the Form router (NewFormRoutes), relative to
+// BasePath. The composition root registers each one under BasePath.
+func FormPaths() []string {
+	return []string{AuthPath, LoginPath, LogoutPath, FormLoginPath, FormAuthorizePath, FormLogoutPath}
 }
 
 func (h *Handler) registerReadRoute(router chi.Router, path string, handler http.HandlerFunc) {
@@ -218,23 +228,19 @@ func (h *Handler) renderForm(writer http.ResponseWriter, request *http.Request) 
 
 	brand := h.loginBrand(request.Context())
 	var body bytes.Buffer
-	if err := h.loginTemplate.Execute(&body, struct {
-		Target string
-		Error  bool
-		Style  template.CSS
-		Brand  loginBrand
-	}{
+	if err := h.loginTemplate.Execute(&body, loginPage{
 		Target: target,
 		Error:  hasQueryKey(request.URL.Query(), "error"),
-		Style:  template.CSS(loginStyleSource), // The source is compiled into this binary.
+		Style:  authPageStyle(),
+		Script: authPageScript(),
 		Brand:  brand,
 	}); err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable)
 		return
 	}
-	// The brand stylesheet's hash joins the static one; nothing else in the
-	// policy changes (branding.go).
-	writer.Header().Set("Content-Security-Policy", loginContentSecurityPolicy(brand.StyleSource))
+	// The brand stylesheet's hash joins the static one (branding.go); the
+	// theme script is pinned by its own hash (page.go).
+	writer.Header().Set("Content-Security-Policy", authPageCSP("'self'", brand.StyleSource))
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(body.Bytes())
@@ -294,6 +300,9 @@ func (h *Handler) authorizeForm(writer http.ResponseWriter, request *http.Reques
 	}, verifier)
 	if err != nil {
 		switch {
+		case errors.Is(err, browserapp.ErrUnauthenticated) && result.ReturnTarget != "":
+			// A wrong password keeps the original target (ADR-0025 §3.9).
+			h.redirectLoginFailureTo(writer, request, result.ReturnTarget)
 		case errors.Is(err, browserapp.ErrUnauthenticated),
 			errors.Is(err, browserapp.ErrAuthenticationExpired),
 			// A rejected transaction means the rendered form went stale: it
@@ -397,6 +406,19 @@ func (h *Handler) redirectLoginFailure(writer http.ResponseWriter, request *http
 	http.Redirect(writer, request, BasePath+LoginPath+"?error=true", http.StatusFound)
 }
 
+// redirectLoginFailureTo is redirectLoginFailure carrying the return target
+// the failed attempt was for. A target that is not a canonical same-origin
+// path is dropped, never passed through.
+func (h *Handler) redirectLoginFailureTo(writer http.ResponseWriter, request *http.Request, target string) {
+	canonical, err := browserflow.CanonicalReturnTarget(target)
+	if err != nil {
+		h.redirectLoginFailure(writer, request)
+		return
+	}
+	query := url.Values{"error": {"true"}, "target_to": {canonical}}
+	http.Redirect(writer, request, BasePath+LoginPath+"?"+query.Encode(), http.StatusFound)
+}
+
 func (h *Handler) writeFlowError(writer http.ResponseWriter, err error) {
 	if errors.Is(err, browserapp.ErrInvalidRequest) {
 		writeProblem(writer, http.StatusBadRequest)
@@ -453,7 +475,7 @@ func setRetryAfter(writer http.ResponseWriter, retryAfter time.Duration) {
 func securityHeaders(writer http.ResponseWriter) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Pragma", "no-cache")
-	writer.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; style-src "+loginStyleCSPSource)
+	writer.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; style-src "+authStyleCSPSource)
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("X-Frame-Options", "DENY")

@@ -20,19 +20,19 @@
 // (internal/api/router.go). A second, separately-authenticated tree at the root
 // would be a second place for the identity check to be got wrong.
 //
-// # How a client authenticates, and why there is no SCIM token type
+// # How a client authenticates
 //
-// With a PERSONAL ACCESS TOKEN, as a bearer credential, belonging to an account
-// that holds `admin.auth.users` in administration mode — the same permission the
-// admin Users page's write routes require. A SCIM client that can create and
-// deactivate accounts is doing exactly what that page does.
+// With a SCIM CLIENT credential (shared migration 0135), and with nothing else.
+// An administrator creates the client under Admin > Configuration >
+// Authentication. A `bearer` client presents its secret as the bearer token; a
+// `client_credentials` client first gets an access token from
+// `/api/v2/scim/oauth/token` (token.go). auth.go is the check, and it refuses a
+// personal access token and a browser session.
 //
-// The alternative was a dedicated SCIM token table with its own hashing,
-// rotation and admin surface. It was rejected: a PAT is already a static bearer
-// credential with an owner, an expiry and a revocation path, and a second
-// credential type would be a second set of those to get right. What an operator
-// does instead is create a service account, grant it the administration role,
-// and mint a token — all of which the platform already supports.
+// The first revision accepted a personal access token of an account holding
+// `admin.auth.users`. That tied every identity provider to one person: their
+// full rights, their name on every change, and an integration that stopped when
+// they left. The dedicated credential replaced it.
 //
 // # Groups map onto a project, and the missing half is authored
 //
@@ -60,6 +60,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -95,6 +96,7 @@ const (
 	schemaProjectGrant = "urn:elitea:params:scim:schemas:extension:projectgrant:2.0:Group"
 	schemaListResponse = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 	schemaError        = "urn:ietf:params:scim:api:messages:2.0:Error"
+	schemaEnterprise   = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 	schemaProviderCfg  = "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
 	schemaResourceType = "urn:ietf:params:scim:schemas:core:2.0:ResourceType"
 
@@ -118,6 +120,8 @@ type Directory interface {
 	Create(ctx context.Context, user scimdirectory.User) (scimdirectory.User, error)
 	Replace(ctx context.Context, id int, user scimdirectory.User) (scimdirectory.User, error)
 	SetActive(ctx context.Context, id int, active bool) (scimdirectory.User, error)
+	// ApplyUserChanges persists a whole PATCH atomically.
+	ApplyUserChanges(ctx context.Context, id int, changes scimdirectory.UserChanges) (scimdirectory.User, error)
 
 	ListGroups(ctx context.Context, filter scimdirectory.Filter, startIndex, count int) ([]scimdirectory.Group, int, error)
 	GetGroup(ctx context.Context, id int64) (scimdirectory.Group, error)
@@ -155,7 +159,9 @@ func (h *Handler) Routes() chi.Router {
 	router := chi.NewRouter()
 	router.Get("/ServiceProviderConfig", h.ServiceProviderConfig)
 	router.Get("/ResourceTypes", h.ResourceTypes)
+	router.Get("/ResourceTypes/{id}", h.ResourceType)
 	router.Get("/Schemas", h.Schemas)
+	router.Get("/Schemas/{id}", h.Schema)
 
 	router.Get("/Users", h.ListUsers)
 	router.Post("/Users", h.CreateUser)
@@ -207,10 +213,12 @@ func (h *Handler) ServiceProviderConfig(w http.ResponseWriter, _ *http.Request) 
 		"sort":           map[string]any{"supported": false},
 		"etag":           map[string]any{"supported": false},
 		"authenticationSchemes": []map[string]any{{
-			"type":        "oauthbearertoken",
-			"name":        "OAuth Bearer Token",
-			"description": "A platform personal access token belonging to an account that holds admin.auth.users.",
-			"primary":     true,
+			"type": "oauthbearertoken",
+			"name": "OAuth Bearer Token",
+			"description": "A SCIM client credential: the secret of a bearer client, or an access token " +
+				"from the OAuth 2.0 client credentials grant at " + TokenPath + ". Personal access tokens are not accepted.",
+			"specUri": "https://www.rfc-editor.org/rfc/rfc6750",
+			"primary": true,
 		}},
 		"meta": map[string]any{
 			"resourceType": "ServiceProviderConfig",
@@ -221,7 +229,7 @@ func (h *Handler) ServiceProviderConfig(w http.ResponseWriter, _ *http.Request) 
 
 // ResourceTypes answers `GET /ResourceTypes`. It lists User and Group, both of
 // which this tree serves.
-func (h *Handler) ResourceTypes(w http.ResponseWriter, _ *http.Request) {
+func resourceTypeDocuments() []any {
 	userType := map[string]any{
 		"schemas":     []string{schemaResourceType},
 		"id":          "User",
@@ -229,6 +237,11 @@ func (h *Handler) ResourceTypes(w http.ResponseWriter, _ *http.Request) {
 		"endpoint":    "/Users",
 		"description": "Platform accounts.",
 		"schema":      schemaUser,
+		// Announced so the enterprise attributes Entra sends are a declared
+		// extension. They are accepted and not stored; see patch_user.go.
+		"schemaExtensions": []map[string]any{{
+			"schema": schemaEnterprise, "required": false,
+		}},
 		"meta": map[string]any{
 			"resourceType": "ResourceType",
 			"location":     BasePath + "/ResourceTypes/User",
@@ -253,17 +266,36 @@ func (h *Handler) ResourceTypes(w http.ResponseWriter, _ *http.Request) {
 			"location":     BasePath + "/ResourceTypes/Group",
 		},
 	}
-	writeJSON(w, http.StatusOK, listResponse([]any{userType, groupType}, 2, 2))
+	return []any{userType, groupType}
 }
 
-// Schemas answers `GET /Schemas` with the attributes this directory really
+// ResourceTypes answers `GET /ResourceTypes`.
+func (h *Handler) ResourceTypes(w http.ResponseWriter, _ *http.Request) {
+	documents := resourceTypeDocuments()
+	writeJSON(w, http.StatusOK, listResponse(documents, len(documents), len(documents)))
+}
+
+// ResourceType answers `GET /ResourceTypes/{id}`, the address `meta.location`
+// advertises.
+func (h *Handler) ResourceType(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	for _, document := range resourceTypeDocuments() {
+		if strings.EqualFold(document.(map[string]any)["id"].(string), id) {
+			writeJSON(w, http.StatusOK, document)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "", "no such resource type")
+}
+
+// schemaDocuments lists the attributes this directory really
 // reads.
 //
 // Each document describes the attributes this service ACTS ON and no more. A
 // client uses it to decide what to send, so listing the whole core schema would
 // invite it to push a manager, a department and a set of phone numbers that this
 // service stores nowhere.
-func (h *Handler) Schemas(w http.ResponseWriter, _ *http.Request) {
+func schemaDocuments() []any {
 	attribute := func(name, kind, description string) map[string]any {
 		return map[string]any{
 			"name": name, "type": kind, "multiValued": false,
@@ -281,7 +313,18 @@ func (h *Handler) Schemas(w http.ResponseWriter, _ *http.Request) {
 			attribute("displayName", "string", "The name shown in the product."),
 			attribute("active", "boolean", "False suspends the account; it is not deleted."),
 			attribute("externalId", "string", "The identity provider's own identifier."),
-			attribute("emails", "complex", "The primary value is kept as the account address."),
+			complexAttribute("name", "The name parts. The formatted value is kept as the display name.",
+				subAttribute("formatted", "The full name."),
+				subAttribute("givenName", "The given name."),
+				subAttribute("familyName", "The family name.")),
+			complexAttribute("emails", "The work or primary value is kept as the account address.",
+				subAttribute("value", "The address."),
+				subAttribute("type", "work, home or other."),
+				map[string]any{
+					"name": "primary", "type": "boolean", "multiValued": false,
+					"description": "Whether this is the primary address.",
+					"required":    false, "mutability": "readWrite", "returned": "default", "uniqueness": "none",
+				}),
 		},
 		"meta": map[string]any{"resourceType": "Schema", "location": BasePath + "/Schemas/" + schemaUser},
 	}
@@ -356,7 +399,58 @@ func (h *Handler) Schemas(w http.ResponseWriter, _ *http.Request) {
 		},
 		"meta": map[string]any{"resourceType": "Schema", "location": BasePath + "/Schemas/" + schemaProjectGrant},
 	}
-	writeJSON(w, http.StatusOK, listResponse([]any{userSchema, groupSchema, grantSchema}, 3, 3))
+	enterpriseSchema := map[string]any{
+		"id":   schemaEnterprise,
+		"name": "EnterpriseUser",
+		"description": "Enterprise attributes an identity provider sends. They are accepted " +
+			"and not stored by this deployment.",
+		"attributes": []map[string]any{
+			attribute("employeeNumber", "string", "Accepted and not stored."),
+			attribute("department", "string", "Accepted and not stored."),
+			attribute("organization", "string", "Accepted and not stored."),
+			attribute("costCenter", "string", "Accepted and not stored."),
+			attribute("division", "string", "Accepted and not stored."),
+			complexAttribute("manager", "Accepted and not stored.",
+				subAttribute("value", "The manager's id."),
+				subAttribute("displayName", "The manager's name.")),
+		},
+		"meta": map[string]any{"resourceType": "Schema", "location": BasePath + "/Schemas/" + schemaEnterprise},
+	}
+	return []any{userSchema, groupSchema, grantSchema, enterpriseSchema}
+}
+
+// Schemas answers `GET /Schemas`.
+func (h *Handler) Schemas(w http.ResponseWriter, _ *http.Request) {
+	documents := schemaDocuments()
+	writeJSON(w, http.StatusOK, listResponse(documents, len(documents), len(documents)))
+}
+
+// Schema answers `GET /Schemas/{id}`, the address `meta.location` advertises.
+func (h *Handler) Schema(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	for _, document := range schemaDocuments() {
+		if strings.EqualFold(document.(map[string]any)["id"].(string), id) {
+			writeJSON(w, http.StatusOK, document)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "", "no such schema")
+}
+
+func subAttribute(name, description string) map[string]any {
+	return map[string]any{
+		"name": name, "type": "string", "multiValued": false, "description": description,
+		"required": false, "caseExact": false, "mutability": "readWrite",
+		"returned": "default", "uniqueness": "none",
+	}
+}
+
+func complexAttribute(name, description string, subAttributes ...map[string]any) map[string]any {
+	return map[string]any{
+		"name": name, "type": "complex", "multiValued": name == "emails", "description": description,
+		"required": false, "mutability": "readWrite", "returned": "default", "uniqueness": "none",
+		"subAttributes": subAttributes,
+	}
 }
 
 func uniquenessOf(name string) string {
@@ -392,8 +486,14 @@ func userResource(user scimdirectory.User) map[string]any {
 		"id":          strconv.Itoa(user.ID),
 		"userName":    user.UserName,
 		"displayName": user.DisplayName,
-		"name":        map[string]any{"formatted": user.DisplayName},
+		"name":        nameResource(user),
 		"active":      user.Active,
+		// ONE address: the account's, which is the userName. The platform
+		// stores no second address, so a client that maps a different work
+		// email (Entra: `mail` beside a UPN userName) reads back a value that
+		// differs from what it sent. Its PATCH of the email is accepted and
+		// is a no-op (patch_user.go), so the difference costs one harmless
+		// request per cycle and never re-addresses the account.
 		"emails": []map[string]any{{
 			"value": user.UserName, "primary": true, "type": "work",
 		}},
@@ -410,6 +510,35 @@ func userResource(user scimdirectory.User) map[string]any {
 		resource["externalId"] = user.ExternalID
 	}
 	return resource
+}
+
+// nameResource renders the `name` complex attribute from what was STORED.
+//
+// givenName and familyName are returned exactly as the client sent them, and
+// omitted when it sent none. `formatted` is the stored value when the client
+// sent one, else the given and family name joined (which is what Entra ID's
+// default `Join(" ", givenName, surname)` mapping computes), else the display
+// name. Answering with what was sent is what lets a client that compares its
+// source against a GET see no difference and stop re-sending the name.
+func nameResource(user scimdirectory.User) map[string]any {
+	name := map[string]any{}
+	if user.GivenName != "" {
+		name["givenName"] = user.GivenName
+	}
+	if user.FamilyName != "" {
+		name["familyName"] = user.FamilyName
+	}
+	formatted := user.FormattedName
+	if formatted == "" {
+		formatted = strings.TrimSpace(user.GivenName + " " + user.FamilyName)
+	}
+	if formatted == "" {
+		formatted = user.DisplayName
+	}
+	if formatted != "" {
+		name["formatted"] = formatted
+	}
+	return name
 }
 
 // groupResource renders one bound group.
@@ -473,4 +602,59 @@ func writeError(w http.ResponseWriter, status int, scimType, detail string) {
 		body["scimType"] = scimType
 	}
 	writeJSON(w, status, body)
+}
+
+// projectResource applies the `attributes` and `excludedAttributes` query
+// parameters (RFC 7644 §3.4.2.5) to one rendered resource.
+//
+// Entra ID sends `excludedAttributes=members` on every group read, because a
+// large group's member list is the expensive part, and a server that ignored it
+// would return a body the client then has to discard. `attributes` wins when
+// both are sent. `id` and `schemas` are always returned. A dotted name such as
+// `name.givenName` keeps its parent attribute whole: the platform stores no
+// sub-attribute that the parent does not already carry.
+func projectResource(resource map[string]any, r *http.Request) map[string]any {
+	query := r.URL.Query()
+	if wanted := splitAttributeList(query.Get("attributes")); len(wanted) > 0 {
+		kept := map[string]any{}
+		for key, value := range resource {
+			lowered := strings.ToLower(key)
+			if lowered == "id" || lowered == "schemas" || wanted[lowered] {
+				kept[key] = value
+			}
+		}
+		return kept
+	}
+	if excluded := splitAttributeList(query.Get("excludedAttributes")); len(excluded) > 0 {
+		for key := range resource {
+			lowered := strings.ToLower(key)
+			if lowered != "id" && lowered != "schemas" && excluded[lowered] {
+				delete(resource, key)
+			}
+		}
+	}
+	return resource
+}
+
+// splitAttributeList reads a comma-separated attribute list into the set of
+// lower-cased top-level names. A URN prefix and a sub-attribute are reduced to
+// the attribute they sit under.
+func splitAttributeList(raw string) map[string]bool {
+	names := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" {
+			continue
+		}
+		for _, prefix := range []string{
+			strings.ToLower(schemaUser) + ":", strings.ToLower(schemaGroup) + ":",
+		} {
+			name = strings.TrimPrefix(name, prefix)
+		}
+		if dot := strings.Index(name, "."); dot > 0 && !strings.HasPrefix(name, "urn:") {
+			name = name[:dot]
+		}
+		names[name] = true
+	}
+	return names
 }

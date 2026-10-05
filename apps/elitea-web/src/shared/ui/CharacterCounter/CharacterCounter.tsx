@@ -12,7 +12,7 @@ import { combineSx } from '../lib/combineSx';
 export interface CharacterCounterProps {
   value: string;
   maxLength: number;
-  textVariant?: 'bodySmall' | 'bodySmall2' | 'bodyMedium' | 'labelSmall' | 'labelMedium' | 'labelTiny';
+  textVariant?: 'bodySmall' | 'bodyMedium' | 'labelSmall' | 'labelMedium';
   /**
    * `false` keeps the line in flow but invisible (#848).
    *

@@ -14,13 +14,13 @@ export function FailureReference({ messageId, code }: FailureReferenceProps): Re
     .filter(Boolean).join('\n');
   return (
     <Box component="details" sx={{ mt: 1 }} data-testid="failure-reference">
-      <Typography component="summary" variant="body2" sx={{ cursor: 'pointer' }}>
+      <Typography component="summary" variant="bodyMedium" sx={{ cursor: 'pointer' }}>
         {t('chatMessages.error.supportDetails', 'Details for support')}
       </Typography>
-      <Typography component="pre" variant="caption" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', my: 1 }}>
+      <Typography component="pre" variant="bodySmall" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', my: 1 }}>
         {reference}
       </Typography>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="bodyMedium" component="p" color="text.secondary">
         {t('chatMessages.error.operatorDiagnostics', 'Share this reference with your administrator. Detailed diagnostics are available to operators in service logs.')}
       </Typography>
       <Button size="small" onClick={() => { void handleCopy(reference); }}>

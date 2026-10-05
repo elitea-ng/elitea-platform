@@ -99,7 +99,7 @@ const ICON_BY_NODE_TYPE: Readonly<Record<string, ComponentType<IconProps>>> = {
 
 export const getNodeIconByType = (type: string, theme: Theme, specifiedColor?: string): ReactElement => {
   const iconColor = specifiedColor ?? theme.vars.palette.text.secondary;
-  const style: CSSProperties = { fontSize: theme.typography.body1.fontSize, color: iconColor };
+  const style: CSSProperties = { fontSize: theme.typography.bodyMedium.fontSize, color: iconColor };
   const Icon = ICON_BY_NODE_TYPE[type] ?? JsonIcon;
   return <Icon style={style} fill={iconColor} />;
 };

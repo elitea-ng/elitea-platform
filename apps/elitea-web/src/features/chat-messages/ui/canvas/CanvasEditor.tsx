@@ -96,6 +96,8 @@ import { MarkdownTableEditor } from './table/MarkdownTableEditor';
 
 import type { CanvasFileSource } from '../../lib/canvasFileSource';
 import type { DocumentEditorHandle } from './DocumentEditor';
+import type { Theme } from '@mui/material/styles';
+import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
 
 /**
  * The `document` pane (issue #879), lazy-loaded — see `./DocumentEditor.tsx`'s
@@ -638,14 +640,16 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
                   key={editor.userName}
                   alt={editor.userName}
                   data-testid="canvas-presence-avatar"
-                  sx={{
+                  sx={(theme: Theme) => ({
                     width: '1.25rem',
                     height: '1.25rem',
-                    fontSize: '0.625rem',
+                    // A 20px avatar: initials snap to the ladder (labelSmall),
+                    // not 10px — under the 12px floor.
+                    ...typeScale(theme.typography[avatarInitialsType(20)]),
                     transform: `translateX(-${String(index * 5)}px)`,
                     zIndex: presence.otherEditors.length - index,
                     backgroundColor: stringToColor(editor.userName),
-                  }}
+                  })}
                 >
                   {getInitials(editor.userName)}
                 </Avatar>

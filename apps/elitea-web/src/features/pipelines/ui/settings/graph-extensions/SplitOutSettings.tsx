@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useContext } from 'react';
 import Stack from '@mui/material/Stack';
 import FormControlLabel from '@mui/material/FormControlLabel';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
@@ -46,7 +46,7 @@ export function SplitOutSettings(props: ExtensionSettingsProps): ReactNode {
     <ExtensionChoice label={t('pipelines.graphExtensions.nullList', 'Null list')} value={extensionText(node['null_list']) || 'error'}
       disabled={disabled} choices={['error', 'empty']} change={(value) => change('null_list', value)} />
     <FormControlLabel label={t('pipelines.graphExtensions.removeSource', 'Remove source field after retention')}
-      control={<Checkbox className="nodrag nopan" checked={node['remove_source'] !== false} disabled={disabled}
+      control={<BaseCheckbox className="nodrag nopan" checked={node['remove_source'] !== false} disabled={disabled}
         onChange={(_, checked) => change('remove_source', checked)} />} />
     <StateChannelSelect label={t('pipelines.graphExtensions.output', 'Output list state variable')} value={output} types={['list']}
       exclude={source} disabled={disabled} change={(value) => change('output', value === '' ? [] : [value])} />

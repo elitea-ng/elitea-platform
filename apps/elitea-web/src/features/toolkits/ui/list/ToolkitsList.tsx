@@ -257,7 +257,7 @@ export function ToolkitsList({
         )}
         {isError && !isLoading && (
           <Box sx={centeredSx}>
-            <Typography variant="body2">{t('features.toolkits.toolkitsList.loadError', 'Failed to load toolkits.')}</Typography>
+            <Typography variant="bodyMedium" component="p">{t('features.toolkits.toolkitsList.loadError', 'Failed to load toolkits.')}</Typography>
           </Box>
         )}
         {isEmpty && (

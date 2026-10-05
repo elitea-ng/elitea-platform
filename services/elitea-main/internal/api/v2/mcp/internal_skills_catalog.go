@@ -1,5 +1,7 @@
 package mcp
 
+import skillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
+
 const internalSkillsCategory = "elitea_core/skills"
 
 type internalSkillOperation string
@@ -76,7 +78,7 @@ var internalSkillToolDefinitions = []internalSkillToolDefinition{
 			"skill_id":     intProperty("Skill ID."),
 			"description":  boundedStringProperty("Optional skill description.", 1, 2304),
 			"version_id":   intProperty("Update this version with flat name, instructions, tags, and meta fields."),
-			"instructions": boundedStringProperty("Version instructions; requires version_id.", 1, 5000),
+			"instructions": boundedStringProperty("Version instructions; requires version_id.", 1, skillsapi.SkillInstructionsMaxLength),
 			"tags":         map[string]any{"type": "array", "items": skillTagWriteSchema()},
 			"meta":         map[string]any{"type": "object"},
 			"name":         boundedStringProperty("Skill name, or version name when version_id is provided.", 1, 128),
@@ -138,7 +140,7 @@ func skillVersionWriteSchema(required bool) map[string]any {
 		"version": objectSchema(map[string]any{
 			"id":           intProperty("Existing version ID; omission selects the default version."),
 			"name":         boundedStringProperty("Version name. The base version cannot be renamed.", 1, 128),
-			"instructions": boundedStringProperty("Skill instructions.", 1, 5000),
+			"instructions": boundedStringProperty("Skill instructions.", 1, skillsapi.SkillInstructionsMaxLength),
 			"tags":         tags,
 			"meta":         map[string]any{"type": "object"},
 		}),
@@ -146,7 +148,7 @@ func skillVersionWriteSchema(required bool) map[string]any {
 	if required {
 		properties = map[string]any{
 			"name":         map[string]any{"type": "string", "const": "base"},
-			"instructions": boundedStringProperty("Skill instructions.", 1, 5000),
+			"instructions": boundedStringProperty("Skill instructions.", 1, skillsapi.SkillInstructionsMaxLength),
 			"tags":         tags,
 		}
 		return objectSchema(properties, "name", "instructions")

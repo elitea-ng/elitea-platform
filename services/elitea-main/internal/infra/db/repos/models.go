@@ -249,6 +249,10 @@ func mapCurrentModelCandidate(
 		return currentModelCandidate{id: row.ID, item: item}, nil
 	}
 
+	// The description is read tolerantly: it is display text, and a
+	// malformed value must not remove an otherwise valid model from the
+	// picker the way a malformed numeric field would.
+	item.Description = currentModelDescription(data)
 	item.ContextWindow, err = optionalCurrentModelInt(data, "context_window")
 	if err != nil {
 		return currentModelCandidate{}, err
@@ -282,6 +286,20 @@ func mapCurrentModelCandidate(
 		return currentModelCandidate{}, err
 	}
 	return currentModelCandidate{id: row.ID, item: item}, nil
+}
+
+// currentModelDescription reads the optional llm_model description. A value
+// that is absent, null or not a string yields nil.
+func currentModelDescription(data map[string]json.RawMessage) *string {
+	raw, ok := data[configurationapp.LLMModelDescriptionField]
+	if !ok || currentModelJSONNull(raw) {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	return configurationapp.ReadLLMModelDescription(value)
 }
 
 func decodeCurrentModelData(raw []byte) (map[string]json.RawMessage, error) {

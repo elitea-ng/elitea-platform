@@ -1,5 +1,9 @@
 /* ── Markdown content inside assistant messages ── */
 
+/* Sizes are on the app's type ladder (12 / 14 / 16 / 20px, typography spec
+   §2) in rem, not em: an em size compounds on the 14px message text into
+   off-ladder values (17.5, 15.75, 11.9px). Line heights stay ≥ 1.4 (§5). */
+
 .elitea-assistant-markdown {
   overflow-wrap: break-word;
 }
@@ -24,17 +28,22 @@
 .elitea-assistant-markdown h6 {
   margin: 0.75em 0 0.375em;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.4;
 }
 
 .elitea-assistant-markdown h1 {
-  font-size: 1.25em;
+  font-size: 1.25rem;
 }
 .elitea-assistant-markdown h2 {
-  font-size: 1.125em;
+  font-size: 1rem;
 }
-.elitea-assistant-markdown h3 {
-  font-size: 1em;
+/* h3–h6 share the body rung: the browser's own h5/h6 sizes (0.83em,
+   0.67em) fall under the 12px floor. */
+.elitea-assistant-markdown h3,
+.elitea-assistant-markdown h4,
+.elitea-assistant-markdown h5,
+.elitea-assistant-markdown h6 {
+  font-size: 0.875rem;
 }
 
 .elitea-assistant-markdown ul,
@@ -56,7 +65,7 @@
   background: rgba(0, 0, 0, 0.06);
   padding: 0.125em 0.3em;
   border-radius: 0.25em;
-  font-size: 0.85em;
+  font-size: 0.75rem;
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -71,7 +80,7 @@
 .elitea-assistant-markdown pre code {
   background: none;
   padding: 0;
-  font-size: 0.8125em;
+  font-size: 0.75rem;
   white-space: pre;
 }
 
@@ -99,7 +108,7 @@
 .elitea-assistant-markdown table {
   border-collapse: collapse;
   margin: 0.5em 0;
-  font-size: 0.85em;
+  font-size: 0.75rem;
   width: 100%;
 }
 
@@ -198,7 +207,7 @@
   height: 2rem;
   color: #fff;
   font-size: 0.875rem;
-  line-height: 1;
+  line-height: 1.4;
   cursor: pointer;
   display: flex;
   align-items: center;

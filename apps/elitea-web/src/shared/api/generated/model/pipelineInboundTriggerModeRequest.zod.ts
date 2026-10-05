@@ -43,30 +43,48 @@ import * as zod from "zod";
 
 export const pipelineInboundTriggerModeRequestSignatureHeaderMax = 128;
 
+export const pipelineInboundTriggerModeRequestEventsItemMax = 64;
+
+export const pipelineInboundTriggerModeRequestEventsMax = 32;
+
 export const PipelineInboundTriggerModeRequest = zod
   .object({
     type: zod
-      .enum(["custom", "github"])
+      .enum(["custom", "github", "gitlab"])
       .optional()
       .describe(
-        "The preset. `github` expands to `auth_mode: hmac_sha256` with `X-Hub-Signature-256` and a `/github` URL suffix.\n",
+        "The preset. `github` expands to `auth_mode: hmac_sha256` with `X-Hub-Signature-256` and a `/github` URL suffix. `gitlab` expands to `auth_mode: token` with a `/gitlab` URL suffix: a GitLab secret token is the trigger secret, sent in `X-Gitlab-Token`. Add `auth_mode: standard_webhooks_hmac` for a GitLab signing token.\n",
       ),
     provider: zod
-      .enum(["custom", "github"])
+      .enum(["custom", "github", "gitlab"])
       .optional()
       .describe("An alias of `type`, for callers that prefer the noun."),
     auth_mode: zod
-      .enum(["token", "hmac_sha256"])
+      .enum(["token", "hmac_sha256", "standard_webhooks_hmac"])
       .optional()
       .describe(
-        "The explicit form, for a sender that signs the same way under a header of its own. Asking for `token` beside the `github` preset is refused rather than resolved: turning the stricter request into the weaker setting is exactly the failure this refusal exists to stop.\n",
+        "The explicit form, for a sender that signs the same way under a header of its own. Asking for `token` beside the `github` preset is refused rather than resolved: turning the stricter request into the weaker setting is exactly the failure this refusal exists to stop. `hmac_sha256` beside `gitlab` and `standard_webhooks_hmac` beside `github` are refused too: neither provider sends that signature.\n",
       ),
     signature_header: zod
       .string()
       .max(pipelineInboundTriggerModeRequestSignatureHeaderMax)
       .optional()
       .describe(
-        "The header to read the signature from. Required by a signing mode that names no preset; overrides the preset's own header when both are given.\n",
+        "The header to read the signature from. Required by `hmac_sha256` when no preset names one; overrides the preset's own header when both are given. `standard_webhooks_hmac` always reads `webhook-signature`, and any other name is refused.\n",
+      ),
+    events: zod
+      .array(zod.string().max(pipelineInboundTriggerModeRequestEventsItemMax))
+      .min(1)
+      .max(pipelineInboundTriggerModeRequestEventsMax)
+      .optional()
+      .describe(
+        'The provider events the trigger admits, for a GitHub or GitLab trigger only. `["*"]` admits every event. An empty list, and a list on a custom trigger, are refused with 400. Without this field a rotation keeps the stored list; a new trigger gets the default described on `PipelineInboundTrigger.events`.\n',
+      ),
+    allow_variable_overrides: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Let the inbound body's `variables` re-value the agent's declared variables. Without this field a rotation keeps the stored value, and a new trigger is off.\n",
       ),
   })
   .describe(

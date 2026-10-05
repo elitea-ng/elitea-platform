@@ -22,6 +22,11 @@ type Repository interface {
 	// repository's cap constants for why a silent cut is worse here than
 	// elsewhere: the client paginates over what it receives.
 	GetUserActivity(ctx context.Context, params analytics.QueryParams) ([]analytics.UserActivity, bool, error)
+	// GetExecutionAnalytics is one runtime execution's totals, and
+	// GetEvaluationRunAnalytics one evaluation run's. They read by id, with
+	// no date window: a run is a fixed set of calls.
+	GetExecutionAnalytics(ctx context.Context, projectID, executionID string) (analytics.ExecutionAnalytics, error)
+	GetEvaluationRunAnalytics(ctx context.Context, projectID, runID string) (analytics.EvaluationRunAnalytics, error)
 }
 
 type Handler struct {
@@ -83,6 +88,22 @@ func writeRepoFailure(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "project id must be a positive integer",
 			"code":  "bad_project_id",
+		})
+		return
+	}
+	if errors.Is(err, analytics.ErrBadID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "the run id is not valid",
+			"code":  "bad_run_id",
+		})
+		return
+	}
+	// One answer for "no such run" and "a run of another project", so the
+	// route does not confirm that another project's id exists.
+	if errors.Is(err, analytics.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": "run not found",
+			"code":  "run_not_found",
 		})
 		return
 	}
@@ -153,7 +174,11 @@ func writeRepoFailure(w http.ResponseWriter, err error) {
 //	                    with the first, and only one of the two carries the
 //	                    scope rules that stop it double-counting.
 func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
-	summary, err := h.repo.GetUsageSummary(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	summary, err := h.repo.GetUsageSummary(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -207,6 +232,13 @@ func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
 	if summary.Health != nil {
 		body["health"] = summary.Health
 	}
+	// The unattended calls the active-user figures above leave out (legacy
+	// issues 6802 and 6881), one row per trigger origin. Absent, not empty,
+	// when the database cannot tell the origins apart: an empty list would
+	// say "nothing here was automated".
+	if summary.Automated != nil {
+		body["automated_activity"] = summary.Automated
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -235,7 +267,11 @@ func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
 // /llm traffic is not made from a runtime execution, so without both figures an
 // operator is reconciling a breakdown against a total it never summed to.
 func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
-	breakdown, err := h.repo.GetAgentAnalytics(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	breakdown, err := h.repo.GetAgentAnalytics(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -268,7 +304,7 @@ func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
 	// with the flag that says which window it covers, and the per-agent split
 	// stays unclaimed rather than faked from a join that does not exist.
 	if r.URL.Query().Get("application_id") != "" || r.URL.Query().Get("agent_id") != "" {
-		tools, toolErr := h.repo.GetToolAnalytics(r.Context(), h.parseParams(r))
+		tools, toolErr := h.repo.GetToolAnalytics(r.Context(), params)
 		if toolErr != nil && !errors.Is(toolErr, analytics.ErrNoSource) {
 			writeRepoFailure(w, toolErr)
 			return
@@ -286,6 +322,41 @@ func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// Execution is one runtime execution's analytics (legacy issues 6667 and
+// 6816): the calls, tokens, estimated cost, models, callers, failures and
+// tools of the run and its child attributions.
+//
+// # `available: false` is not zero
+//
+// A run admitted before shared migration 0100, or one whose calls the
+// gateway has pruned, answers 200 with `available: false`, a reason, and NO
+// figure keys. A client renders "unavailable" for it. A run that made no
+// model call answers `available: true` with zero totals, which is a
+// measurement.
+func (h *Handler) Execution(w http.ResponseWriter, r *http.Request) {
+	result, err := h.repo.GetExecutionAnalytics(r.Context(),
+		chi.URLParam(r, "projectID"), chi.URLParam(r, "executionID"))
+	if err != nil {
+		writeRepoFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// EvaluationRun is one evaluation run's analytics (legacy issues 6677 and
+// 6817): the run's total, its agent and judge roles, and one row per case
+// with the two roles side by side. The roles are never added into each other.
+// The availability rule is Execution's.
+func (h *Handler) EvaluationRun(w http.ResponseWriter, r *http.Request) {
+	result, err := h.repo.GetEvaluationRunAnalytics(r.Context(),
+		chi.URLParam(r, "projectID"), chi.URLParam(r, "runID"))
+	if err != nil {
+		writeRepoFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // agentName resolves the requested agent's display name out of the breakdown
@@ -324,7 +395,11 @@ func agentName(breakdown analytics.AgentBreakdown, r *http.Request) string {
 // to map over. The precedent is the Agents tab above, and behind it
 // usageDimensions.Available (internal/api/v2/budgets/usage_dimensions.go).
 func (h *Handler) Tools(w http.ResponseWriter, r *http.Request) {
-	tools, err := h.repo.GetToolAnalytics(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	tools, err := h.repo.GetToolAnalytics(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -379,7 +454,11 @@ func toolName(tools analytics.ToolBreakdown, r *http.Request) string {
 // does not carry. It answers with empty lists and no kpis block rather than
 // with zeros, for the same reason the list branches refuse outright.
 func (h *Handler) Users(w http.ResponseWriter, r *http.Request) {
-	users, truncated, err := h.repo.GetUserActivity(r.Context(), h.parseParams(r))
+	params, ok := h.requestParams(w, r)
+	if !ok {
+		return
+	}
+	users, truncated, err := h.repo.GetUserActivity(r.Context(), params)
 	if err != nil {
 		writeRepoFailure(w, err)
 		return
@@ -429,7 +508,7 @@ func round1(v float64) float64 {
 // decisions, and two endpoints on the same screen answering over two different
 // windows is a discrepancy no reader can attribute. dateWindow is shared with
 // it for exactly that reason.
-func (h *Handler) parseParams(r *http.Request) analytics.QueryParams {
+func (h *Handler) parseParams(r *http.Request) (analytics.QueryParams, error) {
 	query := r.URL.Query()
 	startDate := query.Get("start_date")
 	if startDate == "" {
@@ -454,7 +533,10 @@ func (h *Handler) parseParams(r *http.Request) analytics.QueryParams {
 	if endDate != "" {
 		window.Set("date_to", endDate)
 	}
-	from, to := dateWindow(window, h.clock)
+	from, to, err := dateWindow(window, h.clock)
+	if err != nil {
+		return analytics.QueryParams{}, err
+	}
 	return analytics.QueryParams{
 		ProjectID: chi.URLParam(r, "projectID"),
 		From:      from,
@@ -462,7 +544,18 @@ func (h *Handler) parseParams(r *http.Request) analytics.QueryParams {
 		StartDate: startDate,
 		EndDate:   endDate,
 		Period:    query.Get("period"),
+	}, nil
+}
+
+// requestParams is parseParams for a handler: a reversed window is answered
+// with 400 invalid_date_range here, and ok is false so the handler returns.
+func (h *Handler) requestParams(w http.ResponseWriter, r *http.Request) (analytics.QueryParams, bool) {
+	params, err := h.parseParams(r)
+	if err != nil {
+		writeInvalidDateRange(w)
+		return analytics.QueryParams{}, false
 	}
+	return params, true
 }
 
 func (h *Handler) clock() time.Time {

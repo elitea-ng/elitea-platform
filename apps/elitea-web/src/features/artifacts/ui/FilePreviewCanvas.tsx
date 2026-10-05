@@ -335,7 +335,7 @@ const headerSx: SxProps<Theme> = (theme) => ({
   justifyContent: 'space-between',
   gap: theme.spacing(2),
   padding: theme.spacing(2),
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  borderBottom: `0.0625rem solid ${theme.vars.palette.border.artifactDivider}`,
 });
 const contentSx: SxProps<Theme> = (theme) => ({
   flex: 1,

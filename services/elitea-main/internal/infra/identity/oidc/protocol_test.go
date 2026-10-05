@@ -63,7 +63,7 @@ func TestProtocolRunsSignedAuthorizationCodeFlow(t *testing.T) {
 	if authorizationRequest.Transport != browserapp.OIDCAuthorizationPOST ||
 		authorizationRequest.Endpoint != "https://issuer.example/authorize" ||
 		authorizationRequest.ResponseType != "code" || authorizationRequest.ClientID != "elitea-client" ||
-		authorizationRequest.RedirectURI != "https://elitea.example/forward-auth/auth_oidc/login_callback" ||
+		authorizationRequest.RedirectURI != "https://elitea.example/auth/oidc/login_callback" ||
 		authorizationRequest.Scope != "openid profile email" || authorizationRequest.State != state ||
 		authorizationRequest.Nonce != authorization.Correlation.Nonce ||
 		authorizationRequest.CodeChallengeMethod != browserapp.OIDCPKCEChallengeS256 ||
@@ -304,7 +304,7 @@ func TestOAuth2CodeExchangerIsBoundedAndSendsPKCEVerifier(t *testing.T) {
 		}
 		if values.Get("grant_type") != "authorization_code" || values.Get("code") != "authorization-code" ||
 			values.Get("code_verifier") != strings.Repeat("v", browserflow.MinPKCEVerifierBytes) ||
-			values.Get("redirect_uri") != "https://elitea.example/forward-auth/auth_oidc/login_callback" ||
+			values.Get("redirect_uri") != "https://elitea.example/auth/oidc/login_callback" ||
 			values.Get("client_secret") != "" {
 			t.Fatalf("token form = %v", values)
 		}
@@ -514,7 +514,7 @@ func validProtocolConfig() Config {
 		Issuer:                     "https://issuer.example",
 		AuthorizationEndpoint:      "https://issuer.example/authorize",
 		ClientID:                   "elitea-client",
-		RedirectURI:                "https://elitea.example/forward-auth/auth_oidc/login_callback",
+		RedirectURI:                "https://elitea.example/auth/oidc/login_callback",
 		Scopes:                     []string{"openid", "profile", "email"},
 		SupportedSigningAlgorithms: []string{"RS256"},
 		RequireEmailVerified:       true,
@@ -526,7 +526,7 @@ func validExchangerConfig() CodeExchangerConfig {
 		TokenEndpoint:  "https://issuer.example/token",
 		ClientID:       "elitea-client",
 		ClientSecret:   "client-secret",
-		RedirectURI:    "https://elitea.example/forward-auth/auth_oidc/login_callback",
+		RedirectURI:    "https://elitea.example/auth/oidc/login_callback",
 		AuthStyle:      TokenEndpointAuthBasic,
 		RequestTimeout: 5 * time.Second,
 	}

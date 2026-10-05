@@ -17,6 +17,7 @@ import {
   isInherited,
   isSixDigitHex,
   parseBrandingValues,
+  resetBrandingPayload,
   withDerivedSchemes,
 } from './brandingValues';
 
@@ -53,6 +54,46 @@ describe('parseBrandingValues', () => {
     for (const key of BRANDING_KEYS) {
       expect(isInherited(emptyBrandingValues(), key), key).toBe(true);
     }
+  });
+});
+
+describe('resetBrandingPayload', () => {
+  it('clears the keys this page does not edit, even before the section has loaded', () => {
+    expect(resetBrandingPayload()).toEqual({
+      ...emptyBrandingValues(),
+      scheme_tokens: {},
+      sender_name: '',
+      support_email: '',
+    });
+  });
+
+  it('clears any other stored key at its own shape, so a key added server-side cannot survive', () => {
+    const payload = resetBrandingPayload({
+      product_name: 'Acme',
+      future_text: 'x',
+      future_number: 7,
+      future_list: ['a'],
+      future_map: { a: 1 },
+    });
+    expect(payload).toMatchObject({
+      product_name: '',
+      future_text: '',
+      future_number: 0,
+      future_list: [],
+      future_map: {},
+      scheme_tokens: {},
+    });
+  });
+
+  it('leaves out a stored key whose shape cannot name its inherit value', () => {
+    const payload = resetBrandingPayload({ future_flag: true, future_null: null });
+    expect(payload).not.toHaveProperty('future_flag');
+    expect(payload).not.toHaveProperty('future_null');
+  });
+
+  it('reads a non-object answer as nothing extra', () => {
+    expect(resetBrandingPayload(['product_name'])).toEqual(resetBrandingPayload());
+    expect(resetBrandingPayload(null)).toEqual(resetBrandingPayload());
   });
 });
 

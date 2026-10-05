@@ -43,9 +43,11 @@ use crate::transport::{
 const MAX_AGENTSTATE_CONNECTION_BYTES: usize = 16 * 1024;
 const MAX_RUNTIME_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_APPLICATION_VERSION_BYTES: usize = 1024 * 1024;
-// The attachment ENVELOPE, not the object: main caps the file at 128 KiB and
-// its JSON envelope at 1 MiB, because the content travels as a JSON string.
-const MAX_ATTACHMENT_OBJECT_BYTES: usize = 1024 * 1024;
+// The attachment ENVELOPE, not the text: main serves at most 2 MiB of
+// extracted text in an envelope of at most 6 MiB (see the transport's own
+// constant, which this one restates so the two cannot drift).
+const MAX_ATTACHMENT_OBJECT_BYTES: usize =
+    crate::transport::runtime_context::MAX_ATTACHMENT_OBJECT_BYTES;
 // The artifact ENVELOPE, likewise: main serves at most 200_000 CHARACTERS of
 // file content and caps the envelope at 2 MiB, because a control-character-
 // dense file escapes to six characters per byte inside a JSON string.

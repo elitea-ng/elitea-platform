@@ -26,6 +26,7 @@ const IconButtonAny = IconButton as React.ComponentType<
 
 import RefreshIcon from '@/shared/ui/icons/svg/refresh-icon.svg?react';
 import { INITIAL_CARD_DISPLAY_COUNT } from '@/shared/lib/layout';
+import { ShowMoreButton } from '@/shared/ui/ShowMoreButton';
 
 import AgentCard from './AgentCard';
 import type { ApplicationData } from '../types';
@@ -133,13 +134,11 @@ const AgentCategorySection = memo(
         </Box>
         {shouldShowButton && (
           <Box sx={styles.showMoreContainer}>
-            <Typography
-              variant="labelMedium"
+            <ShowMoreButton
+              expanded={isExpanded}
               onClick={isExpanded ? handleShowLess : handleShowMore}
-              sx={styles.showMore}
-            >
-              {isExpanded ? 'Show less' : 'Show more'}
-            </Typography>
+              data-testid="agent-category-show-more"
+            />
           </Box>
         )}
       </Box>
@@ -184,15 +183,14 @@ const styles: Record<string, SxProps<Theme>> = {
     width: '100%',
     height: '7.25rem',
   },
+  // #6640: 12px of space on the right, so the button does not sit on the
+  // edge of the last card column.
   showMoreContainer: {
     display: 'flex',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     height: '1.5rem',
-  },
-  showMore: {
-    cursor: 'pointer',
-    color: 'primary.main',
-    '&:hover': { color: 'text.button.showMore' },
+    paddingRight: '0.75rem',
   },
 };
 

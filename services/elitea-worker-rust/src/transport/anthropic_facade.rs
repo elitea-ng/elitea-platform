@@ -32,7 +32,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
-use http::{HeaderName, HeaderValue, Method, Request, Version};
+use http::{HeaderName, HeaderValue, Method, Request, StatusCode, Version};
 use http_body_util::Full;
 use tokio::time::timeout;
 use tonic::body::Body;
@@ -41,9 +41,10 @@ use zeroize::Zeroizing;
 
 use super::openai_compatible_facade::{
     BoundedSseEvent, MAX_EXECUTION_ID_BYTES, ModelFacadeError, ModelFacadeInvocation,
-    ModelGatewayClient, ModelReasoningEffort, SseParser, bounded_header_text, model_error,
-    next_response_chunk, valid_tool_call_id, valid_tool_name, validate_invocation,
-    validate_llm_request, validate_response_head,
+    ModelGatewayClient, ModelReasoningEffort, SseParser, bounded_header_text, budget_refusal,
+    is_generic_rejection, model_error, next_response_chunk, rejection_with_detail,
+    valid_tool_call_id, valid_tool_name, validate_invocation, validate_llm_request,
+    validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
@@ -351,6 +352,18 @@ impl Llm for EliteaAnthropicModel {
                     "the native Anthropic transport is unavailable",
                 )
             })?;
+            // #6732: name the refusing budget, as the OpenAI-compatible facade
+            // does. validate_response_head alone reports every 402 unscoped.
+            if response.status() == StatusCode::PAYMENT_REQUIRED
+                && response.version() == Version::HTTP_2
+            {
+                return Err(budget_refusal(response, self.config.response_header_timeout).await);
+            }
+            if is_generic_rejection(response.status()) && response.version() == Version::HTTP_2 {
+                return Err(
+                    rejection_with_detail(response, self.config.response_header_timeout).await,
+                );
+            }
             validate_response_head(&response)?;
             Ok(anthropic_response_stream(
                 response,

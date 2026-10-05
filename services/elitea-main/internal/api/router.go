@@ -7,15 +7,18 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/gateway"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
@@ -30,6 +33,7 @@ import (
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
@@ -60,6 +64,7 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
@@ -68,6 +73,7 @@ import (
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -76,7 +82,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
@@ -143,6 +151,43 @@ type RouterConfig struct {
 	// login page can never disagree about the brand. Nil builds one here
 	// from BrandPackPath and Pool — the shape every test uses.
 	Branding *v2branding.Resolver
+	// DeploymentKind is published in the discovery document (ADR-0025
+	// decision 1): "saas" or "self_hosted", read from ELITEA_DEPLOYMENT_KIND
+	// in cmd/elitea-main/deployment_kind_config.go. Empty means self_hosted.
+	DeploymentKind string
+	// PublicOrigin is the deployment's public origin
+	// (publicorigin.Normalize(DEPLOYMENT_URL)). The discovery document and
+	// /api/v2/branding/pack.json make their URLs absolute against it. Empty
+	// derives the origin from each request and marks the response Vary.
+	PublicOrigin string
+	// NativeAuth and ClientPolicy feed the discovery document (ADR-0025
+	// WP2/WP4). Nil means `native_auth: null` and the default public policy.
+	// Keep them nil INTERFACES: a typed nil pointer here would be called.
+	NativeAuth   v2discovery.NativeAuthSource
+	ClientPolicy v2discovery.ClientPolicySource
+	// NativeClients and NativeStore are the native authorization server
+	// (ADR-0025 WP2): the effective client registry (file layer + DB layer)
+	// and its PostgreSQL store. Both nil mounts no native route at all; the
+	// discovery document then says `native_auth: null`. main.go builds both
+	// whenever a pool exists, so the routes are mounted and answer 404 until
+	// a client is registered.
+	NativeClients *nativeauth.Registry
+	NativeStore   *nativeauth.Store
+	// NativeSecureCookies selects the `__Host-` binder cookie
+	// (COOKIE_SECURE != "false").
+	NativeSecureCookies bool
+	// NativeTokenDecorator adds fields to every native token response. Nil
+	// uses the native client policy's: `client_policy` (WP4).
+	NativeTokenDecorator nativeapi.TokenResponseDecorator
+	// NativePolicy is the one cached reader of the `native_client_policy`
+	// section (ADR-0025 WP4), shared by discovery, the token response, the
+	// 426 gate and the admin save that invalidates it. Nil builds one here
+	// from Pool and NativeClients — the shape every test uses.
+	NativePolicy *nativepolicy.Service
+	// NativeAccess resolves the client of a native bearer token for the 426
+	// gate when the principal came from the edge's forwarded identity (which
+	// carries no client id). Nil skips that fallback.
+	NativeAccess *nativeauth.AccessValidator
 	// Mailer is outbound e-mail (ADR-0024 WP7): invitations, moderation
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
@@ -165,6 +210,14 @@ type RouterConfig struct {
 	// gets audit.NewPostgresRecorder(Pool). A nil Pool and a nil field together
 	// mean the audit middleware is not mounted at all.
 	AuditRecorder audit.Recorder
+	// SCIMAccessTokenTTL is the lifetime of an access token the SCIM token
+	// endpoint issues. Zero selects scimclient.DefaultAccessTokenTTL (1h).
+	// cmd/elitea-main reads it from ELITEA_SCIM_ACCESS_TOKEN_TTL.
+	SCIMAccessTokenTTL time.Duration
+	// SCIMClientAddresses resolves the real caller address for the SCIM token
+	// endpoint's failure limiter, from the trusted proxy CIDRs. Nil means no
+	// address is known; see internal/api/scim/token.go for that behaviour.
+	SCIMClientAddresses *scimapi.ClientAddressResolver
 	// ArtifactPermissionResolver overrides the legacyrbac.NewPostgresResolver
 	// built from Pool for the artifact routes only (S11) — tests inject a
 	// resolver here to control RBAC outcomes without a live database. Every
@@ -306,6 +359,13 @@ type RouterConfig struct {
 	// webhook.Handler's destinationGuard field for why that direction is
 	// fail-closed unlike WebhookDispatcher's own nil-gated degrade above.
 	WebhookDestinationGuard *webhook.DestinationGuard
+	// MCPAuthorizationEgressGuard is the SSRF guard of the MCP OAuth and DCR
+	// proxies (eliteacore/mcp_oauth_egress.go). main.go builds it from
+	// ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST. Nil does NOT disable the guard: the
+	// router then builds one with an empty allowlist, which refuses every
+	// private, loopback and link-local destination. A viewer may call these
+	// proxies (#6885), so they are never composed unguarded.
+	MCPAuthorizationEgressGuard *webhook.DestinationGuard
 	// EvalDimensionsRepo backs the Agent Evaluation DIMENSION LIBRARY — the
 	// first and, for now, only slice of that feature. Unassigned, the four
 	// routes are not registered at all, which answers 404: a stubbed 200 with
@@ -332,7 +392,15 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
-	AdminUI            *adminui.Config
+	// PlatformModelDefaults is the platform default model service (#6826). It
+	// backs /api/v2/admin/gateway/default_model, the default_usage count a
+	// platform-model delete reads, the release of stored defaults after a
+	// model delete, and the seed that gives a new project the platform
+	// default. It is built from the Configurations runtime in main.go.
+	// Unassigned, the admin routes answer 503 and nothing is seeded; every
+	// project still reads the platform default through the catalogue.
+	PlatformModelDefaults PlatformModelDefaults
+	AdminUI               *adminui.Config
 	// ObjectStore is the new S3/Azure/GCS-compatible backend (see
 	// docs/plans/storage-migration-plan.md). S8 reads it for the bucket-plane
 	// DELETE cascade, but only inside newProductionRouter — it is
@@ -365,6 +433,7 @@ type RouterConfig struct {
 	ProductionRuntime             *ProductionRuntimeRoutes
 	CurrentProjectInfo            *v2projectinfo.CurrentProjectInfoRoute
 	CurrentIndexTypes             *v2indextypes.CurrentIndexTypesRoute
+	AttachmentExtensions          []string // discovery's accepted_extensions (client contract 1.1); empty = the web default list
 	CurrentApplicationSkills      *v2applicationskills.CurrentApplicationSkillsRoute
 	CurrentPromptContextReads     *v2promptcontextreads.CurrentRoutes
 	CurrentProjectList            *v2projects.CurrentProjectListRoute
@@ -600,6 +669,13 @@ func (p supportProjectProvisioner) Provision(
 	return result.ProjectID, nil
 }
 
+// PlatformModelDefaults is what the router needs from the platform default
+// model service: the admin and delete surface, and the provisioning seed.
+type PlatformModelDefaults interface {
+	v2configs.ModelDefaultsManager
+	projectprovisioning.ProjectDefaultModelSeeder
+}
+
 // newProjectProvisioner builds the project-create pipeline (#333).
 //
 // ok is false without a pool, in which case the create route answers 503 rather
@@ -629,6 +705,11 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// The vector store (#371) IS conditional — see this function's doc comment.
 	if cfg.ProjectVectorStore != nil {
 		options = append(options, projectprovisioning.WithVectorStore(cfg.ProjectVectorStore))
+	}
+	// The platform default model seed (#6826) is optional too: a project
+	// created without it reads the platform default at request time.
+	if cfg.PlatformModelDefaults != nil {
+		options = append(options, projectprovisioning.WithDefaultModelSeeder(cfg.PlatformModelDefaults))
 	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
@@ -676,6 +757,10 @@ type ArtifactDeps struct {
 	Handler      *v2artifacts.Handler
 	Authenticate func(http.Handler) http.Handler
 	Resolver     platformauth.PermissionResolver
+	// Gates are the API group's post-authentication gates (Maintenance, then
+	// the minimum client version), applied directly after Authenticate as
+	// the group applies them. Nil applies none.
+	Gates []func(http.Handler) http.Handler
 }
 
 // mountArtifactRoutes registers all 24 artifact routes (13 from S7, plus
@@ -685,11 +770,15 @@ type ArtifactDeps struct {
 // newProductionRouter, so the oapiserver conformance suite and production
 // see an identical route shape. Deliberately NOT nested inside the /api/v2
 // group: that group compresses JSON responses, which would buffer and encode
-// every downloaded object rather than streaming it (S12).
+// every downloaded object rather than streaming it (S12). Everything ELSE the
+// group applies is applied here too — NoStore in front of authentication and
+// deps.Gates behind it — so leaving the group costs only the compression.
 func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	view := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionView)
 	aclView := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLView)
 	aclEdit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionACLEdit)
+	aclListScope := apimw.ResolvedPermissionFlag(deps.Resolver, platformauth.PermissionModeDefault,
+		v2artifacts.WithFullACLView, artifactPermissionACLEdit)
 	create := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionCreate)
 	edit := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionEdit)
 	del := apimw.RequireResolvedPermissions(deps.Resolver, platformauth.PermissionModeDefault, artifactPermissionDelete)
@@ -745,7 +834,14 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	}
 
 	r.Group(func(r chi.Router) {
+		// NoStore never replaces a value a handler chose. Object downloads
+		// state their own ("private, no-store", artifacts streamObject);
+		// every other artifact answer gets the group's no-store from here.
+		r.Use(apimw.NoStore)
 		r.Use(deps.Authenticate)
+		for _, gate := range deps.Gates {
+			r.Use(gate)
+		}
 		r.Route("/api/v2/artifacts", func(r chi.Router) {
 			// Bucket plane — S8.
 			r.With(view).Get("/buckets/{projectID}", listBuckets)
@@ -812,7 +908,12 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			// on every other artifact route above: this surface resolves
 			// PermissionModeDefault unconditionally, so a mode in the path
 			// would name something the router does not read.
-			r.With(aclView).Get("/bucket_permissions/{projectID}", listBucketPermissions)
+			//
+			// The GET stays at the `.view` tier, because a member needs their
+			// own row to know what a bucket allows them. The full list is for
+			// a caller who may EDIT it (#6725): aclListScope marks that
+			// caller, and the handler answers everyone else their own row.
+			r.With(aclView, aclListScope).Get("/bucket_permissions/{projectID}", listBucketPermissions)
 			r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
 			r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
 		})
@@ -1123,47 +1224,31 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 	r.Mount("/", health.RoutesWithDeps(cfg.HealthDeps))
 
-	// Traefik forward-auth endpoint (no auth middleware — this IS the auth check)
-	forwardAuth := v2auth.NewForwardAuthHandler(cfg.AuthValidator)
-	r.Get("/auth", forwardAuth.ServeHTTP)
+	// Traefik edge-auth endpoint (no auth middleware — this IS the auth check)
+	edgeAuth := v2auth.NewEdgeAuthHandler(cfg.AuthValidator)
+	r.Get("/auth", edgeAuth.ServeHTTP)
+
+	// The pack is resolved from three layers (ADR-0024): the product default
+	// under the BRAND_PACK_PATH file under the admin-authored `branding`
+	// section, read through cfg.Pool and cached briefly. Built here, before
+	// the browser-auth routes, because the single sign-on sign-in page renders
+	// the brand too. The bootstrap route and the admin routes below share it.
+	brandingResolver := cfg.Branding
+	if brandingResolver == nil {
+		brandingResolver = v2branding.NewResolver(v2branding.ResolverConfig{
+			PackPath: cfg.BrandPackPath,
+			Pool:     cfg.Pool,
+		})
+	}
 
 	// Browser-facing OIDC session lifecycle. Legacy form authentication is not
 	// mounted because auth_core__user has no password credential columns; the
 	// previous prototype queried columns that do not exist in the legacy schema.
+	//
+	// The routes are under `/auth/`; see auth_paths.go.
 	if cfg.SessionHandler != nil {
-		r.Route("/forward-auth", func(r chi.Router) {
-			if cfg.OIDCHandler != nil {
-				r.Get("/login", func(w http.ResponseWriter, req *http.Request) {
-					http.Redirect(w, req, "/forward-auth/auth_oidc/login", http.StatusFound)
-				})
-			}
-			r.Get("/logout", cfg.SessionHandler.Logout)
-			r.Get("/info", cfg.SessionHandler.Info)
-			r.Get("/auth_form/logout", cfg.SessionHandler.Logout)
-			if cfg.OIDCHandler != nil {
-				r.Get("/auth_oidc/login", cfg.OIDCHandler.Login)
-				r.Get("/auth_oidc/callback", cfg.OIDCHandler.Callback)
-			}
-			r.Get("/auth_oidc/logout", cfg.SessionHandler.Logout)
-			// SAML 2.0. Three routes, and the shapes are not
-			// interchangeable: metadata and login are GET navigations, and
-			// the assertion consumer service is a POST because the
-			// authentication request asks for the HTTP-POST binding.
-			//
-			// `/auth_saml/logout` clears the local session, as the OIDC one
-			// above does. Federated single logout — sending a LogoutRequest to
-			// the identity provider's SLO endpoint — is NOT mounted: it needs
-			// the session index of the assertion that started the session, and
-			// this deployment's session cookie does not carry one. Mounting a
-			// route that silently only cleared the local session would tell an
-			// operator their users were signed out everywhere.
-			if cfg.SAMLHandler != nil {
-				r.Get("/auth_saml/metadata", cfg.SAMLHandler.Metadata)
-				r.Get("/auth_saml/login", cfg.SAMLHandler.Login)
-				r.Post("/auth_saml/acs", cfg.SAMLHandler.ACS)
-				r.Get("/auth_saml/logout", cfg.SessionHandler.Logout)
-			}
-		})
+		chooser := newSSOChooser(cfg.OIDCHandler, cfg.SAMLHandler, brandingResolver)
+		mountSSOBrowserRoutes(r, ssoPaths, cfg.SessionHandler, cfg.OIDCHandler, cfg.SAMLHandler, chooser)
 	}
 
 	// Static file serving for application icons (root level like pylon)
@@ -1189,18 +1274,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// The UI loads branding before a browser session exists, so this exact
 	// static bootstrap route must remain public in both current-main and PoV.
 	//
-	// The pack is resolved from three layers (ADR-0024): the product default
-	// under the BRAND_PACK_PATH file under the admin-authored `branding`
-	// section, read through cfg.Pool and cached briefly. The admin routes
-	// below invalidate the same resolver on a save.
-	brandingResolver := cfg.Branding
-	if brandingResolver == nil {
-		brandingResolver = v2branding.NewResolver(v2branding.ResolverConfig{
-			PackPath: cfg.BrandPackPath,
-			Pool:     cfg.Pool,
-		})
-	}
-	brandingHandler := v2branding.NewHandler(v2branding.Config{Resolver: brandingResolver})
+	// brandingResolver is built above the browser-auth routes. The admin
+	// routes below invalidate the same resolver on a save.
+	brandingHandler := v2branding.NewHandler(v2branding.Config{
+		Resolver:     brandingResolver,
+		PublicOrigin: cfg.PublicOrigin,
+	})
 	// A nil *Composer must stay a nil INTERFACE for the With* options to
 	// recognise "no mailer"; a typed nil inside the interface would pass
 	// their check and panic on first use.
@@ -1215,6 +1294,86 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	brandingPackages := cfg.BrandingPackages
 	r.Get("/api/v2/branding/bootstrap.js", brandingHandler.Bootstrap)
 	r.Head("/api/v2/branding/bootstrap.js", brandingHandler.Bootstrap)
+	// The same resolved pack as JSON, with absolute references, for clients
+	// that are not a browser on this origin (ADR-0025 decision 2). Public for
+	// the same reason as the bootstrap script: it is the brand a sign-in
+	// screen renders, before any credential exists.
+	r.Get(v2branding.PackJSONPath, brandingHandler.PackJSON)
+	r.Head(v2branding.PackJSONPath, brandingHandler.PackJSON)
+	// The discovery document (ADR-0025 decision 1): what a client given only
+	// this deployment's origin needs before it signs in. Root-mounted under
+	// /.well-known/ (RFC 8615), above the Auth group like the routes around
+	// it, and forwarded by every browser edge as an exact path.
+	//
+	// The native authorization server (ADR-0025 WP2) is mounted first, because
+	// the discovery document reports its endpoints. Its five routes are
+	// root-mounted siblings of /api/v2 like the bootstrap script, so the
+	// group's JSON 401 never reaches the two browser pages; `continue` and
+	// `decision` authenticate with the SAME credential set the group uses,
+	// through apimw.BrowserSignInRequired. Each route answers 404 while no
+	// client is registered.
+	nativeDiscovery := cfg.NativeAuth
+	nativePolicy := cfg.NativePolicy
+	if nativePolicy == nil {
+		var registered nativepolicy.Clients
+		if cfg.NativeClients != nil {
+			registered = cfg.NativeClients
+		}
+		nativePolicy = nativepolicy.New(cfg.Pool, registered)
+	}
+	nativeTokenDecorator := cfg.NativeTokenDecorator
+	if nativeTokenDecorator == nil {
+		nativeTokenDecorator = nativePolicy.Decorate
+	}
+	clientPolicySource := cfg.ClientPolicy
+	if clientPolicySource == nil {
+		clientPolicySource = nativePolicyDiscovery{policy: nativePolicy}
+	}
+	var nativeHandler *nativeapi.Handler
+	if cfg.NativeClients != nil && cfg.NativeStore != nil {
+		var nativeAddresses nativeapi.ClientAddresses
+		if cfg.SCIMClientAddresses != nil {
+			nativeAddresses = cfg.SCIMClientAddresses
+		}
+		nativeHandler = nativeapi.New(nativeapi.Config{
+			Registry:     cfg.NativeClients,
+			Store:        cfg.NativeStore,
+			PublicOrigin: cfg.PublicOrigin,
+			Pages:        browserauth.NewNativePages(brandingResolver),
+			Authenticate: apimw.Auth(apimw.AuthConfig{
+				Validator:                  cfg.AuthValidator,
+				PrincipalValidator:         cfg.PrincipalValidator,
+				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				SessionSecret:              cfg.SessionSecret,
+				SessionStore:               cfg.Auth.SessionStore,
+				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
+			}),
+			Addresses:     nativeAddresses,
+			Audit:         auditRecorder,
+			SecureCookies: cfg.NativeSecureCookies,
+			Decorate:      nativeTokenDecorator,
+			// The same rule the API group's ClientVersion gate applies.
+			MinimumClientVersion: nativePolicy.MinimumFor,
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(apimw.NoStore)
+			nativeHandler.Mount(r)
+		})
+		if nativeDiscovery == nil {
+			nativeDiscovery = nativeHandler
+		}
+	}
+	discoveryHandler := v2discovery.NewHandler(v2discovery.Config{
+		ServerVersion:  buildinfo.Version,
+		DeploymentKind: cfg.DeploymentKind,
+		PublicOrigin:   cfg.PublicOrigin,
+		Brand:          brandingResolver,
+		NativeAuth:     nativeDiscovery,
+		ClientPolicy:   clientPolicySource,
+		Attachments:    discoveryAttachmentPolicy(v2convs.CurrentAttachmentLimits(cfg.AttachmentExtensions)),
+	})
+	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
+	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
 	// Uploaded brand assets (ADR-0024 decision 3): public for the same
 	// reason as /icons — <img src>, <link rel="icon"> and @font-face fetches
 	// carry no credential. Content-addressed and immutable; the route
@@ -1369,6 +1528,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
 		v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
 		v2configs.WithPublicProjectID(apimw.PublicProjectID()),
+		v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 	)
 	artifactHandler := cfg.ArtifactHandler
 	if artifactHandler == nil {
@@ -1388,10 +1548,44 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		SessionStore:               cfg.Auth.SessionStore,
 		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 	})
+	// The API group's post-authentication gates, built ONCE and applied to
+	// every /api/v2 surface that authenticates a user: the group below, the
+	// artifact routes, and the root-mounted reviewed routes
+	// (mountReviewedProductionRoutes), which carry their own Auth. One
+	// maintenance gate means one cached switch, so a window opens and closes
+	// on every surface at the same moment.
+	//
+	// Maintenance, immediately AFTER authentication and before anything
+	// that does work. The ordering is load-bearing. It has to be after Auth,
+	// because the only caller it admits is one whose administration
+	// permissions can be resolved, and that needs a principal on the
+	// context. It has to be above everything that does work, so a refused
+	// request reaches no handler.
+	//
+	// The minimum client version (ADR-0025 WP4), directly AFTER Maintenance:
+	// a 503 ("come back later") is the truer answer during a window than a
+	// 426 ("upgrade"). After Auth, because only a caller authenticated by a
+	// NATIVE access token is gated (coordinator decision 13); PAT and cookie
+	// callers pass whatever they send.
+	var nativeClientForToken func(context.Context, string) (string, bool, error)
+	if cfg.NativeAccess != nil {
+		nativeClientForToken = cfg.NativeAccess.ClientID
+	}
+	apiGates := []func(http.Handler) http.Handler{
+		apimw.Maintenance(apimw.MaintenanceConfig{
+			Pool:     cfg.Pool,
+			Resolver: permissionResolver,
+		}),
+		apimw.ClientVersion(apimw.ClientVersionConfig{
+			MinimumFor:           nativePolicy.MinimumFor,
+			NativeClientForToken: nativeClientForToken,
+		}),
+	}
 	mountArtifactRoutes(r, ArtifactDeps{
 		Handler:      artifactHandler,
 		Authenticate: authenticate,
 		Resolver:     artifactResolver,
+		Gates:        apiGates,
 	})
 	// Construct these collaborators before either route family is mounted.
 	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
@@ -1416,6 +1610,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithDelegatedAuthToolkitSettingsResolver(cfg.DelegatedAuthToolkitSettings),
 		v2core.WithMCPDCRClients(mcpOAuthClientStore(cfg.Pool)),
 		v2core.WithMCPDelegatedTokens(mcpOAuthTokenStore(cfg.Pool)),
+		v2core.WithMCPAuthorizationEgressGuard(mcpAuthorizationEgressGuard(cfg)),
+		v2core.WithMCPEgressGuard(mcpEgressGuard()),
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
@@ -1444,6 +1640,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithContextManagementGate(defaults).
 			WithReasoningModels(defaults).
 			WithEvents(cfg.DomainEvents)
+		if cfg.Pool != nil {
+			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
+		}
 	}
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
@@ -1452,11 +1651,85 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
 	)
 
+	// SCIM 2.0 provisioning (shared migrations 0096, 0098, 0134).
+	//
+	// The base URL an operator pastes into their identity provider is
+	// `https://<host>/api/v2/scim/v2`, and the OAuth 2.0 token endpoint is
+	// `https://<host>/api/v2/scim/oauth/token`.
+	//
+	// This group sits OUTSIDE the `/api/v2` group below, and that is the point.
+	// That group's Auth middleware resolves a USER from a session or a personal
+	// access token. A SCIM request runs as a SCIM CLIENT (internal/scimclient):
+	// scimapi.Authenticate admits a client credential and refuses a personal
+	// access token and a browser session. Until shared migration 0135 the tree
+	// was mounted inside that group behind `admin.auth.users`, which tied every
+	// identity provider to one person's personal access token.
+	//
+	// chi matches the longer static prefix first, so `/api/v2/scim/...` reaches
+	// this group and never the `/api/v2` catch-all, as `/api/v2/artifacts` does.
+	//
+	// AUDIT sits BELOW authentication on the SCIM tree, and records only
+	// successful issues on the token endpoint. Both are deliberate: the two
+	// routes are reachable without a session, and an audit middleware above
+	// the credential check would let any anonymous caller write a row to
+	// `centry.audit_events` per request. An authenticated SCIM change is
+	// recorded with the actor `scim:<client name>`, because a client has no
+	// user id.
+	//
+	// MAINTENANCE MODE is NOT mounted, and this is a decision, not an
+	// omission: it admits only callers whose administration permissions
+	// resolve, and a SCIM client has none. A push during a maintenance window
+	// is therefore answered as on any other day. The SCIM documentation
+	// (apps/elitea-web/src/entries/docs/content/admin/authentication.mdx) and
+	// the Helm values comment say so; an operator who must freeze the
+	// directory pauses provisioning in the identity provider.
+	var (
+		scimCredentials scimapi.Credentials
+		scimTokenIssuer scimapi.TokenIssuer
+		scimClientStore admin.SCIMClientStore
+	)
+	// Interface variables stay nil without a pool. A typed nil *Store in an
+	// interface would pass the nil checks and panic on the first request.
+	if cfg.Pool != nil {
+		store := scimclient.NewStore(cfg.Pool, cfg.SCIMAccessTokenTTL)
+		scimCredentials, scimTokenIssuer, scimClientStore = store, store, store
+	}
+	// The caller-address resolver for the token endpoint's failure limiter.
+	// cmd/elitea-main builds it from the deployment's trusted proxy CIDRs on
+	// every authentication plane. A nil resolver is valid: the endpoint then
+	// verifies every secret before it throttles (internal/api/scim/token.go).
+	var scimClientAddresses scimapi.ClientAddresses
+	if cfg.SCIMClientAddresses != nil {
+		scimClientAddresses = cfg.SCIMClientAddresses
+	}
+	r.Group(func(r chi.Router) {
+		r.Use(apimw.NoStore)
+		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).
+			Method(http.MethodPost, scimapi.TokenPath, scimapi.NewTokenHandler(scimTokenIssuer, scimClientAddresses))
+		r.With(
+			scimapi.Authenticate(scimCredentials),
+			apimw.Audit(auditRecorder),
+			scimapi.AnnotateAuditActor,
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
+	})
+
 	// This group holds the whole JSON API — the `/api/v2` route below is its
 	// only member. Compression sits at the top of it, so every handler in the
 	// group writes plain JSON and only the outermost layer encodes it.
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
+		// A browser must not keep a copy of an API answer. Nothing here said
+		// so, and WebKit reads "nothing" as "decide for yourself" — it served
+		// a reloaded page the previous answer for seconds. The middleware's
+		// own doc carries the measurement. Handlers that serve something
+		// genuinely cacheable still set their own value.
+		//
+		// It sits ABOVE Auth, not inside the /api/v2 route: the 401, the
+		// maintenance 503 and the 426 are per-caller answers too, and the
+		// root-mounted reviewed routes (production_router.go) apply it at the
+		// same position — in front of their own Auth — so every /api/v2
+		// answer carries the directive whichever composition served it.
+		r.Use(apimw.NoStore)
 		r.Use(apimw.Auth(apimw.AuthConfig{
 			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
@@ -1466,18 +1739,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 		}))
 
-		// Maintenance mode, immediately AFTER authentication and before
-		// anything that does work.
-		//
-		// The ordering is load-bearing. It has to be after Auth, because the
-		// only caller it admits is one whose administration permissions can be
-		// resolved, and that needs a principal on the context. It has to be
-		// above everything that does work, so a refused request reaches no
-		// handler.
-		r.Use(apimw.Maintenance(apimw.MaintenanceConfig{
-			Pool:     cfg.Pool,
-			Resolver: permissionResolver,
-		}))
+		// Maintenance, then the minimum client version, directly after
+		// authentication: apiGates (built above, where the ordering is
+		// explained) — the same instances the artifact and reviewed routes
+		// apply.
+		for _, gate := range apiGates {
+			r.Use(gate)
+		}
 
 		// The audit-trail emitter for `centry.audit_events` — the producer the
 		// admin Audit Trail page never had (internal/api/middleware/audit.go
@@ -1494,13 +1762,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
-			// A browser must not keep a copy of an API answer. Nothing here
-			// said so, and WebKit reads "nothing" as "decide for yourself" —
-			// it served a reloaded page the previous answer for seconds. The
-			// middleware's own doc carries the measurement. Handlers that
-			// serve something genuinely cacheable still set their own value.
-			r.Use(apimw.NoStore)
-
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
 			//
 			// Auth runs ABOVE this subrouter, so a path nobody registered is
@@ -1577,6 +1838,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			} else {
 				authOptions = append(authOptions, v2auth.WithTokenSigningKey(cfg.SessionSecret))
 			}
+			// The native device registry (ADR-0025 WP3): a user's own
+			// devices, with any credential the group accepts. Static
+			// routes, so they win over the /auth mount below; 404 while no
+			// native client is registered (coordinator decision 4).
+			if nativeHandler != nil {
+				r.With(nativeHandler.RegisteredOnly).
+					Get("/auth/native/devices", nativeHandler.ListDevices)
+				r.With(nativeHandler.RegisteredOnly).
+					Delete("/auth/native/devices/{deviceID}", nativeHandler.RevokeDevice)
+			}
 			r.Mount("/auth", v2auth.NewHandler(cfg.Pool, authOptions...).Routes())
 
 			// === Projects endpoints ===
@@ -1641,6 +1912,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
 					admin.WithBranding(brandingResolver),
+					// A save of the native_client_policy section drops the
+					// one cached policy discovery, the token response and the
+					// 426 gate read.
+					admin.WithNativeClientPolicy(nativePolicy),
 					admin.WithBrandingAssets(brandingAssets),
 					admin.WithMailer(adminMailer),
 					admin.WithEmailSettings(emailResolver.Store(), emailResolver),
@@ -1649,6 +1924,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// the screen and a group push can never disagree about which
 					// project a binding names.
 					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+					// The SCIM client credentials, the same store the SCIM tree
+					// authenticates against.
+					admin.WithSCIMClients(scimClientStore),
 					// The toolkit type policy the served catalogue also reads.
 					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
 				}, adminOptions...)...,
@@ -1733,31 +2011,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			requireProjectsView := central("projects.projects.projects.view")
 			requireProjectsEdit := central("projects.projects.projects.edit")
 
-			// SCIM 2.0 user provisioning (shared migration 0096).
-			//
-			// Mounted UNDER /api/v2, not at the root, so it inherits the one
-			// authentication middleware this service has rather than acquiring a
-			// second identity check. The base URL an operator pastes into their
-			// identity provider is therefore `https://<host>/api/v2/scim/v2`;
-			// internal/api/scim states that in its package comment, next to the
-			// paths themselves.
-			//
-			// The gate is `admin.auth.users` in administration mode — the SAME
-			// permission the admin Users page's write routes carry above. A SCIM
-			// client creating and deactivating accounts is doing what that page
-			// does, so no new permission string arrives here and the grant gate
-			// in router_permission_grant_gate_test.go stays untripped.
-			// `/Groups` is served too, and the gate does not change with it. An
-			// identity provider presents ONE credential for both resources, so
-			// a second permission on the group half would stop every SCIM
-			// client already configured against this deployment. What a group
-			// push can do is bounded by the BINDING an administrator authored
-			// under `/admin/scim_group_bindings/administration` (below, on the
-			// project-membership permission), not by a second gate here: a push
-			// cannot choose a project, cannot choose a role, and cannot create
-			// or delete either.
-			r.With(requireAdminUsers).Mount(scimapi.MountPath,
-				scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
+			// The SCIM 2.0 tree is NOT mounted here. It authenticates a SCIM
+			// client, not a user, so it sits outside this group's Auth
+			// middleware; see the group above the `/api/v2` group.
 
 			r.Route("/admin", func(r chi.Router) {
 				// Admin panel endpoints (administration mode, no projectID)
@@ -1833,6 +2089,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/user_project_permissions/administration", adminHandler.UserProjectPermissions)
 				r.With(central(admin.UserProjectPermissionsEditPermission)).
 					Put("/user_project_permissions/administration", adminHandler.UserProjectPermissionsSave)
+				// The dedicated SCIM client credentials (shared migration 0135).
+				// Gated on `admin.auth.users`, the permission the SCIM tree
+				// itself required before 0134: a SCIM client creates and
+				// deactivates accounts, so minting one must need the right to
+				// do that by hand. internal/api/v2/admin/scim_clients.go
+				// states why a weaker gate would be an escalation. A secret is
+				// returned once, by the create and the rotate.
+				r.With(requireAdminUsers).
+					Get("/scim_clients/administration", adminHandler.SCIMClientList)
+				r.With(requireAdminUsers).
+					Post("/scim_clients/administration", adminHandler.SCIMClientCreate)
+				r.With(requireAdminUsers).
+					Post("/scim_clients/administration/{id}/rotate", adminHandler.SCIMClientRotate)
+				r.With(requireAdminUsers).
+					Post("/scim_clients/administration/{id}/revoke", adminHandler.SCIMClientRevoke)
+				r.With(requireAdminUsers).
+					Delete("/scim_clients/administration/{id}", adminHandler.SCIMClientDelete)
 				// The SCIM group bindings (shared migration 0098): which
 				// identity provider group grants which role on which project.
 				//
@@ -1947,6 +2220,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// deployment fact with no project-scoped view, so another mode
 				// 404s rather than being answered under a scope that does not
 				// apply.
+				// The native client registry (ADR-0025 WP2). One permission
+				// guards both native admin surfaces (coordinator decision 6);
+				// shared 0141 grants it. Mounted whenever the native server
+				// is, registered or not: these routes are how the first
+				// client is registered.
+				if nativeHandler != nil {
+					requireNativeClients := central("configuration.native_clients")
+					r.With(requireNativeClients).
+						Get("/native_clients/administration", nativeHandler.AdminList)
+					r.With(requireNativeClients).
+						Put("/native_clients/administration/{clientID}", nativeHandler.AdminSave)
+					r.With(requireNativeClients).
+						Delete("/native_clients/administration/{clientID}", nativeHandler.AdminDelete)
+					// Every user's devices (ADR-0025 WP3), gated like user
+					// suspension and SCIM clients: whoever may suspend an
+					// account may cut off its devices.
+					r.With(requireAdminUsers).
+						Get("/native_devices/administration", nativeHandler.AdminListDevices)
+					r.With(requireAdminUsers).
+						Delete("/native_devices/administration/{deviceID}", nativeHandler.AdminRevokeDevice)
+				}
 				r.With(requireRuntimePlugins).
 					Get("/identity_providers/administration", adminHandler.IdentityProviderList)
 				r.With(requireRuntimePlugins).
@@ -2390,6 +2684,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						// credentials ONLY, so the two surfaces are mounted
 						// together and global_models.go enforces that pairing.
 						r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes())
+						// The PLATFORM DEFAULT model (#6826): which platform
+						// model a new project starts with, and what a project
+						// with no usable default of its own falls back to.
+						// platform_default_model.go has the precedence.
+						r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes())
 					})
 				})
 			})
@@ -2970,7 +3269,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						coreResolver, platformauth.PermissionModeDefault, permission)
 				}
 				if cfg.EvalDimensionsRepo != nil {
-					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo)
+					// A PUT that promotes an agent dimension to the project
+					// library is a create as well as an update; the handler
+					// asks this check, resolved like the gates above.
+					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo,
+						v2evaluation.WithCreatePermissionCheck(apimw.HoldsResolvedPermission(
+							coreResolver, platformauth.PermissionModeDefault, v2evaluation.PermissionDimensionCreate)))
 					r.With(evaluationGate(v2evaluation.PermissionDimensionRead)).
 						Get("/eval_dimensions/prompt_lib/{projectID}", evaluationHandler.List)
 					r.With(evaluationGate(v2evaluation.PermissionDimensionCreate)).
@@ -3128,6 +3432,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/participants/prompt_lib/{projectID}/{conversationID}", convHandler.AddParticipant)
 					r.With(projectPermission("models.chat.participant.delete")).
 						Delete("/participant/prompt_lib/{projectID}/{conversationID}/{participantID}", convHandler.RemoveParticipant)
+					// Client contract 1.1: who may be added. It answers project
+					// members, so it declares the permission that governs the ADD
+					// it feeds (no new permission, so no RBAC seed migration).
+					r.With(projectPermission("models.chat.participants.create")).
+						Get("/participant_candidates/prompt_lib/{projectID}/{conversationID}", convHandler.ListParticipantCandidates)
 					r.With(requireEntitySettings).
 						Put("/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}", convHandler.UpdateEntitySettings)
 					r.With(requireEntitySettings).
@@ -3178,6 +3487,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.AddAttachments)
 					r.With(projectPermission("models.chat.attachments.delete")).
 						Delete("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteAttachments)
+					// Client contract 1.1: one attachment's bytes, scoped by the
+					// conversation (attachment_download.go). It takes the
+					// conversation READ, like getConversation — reading a file
+					// that was sent in a conversation is not a wider claim than
+					// reading the conversation — and NOT the artifacts bucket
+					// permission, which would reach every conversation's files.
+					r.With(requireConversationRead).
+						Get("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
+					r.With(requireConversationRead).
+						Head("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
 					r.With(requireConversationRead).
 						Get("/context_analytics/prompt_lib/{projectID}/{conversationID}", convHandler.GetContextStatus)
 					// The strategy READ is new here (pylon exposed only the
@@ -3487,6 +3806,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_tool_detail/prompt_lib/{projectID}", analyticsHandler.Tools)
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_users/prompt_lib/{projectID}", analyticsHandler.Users)
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_user_detail/prompt_lib/{projectID}", analyticsHandler.Users)
+					// One run's analytics, read by id rather than by window
+					// (legacy issues 6667, 6816 and 6817). The execution read
+					// is a project analytics read and takes the same gate.
+					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_execution/prompt_lib/{projectID}/{executionID}", analyticsHandler.Execution)
+					// The evaluation run read is spend, so it takes the
+					// analytics gate, AND it names one run, so it also takes
+					// the run READ permission the run's own routes take.
+					r.With(evaluationGate(v2evaluation.PermissionRunRead), requireAnalyticsView, requireAnalyticsEnabled).
+						Get("/eval_run_analytics/prompt_lib/{projectID}/{runID}", analyticsHandler.EvaluationRun)
 				}
 
 				// The eighth analytics endpoint (issue 253), and the only one
@@ -3599,17 +3927,34 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `models.project_context.view` for the reads and `.edit` for the
 				// writes. `.view` is 0062's grant, already in the history; `.edit`
 				// arrives with 0068.
+				//
+				// The project SETTINGS writes — the name, the description and
+				// the icon — take `models.project_settings.edit` instead (#6789).
+				// Under `.edit` an editor could rename a team project and change
+				// its icon; the settings are the project admin's. Shared
+				// migration 0136 grants the string to `admin` only. The project
+				// CONTEXT writes below keep `models.project_context.edit`: the
+				// context is content an editor maintains.
+				//
+				// In the caller's OWN personal project the settings writes accept
+				// `models.project_context.edit` too. A personal project has one
+				// member, and pylon made that member an `editor`.
 				requireProjectContextView := projectPermission("models.project_context.view")
 				requireProjectContextEdit := projectPermission("models.project_context.edit")
+				requireProjectSettingsEdit := apimw.RequireResolvedPermissionOrPersonalProject(
+					coreResolver, platformauth.PermissionModeDefault,
+					personalproject.NewOwnershipCheck(cfg.Pool).IsOwnPersonalProject,
+					"models.project_context.edit",
+					"models.project_settings.edit")
 				r.With(requireProjectContextView).
 					Get("/project_info/prompt_lib/{projectID}/project-info", coreHandler.ProjectInfo)
-				r.With(requireProjectContextEdit).
+				r.With(requireProjectSettingsEdit).
 					Put("/project_info/prompt_lib/{projectID}/project-info", coreHandler.UpdateProjectInfo)
 				r.With(requireProjectContextView).
 					Get("/project_icon/prompt_lib/{projectID}", coreHandler.ListProjectIcons)
-				r.With(requireProjectContextEdit).
+				r.With(requireProjectSettingsEdit).
 					Post("/project_icon/prompt_lib/{projectID}", coreHandler.CreateProjectIcon)
-				r.With(requireProjectContextEdit).
+				r.With(requireProjectSettingsEdit).
 					Delete("/project_icon/prompt_lib/{projectID}/{name}", coreHandler.DeleteProjectIcon)
 				// Registered unconditionally: this is the ONLY registration
 				// source for project-context GET/PUT/DELETE in the router every real
@@ -3661,13 +4006,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/search_options/prompt_lib/{projectID}", coreHandler.SearchOptions)
 
 				// MCP OAuth & sync. All three pylon modules declare
-				// `models.applications.tool.patch`: each one writes a project's
-				// toolkit rows, whatever the transport in front of it looks like.
+				// `models.applications.tool.patch`. Only the sync writes a
+				// project's toolkit rows, so only the sync keeps that string.
+				//
+				// The two proxies (#6885) are a CONNECTION action, not a
+				// configuration edit. eliteacore/mcp_oauth_proxy.go and
+				// mcp_dcr_clients.go/mcp_delegated_tokens.go relay one
+				// token or registration exchange and store the result bound to
+				// (project, CALLER, toolkit). They never write a toolkit row and
+				// never read or replace another member's token or client. A
+				// viewer who may run an agent must be able to authorize the MCP
+				// server that agent calls, so the proxies take the agent RUN
+				// permission, `models.applications.predict.post`. Under
+				// `tool.patch` the chat "Authorize" button failed for every
+				// viewer with "Dynamic client registration failed: access_denied".
+				//
 				// The two proxies are mode-less ProjectAPI paths in pylon, which
 				// is why they carry no `prompt_lib` segment here either.
+				requireMCPConnect := projectPermission("models.applications.predict.post")
 				requireMCPToolWrite := projectPermission("models.applications.tool.patch")
-				r.With(requireMCPToolWrite).Post("/mcp_oauth_proxy/{projectID}", coreHandler.MCPOAuthProxy)
-				r.With(requireMCPToolWrite).Post("/mcp_dcr_proxy/{projectID}", coreHandler.MCPDCRProxy)
+				r.With(requireMCPConnect).Post("/mcp_oauth_proxy/{projectID}", coreHandler.MCPOAuthProxy)
+				r.With(requireMCPConnect).Post("/mcp_dcr_proxy/{projectID}", coreHandler.MCPDCRProxy)
 				r.With(requireMCPToolWrite).Post("/mcp_sync_tools/prompt_lib/{projectID}", coreHandler.MCPSyncTools)
 
 				// The MCP REST surface (issue 252 P1). All three stay at the
@@ -4229,6 +4588,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 			}))
+			// The session cookie authenticates /llm, and the browser voice
+			// client POSTs audio here with it. A cookie-authenticated write
+			// must prove it came from this origin (CSRF from a same-site
+			// sibling). Bearer, API-key and forwarded-token callers pass.
+			r.Use(apimw.BrowserWriteOrigin)
 			// Membership admits the caller-supplied project selector header
 			// (issue #318). Without it the edge admits no selector that names
 			// another project, so /llm keeps billing the caller's own project
@@ -4298,7 +4662,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// The broad prototype compatibility handler above already owns the current
 	// project-context GET/PUT/DELETE. Keep that single live registration while adding the
 	// reviewed routes it does not provide, including chat config and agent SSE.
-	mountReviewedProductionRoutes(r, cfg)
+	//
+	// They get the group's whole post-authentication chain, in the group's
+	// order: apiGates, then Audit last. The reviewed set includes the
+	// configuration writes (POST/PUT/DELETE /api/v2/configurations/...),
+	// where a project's ai_credentials are created, overwritten and deleted;
+	// without Audit here they left no centry.audit_events row. A fresh slice,
+	// so the append can never write into apiGates' backing array.
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+1)
+	reviewedGates = append(reviewedGates, apiGates...)
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder))
+	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
 	return r
 }
@@ -4430,4 +4804,22 @@ func (p publishAICompleter) Complete(
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 	})
+}
+
+// discoveryAttachmentPolicy carries the conversations package's attachment
+// limits into the discovery document's shape. The two packages do not import
+// each other; this composition root imports both.
+func discoveryAttachmentPolicy(limits v2convs.AttachmentLimits) v2discovery.AttachmentPolicy {
+	return v2discovery.AttachmentPolicy{
+		MaxFiles:             limits.MaxFiles,
+		MaxTotalBytes:        limits.MaxTotalBytes,
+		MaxFileBytes:         limits.MaxFileBytes,
+		MaxImageBytes:        limits.MaxImageBytes,
+		ChunkBytes:           limits.ChunkBytes,
+		AcceptedExtensions:   limits.AcceptedExtensions,
+		MaxExtractBytes:      limits.MaxExtractBytes,
+		InlineImageMaxBytes:  limits.InlineImageMaxBytes,
+		InlineImageFormats:   limits.InlineImageFormats,
+		InlineImageDownscale: limits.InlineImageDownscale,
+	}
 }

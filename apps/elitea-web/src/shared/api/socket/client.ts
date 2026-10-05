@@ -32,7 +32,7 @@ import {
 /** @public Wave-1 surface: consumed by rooms.ts, testing.ts, and Wave-2 chat features. */
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error';
 
-/** @public Wave-1 surface: the sidebar connectivity indicator (SHELL-012, W-shell) reads this shape. */
+/** @public Wave-1 surface: the per-client connection store shape (the sidebar indicator no longer reads it — it reports SSE health via `shared/api/sse`). */
 export interface ConnectionStoreState {
   readonly status: ConnectionState;
   readonly lastError: string | null;

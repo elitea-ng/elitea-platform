@@ -21,6 +21,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import DropdownFooter from '@/features/chat-participants/ui/UsersParticipantDropdown/DropdownFooter';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { remToPx } from '@/shared/ui/lib/testTheme';
 
 import { PlusChatSubmenu } from './PlusChatSubmenu';
 
@@ -70,6 +71,54 @@ describe('PlusChatSubmenu renders outside a Menu', () => {
     expect(screen.getByRole('switch')).toBeChecked();
     expect(screen.getByRole('menuitem', { name: 'Toolkit' })).toHaveAttribute('aria-disabled', 'true');
     expect(onClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('PlusChatSubmenu header and size (#6629)', () => {
+  it('keeps the create row in the header with the search, outside the scrolling list', async () => {
+    const onCreateNew = vi.fn();
+    render(
+      <Harness>
+        <PlusChatSubmenu
+          items={Array.from({ length: 40 }, (_, index) => ({ key: `a-${String(index)}`, label: `Agent ${String(index)}` }))}
+          showCreateNew
+          onCreateNew={onCreateNew}
+          createNewLabel="Create Agent"
+        />
+      </Harness>,
+    );
+    const header = screen.getByTestId('plus-submenu-header');
+    const list = screen.getByTestId('plus-submenu-list');
+    const create = screen.getByTestId('plus-submenu-create-new');
+    expect(header).toContainElement(create);
+    expect(header).toContainElement(screen.getByRole('textbox'));
+    expect(list).not.toContainElement(create);
+    expect(create).toHaveTextContent('Create Agent');
+    await userEvent.click(create);
+    expect(onCreateNew).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives every list one fixed height, full or empty', () => {
+    render(
+      <Harness>
+        <PlusChatSubmenu items={[]} />
+      </Harness>,
+    );
+    expect(screen.getByTestId('plus-submenu-list')).toHaveStyle({ height: remToPx('20.3125rem') });
+  });
+
+  it('draws the search and plus glyphs at 16px', () => {
+    render(
+      <Harness>
+        <PlusChatSubmenu
+          items={[]}
+          showCreateNew
+          onCreateNew={vi.fn()}
+        />
+      </Harness>,
+    );
+    expect(screen.getByTestId('plus-submenu-search-icon')).toHaveStyle({ width: remToPx('1rem'), height: remToPx('1rem') });
+    expect(screen.getByTestId('plus-submenu-create-icon')).toHaveStyle({ width: remToPx('1rem'), height: remToPx('1rem') });
   });
 });
 

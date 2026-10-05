@@ -279,13 +279,19 @@ impl DurableContextCompaction {
         ))
     }
 
+    /// Attachment blocks are WITHHELD from the summary model: a document is
+    /// pinned in the message that carries it and never paraphrased into a
+    /// summary that later stands in for it
+    /// (`attachment_context::withhold_attachment_blocks`).
     async fn summarize(
         &self,
         objective: &Content,
         contents: &[Content],
     ) -> adk_rust::Result<String> {
+        let objective = withhold_attachments(objective);
+        let contents: Vec<Content> = contents.iter().map(withhold_attachments).collect();
         let mut remaining = super::context_summary::MAX_BATCH_ATTEMPTS;
-        self.summarize_bounded(objective, contents, &mut remaining, None)
+        self.summarize_bounded(&objective, &contents, &mut remaining, None)
             .await
     }
 
@@ -461,6 +467,59 @@ impl DurableContextCompaction {
     pub(super) fn committed(&self, record: Option<CompactionRecord>) -> adk_rust::Result<()> {
         *self.record.lock().map_err(|_| invalid_compaction())? = record;
         Ok(())
+    }
+}
+
+/// A copy of `content` with the body of every attachment block replaced by a
+/// stub, in text parts and in tool results alike (a `read_attachment` result
+/// carries a block in its `content` field).
+pub(super) fn withhold_attachments(content: &Content) -> Content {
+    let mut content = content.clone();
+    for part in &mut content.parts {
+        if let Part::Text { text } = part {
+            if let Some(withheld) = super::attachment_context::withhold_attachment_blocks(text) {
+                *text = withheld;
+            }
+            continue;
+        }
+        let Ok(mut value) = serde_json::to_value(&*part) else {
+            continue;
+        };
+        if withhold_in_value(&mut value)
+            && let Ok(rewritten) = serde_json::from_value::<Part>(value)
+        {
+            *part = rewritten;
+        }
+    }
+    content
+}
+
+fn withhold_in_value(value: &mut Value) -> bool {
+    match value {
+        Value::String(text) => {
+            if let Some(withheld) = super::attachment_context::withhold_attachment_blocks(text) {
+                *text = withheld;
+                return true;
+            }
+            false
+        }
+        // Every element is visited: a short-circuiting `any` would leave a
+        // second block in the same array unwithheld.
+        Value::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= withhold_in_value(item);
+            }
+            changed
+        }
+        Value::Object(map) => {
+            let mut changed = false;
+            for item in map.values_mut() {
+                changed |= withhold_in_value(item);
+            }
+            changed
+        }
+        _ => false,
     }
 }
 

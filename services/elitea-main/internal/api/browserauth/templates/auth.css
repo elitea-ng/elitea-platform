@@ -1,0 +1,619 @@
+/*
+ * The sign-in pages (`/auth/login`, `/auth/form/login`): one stylesheet,
+ * pinned by hash in the CSP. Tokens follow the web app's default brand pack
+ * (shared/brand/tokens/default.pack.json); a served pack overrides the
+ * `--brand-*`, `--page-*`, `--card-*`, `--text-*` and `--radius-*` inputs in a
+ * second hash-pinned style element (branding.go).
+ *
+ * Scheme: light by default; dark when the OS asks for it and the page has no
+ * explicit `data-el-scheme`, or when `data-el-scheme="dark"` (set from the
+ * app's `el-mode` key by the hash-pinned inline script). Without script the
+ * OS preference decides. The dark token block is stated twice for that reason.
+ */
+:root {
+  color-scheme: light;
+  font-family: "Montserrat", "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --accent: var(--brand-light, #c428dd);
+  --on-accent: var(--on-brand-light, #ffffff);
+  --accent-fill: var(--accent);
+  --page: var(--page-light, #f3f7fc);
+  --card: var(--card-light, #ffffff);
+  --text: var(--text-light, #0e131d);
+  --muted: #545864;
+  --line: rgb(61 68 86 / 14%);
+  --card-border: rgb(61 68 86 / 12%);
+  --control: rgb(255 255 255 / 72%);
+  --control-border: #8a8f99;
+  --control-hover: rgb(61 68 86 / 6%);
+  --input: rgb(61 68 86 / 4%);
+  --glow-1: var(--accent);
+  --glow-2: #29a3f5;
+  --art-opacity: 0.42;
+  --glow-strength: 14%;
+  --wordmark: #0e131d;
+  --shadow: 0 1px 2px rgb(14 19 29 / 6%), 0 24px 64px -12px rgb(14 19 29 / 18%);
+  --error-bg: #fdeced;
+  --error-border: #d71616;
+  --error-text: #9e0f0f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-el-scheme="light"]) {
+    color-scheme: dark;
+    --accent: var(--brand-dark, #6ae8fa);
+    --on-accent: var(--on-brand-dark, #0e131d);
+    --accent-fill: var(--accent);
+    --page: var(--page-dark, #0b111b);
+    --card: var(--card-dark, #181f2a);
+    --text: var(--text-dark, #ffffff);
+    --muted: #a9b7c1;
+    --line: rgb(255 255 255 / 12%);
+    --card-border: rgb(255 255 255 / 9%);
+    --control: rgb(255 255 255 / 3%);
+    --control-border: #6b7280;
+    --control-hover: rgb(255 255 255 / 7%);
+    --input: rgb(255 255 255 / 5%);
+    --glow-2: #dd42bb;
+    --art-opacity: 0.62;
+    --glow-strength: 18%;
+    --wordmark: #53e2fb;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 32px 80px -16px rgb(0 0 0 / 65%);
+    --error-bg: rgb(215 22 22 / 14%);
+    --error-border: #e74444;
+    --error-text: #ffb3ae;
+  }
+}
+
+:root[data-el-scheme="dark"] {
+  color-scheme: dark;
+  --accent: var(--brand-dark, #6ae8fa);
+  --on-accent: var(--on-brand-dark, #0e131d);
+  --accent-fill: var(--accent);
+  --page: var(--page-dark, #0b111b);
+  --card: var(--card-dark, #181f2a);
+  --text: var(--text-dark, #ffffff);
+  --muted: #a9b7c1;
+  --line: rgb(255 255 255 / 12%);
+  --card-border: rgb(255 255 255 / 9%);
+  --control: rgb(255 255 255 / 3%);
+  --control-border: #6b7280;
+  --control-hover: rgb(255 255 255 / 7%);
+  --input: rgb(255 255 255 / 5%);
+  --glow-2: #dd42bb;
+  --art-opacity: 0.62;
+  --glow-strength: 18%;
+  --wordmark: #53e2fb;
+  --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 32px 80px -16px rgb(0 0 0 / 65%);
+  --error-bg: rgb(215 22 22 / 14%);
+  --error-border: #e74444;
+  --error-text: #ffb3ae;
+}
+
+/* Light scheme: filled accents sit a shade deeper than the token, so white
+   text on the product default (#c428dd, 4.49:1) clears AA (about 5.2:1). */
+@supports (color: color-mix(in srgb, red, blue)) {
+  :root {
+    --accent-fill: color-mix(in srgb, var(--accent) 90%, #000000);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-el-scheme="light"]) {
+      --accent-fill: var(--accent);
+    }
+  }
+
+  :root[data-el-scheme="dark"] {
+    --accent-fill: var(--accent);
+  }
+}
+
+/* The second glow colour is the brand hue turned around the wheel, so a
+   white-labelled hue gets matching art; browsers without relative colours
+   keep the static pair above. */
+@supports (color: oklch(from red l c h)) {
+  :root {
+    --glow-2: oklch(from var(--accent) 0.7 0.15 calc(h - 120));
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-el-scheme="light"]) {
+      --glow-2: oklch(from var(--accent) 0.62 0.22 calc(h + 130));
+    }
+  }
+
+  :root[data-el-scheme="dark"] {
+    --glow-2: oklch(from var(--accent) 0.62 0.22 calc(h + 130));
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  padding: 56px 16px;
+  overflow-x: hidden;
+  background-color: var(--page);
+  background-image:
+    radial-gradient(340px circle at calc(50% - 350px) calc(50% + 80px), color-mix(in srgb, var(--glow-2) var(--glow-strength), transparent), transparent),
+    radial-gradient(280px circle at calc(50% + 360px) calc(50% - 170px), color-mix(in srgb, var(--glow-1) var(--glow-strength), transparent), transparent),
+    radial-gradient(ellipse 60% 55% at 50% 45%, color-mix(in srgb, var(--glow-1) var(--glow-strength), transparent) 0%, transparent 70%);
+  background-attachment: fixed;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Decorative art: two translucent wireframe rings in the brand colours. */
+.auth-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.auth-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.torus-stop-1 {
+  stop-color: var(--glow-1);
+}
+
+.torus-stop-2 {
+  stop-color: var(--glow-2);
+}
+
+.ring {
+  position: absolute;
+  overflow: visible;
+  opacity: var(--art-opacity);
+  filter: drop-shadow(0 0 18px color-mix(in srgb, var(--glow-1) 35%, transparent));
+}
+
+.ring use {
+  fill: none;
+  stroke-width: 0.45;
+  stroke-opacity: 0.85;
+}
+
+.ring-a {
+  width: 540px;
+  height: 540px;
+  left: calc(50% - 620px);
+  top: calc(50% - 190px);
+  transform: rotate(-20deg);
+  animation: ring-drift-a 18s ease-in-out infinite alternate;
+}
+
+.ring-b {
+  width: 420px;
+  height: 420px;
+  left: calc(50% + 150px);
+  top: calc(50% - 380px);
+  transform: rotate(28deg);
+  animation: ring-drift-b 22s ease-in-out infinite alternate;
+}
+
+@keyframes ring-drift-a {
+  to {
+    transform: rotate(-15deg) translateY(-14px);
+  }
+}
+
+@keyframes ring-drift-b {
+  to {
+    transform: rotate(33deg) translateY(12px);
+  }
+}
+
+.auth-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 28px;
+  width: min(100%, 420px);
+}
+
+.brand-header {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.brand-logo {
+  display: block;
+  max-width: 240px;
+  max-height: 44px;
+}
+
+/* With script, the logo waits until it has loaded (theme.js), then the text
+   wordmark steps aside but stays the accessible name. */
+:root[data-el-mode] .brand-logo:not(.is-loaded) {
+  display: none;
+}
+
+.brand-logo.is-loaded + .brand-name-fallback {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.brand-mark {
+  display: block;
+  width: auto;
+  height: 40px;
+  color: var(--wordmark);
+}
+
+.brand-name {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+
+.brand-tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.card-signin {
+  width: 100%;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--card);
+  background: color-mix(in srgb, var(--card) 84%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: var(--shadow);
+}
+
+.form-signin {
+  padding: 36px 32px 32px;
+}
+
+h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.lede {
+  margin: 6px 0 28px;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+.provider-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 10px 24px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--control);
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.provider-button:hover {
+  border-color: var(--accent);
+  background: var(--control-hover);
+}
+
+.provider-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+.provider-button.is-last-used {
+  border-color: var(--accent);
+}
+
+.last-used-badge {
+  position: absolute;
+  top: -10px;
+  right: 18px;
+  padding: 1px 10px;
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 18px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 28px 0 22px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+.email-form,
+.password-form {
+  display: grid;
+  gap: 8px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.password-form .field + .field {
+  margin-top: 8px;
+}
+
+.field-label {
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 16px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--input);
+  color: var(--text);
+  font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.form-control::placeholder {
+  color: var(--muted);
+}
+
+.form-control:hover {
+  border-color: var(--text);
+}
+
+.form-control:focus {
+  border-color: var(--accent);
+}
+
+.form-control[aria-invalid="true"] {
+  border-color: var(--error-border);
+}
+
+/* #6628: a 40px button with 14px text, the same on both sign-in pages. */
+.sign-in-button {
+  width: 100%;
+  height: 40px;
+  margin-top: 12px;
+  padding: 0 16px;
+  border: 1px solid var(--accent-fill);
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent);
+  transition: filter 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sign-in-button:hover {
+  filter: brightness(1.08) saturate(1.05);
+}
+
+.sign-in-button:active {
+  filter: brightness(0.94);
+}
+
+/* The ring is the text colour, which the scheme keeps at AA contrast against
+   the page and the card whatever the brand hue is; the halo carries the hue. */
+.provider-button:focus-visible,
+.sign-in-button:focus-visible,
+.theme-toggle:focus-visible,
+.form-control:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--error-text);
+  font-size: 0.875rem;
+}
+
+.login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--error-bg);
+  color: var(--error-text);
+  font-size: 0.875rem;
+}
+
+.password-form .login-error {
+  margin: 12px 0 0;
+}
+
+.login-error-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-pill, 9999px);
+  background: color-mix(in srgb, var(--card) 80%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+}
+
+.theme-toggle[hidden],
+.theme-toggle svg {
+  display: none;
+}
+
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+:root[data-el-mode="system"] .theme-toggle .icon-system,
+:root[data-el-mode="light"] .theme-toggle .icon-light,
+:root[data-el-mode="dark"] .theme-toggle .icon-dark {
+  display: block;
+}
+
+@media (max-width: 520px) {
+  body {
+    align-items: start;
+    padding: 72px 16px 32px;
+  }
+
+  .auth-shell {
+    gap: 22px;
+  }
+
+  .form-signin {
+    padding: 28px 20px 24px;
+  }
+
+  .ring-a {
+    width: 320px;
+    height: 320px;
+    left: -170px;
+    top: auto;
+    bottom: -90px;
+  }
+
+  .ring-b {
+    width: 240px;
+    height: 240px;
+    left: auto;
+    right: -120px;
+    top: -70px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-a,
+  .ring-b {
+    animation: none;
+  }
+
+  .provider-button,
+  .form-control,
+  .sign-in-button {
+    transition: none;
+  }
+}
+
+/* The native sign-in confirmation and error pages (ADR-0025 WP2). */
+.consent-text {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.consent-muted {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.consent-cancel {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  border-color: var(--card-border);
+}
+
+.consent-switch {
+  display: block;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-align: center;
+}

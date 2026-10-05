@@ -150,6 +150,10 @@ const ADDITIONS = [
   ['success.main', '#2BD48D', '#2AB37A'],
   ['success.dark', '#108D22', '#108D22'],
   ['success.contrastText', '#FFFFFF', '#FFFFFF'],
+  // #6687: every divider in the Artifacts views — Gray40 (dark) / Light40
+  // (light) in the design, the same pair as `border.table`. A role of its own
+  // so a brand pack can recolour these rules without touching tables.
+  ['border.artifactDivider', '#262B34', '#E1E5E9'],
 ];
 
 /**
@@ -288,8 +292,8 @@ const PACK_META = {
     favicon: './brand/favicon.svg',
   },
   typography: {
-    // MainTheme.js:113 verbatim; baseSize/scale reproduce the baseline's five
-    // distinct variant sizes exactly (see src/shared/brand/typography.ts).
+    // MainTheme.js:113 verbatim; baseSize/scale produce the one type scale's
+    // four sizes, 12/14/16/20 (see src/shared/brand/typography.ts).
     fontFamily: '"Montserrat", Roboto, Arial, sans-serif',
     fontFamilyMono: '"Roboto Mono", Consolas, "Courier New", monospace',
     baseSize: 14,

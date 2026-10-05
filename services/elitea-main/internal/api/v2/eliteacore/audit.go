@@ -98,7 +98,10 @@ type auditSpan struct {
 // AuditTrail serves `GET /elitea_core/audit/{mode}` — the flat span listing.
 func (h *Handler) AuditTrail(w http.ResponseWriter, r *http.Request) {
 	limit, offset := auditPagination(r)
-	filters := parseAuditFilters(r)
+	filters, ok := parseAuditRequest(w, r)
+	if !ok {
+		return
+	}
 	query := r.URL.Query()
 
 	rows, total, err := h.listAuditSpans(r.Context(), filters, spanListing{
@@ -221,7 +224,10 @@ GROUP BY e.trace_id`
 // key, which the client has never read.
 func (h *Handler) AuditTraces(w http.ResponseWriter, r *http.Request) {
 	limit, offset := auditPagination(r)
-	filters := parseAuditFilters(r)
+	filters, ok := parseAuditRequest(w, r)
+	if !ok {
+		return
+	}
 	query := r.URL.Query()
 
 	rows, total, err := h.listAuditTraces(r.Context(), filters, spanListing{
@@ -380,7 +386,10 @@ var heatmapColumns = map[string][2]string{
 }
 
 func (h *Handler) serveHeatmap(w http.ResponseWriter, r *http.Request, template, totalKey, what string) {
-	filters := parseAuditFilters(r)
+	filters, ok := parseAuditRequest(w, r)
+	if !ok {
+		return
+	}
 	// Both bounds are required: without them there is no axis to draw and no
 	// way to choose a bucket width. pylon answers 400 here too.
 	if filters.dateFrom == nil || filters.dateTo == nil {

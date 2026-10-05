@@ -163,11 +163,11 @@ describe('behaviour 2 — a real 401 is the PRIMARY re-auth signal', () => {
 });
 
 describe('behaviour 2 — redirect sniff retained as the SECONDARY signal', () => {
-  it('a redirect to a forward-auth login URL triggers re-auth (eliteaApi.js:26-28 parity)', async () => {
+  it('a redirect to an edge-auth login URL triggers re-auth (eliteaApi.js:26-28 parity)', async () => {
     const gate: SessionGate = { authed: false };
     server.use(
-      probeRedirectGated(gate, `${ORIGIN}/forward-auth/auth_oidc/login?target_to=abc`),
-      loginPage('/forward-auth/auth_oidc/login'),
+      probeRedirectGated(gate, `${ORIGIN}/auth/oidc/login?target_to=abc`),
+      loginPage('/auth/oidc/login'),
     );
     const { state, reauthenticate } = fakeReauth(gate);
     const result = await client(reauthenticate).get<{ message: string }>(PROBE);
@@ -177,13 +177,13 @@ describe('behaviour 2 — redirect sniff retained as the SECONDARY signal', () =
     expect(state.calls).toBe(1);
   });
 
-  it('ignores a forward-auth redirect that is not a login page', async () => {
+  it('ignores an edge-auth redirect that is not a login page', async () => {
     const gate: SessionGate = { authed: false };
     server.use(
       // `/login` appears ONLY inside the target_to VALUE (raw slash survives
       // URL serialization) — the sniff must strip the param before matching:
-      probeRedirectGated(gate, `${ORIGIN}/forward-auth/dashboard?target_to=/login`),
-      loginPage('/forward-auth/dashboard'),
+      probeRedirectGated(gate, `${ORIGIN}/auth/dashboard?target_to=/login`),
+      loginPage('/auth/dashboard'),
     );
     const { state, reauthenticate } = fakeReauth(gate);
     const result = await client(reauthenticate).get(PROBE);
@@ -191,7 +191,7 @@ describe('behaviour 2 — redirect sniff retained as the SECONDARY signal', () =
     expect(state.calls).toBe(0);
   });
 
-  it('ignores a login-looking redirect outside forward-auth', async () => {
+  it('ignores a login-looking redirect outside edge-auth', async () => {
     const gate: SessionGate = { authed: false };
     server.use(
       probeRedirectGated(gate, `${ORIGIN}/elsewhere/login`),

@@ -116,6 +116,17 @@ function captureCreates(bodies: unknown[]): void {
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: 'https://elitea.example' });
+  // The platform default model card (#6826) renders above the models, and a
+  // delete confirmation reads who uses the model as a default. Neither is the
+  // subject here, so both answer "nothing stored, nobody affected".
+  server.use(
+    http.get('*/admin/gateway/default_model', () =>
+      HttpResponse.json({ model_name: '', model_project_id: null, available: true, candidates: [] }),
+    ),
+    http.get('*/admin/gateway/platform_models/:id/default_usage', () =>
+      HttpResponse.json({ model_name: '', platform_default: false, projects: 0 }),
+    ),
+  );
 });
 
 afterEach(() => {
@@ -518,6 +529,50 @@ describe('PlatformModelsPanel — deletion', () => {
     await waitFor(() => {
       expect(deletes).toEqual(['11']);
     });
+  });
+
+  // #6826: the confirmation says who falls back before the operator confirms.
+  it('warns when the model is the platform default and other projects use it', async () => {
+    useModels([GPT4O]);
+    const reads: string[] = [];
+    server.use(
+      http.get('*/admin/gateway/platform_models/:id/default_usage', ({ params }) => {
+        reads.push(String(params.id));
+        return HttpResponse.json({ model_name: 'gpt-4o', platform_default: true, projects: 3 });
+      }),
+    );
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    const impact = await screen.findByTestId('platform-models-delete-default-impact');
+    expect(impact).toHaveTextContent('platform default');
+    expect(impact).toHaveTextContent('own default of 3 projects');
+    expect(reads).toEqual(['11']);
+  });
+
+  it('says the impact is unknown when the count fails', async () => {
+    useModels([GPT4O]);
+    server.use(
+      http.get('*/admin/gateway/platform_models/:id/default_usage', () =>
+        HttpResponse.json({ error: 'too many projects to count' }, { status: 503 }),
+      ),
+    );
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    const impact = await screen.findByTestId('platform-models-delete-default-impact');
+    expect(impact).toHaveTextContent('Could not count');
+  });
+
+  it('adds no default warning for a model nobody chose as default', async () => {
+    useModels([GPT4O]);
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    expect(await screen.findByTestId('platform-models-confirm-delete')).toBeVisible();
+    expect(screen.queryByTestId('platform-models-delete-default-impact')).toBeNull();
   });
 
   it('cancels without deleting', async () => {

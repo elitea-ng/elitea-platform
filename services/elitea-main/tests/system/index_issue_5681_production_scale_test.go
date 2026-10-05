@@ -1058,7 +1058,7 @@ func requireIssue5681GatewayTLSBinding(
 		"priority: 90",
 		"entryPoints: [websecure]",
 		"tls: {}",
-		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-forward-auth",
+		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-auth",
 		"service: elitea-main",
 	} {
 		if strings.Count(router, required) != 1 {
@@ -1078,8 +1078,8 @@ func requireIssue5681GatewayTLSBinding(
 		`X-Auth-Type: ""`,
 		`X-Auth-ID: ""`,
 		`X-Auth-Reference: ""`,
-		"go-main-forward-auth:",
-		"address: http://elitea-main-auth:8080/internal/forward-auth/main",
+		"go-main-auth:",
+		"address: http://elitea-main-auth:8080/internal/auth/main",
 		"trustForwardHeader: false",
 		"forwardBody: false",
 		"preserveRequestMethod: false",
@@ -1275,7 +1275,7 @@ func assertIssue5681AdmissionRBAC(
 		t.Fatal(err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "spoofed-forward-auth")
+	request.Header.Set("X-Auth-Type", "spoofed-edge-auth")
 	request.Header.Set("X-Auth-Id", "1")
 	request.Header.Set("X-Auth-Reference", "attacker@example.invalid")
 	response, err := harness.config.httpClient.Do(request)
@@ -1331,7 +1331,7 @@ func assertIssue5681PublicReadBoundaries(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("X-Auth-Type", "spoofed-forward-auth")
+	request.Header.Set("X-Auth-Type", "spoofed-edge-auth")
 	request.Header.Set("X-Auth-Id", "1")
 	request.Header.Set("X-Auth-Reference", "attacker@example.invalid")
 	response, err := harness.config.httpClient.Do(request)
@@ -3463,7 +3463,7 @@ func requireArtifactRouter(t *testing.T, route string) {
 		"priority: 90",
 		"entryPoints: [websecure]",
 		"tls: {}",
-		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-forward-auth",
+		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-auth",
 		"service: elitea-main",
 	} {
 		if !strings.Contains(router, required) {
@@ -3564,7 +3564,7 @@ func requireNestedApplicationReferenceRouter(t *testing.T, route string) {
 		"priority: 85",
 		"entryPoints: [websecure]",
 		"tls: {}",
-		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-forward-auth",
+		"middlewares:\n        - strip-caller-auth-context\n        - normalize-runtime-public-authority\n        - go-main-auth",
 		"service: current-main",
 	} {
 		if strings.Count(applicationRouter, required) != 1 {

@@ -17,7 +17,7 @@ export interface PageHeaderTab {
   readonly icon?: ReactElement;
 }
 
-/** The tabs variant. When present, the tabs replace the title in the left cluster. */
+/** The tabs variant. With a `title`, the tabs sit on their own row under it. */
 export interface PageHeaderTabsConfig {
   readonly items: readonly PageHeaderTab[];
   /** `false` renders no tab as selected — MUI's own "nothing matched" value. */
@@ -37,7 +37,11 @@ export interface PageHeaderSlots {
 }
 
 export interface PageHeaderProps {
-  /** Title variant — `StickyTabs`' `showTitleAndSwitchBySelect` branch. Ignored when `tabs` is set. */
+  /**
+   * The page title, `headingLarge` (typography spec §2). With `tabs` it
+   * renders as its own row above the tab bar, so a tabbed page has a title
+   * like every other page instead of letting the tabs stand in for one.
+   */
   readonly title?: string;
   readonly titleTestId?: string;
   /**
@@ -67,8 +71,11 @@ export interface PageHeaderProps {
  * Layout and tokens come from `StickyTabs.jsx:60-95`:
  *  - the bar is `60px` tall, `flexShrink: 0`, with a bottom `divider` rule
  *    and `0 1.5rem` of horizontal padding;
- *  - the left cluster holds the tabs, or a `headingSmall` /
- *    `text.secondary` title (`StickyTabs.jsx:227-241`);
+ *  - the left cluster holds the tabs, or the title (`StickyTabs.jsx:227-241`);
+ *  - DEVIATION (typography spec §2): the title is `headingLarge`, the one
+ *    page-title size the app and the admin console share (the reference's
+ *    14px `headingSmall` left app titles smaller than admin's 24px), and a
+ *    tabbed page renders it as a row ABOVE the tab bar;
  *  - the right cluster (`MiddleArea`, `StickyTabs.jsx:76-86`) is
  *    `flex-end`-aligned, `35.5px` tall, `flexShrink: 0`, with a `20px` gap.
  *
@@ -88,48 +95,76 @@ export function PageHeader({
   showBorder = true,
   sx,
 }: PageHeaderProps): ReactNode {
-  const { search, filters, viewToggle, actions } = slots ?? {};
-  const hasActions = search !== undefined || filters !== undefined || viewToggle !== undefined || actions !== undefined;
   const titleText = count === undefined ? title : `${title ?? ''} (${count})`;
+  const titleNode =
+    titleText === undefined ? null : (
+      <Typography
+        variant="headingLarge"
+        color="text.secondary"
+        component={titleComponent}
+        data-testid={titleTestId}
+      >
+        {titleText}
+      </Typography>
+    );
+  const barContent = (
+    <>
+      {tabs === undefined ? titleNode : <PageHeaderTabBar tabs={tabs} />}
+      <PageHeaderActions slots={slots} />
+    </>
+  );
+
+  if (tabs === undefined || titleNode === null) {
+    return (
+      <Box
+        data-testid="page-header"
+        sx={combineSx(headerSx(showBorder), sx)}
+      >
+        {barContent}
+      </Box>
+    );
+  }
 
   return (
     <Box
       data-testid="page-header"
-      sx={combineSx(headerSx(showBorder), sx)}
+      sx={combineSx(stackedHeaderSx(showBorder), sx)}
     >
-      {tabs === undefined ? (
-        <Typography
-          variant="headingSmall"
-          color="text.secondary"
-          component={titleComponent}
-          data-testid={titleTestId}
-        >
-          {titleText}
-        </Typography>
-      ) : (
-        <BaseTabs
-          value={tabs.selectedIndex ?? false}
-          onChange={tabs.onChange}
-          aria-label={tabs.ariaLabel}
-        >
-          {tabs.items.map((tab) => (
-            <BaseTab
-              key={tab.value}
-              label={tab.label}
-              icon={tab.icon}
-              data-testid={tabs.testIdPrefix === undefined ? undefined : `${tabs.testIdPrefix}-${tab.value}`}
-            />
-          ))}
-        </BaseTabs>
-      )}
-      {hasActions && (
-        <Box sx={actionsSx}>
-          {search}
-          {filters}
-          {viewToggle}
-          {actions}
-        </Box>
-      )}
+      <Box sx={titleRowSx}>{titleNode}</Box>
+      <Box sx={tabsRowSx}>{barContent}</Box>
+    </Box>
+  );
+}
+
+function PageHeaderTabBar({ tabs }: { readonly tabs: PageHeaderTabsConfig }): ReactNode {
+  return (
+    <BaseTabs
+      value={tabs.selectedIndex ?? false}
+      onChange={tabs.onChange}
+      aria-label={tabs.ariaLabel}
+    >
+      {tabs.items.map((tab) => (
+        <BaseTab
+          key={tab.value}
+          label={tab.label}
+          icon={tab.icon}
+          data-testid={tabs.testIdPrefix === undefined ? undefined : `${tabs.testIdPrefix}-${tab.value}`}
+        />
+      ))}
+    </BaseTabs>
+  );
+}
+
+function PageHeaderActions({ slots }: { readonly slots: PageHeaderSlots | undefined }): ReactNode {
+  const { search, filters, viewToggle, actions } = slots ?? {};
+  const hasActions = search !== undefined || filters !== undefined || viewToggle !== undefined || actions !== undefined;
+  if (!hasActions) return null;
+  return (
+    <Box sx={actionsSx}>
+      {search}
+      {filters}
+      {viewToggle}
+      {actions}
     </Box>
   );
 }
@@ -149,6 +184,31 @@ const headerSx =
     alignItems: 'center',
     justifyContent: 'space-between',
   });
+
+/** A titled tab bar: the title row, then the tab bar, under one bottom rule. */
+const stackedHeaderSx =
+  (showBorder: boolean): SxProps<Theme> =>
+  () => ({
+    flexShrink: 0,
+    boxSizing: 'border-box',
+    borderBottom: showBorder ? 1 : 0,
+    borderColor: 'divider',
+    padding: '0 1.5rem',
+    display: 'flex',
+    flexDirection: 'column',
+  });
+
+const titleRowSx: SxProps<Theme> = {
+  paddingTop: 2,
+};
+
+const tabsRowSx: SxProps<Theme> = {
+  minHeight: '3rem',
+  display: 'flex',
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+};
 
 /** `StickyTabs.jsx:76-86` (`MiddleArea`). */
 const actionsSx: SxProps<Theme> = {

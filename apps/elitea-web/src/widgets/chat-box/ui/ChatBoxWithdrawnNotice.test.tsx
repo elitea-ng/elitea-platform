@@ -23,7 +23,6 @@ const quietFlags = {
   isConversationSending: false,
   isStreaming: false,
   hasChatInput: true,
-  isProcessingSymbols: false,
   hasPendingHitlInterrupt: false,
   isActiveParticipantBroken: false,
 };

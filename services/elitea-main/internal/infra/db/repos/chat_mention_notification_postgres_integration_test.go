@@ -21,6 +21,8 @@ package repos
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +104,11 @@ ORDER BY user_id`, projectID)
 		}
 		if meta["message_id"] != "22222222-2222-2222-2222-222222222222" {
 			t.Fatalf("meta.message_id missing or wrong: %s", metaText)
+		}
+		// No auth_core__user here (the migrated template has none): the
+		// sender is still typed, with its id and an empty name.
+		if sender, _ := meta["sender"].(map[string]any); sender == nil || sender["id"] != float64(9_770) || sender["name"] != "" {
+			t.Fatalf("meta.sender missing or wrong without a user table: %s", metaText)
 		}
 	}
 	if err := written.Err(); err != nil {
@@ -287,5 +294,59 @@ ON CONFLICT DO NOTHING`, seed.projectID, seed.userID, roleOf(seed.projectID)); e
 	}
 	if found[outsider] {
 		t.Fatalf("a member of another project came back as a member of this one: %v", members)
+	}
+}
+
+// TestChatMentionNotificationMetaIsExactlyTheContractKeys pins the meta a
+// client reads (client contract 1.1, Notification.meta for
+// chat_user_mentioned): the snake_case conversation and message ids, the
+// project, and a `sender` object carrying the sender's id and display name —
+// and nothing else, so a key added here is a reviewed change to the contract.
+func TestChatMentionNotificationMetaIsExactlyTheContractKeys(t *testing.T) {
+	pool := newMembershipTestPool(t)
+	repo := NewChatMentionNotificationRepo(pool)
+	ctx := context.Background()
+
+	var sender int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO public.auth_core__user (email, name)
+VALUES ('mention-sender@example.test', 'Alice Sender')
+ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+RETURNING id`).Scan(&sender); err != nil {
+		t.Fatalf("seed sender: %v", err)
+	}
+	const projectID = int64(910_986)
+	if err := repo.WriteChatMentionNotifications(ctx, []agentexecutionapp.MentionNotification{{
+		ProjectID:        projectID,
+		UserID:           9_861,
+		ConversationUUID: "33333333-3333-3333-3333-333333333333",
+		MessageID:        "44444444-4444-4444-4444-444444444444",
+		SenderUserID:     sender,
+	}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var metaText string
+	if err := pool.QueryRow(ctx, `SELECT meta::text FROM centry.notifications WHERE project_id = $1`, projectID).Scan(&metaText); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(metaText), &meta); err != nil {
+		t.Fatalf("meta is not JSON: %v", err)
+	}
+	keys := make([]string, 0, len(meta))
+	for key := range meta {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if got := strings.Join(keys, ","); got != "conversation_id,message_id,project_id,sender,sender_user_id" {
+		t.Fatalf("meta keys = %s, want exactly conversation_id,message_id,project_id,sender,sender_user_id (%s)", got, metaText)
+	}
+	senderMeta, _ := meta["sender"].(map[string]any)
+	if len(senderMeta) != 2 || senderMeta["name"] != "Alice Sender" || senderMeta["id"] != float64(sender) {
+		t.Fatalf("meta.sender = %v, want {id: %d, name: Alice Sender}", meta["sender"], sender)
+	}
+	if meta["conversation_id"] != "33333333-3333-3333-3333-333333333333" || meta["message_id"] != "44444444-4444-4444-4444-444444444444" {
+		t.Fatalf("meta ids = %s", metaText)
 	}
 }

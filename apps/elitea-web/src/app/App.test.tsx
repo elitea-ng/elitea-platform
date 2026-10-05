@@ -129,11 +129,11 @@ describe('App', () => {
     // mounted hooks 401 against the stubbed fetch too, and each SEQUENTIAL
     // failure is entitled to its own flight (single-flight covers CONCURRENT
     // failures and is asserted in `auth/popup.test.ts`). What matters is that
-    // every popup the app opens is the real OIDC login entry point.
+    // every popup the app opens is the real sign-in entry point.
     expect(openedUrls.length).toBeGreaterThan(0);
     for (const raw of openedUrls) {
       const opened = new URL(raw, 'http://localhost');
-      expect(opened.pathname).toBe('/forward-auth/auth_oidc/login');
+      expect(opened.pathname).toBe('/auth/login');
       // `VITE_BASE_URI` is `/app/`; the trailing slash must not survive into
       // the callback target or the route it names cannot match. Under vitest
       // `import.meta.env.DEV` is true, so `getAppBasename()` returns '' and

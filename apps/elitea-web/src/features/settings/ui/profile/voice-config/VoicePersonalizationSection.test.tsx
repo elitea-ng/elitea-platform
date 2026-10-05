@@ -21,7 +21,7 @@ import userEvent from '@testing-library/user-event';
 import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
 import { HttpResponse, http } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { SocketClientContext } from '@/shared/api/socket/client';
@@ -173,5 +173,107 @@ describe('VoicePersonalizationSection', () => {
     expect(window.getComputedStyle(labelled('100%')).transform).toBe('translateX(-100%)');
     expect(window.getComputedStyle(labelled('1x')).transform).toBe('translateX(-50%)');
     expect(window.getComputedStyle(labelled('50%')).transform).toBe('translateX(-50%)');
+  });
+
+  describe('Preview with a model voice', () => {
+    interface PlayedAudio {
+      readonly decoded: ArrayBuffer[];
+      started: number;
+      volume: number | null;
+    }
+
+    /** jsdom ships no Web Audio. A stub that records what was decoded and played, and ends playback at once. */
+    function stubAudioContext(decodeFails = false): PlayedAudio {
+      const played: PlayedAudio = { decoded: [], started: 0, volume: null };
+      class FakeAudioContext {
+        readonly destination = {};
+        decodeAudioData(audio: ArrayBuffer): Promise<object> {
+          played.decoded.push(audio);
+          return decodeFails ? Promise.reject(new DOMException('bad audio', 'EncodingError')) : Promise.resolve({});
+        }
+        createGain() {
+          const gain = { value: 1 };
+          return {
+            gain,
+            connect: () => {
+              played.volume = gain.value;
+            },
+          };
+        }
+        createBufferSource() {
+          const source = {
+            buffer: null as unknown,
+            onended: null as null | (() => void),
+            connect: () => undefined,
+            start: () => {
+              played.started += 1;
+              queueMicrotask(() => source.onended?.());
+            },
+          };
+          return source;
+        }
+        close(): Promise<void> {
+          return Promise.resolve();
+        }
+      }
+      vi.stubGlobal('AudioContext', FakeAudioContext);
+      return played;
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('plays the model voice over HTTPS instead of doing nothing', async () => {
+      captureModelRequests();
+      const voiceRequests = serveVoices('azure-tts', [{ id: 'v1', name: 'Aria' }]);
+      const speech: Array<{ body: unknown; project: string | null }> = [];
+      server.use(
+        http.post('*/llm/v1/audio/speech', async ({ request }) => {
+          speech.push({ body: await request.json(), project: request.headers.get('X-Project-Id') });
+          return new HttpResponse(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
+        }),
+      );
+      const played = stubAudioContext();
+
+      renderPanel();
+      await waitFor(() => expect(voiceRequests.length).toBeGreaterThan(0));
+      await screen.findByRole('combobox');
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('voice-preview-button'));
+
+      await waitFor(() => expect(played.started).toBe(1));
+      expect(speech).toHaveLength(1);
+      expect(speech[0]?.project).toBe('1');
+      const body = speech[0]?.body as { model?: unknown; input?: unknown } | undefined;
+      expect(body?.model).toBe('azure-tts');
+      expect(typeof body?.input).toBe('string');
+      expect(new Uint8Array(played.decoded[0] ?? new ArrayBuffer(0))).toEqual(new Uint8Array([1, 2, 3]));
+      expect(screen.queryByTestId('voice-preview-error')).toBeNull();
+    });
+
+    it('says why the preview failed when the speech route refuses it', async () => {
+      captureModelRequests();
+      const voiceRequests = serveVoices('azure-tts', [{ id: 'v1', name: 'Aria' }]);
+      server.use(
+        http.post('*/llm/v1/audio/speech', () =>
+          HttpResponse.json({ error: { code: 'unsupported_operation' } }, { status: 501 }),
+        ),
+      );
+      const played = stubAudioContext();
+
+      renderPanel();
+      await waitFor(() => expect(voiceRequests.length).toBeGreaterThan(0));
+      await screen.findByRole('combobox');
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('voice-preview-button'));
+
+      expect(await screen.findByTestId('voice-preview-error')).toHaveTextContent(
+        'The speech model is not available. Check the AI configuration.',
+      );
+      expect(played.started).toBe(0);
+    });
   });
 });

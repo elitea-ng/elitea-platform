@@ -136,7 +136,7 @@ export function EntityEmptyState({ title, description, art = 'applications', onC
         />
       </Box>
       <Typography
-        variant="headingSmall"
+        variant="headingMedium"
         data-testid="empty-state-title"
         sx={titleSx}
       >

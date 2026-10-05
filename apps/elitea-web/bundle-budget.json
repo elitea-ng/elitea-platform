@@ -10,7 +10,29 @@
   "targets": {
     "app": {
       "html": "index.html",
-      "initialKB": 300,
+      "initialNote": [
+        "302, not 301: measured 2026-10-03 on fix/ui-search-showmore-sidebar",
+        "(PR #1032, top of the regression stack). CI measured 300.7 KiB gzip on",
+        "the PR below the stack's UI layers (#1029) and 301.1 KiB here. A local",
+        "per-chunk diff of #1029 against #1032 attributes it: the i18n chunk",
+        "(t) +0.25 KiB, the new strings of #1031 and #1032 (budget-refusal",
+        "scope, Show more/less, composer create rows, storage caption, final",
+        "state); the app shell chunk (index) +0.17 KiB, the project selector's",
+        "list split and edge fades and the one shared search box, all rendered",
+        "by the sidebar on every page; the theme chunk +0.03 KiB. No route code",
+        "moved into the initial set.",
+        "301, not 300: measured 2026-10-03 on fix/typography-scale (one type scale",
+        "for the app and the admin console). main (d49b4c9ac) measures 299.7 KiB",
+        "gzip; the branch 300.4. Attribution, per initial chunk: the theme chunk",
+        "(channelC) +0.54 KiB — four new MUI override keys (DialogTitle,",
+        "TableCell, ListItemText, InputLabel), type-scale slots on eleven more,",
+        "the thirteen stock-variant aliases and the ladder's floor/separation",
+        "guards — and +0.24 KiB for shared/brand/typeScale.ts, which the",
+        "overrides and lazy route chunks share and the bundler therefore splits",
+        "into its own preloaded chunk. No route code moved into the initial set;",
+        "the growth is the type scale itself."
+      ],
+      "initialKB": 302,
       "routeChunkKB": 250
     },
     "admin": {
@@ -43,7 +65,18 @@
         "5.6 KiB of headroom, deliberately small so the next framework bump is",
         "a conversation rather than a silent slide."
       ],
-      "initialKB": 325,
+      "initialNote3": [
+        "326, not 325: measured 2026-10-03 on PR #1021 (styled access-denied /",
+        "sign-in / unavailable pages). The refusal pages are lazy-loaded behind one",
+        "dynamic import, so a granted admin never fetches their code. The admin",
+        "initial set still grew from 323.4 to 325.1 KiB gzip: ~1.7 KiB of that is",
+        "React/MUI chunk-split overhead (the bundler splits the shared React and",
+        "MUI code three more ways once a lazy chunk needs a subset of it), not",
+        "content; the raw size of the initial chunks moved by 0.5 KB. Variants",
+        "tried (single lazy module, Paper, no brand imports) all landed within",
+        "0.2 KiB of each other."
+      ],
+      "initialKB": 326,
       "routeChunkKB": 250
     },
     "maintenance": {

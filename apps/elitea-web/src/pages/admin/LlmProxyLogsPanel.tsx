@@ -85,7 +85,7 @@ function LogSummaryRow({ summary }: { readonly summary: LlmLogSummary }): ReactN
           <Typography variant="bodySmall" color="text.secondary">
             {tile.label}
           </Typography>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          <Typography variant="headingSmall" component="p">
             {tile.value}
           </Typography>
         </Paper>

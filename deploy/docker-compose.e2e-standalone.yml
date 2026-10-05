@@ -192,8 +192,16 @@ services:
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-e2e-client"
       OIDC_CLIENT_SECRET: "elitea-e2e-secret"
-      OIDC_REDIRECT_URI: "http://localhost:${E2E_PORT:-8082}/forward-auth/auth_oidc/callback"
+      OIDC_REDIRECT_URI: "http://localhost:${E2E_PORT:-8082}/auth/oidc/callback"
       COOKIE_SECURE: "false"
+      # The public origin (ADR-0025 decision 9): the issuer every native
+      # sign-in carries. Without it the admin native-client registry refuses
+      # every save (409 public_origin_required) and /auth/native/authorize
+      # answers 503, so the native-client journeys
+      # (admin.native-clients.spec.ts, settings.devices.spec.ts) could not
+      # register a client or sign a device in. It is the browser-facing
+      # origin, traefik on E2E_PORT, the same origin OIDC_REDIRECT_URI uses.
+      DEPLOYMENT_URL: "http://localhost:${E2E_PORT:-8082}"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). Empty by default: this stack's E2E seeder
       # (apps/elitea-web/scripts/e2e-stack.sh) grants its admin fixture

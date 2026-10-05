@@ -21,6 +21,12 @@ http:
     # {"status":"ok"}. tests/deployedge/edge_public_policy_test.go holds the
     # two layers together.
     #
+    # /.well-known/elitea-client IS here (ADR-0025 decision 1), as an exact
+    # Path so nothing else under /.well-known/ (an ACME challenge) is sent to
+    # elitea-main. It is the anonymous discovery document a native client
+    # reads from an origin alone, public on both layers
+    # (go.discovery.well_known); tests/deployedge holds the two together.
+    #
     # /readyz and /startupz are deliberately NOT here. Nothing probes them
     # through an edge. The Helm probes hit the pod, and the compose healthcheck
     # curls 127.0.0.1 in the container. The readiness body names each
@@ -45,7 +51,7 @@ http:
     # avatars broken there while every compose test stayed green. Change both
     # files. edge_gateway_api_test.go walks the same router against that file.
     api:
-      rule: "PathPrefix(`/api/`) || PathPrefix(`/forward-auth/`) || Path(`/auth`) || Path(`/healthz`) || PathPrefix(`/icons/`) || PathPrefix(`/avatars/`) || PathPrefix(`/artifacts/`) || PathPrefix(`/admin/app`) || PathPrefix(`/app/application_icon/`) || PathPrefix(`/app/application_tool_icon/`) || PathPrefix(`/llm/`)"
+      rule: "PathPrefix(`/api/`) || PathPrefix(`/auth/`) || Path(`/auth`) || Path(`/healthz`) || Path(`/.well-known/elitea-client`) || PathPrefix(`/icons/`) || PathPrefix(`/avatars/`) || PathPrefix(`/artifacts/`) || PathPrefix(`/admin/app`) || PathPrefix(`/app/application_icon/`) || PathPrefix(`/app/application_tool_icon/`) || PathPrefix(`/llm/`)"
       service: elitea-main
       entryPoints:
         - web

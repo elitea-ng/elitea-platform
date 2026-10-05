@@ -126,8 +126,12 @@ func TestAPylonBackedViewerKeepsTheMatrixGrants(t *testing.T) {
 	seedRoleMembership(t, pool, 9021, "viewer", 1)
 	resolution := resolveDefaultModeFor(t, pool, "1", "1")
 
+	// shared/0136 removes, on purpose, the strings no code checks (#6874). The
+	// matrix still lists some of them for the viewer; losing them grants and
+	// refuses nothing, because no gate reads them.
+	retired := retiredBy0136(t)
 	for _, permission := range matrixPermissionsFor(t, "default", "viewer") {
-		if permission == viewerSecretListing {
+		if permission == viewerSecretListing || retired[permission] {
 			continue
 		}
 		if !slices.Contains(resolution.Permissions, permission) {

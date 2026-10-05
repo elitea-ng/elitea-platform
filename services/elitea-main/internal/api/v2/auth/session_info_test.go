@@ -1,6 +1,6 @@
 package auth
 
-// GET /forward-auth/info: how a failed user lookup is reported.
+// GET /auth/info: how a failed user lookup is reported.
 //
 // DEFECT. Every failure exit of SessionHandler.Info answered
 // `200 {"authenticated": false}`, including the error from the user SELECT. A
@@ -59,7 +59,7 @@ func (s stubUsers) QueryRow(context.Context, string, ...any) pgx.Row { return s.
 
 func infoResponse(t *testing.T, handler *SessionHandler, token string) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/info", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/info", nil)
 	if token != "" {
 		request.AddCookie(&http.Cookie{Name: "elitea_session", Value: token})
 	}

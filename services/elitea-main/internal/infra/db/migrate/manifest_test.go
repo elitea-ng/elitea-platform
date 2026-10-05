@@ -565,9 +565,70 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// Feature migrations 127 through 133 retain their SQL bytes.
 	// Reconcile existing rehearsal ledgers before deployment.
-	// Code authority, workspace, broker, debug, and saved source require 0134 through 0141.
+	//
+	// 134: shared/0134_scim_user_name_parts.sql, the SCIM name.givenName,
+	// name.familyName and name.formatted, stored on the SCIM side table so a
+	// GET answers with what the identity provider sent and Entra ID converges
+	// instead of re-PATCHing the name (and overwriting the display name) on
+	// every provisioning cycle.
+	//
+	// 135: shared/0135_scim_clients.sql, the dedicated SCIM client
+	// credentials. SCIM stops accepting personal access tokens; it accepts a
+	// bearer secret or an OAuth2 client-credentials access token from these
+	// two tables. Only SHA-256 hashes of the secrets are stored.
+	//
+	// 136: shared/0136_project_settings_permission_and_dead_permissions.sql,
+	// `models.project_settings.edit` for the default-mode admin (the project
+	// name/description/icon writes, #6789) with its per-project override
+	// delivery, and the removal of permission strings no code checks (#6874).
+	//
+	// 137: shared/0137_attachment_extractions.sql, the sidecar for extracted
+	// chat attachment text: one row per stored object with the text, the
+	// page/section/sheet map and the extractor version, deleted with its
+	// object. No new permission: only the claim-authorized runtime content
+	// route reads or writes it.
+	//
+	// 138: shared/0138_attachment_extraction_source_digest.sql, the SHA-256
+	// of the bytes an extraction was made from, so a byte-identical
+	// re-upload (the chat client uploads the file again with every message)
+	// finds the filed extraction. No new permission.
+	//
+	// 139: shared/0139_gateway_request_log_credential_owner_and_cache_tokens.sql,
+	// three columns on gateway.llm_request_logs: who owns the credential that
+	// served a request (project or platform, legacy issue 6709) and the
+	// provider's cache-read and cache-write token counts. No new permission.
+	//
+	// 140: shared/0140_execution_trigger_origin.sql, how a runtime execution
+	// started (manual, api, schedule, webhook, index), so the analytics
+	// active-user reads stop counting a person for an unattended run (legacy
+	// issues 6802 and 6881). No request-log index: the runner applies every
+	// pending file in one transaction, and a build there would hold the
+	// execution_jobs lock. No new permission.
+	//
+	// 141: shared/0141_native_auth.sql, native authorization for registered
+	// public clients (ADR-0025 WP2): the native_clients DB layer, the
+	// authorization requests, the device registry (one row per refresh-token
+	// family, anchored on an auth_core__token row with uuid NULL), hashed
+	// refresh and access tokens with the sealed re-delivery successor, and the
+	// `configuration.native_clients` administration grant. 139 and 140 are
+	// main's (landed while this branch was open).
+	//
+	// 143: shared/0143_native_client_min_version.sql, a registered native
+	// client's own minimum version (ADR-0025 WP4), which can only raise the
+	// `native_client_policy` section's deployment-wide minimum. No new
+	// permission: `configuration.native_clients` (0141) guards both. 142 is
+	// unused (reserved for a device-registry file WP3 folded into 0141).
+	//
+	// 144: shared/0144_notification_sync.sql, incremental sync for
+	// notifications (ADR-0025 WP6): a trigger-maintained `sync_at` stamp on
+	// centry.notifications (backfilled from updated_at/created_at, never on
+	// the wire) with a (user_id, sync_at, id) index, and
+	// centry.notification_tombstones filled by an AFTER DELETE trigger. No
+	// permission. Guarded on centry.notifications for bare databases.
+	// Code authority, workspace, broker, debug, and saved source require 0145 through 0152.
+	// Their SQL bytes remain unchanged after incoming history claims the former slots.
 	// HTTP schema remains inactive until its runtime gate is enabled.
-	require.EqualValues(t, 141, Head(shared))
+	require.EqualValues(t, 152, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -705,7 +766,54 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// mode, and a CHECK on each vocabulary so an unknown value cannot fall
 	// through to the weaker branch. It introduces NO permission and no table,
 	// so it has no shared sibling.
-	require.EqualValues(t, 138, Head(tenant))
+	// 139: tenant/0139_pipeline_trigger_gitlab_modes.sql, GitLab webhooks
+	// for an inbound pipeline trigger (legacy issue 6664). It widens 0138's
+	// three CHECK constraints: the `gitlab` provider (its secret token is
+	// the bearer secret sent in X-Gitlab-Token), the `standard_webhooks_hmac`
+	// mode (what a GitLab signing token sends), and the signature-header rule
+	// to every mode but `token`. No table and no permission, so no shared
+	// sibling.
+	// 140: tenant/0140_pipeline_trigger_deliveries.sql, the signed
+	// deliveries an inbound trigger has admitted, keyed by the delivery's
+	// signed identity (Standard Webhooks `webhook-id`, or the HMAC-signed raw
+	// body), so a replay or a provider retry answers the first run instead of
+	// starting a second (PR #1027 review). A table and no permission, so no
+	// shared sibling.
+	// 141: tenant/0141_eval_dataset_case_excluded.sql, an `excluded` flag on
+	// an evaluation dataset case (legacy issue 6700). A run start freezes the
+	// active cases into its snapshot. One column and no permission (the case
+	// write reuses `models.applications.evaluation.dataset.update`), so no
+	// shared sibling.
+	// 142: tenant/0142_pipeline_trigger_agent_controls.sql, three facts the
+	// inbound trigger needs once it starts AGENT versions (legacy issue
+	// 6656): the kind the credential was issued for (`target_kind`, so a
+	// trigger on a version edited from a pipeline into an agent is refused),
+	// the provider events it admits (`event_filter`), and whether a caller
+	// may re-value the agent's variables (`allow_variable_overrides`).
+	// Columns and no permission, so no shared sibling.
+	// 143: tenant/0143_strip_llm_settings_webhook_secret.sql, a data-only
+	// migration that removes the plaintext `webhook_secret` the agent
+	// editor's dead "Webhook secret" model setting wrote into
+	// `application_versions.llm_settings`. No table and no permission, so no
+	// shared sibling.
+	// 144: tenant/0144_chat_sync.sql, incremental sync for conversations and
+	// messages (ADR-0025 WP6): a trigger-maintained `sync_at` stamp on
+	// chat_conversations and chat_message_group (internal; `updated_at` keeps
+	// its wire meaning), throttled child -> parent bumps from groups, items,
+	// text and participant mappings, and chat_sync_tombstones for deletions
+	// and lost access. No permission, so no shared sibling (shared 0144 is the
+	// notification half, not a grant). Authored as tenant 0142 and renumbered
+	// at merge: main landed 0141-0143 while this branch was open.
+	// 145: tenant/0145_chat_conversation_activity.sql, a new message group
+	// stamps its conversation's `updated_at` (throttled to one per second),
+	// so the list's "last modified" order and age follow chat activity
+	// (Agent Zefir E2E DEF-R7). A trigger and no permission, so no shared
+	// sibling.
+	// 146: tenant/0146_eval_run_resume_count.sql, `eval_runs.resume_count`
+	// counts the sweep's resumes of a run whose process died, so the sweep
+	// fails a run that keeps dying after MaxResumes and not after a fixed age.
+	// A column and no permission, so no shared sibling.
+	require.EqualValues(t, 146, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

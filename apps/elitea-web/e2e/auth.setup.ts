@@ -4,7 +4,7 @@
  * Performs a real OIDC authorization-code round trip via oidc-provider-mock:
  *   1. Navigate to the app → elitea-main redirects to the mock's authorize endpoint.
  *   2. Fill the "Subject" field with the persona's email and click "Authorize".
- *   3. The mock redirects back through /forward-auth/auth_oidc/callback →
+ *   3. The mock redirects back through /auth/oidc/callback →
  *      elitea-main sets the session cookie → app loads.
  *   4. Save storageState per persona so the 30 journey specs reuse the
  *      authenticated session without re-logging in for every test.
@@ -102,7 +102,7 @@ async function performOidcLogin(
   // so a plain navigation follows the whole chain. That change is what made
   // J3's re-auth popup possible at all: a redirect the BROWSER follows on its
   // own cannot be rewritten from the test side.
-  await page.goto(BASE_URL + '/forward-auth/auth_oidc/login', {
+  await page.goto(BASE_URL + '/auth/oidc/login', {
     waitUntil: 'domcontentloaded',
   });
 
@@ -126,9 +126,9 @@ async function performOidcLogin(
 
   // Verify session is valid by calling the session info endpoint directly.
   // The SPA router context is not yet wired to a session store (Wave-2 gap),
-  // so we cannot rely on sidebar-toggle rendering; instead, /forward-auth/info
+  // so we cannot rely on sidebar-toggle rendering; instead, /auth/info
   // confirms the server-side cookie round-trip succeeded.
-  const infoResponse = await page.request.get(BASE_URL + '/forward-auth/info');
+  const infoResponse = await page.request.get(BASE_URL + '/auth/info');
   const infoBody = (await infoResponse.json()) as { authenticated?: boolean; user_id?: string };
   expect(
     infoBody,

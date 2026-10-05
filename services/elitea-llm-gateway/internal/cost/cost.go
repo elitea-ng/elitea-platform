@@ -149,6 +149,18 @@ type Price struct {
 	// really are fabricated. That says nothing about the rate that pays the
 	// request, and Cost.Source, not this field, is what the billing log reports.
 	Source string
+
+	// OutputDerived is true when the catalog row had NO output price and
+	// OutputNanoPer1M is the pylon input x 3 estimate (tokenPricesFromRow).
+	//
+	// Issue #6719 is why it is a field. An image model publishes its output
+	// price as a per-IMAGE-TOKEN rate, and the price sync read only the
+	// per-token one, so gpt-image-2 reached this package with a NULL output
+	// price. Its output tokens were then billed at 15 USD per 1M instead of
+	// 30, and nothing anywhere said that the figure was an estimate. The sync
+	// now stores the image rate in the output column. This flag makes the
+	// next row that still lacks one visible on the billing log.
+	OutputDerived bool
 }
 
 // Units is the quantity a request consumed, in every denomination the catalog
@@ -226,6 +238,10 @@ type Cost struct {
 	// the gateway could not price at all, and it is a hole in the money path
 	// that an operator must be able to count.
 	Basis string
+	// OutputDerived is true when OutputNanoUSD was priced at the input x 3
+	// estimate because the catalog row carries no output price. See
+	// Price.OutputDerived. It is false for every other basis and source.
+	OutputDerived bool
 }
 
 // rowQuerier is the minimal pgx surface the calculator needs, satisfied by
@@ -454,6 +470,9 @@ func (c *Calculator) tokenCost(ctx context.Context, provider, model string, pric
 		TotalNanoUSD:  in + out,
 		Source:        price.Source,
 		Basis:         BasisTokens,
+		// Only when output tokens were actually priced at the estimate. A
+		// request with no output (an embedding) did not use the estimate.
+		OutputDerived: price.OutputDerived && outputTokens > 0,
 	}
 }
 
@@ -585,7 +604,7 @@ func (c *Calculator) lookupCatalog(ctx context.Context, provider, model string) 
 	p.AudioFromCatalog = p.InputNanoPer1MSeconds > 0 || p.OutputNanoPer1MSeconds > 0 ||
 		p.InputNanoPer1MChars > 0 || p.OutputNanoPer1MChars > 0
 
-	inTok, outTok, tokOK := tokenPricesFromRow(row.inputTokens, row.outputTokens)
+	inTok, outTok, outDerived, tokOK := tokenPricesFromRow(row.inputTokens, row.outputTokens)
 	if !tokOK {
 		if !p.AudioFromCatalog {
 			// Neither a usable token price nor an audio rate: the row is not
@@ -602,6 +621,7 @@ func (c *Calculator) lookupCatalog(ctx context.Context, provider, model string) 
 		return p, true
 	}
 	p.InputNanoPer1M, p.OutputNanoPer1M, p.Source = inTok, outTok, sourceCatalog
+	p.OutputDerived = outDerived
 	return p, true
 }
 
@@ -671,22 +691,29 @@ func (c *Calculator) reportLookupFailure(provider, model string, err error) {
 
 // tokenPricesFromRow resolves the token price pair from the two token columns.
 // ok is false when the input price is NULL, or when the pylon input*3 output
-// default would overflow int64.
-func tokenPricesFromRow(inputNano, outputNano *int64) (in, out int64, ok bool) {
+// default would overflow int64. derived is true when out is that input*3
+// estimate rather than a catalog price.
+//
+// An image model does not reach the estimate any more. The price sync stores
+// its per-image-token output rate in output_cost_per_1m_tokens (issue #6719),
+// because that is the rate of the tokens the provider reports as output. The
+// estimate stays for a row that still has no output price, and derived makes
+// such a row visible.
+func tokenPricesFromRow(inputNano, outputNano *int64) (in, out int64, derived, ok bool) {
 	if inputNano == nil {
 		// Row exists but has no usable input price — treat as uncatalogued.
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	if outputNano != nil {
-		return *inputNano, *outputNano, true
+		return *inputNano, *outputNano, false, true
 	}
 	// pylon default when output price is absent: input * 3. Guard against
 	// silent int64 overflow (which would produce an output price of 0 instead
 	// of the correct fallback) for a corrupt/absurd catalog row.
 	if *inputNano > math.MaxInt64/3 {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	return *inputNano, *inputNano * 3, true
+	return *inputNano, *inputNano * 3, true, true
 }
 
 // positiveOrZero reads a nullable catalog rate. NULL and a non-positive value

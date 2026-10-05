@@ -25,6 +25,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
@@ -102,6 +103,16 @@ const (
 	// concept with no OpenAI equivalent, so there is no canonical code to keep
 	// here, and the SDK needs this exact spelling to report the member scope.
 	budgetCodeMember = "member_budget_exceeded"
+	// budgetScopeFieldProject and budgetScopeFieldMember are the values of the
+	// error.scope field. Only a refusal this gateway's own gate decided carries
+	// error.scope. A provider's own quota refusal also arrives as
+	// budget_exceeded/insufficient_quota (statusAndType), so the code alone
+	// cannot say that the PROJECT ceiling refused the call. The workers read
+	// error.scope to name the refusing budget, and treat its absence as an
+	// unknown scope, for example provider billing (#6732). The SDK ignores the
+	// field, so its type/code contract above does not change.
+	budgetScopeFieldProject = "project"
+	budgetScopeFieldMember  = "member"
 )
 
 // perImageFallbackNano is the fixed per-image billing cost in nano-USD used
@@ -188,8 +199,23 @@ func (h *Handler) checkBudget(
 	if v.retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(v.retryAfter/time.Second)+1, 10))
 	}
-	writeError(w, v.status, v.errType, v.message, v.code)
+	writeBudgetRefusal(w, v)
 	return false
+}
+
+// writeBudgetRefusal writes a refusal verdict. A gate-decided budget refusal
+// adds error.scope; every other refusal is the plain writeError body.
+func writeBudgetRefusal(w http.ResponseWriter, v budgetVerdict) {
+	if v.scope == "" {
+		writeError(w, v.status, v.errType, v.message, v.code)
+		return
+	}
+	if sink, ok := w.(requestlog.ErrorCodeSetter); ok {
+		sink.SetErrorCode(v.errType)
+	}
+	writeJSON(w, v.status, openAIError{Error: openAIErrorFields{
+		Message: v.message, Type: v.errType, Code: v.code, Scope: v.scope,
+	}})
 }
 
 // budgetVerdict is one admission decision, with no dependency on how it is
@@ -200,12 +226,18 @@ func (h *Handler) checkBudget(
 // retryAfter is non-zero only for the loop-breaker refusal, which is the one
 // refusal that carries a Retry-After header on the HTTP path.
 type budgetVerdict struct {
-	allow      bool
-	status     int
-	errType    string
-	message    string
-	code       string
+	allow   bool
+	status  int
+	errType string
+	message string
+	code    string
+	// scope is set only on a budget refusal the gate decided: "project" or
+	// "member". See budgetScopeFieldProject.
+	scope      string
 	retryAfter time.Duration
+	// budgeted is set only on an ALLOWED verdict: the project has a hard
+	// ceiling (failmode.Decision.Budgeted). The audio routes read it.
+	budgeted bool
 }
 
 // budgetAllowed is the verdict every admitted request gets.
@@ -341,13 +373,16 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		}
 		// The project has room. The member cap is a SECOND ceiling inside it,
 		// so it is asked only after the project admits (issue #321).
-		return h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v.budgeted = v.allow && dec.Budgeted
+		return v
 	case failmode.Block402:
 		return budgetVerdict{
 			status:  http.StatusPaymentRequired,
 			errType: budgetErrorType,
 			message: "project budget exhausted for this billing period",
 			code:    budgetCodeProject,
+			scope:   budgetScopeFieldProject,
 		}
 	case failmode.Block503:
 		return budgetVerdict{
@@ -363,7 +398,9 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		// independent limit.
 		h.logger.Warn("budget gate: unknown verdict; allowing request",
 			"verdict", fmt.Sprintf("%v", dec.Verdict))
-		return h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v.budgeted = v.allow && dec.Budgeted
+		return v
 	}
 }
 
@@ -450,6 +487,7 @@ func (h *Handler) memberVerdict(
 			errType: budgetErrorType,
 			message: "member budget exhausted for this billing period",
 			code:    budgetCodeMember,
+			scope:   budgetScopeFieldMember,
 		}
 	case failmode.Block503:
 		return budgetVerdict{
@@ -555,7 +593,7 @@ func (h *Handler) updateUsage(
 	projectIDStr string,
 	userIDStr string,
 ) billOutcome {
-	return h.updateUsageUnits(ctx, surfaceAudio, provider, model,
+	return h.updateUsageUnits(ctx, surfaceTokens, provider, model,
 		cost.Units{InputTokens: inputTokens, OutputTokens: outputTokens},
 		projectIDStr, userIDStr)
 }
@@ -573,9 +611,16 @@ func (h *Handler) updateUsage(
 type billingSurface int
 
 const (
-	// surfaceAudio is the unary /llm/v1/audio/* routes, and the token routes
-	// that reach here through updateUsage.
-	surfaceAudio billingSurface = iota
+	// surfaceTokens is the token routes (chat, completions, responses,
+	// messages, embeddings, images) that reach here through updateUsage. They
+	// carry no audio units, so the audio counters and the "audio: …" log lines
+	// do not apply to them. Before this value existed updateUsage passed
+	// surfaceAudio, and every plain text chat priced from the fallback table
+	// logged "audio: billed a token price the catalog did not supply" and moved
+	// gateway_audio_default_priced_total.
+	surfaceTokens billingSurface = iota
+	// surfaceAudio is the unary /llm/v1/audio/* routes only.
+	surfaceAudio
 	// surfaceRealtime is a turn of a /llm/v1/realtime session.
 	surfaceRealtime
 )
@@ -596,7 +641,55 @@ const (
 // enrichment and not the record itself: a request that failed before the
 // provider answered has none, and zero is the honest value there.
 func recordLoggedUsage(ctx context.Context, units cost.Units) {
-	requestlog.FromContext(ctx).SetTokens(units.InputTokens, units.OutputTokens)
+	enrichment := requestlog.FromContext(ctx)
+	enrichment.SetTokens(units.InputTokens, units.OutputTokens)
+	recordLoggedCredentialOwner(ctx, enrichment)
+}
+
+// recordLoggedCredentialOwner attaches who owns the credential that served the
+// request (legacy issue 6709). It runs where the usage is recorded, because a
+// request that reaches the billing path is one a credential served, and ctx
+// there is the request's BifrostContext, where bifrost/core left the selected
+// key. A ctx without a selected key leaves the field empty.
+func recordLoggedCredentialOwner(ctx context.Context, enrichment *requestlog.Enrichment) {
+	enrichment.SetCredentialOwner(account.SelectedCredentialOwner(ctx))
+}
+
+// recordLoggedCacheTokens attaches the prompt-cache counts of a chat or text
+// completion usage block. Nil usage records nothing.
+func recordLoggedCacheTokens(ctx context.Context, usage *schemas.BifrostLLMUsage) {
+	if read, write, ok := cacheTokensFromLLMUsage(usage); ok {
+		requestlog.FromContext(ctx).SetCacheTokens(read, write)
+	}
+}
+
+// recordLoggedResponsesCacheTokens is recordLoggedCacheTokens for the
+// Responses-API usage block, which /llm/v1/responses and /llm/v1/messages use.
+func recordLoggedResponsesCacheTokens(ctx context.Context, usage *schemas.ResponsesResponseUsage) {
+	if read, write, ok := cacheTokensFromResponsesUsage(usage); ok {
+		requestlog.FromContext(ctx).SetCacheTokens(read, write)
+	}
+}
+
+// cacheTokensFromLLMUsage reads the cache-read and cache-write counts from a
+// chat usage block. ok is false when the block carries no prompt details.
+func cacheTokensFromLLMUsage(usage *schemas.BifrostLLMUsage) (read, write int64, ok bool) {
+	if usage == nil || usage.PromptTokensDetails == nil {
+		return 0, 0, false
+	}
+	details := usage.PromptTokensDetails
+	return int64(details.CachedReadTokens), int64(details.CachedWriteTokens), true
+}
+
+// cacheTokensFromResponsesUsage reads the same two counts from a Responses-API
+// usage block. bifrost maps OpenAI's cached_tokens into CachedReadTokens and
+// Anthropic's cache_creation_input_tokens into CachedWriteTokens.
+func cacheTokensFromResponsesUsage(usage *schemas.ResponsesResponseUsage) (read, write int64, ok bool) {
+	if usage == nil || usage.InputTokensDetails == nil {
+		return 0, 0, false
+	}
+	details := usage.InputTokensDetails
+	return int64(details.CachedReadTokens), int64(details.CachedWriteTokens), true
 }
 
 func (h *Handler) updateUsageUnits(
@@ -682,6 +775,17 @@ func (h *Handler) updateUsageUnits(
 			"provider", provider, "model", model,
 			"source", actualCost.Source, "cost_nano", actualCost.TotalNanoUSD,
 			"metric", MetricAudioDefaultPriced)
+	}
+
+	// The catalog row has an input price and no output price, so the output
+	// tokens were billed at the pylon input x 3 estimate. That is the shape
+	// issue #6719 hid: gpt-image-2 billed its image output at half its real
+	// rate, and every log line looked like a catalog price. The bill does not
+	// change here; the estimate becomes visible.
+	if actualCost.OutputDerived {
+		h.logger.WarnContext(ctx, "cost: the catalog has no output price for this model; output tokens billed at the input x 3 estimate",
+			"provider", provider, "model", model,
+			"output_tokens", u.OutputTokens, "output_nano", actualCost.OutputNanoUSD)
 	}
 
 	// The authored credential rate policy decides whether this cost reaches the
@@ -772,6 +876,11 @@ func (h *Handler) updateUsageDirect(
 	model string,
 	costNano int64,
 ) billOutcome {
+	// A credential served this response too, though it reported no usage.
+	// Before the gate check, for the reason updateUsageUnits records first:
+	// the log is about what happened, not about what was charged.
+	recordLoggedCredentialOwner(ctx, requestlog.FromContext(ctx))
+
 	bp := h.budget()
 	if bp.gate == nil || costNano <= 0 {
 		return billNotBillable

@@ -154,7 +154,7 @@ func TestAnEmailEntryGrantsNothingWithoutAStatedVerification(t *testing.T) {
 				FirstLoginPolicy{InitialGlobalAdmins: []string{"email:alice@corp.com"}})
 
 			id, err := handler.provisionUser(context.Background(),
-				"mallory-sub", "alice@corp.com", "Mallory", emailVerified, false)
+				"mallory-sub", "alice@corp.com", "Mallory", emailVerified, false, false)
 			require.NoError(t, err)
 
 			require.Empty(t, administrationRoles(t, pool, atoiUserID(t, id)))
@@ -261,11 +261,31 @@ func TestRevokingEveryKeyIsHealedByTheNextLogin(t *testing.T) {
 	require.Len(t, ownedTokens(t, pool, userID), 1)
 }
 
+/* ── M5: the provider setting reaches the resolution ──────────────────── */
+
+// The handlers pass the provider's `adopt_scim_users` through: a GitHub/Dex
+// OIDC login (setting off) is refused on a SCIM-provisioned account, and the
+// paired Entra SAML login (setting on) adopts it.
+func TestTheHandlersApplyTheProvidersSCIMAdoptionSetting(t *testing.T) {
+	pool := newFirstLoginPool(t)
+	provisioned := seedSCIMAccount(t, pool, "alice@corp.com")
+
+	oidcHandler := (&OIDCHandler{pool: pool}).WithFirstLoginPolicy(FirstLoginPolicy{})
+	_, err := oidcHandler.provisionUser(context.Background(),
+		"github|mallory", "alice@corp.com", "Mallory", nil, false, false)
+	require.ErrorIs(t, err, errIdentityConflict)
+
+	samlHandler := (&SAMLHandler{pool: pool}).WithFirstLoginPolicy(FirstLoginPolicy{})
+	id, err := samlHandler.provisionUser(context.Background(), "entra-nameid", "alice@corp.com", "Alice", true)
+	require.NoError(t, err)
+	require.Equal(t, provisioned, atoiUserID(t, id))
+}
+
 /* ── helpers ───────────────────────────────────────────────────────────── */
 
 func signInWithOIDC(t *testing.T, handler *OIDCHandler, sub, email string) int {
 	t.Helper()
-	id, err := handler.provisionUser(context.Background(), sub, email, "Alice", nil, false)
+	id, err := handler.provisionUser(context.Background(), sub, email, "Alice", nil, false, false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }
@@ -278,14 +298,14 @@ func signInWithVerifiedOIDC(
 ) int {
 	t.Helper()
 	id, err := handler.provisionUser(
-		context.Background(), sub, email, "Alice", &emailVerified, false)
+		context.Background(), sub, email, "Alice", &emailVerified, false, false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }
 
 func signInWithSAML(t *testing.T, handler *SAMLHandler, nameID, email string) int {
 	t.Helper()
-	id, err := handler.provisionUser(context.Background(), nameID, email, "Alice")
+	id, err := handler.provisionUser(context.Background(), nameID, email, "Alice", false)
 	require.NoError(t, err)
 	return atoiUserID(t, id)
 }

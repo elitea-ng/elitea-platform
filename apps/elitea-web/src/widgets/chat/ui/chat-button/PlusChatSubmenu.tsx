@@ -2,7 +2,11 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 
 import { t } from '@/shared/i18n';
 
+import AddIcon from '@mui/icons-material/Add';
+import SearchIcon from '@mui/icons-material/Search';
 import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
+import InputAdornment from '@mui/material/InputAdornment';
 import MenuItem from '@mui/material/MenuItem';
 import MenuList from '@mui/material/MenuList';
 import Switch from '@mui/material/Switch';
@@ -107,29 +111,82 @@ export const PlusChatSubmenu = memo(
 
     return (
       <Box>
-        {/* Search bar */}
+        {/*
+          * The header: search, then the "Create …" row (#6629). Both stay at
+          * the top while the list below scrolls, so "Create Agent" is one
+          * click away however long the list is. The create row is a plain
+          * button, not a `MenuItem`: it sits outside the `MenuList` below, and
+          * a `MenuItem` throws without that list's context.
+          */}
         <Box
           sx={{
-            padding: '0.25rem 1rem',
             borderBottom: '0.0625rem solid',
             borderColor: 'border.lines',
           }}
+          data-testid="plus-submenu-header"
         >
-          <TextField
-            inputRef={searchRef}
-            size="small"
-            placeholder={searchPlaceholder}
-            value={searchValue}
-            onChange={onSearchChange}
-            variant="standard"
-            sx={{ color: 'text.primary' }}
-          />
+          <Box sx={{ padding: '0.25rem 1rem' }}>
+            <TextField
+              inputRef={searchRef}
+              size="small"
+              placeholder={searchPlaceholder}
+              value={searchValue}
+              onChange={onSearchChange}
+              variant="standard"
+              fullWidth
+              sx={{ color: 'text.primary' }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon
+                        aria-hidden
+                        data-testid="plus-submenu-search-icon"
+                        sx={submenuIconSx}
+                      />
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
+          </Box>
+          {showCreateNew && (
+            <ButtonBase
+              onClick={onCreateNew}
+              data-testid="plus-submenu-create-new"
+              sx={(theme: Theme) => ({
+                display: 'flex',
+                justifyContent: 'flex-start',
+                width: '100%',
+                padding: '0.5rem 1rem',
+                height: '2.5rem',
+                gap: 0.75,
+                color: theme.vars.palette.text.secondary,
+                '&:hover, &:focus-visible': {
+                  backgroundColor: theme.vars.palette.action.hover,
+                },
+              })}
+            >
+              <AddIcon
+                aria-hidden
+                data-testid="plus-submenu-create-icon"
+                sx={submenuIconSx}
+              />
+              <Typography variant="bodyMedium">{createNewLabel}</Typography>
+            </ButtonBase>
+          )}
         </Box>
 
         {/* Items list */}
+        {/*
+          * #6629: one fixed height for every submenu, the Modules list's.
+          * The lists used to size to their rows, so each category opened at
+          * a different size.
+          */}
         <Box
+          data-testid="plus-submenu-list"
           sx={{
-            maxHeight: '20.3125rem',
+            height: '20.3125rem',
             overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
@@ -149,25 +206,6 @@ export const PlusChatSubmenu = memo(
             * `disablePadding` keeps the previous flush-to-the-edges spacing.
             */}
           <MenuList disablePadding sx={{ outline: 'none' }}>
-            {/* Create new button */}
-            {showCreateNew && (
-              <MenuItem
-                onClick={onCreateNew}
-                data-testid="plus-submenu-create-new"
-                sx={{
-                  padding: '0.5rem 1.25rem',
-                  height: '2.5rem',
-                  gap: 0.75,
-                  color: 'text.secondary',
-                  '&:hover': {
-                    backgroundColor: 'action.hover',
-                  },
-                }}
-              >
-                <Typography variant="bodyMedium">{createNewLabel}</Typography>
-              </MenuItem>
-            )}
-
             {/* Items */}
             {filteredItems.map((item) => (
               <MenuItem
@@ -235,3 +273,10 @@ export const PlusChatSubmenu = memo(
 );
 
 PlusChatSubmenu.displayName = 'PlusChatSubmenu';
+
+/** #6629: the search and plus glyphs take the default icon colour (Gray10 dark, Light10 light). */
+const submenuIconSx = (theme: Theme) => ({
+  width: '1rem',
+  height: '1rem',
+  color: theme.vars.palette.icon.fill.default,
+});

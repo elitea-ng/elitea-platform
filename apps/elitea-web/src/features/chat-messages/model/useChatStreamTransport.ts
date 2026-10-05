@@ -1,48 +1,17 @@
 /**
- * model/useChatStreamTransport.ts — the chat transport swap (issue #93, Surface B).
+ * Durable chat transport: admit one execution and fold its replayed frames.
  *
- * This is the producer the reducer was written for. Until now the chat
- * surface started its run by emitting socket.io `chat_predict` and rendered
- * the answer only once `chat_message_sync` pushed the PERSISTED message group
- * — no live streaming at all, because, as `useChatBoxHandlers` said in place:
- * "the chat surface has no consumer for the streamed `execution.node_event`
- * envelope — the streaming reducer the old app fed from `chat_predict` was
- * never ported". It is ported now, so this hook closes the loop: start the run
- * over REST, subscribe to the durable replay stream, and fold each frame into
- * chat history with `applyChatStreamFrame`.
+ * Run starters own admission and its failure classification. The connection
+ * hook owns reconnects to the same execution. This hook owns conversation
+ * identity, generation fences, history dispatch, and final-result observation.
  *
- * WHAT IS LEFT HERE, AND WHAT MOVED. Two families were split out of this file
- * to keep it inside the §3.5 400-line budget — the same move
- * `lib/chatStreamSettle.ts` records in its own header:
+ * A conversation switch closes its observer. A delayed admission cannot
+ * subscribe to another conversation's transcript. Reconnects do not admit
+ * another execution. Stop requests cancellation and retains observation until
+ * the authoritative terminal outcome arrives.
  *
- *  - `./useChatStreamRunStarters.ts` — the three admission routes (start,
- *    resume, regenerate) and the classification of their failures. It carries
- *    the FALLBACK CONTRACT in full: the Go route requires a recognised
- *    `execution_contract`, so a failure — or a 200 with no `events_url` — is
- *    an unambiguous "this backend has not landed the SSE path", `start`
- *    answers `false`, and the caller emits `chat_predict` exactly as before.
- *  - `./useChatStreamConnection.ts` — the SSE connection lifecycle, and with
- *    it the RESUME contract of issue #329 in full: a drop reopens the SAME
- *    execution's stream at `?cursor=<last id seen>` rather than re-running
- *    anything, and the retries stop once the turn is over.
- *
- * What stays is what needs all three at once: run OWNERSHIP, frame dispatch
- * into chat history, and how a turn ends.
- *
- * IT NEVER RE-STARTS A RUN. Once the POST has succeeded the execution exists
- * server-side, so a transport failure after that point must not fall back to
- * the socket — that would run the agent twice and bill it twice. The stream is
- * REOPENED instead. Extended outages use slower retries without ending the run.
- *
- * STREAM OWNERSHIP (issue #328). A stream belongs to the conversation that
- * started it, and to nothing else. The hook stays mounted across a
- * conversation switch — `ChatBox` re-renders with a new `conversationUuid`
- * rather than remounting — so an open stream would otherwise keep folding its
- * frames into whatever history is mounted next, i.e. into a DIFFERENT
- * conversation's transcript. The stream is therefore closed the moment the
- * active conversation stops matching the stream's owner — and, for the one
- * ordering that closing cannot cover, a `start` whose POST resolves after the
- * user has already left subscribes to nothing at all.
+ * Reload observation resets the seeded turn with its first accepted frame.
+ * Success progress retains the observer until the generation-bound result.
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -71,8 +40,10 @@ import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isObserverTerminalFrame } from "../lib/chatStreamTurnEnd";
 import { resultReference, settleFinalResultObserver } from '../lib/chatStreamFinalResult';
 import { completeReferencedChatResult } from './completeReferencedChatResult';
+import { resetTurnForReplay } from "../lib/chatStreamReattach";
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
+import { usePendingReplay, useReattach } from "./usePendingReplay";
 import {
   nonEmptyString,
   useChatStreamRunStarters,
@@ -137,6 +108,10 @@ export function useChatStreamTransport(
   const runEpochRef = useRef(0);
   const hydrationEpochRef = useRef<number | undefined>(undefined);
 
+  /** The seeded message a reattach replays into, until its first frame (#6654). */
+  const pendingReplay = usePendingReplay();
+  const { take: takePendingReplay, clear: clearPendingReplay } = pendingReplay;
+
   /**
    * The connection's own `close`, held in a ref because the two sides need
    * each other: `useChatStreamConnection` is handed the frame handlers below,
@@ -163,8 +138,9 @@ export function useChatStreamTransport(
     cancelRef.current = null;
     questionIdRef.current = undefined;
     generationRef.current = undefined;
+    clearPendingReplay();
     closeStreamRef.current();
-  }, []);
+  }, [clearPendingReplay]);
 
   const onNodeEvent = useCallback(
     (frame: ExecutionEventData) => {
@@ -185,10 +161,12 @@ export function useChatStreamTransport(
         question_id: frameQuestionId ?? questionIdRef.current,
         execution_generation: generation ?? generationRef.current,
       };
+      const replayInto = takePendingReplay();
       setChatHistory((prev) => {
+        const replayed = replayInto === undefined ? prev : resetTurnForReplay(prev, replayInto);
         // Bind assembly results that arrive without agent_start to the admitted generation.
-        const owned = generation && prev.some((message) => message.id === responseId && message.executionGeneration !== generation)
-          ? prev.map((message) => message.id === responseId ? { ...message, executionGeneration: generation } : message) : prev;
+        const owned = generation && replayed.some((message) => message.id === responseId && message.executionGeneration !== generation)
+          ? replayed.map((message) => message.id === responseId ? { ...message, executionGeneration: generation } : message) : replayed;
         return applyChatStreamFrame(owned, identifiedFrame, contextRef.current ?? {});
       });
       // Success progress precedes full_message; the result releases the durable observer.
@@ -215,7 +193,7 @@ export function useChatStreamTransport(
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach, refreshContext, ownsRun],
+    [setChatHistory, detach, refreshContext, ownsRun, takePendingReplay],
   );
 
   /**
@@ -246,10 +224,20 @@ export function useChatStreamTransport(
       // assume a message exists to carry it; `recordStreamFailure` appends one
       // when nothing is in flight.
       refreshContext();
+      const replayInto = takePendingReplay();
+      if (replayInto !== undefined) setChatHistory((prev) => resetTurnForReplay(prev, replayInto));
       failWith(runtimeFailureReason(frame), typeof frame['code'] === 'string' ? frame['code'] : undefined);
     },
-    [failWith, refreshContext],
+    [failWith, refreshContext, setChatHistory, takePendingReplay],
   );
+
+  // A reattach that never opened (see PendingReplay.isArmed) is given up:
+  // drop ownership so the composer is released; the seeded row is untouched.
+  const onNeverOpened = useCallback((): boolean => {
+    if (!pendingReplay.isArmed()) return false;
+    detach();
+    return true;
+  }, [detach, pendingReplay]);
 
   const connection = useChatStreamConnection({
     onNodeEvent,
@@ -257,6 +245,7 @@ export function useChatStreamTransport(
     // A disconnected observer cannot declare the durable execution failed.
     // Retain ownership and Stop while the connection keeps retrying.
     onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
+    onNeverOpened,
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;
@@ -386,6 +375,8 @@ export function useChatStreamTransport(
     });
   }, [ownsRun]);
 
+  const reattach = useReattach(ownsRun, subscribeToRun, pendingReplay);
+
   return useMemo(
     () => ({
       ...starters,
@@ -393,7 +384,8 @@ export function useChatStreamTransport(
       attachExistingRun,
       close: detach,
       stop,
+      reattach,
     }),
-    [starters, isStreaming, attachExistingRun, detach, stop],
+    [starters, isStreaming, attachExistingRun, detach, stop, reattach],
   );
 }

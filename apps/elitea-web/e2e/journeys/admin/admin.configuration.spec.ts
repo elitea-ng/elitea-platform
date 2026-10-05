@@ -88,6 +88,9 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   const sections = page.getByRole('navigation', { name: 'Configuration sections' });
   const marks = sections.getByText('Not available here');
   await expect(marks.first()).toBeVisible();
+  // `Native clients` (ADR-0025 WP2) used to be the third: it pointed at its
+  // managed surface and this build had no editor for it. It has one now
+  // (`AdminNativeClientsEditor`), so it moved to the live set below.
   await expect(marks).toHaveCount(2);
   for (const section of ['LLM Governance', 'Service Descriptors']) {
     await expect(
@@ -100,7 +103,18 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   // two above would pass on a build where Banner and Maintenance had silently
   // reverted to refusing, since the count would still be right if something
   // else had also changed.
-  for (const section of ['Banner', 'Maintenance', 'Guardrails', 'LLM Proxy', 'Authentication']) {
+  // `Native client policy` (ADR-0025 WP4) is live from the start: discovery,
+  // the native token response and the 426 gate all read it.
+  const live = [
+    'Banner',
+    'Maintenance',
+    'Guardrails',
+    'LLM Proxy',
+    'Authentication',
+    'Native client policy',
+    'Native clients',
+  ];
+  for (const section of live) {
     await expect(
       sections.getByRole('button', { name: new RegExp(section) }).getByText('Not available here'),
       `${section} is available and must not be marked`,
@@ -369,6 +383,26 @@ adminTest('J34h: the LLM Proxy model catalogue is authorised and answers', async
   await expect(page.getByTestId('llm-proxy-add-price')).toBeVisible();
   await expect(page.getByTestId('llm-proxy-models-load-error')).toHaveCount(0);
   await expect(page.getByTestId('llm-proxy-models-error')).toHaveCount(0);
+
+  await checkA11y(page);
+});
+
+adminTest('J34o: the platform default model card reads its route', async ({ page }) => {
+  await openConfiguration(page);
+  await page.getByRole('button', { name: /LLM Proxy/ }).click();
+
+  // #6826. The card reads GET /admin/gateway/default_model. The read itself is
+  // the positive terminal state: the error Alert is absent while the read is in
+  // flight, so its absence alone would read a 403 or 500 as success.
+  const read = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith('/admin/gateway/default_model'),
+  );
+  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  expect((await read).status()).toBe(200);
+
+  const card = page.getByTestId('platform-default-model');
+  await expect(card.getByRole('combobox', { name: 'Default model' })).toBeVisible();
+  await expect(page.getByTestId('platform-default-model-error')).toHaveCount(0);
 
   await checkA11y(page);
 });

@@ -139,7 +139,7 @@ jobs:
         run: bash deploy/helm/tests/render-llm-path.sh
 
       # The liveness path at the chart's own edge (#569). On the cluster,
-      # /healthz sat in the HTTPRoute rule that carries the forward-auth
+      # /healthz sat in the HTTPRoute rule that carries the edge-auth
       # ExtensionRef while the policy did not name it, so every probe of the
       # public hostname got a 302 to the login form. This step reads the
       # RENDERED HTTPRoute and Ingress: both reach /healthz, and no ExtensionRef

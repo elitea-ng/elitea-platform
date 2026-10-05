@@ -76,7 +76,7 @@ export function ConversationItemRow(props: ConversationItemRowProps): ReactNode 
                 thickness={5}
               />
               <Typography
-                variant="bodySmall2"
+                variant="bodySmall"
                 color="text.disabled"
               >
                 {t('features.chatConversationList.conversationItem.naming', 'Naming')}
@@ -86,7 +86,7 @@ export function ConversationItemRow(props: ConversationItemRowProps): ReactNode 
             <Typography
               sx={styles.nameText}
               component="div"
-              variant="bodySmall2"
+              variant="bodySmall"
               color="text.secondary"
             >
               {name || firstMessagePreview}

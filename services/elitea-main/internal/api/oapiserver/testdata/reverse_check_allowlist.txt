@@ -16,6 +16,10 @@
 # described for some time and the list still carried them. The other six are
 # the two `/configurations/*` reads this change describes.
 #
+# 64 -> 51 (ADR-0025 WP5): the chat, execution-event and notification
+# operations a native client depends on are described, so their thirteen ids
+# came off.
+#
 # RULES
 # - The list may only shrink. Describe the endpoint in v2.yaml, then delete
 #   its line here. The test fails on a line the spec now covers.
@@ -35,8 +39,6 @@ canvas.editCanvas
 canvas.removeAttachments
 canvas.setAttachmentStorage
 chat.getChatConfig
-conversation.create
-conversation.delete
 conversation.deleteAllMessages
 conversation.deleteMessage
 conversation.deleteSummary
@@ -45,11 +47,8 @@ conversation.generateSummary
 conversation.getContextAnalytics
 conversation.getContextStatus
 conversation.getConversationSummaries
-conversation.messageList
 conversation.optimizeContext
-conversation.regenerate
 conversation.select
-conversation.startAgentExecution
 conversation.unselect
 conversation.updateContextStrategy
 conversation.updateSummary
@@ -71,18 +70,8 @@ folder.delete
 folder.list
 folder.pinUpdate
 folder.update
-notifications.bulkDelete
-notifications.bulkMarkSeen
-notifications.delete
-notifications.eventStream
-notifications.list
-notifications.read
-participant.addParticipantIntoConversation
-participant.deleteParticipantFromConversation
 pipelines.stopLlmTask
-runtime.executionEvents
 toolkits.deleteIndexItem
-toolkits.getIndexHistoryConversationDetails
 toolkits.getIndexesList
 toolkits.startIndexExecution
 toolkits.stopIndexingItem

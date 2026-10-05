@@ -152,7 +152,7 @@ export function BrandingStyleFields({
   const densitySource = brandingFieldSource(values, 'density', layers);
   return (
     <Box component="section" aria-labelledby="branding-style-heading" sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <Typography id="branding-style-heading" variant="h6" component="h2">
+      <Typography id="branding-style-heading" variant="headingSmall" component="h2">
         {t('pages.admin.branding.group.style', 'Colour, type and shape')}
       </Typography>
 

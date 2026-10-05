@@ -248,7 +248,10 @@ func WriteError(w http.ResponseWriter, err error) {
 		// Refused BEFORE admission, so there is no task id to report: nothing
 		// was written and nothing ran.
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"ok": false, "reason": "unsupported_toolkit", "error": err.Error(),
+			// The reason as one sentence for the person reading it; err.Error()
+			// is the operator form with the sentinel prefix (UI-DC-1).
+			"ok": false, "reason": "unsupported_toolkit",
+			"error": toolkitcalltoolapp.UnsupportedToolkitTypeSentence(err),
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrInvalidToolRun),
 		errors.Is(err, toolkitcalltoolapp.ErrInvalidAuthoritativeToolRunInput):

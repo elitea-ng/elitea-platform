@@ -41,11 +41,34 @@
  */
 import * as zod from "zod";
 import { ConversationSummary } from "./conversationSummary.zod";
+import { SyncTombstone } from "./syncTombstone.zod";
 
-export const ConversationListing = zod.object({
-  total: zod.int(),
-  rows: zod.array(ConversationSummary),
-});
+export const ConversationListing = zod
+  .object({
+    total: zod.int(),
+    rows: zod.array(ConversationSummary),
+    tombstones: zod
+      .array(SyncTombstone)
+      .optional()
+      .describe(
+        "Delta mode only. Conversations deleted (`deleted`) or gone from this list for this caller (`access_lost`: made private, the caller removed as a participant, or no longer matching the list filter) since the cursor. A private conversation's deletion is told only to its author, its former user participants and project admins.\n",
+      ),
+    next_cursor: zod
+      .string()
+      .optional()
+      .describe(
+        "Delta mode only. The opaque cursor for the next call. It never moves past the database clock minus a 5 s settle window, so rows changed within that window come back again; upsert by id.\n",
+      ),
+    has_more: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Delta mode only. True when this page was cut short by `limit`; call again with `next_cursor` straight away.\n",
+      ),
+  })
+  .describe(
+    "The legacy page carries `total` and `rows` only. With `changes_since` (ADR-0025 WP6) the same two keys keep their meaning — the rows are the legacy row shape, oldest change first, and `total` is the size of the caller's whole filtered list now — and `tombstones`, `next_cursor` and `has_more` are added.\n",
+  );
 
 export type ConversationListing = zod.input<typeof ConversationListing>;
 export type ConversationListingOutput = zod.output<typeof ConversationListing>;

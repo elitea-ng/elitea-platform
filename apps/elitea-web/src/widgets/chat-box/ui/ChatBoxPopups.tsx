@@ -14,6 +14,8 @@ import { RecommendationList } from '@/features/chat-recommendations';
 import { MentionToolList } from '@/shared/ui/MentionToolList';
 
 import { optField } from './ChatBox.helpers';
+import { HashParticipantPopup } from './HashParticipantPopup';
+import type { HashParticipantSelection } from './HashParticipantPopup';
 import { useNoopValidateToolkitQuery, useSlashToolkitDetailsQuery } from './hooks/useChatBoxSlashQueries';
 import type { useChatBoxState } from './hooks/useChatBoxState';
 
@@ -43,8 +45,17 @@ interface ChatBoxPopupsSkill {
   readonly onSelectTool: (toolName: string | null) => void;
 }
 
+interface ChatBoxPopupsHashPicker {
+  readonly isOpen: boolean;
+  readonly query: string;
+  readonly projectId: string | undefined;
+  readonly onSelect: (selection: HashParticipantSelection) => void;
+  readonly onClose: () => void;
+}
+
 export interface ChatBoxPopupsProps {
   readonly recommendations: ChatBoxPopupsRecommendations;
+  readonly hashPicker?: ChatBoxPopupsHashPicker | undefined;
   readonly userMentions: ChatBoxPopupsUserMentions;
   readonly slash: ChatBoxState['slash'];
   readonly skill: ChatBoxPopupsSkill;
@@ -66,9 +77,18 @@ export function buildChatBoxPopupsProps(input: {
   readonly projectId: string | undefined;
   readonly onSelectUser: ChatBoxPopupsUserMentions['onSelectUser'];
   readonly onSelectTool: ChatBoxPopupsSkill['onSelectTool'];
+  /** Attaches a "#"-picked agent or pipeline (the "+" menu's `onSelectParticipant`). */
+  readonly onAddParticipant?: ((selection: unknown) => void) | undefined;
 }): ChatBoxPopupsProps {
-  const { state, onChangeParticipant, existingParticipants, projectId, onSelectUser, onSelectTool } = input;
+  const { state, onChangeParticipant, existingParticipants, projectId, onSelectUser, onSelectTool, onAddParticipant } = input;
   return {
+    hashPicker: {
+      isOpen: state.keyDown.isProcessingSymbols && onAddParticipant !== undefined,
+      query: state.keyDown.query,
+      projectId,
+      onSelect: (selection) => { state.clearHashQuery(); onAddParticipant?.(selection); },
+      onClose: state.keyDown.stopProcessingSymbols,
+    },
     recommendations: {
       show: state.showRecommendationList,
       onSelectParticipant: (p) => { onChangeParticipant?.(p); state.setShowRecommendationList(false); },
@@ -94,9 +114,17 @@ export function buildChatBoxPopupsProps(input: {
   };
 }
 
-export function ChatBoxPopups({ recommendations, userMentions, slash, skill }: ChatBoxPopupsProps): ReactNode {
+export function ChatBoxPopups({ recommendations, hashPicker, userMentions, slash, skill }: ChatBoxPopupsProps): ReactNode {
   return (
     <>
+      {hashPicker?.isOpen === true && (
+        <HashParticipantPopup
+          query={hashPicker.query}
+          projectId={hashPicker.projectId}
+          onSelect={hashPicker.onSelect}
+          onClose={hashPicker.onClose}
+        />
+      )}
       {recommendations.show && (
         <Box sx={{ mb: 1 }}>
           <RecommendationList

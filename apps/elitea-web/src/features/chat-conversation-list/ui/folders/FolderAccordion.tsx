@@ -181,7 +181,7 @@ export function FolderAccordion({
                 <TypographyWithConditionalTooltip
                   title={item.title}
                   placement="top"
-                  variant="bodySmall2"
+                  variant="bodySmall"
                   sx={titleTextSx}
                 >
                   {item.title}

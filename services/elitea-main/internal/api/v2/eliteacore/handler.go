@@ -21,12 +21,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
@@ -53,7 +58,17 @@ type Handler struct {
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
 	httpClient         *http.Client
-	store              storage.ObjectStore
+	// mcpEgressGuard pins every production MCP dial (Load Tools, metadata
+	// reads) to a resolved, checked public address. It is used only when no
+	// WithHTTPClient override is configured.
+	mcpEgressGuard *webhook.DestinationGuard
+	// The egress guard of the MCP OAuth and DCR proxies (mcp_oauth_egress.go)
+	// and the client built from httpClient with the guard's dialer. The
+	// proxies are viewer-reachable, so they keep their own allowlist.
+	mcpAuthorizationGuard MCPAuthorizationEgressGuard
+	guardedClientOnce     sync.Once
+	guardedClient         *http.Client
+	store                 storage.ObjectStore
 	// The pre-built MCP server catalogue and the vault holding its client
 	// secrets (mcp_prebuilt_resolution.go). Both nil unless
 	// WithPrebuiltMCPCatalogue is applied, in which case resolution is a no-op.
@@ -168,8 +183,20 @@ func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	}
 }
 
+// WithMCPEgressGuard sets the dial-time egress guard for the MCP requests
+// this handler makes. Without it, a guard with an empty allowlist applies:
+// loopback, private, link-local and multicast destinations are refused.
+func WithMCPEgressGuard(guard *webhook.DestinationGuard) Option {
+	return func(handler *Handler) {
+		if guard != nil {
+			handler.mcpEgressGuard = guard
+		}
+	}
+}
+
 // WithHTTPClient configures the client used by the MCP OAuth and DCR proxies.
-// It is primarily useful when the service needs a custom trusted CA bundle.
+// It replaces the egress-guarded default client, so it is for tests and for a
+// deployment that supplies its own audited transport.
 func WithHTTPClient(client *http.Client) Option {
 	return func(handler *Handler) {
 		if client != nil {
@@ -213,12 +240,19 @@ func WithObjectStore(store storage.ObjectStore) Option {
 }
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
-	handler := &Handler{
-		pool:       pool,
-		httpClient: http.DefaultClient,
-	}
+	handler := &Handler{pool: pool}
 	for _, opt := range opts {
 		opt(handler)
+	}
+	if handler.httpClient == nil {
+		// MCP URLs are tenant-chosen, so the default client is never
+		// http.DefaultClient: each dial re-resolves the host and refuses
+		// internal addresses, which also closes DNS rebinding.
+		guard := handler.mcpEgressGuard
+		if guard == nil {
+			guard = webhook.NewDestinationGuard(nil)
+		}
+		handler.httpClient = &http.Client{Transport: guard.Transport()}
 	}
 	return handler
 }
@@ -490,6 +524,12 @@ func (h *Handler) UpdateProjectInfo(w http.ResponseWriter, r *http.Request) {
 
 	// The caller's own mistake is answered before any server-side precondition,
 	// so a malformed body gets 400 rather than being blamed on the database.
+	if renaming {
+		if code, message := invalidProjectName(name); code != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": message, "code": code})
+			return
+		}
+	}
 	var iconMeta map[string]any
 	if iconRequested {
 		var err error
@@ -516,17 +556,8 @@ func (h *Handler) UpdateProjectInfo(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{"ok": true}
 
 	if renaming {
-		if _, err := h.pool.Exec(
-			ctx,
-			`UPDATE centry.project SET name = $1 WHERE id = $2`,
-			name, projectID,
-		); err != nil {
-			slog.ErrorContext(ctx, "update project info: rename failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error": projectInfoWriteFailed,
-				"code":  "project_info_write_failed",
-			})
-			return
+		if !h.renameProject(ctx, w, projectID, name) {
+			return // renameProject has already answered.
 		}
 		response["name"] = name
 	}
@@ -543,6 +574,117 @@ func (h *Handler) UpdateProjectInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 const projectInfoWriteFailed = "failed to save project info"
+
+// maxProjectNameLength is the width of centry.project.name (VARCHAR(256)).
+const maxProjectNameLength = 256
+
+// invalidProjectName checks the shape of a new project name. It returns an
+// empty code for a valid name. The reserved prefix is checked in
+// renameProject, because sending a personal project's own name back is a
+// no-op and must not be refused.
+func invalidProjectName(name string) (code, message string) {
+	switch {
+	case strings.TrimSpace(name) == "":
+		return "invalid_project_name", "the project name must not be blank"
+	case utf8.RuneCountInString(name) > maxProjectNameLength:
+		return "invalid_project_name", fmt.Sprintf(
+			"the project name must be at most %d characters", maxProjectNameLength)
+	case !utf8.ValidString(name) || strings.ContainsRune(name, 0):
+		return "invalid_project_name", "the project name must be UTF-8 text without NUL characters"
+	}
+	return "", ""
+}
+
+// reservedProjectName reports whether name is in the personal-project
+// namespace. Every resolver of a personal project (the ensurer,
+// /social/author, the project resolver and the settings-route ownership check)
+// finds the row by the exact name `project_user_<uid>`. A team project renamed
+// into that namespace could pass for somebody's personal project.
+func reservedProjectName(name string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), personalproject.NamePrefix)
+}
+
+// renameProject renames a project and answers the request itself on failure.
+// It reports whether the caller may continue.
+//
+// A PERSONAL project keeps its name. Its row is found by the exact name
+// `project_user_<owner_id>` everywhere (see invalidProjectName). A renamed
+// personal project is orphaned: the ensurer provisions a second one on the
+// next sign-in, /social/author points at that one, and the owner's
+// settings-route exception stops matching. The UPDATE refuses that row in
+// the same statement, so no read-then-write race can let a rename through.
+//
+// Zero rows changed is not success. It is an unknown project (404), a
+// personal project (409), a reserved new name (400), or a no-op rename to the
+// same name (200).
+func (h *Handler) renameProject(ctx context.Context, w http.ResponseWriter, projectID, name string) bool {
+	reserved := reservedProjectName(name)
+	if !reserved {
+		tag, err := h.pool.Exec(ctx, `
+UPDATE centry.project
+SET name = $1
+WHERE id = $2
+  AND name IS DISTINCT FROM $1
+  AND name <> $3 || owner_id::text`,
+			name, projectID, personalproject.NamePrefix)
+		if err != nil {
+			slog.ErrorContext(ctx, "update project info: rename failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": projectInfoWriteFailed,
+				"code":  "project_info_write_failed",
+			})
+			return false
+		}
+		if tag.RowsAffected() == 1 {
+			return true
+		}
+	}
+
+	var current string
+	var personal bool
+	err := h.pool.QueryRow(ctx, `
+SELECT name, name = $2 || owner_id::text
+FROM centry.project
+WHERE id = $1`, projectID, personalproject.NamePrefix).Scan(&current, &personal)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": "project not found",
+			"code":  "project_not_found",
+		})
+		return false
+	case err != nil:
+		slog.ErrorContext(ctx, "update project info: rename check failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": projectInfoWriteFailed,
+			"code":  "project_info_write_failed",
+		})
+		return false
+	case current == name:
+		return true
+	case reserved:
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "names that start with " + strconv.Quote(personalproject.NamePrefix) +
+				" are reserved for personal projects",
+			"code": "reserved_project_name",
+		})
+		return false
+	case personal:
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "a personal project cannot be renamed",
+			"code":  "personal_project_rename",
+		})
+		return false
+	default:
+		// The row changed between the two statements. Report it as a failed
+		// write rather than claim a rename that did not happen.
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "the project changed while it was renamed; retry",
+			"code":  "project_rename_conflict",
+		})
+		return false
+	}
+}
 
 // normalizeProjectIconMeta mirrors normalizeCurrentLocalProjectIcon in
 // internal/application/configurations — the create-time normalizer for
@@ -800,6 +942,17 @@ func (h *Handler) ChatConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Notifications(w http.ResponseWriter, r *http.Request) {
+	// This fallback is shadowed by the reviewed notification API wherever a
+	// store is composed. It has no delta, and silently ignoring
+	// `changes_since` would hand a syncing client a full page it would read
+	// as "nothing was deleted" — so it refuses instead (ADR-0025 WP6).
+	if r.URL.Query().Has("changes_since") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "invalid_sync_request",
+			"message": "changes_since is not supported by this composition",
+		})
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	ctx := r.Context()
 
@@ -5090,10 +5243,17 @@ func effectiveURLPort(endpoint *url.URL) string {
 	return "80"
 }
 
+// defaultMCPEgressClient serves a Handler built without NewHandler. It refuses
+// every internal destination, like NewHandler's default.
+var defaultMCPEgressClient = &http.Client{Transport: webhook.NewDestinationGuard(nil).Transport()}
+
 func (h *Handler) doMCPProxyRequest(req *http.Request) (*http.Response, error) {
-	client := h.httpClient
+	return h.doMCPProxyRequestWith(h.httpClient, req)
+}
+
+func (h *Handler) doMCPProxyRequestWith(client *http.Client, req *http.Request) (*http.Response, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultMCPEgressClient
 	}
 
 	origin := req.URL
@@ -5178,6 +5338,8 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	// migration 0094); the resolution fills only fields the caller left empty,
 	// so a toolkit that carries its own URL still wins.
 	if mcpregistry.IsPrebuiltToolkitType(body.ToolkitType) {
+		callerURL := strings.TrimSpace(body.URL)
+		callerSuppliedHeaders := len(body.Headers) > 0
 		resolved, err := h.resolvePrebuiltSettings(r.Context(), map[string]any{
 			"url":     body.URL,
 			"headers": headersAsAny(body.Headers),
@@ -5196,6 +5358,23 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		body.URL = stringSetting(resolved, "url", body.URL)
 		body.Headers = headerSettings(resolved, body.Headers)
 		body.Timeout = intSetting(resolved, "timeout", body.Timeout)
+		// The catalogue's headers are the operator's credentials for the
+		// catalogue's server. A caller that keeps its own URL must not receive
+		// them at another origin: the agent runtime always dials the catalogue
+		// URL, so only Load Tools could send them elsewhere.
+		if !callerSuppliedHeaders && callerURL != "" && len(body.Headers) > 0 {
+			catalogueURL, err := h.prebuiltURLFor(r.Context(), body.ToolkitType)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+					"success": false,
+					"error":   "the pre-built MCP catalogue could not be read",
+				})
+				return
+			}
+			if !mcpCatalogueOriginMatches(catalogueURL, callerURL) {
+				body.Headers = nil
+			}
+		}
 	}
 
 	if strings.TrimSpace(body.URL) == "" {
@@ -5232,10 +5411,16 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		}
 		// The stated cause is the remote server's, not this service's, so it is
 		// reported as a failed discovery rather than a fault here. The web
-		// client renders `error` directly.
+		// client renders `error` directly. A retired `/sse` endpoint gets an
+		// actionable message naming the `/mcp` replacement (#6688).
+		message := "MCP tool discovery failed"
+		var retired *mcpregistry.RetiredSSEEndpoint
+		if errors.As(err, &retired) {
+			message = retired.Message()
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"success":    false,
-			"error":      "MCP tool discovery failed",
+			"error":      message,
 			"server_url": endpoint.String(),
 		})
 		return

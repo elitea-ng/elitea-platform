@@ -127,7 +127,7 @@ export function ShareLinkDialog(props: ShareLinkDialogProps): React.JSX.Element 
 
   const content = (
     <Box sx={contentSx} data-testid="share-link-dialog">
-      <Typography variant="body2" color="text.disabled">
+      <Typography variant="bodyMedium" component="p" color="text.disabled">
         {t('features.chatConversationList.shareLink.warning', 'Anyone with the link can read this conversation, without signing in. Do not share transcripts that contain sensitive information.')}
       </Typography>
 
@@ -151,27 +151,27 @@ export function ShareLinkDialog(props: ShareLinkDialogProps): React.JSX.Element 
       />
 
       {error !== '' && (
-        <Typography variant="body2" color="error.main" data-testid="share-link-error">
+        <Typography variant="bodyMedium" component="p" color="error.main" data-testid="share-link-error">
           {error}
         </Typography>
       )}
 
       {createdUrl !== null && (
         <Box sx={createdSx} data-testid="share-link-created">
-          <Typography variant="body2" color="text.secondary" sx={urlSx} data-testid="share-link-created-url">
+          <Typography variant="bodyMedium" component="p" color="text.secondary" sx={urlSx} data-testid="share-link-created-url">
             {createdUrl}
           </Typography>
-          <Typography variant="caption" color="text.disabled">
+          <Typography variant="bodySmall" color="text.disabled">
             {t('features.chatConversationList.shareLink.oneShot', 'Copied to your clipboard. This link is shown once and cannot be retrieved again — if you lose it, revoke it and create a new one.')}
           </Typography>
         </Box>
       )}
 
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="bodyMedium" component="p" color="text.secondary">
         {t('features.chatConversationList.shareLink.activeLinks', 'Links on this conversation')}
       </Typography>
       {links.data === undefined || links.data.length === 0 ? (
-        <Typography variant="caption" color="text.disabled" data-testid="share-link-empty">
+        <Typography variant="bodySmall" color="text.disabled" data-testid="share-link-empty">
           {t('features.chatConversationList.shareLink.noLinks', 'No links yet.')}
         </Typography>
       ) : (
@@ -207,11 +207,11 @@ function ShareLinkRow(props: { readonly link: SharedChatLink; readonly onRevoke:
   return (
     <Box sx={rowSx} data-testid="share-link-row">
       <Box sx={rowMetaSx}>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="bodySmall" color="text.secondary">
           {link.active ? t('features.chatConversationList.shareLink.active', 'Active') : t('features.chatConversationList.shareLink.inactive', 'Revoked or expired')}
           {link.has_password ? t('features.chatConversationList.shareLink.protected', ' · Password protected') : ''}
         </Typography>
-        <Typography variant="caption" color="text.disabled">
+        <Typography variant="bodySmall" color="text.disabled">
           {t('features.chatConversationList.shareLink.expires', 'Expires ')}
           {new Date(link.expires_at).toLocaleString()}
           {t('features.chatConversationList.shareLink.views', ' · Opened ')}

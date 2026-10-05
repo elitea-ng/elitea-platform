@@ -268,7 +268,6 @@ function RequestModelConnectionDialog({ open, isSubmitting, onClose, onSubmit }:
       open={open}
       variant="simple"
       title={t('ai-configuration.requestModelConnection.title', 'Request a model connection')}
-      header={{ titleVariant: 'headingMedium' }}
       content={content}
       onClose={onClose}
       actions={{ node: actions }}

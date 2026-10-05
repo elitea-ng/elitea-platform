@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ChatMessage } from '@/features/chat-messages';
 
-import { hasUnsettledTurn, resolveSeededChatHistory } from './useChatBoxData.seed';
+import { hasUnsettledTurn, resolveSeededChatHistory, seedSettlesLiveTurn } from './useChatBoxData.seed';
 
 const AT = '2026-09-23T20:12:10.073Z';
 
@@ -89,5 +89,37 @@ describe('hasUnsettledTurn', () => {
 
   it('reads the LAST message only, so a stale flag further up cannot freeze the surface', () => {
     expect(hasUnsettledTurn([streaming('half a turn ago'), settled('done')])).toBe(false);
+  });
+});
+
+describe('a settled refetch after a reload mid-turn (#6654)', () => {
+  it('accepts a settled refetch for a turn no stream has touched', () => {
+    // The first seed drew the in-flight turn as "...". With no stream to
+    // settle it, the old rule kept that placeholder over every refetch.
+    const firstSeed = [question, streaming('...')];
+    const live = firstSeed;
+    const seed = [question, settled('MOCK: autotest tts arm 262128')];
+    const wasSeeded = (message: ChatMessage): boolean => firstSeed.includes(message);
+    expect(seedSettlesLiveTurn(live, seed, wasSeeded)).toBe(true);
+    expect(resolveSeededChatHistory(live, seed, false, wasSeeded)).toBe(seed);
+  });
+
+  it('keeps a turn a stream owns even when the refetch is settled', () => {
+    // The stream copied the turn, so it is no longer the seed's object; its
+    // late chunks would land on the persisted text twice.
+    const firstSeed = [question, streaming('...')];
+    const live = [question, streaming('MOCK: ')];
+    const seed = [question, settled('MOCK: autotest tts arm 262128')];
+    const wasSeeded = (message: ChatMessage): boolean => firstSeed.includes(message);
+    expect(seedSettlesLiveTurn(live, seed, wasSeeded)).toBe(false);
+    expect(resolveSeededChatHistory(live, seed, false, wasSeeded)).toBe(live);
+  });
+
+  it('keeps the live turn when the seed does not hold it at all', () => {
+    const firstSeed = [question, { ...streaming('...'), id: 'a2' }];
+    const seed = [question, settled('older answer')];
+    const wasSeeded = (message: ChatMessage): boolean => firstSeed.includes(message);
+    expect(seedSettlesLiveTurn(firstSeed, seed, wasSeeded)).toBe(false);
+    expect(resolveSeededChatHistory(firstSeed, seed, false, wasSeeded)).toBe(firstSeed);
   });
 });

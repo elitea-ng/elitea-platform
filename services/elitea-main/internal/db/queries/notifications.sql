@@ -123,3 +123,40 @@ WHERE user_id = sqlc.arg(user_id)
 DELETE FROM centry.notifications
 WHERE user_id = sqlc.arg(user_id)
   AND id = ANY(sqlc.arg(notification_ids)::integer[]);
+
+-- name: CurrentNotificationSyncClock :one
+-- The database clock a `changes_since` page is computed against (ADR-0025
+-- WP6): the stamps are written by triggers on this clock, so the settle
+-- bound and the expiry check must read it too, not the application's.
+SELECT clock_timestamp()::timestamptz AS now;
+
+-- name: ListCurrentNotificationChanges :many
+-- The caller's notifications whose sync_at stamp (shared 0144) is after the
+-- cursor position, oldest change first.
+SELECT id,
+       uuid::text AS uuid,
+       is_seen,
+       project_id,
+       user_id,
+       meta,
+       event_type,
+       created_at,
+       updated_at,
+       sync_at
+FROM centry.notifications
+WHERE user_id = sqlc.arg(user_id)
+  AND (sync_at, id) > (sqlc.arg(after_at)::timestamptz, sqlc.arg(after_id)::bigint)
+ORDER BY sync_at, id
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListCurrentNotificationTombstones :many
+-- The caller's notification deletions after the cursor position.
+SELECT id,
+       notification_id,
+       COALESCE(notification_uuid::text, ''::text)::text AS notification_uuid,
+       deleted_at
+FROM centry.notification_tombstones
+WHERE user_id = sqlc.arg(user_id)
+  AND (deleted_at, id) > (sqlc.arg(after_at)::timestamptz, sqlc.arg(after_id)::bigint)
+ORDER BY deleted_at, id
+LIMIT sqlc.arg(page_limit);

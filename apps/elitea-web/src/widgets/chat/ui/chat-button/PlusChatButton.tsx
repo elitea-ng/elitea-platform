@@ -16,6 +16,7 @@ import type { AttachmentButtonHandle } from './AttachmentButton';
 import { AttachmentsPanel, MainMenuList, MenuPaper } from './PlusChatButton.parts';
 import {
   MENU_ITEMS,
+  createRowLabel,
   resolveActiveSubmenuView,
   type PlusChatButtonEntitySubmenus,
   type SubmenuKey,
@@ -104,8 +105,11 @@ export const PlusChatButton = memo(
   }: PlusChatButtonProps) => {
     const [menuOpen, setMenuOpen] = useState(false);
     const [activeSubmenu, setActiveSubmenu] = useState<SubmenuKey | null>(null);
-    // The ROW the open submenu is anchored to, so it sits beside that row
-    // rather than replacing the whole menu (baseline `hoveredAnchorEl`).
+    // #6629: the open submenu is anchored to the MAIN MENU's paper, not to
+    // the hovered row. It opens beside the menu, aligned with its top edge,
+    // at the same place whichever category is open. (It used to follow the
+    // row, so each submenu opened at a different height.)
+    const mainPaperRef = useRef<HTMLDivElement>(null);
     const [submenuAnchor, setSubmenuAnchor] = useState<HTMLElement | null>(null);
     const [searchValue, setSearchValue] = useState('');
     const anchorRef = useRef<HTMLButtonElement>(null);
@@ -133,9 +137,11 @@ export const PlusChatButton = memo(
       setSearchValue('');
     }, []);
 
-    const handleSubmenuOpen = useCallback((key: SubmenuKey, anchor: HTMLElement) => {
+    // The hovered row is not the anchor any more; the main menu paper is,
+    // and it is mounted whenever a row can be hovered.
+    const handleSubmenuOpen = useCallback((key: SubmenuKey) => {
       setActiveSubmenu(key);
-      setSubmenuAnchor(anchor);
+      setSubmenuAnchor(mainPaperRef.current);
       // Each category has its own search; carrying the previous one over
       // would silently filter the newly-opened list by an unrelated string.
       setSearchValue('');
@@ -242,6 +248,7 @@ export const PlusChatButton = memo(
             */}
           <ClickAwayListener onClickAway={closeMenu}>
             <Box>
+              <Box ref={mainPaperRef}>
               <MenuPaper>
                 <MainMenuList
                   items={visibleMenuItems}
@@ -257,14 +264,16 @@ export const PlusChatButton = memo(
                   }
                 />
               </MenuPaper>
+              </Box>
 
               <Popper
                 open={activeSubmenu !== null && submenuAnchor !== null}
                 anchorEl={submenuAnchor}
                 placement="right-start"
+                modifiers={[{ name: 'offset', options: { offset: [0, 4] } }]}
                 sx={{ zIndex: 9999 }}
               >
-                <MenuPaper>
+                <MenuPaper fixedWidth>
                   {activeSubmenu === 'attachments' ? (
                     <AttachmentsPanel
                       disableAttachments={disableAttachments}
@@ -280,7 +289,7 @@ export const PlusChatButton = memo(
                       searchPlaceholder={t('widgets.chat.plusChatButton.searchPlaceholder', 'Search...')}
                       showCreateNew={createConfig?.showCreateNew ?? false}
                       onCreateNew={createConfig?.onCreateNew}
-                      createNewLabel={t('widgets.chat.plusChatButton.createNewLabel', 'Create new')}
+                      createNewLabel={createRowLabel(createConfig)}
                       emptyMessage={t('widgets.chat.plusChatButton.noItemsAvailable', 'Nothing available')}
                       noResultsMessage={t('widgets.chat.plusChatButton.noItemsFound', 'No items found')}
                       isLoading={false}

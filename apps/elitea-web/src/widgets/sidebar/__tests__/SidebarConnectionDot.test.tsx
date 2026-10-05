@@ -1,47 +1,62 @@
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { SocketClientContext, type SocketClient } from '@/shared/api/socket/client';
+import { createNoopSocketClient, SocketClientContext } from '@/shared/api/socket/client';
+import { createRealtimeStatusStore, RealtimeStatusContext, type RealtimeStatusStore } from '@/shared/api/sse';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { SidebarConnectionDot } from '../ui/SidebarConnectionDot';
 
-/** Minimal fake satisfying `SocketClient` — only `useConnectionState` is exercised by this component. */
-function fakeClient(status: 'connected' | 'disconnected'): SocketClient {
-  return {
-    socket: {} as SocketClient['socket'],
-    getConnectionState: () => status,
-    useConnectionState: () => status,
-    emit: () => true,
-    on: () => {},
-    off: () => {},
-    disconnect: () => {},
-  };
+function renderDot(store: RealtimeStatusStore) {
+  return renderWithTheme(
+    // The noop socket.io client — permanently `disconnected` — is what every
+    // deployment provides. It must have no say in the dot.
+    <SocketClientContext.Provider value={createNoopSocketClient()}>
+      <RealtimeStatusContext.Provider value={store}>
+        <SidebarConnectionDot />
+      </RealtimeStatusContext.Provider>
+    </SocketClientContext.Provider>,
+  );
 }
 
 describe('SidebarConnectionDot (SHELL-012)', () => {
-  it('renders nothing when no SocketClientContext.Provider is mounted (graceful degradation)', () => {
+  it('renders nothing while no live channel is subscribed', () => {
+    const { container } = renderDot(createRealtimeStatusStore());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders nothing with no status provider mounted (admin bundle, isolated renders)', () => {
     const { container } = renderWithTheme(<SidebarConnectionDot />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows a "Connected" dot when the socket is connected', () => {
-    renderWithTheme(
-      <SocketClientContext.Provider value={fakeClient('connected')}>
-        <SidebarConnectionDot />
-      </SocketClientContext.Provider>,
-    );
-    expect(screen.getByTestId('sidebar-connection-dot')).toBeInTheDocument();
-    expect(screen.getByLabelText('Connected')).toBeInTheDocument();
+  it('shows "Connected" when the SSE channel is open, even under the permanently-disconnected noop socket.io client', () => {
+    const store = createRealtimeStatusStore();
+    store.report('notifications', 'open');
+    renderDot(store);
+    const dot = screen.getByTestId('sidebar-connection-dot');
+    expect(dot).toHaveAttribute('aria-label', 'Connected');
+    expect(dot).toHaveAttribute('data-status', 'connected');
+    expect(screen.queryByLabelText('Disconnected')).not.toBeInTheDocument();
   });
 
-  it('shows a "Disconnected" dot when the socket is not connected', () => {
-    renderWithTheme(
-      <SocketClientContext.Provider value={fakeClient('disconnected')}>
-        <SidebarConnectionDot />
-      </SocketClientContext.Provider>,
-    );
-    expect(screen.getByTestId('sidebar-connection-dot')).toBeInTheDocument();
-    expect(screen.getByLabelText('Disconnected')).toBeInTheDocument();
+  it.each([
+    ['connecting', 'Connecting…'],
+    ['reconnecting', 'Connection lost — reconnecting…'],
+    ['offline', 'Offline — live updates unavailable'],
+  ] as const)('labels the %s state "%s"', (state, label) => {
+    const store = createRealtimeStatusStore();
+    store.report('notifications', state);
+    renderDot(store);
+    expect(screen.getByTestId('sidebar-connection-dot')).toHaveAttribute('aria-label', label);
+  });
+
+  it('updates its tooltip as the channel recovers', () => {
+    const store = createRealtimeStatusStore();
+    store.report('notifications', 'reconnecting');
+    renderDot(store);
+    expect(screen.getByTestId('sidebar-connection-dot')).toHaveAttribute('aria-label', 'Connection lost — reconnecting…');
+    act(() => store.report('notifications', 'open'));
+    expect(screen.getByTestId('sidebar-connection-dot')).toHaveAttribute('aria-label', 'Connected');
   });
 });

@@ -667,9 +667,18 @@ fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAss
     let mut content = Content::new(role);
     for part in parts {
         let part = part.as_object().ok_or_else(invalid_profile)?;
-        if part.len() != 2 {
+        // Demo issue 2: an earlier turn's attachment reaches history as its
+        // stored header chunk, and that chunk keeps the `elitea_attachment`
+        // marker that main wrote at admission (attachments.go,
+        // `attachmentContentScaffold`; agent_chat.sql projects it verbatim).
+        // Refusing the third key failed every follow-up question in a chat
+        // with a file. Admit the marker in the shape the current turn admits
+        // it, and read only `text`, which strips it before the model.
+        let has_marker = part.contains_key(attachments::ATTACHMENT_MARKER_KEY);
+        if part.len() != 2 + usize::from(has_marker) {
             return Err(invalid_profile());
         }
+        attachments::validate_marker(part.get(attachments::ATTACHMENT_MARKER_KEY))?;
         match part.get("type").and_then(Value::as_str) {
             Some("text") => {}
             Some(_) => return Err(unsupported_profile()),

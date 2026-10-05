@@ -56,6 +56,9 @@ export { useSyncChatMessage } from './model/useSyncChatMessage';
 export { useChatStreamTransport } from './model/useChatStreamTransport';
 export type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './model/useChatStreamTransport';
 export type { ChatStreamContext } from './lib/chatStreamReducer';
+// Reload mid-turn: observe the seeded in-flight turn again (#6654).
+export { findReattachableTurn } from './lib/chatStreamReattach';
+export type { ReattachableTurn } from './lib/chatStreamReattach';
 
 // Delete-confirmation dialog orchestrator — waived, see budgets-core.mjs.
 export { useDeleteMessageAlert, ALL_MESSAGES } from './model/useDeleteMessageAlert';

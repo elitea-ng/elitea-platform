@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
@@ -27,6 +29,9 @@ type currentNotificationQueries interface {
 	DeleteCurrentNotification(context.Context, sqlcgen.DeleteCurrentNotificationParams) (int64, error)
 	BulkSetCurrentNotificationsSeen(context.Context, sqlcgen.BulkSetCurrentNotificationsSeenParams) (int64, error)
 	BulkDeleteCurrentNotifications(context.Context, sqlcgen.BulkDeleteCurrentNotificationsParams) (int64, error)
+	CurrentNotificationSyncClock(context.Context) (pgtype.Timestamptz, error)
+	ListCurrentNotificationChanges(context.Context, sqlcgen.ListCurrentNotificationChangesParams) ([]sqlcgen.ListCurrentNotificationChangesRow, error)
+	ListCurrentNotificationTombstones(context.Context, sqlcgen.ListCurrentNotificationTombstonesParams) ([]sqlcgen.ListCurrentNotificationTombstonesRow, error)
 }
 
 type CurrentNotificationRepository struct {
@@ -324,4 +329,104 @@ func currentNotificationFromRow(
 	}, nil
 }
 
-var _ notificationapp.Store = (*CurrentNotificationRepository)(nil)
+// ListChanges is the caller's notification delta (`changes_since`, ADR-0025
+// WP6). The cursor is scoped to the user: notifications are user-scoped across
+// projects, so the project in the route does not enter it. Stamps and
+// tombstones are written by shared migration 0144's triggers.
+func (repository *CurrentNotificationRepository) ListChanges(
+	ctx context.Context,
+	userID int64,
+	changesSince string,
+	limit int,
+) (notificationapp.Changes, error) {
+	user, ok := currentNotificationUserID(userID)
+	if repository == nil || repository.queries == nil || ctx == nil || !ok {
+		return notificationapp.Changes{}, ErrInvalidCurrentNotificationOperation
+	}
+	if limit < 1 || limit > changesync.MaxLimit {
+		limit = changesync.DefaultLimit
+	}
+	cursor, err := changesync.Decode(changesSince, changesync.StreamNotifications, strconv.FormatInt(userID, 10))
+	if err != nil {
+		return notificationapp.Changes{}, err
+	}
+	clock, err := repository.queries.CurrentNotificationSyncClock(ctx)
+	if err != nil || !clock.Valid {
+		return notificationapp.Changes{}, fmt.Errorf("current notification sync clock: %w", errors.Join(err, ErrInvalidCurrentNotificationOperation))
+	}
+	if err := cursor.CheckExpiry(clock.Time); err != nil {
+		return notificationapp.Changes{}, err
+	}
+	bound := changesync.SettleBound(clock.Time)
+
+	rowsStart := cursor.RowsStart()
+	rows, err := repository.queries.ListCurrentNotificationChanges(ctx, sqlcgen.ListCurrentNotificationChangesParams{
+		UserID:    user,
+		AfterAt:   pgtype.Timestamptz{Time: rowsStart.At, Valid: true},
+		AfterID:   rowsStart.ID,
+		PageLimit: int32(limit + 1),
+	})
+	if err != nil {
+		return notificationapp.Changes{}, fmt.Errorf("list current notification changes: %w", err)
+	}
+	page := notificationapp.Changes{Rows: []notificationapp.Notification{}, Tombstones: []changesync.Tombstone{}}
+	positions := []changesync.Position{}
+	for _, row := range rows {
+		notification, mapErr := currentNotificationFromRow(
+			row.ID, row.Uuid, row.IsSeen, row.ProjectID, row.UserID, row.Meta,
+			row.EventType, row.CreatedAt, row.UpdatedAt,
+		)
+		if mapErr != nil {
+			return notificationapp.Changes{}, mapErr
+		}
+		page.Rows = append(page.Rows, notification)
+		positions = append(positions, changesync.Position{At: row.SyncAt.Time, ID: int64(row.ID)})
+	}
+	rowsTruncated := len(page.Rows) > limit
+	if rowsTruncated {
+		page.Rows, positions = page.Rows[:limit], positions[:limit]
+	}
+
+	tombsStart := cursor.TombstonesStart(bound)
+	tombs, err := repository.queries.ListCurrentNotificationTombstones(ctx, sqlcgen.ListCurrentNotificationTombstonesParams{
+		UserID:    user,
+		AfterAt:   pgtype.Timestamptz{Time: tombsStart.At, Valid: true},
+		AfterID:   tombsStart.ID,
+		PageLimit: int32(limit + 1),
+	})
+	if err != nil {
+		return notificationapp.Changes{}, fmt.Errorf("list current notification tombstones: %w", err)
+	}
+	tombPositions := []changesync.Position{}
+	for _, tomb := range tombs {
+		var uuid *string
+		if tomb.NotificationUuid != "" {
+			value := tomb.NotificationUuid
+			uuid = &value
+		}
+		page.Tombstones = append(page.Tombstones, changesync.Tombstone{
+			ID:        int64(tomb.NotificationID),
+			UUID:      uuid,
+			Reason:    changesync.ReasonDeleted,
+			DeletedAt: changesync.FormatTime(tomb.DeletedAt.Time),
+		})
+		tombPositions = append(tombPositions, changesync.Position{At: tomb.DeletedAt.Time, ID: tomb.ID})
+	}
+	tombsTruncated := len(page.Tombstones) > limit
+	if tombsTruncated {
+		page.Tombstones, tombPositions = page.Tombstones[:limit], tombPositions[:limit]
+	}
+
+	nextRows, moreRows := changesync.Advance(rowsStart, lastSyncPosition(positions), rowsTruncated, bound)
+	nextTombs, moreTombs := changesync.Advance(tombsStart, lastSyncPosition(tombPositions), tombsTruncated, bound)
+	page.NextCursor = changesync.Encode(changesync.Cursor{
+		Stream: cursor.Stream, Scope: cursor.Scope, Rows: nextRows, Tombs: nextTombs,
+	})
+	page.HasMore = moreRows || moreTombs
+	return page, nil
+}
+
+var (
+	_ notificationapp.Store        = (*CurrentNotificationRepository)(nil)
+	_ notificationapp.ChangesStore = (*CurrentNotificationRepository)(nil)
+)

@@ -1,4 +1,5 @@
 import type { EliteaComponents } from '../theme-types';
+import { typeScale } from '../typeScale';
 
 /**
  * `MuiTablePagination` (R-T12). Ported from `MainTheme.js:252-273`. The
@@ -17,11 +18,11 @@ export const MuiTablePagination: EliteaComponents['MuiTablePagination'] = {
       },
     }),
     selectLabel: ({ theme }) => ({
-      ...theme.typography.labelSmall,
+      ...typeScale(theme.typography.labelSmall),
       color: theme.vars.palette.text.button.disabled,
     }),
     displayedRows: ({ theme }) => ({
-      ...theme.typography.labelSmall,
+      ...typeScale(theme.typography.labelSmall),
       color: theme.vars.palette.text.default,
     }),
     menuItem: ({ theme }) => ({

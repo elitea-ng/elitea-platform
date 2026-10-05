@@ -27,6 +27,8 @@ import { t } from "@/shared/i18n";
 import { toolPayloadText } from "@/shared/lib/toolPayloadText";
 import { CodeDebugTraceArtifact } from "@/shared/ui/CodeDebugArtifact";
 
+import { monoFontFamily } from '@/shared/brand/typeScale';
+
 import { formatRunDuration } from "../lib/formatRunDuration";
 
 const containerSx: SxProps<Theme> = {
@@ -251,7 +253,7 @@ function StepToolInputs({
       variant="bodySmall"
       component="pre"
       data-testid="run-history-trace-tool-inputs"
-      sx={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}
+      sx={{ whiteSpace: "pre-wrap", fontFamily: monoFontFamily }}
     >
       {formatToolInputs(toolInputs)}
     </Typography>
@@ -308,7 +310,7 @@ function StepToolOutput({
         variant="bodySmall"
         component="pre"
         data-testid="run-history-trace-tool-output"
-        sx={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}
+        sx={{ whiteSpace: "pre-wrap", fontFamily: monoFontFamily }}
       >
         {toolPayloadText(value)}
       </Typography>

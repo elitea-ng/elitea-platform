@@ -73,7 +73,7 @@ async function armImageGeneration(page: Page, projectId: string, conversationId:
   const model = liveImageModel();
 
   await page.getByTestId('model-selector-button').click();
-  const option = page.getByRole('menuitem').filter({ hasText: model }).first();
+  const option = page.getByRole('option').filter({ hasText: model }).first();
   await expect(
     option,
     `E2E_LIVE_IMAGE_MODEL names ${model}, and this deployment's picker does not offer it — ` +

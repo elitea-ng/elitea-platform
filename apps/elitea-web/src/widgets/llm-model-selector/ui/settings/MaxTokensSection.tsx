@@ -61,10 +61,10 @@ export const MaxTokensSection = memo(
     return (
       <Box>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-          <Typography variant="body2">
+          <Typography variant="bodyMedium" component="p">
             {t('widgets.llmModelSelector.maxTokensSection.label', 'Max tokens')}
           </Typography>
-          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          <Typography variant="bodySmall" sx={{ color: 'text.secondary' }}>
             {maxOutputTokens !== undefined ? `Max: ${maxOutputTokens}` : ''}
           </Typography>
         </Box>
@@ -115,7 +115,7 @@ export const MaxTokensSection = memo(
           {!isAuto && (
             <Box sx={{ flex: 1 }}>
               <Typography
-                variant="caption"
+                variant="bodySmall"
                 sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}
               >
                 {t('widgets.llmModelSelector.maxTokensSection.remainingLabel', 'Remaining tokens')}

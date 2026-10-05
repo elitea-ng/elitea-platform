@@ -31,6 +31,8 @@ export interface DimensionEditorDialogProps {
   readonly applicationId: number | undefined;
   /** `undefined` opens the dialog in create mode. */
   readonly dimension: EvalDimension | undefined;
+  /** The caller holds dimension.create: an agent dimension may move to the project library. */
+  readonly canPromote: boolean;
   readonly onClose: () => void;
 }
 
@@ -41,7 +43,7 @@ function saveErrorMessage(error: unknown): string {
 }
 
 export function DimensionEditorDialog(props: DimensionEditorDialogProps): ReactNode {
-  const { open, projectId, applicationId, dimension, onClose } = props;
+  const { open, projectId, applicationId, dimension, canPromote, onClose } = props;
   const isEdit = dimension !== undefined;
 
   const [form, setForm] = useState<EvalDimensionForm>(() => toFormState(dimension));
@@ -126,13 +128,16 @@ export function DimensionEditorDialog(props: DimensionEditorDialogProps): ReactN
             form={form}
             isEdit={isEdit}
             canScopeToAgent={applicationId !== undefined}
+            canPromote={canPromote}
+            storedTier={dimension?.tier}
             onFieldChange={setField}
             onToggleEngine={handleToggleEngine}
           />
           {displayedError !== undefined && (
             <Typography
               role="alert"
-              variant="body2"
+              variant="bodyMedium"
+              component="p"
               color="error"
               data-testid="dimension-editor-error"
             >

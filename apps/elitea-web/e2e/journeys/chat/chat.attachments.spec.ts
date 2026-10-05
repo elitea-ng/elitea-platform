@@ -658,7 +658,7 @@ test.describe('notification stream', () => {
    *
    * `NotificationButton` passes `personal_project_id` (→ useNotificationsSSE),
    * and `app/session-store.ts` used to fill that field with the USER ID, with a
-   * comment saying so: `/forward-auth/info` (internal/api/v2/auth/session.go)
+   * comment saying so: `/auth/info` (internal/api/v2/auth/session.go)
    * returns only `authenticated`/`user_id`/`email`, so there was no project id
    * to send. The stream's authorize() resolves
    * `models.notifications.notifications.list` against whatever project id is in
@@ -759,23 +759,41 @@ test.describe('notification stream', () => {
 });
 
 /**
- * The socket.io indicator, kept from the original journey and re-read rather
- * than deleted. On a chat-only stack `vite_socket_server` is empty, the noop
- * client reports `disconnected`, and the dot is telling the truth — socket.io
- * is retained for voice/video only. This is the tripwire that fires the day a
- * socket server is added and JRNY-026's voice/video half becomes writable.
+ * The sidebar connection indicator. It used to read the socket.io client, and
+ * this journey pinned the result: with `vite_socket_server` empty (every stack,
+ * every chart — elitea-main runs no socket.io server) the noop client reports
+ * `disconnected`, so the dot said "Disconnected" on an app whose chat and API
+ * worked. That was the live defect, not the truth: socket.io is only a
+ * feature-local transport for voice now. The dot reports the app's live SSE
+ * channel instead (`shared/api/sse/realtimeStatus.ts`), so on this same
+ * socket-less stack it must read "Connected" once the sidebar's notification
+ * stream opens.
+ *
+ * The per-principal cap of 4 concurrent streams (shared with J26.1/J26.2 and
+ * other workers) can refuse a stream with 429 until the reconnect ladder is
+ * spent, so this retries on a fresh page within a deadline, like J26.2.
  */
-test('J26.3: the sidebar connection indicator reports the real socket state', async ({ page }) => {
+test('J26.3: the sidebar connection indicator reports the live SSE channel, not socket.io', async ({ page }) => {
   const cfg = await page.request.get(`${BASE_URL}/app/config.js`);
   expect(cfg.status()).toBe(200);
   expect(await cfg.text()).toContain('vite_socket_server: ""');
 
-  await page.goto(BASE_URL + '/app/chat');
-
   // The dot's state is carried by its accessible name (MUI Tooltip title →
   // aria-label on the child), not by its visibility.
   const connectionDot = page.getByTestId('sidebar-connection-dot');
-  await expect(connectionDot).toHaveAttribute('aria-label', 'Disconnected', { timeout: 20_000 });
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    await page.goto(BASE_URL + '/app/chat');
+    const connected = await expect(connectionDot)
+      .toHaveAttribute('aria-label', 'Connected', { timeout: 20_000 })
+      .then(() => true, () => false);
+    if (connected || Date.now() >= deadline) break;
+    await page.goto('about:blank');
+    await page.waitForTimeout(3_000);
+  }
+
+  await expect(connectionDot).toHaveAttribute('aria-label', 'Connected');
+  await expect(page.getByLabel('Disconnected')).toHaveCount(0);
 
   await checkA11y(page);
 });

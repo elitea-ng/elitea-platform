@@ -15,7 +15,7 @@ import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import type { ConversationSummary } from '@/shared/api/generated/model';
+import type { ConversationSummary, EditorTestRun } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import { formatRunDuration } from '../lib/formatRunDuration';
@@ -97,6 +97,47 @@ export function RunHistoryList({
               <Typography variant="labelSmall">{t('entities.runHistory.list.restore', 'Restore')}</Typography>
             </Button>
           )}
+        </ListItemButton>
+      ))}
+    </List>
+  );
+}
+
+/** Every row is keyed by its original receipt, not by conversation activity. */
+export function editorTestRunKey(run: EditorTestRun): string {
+  return `${run.execution_id}:${run.execution_generation}:${run.response_message_id}`;
+}
+
+export function EditorTestRunHistoryList({
+  rows,
+  selectedKey,
+  onSelect,
+}: {
+  readonly rows: readonly EditorTestRun[];
+  readonly selectedKey: string | undefined;
+  readonly onSelect: (run: EditorTestRun) => void;
+}): ReactNode {
+  return (
+    <List dense sx={listSx} data-testid="editor-test-run-history-list">
+      {rows.map((run) => (
+        <ListItemButton
+          key={editorTestRunKey(run)}
+          selected={editorTestRunKey(run) === selectedKey}
+          onClick={() => onSelect(run)}
+          data-testid="editor-test-run-history-row"
+          data-execution-id={run.execution_id}
+          data-execution-generation={run.execution_generation}
+          data-response-id={run.response_message_id}
+        >
+          <ListItemText
+            primary={run.state}
+            secondary={[
+              run.admitted_at,
+              formatRunDuration(run.admitted_at, run.settled_at ?? undefined),
+              run.phase,
+            ].join(" · ")}
+            slotProps={{ secondary: { variant: "bodySmall" } }}
+          />
         </ListItemButton>
       ))}
     </List>

@@ -138,6 +138,8 @@ export function Pipelines(): ReactNode {
   return (
     <Box sx={pageSx(railVisible)}>
       <PageHeader
+        title={t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines')}
+        titleComponent="h1"
         tabs={{
           items: visibleTabs.map((tab) => ({
             value: tab.value,

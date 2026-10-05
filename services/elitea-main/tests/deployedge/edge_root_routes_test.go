@@ -67,13 +67,15 @@ import (
 // derives the paths from the router itself.
 var rootMountedGoPaths = map[string]string{
 	"/healthz":                      "router.go: health.RoutesWithDeps mounted at /",
-	"/auth":                         "router.go: forwardAuth.ServeHTTP",
-	"/forward-auth/logout":          "router.go: SessionHandler routes",
+	"/auth":                         "router.go: edgeAuth.ServeHTTP",
+	"/auth/logout":                  "router.go: SessionHandler routes (auth_paths.go)",
 	"/icons/1/abc.png":              "router.go: v2core.DownloadIcon — public, a browser <img src> carries no Authorization header",
 	"/avatars/1/abc.png":            "router.go: v2social.DownloadAvatar — public for the same reason",
 	"/artifacts/1/bucket/k":         "router.go: the artifacts download family",
 	"/admin/app":                    "router.go: the admin SPA mount",
 	"/api/v2/branding/bootstrap.js": "router.go: the branding bootstrap, inside /api/",
+	"/api/v2/branding/pack.json":    "router.go: the brand pack as JSON (ADR-0025 decision 2), inside /api/",
+	"/.well-known/elitea-client":    "router.go: the discovery document (ADR-0025 decision 1)",
 	"/api/v2/branding/assets/logo-full/" + strings.Repeat("ab", 32) + ".svg": "router.go: uploaded brand assets, inside /api/, public like /icons",
 }
 
@@ -259,8 +261,10 @@ var requiredWalkedFamilies = []string{
 	"/app/application_icon",
 	"/artifacts/",
 	"/auth",
+	"/auth/",
 	"/avatars/",
-	"/forward-auth/",
+	"/auth/",
+	"/.well-known/elitea-client",
 	"/healthz",
 	"/icons/",
 	"/llm/",

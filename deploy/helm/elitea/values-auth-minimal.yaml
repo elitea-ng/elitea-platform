@@ -118,9 +118,9 @@ main:
         schema_version: elitea.auth.form.v1
 
         # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
-        # forward-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
+        # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
         # equal this origin's scheme and host. Name the edge that makes the
-        # forward-auth call.
+        # edge-auth call.
         #
         # internal/authcomposition/config.go:365-377 also requires it to be
         # https, with NO path and NO query. A trailing "/" is a path and is
@@ -197,6 +197,12 @@ main:
     # Endpoints the chart cannot guess. Override both at install time.
     DATABASE_URL: ""
     REDIS_URL: ""
+
+    # This file is the recipe for the FORM sign-in plane — a login page this
+    # deployment owns, with no external identity provider — and Form sign-in
+    # is OFF by default (values.yaml). State it on, or the users file above is
+    # loaded and ignored and nobody can sign in through a browser.
+    ELITEA_FORM_LOGIN_ENABLED: "true"
 
     # --- The capability this whole file exists to enable ------------------------
     # Eight configuration and model-catalogue routes, and — the point here — the

@@ -42,6 +42,7 @@ import (
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 // publicByDesign lists the routes that answer without credentials, each with
@@ -59,6 +60,12 @@ var publicByDesign = map[string]string{
 	"/readyz":   "readiness, same reason.",
 	"/startupz": "startup, same reason.",
 
+	// The discovery document (ADR-0025 decision 1). A native client given
+	// only an origin reads it before it can hold any credential; it carries
+	// the version (major.minor), deployment kind, brand name and the public
+	// sign-in endpoints and policy — nothing a login page does not show.
+	"/.well-known/elitea-client": "the ADR-0025 discovery document. Anonymous by definition: it is how a client learns how to sign in.",
+
 	// The served API documentation (S251). These three are the static v2.yaml
 	// spec and the page that renders it — the same bytes for every caller,
 	// describing the shape of the API and carrying no tenant data. They are
@@ -72,11 +79,21 @@ var publicByDesign = map[string]string{
 	"/api/openapi.yaml": "the OpenAPI document. Static, tenant-free, and public on purpose (router.go:903).",
 	"/api/openapi.json": "the same document as JSON.",
 	"/api/docs":         "the page that renders the document above. It fetches /api/openapi.json and nothing else.",
+
+	// Native authorization (ADR-0025 WP2). A native public client calls these
+	// before it holds any credential (RFC 8252): /authorize starts a sign-in
+	// in the system browser, /token exchanges a code or a refresh token, and
+	// /revoke answers 200 for ANY token by RFC 7009 §2.2 so it does not reveal
+	// whether a token existed. `continue` and `decision` are NOT listed: they
+	// require the browser session and answer a page otherwise.
+	"/api/v2/auth/native/authorize": "the RFC 8252 authorization request; it creates only a pending record bound to the browser.",
+	"/api/v2/auth/native/token":     "the token endpoint for public clients; it authenticates the code or refresh token itself.",
+	"/api/v2/auth/native/revoke":    "RFC 7009 revocation; 200 for any token by design, revealing nothing.",
 }
 
 // publicPrefixes covers surfaces whose whole subtree is anonymous.
 var publicPrefixes = []struct{ prefix, reason string }{
-	{"/forward-auth", "the login surface itself. A caller here has no session yet — that is what it is for."},
+	{"/auth/", "the login surface itself. A caller here has no session yet — that is what it is for. `/auth` alone (the edge check) is not under this prefix."},
 	{"/api/v2/branding", "the brand pack a browser loads BEFORE it has a session, so the login page can be branded."},
 	{"/admin/app", "the admin SPA's static assets. A <script src> carries no credential; the page's data calls are gated."},
 }
@@ -216,5 +233,13 @@ func fullSurfaceRouterConfig(t *testing.T) RouterConfig {
 		LLMProxy:            http.NotFoundHandler(),
 		CurrentSocialAvatar: &v2social.CurrentAvatarRoute{},
 		DeepWiki:            &v2deepwiki.Route{},
+		// The native authorization server with one file-layer client, so its
+		// routes are live (not the 404 an empty registry answers) and the
+		// walk exercises them. No pool: nothing here may reach the store.
+		NativeClients: nativeauth.NewRegistry([]nativeauth.Client{{
+			ClientID: "dev.elitea.surface", DisplayName: "Surface", Enabled: true,
+			RedirectURIs: []string{"dev.elitea.surface:/oauth/callback"}, Source: nativeauth.SourceFile,
+		}}, nil),
+		NativeStore: nativeauth.NewStore(nil, nativeauth.Config{}),
 	}
 }

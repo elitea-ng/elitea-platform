@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Sign-in is single sign-on by default
+
+Deployments now sign people in through OIDC or SAML, with SCIM provisioning. The local username/password sign-in is off unless an operator turns it on, and every local user now needs a real e-mail address — none is invented from the login any more.
+
 ## Client deployment readiness
 
 You can now configure a fresh deployment entirely from the UI — set the first global administrators, create a project, and add an AI provider — without running SQL by hand.

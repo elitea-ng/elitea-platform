@@ -190,6 +190,10 @@ type ToolRunRecord struct {
 	ActorUserID int64
 	ToolkitID   int64
 	ToolkitType string
+	// ToolkitName is the toolkit's runtime name at run time. Before demo
+	// issue 6 the explicit run recorded only the id, and the Analytics Tools
+	// tab showed the row with an empty toolkit.
+	ToolkitName string
 	ToolName    string
 	ExecutionID string
 	StartedAt   time.Time
@@ -347,9 +351,9 @@ func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevis
 	// ToolkitTypeVerdict for why it belongs here and not after dispatch.
 	if supported, reason := s.verdict.SupportsToolkitType(inputs.ToolkitType); !supported {
 		if reason == "" {
-			reason = "this deployment cannot build a toolkit of this type"
+			reason = "This deployment cannot run the " + inputs.ToolkitType + " toolkit."
 		}
-		return RunOutcome{}, fmt.Errorf("%w: %s: %s", ErrUnsupportedToolkitType, inputs.ToolkitType, reason)
+		return RunOutcome{}, &UnsupportedToolkitTypeError{ToolkitType: inputs.ToolkitType, Reason: reason}
 	}
 	inputs.ToolName = request.ToolName
 	inputs.Arguments = append(json.RawMessage(nil), request.Arguments...)
@@ -461,6 +465,7 @@ func (s *RunService) record(
 		ActorUserID: request.ActorUserID,
 		ToolkitID:   admitted.Binding.ToolkitID,
 		ToolkitType: toolkitType,
+		ToolkitName: inputs.ToolkitName,
 		ToolName:    toolName,
 		ExecutionID: admitted.Outcome.ExecutionID,
 		StartedAt:   admitted.Outcome.AdmittedAt,

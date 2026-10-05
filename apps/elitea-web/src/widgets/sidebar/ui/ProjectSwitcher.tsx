@@ -14,9 +14,8 @@ import type { Project } from '@/entities/project';
 import { RequestProjectDialog } from '@/features/project-requests';
 import { t } from '@/shared/i18n';
 
-import { CheckedIcon } from '@/shared/ui/icons/checked-icon';
-
 import { ProjectAvatar } from './ProjectAvatar';
+import { ProjectSwitcherList } from './ProjectSwitcherList';
 
 export interface ProjectSwitcherProps {
   projects: readonly Project[];
@@ -128,7 +127,10 @@ export function ProjectSwitcher({ projects, selectedProjectId, onSelect, collaps
               gap: '0.5rem',
               padding: '0.5rem 1rem',
               cursor: 'pointer',
-              minHeight: '3.5rem',
+              // #6638: 52px, the height of the section headers on the pages
+              // beside the rail (Artifacts, Toolkits, MCP, Evaluation), so the
+              // rule under this control lines up with theirs. It was 56px.
+              minHeight: '3.25rem',
               width: '100%',
               border: 'none',
               background: 'transparent',
@@ -225,86 +227,16 @@ export function ProjectSwitcher({ projects, selectedProjectId, onSelect, collaps
               width: anchorWidth,
               minWidth: '11.5rem',
               maxWidth: '18rem',
-              maxHeight: '20rem',
-              overflowY: 'auto',
               boxShadow: theme.vars.palette.boxShadow.default,
             })}
           >
-            {projects.length === 0 && (
-              <Box
-                // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- same custom listbox as the option rows below; an empty row still has to be an "option" for the listbox to stay valid ARIA, exactly as MUI renders a disabled `MenuItem` inside `Select`.
-                role="option"
-                aria-selected={false}
-                aria-disabled
-                sx={(theme: Theme) => ({
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: theme.spacing(1, 2),
-                  cursor: 'default',
-                  color: theme.vars.palette.text.metrics,
-                })}
-              >
-                <Typography variant="labelMedium">{noneLabel}</Typography>
-              </Box>
-            )}
-            {projects.map((project) => (
-              <Box
-                key={project.id}
-                // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- no native tag maps to an ARIA "option" outside a real <select>/<datalist>; this is a custom-styled listbox (role="listbox" on the Paper above), the standard pattern for exactly this case.
-                role="option"
-                aria-selected={String(project.id) === selectedProjectId}
-                tabIndex={0}
-                onClick={() => handleSelect(project)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    handleSelect(project);
-                  }
-                }}
-                sx={(theme: Theme) => ({
-                  display: 'flex',
-                  alignItems: 'center',
-                  // 0.5rem, matching the trigger above. The row used 0.75rem,
-                  // so the avatar column stepped sideways between the closed
-                  // control and the open list — most visible now that the
-                  // panel is the same width as the rail.
-                  gap: '0.5rem',
-                  padding: theme.spacing(1, 2),
-                  cursor: 'pointer',
-                  '&:hover': { backgroundColor: theme.vars.palette.action.hover },
-                })}
-              >
-                <ProjectAvatar
-                  projectName={project.name}
-                  size="1.5rem"
-                />
-                <Typography
-                  variant="labelMedium"
-                  sx={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    flex: 1,
-                    minWidth: 0,
-                  }}
-                >
-                  {project.name}
-                </Typography>
-                {String(project.id) === selectedProjectId && (
-                  // The selected row carried aria-selected and NOTHING a
-                  // sighted user could see. `SingleSelectMenuItem` — the
-                  // shared dropdown row this control deliberately does not
-                  // use, because it cannot host an avatar — marks selection
-                  // with this same icon, so the affordance matches the rest
-                  // of the app rather than inventing a third convention.
-                  <CheckedIcon
-                    aria-hidden
-                    data-testid="project-switcher-selected"
-                    style={{ flexShrink: 0 }}
-                  />
-                )}
-              </Box>
-            ))}
+            <ProjectSwitcherList
+              projects={projects}
+              selectedProjectId={selectedProjectId}
+              noneLabel={noneLabel}
+              open={open}
+              onSelect={handleSelect}
+            />
             {/*
               Self-service "request a project" (#871). A footer row rather
               than a fourth top-level sidebar entry: every existing project

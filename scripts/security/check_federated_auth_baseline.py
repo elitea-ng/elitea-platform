@@ -13,7 +13,7 @@ from typing import Any
 
 
 EXPECTED_SCHEMA_VERSION = 1
-EXPECTED_CATALOG_SHA256 = "ac7b130940024faea2cebc4bd4f06e836477d62f9baa30531d9403e60bbc98e3"
+EXPECTED_CATALOG_SHA256 = "7f104dcb8f2ef3bdc59a332f98b8b276b3e39170e868103babf8fae9aa5e2ebd"
 EXPECTED_SOURCE_COUNT = 47
 EXPECTED_SOURCE_KEYSET_SHA256 = "89ee769351815bb9d7086c8d8d5493512bc78a15066edf51a4304a146f4b5009"
 EXPECTED_SOURCE_MAP_SHA256 = "c5f5281068eecb90dd86b312144ba98bfb3794b3d0462d74ce774bbb88921e9b"
@@ -22,7 +22,7 @@ EXPECTED_FINGERPRINT_KEYSET_SHA256 = "0e5d50c8883d792d145e2e59dffdf91d8412143f28
 EXPECTED_FINGERPRINT_MAP_SHA256 = "2bd5c8a903c59e05ddd7ffa6b53c73fd27b3e9195d9bf98a8e4186624185b79d"
 EXPECTED_SELECTED_CONFIG_SHA256 = "82dd413e3753df0c931a0cf4a6c675d4308f59088b7c16bec14ab449639f8d57"
 EXPECTED_BEHAVIOR_SHA256 = "d1f0c3c183acc1662ac165052cd6e8226d0ccecdb1b47f6430178ee49b35f144"
-EXPECTED_CONSUMER_SHA256 = "fefde40ba7587c31318650e499415bd7bee97a899ce00dbf413c75aee0b56502"
+EXPECTED_CONSUMER_SHA256 = "e1e8a5088e9dfa2ddf5b2ab2fe8893c10a7c3cc66720b4a05b38c981c752bc9f"
 EXPECTED_DISPOSITION_SHA256 = "2bb2d91ed804772958aa087f6d3c1a4705719b47bdfb5fe0aec5e758fdde995b"
 EXPECTED_PROVENANCE_SHA256 = "9e285db72e0030b2069edc5e137ead3dfad83faf1aa2fff5c4eb943e125bb348"
 
@@ -79,44 +79,44 @@ EXPECTED_DISPOSITIONS = {
 }
 
 EXPECTED_METHOD_ROUTE_MATRIX = {
-    "/forward-auth/auth_oidc/login": {
+    "/auth/auth_oidc/login": {
         "GET": "oidc.login",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
     },
-    "/forward-auth/auth_oidc/login_callback": {
+    "/auth/auth_oidc/login_callback": {
         "GET": "oidc.callback",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
         "POST": "oidc.callback",
     },
-    "/forward-auth/auth_oidc/logout": {
+    "/auth/auth_oidc/logout": {
         "GET": "oidc.logout",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
     },
-    "/forward-auth/auth_oidc/logout_callback": {
+    "/auth/auth_oidc/logout_callback": {
         "GET": "oidc.logout_callback",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
     },
-    "/forward-auth/auth_saml/acs": {
+    "/auth/auth_saml/acs": {
         "GET": "saml.acs",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
         "POST": "saml.acs",
     },
-    "/forward-auth/auth_saml/login": {
+    "/auth/auth_saml/login": {
         "GET": "saml.login",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
     },
-    "/forward-auth/auth_saml/logout": {
+    "/auth/auth_saml/logout": {
         "GET": "saml.logout",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
     },
-    "/forward-auth/auth_saml/sls": {
+    "/auth/auth_saml/sls": {
         "GET": "saml.sls",
         "HEAD": "framework.head_via_get",
         "OPTIONS": "framework.automatic_options",
@@ -368,7 +368,7 @@ def check_catalog(catalog: dict[str, Any]) -> list[str]:  # pylint: disable=R091
     consumers = catalog.get("consumer_contract", {})
     if _canonical_sha256(consumers) != EXPECTED_CONSUMER_SHA256:
         failures.append("reviewed UI, gateway, mapper, and profile consumer contract changed")
-    if not _contains(consumers, "/forward-auth", "X-Auth-Type", "provider_attr.attributes.picture"):
+    if not _contains(consumers, "/auth", "X-Auth-Type", "provider_attr.attributes.picture"):
         failures.append("federated-auth downstream consumer evidence is incomplete")
 
     dispositions = _records_by_id(

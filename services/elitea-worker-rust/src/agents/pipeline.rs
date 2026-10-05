@@ -990,8 +990,10 @@ impl PipelineNativeAgentAssembler {
             // same as an unreadable file.
             let assembly = match self.platform.as_ref().filter(|_| !recovery) {
                 Some(platform) => {
+                    // No attachment tools on a pipeline: the overview note
+                    // must not offer them.
                     assembly
-                        .resolve_attachment_contents(platform.as_ref())
+                        .resolve_attachment_contents(platform.as_ref(), false)
                         .await
                 }
                 None => assembly,

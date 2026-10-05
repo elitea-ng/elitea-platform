@@ -43,20 +43,50 @@ import (
 //
 // WHAT MAKES IT SURVIVE A RESTART. A goroutine dies with its process. So the
 // state machine lives on the ROW — created → running → finished|errored|
-// cancelled — and the orchestrator stamps `heartbeat_at` as it works. At
-// startup it re-queues every `running` row whose heartbeat is older than
-// StaleRunTTL, then picks up everything `created`. Results are upserted on
+// cancelled — and the orchestrator stamps `heartbeat_at` every
+// HeartbeatInterval while it works. At shutdown it hands a run in flight back
+// to `created`. At startup, and every sweepInterval after, it fails the
+// orphans already resumed MaxResumes times, re-queues every other `running` row whose
+// heartbeat is older than StaleRunTTL, then picks up everything `created`. A
+// resumed run skips the cases it already scored in full. Results are upserted on
 // (run, case, dimension), so a re-queued run re-scores what it already scored
 // without producing a second, contradictory row the average counts twice.
 
 // StaleRunTTL is how long a `running` row may go without a heartbeat before it
 // is treated as orphaned.
 //
-// It must be comfortably longer than one case's work — an agent call plus one
-// judge call per dimension — or a slow run re-queues itself while it is still
-// running and two workers score the same run. The heartbeat is stamped after
-// EVERY case, so the bound is one case and not one run.
+// The heartbeat is now a LIVENESS TICK (HeartbeatInterval) stamped for as long
+// as the run executes. The TTL still stays ten minutes, because a process of
+// the previous release stamps only after a whole case (an agent call plus one
+// judge call per dimension). A shorter TTL would re-queue that process's slow
+// run during a rolling deployment, and two processes would score and bill the
+// same run. A graceful shutdown does not wait for this TTL: ReleaseRun hands
+// the run back at once. The TTL is only for a process that died.
 const StaleRunTTL = 10 * time.Minute
+
+// HeartbeatInterval is how often a running job stamps `heartbeat_at`. It is
+// several times shorter than StaleRunTTL, so a few slow writes do not make a
+// live run look orphaned.
+const HeartbeatInterval = 30 * time.Second
+
+// sweepInterval is how often the recovery sweep runs after the startup pass.
+const sweepInterval = time.Minute
+
+// MaxResumes bounds how many times the sweep may resume a run whose process
+// died. A stale `running` row that the sweep already re-queued this many times
+// is moved to `errored` with AbandonedRunReason, so a run that kills its
+// process on every attempt does not re-pay for its cases for ever. A graceful
+// shutdown (ReleaseRun) does not count: a deployment is not a failure of the
+// run. The count is on the row (`resume_count`, tenant/0146), so a run that
+// was healthy for hours and then lost its process once is still resumed.
+const MaxResumes = 5
+
+// AbandonedRunReason is the `error` text a run gets when MaxResumes ends
+// its resumes.
+const AbandonedRunReason = "the run was interrupted 5 times (its worker process stopped each time) and was not resumed again; start a new run"
+
+// releaseTimeout bounds the shutdown write that hands a run back to the queue.
+const releaseTimeout = 5 * time.Second
 
 // defaultWorkers bounds concurrent runs in one process. Each run is a serial
 // walk over its cases, so this is the number of PROJECTS that can be
@@ -77,6 +107,14 @@ type Orchestrator struct {
 	// what stops work already in progress, and it is not the source of truth.
 	mu       sync.Mutex
 	inFlight map[string]context.CancelFunc
+
+	// beatEvery overrides HeartbeatInterval in tests. Zero means the default.
+	beatEvery time.Duration
+
+	// stop and running let the composition root wait for the workers at
+	// shutdown (Stop), so the release write lands before the pool closes.
+	stop    context.CancelFunc
+	running sync.WaitGroup
 }
 
 // NewOrchestrator builds the job runner. Either dependency may be nil:
@@ -104,17 +142,42 @@ func NewOrchestrator(repo RunRepository, judge Judge, completer Completer, logge
 // Start launches the worker pool and the recovery sweep, and returns.
 //
 // It is called once from the composition root. The workers stop when ctx is
-// cancelled, which is process shutdown; a run in flight then finishes its
-// current case and leaves the row `running` with a fresh heartbeat, so the next
-// process re-queues it after the TTL rather than losing it.
+// cancelled, which is process shutdown; a run in flight then stops and hands
+// its row back to `created`, so the next process resumes it at startup. A
+// process that dies without that write leaves a stale heartbeat, and the sweep
+// re-queues the row after StaleRunTTL.
 func (o *Orchestrator) Start(ctx context.Context) {
 	if o == nil || o.repo == nil {
 		return
 	}
+	ctx, o.stop = context.WithCancel(ctx)
 	for i := 0; i < defaultWorkers; i++ {
-		go o.worker(ctx)
+		o.running.Go(func() { o.worker(ctx) })
 	}
-	go o.recover(ctx)
+	o.running.Go(func() { o.recover(ctx) })
+}
+
+// Stop cancels the workers and waits up to timeout for them to return. A run
+// in flight writes its shutdown release (ReleaseRun) before its worker
+// returns, so the composition root calls Stop BEFORE it closes the database
+// pool. Without the wait the process closed the pool and exited while the
+// release was still being written, and the run waited the stale TTL instead.
+func (o *Orchestrator) Stop(timeout time.Duration) {
+	if o == nil || o.stop == nil {
+		return
+	}
+	o.stop()
+	done := make(chan struct{})
+	go func() {
+		o.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		o.logger.Warn("evaluation: workers did not stop in time; the sweep resumes their runs after the stale TTL",
+			"timeout", timeout)
+	}
 }
 
 // Enqueue asks for a run to be executed. It never blocks: a full queue means
@@ -168,7 +231,7 @@ func (o *Orchestrator) worker(ctx context.Context) {
 // mid-run while ANOTHER process is alive: a single startup pass would leave
 // that orphan until the next deployment.
 func (o *Orchestrator) recover(ctx context.Context) {
-	ticker := time.NewTicker(StaleRunTTL / 2)
+	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 	o.sweep(ctx)
 	for {
@@ -182,6 +245,15 @@ func (o *Orchestrator) recover(ctx context.Context) {
 }
 
 func (o *Orchestrator) sweep(ctx context.Context) {
+	abandoned, err := o.repo.FailAbandonedRuns(ctx,
+		int(StaleRunTTL.Seconds()), MaxResumes, AbandonedRunReason)
+	if err != nil {
+		o.logger.Error("evaluation: abandoned-run sweep failed", "error", err)
+	}
+	for _, ref := range abandoned {
+		o.logger.Warn("evaluation: failed a run that was interrupted for too long",
+			"project_id", ref.ProjectID, "run_id", ref.RunID)
+	}
 	requeued, err := o.repo.RequeueStaleRuns(ctx, int(StaleRunTTL.Seconds()))
 	if err != nil {
 		o.logger.Error("evaluation: re-queue sweep failed", "error", err)
@@ -227,13 +299,29 @@ func (o *Orchestrator) execute(parent context.Context, ref RunRef) {
 		return
 	}
 
-	failure := o.walk(ctx, ref, run)
+	progress := &runProgress{o: o, ctx: ctx, ref: ref}
+	stopBeat := o.beat(ctx, progress)
+	failure := o.walk(ctx, ref, run, progress)
+	stopBeat()
 
 	// A cancellation is NOT a failure. The route has already written
 	// `cancelled` on the row, so the finish must not overwrite it with
 	// `errored` — FinishRun refuses to move a row that is already terminal, and
 	// this branch returns without asking it to.
 	if ctx.Err() != nil {
+		// A PROCESS shutdown (the parent context, not this run's own cancel)
+		// hands the run back to the queue at once. The next process then
+		// resumes it at startup, and the user does not watch a frozen
+		// `running` row for the stale TTL. ReleaseRun only moves a `running`
+		// row, so it cannot undo a cancel that the route already wrote.
+		if parent.Err() != nil {
+			releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(parent), releaseTimeout)
+			if err := o.repo.ReleaseRun(releaseCtx, ref.ProjectID, ref.RunID); err != nil {
+				o.logger.Error("evaluation: could not release the run at shutdown; the sweep resumes it after the stale TTL",
+					"project_id", ref.ProjectID, "run_id", ref.RunID, "error", err)
+			}
+			cancelRelease()
+		}
 		o.logger.Info("evaluation: run stopped",
 			"project_id", ref.ProjectID, "run_id", ref.RunID, "reason", ctx.Err())
 		return
@@ -255,6 +343,160 @@ func (o *Orchestrator) execute(parent context.Context, ref RunRef) {
 	}
 }
 
+// runProgress serializes the run's heartbeat writes. The liveness tick and the
+// per-case stamp both write `progress_done`. Without one lock a tick could
+// read the old count, lose the race to the case stamp, and then write the old
+// count over the new one, so the progress bar moved backwards.
+type runProgress struct {
+	o   *Orchestrator
+	ctx context.Context
+	ref RunRef
+
+	mu   sync.Mutex
+	done int
+}
+
+// set records n finished cases and stamps it when stamp is true.
+func (p *runProgress) set(n int, stamp bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n > p.done {
+		p.done = n
+	}
+	if stamp {
+		p.stampLocked()
+	}
+}
+
+// tick stamps the current count.
+func (p *runProgress) tick() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stampLocked()
+}
+
+func (p *runProgress) stampLocked() {
+	if err := p.o.repo.Heartbeat(p.ctx, p.ref.ProjectID, p.ref.RunID, p.done); err != nil && p.ctx.Err() == nil {
+		// A heartbeat failure does not stop the run: the work is real and
+		// the results are stored. It DOES mean the row may look orphaned,
+		// so it is logged at error level rather than swallowed.
+		p.o.logger.Error("evaluation: heartbeat failed",
+			"project_id", p.ref.ProjectID, "run_id", p.ref.RunID, "error", err)
+	}
+}
+
+// beat stamps the run's heartbeat every HeartbeatInterval until the returned
+// stop function is called. The stamp carries the current progress, so it never
+// moves the progress bar backwards.
+func (o *Orchestrator) beat(ctx context.Context, progress *runProgress) func() {
+	stop := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(o.heartbeatInterval())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				progress.tick()
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-finished
+	}
+}
+
+func (o *Orchestrator) heartbeatInterval() time.Duration {
+	if o.beatEvery > 0 {
+		return o.beatEvery
+	}
+	return HeartbeatInterval
+}
+
+// completedCases answers the cases a resumed run already scored in full: every
+// binding has a stored result that is `ok` or `skipped`. An `error` result is
+// tried again, because an interruption mid-call stores one.
+func (o *Orchestrator) completedCases(ctx context.Context, ref RunRef, bindings []SnapshotBinding) map[string]bool {
+	completed := map[string]bool{}
+	if len(bindings) == 0 {
+		return completed
+	}
+	// Read EVERY page. One page holds MaxResultPageLimit rows, and a run of
+	// 500 cases x 5 dimensions has more: a single page would re-score (and
+	// re-bill) every case past it.
+	var results []RunResult
+	for offset := 0; ; {
+		page, total, err := o.repo.ListResults(ctx, ref.ProjectID, ref.RunID,
+			ResultPage{Limit: MaxResultPageLimit, Offset: offset})
+		if err != nil {
+			// Not fatal: the run re-scores every case, and the upsert keeps one
+			// row per (run, case, dimension).
+			o.logger.Warn("evaluation: could not read stored results; the run re-scores every case",
+				"project_id", ref.ProjectID, "run_id", ref.RunID, "error", err)
+			return completed
+		}
+		results = append(results, page...)
+		offset += len(page)
+		if len(page) == 0 || offset >= total {
+			break
+		}
+	}
+	settled := map[string]map[string]bool{}
+	for _, result := range results {
+		if result.Status != ResultStatusOK && result.Status != ResultStatusSkipped {
+			continue
+		}
+		if settled[result.DatasetCaseID] == nil {
+			settled[result.DatasetCaseID] = map[string]bool{}
+		}
+		settled[result.DatasetCaseID][result.DimensionID] = true
+	}
+	for caseID, dimensions := range settled {
+		all := true
+		for _, binding := range bindings {
+			if !dimensions[binding.DimensionID] {
+				all = false
+				break
+			}
+		}
+		if all {
+			completed[caseID] = true
+		}
+	}
+	return completed
+}
+
+// snapshotCases keeps the cases the run's snapshot froze at start, in dataset
+// order.
+//
+// The orchestrator reads the case TEXT from the dataset, but the case LIST is
+// the snapshot's. Without this filter a case excluded at start would run, and
+// a case excluded after start would vanish from a run already counted with it.
+// A snapshot with no cases is a run row written before the snapshot carried
+// them; it executes the cases that are not excluded now.
+func snapshotCases(cases []DatasetCase, snapshot RunSnapshot) []DatasetCase {
+	if len(snapshot.Cases) == 0 {
+		return activeCases(cases)
+	}
+	frozen := make(map[string]bool, len(snapshot.Cases))
+	for _, snapshotCase := range snapshot.Cases {
+		frozen[snapshotCase.ID] = true
+	}
+	kept := make([]DatasetCase, 0, len(snapshot.Cases))
+	for _, testCase := range cases {
+		if frozen[testCase.ID] {
+			kept = append(kept, testCase)
+		}
+	}
+	return kept
+}
+
 // walk scores every case, and returns the error that should make the RUN
 // errored — not the errors that make a CASE errored.
 //
@@ -265,11 +507,12 @@ func (o *Orchestrator) execute(parent context.Context, ref RunRef) {
 // cases could not be scored. Only a failure that makes further work
 // meaningless — the dataset cannot be read, the agent version does not exist,
 // the LLM plane is not composed at all — stops the walk and errors the run.
-func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
+func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *runProgress) error {
 	cases, err := o.repo.DatasetCases(ctx, ref.ProjectID, run.DatasetID)
 	if err != nil {
 		return fmt.Errorf("the dataset could not be read: %w", err)
 	}
+	cases = snapshotCases(cases, run.Snapshot)
 	if len(cases) == 0 {
 		return errors.New("the dataset has no cases")
 	}
@@ -282,13 +525,23 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
 		}
 	}
 
+	// A RESUMED run (re-queued after its worker stopped) skips the cases it
+	// already scored in full, so a rollout does not make the project pay for
+	// them twice. A fresh run has no results, and this skips nothing.
+	completed := o.completedCases(ctx, ref, run.Snapshot.Bindings)
+
 	done := 0
 	for _, testCase := range cases {
 		if ctx.Err() != nil {
 			return nil
 		}
+		if completed[testCase.ID] {
+			done++
+			progress.set(done, false)
+			continue
+		}
 
-		output, agentErr := o.agentTurn(ctx, ref.ProjectID, actor(run), version, testCase)
+		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
@@ -310,13 +563,13 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
 		}
 
 		done++
-		if err := o.repo.Heartbeat(ctx, ref.ProjectID, ref.RunID, done); err != nil {
-			// A heartbeat failure does not stop the run: the work is real and
-			// the results are stored. It DOES mean the row may look orphaned,
-			// so it is logged at error level rather than swallowed.
-			o.logger.Error("evaluation: heartbeat failed",
-				"project_id", ref.ProjectID, "run_id", ref.RunID, "error", err)
-		}
+		progress.set(done, true)
+	}
+	// A resume whose LAST cases were all scored before the interruption
+	// stamped no progress for them in the loop. Stamp the final count, so the
+	// finished row does not show fewer cases than it scored.
+	if ctx.Err() == nil && done > 0 {
+		progress.tick()
 	}
 	return nil
 }
@@ -372,6 +625,11 @@ func (o *Orchestrator) scoreOne(
 
 	verdict, err := o.judgeCall(ctx, JudgeRequest{
 		ProjectID: ref.ProjectID,
+		// The run's author, the same identity the agent turn signs. It was
+		// accepted by this function and never passed on, so every judge call
+		// reached the gateway with no user at all.
+		UserID:        userID,
+		AttributionID: JudgeAttributionID(ref.RunID, testCase.ID),
 		// The judge runs on the AGENT VERSION's own model. This slice has no
 		// separate judge-model setting — that belongs to the suite, which does
 		// not exist here — and silently picking a different model would make
@@ -435,7 +693,7 @@ func (o *Orchestrator) judgeCall(ctx context.Context, req JudgeRequest) (JudgeVe
 // measured.
 func (o *Orchestrator) agentTurn(
 	ctx context.Context,
-	projectID string,
+	ref RunRef,
 	userID string,
 	version AgentVersion,
 	testCase DatasetCase,
@@ -450,10 +708,13 @@ func (o *Orchestrator) agentTurn(
 	messages = append(messages, predict.Message{Role: "user", Content: substitute(testCase.Input, testCase.Variables)})
 
 	output, err := o.completer.Complete(ctx, predict.CompletionRequest{
-		ProjectID: projectID,
+		ProjectID: ref.ProjectID,
 		UserID:    userID,
 		Model:     version.ModelName,
 		Messages:  messages,
+		// Legacy issue 6677: the agent turn's spend is attributed to this run
+		// and case, so it is not lost among unattributed /predict_llm calls.
+		AttributionID: AgentAttributionID(ref.RunID, testCase.ID),
 	})
 	if err != nil {
 		return "", err

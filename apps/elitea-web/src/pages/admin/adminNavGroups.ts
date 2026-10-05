@@ -97,6 +97,12 @@ export interface AdminNavGroup {
  * permission list that echoed the reference's section names back to the browser.
  * That handler resolves the operator's real grants now, so an unissuable name
  * hides an item for good. Add no gate whose permission no seed grants.
+ *
+ * The bare `projects` and `configuration` section nodes are gone from every
+ * gate: shared migration 0136 retires them (#6874), because the resolver
+ * matches exact strings and no code checks either one.
+ * `internal/api/router_permission_retired_gate_test.go` fails if a web gate
+ * names a retired string again.
  */
 export function navGroups(): readonly AdminNavGroup[] {
   return [
@@ -122,11 +128,13 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/projects',
           label: t('pages.admin.nav.projects', 'Projects'),
           icon: FolderOutlinedIcon,
-          // `projects` and `projects.projects` are pylon SECTION names. This
-          // platform's administration mode issues neither. It issues
+          // `projects.projects` is a pylon SECTION name, and this platform's
+          // administration mode does not issue it. It issues
           // `projects.projects.projects.view`, which is also the permission
           // `router.go` resolves for the admin project listing this item opens.
-          anyPermission: ['projects', 'projects.projects', 'projects.projects.projects.view'],
+          // The bare `projects` node is retired (shared/0136, #6874): no code
+          // checks it, so no gate here may name it.
+          anyPermission: ['projects.projects', 'projects.projects.projects.view'],
         },
         {
           id: 'secrets',
@@ -152,7 +160,7 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/configuration',
           label: t('pages.admin.nav.configuration', 'Configuration'),
           icon: SettingsOutlinedIcon,
-          anyPermission: ['configuration', 'runtime.plugins'],
+          anyPermission: ['runtime.plugins'],
         },
         {
           id: 'branding',
@@ -162,9 +170,9 @@ export function navGroups(): readonly AdminNavGroup[] {
           // `configuration.branding` is what every branding route is gated on
           // server-side (`internal/api/router.go`), granted to the two
           // administration-mode admin roles by migration 0109 (ADR-0024
-          // decision 5); `configuration` is the prefix `ExpandPermissions`
-          // expands into it, as for `governance` below.
-          anyPermission: ['configuration', 'configuration.branding'],
+          // decision 5). The resolver matches exact strings, so no prefix
+          // such as the retired bare `configuration` node stands in for it.
+          anyPermission: ['configuration.branding'],
         },
         {
           id: 'email',
@@ -174,20 +182,19 @@ export function navGroups(): readonly AdminNavGroup[] {
           // `runtime.plugins` is what every /admin/email route is gated on
           // server-side (`internal/api/router.go`) — the permission the
           // Configuration page it replaces already required, so no new grant
-          // is needed. `configuration` is the prefix `ExpandPermissions`
-          // expands into it, as for `branding` above.
+          // is needed.
           //
-          // Both names are ones this platform's administration mode issues.
-          // See this module's header on why a gate whose permission no seed
-          // grants is a nav item that disappears for good.
-          anyPermission: ['configuration', 'runtime.plugins'],
+          // This platform's administration mode issues that name. See this
+          // module's header on why a gate whose permission no seed grants is
+          // a nav item that disappears for good.
+          anyPermission: ['runtime.plugins'],
         },
         {
           id: 'features',
           path: '/features',
           label: t('pages.admin.nav.features', 'Features'),
           icon: TuneOutlinedIcon,
-          anyPermission: ['configuration', 'runtime.plugins'],
+          anyPermission: ['runtime.plugins'],
         },
         {
           id: 'service-descriptors',
@@ -225,11 +232,10 @@ export function navGroups(): readonly AdminNavGroup[] {
           icon: PolicyOutlinedIcon,
           // The permission every governance route is gated on server-side
           // (`internal/api/router.go`, `central("configuration.governance")`),
-          // plus the `configuration` prefix that `ExpandPermissions` expands
-          // into it. Both are names this platform's administration mode issues
-          // — see this module's header on why an unissuable name is a nav item
-          // that disappears for good.
-          anyPermission: ['configuration', 'configuration.governance'],
+          // a name this platform's administration mode issues — see this
+          // module's header on why an unissuable name is a nav item that
+          // disappears for good.
+          anyPermission: ['configuration.governance'],
         },
         {
           id: 'budgets',
@@ -259,7 +265,7 @@ export function navGroups(): readonly AdminNavGroup[] {
           // server-side, and it is the string the LEGACY Tasks page declares
           // (legacy/plugins/admin/module.py:392-421). Shared migration 0060
           // grants it, so this item cannot disappear for want of a grant.
-          anyPermission: ['configuration', 'runtime.plugins'],
+          anyPermission: ['runtime.plugins'],
         },
         {
           id: 'schedules',

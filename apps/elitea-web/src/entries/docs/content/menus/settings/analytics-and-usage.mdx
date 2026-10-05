@@ -11,7 +11,7 @@ Settings › Analytics is available to any project member and requires the `anal
 
 <Screenshot id="settings-analytics" alt="Analytics overview tab with KPI cards and a daily activity chart" />
 
-Choose a date range with the quick presets (Last 24h/7d/30d/90d) or custom From/To pickers, then switch between tabs:
+Choose a date range with the quick presets (Today/Last 7d/Last 30d/Last 90d) or custom From/To pickers, then switch between the tabs below. Each preset covers whole calendar days, from 00:00 on its first day to 23:59 today, and the To minute is included; for the last 24 hours or another exact window, set From and To by hand. From cannot be later than To. Daily charts group activity by UTC day, so outside UTC one local day can appear as two chart columns. The **COST** tile is billed spend per billing period (a calendar month), so it names the period it covers; under **Today** it is the month to date.
 
 <CardGroup cols={3}>
   <Card title="Overview" icon="chart-line">Team size, AI adoption, LLM calls, tool runs, and the top adopters.</Card>
@@ -25,6 +25,10 @@ Choose a date range with the quick presets (Last 24h/7d/30d/90d) or custom From/
 
 Select **Export to Excel** to download all tabs for the selected range as a single workbook.
 
+<Note title="What counts as an LLM call">
+The LLM calls, tokens, active users and cost figures count completed model calls only. A model call is a request to a model route: chat, completions, embeddings, responses, messages, images, audio or realtime. A completed call is one the gateway answered with a status below 400. A budget refusal, a rate limit, a validation error or a provider failure is not counted, because the Usage tab does not bill it. The Agents & Pipelines tab counts every model-call attempt, because it shows errors. The Health tab counts every request on every route, including model listings and requests to unknown paths, because it exists to show what failed. Analytics reads the gateway request log, which keeps 92 days of requests.
+</Note>
+
 <Note title="Cost by agent and by tool is an estimate, not the accounted spend">
 The Costs tab's **Cost by Agent** and **Cost by Tool** tables answer which agent or tool a call is attributable to (#875), the same estimate the by-model and by-user tables already give — derived from the request log and the price catalogue, not the figure the Usage tab's budget meter accounts. Cost by agent covers calls made from a runtime execution, which most direct `/llm` traffic is not; cost by tool attributes an execution's whole LLM spend to every tool that execution called, so a tool used inside a longer turn is not "what that one tool call cost" in isolation. Both tables are absent — not a zero row — for a deployment or a window that cannot correlate either dimension yet. Setting a spend LIMIT per agent or per tool is not available; see [Budgets and LLM Governance](/admin/budgets-and-governance).
 </Note>
@@ -33,20 +37,23 @@ The Costs tab's **Cost by Agent** and **Cost by Tool** tables answer which agent
 
 Settings › Usage requires the `cost_budgets_enabled` admin flag and shows spend against the current monthly billing period for platform-shared models only — models configured with your own provider credentials are billed by that provider and are not included.
 
-<Screenshot id="settings-usage" alt="Project usage summary with a spend meter and daily usage chart" />
+<Screenshot id="settings-usage" alt="Project usage summary with spend, limit, remaining and a usage meter" />
 
-In a personal project the project budget *is* your own budget, so there is no tab switcher. In a team project, switch between:
+The page shows, for the current billing period:
 
-- **Whole project** — total spend, a usage meter against the effective limit, daily usage, usage by model, and a **Members** table showing each member's own spend against their own limit.
-- **My usage** — the same panels scoped to you alone.
+- **Spent this period**, **Limit** (or *Unlimited*) and **Remaining**.
+- A usage meter with the percentage of the limit used. It changes colour past the project's warning threshold and again at the limit; a scope with no enforced limit says so instead of showing a meter.
+- The billing period's start and end dates.
 
-A warning banner appears as usage approaches its limit; once the limit is reached, requests to platform-shared models are refused until the limit increases or the period resets. Select the export button to download usage data as an Excel file.
+A member who is not a project administrator sees the percentage and the period but not the amounts. When a request is refused because *your own* member budget is exhausted, the error links to this page scoped to you, showing your own spend against your own limit in this project.
+
+A warning banner appears as usage approaches its limit; once the limit is reached, requests to platform-shared models are refused until the limit increases or the period resets. Select **Refresh data** (the circular-arrow button in the header) to fetch the latest figures without reloading the page; if a refresh fails, the last loaded figures stay on screen with a note that they could not be updated.
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="Analytics or Usage section is missing">The relevant admin flag (`analytics_enabled` or `cost_budgets_enabled`) is off for this deployment — ask your administrator.</Accordion>
-  <Accordion title="Numbers look stale">API results are cached briefly; wait a moment or select Refresh.</Accordion>
+  <Accordion title="Numbers look stale">API results are cached briefly; wait a moment, or select **Refresh data** on Settings › Usage.</Accordion>
   <Accordion title="Requests are refused with a budget error">Your project or personal budget for shared models has been reached for the current period — wait for the reset or ask an administrator to raise the limit.</Accordion>
 </AccordionGroup>
 

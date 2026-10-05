@@ -212,7 +212,7 @@ func TestASignInCreatesASessionRowPerProvider(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			manager, store := newTestSessions(t)
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/callback", nil)
+			request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback", nil)
 
 			if !issueBrowserSession(recorder, manager, "unused-secret", true, test.request, request) {
 				t.Fatalf("issueBrowserSession refused a valid sign-in: %s", recorder.Body.String())
@@ -244,7 +244,7 @@ func TestASignInCreatesASessionRowPerProvider(t *testing.T) {
 // the shape every handler tolerates; the legacy signed cookie is still issued.
 func TestADeploymentWithNoStoreStillSignsPeopleIn(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/auth_oidc/callback", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback", nil)
 	if !issueBrowserSession(recorder, nil, "session-secret", true, browsersession.NewSession{
 		UserID: 7, Email: "owner@example.test", Provider: browsersession.ProviderOIDC,
 	}, request) {
@@ -276,7 +276,7 @@ func TestLogoutRevokesTheSessionRow(t *testing.T) {
 		t.Fatalf("the fresh session does not validate: %v", err)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/forward-auth/logout", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/logout", nil)
 	request.AddCookie(&http.Cookie{Name: browsersession.CookieName, Value: value})
 	recorder := httptest.NewRecorder()
 	handler.Logout(recorder, request)
@@ -325,7 +325,7 @@ func TestSessionInfoAnswersTheExpiryContractForAServerSession(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), SessionExpiredCode) {
 		t.Fatalf("body %s does not carry %q", recorder.Body.String(), SessionExpiredCode)
 	}
-	if got := recorder.Header().Get("Location"); !strings.HasPrefix(got, "/forward-auth/login?") {
+	if got := recorder.Header().Get("Location"); !strings.HasPrefix(got, "/auth/login?") {
 		t.Fatalf("Location = %q, want the login start", got)
 	}
 }
@@ -345,7 +345,7 @@ func TestTheExpiryHintPreservesTheReturnTarget(t *testing.T) {
 		{name: "no target", target: "", want: "%2F"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := "/forward-auth/info"
+			path := "/auth/info"
 			if test.target != "" {
 				path += "?target_to=" + test.target
 			}

@@ -87,7 +87,7 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 
 	resources := make([]any, 0, len(groups))
 	for _, group := range groups {
-		resources = append(resources, groupResource(group))
+		resources = append(resources, projectResource(groupResource(group), r))
 	}
 	body := listResponse(resources, total, len(resources))
 	body["startIndex"] = startIndex
@@ -108,7 +108,7 @@ func (h *Handler) GetGroup(w http.ResponseWriter, r *http.Request) {
 		h.writeGroupFailure(w, err, "read group")
 		return
 	}
-	writeJSON(w, http.StatusOK, groupResource(group))
+	writeJSON(w, http.StatusOK, projectResource(groupResource(group), r))
 }
 
 /* ── write ─────────────────────────────────────────────────────────────── */
@@ -279,8 +279,8 @@ func (h *Handler) PatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	operations, problem := readGroupPatch(request.Operations)
-	if problem != "" {
-		writeError(w, http.StatusNotImplemented, "invalidPath", problem)
+	if problem != nil {
+		writeError(w, problem.status, problem.scimType, problem.detail)
 		return
 	}
 
@@ -294,6 +294,12 @@ func (h *Handler) PatchGroup(w http.ResponseWriter, r *http.Request) {
 		if operation.kind == patchRename {
 			applied = append(applied, scimdirectory.GroupOperation{
 				Kind: scimdirectory.GroupRename, DisplayName: operation.displayName,
+			})
+			continue
+		}
+		if operation.kind == patchSetExternalID {
+			applied = append(applied, scimdirectory.GroupOperation{
+				Kind: scimdirectory.GroupSetExternalID, ExternalID: operation.externalID,
 			})
 			continue
 		}
@@ -359,12 +365,14 @@ const (
 	patchReplaceMembers
 	patchRemoveMembers
 	patchRemoveAllMembers
+	patchSetExternalID
 )
 
 type groupPatch struct {
 	kind        groupPatchKind
 	members     []string
 	displayName string
+	externalID  string
 }
 
 // readGroupPatch translates the operations, or names the first one it cannot.
@@ -372,7 +380,26 @@ type groupPatch struct {
 // NOTHING is applied until every operation has been understood. A request whose
 // second operation is unsupported must not leave the first one applied: the
 // client is told the whole PATCH failed, and it will resend the whole PATCH.
-func readGroupPatch(operations []patchOperation) ([]groupPatch, string) {
+//
+// A path-less REMOVE is refused with 400 noTarget, as it is for users (RFC 7644
+// §3.5.2.2: "If "path" is unspecified, the operation fails with ... noTarget").
+// Reading its object with the add/replace logic used to SET the externalId or
+// displayName a client had asked to remove.
+func readGroupPatch(operations []patchOperation) ([]groupPatch, *patchProblem) {
+	for _, operation := range operations {
+		if strings.TrimSpace(operation.Path) == "" &&
+			strings.EqualFold(strings.TrimSpace(operation.Op), "remove") {
+			return nil, &patchProblem{http.StatusBadRequest, "noTarget", "a remove operation needs a path"}
+		}
+	}
+	parsed, problem := readGroupPatchOperations(operations)
+	if problem != "" {
+		return nil, &patchProblem{http.StatusNotImplemented, "invalidPath", problem}
+	}
+	return parsed, nil
+}
+
+func readGroupPatchOperations(operations []patchOperation) ([]groupPatch, string) {
 	parsed := make([]groupPatch, 0, len(operations))
 	for _, operation := range operations {
 		path := strings.TrimSpace(operation.Path)
@@ -387,36 +414,20 @@ func readGroupPatch(operations []patchOperation) ([]groupPatch, string) {
 			}
 			parsed = append(parsed, groupPatch{kind: patchRename, displayName: strings.TrimSpace(name)})
 
-		case lowered == "members":
-			values, stated, err := memberValues(operation.Value)
-			if err != "" {
-				return nil, err
+		case lowered == "externalid":
+			value, problem := externalIDValue(operationName, operation.Value)
+			if problem != "" {
+				return nil, problem
 			}
-			switch operationName {
-			case "add":
-				parsed = append(parsed, groupPatch{kind: patchAddMembers, members: values})
-			case "replace":
-				parsed = append(parsed, groupPatch{kind: patchReplaceMembers, members: values})
-			case "remove":
-				// AN OMITTED VALUE MEANS "REMOVE THEM ALL". AN EMPTY LIST DOES
-				// NOT, and the difference is the whole membership of a group.
-				//
-				// RFC 7644 §3.5.2.2 defines a remove with a path and no value as
-				// removing the attribute. A client that computed a delta and
-				// found nothing to remove sends `"value": []` — and reading that
-				// as the attribute-wide removal empties the group behind a 200
-				// nobody has a reason to look at.
-				if !stated {
-					parsed = append(parsed, groupPatch{kind: patchRemoveAllMembers})
-					continue
-				}
-				if len(values) == 0 {
-					continue
-				}
-				parsed = append(parsed, groupPatch{kind: patchRemoveMembers, members: values})
-			default:
-				return nil, "this directory applies the add, replace and remove operations to members; " +
-					strconv.Quote(operation.Op) + " is not one of them"
+			parsed = append(parsed, groupPatch{kind: patchSetExternalID, externalID: value})
+
+		case lowered == "members":
+			patch, problem := memberPatch(operationName, operation.Op, operation.Value)
+			if problem != "" {
+				return nil, problem
+			}
+			if patch != nil {
+				parsed = append(parsed, *patch)
 			}
 
 		case strings.HasPrefix(lowered, "members["):
@@ -431,30 +442,38 @@ func readGroupPatch(operations []patchOperation) ([]groupPatch, string) {
 			parsed = append(parsed, groupPatch{kind: patchRemoveMembers, members: []string{value}})
 
 		case path == "":
-			// A pathless operation carries an object of attributes. Only
-			// displayName is read from it; a pathless members change is refused
-			// rather than guessed at, because the operation carries no statement
-			// about whether the list adds to or replaces the membership.
+			// A pathless operation carries an object of attributes: displayName,
+			// externalId and members. A pathless members list is read with the
+			// verb of the operation (add adds, replace replaces), which is how
+			// RFC 7644 §3.5.2.1 defines an add or replace without a path.
 			var attributes struct {
-				DisplayName string          `json:"displayName"`
+				DisplayName *string         `json:"displayName"`
+				ExternalID  *string         `json:"externalId"`
 				Members     json.RawMessage `json:"members"`
 			}
 			if err := json.Unmarshal(operation.Value, &attributes); err != nil {
 				return nil, "the operation value could not be read"
 			}
+			if attributes.DisplayName != nil && strings.TrimSpace(*attributes.DisplayName) != "" {
+				parsed = append(parsed, groupPatch{
+					kind:        patchRename,
+					displayName: strings.TrimSpace(*attributes.DisplayName),
+				})
+			}
+			if attributes.ExternalID != nil {
+				parsed = append(parsed, groupPatch{
+					kind: patchSetExternalID, externalID: strings.TrimSpace(*attributes.ExternalID),
+				})
+			}
 			if len(attributes.Members) > 0 {
-				return nil, "a members change needs an explicit path: send " +
-					`{"op":"add|replace|remove","path":"members",…}`
+				patch, problem := memberPatch(operationName, operation.Op, attributes.Members)
+				if problem != "" {
+					return nil, problem
+				}
+				if patch != nil {
+					parsed = append(parsed, *patch)
+				}
 			}
-			if strings.TrimSpace(attributes.DisplayName) == "" {
-				// Nothing this service stores; the resource is unchanged and
-				// the request is honest about having applied nothing.
-				continue
-			}
-			parsed = append(parsed, groupPatch{
-				kind:        patchRename,
-				displayName: strings.TrimSpace(attributes.DisplayName),
-			})
 
 		default:
 			return nil, "this directory can patch only the members and displayName attributes of a group; " +
@@ -463,6 +482,52 @@ func readGroupPatch(operations []patchOperation) ([]groupPatch, string) {
 		}
 	}
 	return parsed, ""
+}
+
+// externalIDValue reads the new external id of a group. A remove, a null or an
+// empty string clears it.
+func externalIDValue(operationName string, raw json.RawMessage) (string, string) {
+	if operationName == "remove" || len(raw) == 0 || string(raw) == "null" {
+		return "", ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", "the externalId attribute needs a string value"
+	}
+	return strings.TrimSpace(value), ""
+}
+
+// memberPatch translates one members operation. It returns a nil patch for an
+// operation that is understood and changes nothing (an empty removal).
+func memberPatch(operationName, operationSpelling string, raw json.RawMessage) (*groupPatch, string) {
+	values, stated, problem := memberValues(raw)
+	if problem != "" {
+		return nil, problem
+	}
+	switch operationName {
+	case "add":
+		return &groupPatch{kind: patchAddMembers, members: values}, ""
+	case "replace":
+		return &groupPatch{kind: patchReplaceMembers, members: values}, ""
+	case "remove":
+		// AN OMITTED VALUE MEANS "REMOVE THEM ALL". AN EMPTY LIST DOES
+		// NOT, and the difference is the whole membership of a group.
+		//
+		// RFC 7644 §3.5.2.2 defines a remove with a path and no value as
+		// removing the attribute. A client that computed a delta and
+		// found nothing to remove sends `"value": []` — and reading that
+		// as the attribute-wide removal empties the group behind a 200
+		// nobody has a reason to look at.
+		if !stated {
+			return &groupPatch{kind: patchRemoveAllMembers}, ""
+		}
+		if len(values) == 0 {
+			return nil, ""
+		}
+		return &groupPatch{kind: patchRemoveMembers, members: values}, ""
+	}
+	return nil, "this directory applies the add, replace and remove operations to members; " +
+		strconv.Quote(operationSpelling) + " is not one of them"
 }
 
 // memberValues reads the `value` of every member in a patch operation value.
@@ -571,8 +636,16 @@ func (h *Handler) resolveMemberValues(
 		var (
 			unknown   scimdirectory.UnknownMemberError
 			ambiguous scimdirectory.AmbiguousMemberError
+			protected *scimdirectory.ProtectedError
 		)
 		switch {
+		case errors.As(err, &protected) && lenient:
+			// A platform principal may be REMOVED from a group (that only
+			// withdraws a grant); it may never be granted one. The id
+			// returned with the refusal is used as is.
+		case errors.As(err, &protected):
+			writeError(w, http.StatusForbidden, "mutability", protected.Reason)
+			return nil, false
 		case errors.As(err, &unknown):
 			if lenient {
 				slog.Info("SCIM: skipped a group member removal that names no account",
