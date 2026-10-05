@@ -16,15 +16,17 @@ use tonic::{Request, Response, Status};
 
 use crate::protocol::elitea::runtime::v1::{
     AuthorizeAgentModelCheckpointRequestV1, AuthorizeAgentModelCheckpointResponseV1,
-    AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, AuthorizeSandboxJobRequestV1,
-    AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1, BeginExecutionResponseV1,
-    ClaimCommandRequestV1, ClaimCommandResponseV1, ObserveDesiredStateRequestV1,
-    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
-    RenewLeaseRequestV1, RenewLeaseResponseV1,
-    runtime_control_service_client::RuntimeControlServiceClient,
+    AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1,
+    AuthorizeRustCompiledSnapshotRequestV1, AuthorizeRustCompiledSnapshotResponseV1,
+    AuthorizeSandboxJobRequestV1, AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1,
+    BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
+    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
+    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
+    RustCompiledSnapshotPurposeV1, runtime_control_service_client::RuntimeControlServiceClient,
 };
 
 const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_COMPILED_AUTH_REQUEST_BYTES: usize = 1024 * 1024 + 80 * 1024;
 const MAX_CONTROL_RESPONSE_BYTES: usize = 80 * 1024;
 const MAX_CONTROL_DEADLINE: Duration = Duration::from_mins(5);
 const MAX_METADATA_BYTES: usize = 256;
@@ -106,6 +108,15 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("sandbox grants are unavailable"))
     }
 
+    async fn authorize_rust_compiled_snapshot(
+        &self,
+        _request: Request<AuthorizeRustCompiledSnapshotRequestV1>,
+    ) -> Result<Response<AuthorizeRustCompiledSnapshotResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "compiled snapshot authority is unavailable",
+        ))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -132,7 +143,7 @@ impl TonicControlRpc {
     #[must_use]
     pub fn new(channel: Channel) -> Self {
         let client = RuntimeControlServiceClient::new(channel)
-            .max_encoding_message_size(MAX_CONTROL_REQUEST_BYTES)
+            .max_encoding_message_size(MAX_COMPILED_AUTH_REQUEST_BYTES)
             .max_decoding_message_size(MAX_CONTROL_RESPONSE_BYTES);
         Self { client }
     }
@@ -176,6 +187,16 @@ impl ControlRpc for TonicControlRpc {
         request: Request<AuthorizeSandboxJobRequestV1>,
     ) -> Result<Response<AuthorizeSandboxJobResponseV1>, Status> {
         self.client.clone().authorize_sandbox_job(request).await
+    }
+
+    async fn authorize_rust_compiled_snapshot(
+        &self,
+        request: Request<AuthorizeRustCompiledSnapshotRequestV1>,
+    ) -> Result<Response<AuthorizeRustCompiledSnapshotResponseV1>, Status> {
+        self.client
+            .clone()
+            .authorize_rust_compiled_snapshot(request)
+            .await
     }
 
     async fn renew_lease(
@@ -348,6 +369,57 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
         Ok(response)
     }
 
+    /// Only an unpinned authenticated initial Read can return an ordinary miss.
+    pub(crate) async fn authorize_rust_compiled_snapshot(
+        &self,
+        message: AuthorizeRustCompiledSnapshotRequestV1,
+    ) -> Result<Option<AuthorizeRustCompiledSnapshotResponseV1>, ControlGrpcError> {
+        if message.prepared_job_json.is_empty()
+            || message.prepared_job_json.len() > 1024 * 1024
+            || message.binding_json.is_empty()
+            || message.binding_json.len() > 16 * 1024
+            || (!message.selected_descriptor_sha256.is_empty()
+                && message.selected_descriptor_sha256.len() != 32)
+        {
+            return Err(ControlGrpcError::InvalidConfiguration(
+                "compiled authorization fields are invalid",
+            ));
+        }
+        let initial_read = message.purpose == RustCompiledSnapshotPurposeV1::Read as i32
+            && message.selected_descriptor_sha256.is_empty();
+        let request = self.request_with_limit(message, MAX_COMPILED_AUTH_REQUEST_BYTES)?;
+        let response = match timeout(
+            self.config.deadline,
+            self.rpc.authorize_rust_compiled_snapshot(request),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if initial_read && status.code() == tonic::Code::NotFound => {
+                return Ok(None);
+            }
+            Err(status) => {
+                return Err(match status.code() {
+                    tonic::Code::Unavailable | tonic::Code::DeadlineExceeded => unavailable(),
+                    tonic::Code::ResourceExhausted => {
+                        ControlGrpcError::ResourceExhausted("compiled authorization is at capacity")
+                    }
+                    _ => ControlGrpcError::InvalidConfiguration(
+                        "Main did not authorize the selected compiled snapshot",
+                    ),
+                });
+            }
+        };
+        validate_response(&response)?;
+        if response.descriptor_json.len() > 16 * 1024 || response.grant.is_none() {
+            return Err(ControlGrpcError::InvalidConfiguration(
+                "compiled authorization response is invalid",
+            ));
+        }
+        Ok(Some(response))
+    }
+
     /// Perform one idempotent lease-renewal attempt without retry.
     ///
     /// # Errors
@@ -409,7 +481,14 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
     }
 
     fn request<M: Message>(&self, message: M) -> Result<Request<M>, ControlGrpcError> {
-        if message.encoded_len() > MAX_CONTROL_REQUEST_BYTES {
+        self.request_with_limit(message, MAX_CONTROL_REQUEST_BYTES)
+    }
+    fn request_with_limit<M: Message>(
+        &self,
+        message: M,
+        limit: usize,
+    ) -> Result<Request<M>, ControlGrpcError> {
+        if message.encoded_len() > limit {
             return Err(ControlGrpcError::ResourceExhausted(
                 "the control request exceeds the transport limit",
             ));

@@ -32,6 +32,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useImperativeHandle, useMemo, useRef } from 'react';
 
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { ConfigurationTabProps } from '@/features/pipelines';
@@ -40,13 +41,14 @@ import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 import { ChatBox, type ChatBoxHandle } from '@/widgets/chat-box';
 
-import { usePipelineTestConversation, type PipelineTestChatIdentity } from '../lib/usePipelineTestConversation';
+import { usePipelineTestConversation, type PipelineTestChatIdentity, type UsePipelineTestConversationResult } from '../lib/usePipelineTestConversation';
 
 /** `ChatPanel`'s own slot-props type, reached through the barrel-exported `ConfigurationTabProps` (`ChatPanelSlotProps`/`ChatBoxSlotHandle` are not on `features/pipelines`' public API). */
 type ChatSlotProps = Parameters<ConfigurationTabProps['slots']['renderChat']>[0];
 
 export interface PipelineTestChatProps {
   /** `usePipelineChat`'s result plus the version's own fields — see `ConfigurationTab`'s `useConfigurationTabSettings`. */
+  readonly restore?: { readonly conversationId: string | undefined; readonly onComplete: () => void } | undefined;
   readonly settings: ChatSlotProps['settings'];
   /** `ChatPanel`'s own gate: no application id yet, or the flow editor holds unsaved YAML. */
   readonly disableChat: boolean;
@@ -92,22 +94,44 @@ function readLlmSettings(settings: ChatSlotProps['settings']) {
   };
 }
 
-export function PipelineTestChat({ settings, disableChat, slotRef, identity, user }: PipelineTestChatProps): ReactNode {
+function restoredTestRun(run:UsePipelineTestConversationResult['selectedRun'],conversationUuid:string|undefined,projectId:string|undefined) {
+ return run && conversationUuid && projectId ? {run,conversationUuid,projectId} : undefined;
+}
+function testChatDisplay(test: UsePipelineTestConversationResult) {
+  // An idle pane waits for first interaction. Only active preparation blocks input.
+  return {
+    key: `${test.displayKey}:${test.selectedRun?.response_message_id ?? 'live'}`,
+    isLoading: test.isCreating,
+  };
+}
+function clearTestChat(handle:ChatBoxHandle|null,release:()=>void):void { handle?.stopAll();handle?.onClear();release(); }
+function ExistingTestRuns({test}:{readonly test:UsePipelineTestConversationResult}):ReactNode {
+ if(test.runs.length===0)return null;
+ return <label>{t('pages.pipelines.testChat.existingRun','Existing run')}
+  <select aria-label={t('pages.pipelines.testChat.existingRun','Existing run')} value={test.selectedRun?.response_message_id ?? ''} onChange={(event)=>test.selectRun(event.target.value)}>
+   {test.runs.map((run)=><option key={run.response_message_id} value={run.response_message_id}>{run.admitted_at} · {run.phase}</option>)}
+  </select></label>;
+}
+
+export function PipelineTestChat({ restore, settings, disableChat, slotRef, identity, user }: PipelineTestChatProps): ReactNode {
   const userId = user?.id;
   const chatIdentity = useMemo<PipelineTestChatIdentity>(
     () => ({ ...identity, ...(userId !== undefined ? { userId } : { userId: undefined }) }),
     [identity, userId],
   );
-  const testConversation = usePipelineTestConversation(chatIdentity);
+  const testConversation = usePipelineTestConversation(chatIdentity, restore);
 
+  const restoredRun = useMemo(()=>restoredTestRun(testConversation.selectedRun,testConversation.conversation?.uuid,identity.projectId), [testConversation.selectedRun,testConversation.conversation?.uuid,identity.projectId]);
+  const testDisplay=testChatDisplay(testConversation);
+  const releaseTestConversation=testConversation.release;
   const chatBoxRef = useRef<ChatBoxHandle | null>(null);
   useImperativeHandle(
     slotRef,
     () => ({
       stopAll: () => chatBoxRef.current?.stopAll(),
-      onClear: () => chatBoxRef.current?.onClear(),
+      onClear: () => clearTestChat(chatBoxRef.current,releaseTestConversation),
     }),
-    [],
+    [releaseTestConversation],
   );
 
   const agentEventSink = readAgentEventSink(settings);
@@ -181,11 +205,22 @@ export function PipelineTestChat({ settings, disableChat, slotRef, identity, use
           {t('pages.pipelines.testChat.error', 'Could not start a test conversation. Click the message box to try again.')}
         </Box>
       )}
+      <ExistingTestRuns test={testConversation} />
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Button
+          data-testid="editor-test-clear"
+          disabled={!testConversation.conversation}
+          onClick={() => clearTestChat(chatBoxRef.current, releaseTestConversation)}
+        >
+          {t('pages.pipelines.testChat.clear', 'Clear Test')}
+        </Button>
+      </Box>
       <ChatBox
+        key={testDisplay.key}
         ref={chatBoxRef}
         conversation={{
           ...(testConversation.conversation ? { active: testConversation.conversation } : {}),
-          isLoading: testConversation.isCreating,
+          isLoading: testDisplay.isLoading,
         }}
         {...(identity.projectId !== undefined ? { projectId: identity.projectId } : {})}
         {...(user ? { user } : {})}
@@ -196,7 +231,7 @@ export function PipelineTestChat({ settings, disableChat, slotRef, identity, use
         // means by this flag: it suppresses the ad-hoc `dummy` model
         // participant, because the turn is addressed to the pipeline.
         isAgentsPage
-        extensions={{ onAgentEvent: handleAgentEvent }}
+        extensions={{ onAgentEvent: handleAgentEvent, editorTest: { restoredRun } }}
       />
     </Box>
   );

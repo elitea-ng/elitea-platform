@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-owner-proof.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "execution_id",
+    "generation",
+    "activation_id",
+    "attempt",
+    "expected_revision",
+    "effect_id",
+    "owner_receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.node-recovery-owner-proof.v1"
+    },
+    "kind": {
+      "enum": [
+        "verified_no_effect",
+        "committed_result"
+      ]
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "Main currentRuntimeID encodes 16 bytes as lowercase hex. Chat response IDs use separate UUIDs.",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "activation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "expected_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "effect_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "owner_receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "result_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content_id",
+        "immutable_version",
+        "digest_sha256",
+        "byte_length",
+        "media_type",
+        "required_grant_audience"
+      ],
+      "properties": {
+        "content_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "not": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "immutable_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "not": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "digest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "not": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "media_type": {
+          "const": "application/json"
+        },
+        "required_grant_audience": {
+          "const": "elitea.runtime.http-action-receipt.v2"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "committed_result"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result_ref"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "result_ref"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -830,6 +830,9 @@ where
 fn require_running(state: DesiredExecutionState) -> Result<(), ClaimLeaseError> {
     match state {
         DesiredExecutionState::Running => Ok(()),
+        DesiredExecutionState::Suspended => Err(ClaimLeaseError::LeaseLost(
+            "the execution is suspended and requires recovery-only authority",
+        )),
         DesiredExecutionState::Cancelled => Err(ClaimLeaseError::cancelled()),
         DesiredExecutionState::Draining => Err(ClaimLeaseError::Draining(
             "the execution is draining and cannot continue on this worker",

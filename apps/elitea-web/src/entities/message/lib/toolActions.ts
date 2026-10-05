@@ -13,6 +13,7 @@
  */
 import { TOOL_ACTION_NAMES, TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 import { convertJsonToString } from '@/shared/lib/json';
+import { codeDebugToolMeta } from '@/shared/lib/codeDebugArtifact';
 
 import { collapseSubAgentInvocationKeys } from './subAgentGrouping';
 import type { PersistedTraceSteps } from './traceSteps';
@@ -227,6 +228,7 @@ function buildToolCallMeta(
     langgraph_node: step.metadata?.langgraph_node,
     icon_meta: step.tool_meta?.icon_meta,
     agent_type: step.tool_meta?.metadata?.agent_type,
+    ...codeDebugToolMeta(step),
   };
 }
 

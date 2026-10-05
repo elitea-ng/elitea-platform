@@ -2663,3 +2663,12 @@ The feature passes PostgreSQL and actual Docker recovery checks.
 Deployed persistent-chat and editor Test-chat acceptance also pass on Docker and hybrid Kubernetes.
 Both backends persist the new phase timestamps and remove completed execution workloads.
 The mapping records image identities, migration order, rolling compatibility, and the rehearsal build limitations.
+
+
+### Python durable dependency delivery extraction (2026-10-02)
+
+The [Python delivery feature](code-python-delivery-feature-20261002.md) connects the existing native dependency resolver and immutable shared storage through the worker and supervisor.
+The final imported-content proof reads `/workspace/wheels` through a distinct fixed execution export command, preserving the separate preparation directory.
+This assembly retains the phase-deadline migration and old-writer runtime-binding fallback.
+Docker, Kubernetes, and persistent/ephemeral browser acceptance remain required before this boundary is accepted.
+JavaScript/TypeScript and Cargo preparation are separate later features.

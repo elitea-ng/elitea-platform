@@ -278,6 +278,7 @@ services:
     volumes:
       - ./runtime/redis.conf:/etc/redis/redis.conf:ro
       - standalone_runtime_redis:/run/elitea-runtime:ro
+      - standalone_runtime_redis_data:/data
     depends_on:
       runtime-material:
         condition: service_completed_successfully
@@ -1787,6 +1788,8 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
+  # Runtime Redis AOF data. Preserve it during scoped service replacement.
+  standalone_runtime_redis_data:
   # Runtime material, split per consumer so no service holds a key it does not
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:

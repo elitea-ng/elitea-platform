@@ -6,6 +6,8 @@
 //! remains capability-disabled until lifecycle routing enables this assembler.
 
 #![allow(dead_code)] // Capability routing remains intentionally disabled.
+pub(crate) mod saved_child_http;
+pub(crate) mod saved_child_scope_provider;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -19,10 +21,12 @@ use sqlx::PgPool;
 use tracing::Instrument as _;
 
 use super::application_tools::{
-    ApplicationToolDependencies, MaterializedApplicationRuntime, materialize_application_runtime,
+    ApplicationMaterializationPath, ApplicationToolDependencies, MaterializedApplicationRuntime,
+    materialize_application_runtime,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
 use super::context_management::ContextManagementPlan;
+use super::events::{ApplicationToolGuardCatalogs, ApplicationToolPresentationCatalog};
 use super::graph::compiler::PipelineNodeRuntimes;
 use super::graph::compiler::{PipelineConfigurationError, PipelineDefinition};
 use super::graph::{
@@ -59,7 +63,17 @@ use crate::transport::model_facade::{
     ModelAdapterKind, ModelFacade, ModelInvocation, ModelReasoningEffort,
 };
 use crate::transport::platform_client::PlatformClient;
-use crate::transport::runtime_context::ClaimScopedEliteaContext;
+use crate::transport::runtime_context::{ClaimScopedEliteaContext, SavedAgentFingerprint};
+
+pub(crate) mod composition;
+// Source integration gate, not a new public flag. Keep false until the assembled
+// producer/coordinator tests and durable/browser acceptance below pass.
+pub(super) const SCOPED_APPLICATION_CONTINUATION_READY: bool = false;
+pub(crate) mod scope_receipts;
+pub(crate) mod scoped_applications;
+pub(crate) mod scoped_runtime;
+
+use composition::{AdmittedPipelineComposition, AdmittedSavedPipeline};
 
 const MAX_PIPELINE_MATERIALIZED_TOOLS: usize = 1_024;
 const MAX_NESTED_PIPELINE_PARTICIPANTS: usize = 25;
@@ -67,6 +81,7 @@ const MAX_NESTED_PIPELINE_PARTICIPANTS: usize = 25;
 type PipelineApplicationBinding = (
     Option<Arc<dyn PipelineApplicationResolver>>,
     ApplicationRuntimeProjection,
+    Option<Arc<scoped_applications::PipelineApplicationScopeRegistry>>,
 );
 
 struct SavedPipelineParticipantReference<'a> {
@@ -76,7 +91,11 @@ struct SavedPipelineParticipantReference<'a> {
     version_id: u64,
 }
 
+#[derive(Clone)]
 struct PipelineApplicationRuntime<'a> {
+    platform: &'a PlatformClient,
+    authority: &'a ClaimBoundRuntimeContextAuthority,
+    connector: Arc<dyn McpConnector>,
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
@@ -84,6 +103,8 @@ struct PipelineApplicationRuntime<'a> {
     mcp_tokens: &'a Map<String, Value>,
     tool_policy: Arc<ToolAdmissionPolicy>,
     model_scopes: ModelScopeSessions,
+    conversation_thread_id: String,
+    materialization: ApplicationMaterializationPath,
 }
 
 /// Frozen, fully admitted application pipeline definition.
@@ -427,6 +448,9 @@ impl PipelineNativeAgentAssembler {
         tool_policy: &Arc<ToolAdmissionPolicy>,
         model_scopes: ModelScopeSessions,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
+        composition: &AdmittedPipelineComposition,
+        scoped_applications: bool,
+        conversation_thread_id: String,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -499,11 +523,15 @@ impl PipelineNativeAgentAssembler {
         }
         let toolsets = freeze_toolsets_by_alias(toolsets).await?;
         let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
-        let application_runtime =
-            context
-                .clone()
-                .zip(model_facade.clone())
-                .map(|(context, model_facade)| PipelineApplicationRuntime {
+        let application_runtime = context
+            .clone()
+            .zip(model_facade.clone())
+            .zip(self.platform.as_ref())
+            .map(
+                |((context, model_facade), platform)| PipelineApplicationRuntime {
+                    platform,
+                    authority: runtime_context,
+                    connector: Arc::clone(&self.mcp_connector),
                     code,
                     context,
                     model_facade,
@@ -511,15 +539,32 @@ impl PipelineNativeAgentAssembler {
                     mcp_tokens,
                     tool_policy: Arc::clone(tool_policy),
                     model_scopes: model_scopes.clone(),
-                });
-        let (application_resolver, application_runtime) = self
-            .build_application_resolver(
+                    conversation_thread_id,
+                    materialization: ApplicationMaterializationPath::native_graph(
+                        scoped_applications,
+                    ),
+                },
+            );
+        let (application_resolver, application_runtime, application_scopes) = if scoped_applications
+        {
+            self.build_scoped_application_resolver(
                 profile,
                 &selected_snapshot,
                 runtime_context,
                 application_runtime,
+                composition,
             )
-            .await?;
+            .await?
+        } else {
+            self.build_application_resolver(
+                profile,
+                &selected_snapshot,
+                runtime_context,
+                application_runtime,
+                composition,
+            )
+            .await?
+        };
         let llm_factory = context.zip(model_facade).map(|(context, model_facade)| {
             Arc::new(NativePipelineLlmAgentFactory {
                 profile: profile.shell().clone(),
@@ -533,13 +578,22 @@ impl PipelineNativeAgentAssembler {
                 model_scopes,
             }) as Arc<dyn PipelineLlmAgentFactory>
         });
+        let mut nodes =
+            PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application_resolver)
+                .with_events(node_event_sender)
+                .with_composition_definitions(composition::composition_definitions_for(
+                    profile.definition(),
+                    &composition.children,
+                ));
+        if let Some(scopes) = application_scopes {
+            let catalog = scopes.checkpoint_catalog()?;
+            scopes.validate_catalog(profile.definition(), &catalog)?;
+            nodes = nodes
+                .with_checkpoint_catalog(catalog)
+                .with_application_scopes(scopes);
+        }
         Ok(PipelineRuntimeBindings {
-            nodes: PipelineNodeRuntimes::new(
-                llm_factory,
-                direct_tool_resolver,
-                application_resolver,
-            )
-            .with_events(node_event_sender),
+            nodes,
             applications: application_runtime,
             node_events: Some(node_events),
         })
@@ -551,9 +605,10 @@ impl PipelineNativeAgentAssembler {
         snapshot: &AdmittedToolSnapshot<'_>,
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         runtime: Option<PipelineApplicationRuntime<'_>>,
+        composition: &AdmittedPipelineComposition,
     ) -> Result<PipelineApplicationBinding, NativeAgentAssemblyError> {
         if !profile.definition().has_application_nodes() {
-            return Ok((None, ApplicationRuntimeProjection::default()));
+            return Ok((None, ApplicationRuntimeProjection::default(), None));
         }
         let platform = self
             .platform
@@ -589,7 +644,8 @@ impl PipelineNativeAgentAssembler {
                 runtime.mcp_tokens,
             )
             .with_model_scopes(runtime.model_scopes.clone())
-            .with_code(runtime.code.clone()),
+            .with_code(runtime.code.clone())
+            .with_materialization(runtime.materialization.clone()),
             Some(&direct_aliases),
         )
         .await?;
@@ -608,7 +664,7 @@ impl PipelineNativeAgentAssembler {
             let (application_id, version_id) = reference
                 .application_identity()
                 .ok_or_else(invalid_pipeline_tool_scope)?;
-            let participant = self
+            let (participant, child_presentations) = self
                 .materialize_saved_pipeline_participant(
                     SavedPipelineParticipantReference {
                         alias: reference.toolkit_name(),
@@ -616,16 +672,19 @@ impl PipelineNativeAgentAssembler {
                         application_id,
                         version_id,
                     },
-                    profile.shell(),
-                    runtime_context,
                     &runtime,
+                    composition
+                        .children
+                        .get(reference.toolkit_name())
+                        .cloned()
+                        .ok_or_else(invalid_pipeline_tool_scope)?,
                 )
                 .await?;
             projection
-                .insert_presentation(
+                .insert_pipeline_presentation(
                     reference.toolkit_name().to_owned(),
                     reference.toolkit_name().to_owned(),
-                    "pipeline".to_owned(),
+                    child_presentations,
                 )
                 .map_err(|_| invalid_pipeline_tool_scope())?;
             if participants
@@ -639,45 +698,137 @@ impl PipelineNativeAgentAssembler {
         if actual != expected {
             return Err(invalid_pipeline_tool_scope());
         }
-        let resolver = Arc::new(NativePipelineApplicationResolver { participants });
-        Ok((Some(resolver), projection))
+        let resolver = Arc::new(NativePipelineApplicationResolver {
+            participants,
+            nodes: BTreeMap::new(),
+            call_owners: BTreeMap::new(),
+        });
+        Ok((Some(resolver), projection, None))
+    }
+
+    // Producer and scoped installer are wired; source gate awaits integrated compilation/runtime proof.
+    async fn build_scoped_application_resolver(
+        &self,
+        profile: &PipelineExecutionProfile,
+        snapshot: &AdmittedToolSnapshot<'_>,
+        _runtime_context: &ClaimBoundRuntimeContextAuthority,
+        runtime: Option<PipelineApplicationRuntime<'_>>,
+        composition: &AdmittedPipelineComposition,
+    ) -> Result<PipelineApplicationBinding, NativeAgentAssemblyError> {
+        if !profile.definition().has_application_nodes() {
+            return Ok((None, ApplicationRuntimeProjection::default(), None));
+        }
+        let runtime = runtime.ok_or_else(unsupported_pipeline_runtime)?;
+        let mut scopes = scoped_applications::PipelineApplicationScopeRegistry::default();
+        scopes.register_scope(String::new(), profile.definition(), None)?;
+        let mut nodes = BTreeMap::new();
+        let mut call_owners = BTreeMap::new();
+        let mut presentations = ApplicationToolPresentationCatalog::default();
+        let mut presented = BTreeSet::new();
+        for (node, selection) in profile.definition().application_nodes() {
+            let alias = selection.alias();
+            call_owners.insert(node.to_owned(), scopes.graph_call_owner("", node)?);
+            let participant = if let Some(child) = composition.children.get(alias) {
+                let bound = bind_admitted_saved_pipeline(
+                    child.as_ref(),
+                    &runtime,
+                    self.mcp_connector.as_ref(),
+                    node.to_owned(),
+                )
+                .await?;
+                if let Some(child_scopes) = bound.runtimes.application_scopes() {
+                    scopes.merge(child_scopes.clone())?;
+                }
+                if presented.insert(alias.to_owned()) {
+                    presentations
+                        .insert_runtime(
+                            alias.to_owned(),
+                            alias.to_owned(),
+                            "pipeline".to_owned(),
+                            "nested-model".to_owned(),
+                            bound.presentations,
+                            ApplicationToolGuardCatalogs::default(),
+                        )
+                        .map_err(|_| invalid_pipeline_tool_scope())?;
+                }
+                NativePipelineApplicationParticipant::Pipeline {
+                    definition: Box::new(child.profile.definition().clone()),
+                    runtimes: bound.runtimes,
+                    events: runtime.node_events.clone(),
+                    display_name: alias.to_owned(),
+                }
+            } else {
+                let (tool, projection, fingerprint) =
+                    bind_scoped_agent(snapshot, profile.shell(), &runtime, alias).await?;
+                if presented.insert(alias.to_owned()) {
+                    presentations = merge_application_presentations(
+                        presentations,
+                        projection.presentation_catalog(),
+                    )?;
+                }
+                let scope = scopes.bind_application(
+                    "",
+                    node,
+                    Arc::new(projection),
+                    runtime.node_events.clone(),
+                )?;
+                NativePipelineApplicationParticipant::ScopedAgent {
+                    tool,
+                    scope,
+                    fingerprint,
+                }
+            };
+            if nodes
+                .insert(node.to_owned(), (alias.to_owned(), participant))
+                .is_some()
+            {
+                return Err(invalid_pipeline_tool_scope());
+            }
+        }
+        Ok((
+            Some(Arc::new(NativePipelineApplicationResolver {
+                participants: BTreeMap::new(),
+                nodes,
+                call_owners,
+            })),
+            ApplicationRuntimeProjection::from_presentations(presentations),
+            Some(Arc::new(scopes)),
+        ))
     }
 
     async fn materialize_saved_pipeline_participant(
         &self,
         reference: SavedPipelineParticipantReference<'_>,
-        fallback: &OrdinaryNoToolProfile,
-        runtime_context: &ClaimBoundRuntimeContextAuthority,
         runtime: &PipelineApplicationRuntime<'_>,
-    ) -> Result<NativePipelineApplicationParticipant, NativeAgentAssemblyError> {
-        let platform = self
-            .platform
-            .as_ref()
-            .ok_or_else(unsupported_pipeline_runtime)?;
-        // The SAME admission the ordinary parent's tool performs (#990 review
-        // 7). This parent keeps every pause kind the child can raise: it owns
-        // the graph checkpoint each of them resumes through, so it reads no
-        // guard surface here.
-        let (definition, bound) = admit_saved_pipeline_child(
-            platform,
-            runtime_context,
+        admitted: Arc<AdmittedSavedPipeline>,
+    ) -> Result<
+        (
+            NativePipelineApplicationParticipant,
+            ApplicationToolPresentationCatalog,
+        ),
+        NativeAgentAssemblyError,
+    > {
+        let bound = bind_admitted_saved_pipeline(
+            admitted.as_ref(),
             runtime,
             self.mcp_connector.as_ref(),
-            fallback,
-            (reference.application_id, reference.version_id),
-            reference.project_id,
+            String::new(),
         )
         .await?;
+        let definition = admitted.profile.definition().clone();
         tracing::debug!(
             application_alias = reference.alias,
             "materialized saved pipeline participant"
         );
-        Ok(NativePipelineApplicationParticipant::Pipeline {
-            definition: Box::new(definition),
-            runtimes: bound.runtimes,
-            events: runtime.node_events.clone(),
-            display_name: reference.alias.to_owned(),
-        })
+        Ok((
+            NativePipelineApplicationParticipant::Pipeline {
+                definition: Box::new(definition),
+                runtimes: bound.runtimes,
+                events: runtime.node_events.clone(),
+                display_name: reference.alias.to_owned(),
+            },
+            bound.presentations,
+        ))
     }
 
     /// The pipeline PARENT's own nested participant, bound by the shared
@@ -689,15 +840,47 @@ impl PipelineNativeAgentAssembler {
         snapshot: AdmittedToolSnapshot<'_>,
         runtime: &PipelineApplicationRuntime<'_>,
     ) -> Result<PipelineNodeRuntimes, NativeAgentAssemblyError> {
-        bind_saved_pipeline_runtimes(profile, snapshot, runtime, self.mcp_connector.as_ref())
-            .await
-            .map(|bound| bound.runtimes)
+        bind_saved_pipeline_runtimes(
+            profile,
+            snapshot,
+            runtime,
+            self.mcp_connector.as_ref(),
+            None,
+        )
+        .await
+        .map(|bound| bound.runtimes)
     }
 }
 
 #[async_trait]
 impl NativeAgentAssembler for PipelineNativeAgentAssembler {
     type Completion = PipelineAgentCompletion;
+
+    async fn inspect_node_recovery(
+        &self,
+        request: &AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+        receipt: &super::graph::node_recovery_receipt::NodeRecoveryRequiredReceipt,
+    ) -> Result<super::node_recovery_checkpoint::OpenedNodeRecoveryVisit, NativeAgentAssemblyError>
+    {
+        let policy = policy_for_guardrails(
+            request.payload.toolkit_guardrails.as_ref(),
+            &self.tool_policy,
+        )?;
+        let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
+            request,
+            command,
+            &request.payload.input_attachments,
+            &policy,
+        )?;
+        self.state
+            .open(session, lease, &plan, profile.definition())
+            .await?
+            .inspect_node_recovery(&plan, profile.definition(), receipt)
+            .await
+    }
 
     fn sandbox_stop_delivery(
         &self,
@@ -738,7 +921,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
         NativeAgentAssemblyError,
     > {
-        let (assembled, evidence) = self.assemble_with_recovery(assembly, true).await?;
+        let (assembled, evidence) = self.assemble_with_recovery(assembly, true, None).await?;
         let evidence = evidence.ok_or_else(unsupported_pipeline_runtime)?;
         Ok(super::runtime::PendingRecoveredAgentInvocation::new(
             assembled, evidence,
@@ -749,17 +932,36 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
-        self.assemble_with_recovery(assembly, false)
+        self.assemble_with_recovery(assembly, false, None)
             .await
             .map(|(assembled, _)| assembled)
+    }
+
+    async fn assemble_node_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+        authority: &crate::protocol::control::NodeRecoveryAssemblyAuthorization,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        let (assembled, evidence) = self
+            .assemble_with_recovery(assembly, false, Some(authority))
+            .await?;
+        let evidence = evidence.ok_or_else(unsupported_pipeline_runtime)?;
+        Ok(super::runtime::PendingRecoveredAgentInvocation::new(
+            assembled, evidence,
+        ))
     }
 }
 
 impl PipelineNativeAgentAssembler {
+    #[allow(clippy::too_many_lines)] // Keep frozen admission, runtime binding, and coordinator ownership together.
     async fn assemble_with_recovery(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
         recovery: bool,
+        node_recovery: Option<&crate::protocol::control::NodeRecoveryAssemblyAuthorization>,
     ) -> Result<
         (
             AssembledNativeAgentInvocation<PipelineAgentCompletion>,
@@ -798,12 +1000,54 @@ impl PipelineNativeAgentAssembler {
             let admitted = assembly.admit_pipeline_with_policy(tool_policy.as_ref())?;
             let (profile, plan, toolsets, mcp_tokens, start, runtime_context, session, lease) =
                 admitted.into_parts();
+            // Resolve the complete frozen tree before credentials or executable runtimes.
+            let composition = if profile.definition().has_application_nodes() {
+                let platform = self
+                    .platform
+                    .as_ref()
+                    .ok_or_else(unsupported_pipeline_runtime)?;
+                composition::admit_root_composition(
+                    platform,
+                    &runtime_context,
+                    plan.resource_project_id()
+                        .parse::<u64>()
+                        .map_err(|_| invalid_pipeline_tool_scope())?,
+                    tool_policy.as_ref(),
+                    &profile,
+                    &toolsets,
+                )
+                .await?
+            } else {
+                AdmittedPipelineComposition {
+                    children: BTreeMap::new(),
+                    checkpoint_paths: Vec::new(),
+                }
+            };
             tracing::Span::current().record("stage", "state");
             let mut state = self
                 .state
-                .open(session, lease, &plan, profile.definition())
+                .open_with_application_paths(
+                    session,
+                    lease,
+                    &plan,
+                    profile.definition(),
+                    &composition.checkpoint_paths,
+                )
                 .await?;
-            let evidence = if recovery {
+            let evidence = if let Some(authority) = node_recovery {
+                let visit = state
+                    .inspect_node_recovery(&plan, profile.definition(), authority.receipt())
+                    .await?;
+                visit
+                    .journal
+                    .verify_applied_revision(authority.journal_revision())
+                    .await
+                    .map_err(|_| invalid_pipeline_tool_scope())?;
+                if !authority.matches(visit.checkpoint()) {
+                    return Err(invalid_pipeline_tool_scope());
+                }
+                Some(visit.into_checkpoint())
+            } else if recovery {
                 let evidence = state
                     .inspect_checkpoint(&plan, profile.definition())
                     .await?;
@@ -812,10 +1056,27 @@ impl PipelineNativeAgentAssembler {
             } else {
                 None
             };
-            let start = if recovery {
+            let start = if recovery || node_recovery.is_some() {
                 super::runtime::PipelineNativeStart::Checkpoint
             } else {
                 start
+            };
+            let scoped_applications = if !SCOPED_APPLICATION_CONTINUATION_READY {
+                false
+            } else if matches!(
+                &start,
+                super::runtime::PipelineNativeStart::Fresh
+                    | super::runtime::PipelineNativeStart::Regenerate
+            ) {
+                true
+            } else {
+                // Existing admitted root conversations keep their original resolver and coordinator.
+                let checkpoint = state
+                    .application_checkpoint(&plan)
+                    .await?
+                    .ok_or_else(invalid_pipeline_tool_scope)?;
+                scope_receipts::has_graph_call_receipts(&checkpoint)
+                    .map_err(|_| invalid_pipeline_tool_scope())?
             };
             let mut node_runtimes = self
                 .bind_node_runtimes(
@@ -829,6 +1090,9 @@ impl PipelineNativeAgentAssembler {
                         .as_ref()
                         .zip(sandbox_authority.clone())
                         .map(|(factory, authority)| factory.bind(authority)),
+                    &composition,
+                    scoped_applications,
+                    plan.session_id().to_owned(),
                 )
                 .await?;
             if let (Some(factory), Some(authority)) = (&self.sandbox, sandbox_authority) {
@@ -876,7 +1140,12 @@ struct NativePipelineDirectToolResolver {
     tools: BTreeMap<(String, String), ResolvedDirectTool>,
 }
 
+#[path = "pipeline/parallel_application_resolver.rs"]
+mod parallel_application_resolver;
+
 struct NativePipelineApplicationResolver {
+    call_owners: BTreeMap<String, Arc<scoped_runtime::PipelineGraphCallOwner>>,
+    nodes: BTreeMap<String, (String, NativePipelineApplicationParticipant)>,
     participants: BTreeMap<String, NativePipelineApplicationParticipant>,
 }
 
@@ -941,6 +1210,11 @@ impl NativePipelineLlmAgentFactory {
 
 #[derive(Clone)]
 enum NativePipelineApplicationParticipant {
+    ScopedAgent {
+        tool: Arc<dyn Tool>,
+        scope: Arc<scoped_runtime::PipelineApplicationNodeRuntime>,
+        fingerprint: Option<SavedAgentFingerprint>,
+    },
     Agent(Arc<dyn Tool>),
     Pipeline {
         definition: Box<PipelineDefinition>,
@@ -950,18 +1224,15 @@ enum NativePipelineApplicationParticipant {
     },
 }
 
-impl PipelineApplicationResolver for NativePipelineApplicationResolver {
-    fn resolve(
-        &self,
-        selection: &PipelineApplicationSelection,
+impl NativePipelineApplicationResolver {
+    fn resolved(
+        participant: NativePipelineApplicationParticipant,
         checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
     ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
-        let participant = self
-            .participants
-            .get(selection.alias())
-            .cloned()
-            .ok_or(ApplicationExecutionError::Unavailable)?;
         match participant {
+            NativePipelineApplicationParticipant::ScopedAgent { tool, scope, .. } => {
+                Ok(ResolvedApplicationParticipant::ScopedAgent { tool, scope })
+            }
             NativePipelineApplicationParticipant::Agent(tool) => {
                 Ok(ResolvedApplicationParticipant::Agent(tool))
             }
@@ -975,11 +1246,89 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
                 .map(|graph| ResolvedApplicationParticipant::Pipeline {
                     graph: Arc::new(graph),
                     variable_types: definition.declared_variable_types(),
+                    static_pauses: definition.static_pause_catalog(),
                     events: Some(events),
                     display_name,
                 })
                 .map_err(|_| ApplicationExecutionError::Unavailable),
         }
+    }
+}
+impl PipelineApplicationResolver for NativePipelineApplicationResolver {
+    fn map_worker_definition_digest(
+        &self,
+        node: &str,
+    ) -> Result<[u8; 32], ApplicationExecutionError> {
+        let (_, participant) = self
+            .nodes
+            .get(node)
+            .ok_or(ApplicationExecutionError::Unavailable)?;
+        match participant {
+            NativePipelineApplicationParticipant::Pipeline { definition, .. }
+                if definition.map_nonpausing_effectfree() =>
+            {
+                self.parallel_participant_digest(node)
+            }
+            _ => Err(ApplicationExecutionError::Unavailable),
+        }
+    }
+    fn for_map_events(
+        &self,
+        events: PipelineNodeEventSender,
+    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
+        // The existing rebinder retains saved identity, call owners and exact scope.
+        self.rebind_parallel_events(&events)
+            .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
+    }
+
+    fn for_parallel_events(
+        &self,
+        events: PipelineNodeEventSender,
+    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
+        self.rebind_parallel_events(&events)
+            .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
+    }
+
+    fn fixed_parallel_definition_digest(
+        &self,
+        node: &str,
+    ) -> Result<[u8; 32], ApplicationExecutionError> {
+        self.parallel_participant_digest(node)
+    }
+
+    fn graph_call_owner(&self, node: &str) -> Option<Arc<scoped_runtime::PipelineGraphCallOwner>> {
+        self.call_owners.get(node).cloned()
+    }
+
+    fn resolve_node(
+        &self,
+        node: &str,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        if self.nodes.is_empty() {
+            return self.resolve(selection, checkpointer);
+        }
+        let (alias, participant) = self
+            .nodes
+            .get(node)
+            .ok_or(ApplicationExecutionError::Unavailable)?;
+        if alias != selection.alias() {
+            return Err(ApplicationExecutionError::Unavailable);
+        }
+        Self::resolved(participant.clone(), checkpointer)
+    }
+    fn resolve(
+        &self,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        let participant = self
+            .participants
+            .get(selection.alias())
+            .cloned()
+            .ok_or(ApplicationExecutionError::Unavailable)?;
+        Self::resolved(participant, checkpointer)
     }
 }
 
@@ -1231,9 +1580,8 @@ impl Toolset for StrictNodeToolset {
 ///
 /// This is the same admission the pipeline parent performs for an `agent`
 /// node's pipeline participant — resolve the exact frozen version, admit its
-/// node/tool scope against the live policy, refuse a child that itself has
-/// Application nodes (depth stays one, exactly as it does there), and bind the
-/// invocation-owned LLM/direct-tool runtimes. What differs is only the caller:
+/// node/tool scope against the live policy, admit the bounded frozen child
+/// composition, and bind invocation-owned runtimes. What differs is only the caller:
 /// there the compiled graph becomes an ADK `SubgraphNode` of the parent graph,
 /// here it becomes the body of one `Tool` the parent model may call.
 // Every owner is an explicit authority boundary — the claim, the project
@@ -1245,7 +1593,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
     runtime_context: &ClaimBoundRuntimeContextAuthority,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
-    mcp_connector: &dyn McpConnector,
+    mcp_connector: &Arc<dyn McpConnector>,
     mcp_tokens: &Map<String, Value>,
     tool_policy: Arc<ToolAdmissionPolicy>,
     fallback: &OrdinaryNoToolProfile,
@@ -1254,8 +1602,20 @@ pub(super) async fn materialize_saved_pipeline_tool(
     project_id: Option<u64>,
     model_scopes: ModelScopeSessions,
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
-) -> Result<(PipelineDefinition, PipelineNodeRuntimes), NativeAgentAssemblyError> {
+    conversation_thread_id: String,
+    materialization: ApplicationMaterializationPath,
+) -> Result<
+    (
+        PipelineDefinition,
+        PipelineNodeRuntimes,
+        ApplicationToolPresentationCatalog,
+    ),
+    NativeAgentAssemblyError,
+> {
     let runtime = PipelineApplicationRuntime {
+        platform,
+        authority: runtime_context,
+        connector: Arc::clone(mcp_connector),
         code,
         context,
         model_facade,
@@ -1263,39 +1623,51 @@ pub(super) async fn materialize_saved_pipeline_tool(
         mcp_tokens,
         tool_policy,
         model_scopes,
+        conversation_thread_id,
+        materialization,
     };
     let (definition, bound) = admit_saved_pipeline_child(
         platform,
         runtime_context,
         &runtime,
-        mcp_connector,
+        mcp_connector.as_ref(),
         fallback,
         identity,
         project_id,
     )
     .await?;
-    // #990 review 3. An ORDINARY parent resumes a child pipeline's `hitl` node
-    // and nothing else: a sensitive-tool approval, a clarifying question and
-    // an MCP authorization challenge are three further pause contracts, each
-    // with its own resume shape in `graph::resume`, and none of them is
-    // implemented for this parent. Admitting such a child anyway would show a
-    // card nothing could answer and lose the child's work when the decision
-    // came back — so the child is refused HERE, at admission, where the caller
-    // can skip it and SAY so, exactly as it does for any other child it cannot
-    // build. The pipeline PARENT keeps admitting them: it owns the graph
-    // checkpoint every one of them resumes through.
-    if !bound.guarded_interrupt_kinds.is_empty() {
-        tracing::debug!(
-            application_id = identity.0,
-            version_id = identity.1,
-            kinds = ?bound.guarded_interrupt_kinds,
-            "a saved pipeline child raises pause kinds an ordinary parent cannot resume"
-        );
+    // Static and scoped ordinary descendants use their typed coordinators.
+    // Direct graph sensitive, AskUser, and MCP pauses remain unsupported here.
+    let scoped_proof = if runtime.materialization.scoped_ready() {
+        let scopes = bound
+            .runtimes
+            .application_scopes()
+            .ok_or_else(invalid_pipeline_tool_scope)?;
+        scopes.validate_catalog(
+            &definition,
+            bound
+                .runtimes
+                .checkpoint_catalog()
+                .ok_or_else(invalid_pipeline_tool_scope)?,
+        )?;
+        scopes.has_ordinary_applications()
+    } else {
+        false
+    };
+    if bound
+        .guarded_interrupt_kinds
+        .iter()
+        .any(|kind| match *kind {
+            "static continuation" => !runtime.materialization.scoped_ready(),
+            "ordinary child continuation" => !scoped_proof,
+            _ => true,
+        })
+    {
         return Err(unsupported_pipeline_child_pauses(
             &bound.guarded_interrupt_kinds,
         ));
     }
-    Ok((definition, bound.runtimes))
+    Ok((definition, bound.runtimes, bound.presentations))
 }
 
 /// The one refusal that names WHAT the child could pause on.
@@ -1315,10 +1687,9 @@ fn unsupported_pipeline_child_pauses(kinds: &[&'static str]) -> NativeAgentAssem
 /// the caller will do with it (#990 review 7).
 ///
 /// Both callers — the pipeline parent's `agent` node and the ordinary parent's
-/// tool — must perform the same five checks in the same order, and the order
-/// is the security property: project scope before any fetch, the frozen
-/// version before any profile, the node/tool scope against the LIVE policy
-/// before any credential, and the depth refusal before any runtime is bound.
+/// tool — use the same frozen composition admission. Project scope, exact
+/// identities, cycles and resource bounds are checked before runtime binding.
+/// Each child profile and selected tool scope are checked against the live policy.
 async fn admit_saved_pipeline_child(
     platform: &PlatformClient,
     runtime_context: &ClaimBoundRuntimeContextAuthority,
@@ -1328,26 +1699,21 @@ async fn admit_saved_pipeline_child(
     identity: (u64, u64),
     project_id: Option<u64>,
 ) -> Result<(PipelineDefinition, BoundSavedPipeline), NativeAgentAssemblyError> {
-    if project_id.is_some_and(|project_id| project_id != runtime.context.resource_project_id()) {
-        return Err(invalid_pipeline_tool_scope());
-    }
-    let loaded = platform
-        .resolve_application_version(runtime_context, identity.0, identity.1)
-        .await
-        .map_err(NativeAgentAssemblyError::from)?;
-    let version = loaded.into_version_details();
-    let mut child = PipelineExecutionProfile::from_nested_version(&version, fallback)?;
-    let frozen = FrozenToolSnapshot::from_version_details(&version)
-        .map_err(|_| invalid_pipeline_tool_scope())?;
-    child.validate_tool_snapshot(&frozen, runtime.tool_policy.as_ref())?;
-    if child.definition().has_application_nodes() {
-        // Depth stays one for both callers: a deeper saved participant needs
-        // the same loaded-version cycle/hop owner, which neither has.
-        return Err(unsupported_pipeline_runtime());
-    }
-    let admitted = frozen.apply_policy(runtime.tool_policy.as_ref());
-    let bound = bind_saved_pipeline_runtimes(&child, admitted, runtime, mcp_connector).await?;
-    Ok((child.into_definition(), bound))
+    let admitted = composition::admit_tool_composition_with_scoped(
+        platform,
+        runtime_context,
+        runtime.context.resource_project_id(),
+        runtime.tool_policy.as_ref(),
+        identity,
+        project_id,
+        fallback,
+        runtime.materialization.scoped_ready(),
+    )
+    .await?;
+    let bound =
+        bind_admitted_saved_pipeline(admitted.as_ref(), runtime, mcp_connector, String::new())
+            .await?;
+    Ok((admitted.profile.definition().clone(), bound))
 }
 
 /// Bind the invocation-owned node runtimes of one saved pipeline participant.
@@ -1359,16 +1725,210 @@ async fn admit_saved_pipeline_child(
 /// One nested pipeline's bound runtimes, plus what its own nodes may PAUSE on.
 ///
 /// The guard surface travels with the runtimes because only the caller can
-/// decide what to do about it: a pipeline PARENT resumes every interrupt kind
-/// through its own graph checkpoint, while an ORDINARY parent (#973) resumes
-/// only the `hitl` node and must therefore refuse a child that could raise
-/// another kind rather than show a card nothing can answer.
+/// decide which typed continuation routes its coordinator supports.
+/// The ordinary parent keeps refusing direct graph sensitive, `AskUser`, and MCP pauses.
 pub(super) struct BoundSavedPipeline {
     pub(super) runtimes: PipelineNodeRuntimes,
     /// The interrupt kinds this child's stored definition can raise besides
     /// its own `hitl` nodes, in a stable order, empty for a child that can
     /// raise none.
     pub(super) guarded_interrupt_kinds: Vec<&'static str>,
+    pub(super) presentations: ApplicationToolPresentationCatalog,
+}
+
+type PipelineBindingFuture<'a> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<BoundSavedPipeline, NativeAgentAssemblyError>>
+            + Send
+            + 'a,
+    >,
+>;
+
+#[allow(clippy::too_many_lines)] // Keep frozen admission, runtime binding, and coordinator ownership together.
+fn bind_admitted_saved_pipeline<'a>(
+    admitted: &'a AdmittedSavedPipeline,
+    runtime: &'a PipelineApplicationRuntime<'_>,
+    connector: &'a dyn McpConnector,
+    graph_path: String,
+) -> PipelineBindingFuture<'a> {
+    Box::pin(async move {
+        let mut runtime = runtime.clone();
+        runtime.materialization = runtime.materialization.enter_pipeline((
+            admitted.revision.application_id,
+            admitted.revision.version_id,
+        ))?;
+        runtime.materialization.admit_version(&admitted.version)?;
+        let runtime = &runtime;
+        let mut scopes = scoped_applications::PipelineApplicationScopeRegistry::default();
+        scopes.register_scope(
+            graph_path.clone(),
+            admitted.profile.definition(),
+            Some(admitted.revision.clone()),
+        )?;
+        let frozen = FrozenToolSnapshot::from_version_details(&admitted.version)
+            .map_err(|_| invalid_pipeline_tool_scope())?;
+        let snapshot = frozen.apply_policy(runtime.tool_policy.as_ref());
+        let mut nodes = BTreeMap::new();
+        let mut call_owners = BTreeMap::new();
+        let mut descendant_guards = BTreeSet::new();
+        let mut presentations = ApplicationToolPresentationCatalog::default();
+        let mut presented = BTreeSet::new();
+        for (node, selection) in admitted.profile.definition().application_nodes() {
+            let alias = selection.alias();
+            if runtime.materialization.scoped_ready() {
+                call_owners.insert(node.to_owned(), scopes.graph_call_owner(&graph_path, node)?);
+            }
+            let participant = if let Some(child) = admitted.children.get(alias) {
+                let child_path = if graph_path.is_empty() {
+                    node.to_owned()
+                } else {
+                    format!("{graph_path}/{node}")
+                };
+                let bound =
+                    bind_admitted_saved_pipeline(child, runtime, connector, child_path).await?;
+                descendant_guards.extend(bound.guarded_interrupt_kinds);
+                if let Some(child_scopes) = bound.runtimes.application_scopes() {
+                    scopes.merge(child_scopes.clone())?;
+                }
+                if presented.insert(alias.to_owned()) {
+                    presentations
+                        .insert_runtime(
+                            alias.to_owned(),
+                            alias.to_owned(),
+                            "pipeline".to_owned(),
+                            "nested-model".to_owned(),
+                            bound.presentations,
+                            ApplicationToolGuardCatalogs::default(),
+                        )
+                        .map_err(|_| invalid_pipeline_tool_scope())?;
+                }
+                NativePipelineApplicationParticipant::Pipeline {
+                    definition: Box::new(child.profile.definition().clone()),
+                    runtimes: bound.runtimes,
+                    events: runtime.node_events.clone(),
+                    display_name: alias.to_owned(),
+                }
+            } else {
+                // Bind one exact ordinary descendant to its registry-owned event receiver.
+                let (tool, projection, fingerprint) =
+                    bind_scoped_agent(&snapshot, admitted.profile.shell(), runtime, alias).await?;
+                if presented.insert(alias.to_owned()) {
+                    presentations = merge_application_presentations(
+                        presentations,
+                        projection.presentation_catalog(),
+                    )?;
+                }
+                let scope = scopes.bind_application(
+                    &graph_path,
+                    node,
+                    Arc::new(projection),
+                    runtime.node_events.clone(),
+                )?;
+                descendant_guards.insert("ordinary child continuation");
+                NativePipelineApplicationParticipant::ScopedAgent {
+                    tool,
+                    scope,
+                    fingerprint,
+                }
+            };
+            if nodes
+                .insert(node.to_owned(), (alias.to_owned(), participant))
+                .is_some()
+            {
+                return Err(invalid_pipeline_tool_scope());
+            }
+        }
+        let application = (!nodes.is_empty()).then(|| {
+            Arc::new(NativePipelineApplicationResolver {
+                participants: BTreeMap::new(),
+                nodes,
+                call_owners,
+            }) as Arc<dyn PipelineApplicationResolver>
+        });
+        let mut bound = bind_saved_pipeline_runtimes(
+            &admitted.profile,
+            snapshot,
+            runtime,
+            connector,
+            application,
+        )
+        .await?;
+        descendant_guards.extend(bound.guarded_interrupt_kinds);
+        bound.guarded_interrupt_kinds = descendant_guards.into_iter().collect();
+        bound.presentations = presentations;
+        bound.runtimes = bound
+            .runtimes
+            .with_checkpoint_catalog(composition::checkpoint_catalog(admitted)?)
+            .with_composition_definitions(composition::composition_definitions(admitted))
+            .with_application_scope_path(graph_path)
+            .with_application_scopes(Arc::new(scopes));
+        Ok(bound)
+    })
+}
+
+type ScopedAgentBinding = (
+    Arc<dyn Tool>,
+    ApplicationRuntimeProjection,
+    Option<SavedAgentFingerprint>,
+);
+
+async fn bind_scoped_agent(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    shell: &OrdinaryNoToolProfile,
+    runtime: &PipelineApplicationRuntime<'_>,
+    alias: &str,
+) -> Result<ScopedAgentBinding, NativeAgentAssemblyError> {
+    let selected = BTreeSet::from([alias.to_owned()]);
+    let (materialized, skipped) = materialize_application_runtime(
+        snapshot,
+        runtime.platform,
+        runtime.authority,
+        Arc::clone(&runtime.context),
+        shell,
+        ApplicationToolDependencies::new(
+            Arc::clone(&runtime.model_facade),
+            Arc::clone(&runtime.tool_policy),
+            Arc::clone(&runtime.connector),
+            runtime.mcp_tokens,
+        )
+        .with_model_scopes(runtime.model_scopes.clone())
+        .with_code(runtime.code.clone())
+        .with_conversation_thread(runtime.conversation_thread_id.clone())
+        .with_materialization(runtime.materialization.for_graph_agent()?),
+        Some(&selected),
+    )
+    .await?;
+    if !skipped.is_empty() {
+        return Err(unsupported_pipeline_runtime());
+    }
+    let materialized = materialized.ok_or_else(invalid_pipeline_tool_scope)?;
+    let fingerprint = materialized
+        .tools
+        .iter()
+        .find(|entry| entry.alias == alias && entry.agent_type == "agent")
+        .ok_or_else(invalid_pipeline_tool_scope)?
+        .saved_agent_fingerprint;
+    let (mut participants, projection) = application_participants(materialized)?;
+    if participants.len() != 1 {
+        return Err(invalid_pipeline_tool_scope());
+    }
+    match participants
+        .remove(alias)
+        .ok_or_else(invalid_pipeline_tool_scope)?
+    {
+        NativePipelineApplicationParticipant::Agent(tool) => Ok((tool, projection, fingerprint)),
+        _ => Err(invalid_pipeline_tool_scope()),
+    }
+}
+
+fn merge_application_presentations(
+    mut target: ApplicationToolPresentationCatalog,
+    source: ApplicationToolPresentationCatalog,
+) -> Result<ApplicationToolPresentationCatalog, NativeAgentAssemblyError> {
+    target
+        .merge_exact(source)
+        .map_err(|_| invalid_pipeline_tool_scope())?;
+    Ok(target)
 }
 
 async fn bind_saved_pipeline_runtimes(
@@ -1376,6 +1936,7 @@ async fn bind_saved_pipeline_runtimes(
     snapshot: AdmittedToolSnapshot<'_>,
     runtime: &PipelineApplicationRuntime<'_>,
     mcp_connector: &dyn McpConnector,
+    application: Option<Arc<dyn PipelineApplicationResolver>>,
 ) -> Result<BoundSavedPipeline, NativeAgentAssemblyError> {
     let aliases = profile.definition().runtime_toolkit_aliases();
     let selected = snapshot.retain_toolkit_names(&aliases);
@@ -1427,7 +1988,7 @@ async fn bind_saved_pipeline_runtimes(
             model_scopes: runtime.model_scopes.clone(),
         }) as Arc<dyn PipelineLlmAgentFactory>
     });
-    let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, None)
+    let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application)
         .with_events(runtime.node_events.clone());
     if let Some(code) = &runtime.code {
         runtimes = runtimes.with_code(code.clone());
@@ -1435,6 +1996,7 @@ async fn bind_saved_pipeline_runtimes(
     Ok(BoundSavedPipeline {
         runtimes,
         guarded_interrupt_kinds,
+        presentations: ApplicationToolPresentationCatalog::default(),
     })
 }
 
@@ -1448,6 +2010,9 @@ pub(super) fn guarded_interrupt_kinds(
     delegated_authorization: &DelegatedAuthorizationCatalog,
 ) -> Vec<&'static str> {
     let mut kinds = Vec::new();
+    if profile.definition().has_static_interrupts() {
+        kinds.push("static continuation");
+    }
     if !profile.sensitive_llm_tools().is_empty()
         || profile
             .definition()

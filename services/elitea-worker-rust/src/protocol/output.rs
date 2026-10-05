@@ -49,6 +49,9 @@ pub enum RuntimeFailureKind {
     PipelineResultInvalid,
     PipelineResultLimit,
     PipelineCodeFailed,
+    CodePreparationFailed,
+    CodePreparationCancelled,
+    CodePreparationUnconfirmed,
 
     DependencyUnavailable,
     DeadlineExceeded,
@@ -616,6 +619,11 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
         Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
         Some("pipeline.code_failed") => RuntimeFailureKind::PipelineCodeFailed,
+        Some("pipeline.code_preparation_failed") => RuntimeFailureKind::CodePreparationFailed,
+        Some("pipeline.code_preparation_cancelled") => RuntimeFailureKind::CodePreparationCancelled,
+        Some("pipeline.code_preparation_unconfirmed") => {
+            RuntimeFailureKind::CodePreparationUnconfirmed
+        }
 
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(
@@ -735,6 +743,21 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::PipelineResultInvalid => (
             RuntimeErrorCodeV1::PipelineResultInvalid,
             "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run.",
+            false,
+        ),
+        RuntimeFailureKind::CodePreparationFailed => (
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
+            false,
+        ),
+        RuntimeFailureKind::CodePreparationCancelled => (
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
+            false,
+        ),
+        RuntimeFailureKind::CodePreparationUnconfirmed => (
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
             false,
         ),
         RuntimeFailureKind::PipelineCodeFailed => (
@@ -864,6 +887,9 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::PipelineResultInvalid,
         RuntimeFailureKind::PipelineResultLimit,
         RuntimeFailureKind::PipelineCodeFailed,
+        RuntimeFailureKind::CodePreparationFailed,
+        RuntimeFailureKind::CodePreparationCancelled,
+        RuntimeFailureKind::CodePreparationUnconfirmed,
         RuntimeFailureKind::DependencyUnavailable,
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,
@@ -1289,5 +1315,38 @@ mod continuation_failure_tests {
         assert!(!error.retryable);
         assert!(error.safe_message.contains("wrong type"));
         assert_eq!(canonical_runtime_failure(&error), Some(kind));
+    }
+}
+
+#[cfg(test)]
+mod code_preparation_failure_tests {
+    use super::*;
+
+    #[test]
+    fn code_preparation_messages_are_exact_bounded_and_restorable() {
+        let policies: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../testdata/proto/runtime/v1/code_preparation_failure_policies.json"
+        ))
+        .unwrap();
+        for policy in policies.as_array().unwrap() {
+            let kind = model_failure(policy["upstream_code"].as_str());
+            assert_ne!(kind, RuntimeFailureKind::Internal);
+            let error = runtime_error(kind);
+            assert_eq!(error.code, RuntimeErrorCodeV1::PipelineCodeFailed as i32);
+            assert_eq!(error.safe_message, policy["message"].as_str().unwrap());
+            assert!(error.safe_message.len() <= MAX_SAFE_STRING_BYTES);
+            assert!(!error.retryable);
+            assert_eq!(canonical_runtime_failure(&error), Some(kind));
+            let mut injected = error;
+            injected
+                .safe_message
+                .push_str("; SELECT private_schema; credential=secret");
+            assert_eq!(canonical_runtime_failure(&injected), None);
+        }
+        let historical = runtime_error(RuntimeFailureKind::PipelineCodeFailed);
+        assert_eq!(
+            canonical_runtime_failure(&historical),
+            Some(RuntimeFailureKind::PipelineCodeFailed)
+        );
     }
 }

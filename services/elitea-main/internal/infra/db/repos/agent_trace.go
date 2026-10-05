@@ -35,6 +35,10 @@ var currentAgentHierarchyKeys = [...]string{
 }
 
 var currentAgentToolMetadataKeys = [...]string{
+	"node_type",
+	"language",
+	"code_lifecycle_v1",
+	"code_debug_v1",
 	"parent_agent_name",
 	"parent_agent_call_id",
 	"parent_agent_path",
@@ -158,6 +162,12 @@ func (p *postgresCurrentAgentTraceProjector) projectAgentTraceDelta(
 ) error {
 	delta, recognized, err := decodeCurrentAgentTraceDelta(frame.BrowserData)
 	if err != nil || !recognized {
+		return err
+	}
+	if err := validateCurrentAgentCodeTraceDelta(delta, frame); err != nil {
+		return err
+	}
+	if err := validateCurrentAgentCodeDebugDelta(ctx, tx, delta, frame); err != nil {
 		return err
 	}
 	projectDatabaseID, ok := currentAgentDatabaseID(projectID)
@@ -577,7 +587,15 @@ func mergeCurrentAgentTraceRows(
 	for _, incoming := range delta.toolCalls {
 		incoming.entry = sanitizeCurrentAgentJSON(incoming.entry).(map[string]any)
 		if index, ok := positions[incoming.key]; ok {
-			merged, err := mergeAgentToolOutputChunk(toolCalls[index].entry, incoming.entry)
+			codeMerged, err := mergeCurrentAgentCodeTrace(toolCalls[index].entry, incoming.entry)
+			if err != nil {
+				return nil, err
+			}
+			debugMerged, err := mergeCurrentAgentCodeDebug(toolCalls[index].entry, codeMerged)
+			if err != nil {
+				return nil, err
+			}
+			merged, err := mergeAgentToolOutputChunk(toolCalls[index].entry, debugMerged)
 			if err != nil {
 				return nil, err
 			}
@@ -890,6 +908,9 @@ func dedupeCurrentAgentToolCalls(values []currentAgentToolCall) []currentAgentTo
 }
 
 func currentAgentToolCallIdentity(entry map[string]any) string {
+	if proof, present, err := currentAgentCodeProof(entry); present && err == nil {
+		return "code:" + proof.runID()
+	}
 	metadata := currentAgentMap(entry, "metadata")
 	toolMeta := currentAgentMap(entry, "tool_meta")
 	toolMetaMetadata := currentAgentMap(toolMeta, "metadata")
@@ -1058,6 +1079,12 @@ func normalizeCurrentAgentHierarchyValue(key string, value any) (any, bool) {
 }
 
 func normalizeCurrentAgentMetadataValue(key string, value any) (any, bool) {
+	if key == currentAgentCodeDebugKey {
+		return normalizedCurrentAgentCodeDebug(value)
+	}
+	if key == currentAgentCodeTraceKey {
+		return normalizedCurrentAgentCodeLifecycle(value)
+	}
 	if key == "hitl_deferred" {
 		flag, ok := value.(bool)
 		return flag, ok

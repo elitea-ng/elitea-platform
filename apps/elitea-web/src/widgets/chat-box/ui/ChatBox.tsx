@@ -1,3 +1,5 @@
+import { StaticPipelineContinuation } from './StaticPipelineContinueControls';
+import { stopChatGeneration } from './hooks/useEditorTestTransport';
 /**
  * ChatBox — composition root for the chat experience. Composes entities/conversation
  * lifecycle + streaming, features/chat-messages ChatMessageList, features/chat-input
@@ -17,7 +19,7 @@ import { useNavBlockerStore } from '@/widgets/app-shell';
 import type { AttachmentButtonHandle, VoiceButtonHandle } from '@/widgets/chat';
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
-import { ChatMessageList, useDeleteMessageAlert } from '@/features/chat-messages';
+import { ChatMessageList, useDeleteMessageAlert, currentNodeRecoveryBinding } from '@/features/chat-messages';
 import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
@@ -81,7 +83,7 @@ const ChatBoxInner = memo(function ChatBox({
   onDelete,
   extensions,
 }: ChatBoxProps) {
-  const { editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator } = extensions ?? {};
+  const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
   const { activeConversation, isLoadingConversation, onConversationCreated } = unwrapChatBoxConversation(conversation);
@@ -154,7 +156,7 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend,
+    llmSettings, model: data.selectedModel, userId, onAgentEvent, getInternalToolsForSend, editorTest,
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
@@ -162,7 +164,6 @@ const ChatBoxInner = memo(function ChatBox({
   // in-flight flag while an SSE turn runs — without the transport's own flag the
   // composer never offers Stop for the turn Stop exists to cancel (#328).
   const isStreaming = [data.streaming.isStreamingNow, data.messageList.isStreamingFromHistory, isStreamedExecution].some(Boolean);
-  const areAttachmentsDisabled = [isStreaming, areAttachmentsGated].some(Boolean); // #905 + A17 — see `useChatBoxParticipant`'s `areAttachmentsGated`.
 
   // Action handlers — real socket protocol (chat_predict / chat_continue_predict),
   // real REST mutations, real conversation-creation-first send ordering.
@@ -229,8 +230,10 @@ const ChatBoxInner = memo(function ChatBox({
   const { handleMentionChange, handleSelectUserMention, handleSelectSkillTool } = useChatBoxMentions({ state, onChangeParticipant });
 
   // Input disable/loading derivation
-  const { isInputLoading, isComposerBusy, disabledSend } = deriveChatBoxInputState({
+  const { isInputLoading, isComposerBusy, isDraftInputBusy, disabledSend } = deriveChatBoxInputState({
     isLoadingConversation,
+    isEditorTest: Boolean(editorTest),
+    activeConversation,
     isFetchingParticipantDetails,
     isUploadingAttachments: data.attachments.upload.isUploading,
     isUpdatingInternalToolsConfig,
@@ -239,9 +242,12 @@ const ChatBoxInner = memo(function ChatBox({
     hasChatInput: !!chatInputRef.current,
     isProcessingSymbols: state.keyDown.isProcessingSymbols,
     hasPendingHitlInterrupt: data.hasPendingHitlInterrupt,
+    hasPendingNodeRecovery: Boolean(currentNodeRecoveryBinding(messages)),
     isActiveParticipantBroken: state.isActiveParticipantBroken,
     isActiveParticipantWithdrawn: state.isActiveParticipantWithdrawn,
   });
+
+  const areAttachmentsDisabled = [isStreaming, areAttachmentsGated, [editorTest, isInputLoading].every(Boolean)].some(Boolean);
 
   // Action callbacks (send, regenerate, copy, delete, edit-resubmit, HITL resume, MCP/token-limit continue, clear chat, starter send)
   const readAloudRef = useStableRef(readAloud); const readAloudStop = useCallback(() => { readAloudRef.current.stop(); }, [readAloudRef]);
@@ -274,9 +280,8 @@ const ChatBoxInner = memo(function ChatBox({
   // cancel-and-close, for a stream the socket path never opened.
   const stopStreamRef = useStableRef(stopStreamedExecution);
   const stopGeneration = useCallback(() => {
-    stopStreamRef.current();
-    streamingRef.current.stopStreaming();
-  }, [stopStreamRef, streamingRef]);
+    stopChatGeneration(stopStreamRef.current, () => streamingRef.current.stopStreaming(), editorTest);
+  }, [stopStreamRef, streamingRef, editorTest]);
   // MUST target the host `ref`, never `chatInputRef` — see `ChatBox.types.ts`.
   useImperativeHandle(ref, () => ({
     onClear: () => { handleClearRef.current(); },
@@ -307,6 +312,7 @@ const ChatBoxInner = memo(function ChatBox({
           continuation={buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString)}
           tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}
         />
+        <StaticPipelineContinuation messages={messages} setChatHistory={data.setChatHistory} projectId={projectId} conversationUuid={conversationUuid} continueExecution={continueStreamedExecution} editorTest={editorTest} isStreaming={isStreaming} />
         {state.shouldShowStarters && (
           <ChatConversationStarters
             onSend={handleSendStarter}
@@ -331,7 +337,7 @@ const ChatBoxInner = memo(function ChatBox({
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
-          state={{ isLoading: isComposerBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
+          state={{ isLoading: isComposerBusy, disabledInput: isDraftInputBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
           content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
           callbacks={{ onSend: queued.onSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({

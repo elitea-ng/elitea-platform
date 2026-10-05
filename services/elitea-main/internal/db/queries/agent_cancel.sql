@@ -54,7 +54,7 @@ WITH target AS MATERIALIZED (
       AND job.generation = target.generation
       AND (
           (
-              job.desired_state = 'RUNNING'
+              job.desired_state IN ('RUNNING', 'SUSPENDED')
               AND (
                   job.state IN (
                       'PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING'
@@ -88,11 +88,15 @@ WITH target AS MATERIALIZED (
     SELECT response.id AS response_message_group_id,
            question.id AS question_message_group_id,
            item_count.value AS item_count,
+           COALESCE(conversation.source = 'editor_test', FALSE)
+               AS keep_empty_editor_test,
            latest_trace.text AS latest_trace_text
     FROM chat_message_group AS response
     JOIN chat_message_group AS question
       ON question.id = response.reply_to_id
      AND question.conversation_id = response.conversation_id
+    JOIN chat_conversations AS conversation
+      ON conversation.id = response.conversation_id
     CROSS JOIN LATERAL (
         SELECT count(*)::bigint AS value
         FROM chat_message_items AS item
@@ -120,12 +124,14 @@ WITH target AS MATERIALIZED (
         meta = response.meta
             - 'hitl_interrupt'
             - 'hitl_interrupts'
-            - 'authorization_requests',
+            - 'authorization_requests'
+            - 'node_recovery_required_v1',
         updated_at = clock_timestamp()
     FROM target
     WHERE response.id = target.response_message_group_id
       AND (
           target.item_count > 0
+          OR target.keep_empty_editor_test
           OR COALESCE(target.latest_trace_text, '') <> ''
       )
     RETURNING response.id
@@ -154,6 +160,7 @@ WITH target AS MATERIALIZED (
     USING target
     WHERE response.id = target.response_message_group_id
       AND target.item_count = 0
+      AND NOT target.keep_empty_editor_test
       AND COALESCE(target.latest_trace_text, '') = ''
     RETURNING response.id
 ), deleted_question_items AS (

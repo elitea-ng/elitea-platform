@@ -34,7 +34,7 @@ export type GraphAdmissionRuleId =
   | 'document.node-count'
   /** `compiler.rs:464-468` (malformed) and `compiler.rs:477-481` (names no node). */
   | 'document.entry-point'
-  /** `compiler.rs:470-474` — any non-empty `interrupt_before`/`interrupt_after` is refused outright. */
+  /** `compiler.rs:187-217, 1971-1984` — each pause list contains at most 128 unique stored node identifiers. */
   | 'document.static-interrupts'
   /** `compiler.rs:1373-1377` + `yaml.rs:371-378` + `compiler.rs:1456-1486` — state key grammar and the reserved list. */
   | 'state.key'
@@ -53,7 +53,9 @@ export type GraphAdmissionRuleId =
   /** `compiler.rs:1277-1290` and the per-family arms at `compiler.rs:1293-1338`, `1344-1351`. */
   | 'node.state-reference'
   /** `llm.rs:171-190` and `direct_tool.rs:182-186` — structured-output cardinality. */
-  | 'node.structured-output';
+  | 'node.structured-output'
+  /** Private extension contract checks. Production type admission stays disabled. */
+  | 'node.extension-configuration';
 
 /** One refusal, named precisely enough for a node panel to point at the offending control. */
 export interface GraphAdmissionIssue {

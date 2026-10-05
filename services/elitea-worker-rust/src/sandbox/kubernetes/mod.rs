@@ -4,6 +4,7 @@ pub mod client;
 #[cfg(test)]
 mod live_tests;
 pub mod runtime;
+mod workspace;
 
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -17,6 +18,7 @@ pub struct PodPolicy {
     pub runtime_class: String,
     pub node_selector: BTreeMap<String, String>,
     pub memory_bytes: u64,
+    pub workspace_bytes: u64,
     pub cpu_millis: u32,
     pub timeout_seconds: u32,
 }
@@ -97,6 +99,8 @@ impl PodPolicy {
                 .any(|(k, v)| k.is_empty() || k.len() > 253 || v.is_empty() || v.len() > 63)
             || self.memory_bytes < 64 * 1024 * 1024
             || self.memory_bytes > 64 * 1024 * 1024 * 1024
+            || !(256 * 1024 * 1024..=4 * 1024 * 1024 * 1024).contains(&self.workspace_bytes)
+            || self.workspace_bytes > 256 * 1024 * 1024 && self.workspace_bytes > self.memory_bytes
             || self.cpu_millis == 0
             || self.cpu_millis > 256_000
             || self.timeout_seconds == 0
@@ -133,7 +137,7 @@ impl PodPolicy {
                     "securityContext":{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}},
                     "volumeMounts":[{"name":"workspace","mountPath":"/workspace"},{"name":"tmp","mountPath":"/tmp"}]
                 }],
-                "volumes":[{"name":"workspace","emptyDir":{"medium":"Memory","sizeLimit":"256Mi"}},
+                "volumes":[{"name":"workspace","emptyDir":{"medium":"Memory","sizeLimit":if self.workspace_bytes==256*1024*1024{"256Mi".into()}else{self.workspace_bytes.to_string()}}},
                     {"name":"tmp","emptyDir":{"medium":"Memory","sizeLimit":"64Mi"}}]
             }
         }))
@@ -163,6 +167,9 @@ pub fn confirmed_terminated(
     {
         return Err(InvalidWorkload);
     }
+    if workspace::stopped_before_code(pod) {
+        return Ok(true);
+    }
     let Some(statuses) = pod
         .pointer("/status/containerStatuses")
         .and_then(Value::as_array)
@@ -187,6 +194,7 @@ mod tests {
             runtime_class: "sandbox".into(),
             node_selector: BTreeMap::from([("sandbox".into(), "true".into())]),
             memory_bytes: 512 * 1024 * 1024,
+            workspace_bytes: 256 * 1024 * 1024,
             cpu_millis: 1000,
             timeout_seconds: 120,
         }

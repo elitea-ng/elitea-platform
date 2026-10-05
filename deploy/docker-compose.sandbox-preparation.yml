@@ -1,0 +1,35 @@
+# Add after the standalone, Rust-agent, and sandbox overlays.
+# Prepare private material before startup. This adds no host port.
+services:
+  elitea-main:
+    environment:
+      ELITEA_RUNTIME_SANDBOX_AUDIENCES: "dns:elitea-sandbox-deno,dns:elitea-sandbox-rust,dns:elitea-sandbox-preparation"
+
+  elitea-sandbox:
+    # All three listeners remain in the existing supervisor process.
+    command:
+      - --config
+      - /run/elitea-sandbox/deno/config.json
+      - --config
+      - /run/elitea-sandbox/rust/config.json
+      - --config
+      - /run/elitea-sandbox/preparation/config.json
+    mem_limit: 1g
+    networks:
+      default:
+        aliases: [elitea-sandbox-deno, elitea-sandbox-rust, elitea-sandbox-preparation]
+    volumes:
+      - type: bind
+        source: ${ELITEA_SANDBOX_PREPARATION_MATERIAL:?Set the private Python preparation material directory}
+        target: /run/elitea-sandbox/preparation
+        read_only: true
+        bind:
+          create_host_path: false
+    # Limit each client's concurrent transfers to one. Bound each staging filesystem.
+    tmpfs:
+      - /run/elitea-sandbox-content/deno:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/preparation:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+
+# The operator creates the resolver network outside Compose.
+# Set its exact name in preparation/config.json. Attach only trusted preparers.
+# The supervisor, worker, and execution containers do not join this network.

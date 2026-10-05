@@ -1,8 +1,10 @@
 // Image-owned adapter. Execute only inside the resource-limited Code container.
 // User modules have the process's Deno permissions; this is not a JS sandbox.
+import { verifyJavaScriptExecution } from "./javascript_hydration_job.mjs";
+import {preparedCapabilities,imageClient,writePlatformResult} from "./platform_prepared.mjs";
 const encoder = new TextEncoder();
 
-export async function executeJavaScript(source, input, language, scratch) {
+export async function executeJavaScript(source, input, language, scratch, platform = null) {
   if (!["javascript", "typescript"].includes(language)) {
     throw new Error("Unsupported JavaScript runtime language");
   }
@@ -11,10 +13,13 @@ export async function executeJavaScript(source, input, language, scratch) {
   const originalInfo = console.info;
   const previousState = globalThis.elitea_state;
   const previousLegacy = globalThis.alita_state;
+  const hadClient=Object.hasOwn(globalThis,"elitea_client"),hadLegacyClient=Object.hasOwn(globalThis,"alita_client");
+  const previousClient=globalThis.elitea_client,previousLegacyClient=globalThis.alita_client;
   try {
     // Never embed state in source or accept a caller-supplied module path.
     globalThis.elitea_state = structuredClone(input);
     globalThis.alita_state = { ...globalThis.elitea_state };
+    if (platform) {globalThis.elitea_client=platform;globalThis.alita_client=platform;}
     console.log = (...args) => console.error(...args);
     console.info = (...args) => console.error(...args);
     const path = directory +
@@ -51,6 +56,8 @@ export async function executeJavaScript(source, input, language, scratch) {
     console.info = originalInfo;
     globalThis.elitea_state = previousState;
     globalThis.alita_state = previousLegacy;
+    if (hadClient) globalThis.elitea_client=previousClient; else delete globalThis.elitea_client;
+    if (hadLegacyClient) globalThis.alita_client=previousLegacyClient; else delete globalThis.alita_client;
     await Deno.remove(directory, { recursive: true });
   }
 }
@@ -61,19 +68,27 @@ if (import.meta.main) {
     throw new Error("Code request or scratch configuration is invalid");
   }
   const request = JSON.parse(await Deno.readTextFile(path));
+  const capability=preparedCapabilities(request);
   if (
-    request.revision !== 1 || typeof request.source !== "string" ||
+    ![1, 3].includes(capability.baseRevision) || typeof request.source !== "string" ||
     encoder.encode(request.source).length > 256 * 1024 ||
     !request.input || Array.isArray(request.input) ||
     typeof request.input !== "object"
   ) {
     throw new Error("Code request is invalid for the JavaScript runtime");
   }
+  if (capability.baseRevision === 3) await verifyJavaScriptExecution();
+  else if (
+    Object.hasOwn(request, "native_dependencies") ||
+    Object.hasOwn(request, "dependency_bundle_sha256")
+  ) throw new Error("Invalid legacy dependency request");
   const result = await executeJavaScript(
     request.source,
     request.input,
     request.language,
     scratch,
+    imageClient(capability.broker),
   );
-  console.log(JSON.stringify({ revision: 1, result }));
+  if (capability.broker) await writePlatformResult(result);
+  else console.log(JSON.stringify({ revision: 1, result }));
 }

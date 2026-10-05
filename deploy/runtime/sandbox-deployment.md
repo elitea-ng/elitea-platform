@@ -4,6 +4,9 @@ Apply `docker-compose.sandbox.yml` after the full standalone and Rust-agent over
 This adds one supervisor process with Deno and Rust runtime profiles. Each profile admits one fixed runtime image and policy.
 The worker never mounts the Docker socket. Sandbox containers receive neither the socket nor supervisor trust material.
 
+Add the optional [Python preparation overlay](sandbox-preparation-deployment.md) for a third supervisor listener and verified shared-content delivery.
+That overlay requires separate client certificates, private staging, and an operator-provisioned resolver network.
+
 Use `--build-arg CARGO_BUILD_JOBS=1` when building the supervisor on a memory-constrained shared host.
 This optional setting bounds build concurrency. It does not change supervisor or sandbox runtime limits.
 Reserve memory for the running rehearsal services before starting a release build.

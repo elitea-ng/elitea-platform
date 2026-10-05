@@ -179,6 +179,10 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 		r.Method(http.MethodPost, agentexecutionapi.CurrentRegenerationPath, cfg.CurrentAgentStart)
 		r.Method(http.MethodPost, agentexecutionapi.CurrentContinuationPath, cfg.CurrentAgentStart)
 	}
+	if cfg.CurrentNodeRecovery != nil {
+		r.Method(http.MethodGet, agentexecutionapi.CurrentNodeRecoveryPath, cfg.CurrentNodeRecovery)
+		r.Method(http.MethodPost, agentexecutionapi.CurrentNodeRecoveryActionPath, cfg.CurrentNodeRecovery)
+	}
 	if cfg.CurrentAgentCancel != nil {
 		r.Method(http.MethodDelete, agentexecutionapi.CurrentAgentCancelPath, cfg.CurrentAgentCancel)
 	}

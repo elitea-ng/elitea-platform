@@ -5,6 +5,7 @@
  * resolution, DEV token gating, http/network failure paths, and the ZIP
  * multi-download loop.
  */
+import { Blob as NodeBlob } from 'node:buffer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
@@ -244,7 +245,9 @@ describe('fetchArtifactBlob', () => {
     const result = await fetchArtifactBlob({ baseUrl: '/api/v2', projectId: 'p1', bucket: 'bucket', filePath: 'notes.md' });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
-    expect(result.data).toBeInstanceOf(Blob);
+    expect(result.data).toBeInstanceOf(NodeBlob);
+    expect(result.data.size).toBe(22);
+    expect(result.data.type).toBe('text/plain');
     expect(await result.data.text()).toBe('hello artifact content');
   });
 

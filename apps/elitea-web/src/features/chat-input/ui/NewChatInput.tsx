@@ -234,7 +234,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
       }}
       clearInputAfterSend={content.clearInputAfterSubmit}
       disabledSend={state.disabledSend}
-      disabledInput={state.isLoading}
+      disabledInput={state.disabledInput}
       showLoading={state.isLoading}
       isStreaming={state.isStreaming}
       isCreatingConversation={state.isCreatingConversation}

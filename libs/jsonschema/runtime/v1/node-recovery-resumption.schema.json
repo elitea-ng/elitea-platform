@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-resumption.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "execution_id",
+    "generation",
+    "request_id",
+    "activation_id",
+    "journal_revision",
+    "receipt_sha256",
+    "claim_id",
+    "input_bundle_id",
+    "input_manifest_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.node-recovery-resumption.v1"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "Main currentRuntimeID encodes 16 bytes as lowercase hex. Chat response IDs use separate UUIDs.",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "activation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "journal_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "claim_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "input_bundle_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "input_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  }
+}

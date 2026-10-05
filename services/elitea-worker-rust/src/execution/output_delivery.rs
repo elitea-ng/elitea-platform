@@ -2442,6 +2442,57 @@ impl AgentOutputPreflight {
     /// Only structurally valid progress covered by Main's watermark is reconciled.
     /// Pending terminal or uncovered progress requires exact replay first.
     #[allow(dead_code)]
+    pub(crate) async fn prepare_node_recovery(
+        &self,
+        recovery: &super::agent_delivery::NodeRecoveryAgentDelivery,
+    ) -> Result<Option<PreparedAgentOutput>, AgentOutputPreflightError> {
+        if !recovery.matches_output_transport(
+            &self.policy.output_config.workload_session_id,
+            &self.policy.output_config.producer_id,
+        ) {
+            return Err(AgentOutputPreflightError::InvalidConfiguration(
+                "the output transport identity does not match the node recovery claim",
+            ));
+        }
+        let factory = AgentOutputSpoolFactory {
+            policy: self.policy.clone(),
+            binding: Arc::new(recovery.spool_identity()),
+        };
+        let mut prepared = factory.reopen().await?;
+        if let Some(frame) = prepared.pending_replay_frame() {
+            if prepared.pending_frame_count() != 1 {
+                return Err(AgentOutputPreflightError::InvalidDurableState(
+                    "the recovery spool contains multiple pending frames",
+                ));
+            }
+            if !recovery.covered_progress(&frame).map_err(|_| {
+                AgentOutputPreflightError::InvalidDurableState(
+                    "the recovery output frame is malformed",
+                )
+            })? {
+                return Ok(None);
+            }
+            let watermark = recovery.output_watermark();
+            tokio::task::spawn_blocking(move || prepared.reconcile_pending_through(watermark))
+                .await
+                .map_err(|_| {
+                    AgentOutputPreflightError::Unavailable(
+                        "checkpoint output reconciliation did not complete",
+                    )
+                })?
+                .map_err(AgentOutputPreflightError::Output)?;
+            prepared = factory.reopen().await?;
+            if prepared.pending_frame_count() != 0 {
+                return Ok(None);
+            }
+        }
+        Ok(Some(PreparedAgentOutput { prepared, factory }))
+    }
+
+    /// Prepare checkpoint output without discarding unacknowledged frames.
+    /// Only structurally valid progress covered by Main's watermark is reconciled.
+    /// Pending terminal or uncovered progress requires exact replay first.
+    #[allow(dead_code)]
     pub(crate) async fn prepare_checkpoint(
         &self,
         recovery: &super::agent_delivery::CheckpointAgentDelivery,

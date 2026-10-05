@@ -1,3 +1,5 @@
+import { useEditorTestTransport } from './useEditorTestTransport';
+import type { ChatBoxProps } from '../ChatBox.types';
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
 import { useCallback, useMemo } from "react";
 
@@ -50,6 +52,7 @@ interface SendDeps {
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
+  readonly editorTest?: NonNullable<ChatBoxProps['extensions']>['editorTest'];
   readonly deps: SendDeps;
   readonly getInternalToolsForSend?: () => Promise<readonly string[]>;
   /** Model settings the composer resolved; forwarded as the turn's `llm_settings`. */
@@ -157,7 +160,8 @@ export function useChatBoxSend(
     context: buildChatStreamContext(params),
     onAgentEvent: params.onAgentEvent,
   });
-  const { startDetailed, resume, regenerateDetailed } = transport;
+  const { startDetailed, resume, resumeDetailed, regenerateDetailed } = transport;
+  const requireTestTransport = useEditorTestTransport(params.editorTest, transport);
 
   const startStreamedExecution = useCallback(
     async ({
@@ -167,7 +171,7 @@ export function useChatBoxSend(
       readonly conversationUuid: string;
       readonly payload: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
-      if (projectId === undefined) return NO_STREAM_TRANSPORT;
+      if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
       // The contract comes from the PARTICIPANT this turn addresses, never
@@ -182,7 +186,7 @@ export function useChatBoxSend(
         (target as { readonly entity_name?: unknown } | null | undefined)
           ?.entity_name === "user"
       )
-        return NO_STREAM_TRANSPORT;
+        return requireTestTransport(NO_STREAM_TRANSPORT);
       const targetParticipantId = positiveParticipantId(
         (target as { readonly id?: unknown } | null | undefined)?.id,
       );
@@ -202,15 +206,16 @@ export function useChatBoxSend(
       // No body can satisfy this contract (an agent turn with no addressable
       // participant). The socket fallback takes it rather than a POST that is
       // certain to be refused.
-      if (body === undefined) return NO_STREAM_TRANSPORT;
-      return startDetailed({
+      if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      return requireTestTransport(await startDetailed({
         projectId,
         conversationUuid,
         contract: resolveStartContract(target),
         body,
-      });
+      }));
     },
     [
+      requireTestTransport,
       startDetailed,
       projectId,
       projectIdString,
@@ -231,16 +236,19 @@ export function useChatBoxSend(
       readonly contract: string;
       readonly body: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
-      if (projectId === undefined) return NO_STREAM_TRANSPORT;
+      if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      if (contract === 'agent.continue.static.v1') {
+        return requireTestTransport(await resumeDetailed({ projectId, conversationUuid, contract, body }));
+      }
       const resumed = await resume({
         projectId,
         conversationUuid,
         contract,
         body,
       });
-      return resumed ? STREAM_STARTED : NO_STREAM_TRANSPORT;
+      return requireTestTransport(resumed ? STREAM_STARTED : NO_STREAM_TRANSPORT);
     },
-    [resume, projectId],
+    [resume, resumeDetailed, projectId, requireTestTransport],
   );
 
   const regenerateStreamedExecution = useCallback(
@@ -251,7 +259,7 @@ export function useChatBoxSend(
       readonly updatedItems?: readonly unknown[] | undefined;
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined || params.conversationUuid === undefined)
-        return NO_STREAM_TRANSPORT;
+        return requireTestTransport(NO_STREAM_TRANSPORT);
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
       const isApplicationTurn =
@@ -273,18 +281,19 @@ export function useChatBoxSend(
           ? { updatedItems: input.updatedItems }
           : {}),
       });
-      if (body === undefined) return NO_STREAM_TRANSPORT;
+      if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
       // Verbatim, not collapsed to a boolean — see `regenerateStreamedWithRetry`
       // (`useChatBoxHandlers.regenerate.ts`) for the one refusal it carries.
-      return regenerateDetailed({
+      return requireTestTransport(await regenerateDetailed({
         projectId,
         conversationUuid: params.conversationUuid,
         responseMessageId: input.messageId,
         body,
-      });
+      }));
     },
     [
       regenerateDetailed,
+      requireTestTransport,
       projectId,
       projectIdString,
       params.conversationUuid,
@@ -298,6 +307,7 @@ export function useChatBoxSend(
   const { deps } = params;
   const createConversationForSend = useCallback(
     async (question: string) => {
+      if (params.editorTest) throw new Error('A validated Test context is required.');
       const internalTools = await getInternalToolsForSend?.();
       const created = await deps.createConversation({
         name:
@@ -322,6 +332,7 @@ export function useChatBoxSend(
     },
     [
       deps,
+      params.editorTest,
       isAgentsPage,
       modelName,
       params.userId,

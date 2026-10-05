@@ -44,6 +44,21 @@ func (c Config) MaterialFiles() ([]MaterialFile, error) {
 	add(c.RedisCAFile, securefile.PublicMaterial)
 	add(c.SigningKeyFile, securefile.PrivateMaterial)
 	add(c.VerificationKeyringFile, securefile.PublicMaterial)
+	if c.CodeOwnerRecovery != nil {
+		add(c.CodeOwnerRecovery.CertificateChainPath, securefile.PublicMaterial)
+		add(c.CodeOwnerRecovery.PrivateKeyPath, securefile.PrivateMaterial)
+		add(c.CodeOwnerRecovery.ServerCAPath, securefile.PublicMaterial)
+	}
+	if c.CodePlatform != nil {
+		add(c.CodePlatform.ContentKeysFile, securefile.PrivateMaterial)
+	}
+	if c.CodeDebugArtifacts != nil {
+		add(c.CodeDebugArtifacts.AgentStateDSNFile, securefile.PrivateMaterial)
+	}
+	if c.RustCompiledSnapshots != nil {
+		add(c.RustCompiledSnapshots.ProfilesFile, securefile.PublicMaterial)
+		add(c.RustCompiledSnapshots.AgentStateDSNFile, securefile.PrivateMaterial)
+	}
 	for _, listener := range []runtimeListenerFiles{
 		{c.ControlTLS.CertificateChainPath, c.ControlTLS.PrivateKeyPath, c.ControlTLS.ClientCAPath},
 		{c.OutputTLS.CertificateChainPath, c.OutputTLS.PrivateKeyPath, c.OutputTLS.ClientCAPath},

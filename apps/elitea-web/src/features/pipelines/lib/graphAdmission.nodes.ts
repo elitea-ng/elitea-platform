@@ -8,6 +8,7 @@
  * budget only; the two halves share `AdmissionGraph` and are composed into
  * one catalogue by `GRAPH_ADMISSION_RULES` there.
  */
+import { mapOwnedWorkerChannels } from './graphMapAdmission.helpers';
 import { FlowEditorConstants, RuntimeContractConstants } from './flow-editor/constants';
 import type { RouteTargetRef } from './graphAdmission.nodeReads';
 import {
@@ -257,8 +258,10 @@ const stateReferenceRule: GraphAdmissionRule = {
 };
 
 function stateReferenceIssues(graph: AdmissionGraph, node: AdmissionNode): readonly GraphAdmissionIssue[] {
+  const ownedInputs = new Set(mapOwnedWorkerChannels(graph.document, node.id));
   const undeclared = declaredStateReferences(node)
-    .filter((ref) => !BUILTIN_STATE_KEYS.has(ref.target) && !graph.stateKeys.has(ref.target))
+    .filter((ref) => !BUILTIN_STATE_KEYS.has(ref.target) && !graph.stateKeys.has(ref.target)
+      && !(ref.field.startsWith('input') && ownedInputs.has(ref.target)))
     .map((ref) =>
       admissionIssue(
         'node.state-reference',

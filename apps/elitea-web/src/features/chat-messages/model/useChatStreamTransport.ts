@@ -68,7 +68,9 @@ import {
 import { isRootContextFrame } from "../lib/chatStreamContextFrames";
 import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
-import { isTurnTerminalFrame } from "../lib/chatStreamTurnEnd";
+import { isObserverTerminalFrame } from "../lib/chatStreamTurnEnd";
+import { resultReference, settleFinalResultObserver } from '../lib/chatStreamFinalResult';
+import { completeReferencedChatResult } from './completeReferencedChatResult';
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
 import {
@@ -131,6 +133,9 @@ export function useChatStreamTransport(
    * individual frame omitted; an explicit frame value still wins.
    */
   const questionIdRef = useRef<string | undefined>(undefined);
+  const generationRef = useRef<string | undefined>(undefined);
+  const runEpochRef = useRef(0);
+  const hydrationEpochRef = useRef<number | undefined>(undefined);
 
   /**
    * The connection's own `close`, held in a ref because the two sides need
@@ -157,6 +162,7 @@ export function useChatStreamTransport(
     ownerRef.current = undefined;
     cancelRef.current = null;
     questionIdRef.current = undefined;
+    generationRef.current = undefined;
     closeStreamRef.current();
   }, []);
 
@@ -164,37 +170,52 @@ export function useChatStreamTransport(
     (frame: ExecutionEventData) => {
       // A frame with no `type` names no case; the reducer would return the
       // same array, but the forward below would still fire on it.
-      if (!isChatStreamFrame(frame)) return;
+      if (!ownsRun() || !isChatStreamFrame(frame)) return;
+      if (activeConversationRef.current !== undefined && activeConversationRef.current !== ownerRef.current) return;
+      const generation = nonEmptyString(frame.execution_generation);
+      if (generation && generationRef.current && generation !== generationRef.current) return;
+      const responseId = cancelRef.current?.messageGroupUuid;
+      if ((generation || generationRef.current) && responseId && frame.message_id !== responseId) return;
       const frameQuestionId = nonEmptyString(frame.question_id);
-      // Authorization/output-limit resumes identify the existing answer and
-      // need not repeat its question. Normalize null/empty wire values to
-      // absence even without a request hint: they must not erase that answer's
-      // persisted question link and send the next Regenerate to the legacy API.
+      if ((generation || generationRef.current) && frameQuestionId && questionIdRef.current && frameQuestionId !== questionIdRef.current) return;
+      if (generation) generationRef.current = generation;
+      // Preserve the admitted question link when a durable frame omits it.
       const identifiedFrame = {
         ...frame,
         question_id: frameQuestionId ?? questionIdRef.current,
+        execution_generation: generation ?? generationRef.current,
       };
-      setChatHistory((prev) =>
-        applyChatStreamFrame(prev, identifiedFrame, contextRef.current ?? {}),
-      );
-      // A terminal frame ENDS the turn, so the transport stops owning a run
-      // right here — it does not wait for the connection to close, because
-      // the server never closes it (executions/events.go keeps the stream open
-      // and only emits `: heartbeat` comments afterwards). `isStreaming` is
-      // "a connection exists", and ChatBox now gates BOTH the Stop button and
-      // the composer on it, so leaving the connection open past the terminal
-      // frame left the composer disabled for the rest of the session — caught
-      // by the #284 journey's "the composer must be released when the turn
-      // ends".
-      //
-      // detach() never touches chat history, and it must not here: the
-      // terminal frame has already settled the message through the reducer.
-      if (isRootContextFrame(identifiedFrame) || isTurnTerminalFrame(identifiedFrame)) refreshContext();
-      if (isTurnTerminalFrame(identifiedFrame)) detach();
+      setChatHistory((prev) => {
+        // Bind assembly results that arrive without agent_start to the admitted generation.
+        const owned = generation && prev.some((message) => message.id === responseId && message.executionGeneration !== generation)
+          ? prev.map((message) => message.id === responseId ? { ...message, executionGeneration: generation } : message) : prev;
+        return applyChatStreamFrame(owned, identifiedFrame, contextRef.current ?? {});
+      });
+      // Success progress precedes full_message; the result releases the durable observer.
+      const terminal = isObserverTerminalFrame(identifiedFrame, generationRef.current);
+      if (terminal && (identifiedFrame.content === null || identifiedFrame.content === undefined) && resultReference(identifiedFrame)) {
+        const target = cancelRef.current, owner = ownerRef.current, currentGeneration = generationRef.current, epoch = runEpochRef.current;
+        if (hydrationEpochRef.current === epoch) return;
+        hydrationEpochRef.current = epoch;
+        const visible = () => runEpochRef.current === epoch && (activeConversationRef.current === undefined || activeConversationRef.current === owner);
+        void completeReferencedChatResult({
+          frame: identifiedFrame, target, conversationUuid: owner, generation: currentGeneration,
+          isCurrent: () => visible() && cancelRef.current === target && ownerRef.current === owner && generationRef.current === currentGeneration,
+          onResult: (result) => setChatHistory((prev) => visible() ? applyChatStreamFrame(prev, result, contextRef.current ?? {}) : prev),
+          onError: (reason) => onStreamErrorRef.current?.(reason),
+          onSettled: () => {
+            setChatHistory((prev) => visible() ? settleFinalResultObserver(prev, identifiedFrame) : prev);
+            refreshContext(); detach();
+          },
+        });
+        return;
+      }
+      if (isRootContextFrame(identifiedFrame) || terminal) refreshContext();
+      if (terminal) detach();
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach, refreshContext],
+    [setChatHistory, detach, refreshContext, ownsRun],
   );
 
   /**
@@ -278,9 +299,11 @@ export function useChatStreamTransport(
       const active = activeConversationRef.current;
       if (active !== undefined && active !== runConversationUuid) return true;
       ownerRef.current = runConversationUuid;
+      runEpochRef.current += 1;
       contextProjectRef.current = projectId;
       refreshContext();
       questionIdRef.current = questionId;
+      generationRef.current = nonEmptyString(accepted['execution_generation']);
       // `response_message_id` is what the cancel route addresses
       // (`DELETE .../task/prompt_lib/{projectID}/{responseMessageID}`). Without
       // one there is nothing to cancel and Stop can only detach.
@@ -294,6 +317,14 @@ export function useChatStreamTransport(
     },
     [openStream, refreshContext],
   );
+
+  const attachExistingRun = useCallback<UseChatStreamTransportResult['attachExistingRun']>((target) => {
+    const { run, conversationUuid, projectId } = target;
+    if (activeConversationRef.current !== conversationUuid || !run.can_control || run.phase !== 'RUNNING'
+      || !run.events_url || run.events_url !== `/api/v2/executions/${encodeURIComponent(String(projectId))}/${encodeURIComponent(run.execution_id)}/events`) return false;
+    detach();
+    return subscribeToRun({ events_url: run.events_url, execution_id: run.execution_id, response_message_id: run.response_message_id, execution_generation: run.execution_generation }, conversationUuid, projectId, run.question_id);
+  }, [detach, subscribeToRun]);
 
   const reconcileResume = useCallback(async (
     accepted: AgentExecutionStart, params: ContinueAgentExecutionParams,
@@ -359,9 +390,10 @@ export function useChatStreamTransport(
     () => ({
       ...starters,
       isStreaming,
+      attachExistingRun,
       close: detach,
       stop,
     }),
-    [starters, isStreaming, detach, stop],
+    [starters, isStreaming, attachExistingRun, detach, stop],
   );
 }

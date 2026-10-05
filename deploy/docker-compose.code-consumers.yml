@@ -1,0 +1,39 @@
+# Add after the full standalone, Rust-agent, and sandbox overlays.
+# This explicit overlay enables all three optional Code consumers.
+# Prepare the owner identity, public runner trust asset, and private material first.
+services:
+  runtime-material:
+    environment:
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
+    volumes:
+      - type: bind
+        source: ${ELITEA_CODE_OWNER_CLIENT_CERT_FILE:?Set the prepared Main Code owner certificate}
+        target: /src/code-owner-client.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ELITEA_CODE_OWNER_CLIENT_KEY_FILE:?Set the prepared Main Code owner private key}
+        target: /src/code-owner-client.key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ELITEA_CODE_PLATFORM_CONTENT_KEYS_FILE:?Set the private platform content key file}
+        target: /src/code-platform-content-keys.json
+        read_only: true
+        bind:
+          create_host_path: false
+
+  elitea-main:
+    environment:
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: ${ELITEA_CODE_OWNER_RECOVERY_CONFIG:?Set exact Main identity and supervisor origins with installed material paths}
+      ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG: ${ELITEA_CODE_WORKSPACE_CONFIG:?Set exact repository capabilities, egress rules, and bounded policy}
+      ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_PLATFORM_CONFIG: ${ELITEA_CODE_PLATFORM_CONFIG:?Set exact broker policies and installed content key path}
+      ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
+      ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE: /run/elitea-runtime/agent-checkpoint-connection

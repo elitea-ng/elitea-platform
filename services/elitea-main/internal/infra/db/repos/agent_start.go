@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,11 @@ type currentRegenerationQuerier interface {
 		context.Context,
 		sqlcgen.ResolveCurrentRegenerationParams,
 	) (sqlcgen.ResolveCurrentRegenerationRow, error)
+}
+
+type currentStaticContinuationQuerier interface {
+	ResolveCurrentStaticToolContinuation(context.Context, sqlcgen.ResolveCurrentStaticToolContinuationParams) (sqlcgen.ResolveCurrentStaticToolContinuationRow, error)
+	ResolveCurrentStaticContinuation(context.Context, sqlcgen.ResolveCurrentStaticContinuationParams) (sqlcgen.ResolveCurrentStaticContinuationRow, error)
 }
 
 type currentContinuationQuerier interface {
@@ -367,6 +373,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					}
 					return fmt.Errorf("validate current application nesting: %w", validationErr)
 				}
+				sourceVersionDetails := bytes.Clone(versionDetails)
 				versionDetails, queryErr = materializeCurrentApplicationVersionNestedSkills(
 					ctx,
 					nesting,
@@ -386,6 +393,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					ApplicationVersionID: int64(row.ApplicationVersionID),
 					Variables:            variables,
 					VersionDetails:       versionDetails,
+					SourceVersionDetails: sourceVersionDetails,
 					ChatHistory:          chatHistory,
 					InternalTools:        internalTools,
 				}
@@ -397,11 +405,12 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 		if catalogue.versionID == 0 {
 			return nil
 		}
-		versionDetails, err := repository.resolveCatalogueApplicationVersion(ctx, catalogue)
+		versionDetails, sourceVersionDetails, err := repository.resolveCatalogueApplicationSourceAndRuntime(ctx, catalogue)
 		if err != nil {
 			return err
 		}
 		target.VersionDetails = versionDetails
+		target.SourceVersionDetails = sourceVersionDetails
 		return nil
 	}
 	if err := repository.resolveAfterCurrentResponseSettles(
@@ -471,16 +480,22 @@ const currentPublishedVersionStatus = "published"
 // five that join `application_versions`, the LEFT JOIN with its identity
 // comparisons restated — and it needs its own tests, because none of those
 // paths is exercised by the send journey.
-func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationVersion(
+// Preserve the existing runtime-only helper and its default behavior.
+func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationVersion(ctx context.Context, reference currentCatalogueApplicationReference) (json.RawMessage, error) {
+	runtime, _, err := repository.resolveCatalogueApplicationSourceAndRuntime(ctx, reference)
+	return runtime, err
+}
+
+func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationSourceAndRuntime(
 	ctx context.Context,
 	reference currentCatalogueApplicationReference,
-) (json.RawMessage, error) {
+) (json.RawMessage, json.RawMessage, error) {
 	if repository == nil || repository.projects == nil ||
 		repository.catalogueProjectID <= 0 ||
 		reference.applicationID <= 0 || reference.versionID <= 0 {
-		return nil, agentexecutionapp.ErrUnsupportedCurrentAgentStart
+		return nil, nil, agentexecutionapp.ErrUnsupportedCurrentAgentStart
 	}
-	var versionDetails json.RawMessage
+	var versionDetails, sourceVersionDetails json.RawMessage
 	err := repository.projects.WithinProjectTx(
 		ctx,
 		int64(repository.catalogueProjectID),
@@ -533,6 +548,7 @@ func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationVersio
 				}
 				return fmt.Errorf("validate catalogue application nesting: %w", validationErr)
 			}
+			sourceVersionDetails = bytes.Clone(details)
 			materialized, materializeErr := materializeCurrentApplicationVersionNestedSkills(
 				ctx,
 				nesting,
@@ -552,9 +568,9 @@ func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationVersio
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return versionDetails, nil
+	return versionDetails, sourceVersionDetails, nil
 }
 
 // currentCatalogueVersionAdmissible applies the two rules that only apply to a
@@ -801,6 +817,60 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 		func(tx sqlExecutor) error {
+			if request.Kind == agentexecutionapp.CurrentContinuationStatic {
+				queries, ok := tx.(currentStaticContinuationQuerier)
+				if !ok {
+					return errors.New("current static continuation query is unavailable")
+				}
+				if request.StaticTools {
+					row, queryErr := queries.ResolveCurrentStaticToolContinuation(ctx, sqlcgen.ResolveCurrentStaticToolContinuationParams{ActorUserID: request.ActorUserID, ProjectID: projectID, ConversationUuid: conversationUUID, ResponseMessageID: responseMessageID})
+					if errors.Is(queryErr, pgx.ErrNoRows) {
+						return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+					}
+					if queryErr != nil {
+						return fmt.Errorf("resolve current static tool continuation: %w", queryErr)
+					}
+					inventory, err := agentexecutionapp.ParseCurrentStaticToolInventory([]byte(row.StaticToolsJson))
+					if err != nil {
+						return err
+					}
+					tools, err := agentexecutionapp.DecodeCurrentStaticToolInput(row.ContentBytes, row.ContentDigest, *inventory, request.ConversationUUID, row.ExecutionGeneration, row.ThreadID)
+					if err != nil {
+						return err
+					}
+					target = agentexecutionapp.CurrentContinuationTarget{ContinuationKind: agentexecutionapp.CurrentContinuationStatic, Kind: agentexecutionapp.CurrentRegenerationApplication, TargetParticipantID: int64(row.TargetParticipantID), QuestionID: uuid.UUID(row.QuestionID.Bytes).String(), UserInput: row.UserInput, ThreadID: row.ThreadID, ExecutionGeneration: row.ExecutionGeneration, PipelineStaticTools: tools}
+					if uuid.UUID(row.ConversationUuid.Bytes).String() != request.ConversationUUID || target.Validate() != nil {
+						return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+					}
+					return nil
+				}
+				row, queryErr := queries.ResolveCurrentStaticContinuation(ctx, sqlcgen.ResolveCurrentStaticContinuationParams{
+					ActorUserID: request.ActorUserID, ProjectID: projectID, ConversationUuid: conversationUUID, ResponseMessageID: responseMessageID,
+				})
+				if errors.Is(queryErr, pgx.ErrNoRows) {
+					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+				}
+				if queryErr != nil {
+					return fmt.Errorf("resolve current static continuation: %w", queryErr)
+				}
+				proof, proofErr := agentexecutionapp.ParseCurrentPipelineStaticProof([]byte(row.StaticPauseJson), row.ThreadID)
+				if proofErr != nil {
+					return proofErr
+				}
+				pause, pauseErr := agentexecutionapp.DecodeCurrentStaticInput(row.ContentBytes, row.ContentDigest, *proof, request.ConversationUUID, row.ExecutionGeneration, row.ThreadID)
+				if pauseErr != nil {
+					return pauseErr
+				}
+				target = agentexecutionapp.CurrentContinuationTarget{
+					ContinuationKind: agentexecutionapp.CurrentContinuationStatic, Kind: agentexecutionapp.CurrentRegenerationApplication,
+					TargetParticipantID: int64(row.TargetParticipantID), QuestionID: uuid.UUID(row.QuestionID.Bytes).String(),
+					UserInput: row.UserInput, ThreadID: row.ThreadID, ExecutionGeneration: row.ExecutionGeneration, PipelineStaticPause: pause,
+				}
+				if uuid.UUID(row.ConversationUuid.Bytes).String() != request.ConversationUUID || target.Validate() != nil {
+					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+				}
+				return nil
+			}
 			queries, ok := tx.(currentContinuationQuerier)
 			if !ok {
 				return errors.New("current agent continuation query is unavailable")

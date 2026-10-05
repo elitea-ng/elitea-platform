@@ -56,11 +56,14 @@ import type {
   CanvasPresence,
   CanvasPresenceRequest,
   ClearMemories200,
+  ConversationDetail,
   ConversationExport,
   ConversationListing,
+  CreateConversationBody,
   CreateSupportConversationBody,
   ErrorResponse,
   ExportConversationParams,
+  GetConversationDetailParams,
   GetMessageTraceParams,
   ListConversationsParams,
   ListMemoriesParams,
@@ -1935,9 +1938,8 @@ export const getListConversationsUrl = (
  * everybody's — see the handler's own comment on why that is a safety
  * property, not a convenience.
  *
- * The route also serves POST (create a conversation), which is
- * handwritten in entities/conversation's own conversationApi and is not
- * documented here.
+ * Main stores editor Test conversations with source=editor_test and is_hidden=true.
+ * Normal lists exclude these rows. Test History requests source=editor_test, hidden=only, and mine=true.
  * @summary List conversations, optionally scoped to one participant entity
  */
 export const listConversations = async (
@@ -2111,6 +2113,554 @@ export function useListConversations<
 } {
   const queryOptions = getListConversationsQueryOptions(
     projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createConversationResponse201 = {
+  data: ConversationDetail;
+  status: 201;
+};
+
+export type createConversationResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type createConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createConversationResponseSuccess =
+  createConversationResponse201 & {
+    headers: Headers;
+  };
+export type createConversationResponseError = (
+  | createConversationResponse400
+  | createConversationResponse401
+  | createConversationResponse403
+  | createConversationResponse404
+  | createConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type createConversationResponse =
+  createConversationResponseSuccess | createConversationResponseError;
+
+export const getCreateConversationUrl = (projectId: string) => {
+  return `/elitea_core/conversations/prompt_lib/${projectId}`;
+};
+
+/**
+ * @summary Create a conversation and initial participants atomically
+ */
+export const createConversation = async (
+  projectId: string,
+  createConversationBody: CreateConversationBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createConversationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createConversationResponse>(
+    getCreateConversationUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(createConversationBody),
+    },
+  );
+};
+
+export const getCreateConversationQueryKey = (
+  projectId: string,
+  createConversationBody?: CreateConversationBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversations/prompt_lib/${projectId}`,
+    createConversationBody,
+  ] as const;
+};
+
+export const getCreateConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  createConversationBody: CreateConversationBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateConversationQueryKey(projectId, createConversationBody);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createConversation>>
+  > = ({ signal }) =>
+    createConversation(projectId, createConversationBody, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createConversation>>
+>;
+export type CreateConversationQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  createConversationBody: CreateConversationBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConversation>>,
+          TError,
+          Awaited<ReturnType<typeof createConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  createConversationBody: CreateConversationBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConversation>>,
+          TError,
+          Awaited<ReturnType<typeof createConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  createConversationBody: CreateConversationBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create a conversation and initial participants atomically
+ */
+
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  createConversationBody: CreateConversationBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateConversationQueryOptions(
+    projectId,
+    createConversationBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getConversationDetailResponse200 = {
+  data: ConversationDetail;
+  status: 200;
+};
+
+export type getConversationDetailResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getConversationDetailResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getConversationDetailResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getConversationDetailResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getConversationDetailResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getConversationDetailResponseSuccess =
+  getConversationDetailResponse200 & {
+    headers: Headers;
+  };
+export type getConversationDetailResponseError = (
+  | getConversationDetailResponse400
+  | getConversationDetailResponse401
+  | getConversationDetailResponse403
+  | getConversationDetailResponse404
+  | getConversationDetailResponse500
+) & {
+  headers: Headers;
+};
+
+export type getConversationDetailResponse =
+  getConversationDetailResponseSuccess | getConversationDetailResponseError;
+
+export const getGetConversationDetailUrl = (
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Test runs use deterministic admitted_at and execution identity ordering, newest first. Input references identify the original admitted immutable request. Controls retain the original response identity and existing actor authority. Reads emit no admission, creation, continuation, cancellation, or checkpoint effects.
+ * @summary Read conversation details and optional existing Test runs
+ */
+export const getConversationDetail = async (
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getConversationDetailResponse> => {
+  return eliteaFetch<getConversationDetailResponse>(
+    getGetConversationDetailUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetConversationDetailQueryKey = (
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+) => {
+  return [
+    `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetConversationDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConversationDetail>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversationDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetConversationDetailQueryKey(projectId, conversationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getConversationDetail>>
+  > = ({ signal }) =>
+    getConversationDetail(projectId, conversationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConversationDetail>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetConversationDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConversationDetail>>
+>;
+export type GetConversationDetailQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useGetConversationDetail<
+  TData = Awaited<ReturnType<typeof getConversationDetail>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params: undefined | GetConversationDetailParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversationDetail>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConversationDetail>>,
+          TError,
+          Awaited<ReturnType<typeof getConversationDetail>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConversationDetail<
+  TData = Awaited<ReturnType<typeof getConversationDetail>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversationDetail>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConversationDetail>>,
+          TError,
+          Awaited<ReturnType<typeof getConversationDetail>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConversationDetail<
+  TData = Awaited<ReturnType<typeof getConversationDetail>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversationDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read conversation details and optional existing Test runs
+ */
+
+export function useGetConversationDetail<
+  TData = Awaited<ReturnType<typeof getConversationDetail>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationDetailParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversationDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetConversationDetailQueryOptions(
+    projectId,
+    conversationId,
     params,
     options,
   );

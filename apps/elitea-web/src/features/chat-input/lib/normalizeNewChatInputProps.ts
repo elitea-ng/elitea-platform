@@ -20,6 +20,7 @@ const flag = (value: boolean | undefined): boolean => value ?? false;
 
 export function resolveState(state: NewChatInputStateProps | undefined): {
   readonly isLoading: boolean;
+  readonly disabledInput: boolean;
   readonly isStreaming: boolean;
   readonly disabledSend: boolean;
   readonly isCreatingConversation: boolean;
@@ -28,6 +29,7 @@ export function resolveState(state: NewChatInputStateProps | undefined): {
 } {
   return {
     isLoading: flag(state?.isLoading),
+    disabledInput: state?.disabledInput ?? flag(state?.isLoading),
     isStreaming: flag(state?.isStreaming),
     disabledSend: flag(state?.disabledSend),
     isCreatingConversation: flag(state?.isCreatingConversation),

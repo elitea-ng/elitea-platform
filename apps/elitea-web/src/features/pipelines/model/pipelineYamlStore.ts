@@ -59,6 +59,14 @@
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
+import {
+  parsePipelineYamlDocument,
+  pipelineYamlDocumentsEqual,
+  preparePipelineYamlEdit,
+} from '../lib/pipelineYamlDocument.helpers';
+import type { PipelineYamlEditOptions } from '../lib/pipelineYamlDocument.helpers';
+import { readPipelineStateOrder, reconcilePipelineStateOrder } from '../lib/pipelineYamlState.helpers';
+
 export interface PipelineYamlState {
   readonly yamlCode: string;
   readonly yamlJsonObject: Readonly<Record<string, unknown>>;
@@ -66,6 +74,18 @@ export interface PipelineYamlState {
   readonly initYamlCode: string;
   /** Baseline `initState.yamlJsonObject` — `resetPipelineYaml`'s restore target for the parsed graph. */
   readonly initYamlJsonObject: Readonly<Record<string, unknown>>;
+  /** Explicit YAML declaration sequence; JavaScript object enumeration is not source order. */
+  readonly stateKeyOrder: readonly string[];
+  readonly initStateKeyOrder: readonly string[];
+  /** Parse raw text without dumping it. Return whether values or meaningful state order changed. */
+  readonly parsePipelineYamlCode: (code: string) => boolean;
+  /** Serialize and verify before atomically publishing source, values, and declaration sequence. */
+  readonly editPipelineYamlDocument: (
+    document:
+      | Readonly<Record<string, unknown>>
+      | ((source: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>),
+    options?: PipelineYamlEditOptions,
+  ) => void;
   /** Baseline `resetFlag` — set by `resetPipelineYaml`, cleared by `clearResetFlag`; `EditorPanel.tsx` forwards it to `FlowEditor`'s `resetFlag` prop. */
   readonly resetFlag: boolean;
   /** Baseline `layout_version` — `undefined` until `setLayoutVersion` runs, matching the baseline's `''` initial value (never equal to a real version string, so the first auto-relayout always fires). */
@@ -73,8 +93,11 @@ export interface PipelineYamlState {
   readonly setYamlCode: (code: string) => void;
   readonly setYamlJsonObject: (yamlJsonObject: Readonly<Record<string, unknown>>) => void;
   /** Baseline `initThePipeline`, scoped to the yaml fields — seeds both the current and the "saved" snapshot together (a fresh load). Signature fixed: two already-landed sibling call sites depend on it exactly as declared. */
-  readonly initPipelineYaml: (input: { readonly yamlCode: string; readonly yamlJsonObject: Readonly<Record<string, unknown>> }) => void;
-  /** Baseline `updateInitState` — marks the CURRENT `yamlCode` as the new saved snapshot without touching `yamlJsonObject`, matching the baseline's own scoped update. */
+  readonly initPipelineYaml: (input: {
+    readonly yamlCode: string;
+    readonly yamlJsonObject: Readonly<Record<string, unknown>>;
+  }) => void;
+  /** Snapshot the saved YAML and its parsed values/order together, so discard returns to the last save. */
   readonly markYamlCodeSaved: () => void;
   /** Baseline `resetPipeline` — restores `yamlCode`/`yamlJsonObject` from the last `initPipelineYaml` snapshot and sets `resetFlag = true`. Zero-arg: two already-landed sibling call sites depend on it exactly as declared. */
   readonly resetPipelineYaml: () => void;
@@ -88,22 +111,59 @@ type PipelineYamlStore = UseBoundStore<StoreApi<PipelineYamlState>>;
 
 const EMPTY_YAML_OBJECT: Readonly<Record<string, unknown>> = {};
 
+/** Invalid YAML stays editable; it has no authoritative declaration sequence yet. */
+function initialStateKeyOrder(source: string): readonly string[] {
+  try {
+    return readPipelineStateOrder(source);
+  } catch {
+    return [];
+  }
+}
+
 export function createPipelineYamlStore(): PipelineYamlStore {
   return create<PipelineYamlState>((set, get) => ({
     yamlCode: '',
     yamlJsonObject: EMPTY_YAML_OBJECT,
     initYamlCode: '',
     initYamlJsonObject: EMPTY_YAML_OBJECT,
+    stateKeyOrder: [],
+    initStateKeyOrder: [],
     resetFlag: false,
     layoutVersion: undefined,
     setYamlCode: (code) => set({ yamlCode: code }),
-    setYamlJsonObject: (yamlJsonObject) => set({ yamlJsonObject: { ...yamlJsonObject } }),
-    initPipelineYaml: ({ yamlCode, yamlJsonObject }) =>
+    setYamlJsonObject: (yamlJsonObject) =>
+      set({
+        yamlJsonObject: { ...yamlJsonObject },
+        stateKeyOrder: reconcilePipelineStateOrder(yamlJsonObject, get().stateKeyOrder),
+      }),
+    parsePipelineYamlCode: (code) => {
+      const parsed = parsePipelineYamlDocument(code);
+      const changed = !pipelineYamlDocumentsEqual(get(), parsed);
+      set(changed ? parsed : { yamlCode: code, stateKeyOrder: parsed.stateKeyOrder });
+      return changed;
+    },
+    editPipelineYamlDocument: (document, options) => {
+      // Source-based internal edits never rebuild an unsaved YAML draft from the stale flow view.
+      const snapshot = typeof document === 'function' ? parsePipelineYamlDocument(get().yamlCode) : get();
+      const candidate = typeof document === 'function' ? document(snapshot.yamlJsonObject) : document;
+      const prepared = preparePipelineYamlEdit(snapshot, candidate, options);
+      if (
+        typeof document === 'function' &&
+        pipelineYamlDocumentsEqual(snapshot, prepared) &&
+        snapshot.yamlCode === prepared.yamlCode
+      )
+        return;
+      if (!pipelineYamlDocumentsEqual(get(), prepared) || prepared.yamlCode !== get().yamlCode) set(prepared);
+    },
+    initPipelineYaml: ({ yamlCode, yamlJsonObject }) => {
+      const stateKeyOrder = initialStateKeyOrder(yamlCode);
       set({
         yamlCode,
         yamlJsonObject: { ...yamlJsonObject },
         initYamlCode: yamlCode,
         initYamlJsonObject: { ...yamlJsonObject },
+        stateKeyOrder,
+        initStateKeyOrder: [...stateKeyOrder],
         // Baseline `initThePipeline` reducer also sets `state.resetFlag = true`
         // (`slices/pipeline.js`) — every load/reload of a pipeline version must
         // re-sync the flow-editor canvas, exactly like `resetPipelineYaml`
@@ -112,11 +172,25 @@ export function createPipelineYamlStore(): PipelineYamlStore {
         // reload whenever they stayed mounted (`usePipelineVersionSync`'s own
         // call site — switching versions without unmounting the editor).
         resetFlag: true,
-      }),
-    markYamlCodeSaved: () => set({ initYamlCode: get().yamlCode }),
+      });
+    },
+    markYamlCodeSaved: () => {
+      const saved = parsePipelineYamlDocument(get().yamlCode);
+      set({
+        ...saved,
+        initYamlCode: saved.yamlCode,
+        initYamlJsonObject: { ...saved.yamlJsonObject },
+        initStateKeyOrder: [...saved.stateKeyOrder],
+      });
+    },
     resetPipelineYaml: () => {
-      const { initYamlCode, initYamlJsonObject } = get();
-      set({ yamlCode: initYamlCode, yamlJsonObject: { ...initYamlJsonObject }, resetFlag: true });
+      const { initYamlCode, initYamlJsonObject, initStateKeyOrder } = get();
+      set({
+        yamlCode: initYamlCode,
+        yamlJsonObject: { ...initYamlJsonObject },
+        stateKeyOrder: [...initStateKeyOrder],
+        resetFlag: true,
+      });
     },
     clearResetFlag: () => set({ resetFlag: false }),
     setLayoutVersion: (version) => set({ layoutVersion: version }),

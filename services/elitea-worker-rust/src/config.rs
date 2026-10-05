@@ -92,6 +92,8 @@ pub struct RuntimeDeployConfig {
     #[serde(default)]
     pub agent_model_checkpoint_recovery: bool,
     #[serde(default)]
+    pub agent_node_recovery: bool,
+    #[serde(default)]
     pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
     pub limits: RuntimeLimits,
 }
@@ -106,9 +108,166 @@ pub struct SandboxRuntimeConfig {
     pub image_digest: String,
     pub policy_revision: String,
     pub timeout_seconds: u32,
+    #[serde(default)]
+    #[serde(deserialize_with = "non_null_code_platform_config")]
+    pub platform_client: Option<CodePlatformRuntimeConfig>,
+    #[serde(default)]
+    #[serde(deserialize_with = "crate::sandbox::compiled_profile_config::non_null_config")]
+    pub compiled_snapshot:
+        Option<crate::sandbox::compiled_profile_config::RustCompiledSnapshotConfig>,
+    #[serde(default)]
+    pub preparation: Option<PythonPreparationConfig>,
+}
+
+/// Optional operator-selected Code broker route and bounded Main policy.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodePlatformRuntimeConfig {
+    pub target: String,
+    pub audience: String,
+    pub image_digest: String,
+    pub policy_revision: String,
+    pub timeout_seconds: u32,
+    pub max_calls: u16,
+    pub max_total_bytes: u32,
+    #[serde(default)]
+    #[serde(deserialize_with = "crate::sandbox::compiled_profile_config::non_null_config")]
+    pub compiled_snapshot:
+        Option<crate::sandbox::compiled_profile_config::RustCompiledSnapshotConfig>,
+}
+
+impl CodePlatformRuntimeConfig {
+    pub(crate) fn policy(
+        &self,
+    ) -> Result<crate::sandbox::platform_client_binding::PlatformClientPolicy, RuntimeConfigError>
+    {
+        crate::sandbox::platform_client_binding::PlatformClientPolicy::new(
+            self.max_calls,
+            self.max_total_bytes,
+        )
+        .map_err(|_| invalid_config())
+    }
+
+    pub(crate) fn execution_config(&self, base: &SandboxRuntimeConfig) -> SandboxRuntimeConfig {
+        let mut config = base.clone();
+        config.target.clone_from(&self.target);
+        config.audience.clone_from(&self.audience);
+        config.image_digest.clone_from(&self.image_digest);
+        config.policy_revision.clone_from(&self.policy_revision);
+        config.timeout_seconds = self.timeout_seconds;
+        config.platform_client = None;
+        config.compiled_snapshot.clone_from(&self.compiled_snapshot);
+        config
+    }
+
+    fn validate(&self, base: &SandboxRuntimeConfig) -> Result<(), RuntimeConfigError> {
+        validate_grpc_target(&self.target)?;
+        if self.audience.is_empty()
+            || self.audience.len() > 256
+            || self
+                .audience
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace())
+            || (base.language == crate::sandbox::request::Language::Rust
+                && self.policy_revision != "cargo-broker-execute-v1")
+        {
+            return Err(invalid_config());
+        }
+        crate::sandbox::request::PreparedJob::new(
+            base.language,
+            "validate".into(),
+            std::collections::BTreeMap::new(),
+            self.image_digest.clone(),
+            self.policy_revision.clone(),
+            self.timeout_seconds,
+        )
+        .map_err(|_| invalid_config())?;
+        self.policy()?;
+        if let Some(compiled) = &self.compiled_snapshot {
+            if base.language != crate::sandbox::request::Language::Rust {
+                return Err(invalid_config());
+            }
+            compiled.validate().map_err(|_| invalid_config())?;
+        }
+        Ok(())
+    }
+}
+
+fn non_null_code_platform_config<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<CodePlatformRuntimeConfig>, D::Error> {
+    CodePlatformRuntimeConfig::deserialize(deserializer).map(Some)
+}
+
+/// Optional trusted Python preparation backend. Saved source cannot select it.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonPreparationConfig {
+    #[serde(default)]
+    pub native_platform: Option<crate::sandbox::native_bundle::NativePlatform>,
+    pub target: String,
+    pub audience: String,
+    pub image_digest: String,
+    pub policy_revision: String,
+    pub timeout_seconds: u32,
+}
+
+impl PythonPreparationConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        validate_grpc_target(&self.target)?;
+        if self.audience.is_empty()
+            || self.audience.len() > 256
+            || self
+                .audience
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace())
+        {
+            return Err(invalid_config());
+        }
+        crate::sandbox::preparation::PreparationJob::new(
+            "validate".into(),
+            self.image_digest.clone(),
+            self.policy_revision.clone(),
+            self.timeout_seconds,
+        )
+        .map_err(|_| invalid_config())?;
+        Ok(())
+    }
+}
+
+impl SandboxRuntimeConfig {
+    fn validate_preparation(&self) -> Result<(), RuntimeConfigError> {
+        let Some(preparation) = &self.preparation else {
+            return Ok(());
+        };
+        if (self.language == crate::sandbox::request::Language::Python)
+            != preparation.native_platform.is_none()
+        {
+            return Err(invalid_config());
+        }
+        preparation.validate()?;
+        if preparation.native_platform.is_some()
+            && preparation.timeout_seconds
+                > if self.language == crate::sandbox::request::Language::Rust {
+                    600
+                } else {
+                    120
+                }
+        {
+            return Err(invalid_config());
+        }
+        if let Some(platform) = &preparation.native_platform {
+            platform.validate().map_err(|_| invalid_config())?;
+        }
+        Ok(())
+    }
 }
 
 impl RuntimeDeployConfig {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep ordered authority checks and durable phases in one owner operation."
+    )]
     fn validate(mut self) -> Result<Self, RuntimeConfigError> {
         if self.schema_version != RUNTIME_DEPLOY_SCHEMA_VERSION
             || self.limits_revision != LIMITS_REVISION
@@ -153,6 +312,51 @@ impl RuntimeDeployConfig {
                 profile.timeout_seconds,
             )
             .map_err(|_| invalid_config())?;
+            profile.validate_preparation()?;
+            if let Some(platform) = &profile.platform_client {
+                if !self.agent_node_recovery || self.agent_checkpoint_connection_path.is_none() {
+                    return Err(invalid_config());
+                }
+                platform.validate(profile)?;
+            }
+            if let Some(compiled) = &profile.compiled_snapshot {
+                if profile.language != crate::sandbox::request::Language::Rust {
+                    return Err(RuntimeConfigError::InvalidConfiguration(
+                        "compiled snapshots require the Rust execution runtime",
+                    ));
+                }
+                compiled.validate().map_err(|_| {
+                    RuntimeConfigError::InvalidConfiguration(
+                        "compiled snapshot release settings are incomplete or invalid",
+                    )
+                })?;
+            }
+        }
+
+        // Stop delivery stores audience only. It must select one transport target.
+        let mut sandbox_targets = std::collections::BTreeMap::new();
+        for profile in &self.sandbox_runtimes {
+            let endpoints = std::iter::once((&profile.audience, &profile.target))
+                .chain(
+                    profile
+                        .platform_client
+                        .iter()
+                        .map(|platform| (&platform.audience, &platform.target)),
+                )
+                .chain(
+                    profile
+                        .preparation
+                        .iter()
+                        .map(|preparation| (&preparation.audience, &preparation.target)),
+                );
+            for (audience, target) in endpoints {
+                if sandbox_targets
+                    .insert(audience, target)
+                    .is_some_and(|prior| prior != target)
+                {
+                    return Err(invalid_config());
+                }
+            }
         }
 
         self.content_origin = canonical_https_origin(&self.content_origin)?;
@@ -171,7 +375,9 @@ impl RuntimeDeployConfig {
         if let Some(path) = &self.agent_checkpoint_connection_path {
             require_absolute_path(path)?;
         }
-        if self.agent_model_checkpoint_recovery && self.agent_checkpoint_connection_path.is_none() {
+        if (self.agent_model_checkpoint_recovery || self.agent_node_recovery)
+            && self.agent_checkpoint_connection_path.is_none()
+        {
             return Err(invalid_config());
         }
         self.limits.validate()?;
@@ -608,6 +814,22 @@ mod tests {
     }
 
     #[test]
+    fn node_recovery_requires_explicit_opt_in_and_durable_storage() {
+        let root = tempdir().expect("root");
+        let mut value = config(root.path());
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("config");
+        assert!(!loaded.agent_node_recovery);
+        value["agent_node_recovery"] = json!(true);
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("opt-in");
+        assert!(loaded.validate().is_ok());
+        value["agent_checkpoint_connection_path"] = Value::Null;
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
+        assert!(loaded.validate().is_err());
+    }
+
+    #[test]
     fn sandbox_profiles_are_optional_and_require_bounded_unique_runtime_identity() {
         let base = config(Path::new("/runtime"));
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(base.clone()).unwrap();
@@ -624,6 +846,7 @@ mod tests {
         let mut valid = base.clone();
         valid["sandbox_runtimes"] = json!([profile.clone()]);
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(valid.clone()).unwrap();
+        assert!(loaded.sandbox_runtimes[0].preparation.is_none());
         assert!(loaded.validate().is_ok());
         for (field, value) in [
             ("target", json!("http://sandbox.internal:9446")),
@@ -645,6 +868,99 @@ mod tests {
             loaded.validate().is_err(),
             "duplicate language must not select an arbitrary backend"
         );
+    }
+
+    #[test]
+    fn compiled_snapshot_settings_are_explicit_and_rust_only() {
+        let mut value = config(Path::new("/runtime"));
+        value["sandbox_runtimes"] = json!([{
+            "language":"rust","target":"sandbox.internal:9447","audience":"sandbox-rust",
+            "image_digest":format!("sha256:{}", "a".repeat(64)),"policy_revision":"rust-v1","timeout_seconds":30
+        }]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.sandbox_runtimes[0].compiled_snapshot.is_none());
+        assert!(loaded.validate().is_ok());
+        value["sandbox_runtimes"][0]["compiled_snapshot"] = json!({
+            "profiles_file":"/runtime/compiled-profiles.json","profiles_sha256":"a".repeat(64),"dependency_bundle_sha256":""
+        });
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.validate().is_ok());
+        for (field, bad) in [
+            ("language", json!("python")),
+            (
+                "compiled_snapshot",
+                json!({"profiles_file":"/runtime/compiled-profiles.json"}),
+            ),
+            ("compiled_snapshot", serde_json::Value::Null),
+        ] {
+            let mut invalid = value.clone();
+            invalid["sandbox_runtimes"][0][field] = bad;
+            assert!(
+                serde_json::from_value::<super::RuntimeDeployConfig>(invalid)
+                    .map_err(|_| ())
+                    .and_then(|config| config.validate().map_err(|_| ()))
+                    .is_err()
+            );
+        }
+        value["sandbox_runtimes"][0]["compiled_snapshot"]["profiles_sha256"] =
+            json!("A".repeat(64));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).unwrap();
+        assert!(loaded.validate().is_err());
+    }
+
+    #[test]
+    fn python_preparation_is_optional_bounded_and_python_only() {
+        let mut enabled = config(Path::new("/runtime"));
+        enabled["sandbox_runtimes"] = json!([{
+            "language": "python",
+            "target": "sandbox.internal:9446",
+            "audience": "sandbox-code",
+            "image_digest": format!("sha256:{}", "a".repeat(64)),
+            "policy_revision": "code-v1",
+            "timeout_seconds": 60,
+            "preparation": {
+                "target": "preparation.internal:9446",
+                "audience": "sandbox-preparation",
+                "image_digest": format!("sha256:{}", "b".repeat(64)),
+                "policy_revision": "python-preparation-v1",
+                "timeout_seconds": 120
+            }
+        }]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(enabled.clone()).unwrap();
+        assert!(loaded.sandbox_runtimes[0].preparation.is_some());
+        assert!(loaded.validate().is_ok());
+        for (field, value) in [
+            ("target", json!("http://preparation.internal:9446")),
+            ("audience", json!("")),
+            ("audience", json!("sandbox other")),
+            ("image_digest", json!("runner:latest")),
+            ("policy_revision", json!("")),
+            ("timeout_seconds", json!(0)),
+            ("timeout_seconds", json!(3601)),
+        ] {
+            let mut invalid = enabled.clone();
+            invalid["sandbox_runtimes"][0]["preparation"][field] = value;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(invalid).unwrap();
+            assert!(
+                loaded.validate().is_err(),
+                "accepted invalid preparation {field}"
+            );
+        }
+        for language in ["javascript", "typescript", "rust"] {
+            let mut invalid = enabled.clone();
+            invalid["sandbox_runtimes"][0]["language"] = json!(language);
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(invalid).unwrap();
+            assert!(loaded.validate().is_err());
+        }
+        let mut ambiguous = enabled.clone();
+        ambiguous["sandbox_runtimes"][0]["preparation"]["audience"] = json!("sandbox-code");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(ambiguous).unwrap();
+        assert!(
+            loaded.validate().is_err(),
+            "one audience cannot select different Stop targets"
+        );
+        enabled["sandbox_runtimes"][0]["preparation"]["package_list"] = json!(["anything"]);
+        assert!(serde_json::from_value::<super::RuntimeDeployConfig>(enabled).is_err());
     }
 
     #[test]
@@ -756,3 +1072,7 @@ mod tests {
         assert!(validate_private_directory(&directory, "spool fixture").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "config_code_platform_tests.rs"]
+mod code_platform_tests;

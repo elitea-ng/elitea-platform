@@ -8,6 +8,7 @@
 import type { RefObject } from 'react';
 import { useCallback } from 'react';
 
+import { currentNodeRecoveryBinding } from '@/features/chat-messages';
 import type { ChatMessage, useDeleteMessageAlert } from '@/features/chat-messages';
 
 import { deriveHitlChildThreadId } from '../ChatBox.helpers';
@@ -59,7 +60,7 @@ export function useChatBoxActions({
 }: UseChatBoxActionsParams): UseChatBoxActionsResult {
   const handleSend = useCallback(
     (question: string) => {
-      if (!question.trim() || data.hasPendingHitlInterrupt || state.isActiveParticipantBroken) return;
+      if (!question.trim() || data.hasPendingHitlInterrupt || currentNodeRecoveryBinding(messages) || state.isActiveParticipantBroken) return;
       const isSendingToUser = state.isMentioningEveryone || state.selectedUsers.length > 0;
       // USER ids, not the participant ids the picker is keyed by. The start
       // route parses `user_ids` as `centry.notifications.user_id`; a
@@ -93,6 +94,7 @@ export function useChatBoxActions({
     },
     [
       data.hasPendingHitlInterrupt,
+      messages,
       data.attachments.state,
       handlers,
       state,

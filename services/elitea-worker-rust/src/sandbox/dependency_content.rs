@@ -14,7 +14,6 @@ use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderValue},
 };
 use ring::digest;
-use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
     io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _},
@@ -26,13 +25,21 @@ use crate::protocol::{
     wire::{Schema, scan_message},
 };
 
+#[path = "dependency_content_cache.rs"]
+mod cache;
+#[path = "dependency_compiled_content.rs"]
+mod compiled_transfer;
 #[path = "dependency_content_tests.rs"]
 #[cfg(test)]
 mod tests;
+#[path = "dependency_content_transfer.rs"]
+mod transfer;
+#[path = "workspace_content_transfer.rs"]
+mod workspace_transfer;
+pub(crate) use workspace_transfer::{WorkspaceContentError, WorkspaceReadProof};
 
 const METADATA_LIMIT: usize = 128 * 1024;
-const FILE_LIMIT: u64 = 32 * 1024 * 1024;
-const CONTENT_LIMIT: u64 = 128 * 1024 * 1024;
+#[cfg(test)]
 const LOCK_NAME: &str = "elitea-python-lock.json";
 const RECORD_NAME: &str = "elitea-python-bundle.json";
 const GRANT_HEADER: &str = "x-elitea-sandbox-bundle-grant";
@@ -68,112 +75,14 @@ pub enum DependencyContentError {
     Staging(#[source] std::io::Error),
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct BundleFile {
-    name: String,
-    bytes: u64,
-    sha256: String,
-}
+#[cfg(test)]
+use super::dependency_bundle::{BundleContent, safe_name};
+pub use super::dependency_bundle::{DependencyBundle, PythonDependencyBundle};
+use super::dependency_bundle::{DependencyBundleFile as BundleFile, hex, valid_digest};
 
-#[derive(Serialize)]
-struct BundleContent<'a> {
-    revision: u32,
-    runtime: &'a str,
-    requirements: &'a [String],
-    files: &'a [BundleFile],
-}
-
-/// Only metadata matching an independently recorded root can construct this value.
-pub struct PythonDependencyBundle {
-    files: Vec<BundleFile>,
-    root: String,
-    canonical: Vec<u8>,
-}
-
-impl PythonDependencyBundle {
-    /// # Errors
-    /// Rejects malformed metadata, unsafe names, excessive content, and root mismatches.
-    pub fn parse(bytes: &[u8], expected_root: &str) -> Result<Self, DependencyContentError> {
-        #[derive(Deserialize, Serialize)]
-        #[serde(deny_unknown_fields)]
-        struct Record {
-            revision: u32,
-            runtime: String,
-            requirements: Vec<String>,
-            files: Vec<BundleFile>,
-            digest: String,
-        }
-        if bytes.len() > METADATA_LIMIT || !valid_digest(expected_root) {
-            return Err(DependencyContentError::Integrity);
-        }
-        let record: Record =
-            serde_json::from_slice(bytes).map_err(|_| DependencyContentError::Integrity)?;
-        if record.revision != 1
-            || record.runtime != "pyodide-0.29.0"
-            || record.digest != expected_root
-            || record.requirements.len() > 128
-            || record.files.is_empty()
-            || record.files.len() > 257
-            || record.requirements.iter().any(|value| {
-                value.is_empty()
-                    || value.len() > 256
-                    || !value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
-            })
-        {
-            return Err(DependencyContentError::Integrity);
-        }
-        let mut total = 0;
-        let mut lock_found = false;
-        for (index, file) in record.files.iter().enumerate() {
-            let limit = if file.name == LOCK_NAME {
-                lock_found = true;
-                1024 * 1024
-            } else {
-                FILE_LIMIT
-            };
-            if !safe_name(&file.name)
-                || !valid_digest(&file.sha256)
-                || file.bytes > limit
-                || index > 0 && file.name <= record.files[index - 1].name
-            {
-                return Err(DependencyContentError::Integrity);
-            }
-            total += file.bytes;
-        }
-        if !lock_found || total > CONTENT_LIMIT {
-            return Err(DependencyContentError::Integrity);
-        }
-        let content = serde_json::to_vec(&BundleContent {
-            revision: record.revision,
-            runtime: &record.runtime,
-            requirements: &record.requirements,
-            files: &record.files,
-        })
-        .map_err(|_| DependencyContentError::Integrity)?;
-        if hex(digest::digest(&digest::SHA256, &content).as_ref()) != expected_root {
-            return Err(DependencyContentError::Integrity);
-        }
-        let canonical =
-            serde_json::to_vec(&record).map_err(|_| DependencyContentError::Integrity)?;
-        if canonical.len() > METADATA_LIMIT {
-            return Err(DependencyContentError::Integrity);
-        }
-        Ok(Self {
-            files: record.files,
-            root: record.digest,
-            canonical,
-        })
-    }
-
-    #[must_use]
-    pub fn root(&self) -> &str {
-        &self.root
-    }
-
-    /// Canonical metadata only. Package bytes remain on the data plane.
-    pub(crate) fn record_json(&self) -> &[u8] {
-        &self.canonical
+impl From<super::dependency_bundle::InvalidDependencyBundle> for DependencyContentError {
+    fn from(_: super::dependency_bundle::InvalidDependencyBundle) -> Self {
+        Self::Integrity
     }
 }
 
@@ -210,6 +119,7 @@ pub struct DependencyContentClient {
     staging: PathBuf,
     slots: Semaphore,
     deadline: Duration,
+    exports: std::sync::Mutex<cache::ExportCache>,
 }
 
 impl DependencyContentClient {
@@ -250,6 +160,7 @@ impl DependencyContentClient {
             staging: staging.to_owned(),
             slots: Semaphore::new(capacity),
             deadline,
+            exports: std::sync::Mutex::new(cache::ExportCache::default()),
         })
     }
 
@@ -400,29 +311,6 @@ impl DependencyContentClient {
     }
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-fn safe_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 256
-        && (value == LOCK_NAME || value.strip_suffix(".whl").is_some())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'+' | b'-'))
-}
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        output.push(char::from(DIGITS[usize::from(byte & 15)]));
-    }
-    output
-}
 fn canonical_origin(origin: &str) -> Result<String, DependencyContentError> {
     if origin.is_empty() || origin.len() > 2048 || !origin.is_ascii() || origin.contains('#') {
         return Err(DependencyContentError::Configuration);

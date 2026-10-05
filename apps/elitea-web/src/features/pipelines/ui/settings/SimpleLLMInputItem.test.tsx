@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
+import { fireEvent, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,6 +72,72 @@ describe('SimpleLLMInputItem', () => {
       onChangeMapping: vi.fn(),
     });
     expect(getByLabelText('Value')).toHaveValue('hello');
+  });
+
+  it.each([
+    { type: 'fixed', capability: false },
+    { type: 'fstring', capability: false },
+    { type: 'fixed', capability: true },
+    { type: 'fstring', capability: true },
+  ])('preserves multiline Code source for $type with AI capability $capability', ({ type, capability }) => {
+    setBackendCapabilityForTests('llmPredictStreaming', capability);
+    const source = 'def run(value):\n    return value + 1\n\nresult = run(input)\n';
+    const edited = source.replace('value + 1', 'value + 2');
+    let savedValue: unknown;
+    const props = {
+      variableName: 'code', variable: 'code', type, value: source, defaultValue: '', enableAIAssistant: true,
+      onChangeMapping: vi.fn((_variable: string, mapping: { value: unknown }) => {
+        savedValue = mapping.value;
+      }),
+    };
+    const ui = renderItem(props);
+    const field = ui.getByLabelText('Value');
+
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(field).toHaveValue(source);
+    fireEvent.change(field, { target: { value: edited } });
+    expect(props.onChangeMapping).toHaveBeenLastCalledWith('code', { type, value: edited });
+    ui.unmount();
+    const reopened = renderItem({ ...props, value: savedValue });
+    expect(reopened.getByLabelText('Value')).toHaveValue(edited);
+  });
+
+  it('preserves Code source through the existing fullscreen editor and reopen', async () => {
+    setBackendCapabilityForTests('llmPredictStreaming', false);
+    const user = userEvent.setup();
+    const source = 'def run(value):\n\treturn value + 1\n\n';
+    const edited = source + 'result = run(input)\n';
+    let savedValue: unknown;
+    const props = {
+      variableName: 'code', variable: 'code', type: 'fixed', value: source, defaultValue: '',
+      onChangeMapping: vi.fn((_variable: string, mapping: { value: unknown }) => {
+        savedValue = mapping.value;
+      }),
+    };
+    const ui = renderItem(props);
+    expect(ui.getByLabelText('Value')).toHaveValue(source);
+    await user.click(ui.getByRole('button', { name: 'Full screen view' }));
+    const field = within(ui.getByRole('dialog')).getByLabelText('Value');
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(field).toHaveValue(source);
+    fireEvent.change(field, { target: { value: edited } });
+    expect(savedValue).toBe(edited);
+    await user.click(ui.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(ui.queryByRole('dialog')).toBeNull());
+    ui.unmount();
+    const reopened = renderItem({ ...props, value: savedValue });
+    expect(reopened.getByLabelText('Value')).toHaveValue(edited);
+  });
+
+  it.each([false, true])('keeps an ordinary task input unchanged with AI capability %s', capability => {
+    setBackendCapabilityForTests('llmPredictStreaming', capability);
+    const { getByLabelText } = renderItem({
+      variableName: 'task', variable: 'task', type: 'fixed', value: 'ordinary task', defaultValue: '',
+      codeLanguage: 'rust', enableAIAssistant: true, onChangeMapping: vi.fn(),
+    });
+    const field = getByLabelText('Value');
+    expect(field.tagName).toBe('INPUT');
+    expect(field).toHaveValue('ordinary task');
   });
 
   it('renders a Value select (not a text field) for a variable type', () => {
@@ -275,7 +342,7 @@ describe('SimpleLLMInputItem', () => {
     expect(queryByText('AI Assistant')).not.toBeInTheDocument();
   });
 
-  describe('the code field AI-Assistant editor pre-sets content type to Python', () => {
+  describe('the code field AI-Assistant editor uses the selected language and Python default', () => {
     function stubForModal(): void {
       server.use(
         http.get('/api/v2/configurations/available/', () => HttpResponse.json([])),
@@ -305,6 +372,23 @@ describe('SimpleLLMInputItem', () => {
       await user.click(getByRole('button', { name: 'AI Assistant' }));
 
       expect(getByRole('combobox', { name: 'Content type' })).toHaveTextContent('Python');
+    });
+
+    it.each([
+      { language: 'python', label: 'Python' },
+      { language: 'javascript', label: 'Java script' },
+      { language: 'typescript', label: 'Type script' },
+      { language: 'rust', label: 'Rust' },
+    ])('uses the selected $language Code language in the AI editor', async ({ language, label }) => {
+      stubForModal();
+      const user = userEvent.setup();
+      const { getByRole } = renderItem({
+        variableName: 'code', variable: 'code', type: 'fixed', value: 'x = 1', defaultValue: '',
+        codeLanguage: language,
+        onChangeMapping: vi.fn(), enableAIAssistant: true,
+      });
+      await user.click(getByRole('button', { name: 'AI Assistant' }));
+      expect(getByRole('combobox', { name: 'Content type' })).toHaveTextContent(label);
     });
 
     it('does not force Python for a non-`code` eligible variable (auto-detected instead)', async () => {

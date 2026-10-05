@@ -244,6 +244,7 @@ pub enum RedisStreamsErrorKind {
     Authentication,
     DependencyUnavailable,
     Timeout,
+    ConsumerGroupMissing,
     Protocol,
     ResourceExhausted,
     Closed,
@@ -260,6 +261,14 @@ impl RedisStreamsError {
     pub(crate) const fn configuration(message: &'static str) -> Self {
         Self {
             kind: RedisStreamsErrorKind::Configuration,
+            message,
+            upstream_kind: None,
+        }
+    }
+
+    pub(crate) const fn consumer_group_missing(message: &'static str) -> Self {
+        Self {
+            kind: RedisStreamsErrorKind::ConsumerGroupMissing,
             message,
             upstream_kind: None,
         }
@@ -316,7 +325,14 @@ impl RedisStreamsError {
     fn from_redis(error: RedisError, operation: &'static str) -> Self {
         let upstream_kind = error.kind();
         let timeout = error.is_timeout();
+        let missing_group = error.code() == Some("NOGROUP");
         drop(error);
+        if missing_group && !timeout {
+            return Self {
+                upstream_kind: Some(upstream_kind),
+                ..Self::consumer_group_missing(operation)
+            };
+        }
         let kind = if timeout {
             RedisStreamsErrorKind::Timeout
         } else {
@@ -363,6 +379,7 @@ impl RedisStreamsError {
             RedisStreamsErrorKind::Authentication => "redis_streams.authentication",
             RedisStreamsErrorKind::DependencyUnavailable => "redis_streams.unavailable",
             RedisStreamsErrorKind::Timeout => "redis_streams.timeout",
+            RedisStreamsErrorKind::ConsumerGroupMissing => "redis_streams.consumer_group_missing",
             RedisStreamsErrorKind::Protocol => "redis_streams.protocol",
             RedisStreamsErrorKind::ResourceExhausted => "redis_streams.resource_exhausted",
             RedisStreamsErrorKind::Closed => "redis_streams.closed",
@@ -514,6 +531,42 @@ impl RedisStreamsClient {
             ));
         }
         Ok(())
+    }
+
+    /// Check the configured group with one read-only pending-entry row.
+    ///
+    /// Group creation remains owned by the deployment bootstrap. This check
+    /// neither admits a delivery nor changes its pending owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a missing-group, transport, protocol, or response-bound error.
+    pub(crate) async fn verify_consumer_group(&self) -> Result<(), RedisStreamsError> {
+        self.ensure_open()?;
+        let permit = self.control_permit().await?;
+        self.ensure_open()?;
+        let mut control = self.control.clone();
+        let stream = self.config.stream.clone();
+        let group = self.config.group.clone();
+        let response = run_owned_operation(permit, self.failed.clone(), async move {
+            cmd("XPENDING")
+                .arg(stream)
+                .arg(group)
+                .arg("-")
+                .arg("+")
+                .arg(1)
+                .query_async::<Value>(&mut control)
+                .await
+                .map_err(|error| {
+                    RedisStreamsError::from_redis(error, "Redis consumer group check failed")
+                })
+        })
+        .await?;
+        let result = decode_group_check_response(response);
+        if result.is_err() {
+            self.fail();
+        }
+        result
     }
 
     /// Block for new entries in the configured consumer group.
@@ -1166,6 +1219,53 @@ fn map_tls_handshake_error(error: io::Error, message: &'static str) -> RedisStre
     }
 }
 
+fn decode_group_check_response(response: Value) -> Result<(), RedisStreamsError> {
+    let rows = value_array(response, "the Redis group check response is malformed")?;
+    if rows.len() > 1 {
+        return Err(RedisStreamsError::resource_exhausted(
+            "the Redis group check exceeds its row bound",
+        ));
+    }
+    for row in rows {
+        let mut fields = value_array(row, "the Redis group check row is malformed")?;
+        if fields.len() != 4 {
+            return Err(RedisStreamsError::protocol(
+                "the Redis group check row is malformed",
+            ));
+        }
+        let deliveries = fields.pop();
+        let idle_millis = fields.pop();
+        if !matches!(deliveries, Some(Value::Int(value)) if value >= 0)
+            || !matches!(idle_millis, Some(Value::Int(value)) if value >= 0)
+        {
+            return Err(RedisStreamsError::protocol(
+                "the Redis group check counters are malformed",
+            ));
+        }
+        let consumer = value_text(
+            fields.pop().ok_or_else(|| {
+                RedisStreamsError::protocol("the Redis group check consumer is malformed")
+            })?,
+            "the Redis group check consumer is malformed",
+        )?;
+        if !std::str::from_utf8(&consumer)
+            .is_ok_and(|value| bounded_ascii_identity(value, MAX_IDENTITY_BYTES))
+        {
+            return Err(RedisStreamsError::protocol(
+                "the Redis group check consumer is malformed",
+            ));
+        }
+        let entry_id = value_text(
+            fields.pop().ok_or_else(|| {
+                RedisStreamsError::protocol("the Redis group check entry is malformed")
+            })?,
+            "the Redis group check entry is malformed",
+        )?;
+        decode_entry_id(&entry_id).map_err(|error| map_command_decode_error(&error))?;
+    }
+    Ok(())
+}
+
 fn decode_read_response(
     response: Value,
     expected_stream: &str,
@@ -1440,9 +1540,9 @@ fn map_retirement_error(error: &RedisStreamsError) -> RedisRetirementClientError
     match error.kind() {
         RedisStreamsErrorKind::Authentication => RedisRetirementClientError::Authentication,
         RedisStreamsErrorKind::Timeout => RedisRetirementClientError::Timeout,
-        RedisStreamsErrorKind::Protocol | RedisStreamsErrorKind::Configuration => {
-            RedisRetirementClientError::Protocol
-        }
+        RedisStreamsErrorKind::ConsumerGroupMissing
+        | RedisStreamsErrorKind::Protocol
+        | RedisStreamsErrorKind::Configuration => RedisRetirementClientError::Protocol,
         RedisStreamsErrorKind::DependencyUnavailable
         | RedisStreamsErrorKind::ResourceExhausted
         | RedisStreamsErrorKind::Closed => RedisRetirementClientError::DependencyUnavailable,
@@ -1550,6 +1650,95 @@ mod tests {
         assert!(value.validate().is_err());
         value.control_timeout = Duration::from_micros(1_500);
         assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn exact_missing_group_code_is_safe_and_nonretryable() {
+        let upstream = redis::make_extension_error(
+            "NOGROUP".to_owned(),
+            Some("sensitive stream identity and server detail".to_owned()),
+        );
+        let mapped = RedisStreamsError::from_redis(upstream, "Redis consumer group check failed");
+        assert_eq!(mapped.kind(), RedisStreamsErrorKind::ConsumerGroupMissing);
+        assert_eq!(mapped.code(), "redis_streams.consumer_group_missing");
+        assert_eq!(mapped.upstream_kind(), Some(&RedisErrorKind::Extension));
+        assert!(!mapped.retryable());
+        assert!(!format!("{mapped:?}").contains("sensitive"));
+        assert!(!mapped.to_string().contains("sensitive"));
+        assert_eq!(
+            map_retirement_error(&mapped),
+            RedisRetirementClientError::Protocol
+        );
+    }
+
+    #[test]
+    fn other_extensions_and_detail_substrings_remain_protocol_failures() {
+        for code in ["nogroup", "NOGROUPX", "WRONGTYPE", "BUSYGROUP"] {
+            let upstream = redis::make_extension_error(
+                code.to_owned(),
+                Some("NOGROUP sensitive detail".to_owned()),
+            );
+            let mapped = RedisStreamsError::from_redis(upstream, "Redis group check failed");
+            assert_eq!(mapped.kind(), RedisStreamsErrorKind::Protocol);
+            assert!(!mapped.retryable());
+        }
+        let upstream = RedisError::from((RedisErrorKind::Extension, "NOGROUP sensitive detail"));
+        let mapped = RedisStreamsError::from_redis(upstream, "Redis group check failed");
+        assert_eq!(mapped.kind(), RedisStreamsErrorKind::Protocol);
+        assert!(!mapped.retryable());
+    }
+
+    fn pending_group_row() -> Value {
+        Value::Array(vec![
+            Value::BulkString(b"12-3".to_vec()),
+            Value::BulkString(b"other-worker".to_vec()),
+            Value::Int(60000),
+            Value::Int(2),
+        ])
+    }
+
+    #[test]
+    fn group_check_accepts_existing_empty_or_pending_group_without_deliveries() {
+        decode_group_check_response(Value::Array(Vec::new())).expect("existing empty group");
+        decode_group_check_response(Value::Array(vec![pending_group_row()]))
+            .expect("existing pending group");
+    }
+
+    #[test]
+    fn group_check_refuses_extra_rows_and_malformed_pending_metadata() {
+        let extra = decode_group_check_response(Value::Array(vec![
+            pending_group_row(),
+            pending_group_row(),
+        ]))
+        .expect_err("at most one pending row");
+        assert_eq!(extra.kind(), RedisStreamsErrorKind::ResourceExhausted);
+        assert!(!extra.retryable());
+
+        let mut malformed = vec![
+            Value::Nil,
+            Value::BulkString(b"not an array".to_vec()),
+            Value::Array(vec![Value::Array(Vec::new())]),
+        ];
+        for (index, value) in [
+            (0, Value::BulkString(b"invalid-id".to_vec())),
+            (1, Value::BulkString(b"invalid\nconsumer".to_vec())),
+            (1, Value::BulkString(vec![b'x'; MAX_IDENTITY_BYTES + 1])),
+            (2, Value::Int(-1)),
+            (3, Value::Int(-1)),
+            (3, Value::BulkString(b"2".to_vec())),
+        ] {
+            let Value::Array(mut row) = pending_group_row() else {
+                panic!("pending fixture row");
+            };
+            row[index] = value;
+            malformed.push(Value::Array(vec![Value::Array(row)]));
+        }
+        for response in malformed {
+            let error =
+                decode_group_check_response(response).expect_err("malformed pending response");
+            assert_eq!(error.kind(), RedisStreamsErrorKind::Protocol);
+            assert!(!error.retryable());
+        }
     }
 
     #[test]

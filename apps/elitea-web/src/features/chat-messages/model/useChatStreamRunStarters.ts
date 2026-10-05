@@ -203,6 +203,8 @@ export interface ChatStreamRunStarters {
    * live view of it is missing.
    */
   readonly resume: (params: ContinueAgentExecutionParams) => Promise<boolean>;
+  /** Static controls must preserve refusal information and never fall back to a socket. */
+  readonly resumeDetailed: (params: ContinueAgentExecutionParams) => Promise<AgentStreamStartAttempt>;
   /**
    * Regenerate one persisted answer, with the distinction between an absent
    * transport and the still-finalizing refusal the caller must retry rather
@@ -249,15 +251,16 @@ export function useChatStreamRunStarters(
     [startDetailed],
   );
 
-  const resume = useCallback(
-    async (resumeParams: ContinueAgentExecutionParams): Promise<boolean> => {
+  const resumeDetailed = useCallback(
+    async (resumeParams: ContinueAgentExecutionParams): Promise<AgentStreamStartAttempt> => {
       let resumed: AgentExecutionStart;
       try {
         resumed = await continueAgentExecution(resumeParams);
-      } catch {
-        // The route refused the resume, or this backend does not serve it. The
-        // caller falls back to `chat_continue_predict`.
-        return false;
+      } catch (error) {
+        if (resumeParams.contract === 'agent.continue.static.v1' && !(error instanceof EliteaApiError)) {
+          return { started: false, reason: 'rejected', message: 'Reload to refresh the original static pause.' };
+        }
+        return classifyStartFailure(error);
       }
       // The route ACCEPTED the resume. The run is live again whether or not the
       // answer named a stream, so the caller must not resume it a second time.
@@ -268,10 +271,13 @@ export function useChatStreamRunStarters(
         resumeParams.projectId,
         questionId ?? nonEmptyString(resumeParams.body["question_id"]),
       );
-      return true;
+      return { started: true };
     },
     [subscribeToRun, reconcileResume],
   );
+
+  const resume = useCallback(async (params: ContinueAgentExecutionParams): Promise<boolean> =>
+    (await resumeDetailed(params)).started, [resumeDetailed]);
 
   const regenerateDetailed = useCallback(
     async (
@@ -312,7 +318,7 @@ export function useChatStreamRunStarters(
   );
 
   return useMemo(
-    () => ({ startDetailed, start, resume, regenerateDetailed, regenerate }),
-    [startDetailed, start, resume, regenerateDetailed, regenerate],
+    () => ({ startDetailed, start, resume, resumeDetailed, regenerateDetailed, regenerate }),
+    [startDetailed, start, resume, resumeDetailed, regenerateDetailed, regenerate],
   );
 }

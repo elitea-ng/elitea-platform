@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { YamlPipelineDocument, YamlPipelineNode } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowEdge, FlowNode } from '../../../lib/flow-editor/reactFlowTypes';
+import { parsePipelineYamlDocument } from '../../../lib/pipelineYamlDocument.helpers';
+import { serializePipelineYaml } from '../../../lib/dumpYaml.helpers';
+import { readPipelineStateOrder } from '../../../lib/pipelineYamlState.helpers';
+import { usePipelineYamlStore } from '../../../model/pipelineYamlStore';
 import { renameFlowEdge, renameFlowNode, renameYamlDocument, renameYamlNode } from './NodeCardHeader.rename';
 
 describe('renameYamlNode', () => {
@@ -228,5 +232,93 @@ describe('renameFlowEdge', () => {
   it('leaves an unrelated edge untouched (same object identity)', () => {
     const unrelated: FlowEdge = { id: 'e3', source: 'A', target: 'B' };
     expect(renameFlowEdge(unrelated, 'Old', 'New')).toBe(unrelated);
+  });
+});
+
+
+describe('strict YAML rename publication', () => {
+  const source = `# Preserve raw bytes when rename does not change a node.
+entry_point: Old
+state:
+  '10': list
+  '2': {type: dict, value: null, vendor: {text: Old}}
+nodes:
+  - {id: Old, type: state_modifier, template: Old}
+  - {id: map_items, type: map, worker: Old, item: Old, source: Old, destination: Old, transition: END}
+  - id: fixed_branches
+    type: parallel
+    branches:
+      - {id: Old, node: Old, metadata: {text: Old}}
+      - {id: kept, node: Another}
+      - null
+      - Old
+`;
+  it('publishes a real rename without adding undefined or changing quoted state declaration order', () => {
+    const parsed = parsePipelineYamlDocument(source);
+    const document = parsed.yamlJsonObject as YamlPipelineDocument;
+    usePipelineYamlStore.getState().initPipelineYaml({ yamlCode: source, yamlJsonObject: document });
+    const renamed = renameYamlDocument(document, 'Old', 'New');
+    expect(renamed).not.toHaveProperty('interrupt_before');
+    expect(renamed).not.toHaveProperty('interrupt_after');
+    usePipelineYamlStore.getState().editPipelineYamlDocument(renamed);
+    const saved = usePipelineYamlStore.getState();
+    const result = parsePipelineYamlDocument(saved.yamlCode).yamlJsonObject as YamlPipelineDocument;
+    expect(result.entry_point).toBe('New');
+    expect(readPipelineStateOrder(saved.yamlCode)).toEqual(['10', '2']);
+    expect(result.state).toEqual(document.state);
+    expect(result.nodes?.find((node) => node.id === 'New')?.template).toBe('Old');
+    expect(result.nodes?.find((node) => node.type === 'map')).toMatchObject({ worker: 'New', item: 'Old', source: 'Old', destination: 'Old' });
+    expect(result.nodes?.find((node) => node.type === 'parallel')?.['branches']).toEqual([
+      { id: 'Old', node: 'New', metadata: { text: 'Old' } }, { id: 'kept', node: 'Another' }, null, 'Old',
+    ]);
+  });
+  it('retains complete original bytes when no stored id or reference changes', () => {
+    const document = parsePipelineYamlDocument(source).yamlJsonObject as YamlPipelineDocument;
+    usePipelineYamlStore.getState().initPipelineYaml({ yamlCode: source, yamlJsonObject: document });
+    usePipelineYamlStore.getState().editPipelineYamlDocument(renameYamlDocument(document, 'missing', 'New'));
+    expect(usePipelineYamlStore.getState().yamlCode).toBe(source);
+  });
+  it('preserves authored null pause metadata and absent entry point during serialization', () => {
+    const document = { nodes: [{ id: 'Old', type: 'printer', transition: 'END' }], interrupt_before: null,
+      interrupt_after: null, metadata: { text: 'Old', value: null } } as unknown as YamlPipelineDocument;
+    const renamed = renameYamlDocument(document, 'Old', 'New');
+    expect(renamed).not.toHaveProperty('entry_point');
+    expect(renamed['interrupt_before']).toBeNull();
+    expect(renamed['interrupt_after']).toBeNull();
+    expect(() => serializePipelineYaml(renamed)).not.toThrow();
+    expect(renamed['metadata']).toEqual(document['metadata']);
+  });
+  it('keeps missing legacy fields omitted when condition and decision references change', () => {
+    const document: YamlPipelineDocument = { nodes: [
+      { id: 'Old' }, { id: 'condition', condition: { conditional_outputs: ['Old'] } },
+      { id: 'decision', decision: { nodes: ['Old'] } }, { id: 'new_decision', type: 'decision', nodes: ['Old'] },
+    ] };
+    const renamed = renameYamlDocument(document, 'Old', 'New');
+    expect(() => serializePipelineYaml(renamed)).not.toThrow();
+    expect(renamed.nodes?.[1]?.condition).toEqual({ conditional_outputs: ['New'] });
+    expect(renamed.nodes?.[2]?.decision).toEqual({ nodes: ['New'] });
+    expect(renamed.nodes?.[3]).not.toHaveProperty('default_output');
+  });
+  it('updates flow Map worker and strict Parallel node references without renaming branch identities', () => {
+    const map: FlowNode = { id: 'map', type: 'map', position: { x: 0, y: 0 }, data: { worker: 'Old', source: 'Old' } };
+    const parallel: FlowNode = { id: 'parallel', type: 'parallel', position: { x: 0, y: 0 }, data: { branches: [{ id: 'Old', node: 'Old' }] } };
+    expect(renameFlowNode(map, 'Old', 'New').data).toEqual({ worker: 'New', source: 'Old' });
+    expect(renameFlowNode(parallel, 'Old', 'New').data['branches']).toEqual([{ id: 'Old', node: 'New' }]);
+  });
+  it('renames a Decision own id and preserves fixed Parallel references in fallback flow data', () => {
+    expect(renameYamlNode({ id: 'Old', type: 'decision', nodes: ['Old'] }, 'Old', 'New')).toEqual({ id: 'New', type: 'decision', nodes: ['New'] });
+    const node: FlowNode = { id: 'parallel', type: 'defaultType', position: { x: 0, y: 0 },
+      data: { type: 'parallel', branches: [{ id: 'Old', node: 'Old', metadata: null }] } };
+    expect(renameFlowNode(node, 'Old', 'New').data['branches']).toEqual([{ id: 'Old', node: 'New', metadata: null }]);
+  });
+  it('preserves unrelated string/null legacy metadata during a route rename', () => {
+    const document = { nodes: [{ id: 'Old' }, { id: 'other', condition: 'Old', decision: null, transition: 'Old' }] } as unknown as YamlPipelineDocument;
+    const renamed = renameYamlDocument(document, 'Old', 'New');
+    expect(renamed.nodes?.[1]).toEqual({ id: 'other', condition: 'Old', decision: null, transition: 'New' });
+    expect(() => serializePipelineYaml(renamed)).not.toThrow();
+  });
+  it('leaves arbitrary unsupported values strict after fixing known omission errors', () => {
+    const document = { nodes: [{ id: 'Old' }], metadata: { nested: undefined } };
+    expect(() => serializePipelineYaml(renameYamlDocument(document, 'Old', 'New'))).toThrow();
   });
 });

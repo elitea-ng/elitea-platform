@@ -6,6 +6,7 @@ import { useGetMessageTrace, useListMessageTraces } from '@/shared/api/generated
 import type { MessageTraceStep, MessageTraceStepDetail } from '@/shared/api/generated/model';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { t } from '@/shared/i18n';
+import { CodeDebugTraceArtifact } from '@/shared/ui/CodeDebugArtifact';
 
 interface TraceReference {
   readonly projectId: string;
@@ -59,6 +60,11 @@ function TracePanel({ reference }: { readonly reference: TraceReference }): Reac
           {detail.isFetching && <Typography component="output">{t('common.loading', 'Loading...')}</Typography>}
           {detail.isError && <Box role="alert">{t('features.chatMessages.traceReadFailed', 'Execution details could not be loaded.')}<Button onClick={() => { void detail.refetch(); }}>{t('common.retry', 'Retry')}</Button></Box>}
           {data && <TraceDetail detail={data} />}
+          {data?.id === selected?.id && data?.message_group_id === reference.messageGroupId && <CodeDebugTraceArtifact
+            attrs={data.attrs}
+            projectId={reference.projectId}
+            scopeKey={JSON.stringify([reference.conversationId, reference.messageGroupId, data.id])}
+          />}
         </Box> : null,
       }]} />)}
   </Box>;

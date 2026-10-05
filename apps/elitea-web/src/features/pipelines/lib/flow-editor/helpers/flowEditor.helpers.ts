@@ -1,3 +1,4 @@
+import { isFixedParallelAuthoringAllowed } from '../constants/parallel.constants';
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/lib/
  * helpers/flowEditor.helpers.js` (512 lines, unit A2c). This is the
@@ -125,6 +126,9 @@ export const updateYamlNode = <TDoc extends YamlDocLike>(
   updateNode(id, yamlJsonObject, setYamlJsonObject, node => ({ ...node, [field]: value }));
 };
 
+/** Only verified node-edit deletion markers are normalized; nested YAML values remain strict. */
+const NODE_DELETION_FIELDS: readonly string[] = ['transition', 'toolkit_name', 'tool', 'input_mapping', 'loop_toolkit_name', 'loop_tool', 'variables_mapping'];
+
 export const batchUpdateYamlNode = <TDoc extends YamlDocLike>(
   id: string,
   value: Record<string, unknown> = {},
@@ -132,16 +136,13 @@ export const batchUpdateYamlNode = <TDoc extends YamlDocLike>(
   setYamlJsonObject: (next: TDoc) => void,
   replace = false,
 ): void => {
-  updateNode(
-    id,
-    yamlJsonObject,
-    setYamlJsonObject,
-    node =>
-      ({
-        ...(!replace ? node : {}),
-        ...value,
-      }) as typeof node,
-  );
+  updateNode(id, yamlJsonObject, setYamlJsonObject, node => {
+    const updated = { ...(!replace ? node : {}), ...value };
+    for (const key of NODE_DELETION_FIELDS) {
+      if (Object.hasOwn(value, key) && value[key] === undefined) delete updated[key];
+    }
+    return updated as typeof node;
+  });
 };
 
 export const updateYamlNodeInputMappingVariable = <TDoc extends YamlDocLike>(
@@ -273,6 +274,7 @@ export const canCreateNodeType = (
   nodeType: string,
   sourceFlags: ReturnType<typeof getNodeTypeFlags>,
 ): boolean => {
+  if (!isFixedParallelAuthoringAllowed(nodeType)) return false;
   // Cannot create special node types (Condition/Decision) from special source nodes
   if (
     (nodeType === PipelineNodeTypes.Condition || nodeType === PipelineNodeTypes.Decision) &&

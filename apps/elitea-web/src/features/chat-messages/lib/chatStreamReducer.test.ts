@@ -1,3 +1,4 @@
+import recoveryReceipt from '@/shared/lib/fixtures/node-recovery-required.json';
 /**
  * The frames here are not invented: they are the shape a live standalone stack
  * emits, captured from the SSE stream while the backend chat smoke ran
@@ -292,6 +293,13 @@ describe('the ported boundary is explicit', () => {
     ];
 
     for (const type of Object.values(SocketMessageType)) {
+      if (type === SocketMessageType.AgentNodeRecoveryRequired) {
+        const response = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+        const owned = before.map(message => ({ ...message, id: response, executionGeneration: '1' }));
+        expect(applyChatStreamFrame(owned, frame(type, { message_id: response, execution_generation: '1',
+          response_metadata: { node_recovery_required_v1: recoveryReceipt } }), CONTEXT)).not.toBe(owned);
+        continue;
+      }
       const next = applyChatStreamFrame(
         before,
         frame(type, {

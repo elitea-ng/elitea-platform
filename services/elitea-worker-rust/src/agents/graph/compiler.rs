@@ -6,6 +6,9 @@
 
 #![allow(dead_code)] // Production pipeline assembly remains capability-gated.
 
+#[path = "node_recovery_definition.rs"]
+mod recovery_definition;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -46,8 +49,20 @@ use super::printer::{
 use super::resume::PipelineResume;
 use super::router::{RouterNode, RouterNodeDefinition};
 use super::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
-use super::yaml::{MAX_NODE_ID_BYTES, valid_graph_id, valid_output_key};
+use super::static_pause::{StaticPauseCatalog, StaticResumeCheckpointer};
+use super::yaml::{MAX_NODE_ID_BYTES, ParallelNodeDefinition, valid_graph_id, valid_output_key};
+
+#[path = "map_compiler.rs"]
+mod map_compiler;
+#[path = "parallel_compiler.rs"]
+mod parallel_compiler;
+use super::map_yaml::MapNodeDefinition;
 use super::{pipeline_completed_event, pipeline_result_event};
+pub(crate) use map_compiler::MapCompilerBinding;
+use map_compiler::validate_map_ownership;
+use parallel_compiler::validate_parallel_ownership;
+#[allow(unused_imports)] // Public continuation binding is staged behind the Parallel gate.
+pub(crate) use parallel_compiler::{ParallelBranchContinuation, ParallelCompilerBinding};
 
 const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
 const MAX_PIPELINE_NODES: usize = 128;
@@ -98,6 +113,8 @@ const INTERNAL_RESULT_KEYS: &[&str] = &[
     HITL_RESUME_STATE_KEY,
     DIRECT_TOOL_RESUME_STATE_KEY,
     LLM_TOOL_RESUME_STATE_KEY,
+    super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY,
+    super::static_pause::STATIC_TEXT_RESUME_STATE_KEY,
 ];
 
 #[derive(Clone, Deserialize)]
@@ -218,12 +235,17 @@ where
 /// claim attempts. Its digest is safe to bind into session/checkpoint lineage.
 #[derive(Clone)]
 pub(crate) struct PipelineDefinition {
+    recovery: recovery_definition::RecoveryCatalog,
     entry_point: String,
     state: BTreeMap<String, String>,
     state_defaults: BTreeMap<String, serde_json::Value>,
     state_declaration_order: Vec<String>,
     nodes: Vec<PipelineNodeDefinition>,
+    parallel_owned_nodes: BTreeSet<String>,
+    map_owned_nodes: BTreeSet<String>,
     definition_digest: [u8; 32],
+    interrupt_before: Vec<String>,
+    interrupt_after: Vec<String>,
 }
 
 /// Invocation-owned dependencies for executable pipeline node families.
@@ -234,9 +256,118 @@ pub(crate) struct PipelineNodeRuntimes {
     direct_tool: Option<Arc<dyn PipelineDirectToolResolver>>,
     application: Option<Arc<dyn PipelineApplicationResolver>>,
     code: Option<Arc<dyn CodeSandboxRuntime>>,
+    node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    saved_child_scope_provider: Option<
+        Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
+    >,
+    checkpoint_catalog:
+        Option<Arc<crate::agents::pipeline::composition::PipelineCheckpointCatalog>>,
+    composition_definitions: Option<Arc<BTreeMap<String, PipelineDefinition>>>,
+    parallel: Option<Arc<ParallelCompilerBinding>>,
+    parallel_authority_bound: bool,
+    map: Option<Arc<MapCompilerBinding>>,
+    map_authority_bound: bool,
+    application_scope_path: String,
+    application_scopes:
+        Option<Arc<crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>>,
 }
 
 impl PipelineNodeRuntimes {
+    pub(crate) fn with_saved_child_scope_provider(
+        mut self,
+        provider: Arc<
+            dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider,
+        >,
+    ) -> Self {
+        self.saved_child_scope_provider = Some(provider);
+        self
+    }
+    pub(crate) fn saved_child_scope_provider(
+        &self,
+    ) -> Option<
+        &Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
+    > {
+        self.saved_child_scope_provider.as_ref()
+    }
+
+    pub(crate) fn with_application_scope_path(mut self, path: String) -> Self {
+        self.application_scope_path = path;
+        self
+    }
+    fn scoped_checkpointer(
+        &self,
+        checkpointer: Arc<dyn Checkpointer>,
+    ) -> Result<Arc<dyn Checkpointer>, PipelineConfigurationError> {
+        if self.parallel_authority_bound || self.map_authority_bound {
+            return Ok(checkpointer);
+        }
+        match self.application_scopes() {
+            Some(scopes) => scopes
+                .wrap_checkpointer(&self.application_scope_path, checkpointer)
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "the graph application scope was not admitted",
+                    )
+                }),
+            None => Ok(checkpointer),
+        }
+    }
+
+    pub(crate) fn with_application_scopes(
+        mut self,
+        scopes: Arc<crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>,
+    ) -> Self {
+        self.application_scopes = Some(scopes);
+        self
+    }
+
+    pub(crate) fn application_scopes(
+        &self,
+    ) -> Option<&crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>
+    {
+        self.application_scopes.as_deref()
+    }
+
+    pub(crate) fn with_composition_definitions(
+        mut self,
+        definitions: BTreeMap<String, PipelineDefinition>,
+    ) -> Self {
+        self.composition_definitions = Some(Arc::new(definitions));
+        self
+    }
+
+    pub(crate) fn checkpoint_catalog_arc(
+        &self,
+    ) -> Option<Arc<super::super::pipeline::composition::PipelineCheckpointCatalog>> {
+        self.checkpoint_catalog.clone()
+    }
+
+    pub(crate) fn composition_definitions(&self) -> Option<&BTreeMap<String, PipelineDefinition>> {
+        self.composition_definitions.as_deref()
+    }
+
+    pub(crate) fn with_checkpoint_catalog(
+        mut self,
+        catalog: crate::agents::pipeline::composition::PipelineCheckpointCatalog,
+    ) -> Self {
+        self.checkpoint_catalog = Some(Arc::new(catalog));
+        self
+    }
+
+    pub(crate) fn checkpoint_catalog(
+        &self,
+    ) -> Option<&crate::agents::pipeline::composition::PipelineCheckpointCatalog> {
+        self.checkpoint_catalog.as_deref()
+    }
+
+    pub(crate) fn with_node_recovery_authority(
+        mut self,
+        authority: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Self {
+        self.node_recovery = Some(authority);
+        self
+    }
+
     pub(in crate::agents) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
         self.code = Some(runtime);
         self
@@ -258,6 +389,16 @@ impl PipelineNodeRuntimes {
             application,
             events: None,
             code: None,
+            node_recovery: None,
+            saved_child_scope_provider: None,
+            checkpoint_catalog: None,
+            composition_definitions: None,
+            application_scopes: None,
+            parallel: None,
+            parallel_authority_bound: false,
+            map: None,
+            map_authority_bound: false,
+            application_scope_path: String::new(),
         }
     }
 }
@@ -362,6 +503,8 @@ fn terminal_target<'a>(target: &'a str, terminal: &'a str) -> &'a str {
 enum PipelineNodeDefinition {
     Code(CodeNodeDefinition),
     Application(ApplicationNodeDefinition),
+    Parallel(ParallelNodeDefinition),
+    Map(MapNodeDefinition),
     Decision(DecisionNodeDefinition),
     DirectTool(DirectToolNodeDefinition),
     Hitl(HitlNodeDefinition),
@@ -376,6 +519,8 @@ impl PipelineNodeDefinition {
         match self {
             Self::Code(node) => node.id(),
             Self::Application(node) => node.id(),
+            Self::Parallel(node) => node.id(),
+            Self::Map(node) => node.id(),
             Self::Decision(node) => node.id(),
             Self::DirectTool(node) => node.id(),
             Self::Hitl(node) => node.id(),
@@ -390,11 +535,11 @@ impl PipelineNodeDefinition {
         match self {
             Self::Code(node) => node.input_keys(),
             Self::Application(node) => node.input_keys(),
+            Self::Parallel(_) | Self::Map(_) | Self::Printer(_) => &[],
             Self::Decision(node) => node.input_keys(),
             Self::DirectTool(node) => node.input_keys(),
             Self::Hitl(node) => node.input_keys(),
             Self::Llm(node) => node.input_keys(),
-            Self::Printer(_) => &[],
             Self::Router(node) => node.input_keys(),
             Self::StateModifier(node) => node.input_keys(),
         }
@@ -404,6 +549,8 @@ impl PipelineNodeDefinition {
         match self {
             Self::Code(node) => node.output_keys(),
             Self::Application(node) => node.output_keys(),
+            Self::Parallel(node) => node.output_keys(),
+            Self::Map(node) => node.output_keys(),
             Self::DirectTool(node) => node.output_keys(),
             Self::Decision(_) | Self::Hitl(_) | Self::Printer(_) | Self::Router(_) => &[],
             Self::Llm(node) => node.output_keys(),
@@ -415,6 +562,8 @@ impl PipelineNodeDefinition {
         match self {
             Self::Code(_)
             | Self::Application(_)
+            | Self::Parallel(_)
+            | Self::Map(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Hitl(_)
@@ -430,6 +579,8 @@ impl PipelineNodeDefinition {
             Self::Hitl(node) => node.edit_state_key(),
             Self::Code(_)
             | Self::Application(_)
+            | Self::Parallel(_)
+            | Self::Map(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Llm(_)
@@ -443,6 +594,8 @@ impl PipelineNodeDefinition {
         match self {
             Self::Code(node) => node.transition().into_iter().collect(),
             Self::Application(node) => node.transition().into_iter().collect(),
+            Self::Parallel(node) => node.transition().into_iter().collect(),
+            Self::Map(node) => node.transition().into_iter().collect(),
             Self::Decision(node) => node.route_targets().collect(),
             Self::DirectTool(node) => node.transition().into_iter().collect(),
             Self::Hitl(node) => node.route_targets().collect(),
@@ -457,6 +610,8 @@ impl PipelineNodeDefinition {
         match self {
             Self::Code(node) => node.validated_digest(),
             Self::Application(node) => node.config_digest(),
+            Self::Parallel(node) => node.config_digest(),
+            Self::Map(node) => node.config_digest(),
             Self::Decision(node) => node.config_digest(),
             Self::DirectTool(node) => node.config_digest(),
             Self::Hitl(node) => node.config_digest(),
@@ -469,6 +624,16 @@ impl PipelineNodeDefinition {
 }
 
 impl PipelineDefinition {
+    #[cfg(test)]
+    pub(super) fn original_code_definition_fixture(
+        &self,
+        node_id: &str,
+    ) -> Option<CodeNodeDefinition> {
+        self.nodes.iter().find_map(|node| match node {
+            PipelineNodeDefinition::Code(code) if code.id() == node_id => Some(code.clone()),
+            _ => None,
+        })
+    }
     pub(crate) fn declared_variable_types(&self) -> BTreeMap<String, String> {
         self.state
             .iter()
@@ -496,10 +661,18 @@ impl PipelineDefinition {
                 "normalized legacy pipeline graph identifiers for runtime compatibility"
             );
         }
-        Self::from_raw(raw)
+        let mut definition = Self::from_raw(raw)?;
+        let mut yaml_pin = [0_u8; 32];
+        yaml_pin.copy_from_slice(digest::digest(&digest::SHA256, yaml.as_bytes()).as_ref());
+        for node in &mut definition.nodes {
+            if let PipelineNodeDefinition::Code(code) = node {
+                code.bind_debug_definition(definition.definition_digest, yaml_pin);
+            }
+        }
+        Ok(definition)
     }
 
-    fn from_raw(raw: RawPipelineDefinition) -> Result<Self, PipelineConfigurationError> {
+    fn from_raw(mut raw: RawPipelineDefinition) -> Result<Self, PipelineConfigurationError> {
         if raw.nodes.is_empty() || raw.nodes.len() > MAX_PIPELINE_NODES {
             return Err(PipelineConfigurationError::Invalid(
                 "the pipeline must contain between 1 and 128 nodes",
@@ -510,13 +683,8 @@ impl PipelineDefinition {
                 "the pipeline entry point is malformed",
             ));
         }
+        let raw_recovery = recovery_definition::RawRecoveryCatalog::extract(&mut raw.nodes)?;
         let (state, state_defaults, state_declaration_order) = validate_state(raw.state)?;
-        if !raw.interrupt_before.is_empty() || !raw.interrupt_after.is_empty() {
-            return Err(PipelineConfigurationError::Unsupported(
-                "static pipeline interrupts are not enabled in this compiler slice",
-            ));
-        }
-
         let (nodes, node_ids) = parse_pipeline_nodes(raw.nodes, &state)?;
         if !node_ids.contains(&raw.entry_point) {
             return Err(PipelineConfigurationError::Invalid(
@@ -541,20 +709,55 @@ impl PipelineDefinition {
                 ));
             }
         }
-        let definition_digest = definition_digest(
+        let parallel_owned_nodes = validate_parallel_ownership(
+            &nodes,
+            &raw.entry_point,
+            &raw.interrupt_before,
+            &raw.interrupt_after,
+        )?;
+        let map_owned_nodes = validate_map_ownership(
+            &nodes,
+            &state,
+            &raw.entry_point,
+            &raw.interrupt_before,
+            &raw.interrupt_after,
+            &parallel_owned_nodes,
+        )?;
+        let recovery_owned = parallel_owned_nodes
+            .union(&map_owned_nodes)
+            .cloned()
+            .collect();
+        let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
+        let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
+        let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
+        let mut definition_digest = definition_digest(
             &raw.entry_point,
             &state,
             &state_defaults,
             &state_declaration_order,
             &nodes,
         );
+        // Empty policies keep existing definition bytes and checkpoint lineage.
+        if !interrupt_before.is_empty() || !interrupt_after.is_empty() {
+            definition_digest = super::static_pause::policy_digest(
+                definition_digest,
+                &interrupt_before,
+                &interrupt_after,
+            );
+        }
+        definition_digest = recovery.bind_digest(definition_digest);
         Ok(Self {
+            recovery,
             entry_point: raw.entry_point,
             state,
             state_defaults,
             state_declaration_order,
             nodes,
+            parallel_owned_nodes,
+            map_owned_nodes,
             definition_digest,
+            interrupt_before,
+            interrupt_after,
         })
     }
 
@@ -564,6 +767,8 @@ impl PipelineDefinition {
         pending.iter().all(|id| {
             self.nodes.iter().any(|node| {
                 node.id() == id
+                    && !self.parallel_owned_nodes.contains(id)
+                    && !self.map_owned_nodes.contains(id)
                     && matches!(
                         node,
                         PipelineNodeDefinition::Llm(_)
@@ -571,9 +776,60 @@ impl PipelineDefinition {
                             | PipelineNodeDefinition::StateModifier(_)
                             | PipelineNodeDefinition::Decision(_)
                             | PipelineNodeDefinition::Router(_)
+                            | PipelineNodeDefinition::Parallel(_)
+                            | PipelineNodeDefinition::Map(_)
                     )
             })
         })
+    }
+
+    pub(crate) fn node_recovery_spec(
+        &self,
+        id: &str,
+    ) -> Option<([u8; 32], super::node_recovery::NodeRecoveryPolicy)> {
+        if self.parallel_owned_nodes.contains(id) || self.map_owned_nodes.contains(id) {
+            return None;
+        }
+        match self.nodes.iter().find(|node| node.id() == id)? {
+            PipelineNodeDefinition::Code(node) => Some((
+                node.validated_digest(),
+                self.recovery
+                    .get(id)
+                    .map(|binding| binding.policy.clone())
+                    .unwrap_or_default(),
+            )),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn node_result_projector(
+        &self,
+        id: &str,
+        execution_id: &str,
+        generation: u64,
+    ) -> Result<
+        Option<Arc<dyn super::node_recovery_runtime::NodeResultRecovery>>,
+        PipelineConfigurationError,
+    > {
+        if self.parallel_owned_nodes.contains(id) || self.map_owned_nodes.contains(id) {
+            return Ok(None);
+        }
+        if let Some(PipelineNodeDefinition::Code(node)) =
+            self.nodes.iter().find(|node| node.id() == id)
+        {
+            let projector = super::code_runtime::CodeCommittedProjector::new(
+                node.clone(),
+                self.declared_variable_types(),
+                execution_id.to_owned(),
+                generation,
+                self.recovery.get(id).is_none(),
+            )
+            .map_err(|_| {
+                PipelineConfigurationError::Invalid("The original Code result contract is invalid.")
+            })?;
+            return Ok(Some(Arc::new(projector)));
+        }
+        Ok(None)
     }
 
     pub(crate) fn entry_point(&self) -> &str {
@@ -588,6 +844,34 @@ impl PipelineDefinition {
     #[must_use]
     pub(crate) const fn definition_digest(&self) -> [u8; 32] {
         self.definition_digest
+    }
+
+    pub(crate) fn has_static_interrupts(&self) -> bool {
+        !self.interrupt_before.is_empty() || !self.interrupt_after.is_empty()
+    }
+
+    pub(crate) fn static_pause_catalog(&self) -> StaticPauseCatalog {
+        StaticPauseCatalog::from_definition(
+            self.definition_digest,
+            &self.interrupt_before,
+            &self.interrupt_after,
+            self.nodes.iter().map(|node| {
+                let targets = match node {
+                    PipelineNodeDefinition::Printer(printer) => vec![printer.reset_node_id()],
+                    _ => node
+                        .route_targets()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                };
+                (
+                    node.id().to_owned(),
+                    node.config_digest(),
+                    targets,
+                    matches!(node, PipelineNodeDefinition::Printer(_)),
+                )
+            }),
+        )
     }
 
     pub(crate) fn printer_pause_catalog(&self) -> PrinterPauseCatalog {
@@ -608,6 +892,8 @@ impl PipelineDefinition {
                 }
                 PipelineNodeDefinition::Llm(node) => node.resolve_legacy_toolkit_aliases(aliases),
                 PipelineNodeDefinition::Application(_)
+                | PipelineNodeDefinition::Parallel(_)
+                | PipelineNodeDefinition::Map(_)
                 | PipelineNodeDefinition::Decision(_)
                 | PipelineNodeDefinition::Hitl(_)
                 | PipelineNodeDefinition::Printer(_)
@@ -623,6 +909,8 @@ impl PipelineDefinition {
         self.nodes.iter().flat_map(|node| match node {
             PipelineNodeDefinition::Llm(node) => node.tool_selections(),
             PipelineNodeDefinition::Application(_)
+            | PipelineNodeDefinition::Parallel(_)
+            | PipelineNodeDefinition::Map(_)
             | PipelineNodeDefinition::Decision(_)
             | PipelineNodeDefinition::DirectTool(_)
             | PipelineNodeDefinition::Hitl(_)
@@ -638,6 +926,8 @@ impl PipelineDefinition {
         self.nodes.iter().filter_map(|node| match node {
             PipelineNodeDefinition::DirectTool(node) => Some(node.selection()),
             PipelineNodeDefinition::Application(_)
+            | PipelineNodeDefinition::Parallel(_)
+            | PipelineNodeDefinition::Map(_)
             | PipelineNodeDefinition::Decision(_)
             | PipelineNodeDefinition::Hitl(_)
             | PipelineNodeDefinition::Llm(_)
@@ -645,6 +935,25 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_) => None,
+        })
+    }
+
+    /// Pair an admitted node path with its exact saved participant selection.
+    pub(crate) fn application_node_digest(&self, node_id: &str) -> Option<[u8; 32]> {
+        self.nodes.iter().find_map(|node| match node {
+            PipelineNodeDefinition::Application(node) if node.id() == node_id => {
+                Some(node.config_digest())
+            }
+            _ => None,
+        })
+    }
+
+    pub(crate) fn application_nodes(
+        &self,
+    ) -> impl Iterator<Item = (&str, &PipelineApplicationSelection)> {
+        self.nodes.iter().filter_map(|node| match node {
+            PipelineNodeDefinition::Application(node) => Some((node.id(), node.selection())),
+            _ => None,
         })
     }
 
@@ -663,6 +972,8 @@ impl PipelineDefinition {
         self.nodes.iter().filter_map(|node| match node {
             PipelineNodeDefinition::Application(node) => Some(node.selection()),
             PipelineNodeDefinition::Decision(_)
+            | PipelineNodeDefinition::Parallel(_)
+            | PipelineNodeDefinition::Map(_)
             | PipelineNodeDefinition::DirectTool(_)
             | PipelineNodeDefinition::Hitl(_)
             | PipelineNodeDefinition::Llm(_)
@@ -762,6 +1073,18 @@ impl PipelineDefinition {
                 "the pipeline agent name is malformed",
             ));
         }
+        let (checkpointer, bound_runtimes) =
+            self.bind_parallel_authority(checkpointer, runtimes)?;
+        let (checkpointer, bound_runtimes) =
+            self.bind_map_authority(checkpointer, &bound_runtimes)?;
+        let runtimes = &bound_runtimes;
+        let checkpointer: Arc<dyn Checkpointer> = Arc::new(StaticResumeCheckpointer::new(
+            runtimes.scoped_checkpointer(checkpointer)?,
+            resume
+                .as_ref()
+                .map(PipelineResume::static_after_checkpoints)
+                .unwrap_or_default(),
+        ));
         let state_schema = self.state_schema(self.runtime_channels());
         let result_policy = self.result_policy();
         // A root HITL decision directly to END runs no data-producing node.
@@ -795,10 +1118,18 @@ impl PipelineDefinition {
                     vec![event]
                 }),
         ));
-        for node in &self.nodes {
+        for node in self.nodes.iter().filter(|node| {
+            !self.parallel_owned_nodes.contains(node.id())
+                && !self.map_owned_nodes.contains(node.id())
+        }) {
             builder = self.bind_node(builder, node, runtimes, &node_checkpointer)?;
         }
         let mut builder = builder.into_agent()?;
+        let before_interrupts: Vec<&str> =
+            self.interrupt_before.iter().map(String::as_str).collect();
+        if !before_interrupts.is_empty() {
+            builder = builder.interrupt_before(&before_interrupts);
+        }
         let printer_interrupts = self
             .nodes
             .iter()
@@ -807,8 +1138,12 @@ impl PipelineDefinition {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if !printer_interrupts.is_empty() {
-            builder = builder.interrupt_after(&printer_interrupts);
+        let mut after_interrupts = printer_interrupts;
+        after_interrupts.extend(self.interrupt_after.iter().map(String::as_str));
+        after_interrupts.sort_unstable();
+        after_interrupts.dedup();
+        if !after_interrupts.is_empty() {
+            builder = builder.interrupt_after(&after_interrupts);
         }
         if let Some(resume) = resume {
             let resume_state = resume.into_state();
@@ -838,6 +1173,12 @@ impl PipelineDefinition {
         checkpointer: Arc<dyn Checkpointer>,
         runtimes: &PipelineNodeRuntimes,
     ) -> Result<CompiledGraph, PipelineConfigurationError> {
+        let (checkpointer, bound_runtimes) =
+            self.bind_parallel_authority(checkpointer, runtimes)?;
+        let (checkpointer, bound_runtimes) =
+            self.bind_map_authority(checkpointer, &bound_runtimes)?;
+        let runtimes = &bound_runtimes;
+        let checkpointer = runtimes.scoped_checkpointer(checkpointer)?;
         let state_schema = self.state_schema(self.runtime_channels());
         let result_policy = self.result_policy();
         // A completed no-op step persists initialized child input before any
@@ -850,7 +1191,10 @@ impl PipelineDefinition {
             graph,
             terminal: SUBGRAPH_RESULT_NODE,
         };
-        for node in &self.nodes {
+        for node in self.nodes.iter().filter(|node| {
+            !self.parallel_owned_nodes.contains(node.id())
+                && !self.map_owned_nodes.contains(node.id())
+        }) {
             builder = self.bind_node(builder, node, runtimes, &checkpointer)?;
             if node.route_targets().is_empty() {
                 builder = builder.edge(node.id(), END);
@@ -873,8 +1217,17 @@ impl PipelineDefinition {
             .with_checkpointer_arc(checkpointer)
             .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
             .with_max_concurrency(1);
-        if !printer_interrupts.is_empty() {
-            graph = graph.with_interrupt_after(&printer_interrupts);
+        let before_interrupts: Vec<&str> =
+            self.interrupt_before.iter().map(String::as_str).collect();
+        if !before_interrupts.is_empty() {
+            graph = graph.with_interrupt_before(&before_interrupts);
+        }
+        let mut after_interrupts = printer_interrupts;
+        after_interrupts.extend(self.interrupt_after.iter().map(String::as_str));
+        after_interrupts.sort_unstable();
+        after_interrupts.dedup();
+        if !after_interrupts.is_empty() {
+            graph = graph.with_interrupt_after(&after_interrupts);
         }
         Ok(graph)
     }
@@ -901,10 +1254,19 @@ impl PipelineDefinition {
             HITL_RESUME_STATE_KEY.to_owned(),
             DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
             LLM_TOOL_RESUME_STATE_KEY.to_owned(),
+            super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY.to_owned(),
+            super::static_pause::STATIC_TEXT_RESUME_STATE_KEY.to_owned(),
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
         ]);
+        if self.has_parallel_nodes() {
+            channels.insert(super::parallel::PARALLEL_RESUME_STATE_KEY.to_owned());
+        }
         channels.extend(self.state.keys().cloned());
-        for node in &self.nodes {
+        for node in self
+            .nodes
+            .iter()
+            .filter(|node| !self.map_owned_nodes.contains(node.id()))
+        {
             if let PipelineNodeDefinition::Application(application) = node {
                 channels.extend(application.variable_channels());
             }
@@ -930,6 +1292,10 @@ impl PipelineDefinition {
             PipelineNodeDefinition::Application(node) => {
                 self.bind_application_node(builder, node, runtimes, checkpointer)?
             }
+            PipelineNodeDefinition::Parallel(node) => {
+                self.bind_parallel_node(builder, node, runtimes, checkpointer)?
+            }
+            PipelineNodeDefinition::Map(node) => self.bind_map_node(builder, node, runtimes)?,
             PipelineNodeDefinition::Decision(node) => {
                 let Some(factory) = runtimes.llm.clone() else {
                     return Err(PipelineConfigurationError::Unsupported(
@@ -1028,11 +1394,55 @@ impl PipelineDefinition {
             .ok_or(PipelineConfigurationError::Unsupported(
                 "Code execution requires an admitted sandbox backend",
             ))?;
-        let executable =
-            CodeNode::new(node.clone(), self.state.clone(), runtime).map_err(|_| {
-                PipelineConfigurationError::Invalid("Code state declarations are invalid")
-            })?;
-        let mut next = builder.node(executable.with_events(runtimes.events.clone()));
+        let runtime = match runtimes.saved_child_scope_provider() {
+            Some(provider) => {
+                if runtimes.node_recovery.is_none() {
+                    return Err(PipelineConfigurationError::Unsupported(
+                        "Scoped Code requires its current fenced node writer",
+                    ));
+                }
+                runtime
+                    .bind_saved_child_scope(provider.clone())
+                    .map_err(|_| {
+                        PipelineConfigurationError::Unsupported(
+                            "Scoped Code runtime authority is unavailable",
+                        )
+                    })?
+            }
+            None => runtime,
+        };
+        let mut bound = node.clone();
+        bound.refresh_debug_compiler_digest(self.definition_digest);
+        let executable = CodeNode::new(bound, self.state.clone(), runtime).map_err(|_| {
+            PipelineConfigurationError::Invalid("Code state declarations are invalid")
+        })?;
+        let executable = executable.with_events(runtimes.events.clone());
+        let binding = self.recovery.get(node.id());
+        let mut next = if let Some(authority) = runtimes.node_recovery.clone() {
+            let policy = binding
+                .map(|binding| binding.policy.clone())
+                .unwrap_or_default();
+            let wrapper = super::node_recovery_runtime::RecoverableNode::new(
+                Arc::new(executable),
+                node.validated_digest(),
+                policy,
+                authority,
+                binding.and_then(|binding| binding.error_route.clone()),
+            );
+            // A default-policy visit preserves the pre-existing effect identity.
+            // Opting into bounded retries creates ordinal identities explicitly.
+            builder.node(if binding.is_none() {
+                wrapper.with_legacy_first_attempt()
+            } else {
+                wrapper
+            })
+        } else if binding.is_some() {
+            return Err(PipelineConfigurationError::Unsupported(
+                "node recovery requires a current fenced durable writer",
+            ));
+        } else {
+            builder.node(executable)
+        };
         if let Some(transition) = node.transition() {
             next = next.edge(
                 node.id(),
@@ -1139,6 +1549,8 @@ impl PipelineDefinition {
                 PipelineNodeDefinition::Application(node) => {
                     (node.transition(), node.output_keys())
                 }
+                PipelineNodeDefinition::Parallel(node) => (node.transition(), node.output_keys()),
+                PipelineNodeDefinition::Map(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Code(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::DirectTool(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Llm(node) => (node.transition(), node.output_keys()),
@@ -1224,6 +1636,9 @@ fn normalize_legacy_graph_identifiers(document: &mut serde_yaml_ng::Value) -> us
             // Retain the identifier boundary for the separately gated parallel
             // node so its later compiler integration cannot regress legacy
             // branch labels.
+            Some("map") => {
+                normalize_mapping_graph_identifier(node, "worker", &mut count);
+            }
             Some("parallel") => {
                 if let Some(serde_yaml_ng::Value::Sequence(branches)) = node.get_mut("branches") {
                     for branch in branches {
@@ -1528,8 +1943,19 @@ fn parse_pipeline_nodes(
                 "pipeline node identifiers must be unique",
             ));
         }
-        validate_node_state(&node, state)?;
         nodes.push(node);
+    }
+    let map_owned = nodes
+        .iter()
+        .filter_map(|node| match node {
+            PipelineNodeDefinition::Map(map) => Some(map.runtime().worker.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for node in &nodes {
+        if !map_owned.contains(node.id()) {
+            validate_node_state(node, state)?;
+        }
     }
     Ok((nodes, node_ids))
 }
@@ -1547,6 +1973,12 @@ fn parse_pipeline_node(
         "decision" => DecisionNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Decision)
             .map_err(|_| PipelineConfigurationError::Invalid("a Decision node is invalid")),
+        "map" => MapNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::Map)
+            .map_err(|_| PipelineConfigurationError::Invalid("a Map node is invalid")),
+        "parallel" => ParallelNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::Parallel)
+            .map_err(|_| PipelineConfigurationError::Invalid("a fixed Parallel node is invalid")),
         "agent" => ApplicationNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Application)
             .map_err(|_| PipelineConfigurationError::Invalid("an Agent node is invalid")),
@@ -1593,6 +2025,28 @@ fn validate_node_state(
         }
     }
     match node {
+        PipelineNodeDefinition::Map(node) => {
+            let map = node.runtime();
+            if state.get(&map.source).map(String::as_str) != Some("list")
+                || state.get(&map.destination).map(String::as_str) != Some("list")
+                || builtin_state_key(&map.source)
+                || builtin_state_key(&map.destination)
+            {
+                return Err(PipelineConfigurationError::Invalid(
+                    "Map source and destination must be declared business list roots",
+                ));
+            }
+        }
+        PipelineNodeDefinition::Parallel(node) => {
+            if builtin_state_key(node.output_key())
+                || reserved_user_state_key(node.output_key())
+                || state.get(node.output_key()).map(String::as_str) != Some("list")
+            {
+                return Err(PipelineConfigurationError::Invalid(
+                    "a fixed Parallel output must be a declared list channel",
+                ));
+            }
+        }
         PipelineNodeDefinition::Application(node) => {
             if node
                 .mapped_variables()
@@ -1763,6 +2217,8 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == HITL_RESUME_STATE_KEY
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
+        || key == super::parallel::PARALLEL_RESUME_STATE_KEY
+        || key == super::application::PARALLEL_AGENT_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
         || matches!(
             key,
@@ -1805,6 +2261,21 @@ fn yaml_string_field<'a>(
         ))
 }
 
+fn validate_static_interrupts(
+    nodes: Vec<String>,
+    known: &BTreeSet<String>,
+) -> Result<Vec<String>, PipelineConfigurationError> {
+    let mut unique = BTreeSet::new();
+    for node in nodes {
+        if !valid_graph_id(&node) || !known.contains(&node) || !unique.insert(node) {
+            return Err(PipelineConfigurationError::Invalid(
+                "a static interrupt must name one unique stored node",
+            ));
+        }
+    }
+    Ok(unique.into_iter().collect())
+}
+
 fn definition_digest(
     entry_point: &str,
     state: &BTreeMap<String, String>,
@@ -1831,6 +2302,8 @@ fn definition_digest(
         let kind = match node {
             PipelineNodeDefinition::Code(_) => b"code".as_slice(),
             PipelineNodeDefinition::Application(_) => b"agent".as_slice(),
+            PipelineNodeDefinition::Parallel(_) => b"parallel".as_slice(),
+            PipelineNodeDefinition::Map(_) => b"map".as_slice(),
             PipelineNodeDefinition::Decision(_) => b"decision".as_slice(),
             PipelineNodeDefinition::DirectTool(node) => {
                 node.selection().kind().wire_name().as_bytes()

@@ -55,6 +55,7 @@ use crate::transport::redis_commands::{
 pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
     router: AgentDeliveryRouter<R, RC>,
     checkpoint_recovery: bool,
+    node_recovery: bool,
     sandbox_stop: Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>>,
     authenticator: Arc<dyn SignedCommandAuthenticator>,
     output: AgentOutputPreflight,
@@ -97,6 +98,7 @@ where
         Self {
             router,
             checkpoint_recovery: false,
+            node_recovery: false,
             sandbox_stop: None,
             authenticator,
             output,
@@ -110,6 +112,11 @@ where
             terminal_recovery,
             coordinator,
         }
+    }
+
+    pub(super) fn with_node_recovery(mut self, enabled: bool) -> Self {
+        self.node_recovery = enabled;
+        self
     }
 
     pub(super) fn with_checkpoint_recovery(mut self, enabled: bool) -> Self {
@@ -133,6 +140,11 @@ where
         delivery: RedisCommandDelivery,
         verified: VerifiedAgentCommand,
     ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError> {
+        if self.node_recovery {
+            return self
+                .process_node_recovery_verified(delivery, verified)
+                .await;
+        }
         if self.checkpoint_recovery {
             return self.process_checkpoint_verified(delivery, verified).await;
         }
@@ -184,71 +196,7 @@ where
         {
             CheckpointDeliveryRoute::Ordinary(route) => self.process_route(route).await,
             CheckpointDeliveryRoute::Inspect(recovery) => {
-                let reservation = match self.admission.reserve().await {
-                    Ok(reservation) => reservation,
-                    Err(error) => {
-                        return Ok(AgentDeliveryProcessOutcome::retained(
-                            error.code().as_str(),
-                            error.retryable(),
-                        ));
-                    }
-                };
-                let output = self
-                    .output
-                    .prepare_checkpoint(&recovery)
-                    .await
-                    .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                let Some(output) = output else {
-                    use super::output_delivery::CheckpointPendingOutput;
-                    match self
-                        .output
-                        .prepare_checkpoint_pending(*recovery)
-                        .await
-                        .map_err(AgentDeliveryProcessError::OutputPreflight)?
-                    {
-                        CheckpointPendingOutput::Progress(recovery) => {
-                            self.output
-                                .replay_checkpoint_progress(*recovery, self.replay.as_ref())
-                                .await
-                                .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                            return Ok(AgentDeliveryProcessOutcome::retained(
-                                "agent_delivery.checkpoint_output_reclaim",
-                                true,
-                            ));
-                        }
-                        CheckpointPendingOutput::Terminal(terminal) => {
-                            recover_accepted_terminal(
-                                self.control.clone(),
-                                self.retirer.as_ref(),
-                                self.replay.as_ref(),
-                                *terminal,
-                                self.clock.clone(),
-                                self.preparation.lease_config(),
-                                self.terminal_recovery,
-                            )
-                            .await
-                            .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
-                            return Ok(AgentDeliveryProcessOutcome::completed(
-                                "agent_delivery.checkpoint_terminal_retired",
-                            ));
-                        }
-                    }
-                };
-                let waiter = self
-                    .coordinator
-                    .submit_checkpoint(
-                        *recovery,
-                        output,
-                        reservation,
-                        self.input.clone(),
-                        self.preparation.lease_config(),
-                    )
-                    .map_err(AgentDeliveryProcessError::Supervision)?;
-                let completion = waiter
-                    .wait()
-                    .await
-                    .map_err(AgentDeliveryProcessError::Supervision)?;
-                Self::finish_invocation(completion)
+                self.process_checkpoint_delivery(*recovery).await
             }
         }
     }
@@ -305,6 +253,139 @@ where
             .instrument(span),
         )
         .await;
+    }
+
+    async fn process_checkpoint_delivery(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+    ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError>
+    where
+        T: AgentProgressConnector,
+    {
+        let reservation = match self.admission.reserve().await {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return Ok(AgentDeliveryProcessOutcome::retained(
+                    error.code().as_str(),
+                    error.retryable(),
+                ));
+            }
+        };
+        let output = self
+            .output
+            .prepare_checkpoint(&recovery)
+            .await
+            .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+        let Some(output) = output else {
+            use super::output_delivery::CheckpointPendingOutput;
+            match self
+                .output
+                .prepare_checkpoint_pending(recovery)
+                .await
+                .map_err(AgentDeliveryProcessError::OutputPreflight)?
+            {
+                CheckpointPendingOutput::Progress(recovery) => {
+                    self.output
+                        .replay_checkpoint_progress(*recovery, self.replay.as_ref())
+                        .await
+                        .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                    return Ok(AgentDeliveryProcessOutcome::retained(
+                        "agent_delivery.checkpoint_output_reclaim",
+                        true,
+                    ));
+                }
+                CheckpointPendingOutput::Terminal(terminal) => {
+                    recover_accepted_terminal(
+                        self.control.clone(),
+                        self.retirer.as_ref(),
+                        self.replay.as_ref(),
+                        *terminal,
+                        self.clock.clone(),
+                        self.preparation.lease_config(),
+                        self.terminal_recovery,
+                    )
+                    .await
+                    .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                    return Ok(AgentDeliveryProcessOutcome::completed(
+                        "agent_delivery.checkpoint_terminal_retired",
+                    ));
+                }
+            }
+        };
+        let waiter = self
+            .coordinator
+            .submit_checkpoint(
+                recovery,
+                output,
+                reservation,
+                self.input.clone(),
+                self.preparation.lease_config(),
+            )
+            .map_err(AgentDeliveryProcessError::Supervision)?;
+        let completion = waiter
+            .wait()
+            .await
+            .map_err(AgentDeliveryProcessError::Supervision)?;
+        Self::finish_invocation(completion)
+    }
+
+    async fn process_node_recovery_verified(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+    ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError>
+    where
+        T: AgentProgressConnector,
+    {
+        use super::agent_delivery::NodeRecoveryDeliveryRoute;
+        match self
+            .router
+            .route_node_recovery_verified(delivery, verified, self.clock.now_unix_millis())
+            .await
+            .map_err(AgentDeliveryProcessError::Delivery)?
+        {
+            NodeRecoveryDeliveryRoute::Ordinary(route) => self.process_route(route).await,
+            NodeRecoveryDeliveryRoute::Model(recovery) => {
+                self.process_checkpoint_delivery(*recovery).await
+            }
+            NodeRecoveryDeliveryRoute::Node(recovery) => {
+                let reservation = match self.admission.reserve().await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Ok(AgentDeliveryProcessOutcome::retained(
+                            error.code().as_str(),
+                            error.retryable(),
+                        ));
+                    }
+                };
+                let output = self
+                    .output
+                    .prepare_node_recovery(&recovery)
+                    .await
+                    .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+                let Some(output) = output else {
+                    return Ok(AgentDeliveryProcessOutcome::retained(
+                        "node_recovery.output_replay_required",
+                        true,
+                    ));
+                };
+                let waiter = self
+                    .coordinator
+                    .submit_node_recovery(
+                        *recovery,
+                        output,
+                        reservation,
+                        self.input.clone(),
+                        self.preparation.lease_config(),
+                    )
+                    .map_err(AgentDeliveryProcessError::Supervision)?;
+                let completion = waiter
+                    .wait()
+                    .await
+                    .map_err(AgentDeliveryProcessError::Supervision)?;
+                Self::finish_invocation(completion)
+            }
+        }
     }
 
     async fn process_output_recovery(

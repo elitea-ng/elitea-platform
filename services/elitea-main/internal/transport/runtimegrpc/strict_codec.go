@@ -17,8 +17,9 @@ var ErrStrictProto = errors.New("strict protobuf contract violation")
 // parsing and rejects unknown fields, duplicate singular tags and conflicting
 // oneof tags that the default last-value-wins decoder would otherwise erase.
 type StrictProtoCodec struct {
-	maxReceiveMessageBytes int
-	maxSendMessageBytes    int
+	maxReceiveMessageBytes       int
+	maxSendMessageBytes          int
+	compiledSnapshotReceiveBytes int
 }
 
 func NewStrictProtoCodec(maxMessageBytes int) (*StrictProtoCodec, error) {
@@ -35,6 +36,22 @@ func NewDirectionalStrictProtoCodec(maxReceiveMessageBytes, maxSendMessageBytes 
 	}, nil
 }
 
+// WithCompiledSnapshotRequestLimit enlarges only this isolated request type.
+// Ordinary control methods retain their original per-message bound.
+func (c *StrictProtoCodec) WithCompiledSnapshotRequestLimit(limit int) error {
+	const maximum = 1024*1024 + 80*1024
+	if limit != maximum || c.maxReceiveMessageBytes > limit {
+		return errors.New("compiled snapshot request limit is invalid")
+	}
+	c.compiledSnapshotReceiveBytes = limit
+	return nil
+}
+func (c *StrictProtoCodec) receiveLimit(message proto.Message) int {
+	if c.compiledSnapshotReceiveBytes > 0 && message.ProtoReflect().Descriptor().FullName() == "elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1" {
+		return c.compiledSnapshotReceiveBytes
+	}
+	return c.maxReceiveMessageBytes
+}
 func (c *StrictProtoCodec) Name() string { return "proto" }
 
 func (c *StrictProtoCodec) Marshal(value any) ([]byte, error) {
@@ -53,12 +70,12 @@ func (c *StrictProtoCodec) Marshal(value any) ([]byte, error) {
 }
 
 func (c *StrictProtoCodec) Unmarshal(encoded []byte, value any) error {
-	if len(encoded) == 0 || len(encoded) > c.maxReceiveMessageBytes {
-		return fmt.Errorf("%w: encoded message exceeds limit", ErrStrictProto)
-	}
 	message, ok := value.(proto.Message)
 	if !ok {
 		return fmt.Errorf("%w: non-protobuf target", ErrStrictProto)
+	}
+	if len(encoded) == 0 || len(encoded) > c.receiveLimit(message) {
+		return fmt.Errorf("%w: encoded message exceeds limit", ErrStrictProto)
 	}
 	if err := ScanStrictMessage(encoded, message.ProtoReflect().Descriptor()); err != nil {
 		return err
@@ -71,7 +88,7 @@ func (c *StrictProtoCodec) Unmarshal(encoded []byte, value any) error {
 
 func StrictServerOptions(codec *StrictProtoCodec) []grpc.ServerOption {
 	return []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(codec.maxReceiveMessageBytes),
+		grpc.MaxRecvMsgSize(max(codec.maxReceiveMessageBytes, codec.compiledSnapshotReceiveBytes)),
 		grpc.MaxSendMsgSize(codec.maxSendMessageBytes),
 		grpc.ForceServerCodec(codec),
 	}

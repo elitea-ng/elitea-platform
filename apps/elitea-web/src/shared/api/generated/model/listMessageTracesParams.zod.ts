@@ -46,6 +46,10 @@ export const listMessageTracesParamsLimitMax = 2000;
 
 export const listMessageTracesParamsOffsetDefault = 0;
 export const listMessageTracesParamsIncludeTotalDefault = false;
+export const listMessageTracesParamsExecutionIdMax = 256;
+
+export const listMessageTracesParamsExecutionGenerationMax = 256;
+
 export const ListMessageTracesParams = zod.object({
   message_group_id: zod.int().optional(),
   message_group_ids: zod.string().optional(),
@@ -58,6 +62,17 @@ export const ListMessageTracesParams = zod.object({
   include_total: zod
     .boolean()
     .default(listMessageTracesParamsIncludeTotalDefault),
+  execution_id: zod
+    .string()
+    .min(1)
+    .max(listMessageTracesParamsExecutionIdMax)
+    .optional(),
+  execution_generation: zod
+    .string()
+    .min(1)
+    .max(listMessageTracesParamsExecutionGenerationMax)
+    .optional(),
+  response_message_id: zod.uuid().optional(),
 });
 
 export type ListMessageTracesParams = zod.input<typeof ListMessageTracesParams>;

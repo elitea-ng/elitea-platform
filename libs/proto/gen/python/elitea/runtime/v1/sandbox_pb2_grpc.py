@@ -26,9 +26,7 @@ if _version_not_supported:
 
 
 class SandboxSupervisorServiceStub(object):
-    """Supervisor-only transport. Each retry needs a fresh Main grant and the same
-    prepared request. It reconciles the existing activation; it never restarts it.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -36,6 +34,21 @@ class SandboxSupervisorServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.HydrateSandboxWorkspace = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxWorkspace',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxWorkspaceRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxWorkspaceResponseV1.FromString,
+                _registered_method=True)
+        self.SubmitRustCompiledSnapshot = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/SubmitRustCompiledSnapshot',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitRustCompiledSnapshotRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitRustCompiledSnapshotResponseV1.FromString,
+                _registered_method=True)
+        self.PublishRustCompiledSnapshot = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishRustCompiledSnapshotRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishRustCompiledSnapshotResponseV1.FromString,
+                _registered_method=True)
         self.SubmitSandboxJob = channel.unary_unary(
                 '/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob',
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobRequestV1.SerializeToString,
@@ -46,12 +59,44 @@ class SandboxSupervisorServiceStub(object):
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.FromString,
                 _registered_method=True)
+        self.PrepareSandboxDependencies = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesResponseV1.FromString,
+                _registered_method=True)
+        self.PublishSandboxDependencies = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishSandboxDependenciesRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishSandboxDependenciesResponseV1.FromString,
+                _registered_method=True)
+        self.HydrateSandboxDependencies = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesResponseV1.FromString,
+                _registered_method=True)
 
 
 class SandboxSupervisorServiceServicer(object):
-    """Supervisor-only transport. Each retry needs a fresh Main grant and the same
-    prepared request. It reconciles the existing activation; it never restarts it.
-    """
+    """Missing associated documentation comment in .proto file."""
+
+    def HydrateSandboxWorkspace(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SubmitRustCompiledSnapshot(self, request, context):
+        """Revision 4 authority selects compile or cached execution. No executable bytes.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PublishRustCompiledSnapshot(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def SubmitSandboxJob(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -65,9 +110,42 @@ class SandboxSupervisorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PrepareSandboxDependencies(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PublishSandboxDependencies(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def HydrateSandboxDependencies(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'HydrateSandboxWorkspace': grpc.unary_unary_rpc_method_handler(
+                    servicer.HydrateSandboxWorkspace,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxWorkspaceRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxWorkspaceResponseV1.SerializeToString,
+            ),
+            'SubmitRustCompiledSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.SubmitRustCompiledSnapshot,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitRustCompiledSnapshotRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitRustCompiledSnapshotResponseV1.SerializeToString,
+            ),
+            'PublishRustCompiledSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.PublishRustCompiledSnapshot,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishRustCompiledSnapshotRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishRustCompiledSnapshotResponseV1.SerializeToString,
+            ),
             'SubmitSandboxJob': grpc.unary_unary_rpc_method_handler(
                     servicer.SubmitSandboxJob,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitSandboxJobRequestV1.FromString,
@@ -78,6 +156,21 @@ def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.SerializeToString,
             ),
+            'PrepareSandboxDependencies': grpc.unary_unary_rpc_method_handler(
+                    servicer.PrepareSandboxDependencies,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesResponseV1.SerializeToString,
+            ),
+            'PublishSandboxDependencies': grpc.unary_unary_rpc_method_handler(
+                    servicer.PublishSandboxDependencies,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishSandboxDependenciesRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishSandboxDependenciesResponseV1.SerializeToString,
+            ),
+            'HydrateSandboxDependencies': grpc.unary_unary_rpc_method_handler(
+                    servicer.HydrateSandboxDependencies,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesResponseV1.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'elitea.runtime.v1.SandboxSupervisorService', rpc_method_handlers)
@@ -87,9 +180,88 @@ def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class SandboxSupervisorService(object):
-    """Supervisor-only transport. Each retry needs a fresh Main grant and the same
-    prepared request. It reconciles the existing activation; it never restarts it.
-    """
+    """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def HydrateSandboxWorkspace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxWorkspace',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxWorkspaceRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxWorkspaceResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SubmitRustCompiledSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/SubmitRustCompiledSnapshot',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitRustCompiledSnapshotRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.SubmitRustCompiledSnapshotResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PublishRustCompiledSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishRustCompiledSnapshotRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishRustCompiledSnapshotResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def SubmitSandboxJob(request,
@@ -135,6 +307,87 @@ class SandboxSupervisorService(object):
             '/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob',
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PrepareSandboxDependencies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PublishSandboxDependencies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishSandboxDependenciesRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PublishSandboxDependenciesResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def HydrateSandboxDependencies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.HydrateSandboxDependenciesResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

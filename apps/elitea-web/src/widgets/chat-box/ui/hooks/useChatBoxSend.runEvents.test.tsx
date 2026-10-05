@@ -319,3 +319,43 @@ describe('internal tools persistence before chat execution', () => {
     expect(createConversation).toHaveBeenCalledWith({ name: 'save a skill', isPrivate: true, meta: { steps_limit: 35, internal_tools: ['elitea'] } });
   });
 });
+
+
+it("rejects unsupported durable Test transport without permitting socket fallback", async () => {
+  server.use(
+    http.post(
+      `${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`,
+      () =>
+        HttpResponse.json(
+          { error: "unsupported_agent_execution" },
+          { status: 422 },
+        ),
+    ),
+  );
+  const { api, Probe } = harness({ editorTest: {} });
+  render(withQueryClient(<Probe />));
+  await act(async () =>
+    expect(
+      await api.current?.startStreamedExecution({
+        conversationUuid: CONVERSATION_UUID,
+        payload: { participant_id: 42, message: "hello" },
+      }),
+    ).toMatchObject({ started: false, reason: "rejected" }),
+  );
+  expect(registry.getSources()).toHaveLength(0);
+});
+it("never allocates an ordinary conversation from a Test composer before identity validation", async () => {
+  const create = vi.fn();
+  const { api, Probe } = harness({
+    editorTest: {},
+    deps: {
+      createConversation: create,
+      uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }),
+    },
+  });
+  render(withQueryClient(<Probe />));
+  await expect(api.current?.createConversationForSend("hello")).rejects.toThrow(
+    "validated Test context",
+  );
+  expect(create).not.toHaveBeenCalled();
+});

@@ -77,8 +77,9 @@ type mutableStoredVault struct {
 	// default project IDs are numbers, for example. Preserve untouched values
 	// byte-for-byte at the JSON-value level while this mutator writes new secret
 	// values as JSON strings.
-	Secrets       map[string]json.RawMessage `json:"secrets"`
-	HiddenSecrets map[string]json.RawMessage `json:"hidden_secrets"`
+	Secrets        map[string]json.RawMessage `json:"secrets"`
+	HiddenSecrets  map[string]json.RawMessage `json:"hidden_secrets"`
+	ExternalAccess map[string]bool            `json:"external_access,omitempty"`
 }
 
 func rewrite(
@@ -234,6 +235,9 @@ func clearMutableStoredVault(stored *mutableStoredVault) {
 	for name, value := range stored.Secrets {
 		clearBytes(value)
 		delete(stored.Secrets, name)
+	}
+	for name := range stored.ExternalAccess {
+		delete(stored.ExternalAccess, name)
 	}
 	for name, value := range stored.HiddenSecrets {
 		clearBytes(value)

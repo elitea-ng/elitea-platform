@@ -15,6 +15,10 @@ on:
       # The LLM-path gate below compares the charts with the standalone compose
       # file. A change to that file alone must run the gate that reads it.
       - "deploy/docker-compose.standalone-full.yml"
+      - "deploy/docker-compose.code-consumers.yml"
+      - "deploy/runtime/install-material.sh"
+      - "scripts/runtime/*code*"
+      - "services/elitea-code-runner/Containerfile.code-platform"
       # The publish-coverage gate below reads the chart matrix out of
       # publish.yml. Without this path a pull request that drops a chart from
       # that matrix and touches nothing under deploy/helm/ never runs the gate
@@ -28,6 +32,10 @@ on:
       - "deploy/argocd/**"
       - "services/elitea-main/internal/runtimecomposition/**"
       - "deploy/docker-compose.standalone-full.yml"
+      - "deploy/docker-compose.code-consumers.yml"
+      - "deploy/runtime/install-material.sh"
+      - "scripts/runtime/*code*"
+      - "services/elitea-code-runner/Containerfile.code-platform"
       - ".github/workflows/publish.yml"
       # This workflow's own file. The pull_request arm above names it and this
       # arm did not, so a push that edited only the gate could not start the
@@ -223,6 +231,13 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-worker.sh
           bash deploy/helm/tests/render-worker-sandbox.sh
+          bash deploy/helm/tests/render-sandbox-kubernetes.sh
+
+      - name: Code consumers preserve typed settings and private material boundaries
+        run: |
+          python3 scripts/runtime/test_code_consumers_deployment.py
+          python3 scripts/runtime/test_code_material_install.py
+          python3 -B scripts/runtime/test_code_platform_public_trust.py
 
       # The BF0.2b render assertions (#485). This file was `deploy/test_bf0_2b.sh`
       # and no workflow, Taskfile task or script called it. Wiring it found two

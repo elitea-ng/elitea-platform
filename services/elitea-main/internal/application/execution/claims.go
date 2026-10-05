@@ -7,6 +7,7 @@ import (
 	"time"
 
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	recoverydomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
@@ -16,6 +17,7 @@ var (
 )
 
 type ClaimRequest struct {
+	NodeRecovery                 bool
 	AgentModelCheckpointRecovery bool
 	CommandID                    string
 	OutboxID                     string
@@ -52,6 +54,7 @@ func (d ClaimAbortDisposition) valid() bool {
 type ClaimDisposition string
 
 const (
+	ClaimRecoverNodeVisit                ClaimDisposition = "RECOVER_NODE_VISIT"
 	ClaimRecoverAgentModelCheckpoint     ClaimDisposition = "RECOVER_AGENT_MODEL_CHECKPOINT"
 	ClaimAccepted                        ClaimDisposition = "ACCEPTED"
 	ClaimRecoverTerminalACK              ClaimDisposition = "RECOVER_TERMINAL_ACK"
@@ -67,7 +70,7 @@ const (
 
 func (d ClaimDisposition) valid() bool {
 	switch d {
-	case ClaimRecoverAgentModelCheckpoint, ClaimAccepted, ClaimRecoverTerminalACK, ClaimRecoverSettlement, ClaimSettledACK, ClaimObsoleteACK, ClaimActiveLeaseNoACK, ClaimRetryLaterNoACK, ClaimRetiredACK, ClaimRecoverRunningNoACK, ClaimRecoverAmbiguousInvocationNoACK:
+	case ClaimRecoverNodeVisit, ClaimRecoverAgentModelCheckpoint, ClaimAccepted, ClaimRecoverTerminalACK, ClaimRecoverSettlement, ClaimSettledACK, ClaimObsoleteACK, ClaimActiveLeaseNoACK, ClaimRetryLaterNoACK, ClaimRetiredACK, ClaimRecoverRunningNoACK, ClaimRecoverAmbiguousInvocationNoACK:
 		return true
 	default:
 		return false
@@ -91,7 +94,8 @@ type SettlementRecovery struct {
 }
 
 type ClaimDecision struct {
-	Lease runtimedomain.ActiveLease
+	NodeRecoveryReceipt string
+	Lease               runtimedomain.ActiveLease
 	// LeaseObservedAt is the state-owner clock instant used to decide whether
 	// Lease was live. PostgreSQL repositories must author it in the same
 	// statement that creates, loads, or renews the lease; application-host time
@@ -109,7 +113,23 @@ type ClaimDecision struct {
 }
 
 func (d ClaimDecision) validate(request ClaimRequest, leaseTTL ClaimLeaseTTLMillis) error {
-	if !d.Disposition.valid() {
+	if !d.Disposition.valid() || (request.NodeRecovery && request.AgentModelCheckpointRecovery) {
+		return ErrInvalidClaim
+	}
+	if d.Disposition == ClaimRecoverNodeVisit {
+		if !request.NodeRecovery || (d.Lease.DesiredState != runtimedomain.DesiredSuspended && d.Lease.DesiredState != runtimedomain.DesiredRunning) {
+			return ErrInvalidClaim
+		}
+		if _, err := recoverydomain.DecodeReceipt([]byte(d.NodeRecoveryReceipt)); err != nil {
+			return ErrInvalidClaim
+		}
+	} else if len(d.NodeRecoveryReceipt) != 0 {
+		return ErrInvalidClaim
+	}
+	if d.Disposition == ClaimRecoverAgentModelCheckpoint &&
+		((!request.NodeRecovery && !request.AgentModelCheckpointRecovery) ||
+			(request.CapabilityID != executiondomain.AgentApplicationCapability && request.CapabilityID != executiondomain.AgentAdhocCapability) ||
+			d.Lease.DesiredState != runtimedomain.DesiredRunning) {
 		return ErrInvalidClaim
 	}
 	if d.Lease == (runtimedomain.ActiveLease{}) {
@@ -145,8 +165,11 @@ func (d ClaimDecision) validate(request ClaimRequest, leaseTTL ClaimLeaseTTLMill
 	if err := lease.Verify(d.LeaseObservedAt.UTC(), lease.Fence); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidClaim, err)
 	}
-	if (d.Disposition == ClaimAccepted || d.Disposition == ClaimRecoverAgentModelCheckpoint) && lease.ExpiresAt.Sub(d.LeaseObservedAt) != leaseTTL.Duration() {
+	if d.Disposition == ClaimAccepted && lease.ExpiresAt.Sub(d.LeaseObservedAt) != leaseTTL.Duration() {
 		return fmt.Errorf("%w: repository returned a lease outside the selected TTL", ErrInvalidClaim)
+	}
+	if d.Disposition == ClaimRecoverAgentModelCheckpoint && lease.ExpiresAt.Sub(d.LeaseObservedAt) > leaseTTL.Duration() {
+		return fmt.Errorf("%w: repository returned an inspection lease outside the selected TTL", ErrInvalidClaim)
 	}
 	switch d.Disposition {
 	case ClaimRecoverTerminalACK:
@@ -251,7 +274,7 @@ func NewClaimService(repository ClaimRepository, applicationNow func() time.Time
 }
 
 func (s *ClaimService) Claim(ctx context.Context, request ClaimRequest) (ClaimDecision, error) {
-	if request.CommandID == "" || request.OutboxID == "" || request.ExecutionID == "" || request.Generation == 0 || !claimCapabilityAllowed(request.CapabilityID) || request.SignedEnvelopeDigest.IsZero() || request.WorkloadIdentity == "" || request.WorkloadSessionID == "" || request.ProducerID == "" {
+	if (request.NodeRecovery && request.AgentModelCheckpointRecovery) || request.CommandID == "" || request.OutboxID == "" || request.ExecutionID == "" || request.Generation == 0 || !claimCapabilityAllowed(request.CapabilityID) || request.SignedEnvelopeDigest.IsZero() || request.WorkloadIdentity == "" || request.WorkloadSessionID == "" || request.ProducerID == "" {
 		return ClaimDecision{}, ErrInvalidClaim
 	}
 	decision, err := s.repository.ClaimValidation(ctx, request, s.leaseTTL)

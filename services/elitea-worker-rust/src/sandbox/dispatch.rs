@@ -64,6 +64,7 @@ pub(crate) struct PendingDispatch {
     pub(crate) activation: [u8; 32],
     pub(crate) digest: [u8; 32],
     pub(crate) audience: String,
+    pub(crate) descriptor: Option<Vec<u8>>,
 }
 
 pub(crate) struct DispatchJournal {
@@ -71,6 +72,107 @@ pub(crate) struct DispatchJournal {
 }
 
 impl DispatchJournal {
+    /// Preserve prior preparation admission across claim generations and terminal delivery.
+    pub(crate) async fn contains_activation(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+    ) -> Result<bool, DispatchError> {
+        Ok(sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4)",
+        )
+        .bind(&scope.tenant).bind(scope.project).bind(&scope.execution)
+        .bind(activation.as_slice()).fetch_one(&self.pool).await?)
+    }
+
+    /// Preserve the original request and audience across claim generations.
+    pub(crate) async fn recorded(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+        snapshot_metadata: bool,
+    ) -> Result<Option<PendingDispatch>, DispatchError> {
+        let query = if snapshot_metadata {
+            "SELECT request_digest,audience,compiled_descriptor_json FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 ORDER BY generation LIMIT 1025"
+        } else {
+            "SELECT request_digest,audience,NULL::bytea AS compiled_descriptor_json FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 ORDER BY generation LIMIT 1025"
+        };
+        let rows = sqlx::query(query)
+            .bind(&scope.tenant)
+            .bind(scope.project)
+            .bind(&scope.execution)
+            .bind(activation.as_slice())
+            .fetch_all(&self.pool)
+            .await?;
+        if rows.len() > 1024 {
+            return Err(DispatchError::Invalid);
+        }
+        let mut original: Option<PendingDispatch> = None;
+        for row in rows {
+            let digest: Vec<u8> = row.try_get("request_digest")?;
+            let digest = digest.try_into().map_err(|_| DispatchError::Invalid)?;
+            let audience: String = row.try_get("audience")?;
+            let descriptor: Option<Vec<u8>> = row.try_get("compiled_descriptor_json")?;
+            if let Some(original) = &mut original {
+                if original.digest != digest
+                    || original.audience != audience
+                    || original
+                        .descriptor
+                        .as_ref()
+                        .zip(descriptor.as_ref())
+                        .is_some_and(|(left, right)| left != right)
+                {
+                    return Err(DispatchError::Conflict);
+                }
+                if original.descriptor.is_none() {
+                    original.descriptor = descriptor;
+                }
+            } else {
+                original = Some(PendingDispatch {
+                    activation: *activation,
+                    digest,
+                    audience,
+                    descriptor,
+                });
+            }
+        }
+        Ok(original)
+    }
+    /// Persist a selected canonical descriptor before admission, across claim generations.
+    pub(crate) async fn record_descriptor(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        audience: &str,
+        descriptor: &[u8],
+    ) -> Result<(), DispatchError> {
+        if descriptor.is_empty() || descriptor.len() > 16 * 1024 {
+            return Err(DispatchError::Invalid);
+        }
+        let mut tx = self.pool.begin().await?;
+        let rows=sqlx::query("SELECT request_digest,audience,compiled_descriptor_json FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 FOR UPDATE")
+            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(activation.as_slice()).fetch_all(&mut *tx).await?;
+        if rows.is_empty() {
+            return Err(DispatchError::Conflict);
+        }
+        for row in rows {
+            let existing: Option<Vec<u8>> = row.try_get("compiled_descriptor_json")?;
+            let request: Vec<u8> = row.try_get("request_digest")?;
+            let target: String = row.try_get("audience")?;
+            if request.as_slice() != digest
+                || target != audience
+                || existing.as_deref().is_some_and(|value| value != descriptor)
+            {
+                return Err(DispatchError::Conflict);
+            }
+        }
+        sqlx::query("UPDATE elitea_runtime.sandbox_dispatches SET compiled_descriptor_json=$5 WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 AND compiled_descriptor_json IS NULL")
+            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(activation.as_slice()).bind(descriptor).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub(crate) async fn pending(
         &self,
         scope: &DispatchScope,
@@ -85,6 +187,7 @@ impl DispatchJournal {
                     activation: activation.try_into().map_err(|_| DispatchError::Invalid)?,
                     digest: digest.try_into().map_err(|_| DispatchError::Invalid)?,
                     audience: row.try_get("audience")?,
+                    descriptor: None,
                 })
             })
             .collect()

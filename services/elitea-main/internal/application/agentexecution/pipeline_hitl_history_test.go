@@ -24,7 +24,7 @@ func TestPipelineHITLContinuationBindsNewResponseOnlyForDirectReview(t *testing.
 				continuationTarget: target,
 				target: CurrentApplicationTarget{ApplicationID: 31, ApplicationVersionID: 41,
 					Variables: json.RawMessage(`[]`), ChatHistory: json.RawMessage(`[]`),
-					VersionDetails: json.RawMessage(`{"id":41,"application_id":31,"agent_type":"pipeline","instructions":"Review the joke","llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},"meta":{},"tools":[]}`)},
+					VersionDetails: json.RawMessage(`{"id":41,"application_id":31,"agent_type":"pipeline","instructions":"nodes:\n  - id: draft\n    type: llm\n  - id: review\n    type: hitl\nedges:\n  - from: draft\n    to: review\n","llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},"meta":{},"tools":[]}`)},
 			}
 			admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
 				ExecutionID: "execution-review", CommandID: "command-review", Created: true,

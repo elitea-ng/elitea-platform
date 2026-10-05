@@ -7,7 +7,7 @@ import (
 
 func TestCurrentAgentCancelSQLFencesTerminalJobsAndPreservesCurrentProjection(t *testing.T) {
 	for _, fragment := range []string{
-		"job.desired_state = 'RUNNING'",
+		"job.desired_state IN ('RUNNING', 'SUSPENDED')",
 		"'PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING'",
 		"OR job.desired_state = 'CANCELLED'",
 		"conversation.author_id = $3::bigint",

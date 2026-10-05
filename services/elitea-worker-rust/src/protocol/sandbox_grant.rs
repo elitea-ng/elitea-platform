@@ -9,11 +9,12 @@ use super::{
 };
 use crate::sandbox::{ledger::JobScope, preparation::PreparationJob, request::PreparedJob};
 
-const DOMAIN: &[u8] = b"elitea.sandbox.job-grant.ed25519.v1\0";
+pub(super) const DOMAIN: &[u8] = b"elitea.sandbox.job-grant.ed25519.v1\0";
 
 pub struct GrantVerifier<R> {
-    resolver: R,
-    audience: String,
+    pub(super) resolver: R,
+    pub(super) audience: String,
+    pub(super) code_owner_requester: Option<String>,
 }
 
 /// An authenticated scope, without the delegation signature or worker credentials.
@@ -26,8 +27,19 @@ struct VerifiedAuthority {
     fingerprint: [u8; 32],
     cancel_only: bool,
     expires_at_unix_millis: i64,
+    content_root: Option<[u8; 32]>,
+    execution_id: String,
+    generation: u64,
+    dispatch_activation: String,
 }
 impl AuthorizedJob {
+    pub(crate) fn original_execution(&self) -> (&str, u64, &str) {
+        (
+            &self.authority.execution_id,
+            self.authority.generation,
+            &self.authority.dispatch_activation,
+        )
+    }
     pub(crate) fn permits(&self, request: &PreparedJob, now_unix_millis: i64) -> bool {
         !self.authority.cancel_only
             && now_unix_millis < self.authority.expires_at_unix_millis
@@ -40,6 +52,15 @@ impl AuthorizedJob {
         &self.authority.scope
     }
 }
+
+#[path = "sandbox_code_recovery_grant.rs"]
+mod code_recovery;
+#[cfg(test)]
+pub(crate) use code_recovery::tests::{Fixture as CodeOwnerFixture, code_owner_fixture};
+pub(crate) use code_recovery::{
+    AuthorizedCodeIntent, AuthorizedCodePlatformOwner, AuthorizedCodeRecovery, CodeOwnerOperation,
+    CodePlatformOwnerOperation, SignedCodeEnvelope,
+};
 
 /// Preparation authority cannot be passed to execution admission.
 pub struct AuthorizedPreparation {
@@ -72,11 +93,32 @@ impl AuthorizedCancellation {
     }
 }
 
+/// Content authority cannot admit preparation, code execution, or cancellation.
+pub struct AuthorizedContent {
+    scope: JobScope,
+    root: [u8; 32],
+    expires_at_unix_millis: i64,
+}
+impl AuthorizedContent {
+    #[must_use]
+    pub fn scope(&self) -> &JobScope {
+        &self.scope
+    }
+    #[must_use]
+    pub fn root(&self) -> &[u8; 32] {
+        &self.root
+    }
+    #[must_use]
+    pub fn valid_at(&self, now_unix_millis: i64) -> bool {
+        now_unix_millis < self.expires_at_unix_millis
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("sandbox authorization is invalid, expired, or does not match this request")]
 pub struct GrantRejected;
 
-fn identity(value: &str) -> bool {
+pub(super) fn identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
         && !value.bytes().any(|b| matches!(b, b'\r' | b'\n' | b'\0'))
@@ -89,7 +131,22 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         if !identity(&audience) {
             return Err(GrantRejected);
         }
-        Ok(Self { resolver, audience })
+        Ok(Self {
+            resolver,
+            audience,
+            code_owner_requester: None,
+        })
+    }
+    /// Exact mandatory mTLS Main identity for owner-only routes. Ordinary
+    /// Execute verification is independent; unset keeps owner routes denied.
+    /// # Errors
+    /// Returns `GrantRejected` if the requester identity fails validation.
+    pub fn with_code_owner_requester(mut self, requester: String) -> Result<Self, GrantRejected> {
+        if !identity(&requester) {
+            return Err(GrantRejected);
+        }
+        self.code_owner_requester = Some(requester);
+        Ok(self)
     }
 
     /// `peer` must come from verified mTLS, never caller-controlled metadata.
@@ -105,8 +162,15 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         now_unix_millis: i64,
     ) -> Result<AuthorizedJob, GrantRejected> {
         let fingerprint = job.fingerprint().map_err(|_| GrantRejected)?;
-        self.verify_operation(grant, peer, Some(fingerprint), now_unix_millis, false)
-            .map(|authority| AuthorizedJob { authority })
+        self.verify_operation(
+            grant,
+            peer,
+            Some(fingerprint),
+            now_unix_millis,
+            false,
+            false,
+        )
+        .map(|authority| AuthorizedJob { authority })
     }
 
     /// Verify Main's revision 1 grant over a preparation-specific fingerprint.
@@ -122,8 +186,15 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         now_unix_millis: i64,
     ) -> Result<AuthorizedPreparation, GrantRejected> {
         let fingerprint = job.fingerprint().map_err(|_| GrantRejected)?;
-        self.verify_operation(grant, peer, Some(fingerprint), now_unix_millis, false)
-            .map(|authority| AuthorizedPreparation { authority })
+        self.verify_operation(
+            grant,
+            peer,
+            Some(fingerprint),
+            now_unix_millis,
+            false,
+            false,
+        )
+        .map(|authority| AuthorizedPreparation { authority })
     }
 
     /// Verify a stop-only grant without receiving code or state.
@@ -135,8 +206,28 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         peer: &str,
         now_unix_millis: i64,
     ) -> Result<AuthorizedCancellation, GrantRejected> {
-        self.verify_operation(grant, peer, None, now_unix_millis, true)
+        self.verify_operation(grant, peer, None, now_unix_millis, true, false)
             .map(|authority| AuthorizedCancellation(AuthorizedJob { authority }))
+    }
+
+    /// Verify revision 3 authority for the signed preparation scope and content root.
+    /// `peer` must come from verified mTLS, never caller-controlled metadata.
+    /// Match this scope and root against the recorded preparation before transfer.
+    ///
+    /// # Errors
+    /// Returns `GrantRejected` for invalid signature, wire, purpose, scope, peer, or lifetime.
+    pub fn verify_content(
+        &self,
+        grant: &SignedSandboxJobGrantV1,
+        peer: &str,
+        now_unix_millis: i64,
+    ) -> Result<AuthorizedContent, GrantRejected> {
+        let authority = self.verify_operation(grant, peer, None, now_unix_millis, false, true)?;
+        Ok(AuthorizedContent {
+            scope: authority.scope,
+            root: authority.content_root.ok_or(GrantRejected)?,
+            expires_at_unix_millis: authority.expires_at_unix_millis,
+        })
     }
 
     fn verify_operation(
@@ -146,6 +237,7 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         expected_fingerprint: Option<[u8; 32]>,
         now_unix_millis: i64,
         cancel_only: bool,
+        content_only: bool,
     ) -> Result<VerifiedAuthority, GrantRejected> {
         if !identity(&grant.key_id)
             || !identity(peer)
@@ -178,9 +270,28 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             .as_slice()
             .try_into()
             .map_err(|_| GrantRejected)?;
+        let content_root = if content_only {
+            Some(
+                claims
+                    .dependency_bundle_sha256
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| GrantRejected)?,
+            )
+        } else {
+            None
+        };
+        let revision = if content_only {
+            3
+        } else if cancel_only {
+            2
+        } else {
+            1
+        };
         if claims.cancel_only != cancel_only
-            || !claims.dependency_bundle_sha256.is_empty()
-            || claims.revision != if cancel_only { 2 } else { 1 }
+            || (content_only && cancel_only)
+            || (!content_only && !claims.dependency_bundle_sha256.is_empty())
+            || claims.revision != revision
             || claims.generation == 0
             || !identity(&claims.tenant_id)
             || claims.project_id <= 0
@@ -212,6 +323,10 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             fingerprint,
             cancel_only,
             expires_at_unix_millis: claims.expires_at_unix_millis,
+            content_root,
+            execution_id: claims.execution_id,
+            generation: claims.generation,
+            dispatch_activation: claims.activation_id,
         })
     }
 }
@@ -313,6 +428,194 @@ mod tests {
                 .verify_cancellation(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn content_authority_binds_the_preparation_scope_and_recorded_root() {
+        let (key, verifier, _, mut claims) = fixture();
+        let request = preparation("print(42)");
+        claims.request_digest = request.fingerprint().unwrap().to_vec();
+        let prepared = verifier
+            .verify_preparation(
+                &sign(&key, claims.encode_to_vec()),
+                "worker-1",
+                &request,
+                1000,
+            )
+            .unwrap();
+        claims.revision = 3;
+        claims.dependency_bundle_sha256 = vec![9; 32];
+        let grant = sign(&key, claims.encode_to_vec());
+        let content = verifier.verify_content(&grant, "worker-1", 1000).unwrap();
+        assert_eq!(content.root(), &[9; 32]);
+        assert!(content.valid_at(1000));
+        assert!(!content.valid_at(31000));
+        assert_eq!(
+            content.scope().runtime_identity().unwrap(),
+            prepared.scope().runtime_identity().unwrap()
+        );
+        assert!(
+            verifier
+                .verify_preparation(&grant, "worker-1", &request, 1000)
+                .is_err()
+        );
+        assert!(
+            verifier
+                .verify(&grant, "worker-1", &job("print(42)"), 1000)
+                .is_err()
+        );
+        assert!(
+            verifier
+                .verify_cancellation(&grant, "worker-1", 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn content_authority_rejects_wrong_purpose_and_digest_lengths() {
+        let (key, verifier, _, mut claims) = fixture();
+        let execution_grant = sign(&key, claims.encode_to_vec());
+        assert!(
+            verifier
+                .verify_content(&execution_grant, "worker-1", 1000)
+                .is_err()
+        );
+        claims.revision = 2;
+        claims.cancel_only = true;
+        assert!(
+            verifier
+                .verify_content(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+                .is_err()
+        );
+        for (revision, cancel_only, root_length) in [
+            (1, false, 32),
+            (2, true, 32),
+            (3, true, 32),
+            (3, false, 0),
+            (3, false, 31),
+            (3, false, 33),
+        ] {
+            claims.revision = revision;
+            claims.cancel_only = cancel_only;
+            claims.dependency_bundle_sha256 = vec![9; root_length];
+            assert!(
+                verifier
+                    .verify_content(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+                    .is_err()
+            );
+        }
+        claims.revision = 3;
+        claims.cancel_only = false;
+        claims.dependency_bundle_sha256 = vec![9; 32];
+        for length in [0, 31, 33] {
+            claims.request_digest = vec![7; length];
+            assert!(
+                verifier
+                    .verify_content(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn content_authority_requires_verified_peer_audience_lifetime_and_strict_signed_bytes() {
+        let (key, verifier, _, mut claims) = fixture();
+        claims.revision = 3;
+        claims.dependency_bundle_sha256 = vec![9; 32];
+        let grant = sign(&key, claims.encode_to_vec());
+        assert!(verifier.verify_content(&grant, "worker-2", 1000).is_err());
+        for now in [999, 31000] {
+            assert!(verifier.verify_content(&grant, "worker-1", now).is_err());
+        }
+        for expires in [1000, 31001, i64::MAX] {
+            let mut changed = claims.clone();
+            changed.expires_at_unix_millis = expires;
+            assert!(
+                verifier
+                    .verify_content(&sign(&key, changed.encode_to_vec()), "worker-1", 1000)
+                    .is_err()
+            );
+        }
+        let mut changed = claims.clone();
+        changed.audience = "different-supervisor".into();
+        assert!(
+            verifier
+                .verify_content(&sign(&key, changed.encode_to_vec()), "worker-1", 1000)
+                .is_err()
+        );
+        let mut changed = grant.clone();
+        changed.signature[0] ^= 1;
+        assert!(verifier.verify_content(&changed, "worker-1", 1000).is_err());
+        let mut changed = grant.clone();
+        changed.key_id = "other-key".into();
+        assert!(verifier.verify_content(&changed, "worker-1", 1000).is_err());
+        let mut changed = grant.clone();
+        let mut substituted = claims.clone();
+        substituted.dependency_bundle_sha256 = vec![8; 32];
+        changed.claims_bytes = substituted.encode_to_vec();
+        assert!(verifier.verify_content(&changed, "worker-1", 1000).is_err());
+        for suffix in [vec![0x60, 1], vec![8, 3]] {
+            let mut bytes = claims.encode_to_vec();
+            bytes.extend(suffix);
+            assert!(
+                verifier
+                    .verify_content(&sign(&key, bytes), "worker-1", 1000)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn content_scope_cannot_match_another_preparation_record() {
+        let (key, verifier, _, mut claims) = fixture();
+        claims.revision = 3;
+        claims.dependency_bundle_sha256 = vec![9; 32];
+        let content = verifier
+            .verify_content(&sign(&key, claims.encode_to_vec()), "worker-1", 1000)
+            .unwrap();
+        let original_identity = content.scope().runtime_identity().unwrap();
+        for field in 0..5 {
+            let mut changed = claims.clone();
+            match field {
+                0 => changed.tenant_id = "different-tenant".into(),
+                1 => changed.project_id += 1,
+                2 => changed.execution_id = "different-execution".into(),
+                3 => changed.activation_id = "different-activation".into(),
+                _ => changed.request_digest = vec![8; 32],
+            }
+            let different = verifier
+                .verify_content(&sign(&key, changed.encode_to_vec()), "worker-1", 1000)
+                .unwrap();
+            assert_ne!(
+                different.scope().runtime_identity().unwrap(),
+                original_identity
+            );
+        }
+        claims.generation = 2;
+        claims.submitter_workload_identity = "worker-2".into();
+        let resumed = verifier
+            .verify_content(&sign(&key, claims.encode_to_vec()), "worker-2", 1000)
+            .unwrap();
+        assert_eq!(
+            resumed.scope().runtime_identity().unwrap(),
+            original_identity
+        );
+        assert_eq!(resumed.root(), content.root());
+        for field in 0..5 {
+            let mut invalid = claims.clone();
+            match field {
+                0 => invalid.tenant_id = "tenant\0".into(),
+                1 => invalid.project_id = 0,
+                2 => invalid.execution_id.clear(),
+                3 => invalid.activation_id.clear(),
+                _ => invalid.generation = 0,
+            }
+            assert!(
+                verifier
+                    .verify_content(&sign(&key, invalid.encode_to_vec()), "worker-2", 1000)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
@@ -670,3 +973,10 @@ mod tests {
         }
     }
 }
+
+#[path = "sandbox_compiled_grant.rs"]
+mod compiled;
+pub(crate) use compiled::{
+    AuthorizedSnapshotCompile, AuthorizedSnapshotExecute, AuthorizedSnapshotPublish,
+    AuthorizedSnapshotRead,
+};

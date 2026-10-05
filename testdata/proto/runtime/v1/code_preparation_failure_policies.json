@@ -1,0 +1,20 @@
+[
+  {
+    "upstream_code": "pipeline.code_preparation_failed",
+    "code": "PIPELINE_CODE_FAILED",
+    "message": "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
+    "retryable": false
+  },
+  {
+    "upstream_code": "pipeline.code_preparation_cancelled",
+    "code": "PIPELINE_CODE_FAILED",
+    "message": "Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
+    "retryable": false
+  },
+  {
+    "upstream_code": "pipeline.code_preparation_unconfirmed",
+    "code": "PIPELINE_CODE_FAILED",
+    "message": "Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
+    "retryable": false
+  }
+]

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-control.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "execution_id",
+    "generation",
+    "desired_state",
+    "receipt",
+    "action"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.node-recovery-control.v1"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "Main currentRuntimeID encodes 16 bytes as lowercase hex. Chat response IDs use separate UUIDs.",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "desired_state": {
+      "enum": [
+        "SUSPENDED",
+        "RUNNING"
+      ]
+    },
+    "receipt": {
+      "$ref": "elitea.pipeline.node-recovery-required.v1"
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "activation_id",
+            "expected_revision",
+            "last_attempt",
+            "action",
+            "receipt_sha256",
+            "owner_proof"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "const": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            "activation_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "const": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9223372036854775807
+            },
+            "last_attempt": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "action": {
+              "enum": [
+                "retry",
+                "reconcile",
+                "resume_result"
+              ]
+            },
+            "receipt_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "const": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            "owner_proof": {
+              "oneOf": [
+                {
+                  "$ref": "elitea.pipeline.node-recovery-owner-proof.v1"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

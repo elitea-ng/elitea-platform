@@ -45,6 +45,8 @@ enum DesiredExecutionStateV1 {
   DESIRED_EXECUTION_STATE_V1_RUNNING = 1;
   DESIRED_EXECUTION_STATE_V1_CANCELLED = 2;
   DESIRED_EXECUTION_STATE_V1_DRAINING = 3;
+  // Nonterminal same-generation node recovery. Never ordinary invocation.
+  DESIRED_EXECUTION_STATE_V1_SUSPENDED = 4;
 }
 
 enum ExecutionOutcomeV1 {

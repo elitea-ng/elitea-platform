@@ -11,6 +11,7 @@ use zeroize::Zeroize;
 
 /// No Clone/Debug: identity and fence cannot be reconstructed by graph code.
 pub(super) struct SandboxClaimBinding {
+    claim_id: String,
     identity: ExecutionIdentityV1,
     fence: ExecutionFenceV1,
     command_binding: [u8; 32],
@@ -19,6 +20,7 @@ pub(super) struct SandboxClaimBinding {
 impl SandboxClaimBinding {
     pub(super) fn from_claim(claim: &AcceptedAgentClaim) -> Self {
         Self {
+            claim_id: claim.claim_id.clone(),
             identity: claim.identity.clone(),
             fence: claim.fence.clone(),
             command_binding: claim.command_binding,
@@ -144,11 +146,86 @@ impl ClaimBoundRuntimeContextAuthority {
 }
 
 impl ClaimBoundSandboxAuthority {
+    /// Borrow the accepted claim headers without issuing another authority.
+    pub(crate) fn debug_content_binding(&self) -> super::RuntimeContextRedemptionBinding<'_> {
+        super::RuntimeContextRedemptionBinding {
+            execution_id: &self.claim.identity.execution_id,
+            generation: self.claim.identity.generation,
+            claim_id: &self.claim.claim_id,
+            fence_token: &self.claim.fence.fence_token,
+            resource_project_id: &self.claim.identity.resource_project_id,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn original_code_visit_conformance_fixture() -> Self {
+        tests::original_code_visit_conformance_fixture()
+    }
+    /// Borrow only for current-fence Main intent admission. No new permit is issued.
+    pub(crate) fn intent_content_binding(&self) -> (&str, u64, &str, &[u8]) {
+        (
+            &self.claim.identity.execution_id,
+            self.claim.identity.generation,
+            &self.claim.claim_id,
+            &self.claim.fence.fence_token,
+        )
+    }
+    /// Public trace identity only. This exposes no grant or fence material.
+    pub(crate) fn trace_identity(&self) -> (&str, u64) {
+        (
+            &self.claim.identity.execution_id,
+            self.claim.identity.generation,
+        )
+    }
+
     pub(crate) fn dispatch_scope(
         &self,
     ) -> Result<crate::sandbox::dispatch::DispatchScope, crate::sandbox::dispatch::DispatchError>
     {
         crate::sandbox::dispatch::DispatchScope::from_identity(&self.claim.identity)
+    }
+
+    pub(crate) fn compiled_binding(
+        &self,
+        profile: &crate::sandbox::compiled_snapshot::SnapshotProfile,
+        job: &crate::sandbox::request::PreparedJob,
+    ) -> Result<crate::sandbox::compiled_snapshot::Binding, crate::sandbox::client::SandboxCallError>
+    {
+        let project = self
+            .claim
+            .identity
+            .resource_project_id
+            .parse::<i32>()
+            .map_err(|_| crate::sandbox::client::SandboxCallError::Rejected)?;
+        profile
+            .binding(job, &self.claim.identity.tenant_id, project)
+            .map_err(|_| crate::sandbox::client::SandboxCallError::Invalid)
+    }
+    pub(crate) fn compilation_job_key(&self, activation: &[u8; 32]) -> [u8; 32] {
+        let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+        hash.update(b"elitea.sandbox.activation.v1\0");
+        for part in [
+            self.claim.identity.execution_id.as_str(),
+            hex_lower(activation).as_str(),
+        ] {
+            hash.update(&(part.len() as u64).to_be_bytes());
+            hash.update(part.as_bytes());
+        }
+        let mut key = [0; 32];
+        key.copy_from_slice(hash.finish().as_ref());
+        key
+    }
+    pub(crate) fn compiled_request(
+        &self,
+        activation: &[u8; 32],
+    ) -> crate::protocol::elitea::runtime::v1::AuthorizeRustCompiledSnapshotRequestV1 {
+        crate::protocol::elitea::runtime::v1::AuthorizeRustCompiledSnapshotRequestV1 {
+            identity: Some(self.claim.identity.clone()),
+            fence: Some(self.claim.fence.clone()),
+            signed_command: Some(self.signed_command.clone()),
+            activation_id: hex_lower(activation),
+            ..Default::default()
+        }
     }
 
     /// Actual content digest and supervisor audience are filled by `SandboxClient`.
@@ -198,6 +275,185 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .await
     }
 
+    pub(crate) async fn read_compiled_snapshot(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        binding: crate::sandbox::compiled_snapshot::Binding,
+    ) -> Result<
+        Option<crate::sandbox::compiled_snapshot::SelectedSnapshot>,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .read_compiled_snapshot(
+                &self.control,
+                authority.compiled_request(activation),
+                job,
+                binding,
+            )
+            .await
+    }
+    pub(crate) async fn submit_compiled_snapshot(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        selected: &crate::sandbox::compiled_snapshot::SelectedSnapshot,
+        bundle: Option<&crate::sandbox::dependency_bundle::DependencyBundle>,
+    ) -> Result<crate::sandbox::client::SandboxOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .submit_compiled_snapshot(
+                &self.control,
+                authority.compiled_request(activation),
+                authority.request(activation),
+                job,
+                selected,
+                bundle,
+            )
+            .await
+    }
+    pub(crate) async fn submit_whole_code(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        bundle: Option<&crate::sandbox::dependency_bundle::DependencyBundle>,
+        intent: &[u8],
+    ) -> Result<crate::sandbox::client::SandboxOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .submit_whole_code(
+                &self.control,
+                authority.request(activation),
+                job,
+                bundle,
+                intent,
+            )
+            .await
+    }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the existing authenticated identity fields explicit."
+    )]
+    pub(crate) async fn submit_compiled_whole_code(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        selected: &crate::sandbox::compiled_snapshot::SelectedSnapshot,
+        bundle: Option<&crate::sandbox::dependency_bundle::DependencyBundle>,
+        intent: &[u8],
+    ) -> Result<crate::sandbox::client::SandboxOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .submit_compiled_snapshot_with_intent(
+                &self.control,
+                authority.compiled_request(activation),
+                authority.request(activation),
+                job,
+                selected,
+                bundle,
+                Some(intent),
+            )
+            .await
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Retain required protocol foundations without enabling deferred execution paths."
+    )]
+    pub(crate) async fn compile_snapshot(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        binding: crate::sandbox::compiled_snapshot::Binding,
+        bundle: Option<&crate::sandbox::dependency_bundle::DependencyBundle>,
+    ) -> Result<crate::sandbox::client::CompilationOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.compile_snapshot_from_original_visit(
+            sandbox, authority, activation, job, binding, bundle, None,
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)] // Compile workspace access retains original visit and current claim independently.
+    pub(crate) async fn compile_snapshot_from_original_visit(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        binding: crate::sandbox::compiled_snapshot::Binding,
+        bundle: Option<&crate::sandbox::dependency_bundle::DependencyBundle>,
+        original_visit: Option<&crate::sandbox::code_recovery::OriginalCodeVisitRef>,
+    ) -> Result<crate::sandbox::client::CompilationOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        let mut request = authority.compiled_request(activation);
+        if job.workspace().is_some() {
+            let reference = original_visit
+                .filter(|reference| reference.valid())
+                .ok_or(crate::sandbox::client::SandboxCallError::Rejected)?;
+            request.original_code_visit = Some(
+                crate::protocol::elitea::runtime::v1::OriginalCodeVisitRefV1 {
+                    visit_id: reference.visit_id.clone(),
+                    revision: reference.revision,
+                    digest_sha256: reference.digest_sha256.clone(),
+                },
+            );
+        }
+        let outcome = sandbox
+            .compile_snapshot(
+                &self.control,
+                request,
+                authority.request(activation),
+                job,
+                binding,
+                bundle,
+            )
+            .await?;
+        if matches!(&outcome,crate::sandbox::client::CompilationOutcome::Captured{job_key,..} if *job_key!=authority.compilation_job_key(activation))
+        {
+            return Err(crate::sandbox::client::SandboxCallError::InvalidReceipt);
+        }
+        Ok(outcome)
+    }
+    #[allow(clippy::too_many_arguments)] // Carry separate signed roles alongside their exact immutable content proof.
+    pub(crate) async fn publish_snapshot(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        binding: &crate::sandbox::compiled_snapshot::Binding,
+        canonical: &[u8],
+        phase: crate::protocol::elitea::runtime::v1::RustCompiledPublicationPhaseV1,
+    ) -> Result<crate::sandbox::client::PublicationOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .publish_snapshot(
+                &self.control,
+                authority.compiled_request(activation),
+                job,
+                binding,
+                canonical,
+                &authority.compilation_job_key(activation),
+                phase,
+            )
+            .await
+    }
     /// Request a fresh Main grant and submit only under the sealed invocation.
     pub(crate) async fn submit_sandbox_job(
         &self,
@@ -215,6 +471,96 @@ impl<R: ControlRpc> AgentControlClient<R> {
         sandbox
             .submit(&self.control, authority.request(activation), job)
             .await
+    }
+
+    pub(crate) async fn submit_sandbox_job_with_dependencies(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        bundle: &crate::sandbox::dependency_bundle::DependencyBundle,
+    ) -> Result<crate::sandbox::client::SandboxOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .submit_with_dependencies(&self.control, authority.request(activation), job, bundle)
+            .await
+    }
+
+    pub(crate) async fn prepare_sandbox_dependencies(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::preparation::PreparationJob,
+    ) -> Result<crate::sandbox::client::PreparationOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .prepare(&self.control, authority.request(activation), job)
+            .await
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep the existing authenticated identity fields explicit."
+    )]
+    pub(crate) async fn hydrate_sandbox_dependencies(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::request::PreparedJob,
+        bundle: &crate::sandbox::dependency_bundle::DependencyBundle,
+        index: usize,
+        intent: Option<&[u8]>,
+    ) -> Result<bool, crate::sandbox::client::SandboxCallError> {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .hydrate_dependencies_with_intent(
+                &self.control,
+                authority.request(activation),
+                job,
+                bundle,
+                index,
+                intent,
+            )
+            .await
+    }
+
+    pub(crate) async fn publish_sandbox_dependencies(
+        &self,
+        sandbox: &crate::sandbox::client::SandboxClient,
+        authority: &ClaimBoundSandboxAuthority,
+        activation: &[u8; 32],
+        job: &crate::sandbox::preparation::PreparationJob,
+        bundle: &crate::sandbox::dependency_bundle::DependencyBundle,
+        index: usize,
+    ) -> Result<crate::sandbox::client::PublicationOutcome, crate::sandbox::client::SandboxCallError>
+    {
+        self.require_sandbox_authority(authority)?;
+        sandbox
+            .publish(
+                &self.control,
+                authority.request(activation),
+                job,
+                bundle,
+                index,
+            )
+            .await
+    }
+
+    fn require_sandbox_authority(
+        &self,
+        authority: &ClaimBoundSandboxAuthority,
+    ) -> Result<(), crate::sandbox::client::SandboxCallError> {
+        if authority.claim.fence.workload_session_id != self.workload_session_id
+            || authority.claim.fence.producer_id != self.producer_id
+        {
+            return Err(crate::sandbox::client::SandboxCallError::Rejected);
+        }
+        Ok(())
     }
 }
 
@@ -257,6 +603,59 @@ mod tests {
         )
         .unwrap();
         ClaimBoundRuntimeContextAuthority::from_claim(&claim)
+    }
+    pub(super) fn original_code_visit_conformance_fixture() -> ClaimBoundSandboxAuthority {
+        use crate::protocol::elitea::runtime::v1::{
+            SignedWorkerCommandEnvelopeV1, WorkerCommandV1,
+        };
+        let mut signed =
+            SignedWorkerCommandEnvelopeV1::decode(vector("signed_command").as_slice()).unwrap();
+        let mut body = WorkerCommandV1::decode(signed.worker_command_bytes.as_slice()).unwrap();
+        let original_execution = body.execution_id.clone();
+        body.execution_id = "1".repeat(32);
+        if body.root_execution_id == original_execution {
+            body.root_execution_id = body.execution_id.clone();
+        }
+        signed.worker_command_bytes = body.encode_to_vec();
+        signed.worker_command_digest.as_mut().unwrap().value =
+            ring::digest::digest(&ring::digest::SHA256, &signed.worker_command_bytes)
+                .as_ref()
+                .to_vec();
+        // Existing public offline conformance key only; no production signer is exposed.
+        signed.signature = ring::hmac::sign(
+            &ring::hmac::Key::new(
+                ring::hmac::HMAC_SHA256,
+                b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET",
+            ),
+            &signed.worker_command_bytes,
+        )
+        .as_ref()
+        .to_vec();
+        let command = parse_and_verify_agent_command(
+            &signed.encode_to_vec(),
+            Some(&TestOnlyConformanceHmacAuthenticator),
+        )
+        .unwrap();
+        let mut reply =
+            ClaimCommandResponseV1::decode(vector("accepted_claim").as_slice()).unwrap();
+        let receipt = reply.receipt.as_mut().unwrap();
+        receipt.identity.as_mut().unwrap().execution_id = body.execution_id;
+        receipt.claim_id = "5".repeat(32);
+        let decision = super::super::parse_agent_claim_decision(
+            &command,
+            reply,
+            "workload-1",
+            "worker-1",
+            1_700_000_000_000,
+        )
+        .unwrap();
+        let super::super::AgentClaimDecision::Accepted(claim) = decision else {
+            panic!("actual conformance admission did not accept the original claim");
+        };
+        let mut authority = ClaimBoundRuntimeContextAuthority::from_claim(&claim);
+        let sandbox = authority.take_sandbox_authority(&command).unwrap();
+        assert!(authority.take_sandbox_authority(&command).is_err());
+        sandbox
     }
     #[test]
     fn sandbox_authority_preserves_exact_command_and_fence_and_is_taken_once() {
@@ -359,5 +758,46 @@ mod tests {
                 .await,
             Err(crate::sandbox::client::SandboxCallError::Rejected)
         ));
+        let preparation = crate::sandbox::preparation::PreparationJob::new(
+            "7".into(),
+            format!("sha256:{}", "a".repeat(64)),
+            "test-v1".into(),
+            10,
+        )
+        .unwrap();
+        assert!(matches!(
+            control
+                .prepare_sandbox_dependencies(&sandbox, &authority, &[7; 32], &preparation)
+                .await,
+            Err(crate::sandbox::client::SandboxCallError::Rejected)
+        ));
+        let content = format!(
+            r#"{{"revision":1,"runtime":"pyodide-0.29.0","requirements":[],"files":[{{"name":"elitea-python-lock.json","bytes":2,"sha256":"{}"}}]}}"#,
+            "a".repeat(64)
+        );
+        let root = crate::sandbox::dependency_bundle::hex(
+            ring::digest::digest(&ring::digest::SHA256, content.as_bytes()).as_ref(),
+        );
+        let bundle = crate::sandbox::dependency_bundle::DependencyBundle::parse_record(
+            format!(r#"{},"digest":"{root}"}}"#, &content[..content.len() - 1]).as_bytes(),
+        )
+        .unwrap();
+        assert!(matches!(
+            control
+                .submit_sandbox_job_with_dependencies(&sandbox, &authority, &[7; 32], &job, &bundle)
+                .await,
+            Err(crate::sandbox::client::SandboxCallError::Rejected)
+        ));
+        assert!(matches!(
+            control
+                .hydrate_sandbox_dependencies(
+                    &sandbox, &authority, &[7; 32], &job, &bundle, 0, None
+                )
+                .await,
+            Err(crate::sandbox::client::SandboxCallError::Rejected)
+        ));
     }
 }
+
+#[path = "sandbox_workspace_authority.rs"]
+mod workspace;

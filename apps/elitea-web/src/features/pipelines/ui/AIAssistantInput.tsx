@@ -198,7 +198,10 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
 
   return (
     <Box sx={{ position: 'relative' }}>
-      <InputBase {...inputBaseProps} />
+      <InputBase
+        {...inputBaseProps}
+        {...(fieldName.toLowerCase() === 'code' ? { expand: { minRows: 3, maxRows: 8 } } : {})}
+      />
       {aiAssistantServed && (
         <Tooltip
           title={triggerLabel}

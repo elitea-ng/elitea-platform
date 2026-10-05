@@ -354,6 +354,59 @@ pub(crate) enum CheckpointDeliveryRoute {
     Inspect(Box<CheckpointAgentDelivery>),
 }
 
+pub(crate) enum NodeRecoveryDeliveryRoute {
+    Ordinary(AgentDeliveryRoute),
+    Model(Box<CheckpointAgentDelivery>),
+    Node(Box<NodeRecoveryAgentDelivery>),
+}
+pub(crate) struct NodeRecoveryAgentDelivery {
+    delivery: RedisCommandDelivery,
+    verified: VerifiedAgentCommand,
+    inspection: crate::protocol::control::NodeRecoveryInspection,
+}
+impl NodeRecoveryAgentDelivery {
+    pub(crate) fn matches_output_transport(&self, session: &str, producer: &str) -> bool {
+        self.inspection.matches_output_transport(session, producer)
+    }
+    pub(crate) fn spool_identity(&self) -> ExecutionSpoolIdentity {
+        let command = self.verified.command();
+        ExecutionSpoolIdentity {
+            tenant_id: command.tenant_id.clone(),
+            resource_project_id: command.resource_project_id.clone(),
+            projection_project_id: command.projection_project_id.clone(),
+            command_id: command.command_id.clone(),
+            execution_id: command.execution_id.clone(),
+            generation: command.generation,
+            producer_id: self.inspection.producer_id().to_owned(),
+        }
+    }
+    pub(crate) fn covered_progress(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<bool, ProtocolError> {
+        if !self.inspection.matches_output_identity(frame) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the node recovery output identity is invalid",
+            ));
+        }
+        Ok(validate_restored_agent_output_frame(&self.verified, frame)?
+            == ValidatedAgentOutputFrameKind::Progress
+            && frame.sequence <= self.inspection.output_watermark())
+    }
+    pub(crate) fn output_watermark(&self) -> u64 {
+        self.inspection.output_watermark()
+    }
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        RedisCommandDelivery,
+        VerifiedAgentCommand,
+        crate::protocol::control::NodeRecoveryInspection,
+    ) {
+        (self.delivery, self.verified, self.inspection)
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) struct CheckpointAgentDelivery {
     delivery: RedisCommandDelivery,
@@ -550,6 +603,39 @@ where
                 .route_claim_decision(delivery, verified, *decision)
                 .await
                 .map(CheckpointDeliveryRoute::Ordinary),
+        }
+    }
+
+    pub(crate) async fn route_node_recovery_verified(
+        &self,
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+        now_ms: i64,
+    ) -> Result<NodeRecoveryDeliveryRoute, AgentDeliveryError> {
+        use crate::protocol::control::NodeRecoveryClaimDecision;
+        match self
+            .control
+            .claim_node_recovery_delivery(&verified, now_ms)
+            .await?
+        {
+            NodeRecoveryClaimDecision::Recover(inspection) => Ok(NodeRecoveryDeliveryRoute::Node(
+                Box::new(NodeRecoveryAgentDelivery {
+                    delivery,
+                    verified,
+                    inspection: *inspection,
+                }),
+            )),
+            NodeRecoveryClaimDecision::ModelInspection(inspection) => Ok(
+                NodeRecoveryDeliveryRoute::Model(Box::new(CheckpointAgentDelivery {
+                    delivery,
+                    verified,
+                    inspection: *inspection,
+                })),
+            ),
+            NodeRecoveryClaimDecision::Ordinary(decision) => self
+                .route_claim_decision(delivery, verified, *decision)
+                .await
+                .map(NodeRecoveryDeliveryRoute::Ordinary),
         }
     }
 

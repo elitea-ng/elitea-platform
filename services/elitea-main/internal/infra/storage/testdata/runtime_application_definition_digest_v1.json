@@ -1,0 +1,10 @@
+{
+  "schema_version": "elitea.runtime.application-definition-digest.fixture.v1",
+  "domain_utf8": "elitea.runtime.application-definition.v1\u0000",
+  "project_id": 17,
+  "application_id": 31,
+  "version_id": 41,
+  "frozen_pre_redemption_json": "{\"agent_type\":\"agent\",\"instructions\":\"Return fixture\",\"tools\":[]}",
+  "frozen_pre_redemption_length": 65,
+  "frozen_definition_sha256": "31e7aff6b702375b6eaca24b124cf465ff9b9c587756b655e53b8256342395d5"
+}

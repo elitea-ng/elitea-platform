@@ -2,7 +2,7 @@
 
 #![allow(dead_code)] // Production pipeline assembly remains capability-gated.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY;
@@ -469,9 +469,26 @@ impl PipelineContinuationDecision {
                         .ok_or_else(PipelineResumeError::stale)?;
                     if checkpoint.thread_id != thread_id
                         || checkpoint.checkpoint_id != binding.checkpoint_id()
-                        || checkpoint.pending_nodes.as_slice() != [binding.node_name()]
+                        || checkpoint.pending_nodes.as_slice() != [binding.pending_node_name()]
                     {
                         return Err(PipelineResumeError::stale());
+                    }
+                    for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
+                        let checkpoint = checkpointer
+                            .load(nested.thread_id())
+                            .await
+                            .map_err(|_| PipelineResumeError::dependency())?
+                            .ok_or_else(PipelineResumeError::stale)?;
+                        let next = binding
+                            .nested_checkpoints()
+                            .get(index + 1)
+                            .map_or(binding.node_name(), |next| next.node_name());
+                        if checkpoint.thread_id != nested.thread_id()
+                            || checkpoint.checkpoint_id != nested.checkpoint_id()
+                            || checkpoint.pending_nodes.as_slice() != [next]
+                        {
+                            return Err(PipelineResumeError::stale());
+                        }
                     }
                     let ResolvedDirectHitlStart::Nested(decisions) =
                         application
@@ -489,7 +506,7 @@ impl PipelineContinuationDecision {
                         .iter()
                         .map(String::as_str)
                         .collect::<BTreeSet<_>>();
-                    if submitted != expected {
+                    if submitted.is_empty() || !submitted.is_subset(&expected) {
                         return Err(PipelineResumeError::stale());
                     }
                     return Ok(ResolvedPipelineContinuation::application(
@@ -929,7 +946,7 @@ pub(crate) struct PipelineResume {
 }
 
 impl PipelineResume {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             root_hitl_resume: false,
             state: State::new(),
@@ -961,6 +978,33 @@ impl PipelineResume {
             state,
             root_hitl_resume: true,
         }
+    }
+
+    pub(super) const fn from_text_state(state: State) -> Self {
+        Self {
+            root_hitl_resume: false,
+            state,
+        }
+    }
+
+    /// A nested static selection delivers text only to its proven leaf. Keep
+    /// every ancestor's original input/task stable for activation and receipt proof.
+    pub(crate) fn preserve_descendant_static_inputs(mut self) -> Self {
+        if self
+            .state
+            .contains_key(super::static_pause::STATIC_TEXT_RESUME_STATE_KEY)
+        {
+            self.state.remove("input");
+            self.state.remove("messages");
+        }
+        self
+    }
+
+    pub(super) fn static_after_checkpoints(&self) -> BTreeMap<String, String> {
+        self.state
+            .get(super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
     }
 
     pub(super) fn into_state(self) -> State {
@@ -1090,19 +1134,19 @@ impl PipelineResumeError {
         Self { code }
     }
 
-    const fn invalid() -> Self {
+    pub(super) const fn invalid() -> Self {
         Self::new(PipelineResumeErrorCode::InvalidInput)
     }
 
-    const fn stale() -> Self {
+    pub(super) const fn stale() -> Self {
         Self::new(PipelineResumeErrorCode::StaleDecision)
     }
 
-    const fn corrupt() -> Self {
+    pub(super) const fn corrupt() -> Self {
         Self::new(PipelineResumeErrorCode::CorruptSession)
     }
 
-    const fn dependency() -> Self {
+    pub(super) const fn dependency() -> Self {
         Self::new(PipelineResumeErrorCode::DependencyUnavailable)
     }
 

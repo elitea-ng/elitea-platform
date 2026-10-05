@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-required.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "activation_id",
+    "journal_revision",
+    "node_id",
+    "graph_thread",
+    "step",
+    "attempt",
+    "failure_class",
+    "stop_reason",
+    "replay_safety",
+    "allowed_actions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.node-recovery-required.v1"
+    },
+    "activation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "journal_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "node_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "graph_thread": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
+      "description": "Main and Worker also require at most 512 UTF-8 bytes."
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "failure_class": {
+      "enum": [
+        "dependency_unavailable",
+        "rate_limited",
+        "attempt_timeout",
+        "worker_interrupted",
+        "invalid_configuration",
+        "invalid_input",
+        "invalid_result",
+        "model_output_incomplete"
+      ]
+    },
+    "stop_reason": {
+      "enum": [
+        "operator_approval_required",
+        "effect_reconciliation_required"
+      ]
+    },
+    "replay_safety": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "no_external_effect"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "effect_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "idempotent_effect_not_committed"
+            },
+            "effect_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "const": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "effect_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unknown_external_effect"
+            },
+            "effect_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "const": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "receipt_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "completed_external_effect"
+            },
+            "receipt_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "not": {
+                "const": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unclassified"
+            }
+          }
+        }
+      ]
+    },
+    "allowed_actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "retry",
+          "reconcile",
+          "resume_result"
+        ]
+      }
+    }
+  },
+  "description": "Strict nonterminal receipt. Main and Worker additionally reject duplicate JSON keys, enforce UTF-8 byte bounds and exact unsigned integers.",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "replay_safety": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "no_external_effect",
+                  "idempotent_effect_not_committed"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allowed_actions": {
+            "const": [
+              "retry"
+            ]
+          },
+          "stop_reason": {
+            "const": "operator_approval_required"
+          },
+          "failure_class": {
+            "enum": [
+              "dependency_unavailable",
+              "rate_limited",
+              "attempt_timeout",
+              "worker_interrupted"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "replay_safety": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "unknown_external_effect",
+                  "unclassified"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allowed_actions": {
+            "const": [
+              "reconcile"
+            ]
+          },
+          "stop_reason": {
+            "const": "effect_reconciliation_required"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "replay_safety": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "completed_external_effect"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allowed_actions": {
+            "const": [
+              "resume_result"
+            ]
+          },
+          "stop_reason": {
+            "const": "effect_reconciliation_required"
+          }
+        }
+      }
+    }
+  ]
+}

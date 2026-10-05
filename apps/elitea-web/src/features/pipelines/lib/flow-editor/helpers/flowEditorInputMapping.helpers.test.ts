@@ -85,6 +85,69 @@ describe('getDefaultInputMappingOfTool', () => {
     expect(result.mappingInfo?.['task']).toMatchObject({ type: 'fstring' });
   });
 
+  it('retains saved child variable sources and JSON values when defaults are derived again', () => {
+    const existingMapping = {
+      task: { type: 'fstring', value: 'Run {topic}' },
+      count: { type: 'variable', value: 'parent_count' },
+      label: { type: 'fstring', value: 'for {topic}', multiline: true },
+      items: { type: 'variable', value: 'parent_items' },
+      enabled: { type: 'fixed', value: false },
+      attempts: { type: 'fixed', value: 0 },
+      options: { type: 'fixed', value: { mode: 'explicit', tags: ['one'] } },
+      empty_note: { type: 'fixed', value: '' },
+      removed: { type: 'fixed', value: 'old child value' },
+    };
+    const toolkit = {
+      type: 'application',
+      variables: [
+        { name: 'count', value: 1 },
+        { name: 'label', value: 'default label' },
+        { name: 'items', value: [] },
+        { name: 'enabled', value: true },
+        { name: 'attempts', value: 3 },
+        { name: 'options', value: { mode: 'default' } },
+        { name: 'empty_note', value: 'default note' },
+        { name: 'fresh', value: ['new default'] },
+      ],
+    };
+    const expectedMapping = {
+      task: existingMapping.task,
+      count: existingMapping.count,
+      label: existingMapping.label,
+      items: existingMapping.items,
+      enabled: existingMapping.enabled,
+      attempts: existingMapping.attempts,
+      options: existingMapping.options,
+      empty_note: existingMapping.empty_note,
+      fresh: { type: 'fixed', value: ['new default'] },
+    };
+
+    const result = getDefaultInputMappingOfTool(undefined, undefined, existingMapping, toolkit);
+
+    expect(result.mapping).toEqual(expectedMapping);
+    for (const variable of toolkit.variables) {
+      expect(result.mappingInfo?.[variable.name]).toEqual({
+        tooltip: 'This is a variable from the agent',
+        ...expectedMapping[variable.name as keyof typeof expectedMapping],
+      });
+    }
+    expect(result.mapping).not.toHaveProperty('removed');
+    expect(result.mappingInfo).not.toHaveProperty('removed');
+    expect(existingMapping.removed).toEqual({ type: 'fixed', value: 'old child value' });
+    expect(getDefaultInputMappingOfTool(undefined, undefined, result.mapping as typeof expectedMapping, toolkit)).toEqual(result);
+  });
+
+  it('keeps an unsupported saved source available for validation instead of replacing it with a valid default', () => {
+    const existingMapping = { topic: { type: 'unsupported', value: 'invalid source' } };
+    const result = getDefaultInputMappingOfTool(undefined, undefined, existingMapping, {
+      type: 'application',
+      variables: [{ name: 'topic', value: 'valid default' }],
+    });
+
+    expect(result.mapping['topic']).toEqual(existingMapping.topic);
+    expect(result.mappingInfo?.['topic']).toMatchObject(existingMapping.topic);
+  });
+
   it('returns the existing mapping unchanged when the tool schema cannot be resolved yet', () => {
     const result = getDefaultInputMappingOfTool(undefined, 'some_tool', { a: { type: 'fixed', value: 1 } }, { type: 'custom' });
     expect(result.mapping).toEqual({ a: { type: 'fixed', value: 1 } });

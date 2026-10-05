@@ -1,3 +1,5 @@
+import { applyNodeRecoveryFrame } from './chatStreamNodeRecovery';
+import { applyStaticPauseFrame } from './chatStreamStaticPause';
 /**
  * lib/chatStreamReducer.ts — the chat streaming reducer (issue #93, Surface B).
  *
@@ -63,6 +65,7 @@ import { reduceSwarmFrame } from './chatStreamSwarmFrames';
 import { reduceContextFrame } from './chatStreamContextFrames';
 import { reduceSummaryFrame } from './chatStreamSummaryFrames';
 import { reduceMessageSyncFrame } from './chatStreamMessageSyncFrames';
+import { isRootAnswerFrame, reduceFinalResultFrame } from './chatStreamFinalResult';
 
 import type { ChatMessage } from './convertMessagesToChatHistory';
 import type { ChatStreamFrame } from './chatStreamFrame';
@@ -83,6 +86,7 @@ export function applyChatStreamFrame(
 ): readonly ChatMessage[] {
   const type = frame.type;
   if (!type) return history;
+  if (type === 'full_message' && !isRootAnswerFrame(frame)) return history;
 
   // Resolved ONCE, here, and handed to every family: `index === -1` means "no
   // message for this frame yet", which several cases read as "create one".
@@ -91,8 +95,12 @@ export function applyChatStreamFrame(
   // the same reason plus a smaller one — it is the already-narrowed, non-empty
   // string the switches (and the error case's `exception` fallback) want.
   const index = findTarget(history, frame);
+  const current = history[index];
+  if (current?.executionGeneration && frame.execution_generation
+    && current.executionGeneration !== frame.execution_generation
+    && type !== 'agent_start' && type !== 'start_task') return history;
 
-  const next = (
+  const reduced = (
     reduceTurnFrame(history, frame, type, context, index) ??
     reduceToolFrame(history, frame, type, index) ??
     reduceToolOutputChunkFrame(history, frame, type, index) ??
@@ -102,10 +110,12 @@ export function applyChatStreamFrame(
     reduceContextFrame(history, frame, type, context, index) ??
     reduceSummaryFrame(history, frame, type, context, index) ??
     reduceMessageSyncFrame(history, frame, type, context) ??
+    reduceFinalResultFrame(history, frame, context, index) ??
     // Not yet ported (see the module doc). Returning the input reference is the
     // point: an unported frame must be inert, never a partial write.
     history
   );
+  const next = applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context);
   if (!isTurnTerminalFrame(frame)) return next;
   const target = findTarget(next, frame);
   const message = next[target];

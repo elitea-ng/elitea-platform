@@ -1,3 +1,5 @@
+import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
+import type { StaticPauseBinding } from './staticPipelinePause';
 import type { MessageItemWire } from '@/entities/message/lib/wire';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
 
@@ -8,6 +10,11 @@ import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping'
  * `convertMessagesToChatHistory` adds at the conversation level.
  */
 export interface ChatMessage {
+  readonly nodeRecoveryRequired?: NodeRecoveryBinding | undefined;
+  readonly staticPause?: StaticPauseBinding | undefined;
+  readonly executionGeneration?: string | undefined;
+  /** Final result metadata delivered after the success progress markers. */
+  readonly responseMetadata?: Readonly<Record<string, unknown>> | undefined;
   readonly resultChunk?: unknown;
   readonly assembledResult?: string | undefined;
   readonly continuedResultPrefix?: string | undefined;

@@ -170,6 +170,43 @@ where
         }
     }
 
+    async fn inspect_node_recovery(
+        &self,
+        request: &super::request::AgentExecutionRequest,
+        command: &super::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+        receipt: &super::graph::node_recovery_receipt::NodeRecoveryRequiredReceipt,
+    ) -> Result<super::node_recovery_checkpoint::OpenedNodeRecoveryVisit, NativeAgentAssemblyError>
+    {
+        match NativeRuntimeKind::from_request(request)? {
+            NativeRuntimeKind::Direct => Err(unsupported_runtime_kind()),
+            NativeRuntimeKind::Pipeline => {
+                self.pipeline
+                    .inspect_node_recovery(request, command, session, lease, receipt)
+                    .await
+            }
+        }
+    }
+
+    async fn assemble_node_checkpoint(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+        authority: &crate::protocol::control::NodeRecoveryAssemblyAuthorization,
+    ) -> Result<
+        super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
+        NativeAgentAssemblyError,
+    > {
+        match NativeRuntimeKind::from_request(assembly.request())? {
+            NativeRuntimeKind::Direct => Err(unsupported_runtime_kind()),
+            NativeRuntimeKind::Pipeline => self
+                .pipeline
+                .assemble_node_checkpoint(assembly, authority)
+                .await
+                .map(|pending| pending.map_completion(NativeRuntimeCompletion::Pipeline)),
+        }
+    }
+
     async fn assemble_checkpoint(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,

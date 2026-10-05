@@ -8,7 +8,7 @@
 
 #![allow(dead_code)] // Production registration remains capability-gated.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,13 +25,17 @@ use adk_rust::{
     ToolExecutionStrategy, Toolset,
 };
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, mpsc};
 use tracing::Instrument as _;
 
 use super::application_pipeline::{
-    ApplicationPipelineTool, PipelineToolParentBinding, PipelineToolResume,
-    pipeline_child_references, pipeline_pause_identity, pipeline_tool_description,
+    ApplicationPipelineTool, MAX_PIPELINE_TOOL_PENDING_BYTES, PipelineApplicationBoundary,
+    PipelineToolParentBinding, PipelineToolResume, pipeline_application_boundary,
+    pipeline_application_pending_event, pipeline_boundary_original_call, pipeline_child_references,
+    pipeline_pause_identity, pipeline_tool_description, rebind_pipeline_tool_boundary,
+    retained_pipeline_application_events, validate_retained_pipeline_application_pause,
 };
 use super::assembly::{OrdinaryModelProvider, OrdinaryNoToolProfile, ReasoningEffort};
 use super::context_management::ContextManagementPlan;
@@ -45,6 +49,13 @@ use super::graph::pipeline_node_event_channel;
 use super::internal_tools::{ASK_USER_TOOL_NAME, ASK_USER_TOOLSET_NAME, InternalToolCatalog};
 use super::model_scope::{ModelScopeSessions, ScopedModelCheckpoint};
 use super::pipeline::materialize_saved_pipeline_tool;
+mod materialization;
+#[cfg(test)]
+mod materialization_tests;
+mod static_resume;
+use super::application_pipeline::{PipelineStaticToolResume, static_pipeline_tool_pause};
+use super::graph::static_tool_pause::StaticToolDecision;
+use super::pipeline::scoped_applications::PipelineApplicationScopeRoute;
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::sensitive_tools::{SensitiveToolCatalog, sensitive_tools_for_kind};
 use super::session::{
@@ -64,6 +75,11 @@ use crate::transport::model_facade::{
 };
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
+use crate::transport::runtime_context::SavedAgentFingerprint;
+pub(super) use materialization::ApplicationMaterializationPath;
+pub(crate) use static_resume::{
+    install_static_application_resume, prepare_static_application_resume,
+};
 
 const MAX_APPLICATION_HOPS: usize = 25;
 /// The one child `agent_type` this worker compiles as a nested `LlmAgent`.
@@ -80,9 +96,170 @@ const MAX_AGENT_DESCRIPTION_BYTES: usize = 4 * 1_024;
 const MAX_DESCRIPTION_CAPABILITIES: usize = 16;
 const APPLICATION_EVENT_CHANNEL_CAPACITY: usize = 64;
 const MAX_PARALLEL_APPLICATION_CALLS: usize = 8;
+const MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS: usize = 16;
 const ADK_LLM_REQUEST_METADATA_KEY: &str = "gcp.vertex.agent.llm_request";
 const ADK_LLM_RESPONSE_METADATA_KEY: &str = "gcp.vertex.agent.llm_response";
 const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
+const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
+const APPLICATION_RETAINED_PAUSE_KEY: &str = "elitea.application.retained_pause.v1";
+const MAX_RETAINED_PAUSE_BYTES: usize = 512 * 1_024;
+const APPLICATION_RETAINED_PIPELINE_KEY: &str = "elitea.application.retained_pipeline.v1";
+const MAX_RETAINED_PIPELINE_EVENTS: usize = 512;
+
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ApplicationReplayBatch {
+    event_id: String,
+    interrupt_ids: BTreeSet<String>,
+    call_ordinals: BTreeMap<String, usize>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RetainedApplicationPause {
+    interrupt_id: String,
+    parent_call_id: String,
+    events: Vec<Event>,
+}
+/// Minimal original projection data for an untouched saved graph family.
+/// The original parent model event is proof data only; it is never reprojected.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RetainedPipelinePause {
+    schema: String,
+    batch_event_id: String,
+    ordinal: usize,
+    parent_call_id: String,
+    tool_name: String,
+    arguments_digest: String,
+    checkpoint_thread_id: String,
+    #[serde(deserialize_with = "deserialize_unique_interrupt_ids")]
+    interrupt_ids: BTreeSet<String>,
+    original_call: Event,
+    events: Vec<Event>,
+}
+
+fn deserialize_unique_interrupt_ids<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+    if values.is_empty() || values.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS {
+        return Err(serde::de::Error::custom(
+            "invalid retained pipeline interrupt count",
+        ));
+    }
+    let count = values.len();
+    let unique: BTreeSet<_> = values.into_iter().collect();
+    if unique.len() != count {
+        return Err(serde::de::Error::custom(
+            "duplicate retained pipeline interrupts",
+        ));
+    }
+    Ok(unique)
+}
+
+fn application_arguments_digest(arguments: &Value) -> Result<String, NativeAgentAssemblyError> {
+    let encoded = serde_json::to_string(arguments).map_err(|_| invalid_configuration())?;
+    Ok(super::instruction_authority::content_digest(&encoded))
+}
+
+impl RetainedPipelinePause {
+    fn validate_basic(&self) -> Result<(), NativeAgentAssemblyError> {
+        if self.schema != APPLICATION_RETAINED_PIPELINE_KEY
+            || self.ordinal == 0
+            || self.ordinal > MAX_PARALLEL_APPLICATION_CALLS
+            || self.interrupt_ids.is_empty()
+            || self.interrupt_ids.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS
+            || self.events.is_empty()
+            // The original call is one additional proof event within the total bound.
+            || self.events.len() >= MAX_RETAINED_PIPELINE_EVENTS
+            || [
+                &self.batch_event_id,
+                &self.parent_call_id,
+                &self.tool_name,
+                &self.checkpoint_thread_id,
+            ]
+            .into_iter()
+            .any(|value| !valid_retained_pipeline_identity(value))
+            || self
+                .interrupt_ids
+                .iter()
+                .any(|value| !valid_retained_pipeline_identity(value))
+            || self.original_call.id != self.batch_event_id
+            || original_application_batch_id(&self.original_call)? != self.batch_event_id
+            || serde_json::to_vec(self)
+                .map_err(|_| invalid_configuration())?
+                .len()
+                > MAX_PIPELINE_TOOL_PENDING_BYTES
+        {
+            return Err(invalid_configuration());
+        }
+        let calls = self.original_call.tool_calls();
+        let mut matching = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.call_id == Some(self.parent_call_id.as_str()));
+        let (index, call) = matching.next().ok_or_else(invalid_configuration)?;
+        if matching.next().is_some()
+            || index + 1 != self.ordinal
+            || call.name != self.tool_name
+            || application_arguments_digest(call.args)? != self.arguments_digest
+        {
+            return Err(invalid_configuration());
+        }
+        let mut ids = HashSet::new();
+        for event in &self.events {
+            if event.id == self.original_call.id
+                || !ids.insert(&event.id)
+                || !event.tool_results().is_empty()
+                || event.actions.tool_confirmation_decision.is_some()
+                || event
+                    .provider_metadata
+                    .contains_key(APPLICATION_RETAINED_PAUSE_KEY)
+                || event
+                    .provider_metadata
+                    .contains_key(APPLICATION_RETAINED_PIPELINE_KEY)
+            {
+                return Err(invalid_configuration());
+            }
+        }
+        Ok(())
+    }
+
+    fn pending_event(&self) -> Result<&Event, NativeAgentAssemblyError> {
+        let mut pending = None;
+        for event in &self.events {
+            if pipeline_application_pending_event(event)? && pending.replace(event).is_some() {
+                return Err(invalid_configuration());
+            }
+        }
+        pending.ok_or_else(invalid_configuration)
+    }
+
+    fn validate(&self) -> Result<(), NativeAgentAssemblyError> {
+        self.validate_basic()?;
+        let pending = self.pending_event()?;
+        if pending
+            .provider_metadata
+            .get(DESCENDANT_CHECKPOINT_THREAD_KEY)
+            != Some(&self.checkpoint_thread_id)
+        {
+            return Err(invalid_configuration());
+        }
+        validate_retained_pipeline_application_pause(
+            &self.original_call,
+            pending,
+            &self.events,
+            &self.interrupt_ids,
+        )
+    }
+}
+
+fn valid_retained_pipeline_identity(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+}
+
 pub(crate) const PIPELINE_APPLICATION_NODE_METADATA_KEY: &str =
     "elitea.pipeline.application_node.v1";
 
@@ -95,6 +272,14 @@ pub(super) type ApplicationEventSender = mpsc::Sender<ApplicationEventSignal>;
 
 pub(super) enum ApplicationEventSignal {
     ContainerEvent(Box<Event>),
+    GraphDescendant {
+        root_container_invocation_id: String,
+        root_parent_call_id: String,
+        root_checkpoint_thread_id: String,
+        catalog: Arc<super::pipeline::composition::PipelineCheckpointCatalog>,
+        lineage: Option<super::application_pipeline::PipelineToolCallLineage>,
+        event: Box<Event>,
+    },
     Event {
         container_invocation_id: String,
         parent_call_id: String,
@@ -118,6 +303,28 @@ pub(crate) struct ApplicationEventReceiver {
     inner: Arc<Mutex<Option<mpsc::Receiver<ApplicationEventSignal>>>>,
 }
 
+impl ApplicationEventReceiver {
+    pub(super) async fn take(&self) -> adk_rust::Result<mpsc::Receiver<ApplicationEventSignal>> {
+        self.inner
+            .lock()
+            .await
+            .take()
+            .ok_or_else(application_event_channel_error)
+    }
+
+    pub(super) async fn restore(
+        &self,
+        receiver: mpsc::Receiver<ApplicationEventSignal>,
+    ) -> adk_rust::Result<()> {
+        let mut slot = self.inner.lock().await;
+        if slot.is_some() {
+            return Err(application_event_channel_error());
+        }
+        *slot = Some(receiver);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct ApplicationResumeCoordinator {
     inner: Arc<Mutex<ApplicationResumeState>>,
@@ -126,10 +333,12 @@ pub(crate) struct ApplicationResumeCoordinator {
 #[derive(Default)]
 struct ApplicationResumeState {
     root: Option<HashMap<String, ChildApplicationResume>>,
+    call_lineage: HashMap<(String, String), super::application_pipeline::PipelineToolCallLineage>,
     by_parent_invocation: HashMap<String, HashMap<String, ChildApplicationResume>>,
 }
 
 pub(super) struct ChildApplicationResume {
+    batch_event_id: String,
     tool_name: String,
     arguments: Value,
     ordinal: usize,
@@ -138,32 +347,202 @@ pub(super) struct ChildApplicationResume {
 }
 
 impl ChildApplicationResume {
+    pub(super) async fn retained_result(
+        &self,
+        ctx: &dyn ToolContext,
+        tool_name: &str,
+        arguments: &Value,
+        sender: Option<&ApplicationEventSender>,
+    ) -> adk_rust::Result<Option<Value>> {
+        if self.tool_name != tool_name || &self.arguments != arguments {
+            return Err(tool_input_error());
+        }
+        let (metadata_key, encoded, interrupt_ids) = match &self.action {
+            ChildApplicationResumeAction::Retained(pause) => {
+                if pause.parent_call_id != ctx.function_call_id() {
+                    return Err(application_event_channel_error());
+                }
+                let encoded =
+                    serde_json::to_string(pause).map_err(|_| application_event_channel_error())?;
+                if encoded.len() > MAX_RETAINED_PAUSE_BYTES {
+                    return Err(application_event_channel_error());
+                }
+                (
+                    APPLICATION_RETAINED_PAUSE_KEY,
+                    encoded,
+                    BTreeSet::from([pause.interrupt_id.clone()]),
+                )
+            }
+            ChildApplicationResumeAction::RetainedPipeline(pause) => {
+                pause
+                    .validate()
+                    .map_err(|_| application_event_channel_error())?;
+                if pause.batch_event_id != self.batch_event_id
+                    || pause.ordinal != self.ordinal
+                    || pause.parent_call_id != ctx.function_call_id()
+                    || pause.tool_name != tool_name
+                    || pause.arguments_digest
+                        != application_arguments_digest(arguments)
+                            .map_err(|_| tool_input_error())?
+                {
+                    return Err(tool_input_error());
+                }
+                let encoded =
+                    serde_json::to_string(pause).map_err(|_| application_event_channel_error())?;
+                (
+                    APPLICATION_RETAINED_PIPELINE_KEY,
+                    encoded,
+                    pause.interrupt_ids.clone(),
+                )
+            }
+            _ => return Ok(None),
+        };
+        let mut event = Event::new(ctx.invocation_id());
+        ctx.agent_name().clone_into(&mut event.author);
+        ctx.branch().clone_into(&mut event.branch);
+        event
+            .provider_metadata
+            .insert(metadata_key.to_owned(), encoded);
+        sender
+            .ok_or_else(application_event_channel_error)?
+            .send(ApplicationEventSignal::ContainerEvent(Box::new(event)))
+            .await
+            .map_err(|_| application_event_channel_error())?;
+        Ok(Some(nested_interrupt_result(&interrupt_ids)))
+    }
+
+    pub(super) fn into_pipeline_with_static(
+        self,
+        tool_name: &str,
+        arguments: &Value,
+        definition: &super::graph::compiler::PipelineDefinition,
+        runtimes: &super::graph::compiler::PipelineNodeRuntimes,
+        thread: &str,
+    ) -> adk_rust::Result<PreparedPipelineToolResume> {
+        if self.tool_name != tool_name || &self.arguments != arguments {
+            return Err(tool_input_error());
+        }
+        match self.action {
+            ChildApplicationResumeAction::PipelineStatic(request) => {
+                let checkpoint = request
+                    .resolve(definition, runtimes, thread)
+                    .map_err(|_| tool_input_error())?;
+                Ok(PreparedPipelineToolResume {
+                    checkpoint: Box::new(checkpoint),
+                    scopes: Vec::new(),
+                    static_scopes: Vec::new(),
+                })
+            }
+            action => ChildApplicationResume { action, ..self }.into_pipeline(tool_name, arguments),
+        }
+    }
+
     /// Take the pipeline continuation this resume carries, proving first that
     /// it names the same tool and the same arguments the replay re-emitted.
     pub(super) fn into_pipeline(
         self,
         tool_name: &str,
         arguments: &Value,
-    ) -> adk_rust::Result<Box<PipelineToolResume>> {
+    ) -> adk_rust::Result<PreparedPipelineToolResume> {
         if self.tool_name != tool_name || &self.arguments != arguments {
             return Err(tool_input_error());
         }
         match self.action {
-            ChildApplicationResumeAction::Pipeline(resume) => Ok(resume),
+            ChildApplicationResumeAction::Pipeline(checkpoint) => Ok(PreparedPipelineToolResume {
+                checkpoint,
+                scopes: Vec::new(),
+                static_scopes: Vec::new(),
+            }),
+            ChildApplicationResumeAction::PipelineDescendants(resume) => {
+                pipeline_resume_scope_ids(&resume).map_err(|_| tool_input_error())?;
+                Ok(*resume)
+            }
             _ => Err(tool_input_error()),
         }
     }
 }
 
+/// Resume the saved graph family before installing its exact ordinary child scopes.
+/// The graph itself has no ordinary model history or model replay action.
+pub(super) struct PreparedPipelineToolResume {
+    pub(super) checkpoint: Box<PipelineToolResume>,
+    pub(super) scopes: Vec<PipelineApplicationScopeDecisions>,
+    pub(super) static_scopes: Vec<PipelineApplicationScopeStaticDecisions>,
+}
+
+pub(super) struct PipelineApplicationScopeStaticDecisions {
+    pub(super) route: PipelineApplicationScopeRoute,
+    pub(super) events: Vec<Event>,
+    pub(super) decisions: Vec<StaticToolDecision>,
+}
+
+/// Selection is still subject to the rebuilt registry and exact ancestor checkpoints.
+/// This bundle carries identities; it does not grant execution before that proof.
+pub(super) struct PipelineApplicationScopeDecisions {
+    pub(super) route: PipelineApplicationScopeRoute,
+    pub(super) events: Vec<Event>,
+    pub(super) decisions: Vec<ResolvedDirectHitlDecision>,
+}
+
 pub(super) enum ChildApplicationResumeAction {
+    Retained(Box<RetainedApplicationPause>),
+    RetainedPipeline(Box<RetainedPipelinePause>),
     Direct(Box<ResolvedDirectHitlDecision>),
     Nested(HashMap<String, ChildApplicationResume>),
     /// #973: a saved PIPELINE child re-enters its own graph at the node that
     /// paused, from the checkpoint its pause persisted on the parent's event.
     Pipeline(Box<PipelineToolResume>),
+    PipelineStatic(Box<PipelineStaticToolResume>),
+    /// An ordinary child pause inside a saved graph crosses a checkpoint boundary.
+    PipelineDescendants(Box<PreparedPipelineToolResume>),
 }
 
 impl ApplicationResumeCoordinator {
+    pub(super) async fn observe_call_lineage(
+        &self,
+        event: &Event,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let mut state = self.inner.lock().await;
+        for (index, call) in event.tool_calls().iter().enumerate() {
+            let id = call.call_id.ok_or_else(invalid_configuration)?;
+            let value =
+                super::application_pipeline::PipelineToolCallLineage::from_call(event, index)?;
+            let key = (event.invocation_id.clone(), id.to_owned());
+            if let Some(recorded) = state.call_lineage.get(&key) {
+                if recorded != &value {
+                    return Err(invalid_configuration());
+                }
+            } else {
+                if state.call_lineage.len() >= 1024 {
+                    return Err(resource_exhausted());
+                }
+                state.call_lineage.insert(key, value);
+            }
+        }
+        Ok(())
+    }
+    pub(super) async fn pipeline_call_lineage(
+        &self,
+        invocation: &str,
+        call: &str,
+        name: &str,
+        args: &Value,
+    ) -> Result<super::application_pipeline::PipelineToolCallLineage, NativeAgentAssemblyError>
+    {
+        let value = self
+            .inner
+            .lock()
+            .await
+            .call_lineage
+            .get(&(invocation.to_owned(), call.to_owned()))
+            .cloned()
+            .ok_or_else(invalid_configuration)?;
+        if !value.matches(name, args)? {
+            return Err(invalid_configuration());
+        }
+        Ok(value)
+    }
+
     async fn install_root(
         &self,
         calls: HashMap<String, ChildApplicationResume>,
@@ -191,6 +570,18 @@ impl ApplicationResumeCoordinator {
             return Err(application_event_channel_error());
         }
         Ok(())
+    }
+
+    /// Probe the same exact route as `take` without consuming its installed resume.
+    pub(super) async fn has_resume(&self, parent_invocation_id: &str, call_id: &str) -> bool {
+        let stored = self.inner.lock().await;
+        if let Some(calls) = stored.by_parent_invocation.get(parent_invocation_id) {
+            return calls.contains_key(call_id);
+        }
+        stored
+            .root
+            .as_ref()
+            .is_some_and(|calls| calls.contains_key(call_id))
     }
 
     pub(super) async fn take(
@@ -250,6 +641,7 @@ struct ApplicationCallHop {
 }
 
 struct ChildApplicationResumeBuilder {
+    batch_event_id: String,
     tool_name: String,
     arguments: Value,
     ordinal: usize,
@@ -260,6 +652,11 @@ struct ChildApplicationResumeBuilder {
     /// #973: set for a child PIPELINE, which has no history to replay and one
     /// checkpoint to re-enter instead.
     pipeline: Option<Box<PipelineToolResume>>,
+    pipeline_descendants: Option<Box<PreparedPipelineToolResume>>,
+    pipeline_static: Option<Box<PipelineStaticToolResume>>,
+    pipeline_boundary_event_id: Option<String>,
+    retained: Option<Box<RetainedApplicationPause>>,
+    retained_pipeline: Option<Box<RetainedPipelinePause>>,
 }
 
 pub(crate) async fn prepare_nested_application_resume(
@@ -272,6 +669,7 @@ pub(crate) async fn prepare_nested_application_resume(
     let (child_resumes, submitted_interrupt_ids) =
         build_nested_application_resume(events, decisions, applications)?;
     let calls = application_replay_calls(&child_resumes)?;
+    let batch = application_replay_batch(&child_resumes, &submitted_interrupt_ids)?;
     coordinator.install_root(child_resumes).await?;
     let user_content = nested_resume_user_content(&submitted_interrupt_ids);
     Ok(PreparedNestedApplicationResume {
@@ -279,6 +677,8 @@ pub(crate) async fn prepare_nested_application_resume(
             delegate,
             state: AtomicU8::new(REPLAY_APPLICATIONS_PENDING),
             calls,
+            batch,
+            previous_markers: nested_resume_markers(events)?,
             replay_marker: user_content.clone(),
         }),
         user_content,
@@ -312,33 +712,260 @@ fn build_nested_application_resume(
                 &mut submitted_interrupt_ids,
                 decision,
             )?;
-            if root_event_id
-                .get_or_insert_with(|| root_event_id_of_call.clone())
-                .as_str()
-                != root_event_id_of_call
-            {
+            bind_application_resume_batch(&mut root_event_id, &root_event_id_of_call)?;
+            continue;
+        }
+        if let Some(boundary) = scoped_pipeline_boundary_for_decision(events, &decision)? {
+            let chain = pipeline_boundary_call_chain(events, &boundary)?;
+            let root_call = chain.last().ok_or_else(invalid_configuration)?;
+            bind_application_resume_batch(&mut root_event_id, &root_call.event_id)?;
+            if !submitted_interrupt_ids.insert(decision.interrupt_id().to_owned()) {
                 return Err(unsupported_capability());
             }
+            insert_pipeline_descendant_decision(
+                &mut builders,
+                &chain,
+                events,
+                applications,
+                boundary,
+                decision,
+            )?;
             continue;
         }
         let chain = application_call_chain(events, &decision)?;
         let root_call = chain.last().ok_or_else(invalid_configuration)?;
-        if root_event_id
-            .get_or_insert_with(|| root_call.event_id.clone())
-            .as_str()
-            != root_call.event_id
-        {
-            return Err(unsupported_capability());
-        }
+        bind_application_resume_batch(&mut root_event_id, &root_call.event_id)?;
         if !submitted_interrupt_ids.insert(decision.interrupt_id().to_owned()) {
             return Err(unsupported_capability());
         }
         insert_resume_decision(&mut builders, &chain, events, applications, decision)?;
     }
     let root_event_id = root_event_id.ok_or_else(invalid_configuration)?;
-    validate_complete_nested_decision_set(events, &root_event_id, &submitted_interrupt_ids)?;
+    retain_pending_nested_decisions(
+        events,
+        &root_event_id,
+        &submitted_interrupt_ids,
+        &mut builders,
+        applications,
+    )?;
     let child_resumes = finish_resume_builders(builders)?;
     Ok((child_resumes, submitted_interrupt_ids))
+}
+
+fn bind_application_resume_batch(
+    root_event_id: &mut Option<String>,
+    candidate: &str,
+) -> Result<(), NativeAgentAssemblyError> {
+    if root_event_id
+        .get_or_insert_with(|| candidate.to_owned())
+        .as_str()
+        != candidate
+    {
+        return Err(unsupported_capability());
+    }
+    Ok(())
+}
+
+/// Scope and checkpoint authority comes from the graph boundary helper.
+fn scoped_pipeline_boundary_for_decision(
+    events: &[Event],
+    decision: &ResolvedDirectHitlDecision,
+) -> Result<Option<PipelineApplicationBoundary>, NativeAgentAssemblyError> {
+    let mut candidates = events.iter().filter(|event| {
+        event.invocation_id == decision.invocation_id()
+            && event
+                .actions
+                .tool_confirmation
+                .as_ref()
+                .is_some_and(|request| {
+                    request.function_call_id.as_deref() == Some(decision.call_id())
+                        && request.tool_name == decision.tool_name()
+                        && &request.args == decision.arguments()
+                })
+    });
+    let event = candidates.next().ok_or_else(invalid_configuration)?;
+    if candidates.next().is_some() {
+        return Err(invalid_configuration());
+    }
+    let boundary = pipeline_application_boundary(events, event)?;
+    if let Some(boundary) = &boundary
+        && (!boundary
+            .scope_events
+            .iter()
+            .any(|original| original.id == event.id)
+            || !boundary.scope_events.iter().any(|original| {
+                original.tool_calls().iter().any(|call| {
+                    call.call_id == Some(boundary.scope_route.application_call_id.as_str())
+                })
+            }))
+    {
+        return Err(invalid_configuration());
+    }
+    Ok(boundary)
+}
+
+/// Walk only the ordinary model calls above the saved graph, never its node calls.
+fn pipeline_boundary_call_chain(
+    events: &[Event],
+    boundary: &PipelineApplicationBoundary,
+) -> Result<Vec<ApplicationCallHop>, NativeAgentAssemblyError> {
+    if boundary.checkpoint.thread_id() != boundary.checkpoint_thread_id {
+        return Err(invalid_configuration());
+    }
+    let chain = application_call_chain_from(
+        events,
+        &boundary.pending_event.invocation_id,
+        &boundary.container_invocation_id,
+        &boundary.parent_call_id,
+        &boundary.pending_event.branch,
+    )?;
+    let pipeline = chain.first().ok_or_else(invalid_configuration)?;
+    if pipeline.tool_name != boundary.pending_event.author {
+        return Err(invalid_configuration());
+    }
+    application_task(&pipeline.arguments)?;
+    Ok(chain)
+}
+
+fn pipeline_boundary_builder<'a>(
+    builders: &'a mut HashMap<String, ChildApplicationResumeBuilder>,
+    hop: &ApplicationCallHop,
+    history: Vec<Content>,
+) -> Result<&'a mut ChildApplicationResumeBuilder, NativeAgentAssemblyError> {
+    let builder =
+        builders
+            .entry(hop.call_id.clone())
+            .or_insert_with(|| ChildApplicationResumeBuilder {
+                batch_event_id: hop.event_id.clone(),
+                tool_name: hop.tool_name.clone(),
+                arguments: hop.arguments.clone(),
+                ordinal: hop.ordinal,
+                owned_invocation_id: hop.owned_invocation_id.clone(),
+                history,
+                decision: None,
+                children: HashMap::new(),
+                pipeline: None,
+                pipeline_descendants: None,
+                pipeline_static: None,
+                pipeline_boundary_event_id: None,
+                retained: None,
+                retained_pipeline: None,
+            });
+    if builder.batch_event_id != hop.event_id
+        || builder.tool_name != hop.tool_name
+        || builder.arguments != hop.arguments
+        || builder.ordinal != hop.ordinal
+        || builder.owned_invocation_id != hop.owned_invocation_id
+    {
+        return Err(invalid_configuration());
+    }
+    Ok(builder)
+}
+
+fn insert_pipeline_descendant_decision(
+    builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
+    chain: &[ApplicationCallHop],
+    events: &[Event],
+    applications: &ApplicationToolPresentationCatalog,
+    boundary: PipelineApplicationBoundary,
+    decision: ResolvedDirectHitlDecision,
+) -> Result<(), NativeAgentAssemblyError> {
+    let mut current = builders;
+    let mut catalog = applications;
+    for (index, hop) in chain.iter().rev().enumerate() {
+        let child_catalog = catalog
+            .child_tools(&hop.tool_name)
+            .ok_or_else(invalid_configuration)?;
+        if completed_application_calls(events, &hop.event_id)?.contains_key(&hop.call_id) {
+            return Err(invalid_configuration());
+        }
+        let is_pipeline = index + 1 == chain.len();
+        let history = if is_pipeline {
+            Vec::new()
+        } else {
+            let task = application_task_with_variables(&hop.arguments)?;
+            let mut history = vec![Content::new("user").with_text(task)];
+            history.extend(application_resume_history(
+                events,
+                &hop.owned_invocation_id,
+            )?);
+            history
+        };
+        let builder = pipeline_boundary_builder(current, hop, history)?;
+        if builder.decision.is_some()
+            || builder.pipeline.is_some()
+            || builder.retained.is_some()
+            || builder.retained_pipeline.is_some()
+        {
+            return Err(unsupported_capability());
+        }
+        if is_pipeline {
+            if !builder.children.is_empty() {
+                return Err(unsupported_capability());
+            }
+            return append_pipeline_scope_decision(builder, boundary, decision);
+        }
+        if builder.pipeline_descendants.is_some() {
+            return Err(unsupported_capability());
+        }
+        current = &mut builder.children;
+        catalog = child_catalog;
+    }
+    Err(invalid_configuration())
+}
+
+fn append_pipeline_scope_decision(
+    builder: &mut ChildApplicationResumeBuilder,
+    boundary: PipelineApplicationBoundary,
+    decision: ResolvedDirectHitlDecision,
+) -> Result<(), NativeAgentAssemblyError> {
+    if boundary.scope_events.is_empty()
+        || boundary.scope_events.len() > 512
+        || serde_json::to_vec(&boundary.scope_events)
+            .map_err(|_| invalid_configuration())?
+            .len()
+            > MAX_RETAINED_PAUSE_BYTES
+        || builder
+            .pipeline_boundary_event_id
+            .as_ref()
+            .is_some_and(|id| id != &boundary.pending_event.id)
+    {
+        return Err(invalid_configuration());
+    }
+    builder.pipeline_boundary_event_id = Some(boundary.pending_event.id);
+    let resume = builder.pipeline_descendants.get_or_insert_with(|| {
+        Box::new(PreparedPipelineToolResume {
+            checkpoint: boundary.checkpoint,
+            scopes: Vec::new(),
+            static_scopes: Vec::new(),
+        })
+    });
+    if resume.checkpoint.thread_id() != boundary.checkpoint_thread_id {
+        return Err(invalid_configuration());
+    }
+    if let Some(scope) = resume
+        .scopes
+        .iter_mut()
+        .find(|scope| scope.route == boundary.scope_route)
+    {
+        if scope
+            .events
+            .iter()
+            .map(|event| &event.id)
+            .ne(boundary.scope_events.iter().map(|event| &event.id))
+        {
+            return Err(invalid_configuration());
+        }
+        scope.decisions.push(decision);
+    } else {
+        resume.scopes.push(PipelineApplicationScopeDecisions {
+            route: boundary.scope_route,
+            events: boundary.scope_events,
+            decisions: vec![decision],
+        });
+    }
+    pipeline_descendant_interrupt_ids(&resume.scopes)?;
+    Ok(())
 }
 
 fn application_call_chain(
@@ -381,8 +1008,9 @@ fn application_call_chain_from(
         if event.branch != parent_branch {
             return Err(invalid_configuration());
         }
+        let ordinal = application_replay_ordinal(event, &parent_call_id)?.unwrap_or(ordinal);
         chain.push(ApplicationCallHop {
-            event_id: event.id.clone(),
+            event_id: original_application_batch_id(event)?,
             call_id: parent_call_id,
             tool_name: call.name.to_owned(),
             arguments: call.args.clone(),
@@ -500,15 +1128,18 @@ fn insert_resume_decision(
             .child_tools(&hop.tool_name)
             .ok_or_else(invalid_configuration)?;
         let task = application_task_with_variables(&hop.arguments)?;
+        if completed_application_calls(events, &hop.event_id)?.contains_key(&hop.call_id) {
+            return Err(invalid_configuration());
+        }
         let mut history = vec![Content::new("user").with_text(task)];
-        history.extend(events.iter().filter_map(|event| {
-            (event.invocation_id == hop.owned_invocation_id)
-                .then(|| event.content().cloned())
-                .flatten()
-        }));
+        history.extend(application_resume_history(
+            events,
+            &hop.owned_invocation_id,
+        )?);
         let builder = current_builders
             .entry(hop.call_id.clone())
             .or_insert_with(|| ChildApplicationResumeBuilder {
+                batch_event_id: hop.event_id.clone(),
                 tool_name: hop.tool_name.clone(),
                 arguments: hop.arguments.clone(),
                 ordinal: hop.ordinal,
@@ -517,8 +1148,14 @@ fn insert_resume_decision(
                 decision: None,
                 children: HashMap::new(),
                 pipeline: None,
+                pipeline_descendants: None,
+                pipeline_static: None,
+                pipeline_boundary_event_id: None,
+                retained: None,
+                retained_pipeline: None,
             });
-        if builder.tool_name != hop.tool_name
+        if builder.batch_event_id != hop.event_id
+            || builder.tool_name != hop.tool_name
             || builder.arguments != hop.arguments
             || builder.ordinal != hop.ordinal
             || builder.owned_invocation_id != hop.owned_invocation_id
@@ -540,6 +1177,10 @@ fn insert_resume_decision(
             };
             if !leaf_is_admitted
                 || builder.pipeline.is_some()
+                || builder.pipeline_descendants.is_some()
+                || builder.pipeline_static.is_some()
+                || builder.retained.is_some()
+                || builder.retained_pipeline.is_some()
                 || builder.decision.replace(decision).is_some()
                 || !builder.children.is_empty()
             {
@@ -547,7 +1188,13 @@ fn insert_resume_decision(
             }
             return Ok(());
         }
-        if builder.decision.is_some() || builder.pipeline.is_some() {
+        if builder.decision.is_some()
+            || builder.pipeline.is_some()
+            || builder.pipeline_descendants.is_some()
+            || builder.pipeline_static.is_some()
+            || builder.retained.is_some()
+            || builder.retained_pipeline.is_some()
+        {
             return Err(unsupported_capability());
         }
         current_builders = &mut builder.children;
@@ -597,7 +1244,11 @@ fn insert_pipeline_resume(
     {
         return Err(unsupported_capability());
     }
-    let root_event_id = event.id.clone();
+    let root_event_id = original_application_batch_id(event)?;
+    let ordinal = application_replay_ordinal(event, route.parent_call_id())?.unwrap_or(ordinal);
+    if completed_application_calls(events, &root_event_id)?.contains_key(route.parent_call_id()) {
+        return Err(invalid_configuration());
+    }
     let tool_name = call.name.to_owned();
     let arguments = call.args.clone();
     let pipeline = decision
@@ -606,6 +1257,7 @@ fn insert_pipeline_resume(
     let builder = builders
         .entry(route.parent_call_id().to_owned())
         .or_insert_with(|| ChildApplicationResumeBuilder {
+            batch_event_id: root_event_id.clone(),
             tool_name,
             arguments,
             ordinal,
@@ -614,9 +1266,18 @@ fn insert_pipeline_resume(
             decision: None,
             children: HashMap::new(),
             pipeline: None,
+            pipeline_descendants: None,
+            pipeline_static: None,
+            pipeline_boundary_event_id: None,
+            retained: None,
+            retained_pipeline: None,
         });
     if builder.decision.is_some()
         || !builder.children.is_empty()
+        || builder.pipeline_descendants.is_some()
+        || builder.pipeline_static.is_some()
+        || builder.retained.is_some()
+        || builder.retained_pipeline.is_some()
         || builder.pipeline.replace(pipeline).is_some()
     {
         return Err(unsupported_capability());
@@ -663,19 +1324,40 @@ fn finish_resume_builders(
                 builder.decision,
                 builder.pipeline,
                 builder.children.is_empty(),
+                builder.retained,
+                builder.pipeline_descendants,
+                builder.retained_pipeline,
+                builder.pipeline_static,
             ) {
-                (Some(decision), None, true) => {
+                (Some(decision), None, true, None, None, None, None) => {
                     ChildApplicationResumeAction::Direct(Box::new(decision))
                 }
-                (None, Some(pipeline), true) => ChildApplicationResumeAction::Pipeline(pipeline),
-                (None, None, false) => {
+                (None, Some(pipeline), true, None, None, None, None) => {
+                    ChildApplicationResumeAction::Pipeline(pipeline)
+                }
+                (None, None, false, None, None, None, None) => {
                     ChildApplicationResumeAction::Nested(finish_resume_builders(builder.children)?)
+                }
+                (None, None, true, Some(pause), None, None, None) => {
+                    ChildApplicationResumeAction::Retained(pause)
+                }
+                (None, None, true, None, Some(resume), None, None) => {
+                    pipeline_resume_scope_ids(&resume)?;
+                    ChildApplicationResumeAction::PipelineDescendants(resume)
+                }
+                (None, None, true, None, None, Some(pause), None) => {
+                    pause.validate()?;
+                    ChildApplicationResumeAction::RetainedPipeline(pause)
+                }
+                (None, None, true, None, None, None, Some(request)) => {
+                    ChildApplicationResumeAction::PipelineStatic(request)
                 }
                 _ => return Err(unsupported_capability()),
             };
             Ok((
                 call_id,
                 ChildApplicationResume {
+                    batch_event_id: builder.batch_event_id,
                     tool_name: builder.tool_name,
                     arguments: builder.arguments,
                     ordinal: builder.ordinal,
@@ -710,6 +1392,58 @@ fn application_replay_calls(
     Ok(calls.into_iter().map(|(_, call)| call).collect())
 }
 
+fn pipeline_descendant_interrupt_ids(
+    scopes: &[PipelineApplicationScopeDecisions],
+) -> Result<BTreeSet<String>, NativeAgentAssemblyError> {
+    if scopes.is_empty() || scopes.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS {
+        return Err(invalid_configuration());
+    }
+    let mut ids = BTreeSet::new();
+    for scope in scopes {
+        if scope.decisions.is_empty()
+            || scope.decisions.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS
+        {
+            return Err(invalid_configuration());
+        }
+        for decision in &scope.decisions {
+            if !ids.insert(decision.interrupt_id().to_owned()) {
+                return Err(invalid_configuration());
+            }
+            if ids.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS {
+                return Err(resource_exhausted());
+            }
+        }
+    }
+    Ok(ids)
+}
+
+fn pipeline_resume_scope_ids(
+    resume: &PreparedPipelineToolResume,
+) -> Result<BTreeSet<String>, NativeAgentAssemblyError> {
+    if resume.static_scopes.is_empty() {
+        return pipeline_descendant_interrupt_ids(&resume.scopes);
+    }
+    if !resume.scopes.is_empty()
+        || resume.static_scopes.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS
+    {
+        return Err(invalid_configuration());
+    }
+    let mut ids = BTreeSet::new();
+    for scope in &resume.static_scopes {
+        if scope.decisions.is_empty() {
+            return Err(invalid_configuration());
+        }
+        for decision in &scope.decisions {
+            if !ids.insert(decision.pause_id().to_owned())
+                || ids.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS
+            {
+                return Err(invalid_configuration());
+            }
+        }
+    }
+    Ok(ids)
+}
+
 fn resume_interrupt_ids(
     resumes: &HashMap<String, ChildApplicationResume>,
 ) -> Result<HashSet<String>, NativeAgentAssemblyError> {
@@ -719,6 +1453,8 @@ fn resume_interrupt_ids(
     ) -> Result<(), NativeAgentAssemblyError> {
         for resume in resumes.values() {
             match &resume.action {
+                ChildApplicationResumeAction::Retained(_)
+                | ChildApplicationResumeAction::RetainedPipeline(_) => {}
                 ChildApplicationResumeAction::Direct(decision) => {
                     if !interrupt_ids.insert(decision.interrupt_id().to_owned()) {
                         return Err(invalid_configuration());
@@ -727,9 +1463,21 @@ fn resume_interrupt_ids(
                 ChildApplicationResumeAction::Nested(children) => {
                     collect(children, interrupt_ids)?;
                 }
+                ChildApplicationResumeAction::PipelineStatic(resume) => {
+                    if !interrupt_ids.insert(resume.pause_id().to_owned()) {
+                        return Err(invalid_configuration());
+                    }
+                }
                 ChildApplicationResumeAction::Pipeline(resume) => {
                     if !interrupt_ids.insert(resume.interrupt_id().to_owned()) {
                         return Err(invalid_configuration());
+                    }
+                }
+                ChildApplicationResumeAction::PipelineDescendants(resume) => {
+                    for interrupt_id in pipeline_resume_scope_ids(resume)? {
+                        if !interrupt_ids.insert(interrupt_id) {
+                            return Err(invalid_configuration());
+                        }
                     }
                 }
             }
@@ -745,77 +1493,804 @@ fn resume_interrupt_ids(
     Ok(interrupt_ids)
 }
 
-fn validate_complete_nested_decision_set(
+fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+    let live = event
+        .llm_response
+        .provider_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+    let encoded = event
+        .provider_metadata
+        .get(ADK_LLM_RESPONSE_METADATA_KEY)
+        .map(|encoded| {
+            serde_json::from_str::<LlmResponse>(encoded).map_err(|_| invalid_configuration())
+        })
+        .transpose()?;
+    let serialized = encoded
+        .as_ref()
+        .and_then(|response| response.provider_metadata.as_ref())
+        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+    let decode = |raw: Option<&Value>| {
+        raw.map(|raw| {
+            serde_json::from_value::<ApplicationReplayBatch>(raw.clone())
+                .map_err(|_| invalid_configuration())
+        })
+        .transpose()
+    };
+    let live = decode(live)?;
+    let serialized = decode(serialized)?;
+    let batch = match (live, serialized) {
+        (Some(live), Some(serialized)) if live != serialized => return Err(invalid_configuration()),
+        (Some(value), _) | (_, Some(value)) => value,
+        (None, None) => return Ok(None),
+    };
+    if batch.event_id.is_empty()
+        || batch.event_id.len() > 512
+        || batch.interrupt_ids.is_empty()
+        || batch.interrupt_ids.len() > 16
+    {
+        return Err(invalid_configuration());
+    }
+    if batch.call_ordinals.is_empty()
+        || batch.call_ordinals.len() > MAX_PARALLEL_APPLICATION_CALLS
+        || batch
+            .call_ordinals
+            .values()
+            .any(|ordinal| *ordinal == 0 || *ordinal > 16)
+        || batch
+            .call_ordinals
+            .values()
+            .copied()
+            .collect::<HashSet<_>>()
+            .len()
+            != batch.call_ordinals.len()
+    {
+        return Err(invalid_configuration());
+    }
+    Ok(Some(batch))
+}
+
+pub(super) fn original_application_batch_id(
+    event: &Event,
+) -> Result<String, NativeAgentAssemblyError> {
+    Ok(replay_batch(event)?.map_or_else(|| event.id.clone(), |batch| batch.event_id))
+}
+
+pub(super) fn application_replay_ordinal(
+    event: &Event,
+    call_id: &str,
+) -> Result<Option<usize>, NativeAgentAssemblyError> {
+    let Some(batch) = replay_batch(event)? else {
+        return Ok(None);
+    };
+    batch
+        .call_ordinals
+        .get(call_id)
+        .copied()
+        .map(Some)
+        .ok_or_else(invalid_configuration)
+}
+
+fn application_replay_batch(
+    resumes: &HashMap<String, ChildApplicationResume>,
+    interrupt_ids: &HashSet<String>,
+) -> Result<ApplicationReplayBatch, NativeAgentAssemblyError> {
+    let event_id = resumes
+        .values()
+        .next()
+        .ok_or_else(invalid_configuration)?
+        .batch_event_id
+        .clone();
+    if resumes
+        .values()
+        .any(|resume| resume.batch_event_id != event_id)
+    {
+        return Err(unsupported_capability());
+    }
+    Ok(ApplicationReplayBatch {
+        event_id,
+        interrupt_ids: interrupt_ids.iter().cloned().collect(),
+        call_ordinals: resumes
+            .iter()
+            .map(|(id, resume)| (id.clone(), resume.ordinal))
+            .collect(),
+    })
+}
+
+/// Recover results only from the original invocation or an exact, typed replay of its batch.
+fn completed_application_calls(
     events: &[Event],
-    root_event_id: &str,
-    submitted_interrupt_ids: &HashSet<String>,
-) -> Result<(), NativeAgentAssemblyError> {
-    let mut pending = HashSet::new();
+    batch_event_id: &str,
+) -> Result<HashMap<String, Value>, NativeAgentAssemblyError> {
+    let original = events
+        .iter()
+        .find(|event| event.id == batch_event_id)
+        .ok_or_else(invalid_configuration)?;
+    let calls = original.tool_calls();
+    let mut invocations = HashSet::from([original.invocation_id.clone()]);
+    for event in events {
+        if replay_batch(event)?.is_some_and(|batch| batch.event_id == batch_event_id) {
+            if event.tool_calls().iter().any(|replayed| {
+                !calls.iter().any(|call| {
+                    replayed.call_id == call.call_id
+                        && replayed.name == call.name
+                        && replayed.args == call.args
+                })
+            }) {
+                return Err(invalid_configuration());
+            }
+            invocations.insert(event.invocation_id.clone());
+        }
+    }
+    let mut results = HashMap::new();
     for event in events
         .iter()
-        .filter(|event| event.actions.tool_confirmation.is_some())
+        .filter(|event| invocations.contains(&event.invocation_id))
     {
-        let Some((container, parent)) = persisted_parent_route(event)? else {
-            continue;
-        };
-        let chain = application_call_chain_from(
-            events,
-            &event.invocation_id,
-            &container,
-            &parent,
-            &event.branch,
-        )?;
-        if chain
-            .last()
-            .is_none_or(|root_call| root_call.event_id != root_event_id)
+        for result in event.tool_results() {
+            let Some(call_id) = result.call_id else {
+                continue;
+            };
+            if calls
+                .iter()
+                .any(|call| call.call_id == Some(call_id) && call.name == result.name)
+                && (is_nested_interrupt_result(result.response)
+                    || results
+                        .insert(call_id.to_owned(), result.response.clone())
+                        .is_some())
+            {
+                return Err(invalid_configuration());
+            }
+        }
+    }
+    Ok(results)
+}
+
+fn application_resume_history(
+    events: &[Event],
+    owned_invocation_id: &str,
+) -> Result<Vec<Content>, NativeAgentAssemblyError> {
+    // Direct child resumes get a new invocation ID. Join their histories only
+    // through the same original parent call, never through a shared tool name.
+    let mut child_routes = HashMap::new();
+    for event in events {
+        if !event
+            .provider_metadata
+            .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
         {
             continue;
         }
+        let (container, parent) =
+            persisted_parent_route(event)?.ok_or_else(invalid_configuration)?;
+        let (call_event, _, _) = exact_application_call(events, &container, &parent)?;
+        let route = (original_application_batch_id(call_event)?, parent);
+        if let Some(previous) = child_routes.insert(event.invocation_id.clone(), route.clone())
+            && previous != route
+        {
+            return Err(invalid_configuration());
+        }
+    }
+    let mut invocations = HashSet::from([owned_invocation_id.to_owned()]);
+    for _ in 0..MAX_APPLICATION_HOPS {
+        let mut changed = false;
+        let routes: HashSet<_> = invocations
+            .iter()
+            .filter_map(|invocation| child_routes.get(invocation))
+            .cloned()
+            .collect();
+        for (invocation, route) in &child_routes {
+            if routes.contains(route) {
+                changed |= invocations.insert(invocation.clone());
+            }
+        }
+        for event in events {
+            let Some(batch) = replay_batch(event)? else {
+                continue;
+            };
+            let original = events
+                .iter()
+                .find(|candidate| candidate.id == batch.event_id)
+                .ok_or_else(invalid_configuration)?;
+            if invocations.contains(&original.invocation_id)
+                || invocations.contains(&event.invocation_id)
+            {
+                changed |= invocations.insert(original.invocation_id.clone());
+                changed |= invocations.insert(event.invocation_id.clone());
+            }
+        }
+        if !changed {
+            return Ok(events
+                .iter()
+                .filter(|event| invocations.contains(&event.invocation_id))
+                .filter_map(|event| event.content().cloned())
+                .collect());
+        }
+    }
+    Err(resource_exhausted())
+}
+
+#[allow(clippy::too_many_lines)] // Keep original batch lineage, retained siblings, and transient projection in one ordered path.
+fn retain_pending_nested_decisions(
+    events: &[Event],
+    root_event_id: &str,
+    submitted: &HashSet<String>,
+    builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
+    applications: &ApplicationToolPresentationCatalog,
+) -> Result<(), NativeAgentAssemblyError> {
+    let mut consumed = HashSet::new();
+    for event in events {
+        if let Some(batch) = replay_batch(event)?
+            && batch.event_id == root_event_id
+        {
+            consumed.extend(batch.interrupt_ids);
+        }
+    }
+    if !submitted.is_disjoint(&consumed) {
+        return Err(invalid_configuration());
+    }
+    let mut pending = HashSet::new();
+    let mut retained_pipelines = HashMap::new();
+    for event in events {
+        if event.actions.tool_confirmation.is_none() && pipeline_application_pending_event(event)? {
+            continue;
+        }
+        if (event.actions.tool_confirmation.is_some()
+            || (event
+                .provider_metadata
+                .contains_key(super::application_pipeline::BOUNDARY_LEDGER_KEY)
+                && static_pipeline_tool_pause(event)?.is_some()))
+            && scoped_pipeline_pending_candidate(
+                events,
+                event,
+                root_event_id,
+                &consumed,
+                &mut pending,
+                builders,
+                &mut retained_pipelines,
+            )?
+        {
+            continue;
+        }
+        let (interrupt_id, chain, pause_events) = if event.actions.tool_confirmation.is_some() {
+            let Some((container, parent)) = persisted_parent_route(event)? else {
+                continue;
+            };
+            let chain = application_call_chain_from(
+                events,
+                &event.invocation_id,
+                &container,
+                &parent,
+                &event.branch,
+            )?;
+            let (interrupt_id, pause_events) = ordinary_pause_events(events, event)?;
+            (interrupt_id, chain, pause_events)
+        } else if let Some(pause) = static_pipeline_tool_pause(event)? {
+            let (original, _, _) = exact_application_call(
+                events,
+                &pause.container_invocation_id,
+                &pause.parent_call_id,
+            )?;
+            pause.matches_original_call(original)?;
+            let chain = application_call_chain_from(
+                events,
+                &event.invocation_id,
+                &pause.container_invocation_id,
+                &pause.parent_call_id,
+                &event.branch,
+            )?;
+            (pause.pause_id, chain, vec![event.clone()])
+        } else if let Some(pause) =
+            pipeline_pause_identity(event).map_err(|_| invalid_configuration())?
+        {
+            let (call_event, call, ordinal) = exact_application_call(
+                events,
+                &pause.container_invocation_id,
+                &pause.parent_call_id,
+            )?;
+            let chain = vec![ApplicationCallHop {
+                event_id: original_application_batch_id(call_event)?,
+                ordinal: application_replay_ordinal(call_event, &pause.parent_call_id)?
+                    .unwrap_or(ordinal),
+                call_id: pause.parent_call_id,
+                tool_name: call.name.to_owned(),
+                arguments: call.args.clone(),
+                owned_invocation_id: event.invocation_id.clone(),
+            }];
+            (pause.interrupt_id, chain, vec![event.clone()])
+        } else {
+            continue;
+        };
+        if consumed.contains(&interrupt_id)
+            || chain.last().is_none_or(|hop| hop.event_id != root_event_id)
+        {
+            continue;
+        }
+        let mut completed = false;
+        for hop in &chain {
+            completed |=
+                completed_application_calls(events, &hop.event_id)?.contains_key(&hop.call_id);
+        }
+        if completed {
+            continue;
+        }
+        if !pending.insert(interrupt_id.clone()) {
+            return Err(invalid_configuration());
+        }
+        if !submitted.contains(&interrupt_id) {
+            insert_retained_pause(
+                builders,
+                &chain,
+                events,
+                applications,
+                interrupt_id,
+                pause_events,
+            )?;
+        }
+    }
+    if !submitted.is_subset(&pending) {
+        return Err(invalid_configuration());
+    }
+    for candidate in retained_pipelines.into_values() {
+        insert_retained_pipeline_candidate(builders, events, applications, &candidate)?;
+    }
+    Ok(())
+}
+
+struct RetainedPipelineCandidate {
+    chain: Vec<ApplicationCallHop>,
+    boundary: PipelineApplicationBoundary,
+    interrupt_ids: BTreeSet<String>,
+}
+
+/// Recognize exact scoped pending IDs without replaying the saved graph as a model.
+fn scoped_pipeline_pending_candidate(
+    events: &[Event],
+    event: &Event,
+    root_event_id: &str,
+    consumed: &HashSet<String>,
+    pending: &mut HashSet<String>,
+    builders: &HashMap<String, ChildApplicationResumeBuilder>,
+    retained: &mut HashMap<(String, String), RetainedPipelineCandidate>,
+) -> Result<bool, NativeAgentAssemblyError> {
+    let interrupt_id = if let Some(pause) = static_pipeline_tool_pause(event)? {
+        pause.pause_id
+    } else {
         let request = event
             .actions
             .tool_confirmation
             .as_ref()
             .ok_or_else(invalid_configuration)?;
+        let call = request
+            .function_call_id
+            .as_deref()
+            .ok_or_else(invalid_configuration)?;
+        sensitive_call_identity(
+            &event.invocation_id,
+            call,
+            &request.tool_name,
+            &request.args,
+        )
+        .map_err(|_| invalid_configuration())?
+        .0
+    };
+    if consumed.contains(&interrupt_id) {
+        return Ok(true);
+    }
+    let Some(boundary) = pipeline_application_boundary(events, event)? else {
+        return Ok(false);
+    };
+    let chain = pipeline_boundary_call_chain(events, &boundary)?;
+    if chain.last().is_none_or(|hop| hop.event_id != root_event_id) {
+        return Ok(true);
+    }
+    for hop in &chain {
+        if completed_application_calls(events, &hop.event_id)?.contains_key(&hop.call_id) {
+            return Ok(true);
+        }
+    }
+    if !pending.insert(interrupt_id.clone()) {
+        return Err(invalid_configuration());
+    }
+    let mut current = builders;
+    let mut selected = None;
+    for hop in chain.iter().rev() {
+        let Some(builder) = current.get(&hop.call_id) else {
+            selected = None;
+            break;
+        };
+        if builder.batch_event_id != hop.event_id
+            || builder.tool_name != hop.tool_name
+            || builder.arguments != hop.arguments
+            || builder.ordinal != hop.ordinal
+        {
+            return Err(invalid_configuration());
+        }
+        selected = Some(builder);
+        current = &builder.children;
+    }
+    if let Some(builder) = selected {
+        if builder.pipeline_descendants.is_none()
+            || builder.pipeline_boundary_event_id.as_deref()
+                != Some(boundary.pending_event.id.as_str())
+        {
+            return Err(unsupported_capability());
+        }
+        // The selected pipeline's scope coordinator retains untouched local ordinary children.
+        return Ok(true);
+    }
+    retain_pipeline_candidate(retained, chain, boundary, interrupt_id)?;
+    Ok(true)
+}
+
+fn retain_pipeline_candidate(
+    retained: &mut HashMap<(String, String), RetainedPipelineCandidate>,
+    chain: Vec<ApplicationCallHop>,
+    boundary: PipelineApplicationBoundary,
+    interrupt_id: String,
+) -> Result<(), NativeAgentAssemblyError> {
+    let pipeline = chain.first().ok_or_else(invalid_configuration)?;
+    let key = (pipeline.event_id.clone(), pipeline.call_id.clone());
+    if let Some(candidate) = retained.get_mut(&key) {
+        if candidate.boundary.pending_event.id != boundary.pending_event.id
+            || candidate.boundary.checkpoint_thread_id != boundary.checkpoint_thread_id
+            || candidate.chain.len() != chain.len()
+            || candidate.chain.iter().zip(&chain).any(|(left, right)| {
+                left.event_id != right.event_id
+                    || left.call_id != right.call_id
+                    || left.ordinal != right.ordinal
+                    || left.arguments != right.arguments
+                    || left.tool_name != right.tool_name
+            })
+            || !candidate.interrupt_ids.insert(interrupt_id)
+        {
+            return Err(invalid_configuration());
+        }
+        if candidate.interrupt_ids.len() > MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS {
+            return Err(resource_exhausted());
+        }
+    } else {
+        retained.insert(
+            key,
+            RetainedPipelineCandidate {
+                chain,
+                boundary,
+                interrupt_ids: BTreeSet::from([interrupt_id]),
+            },
+        );
+    }
+    Ok(())
+}
+
+fn retained_pipeline_pause(
+    events: &[Event],
+    candidate: &RetainedPipelineCandidate,
+) -> Result<RetainedPipelinePause, NativeAgentAssemblyError> {
+    let pipeline = candidate.chain.first().ok_or_else(invalid_configuration)?;
+    let (original_call, batch_event_id, ordinal) =
+        pipeline_boundary_original_call(events, &candidate.boundary)?;
+    if batch_event_id != pipeline.event_id || ordinal != pipeline.ordinal {
+        return Err(invalid_configuration());
+    }
+    let projection = retained_pipeline_application_events(
+        events,
+        &candidate.boundary,
+        &candidate.interrupt_ids,
+    )?;
+    let pause = RetainedPipelinePause {
+        schema: APPLICATION_RETAINED_PIPELINE_KEY.to_owned(),
+        batch_event_id,
+        ordinal,
+        parent_call_id: pipeline.call_id.clone(),
+        tool_name: pipeline.tool_name.clone(),
+        arguments_digest: application_arguments_digest(&pipeline.arguments)?,
+        checkpoint_thread_id: candidate.boundary.checkpoint_thread_id.clone(),
+        interrupt_ids: candidate.interrupt_ids.clone(),
+        original_call,
+        events: projection,
+    };
+    pause.validate()?;
+    Ok(pause)
+}
+
+fn insert_retained_pipeline_candidate(
+    builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
+    events: &[Event],
+    applications: &ApplicationToolPresentationCatalog,
+    candidate: &RetainedPipelineCandidate,
+) -> Result<(), NativeAgentAssemblyError> {
+    let pause = retained_pipeline_pause(events, candidate)?;
+    let mut current = builders;
+    let mut catalog = applications;
+    for (index, hop) in candidate.chain.iter().rev().enumerate() {
+        let child_catalog = catalog
+            .child_tools(&hop.tool_name)
+            .ok_or_else(invalid_configuration)?;
+        let is_pipeline = index + 1 == candidate.chain.len();
+        let history = if is_pipeline {
+            Vec::new()
+        } else {
+            let task = application_task_with_variables(&hop.arguments)?;
+            let mut history = vec![Content::new("user").with_text(task)];
+            history.extend(application_resume_history(
+                events,
+                &hop.owned_invocation_id,
+            )?);
+            history
+        };
+        let builder = pipeline_boundary_builder(current, hop, history)?;
+        if builder.decision.is_some()
+            || builder.pipeline.is_some()
+            || builder.pipeline_descendants.is_some()
+            || builder.pipeline_static.is_some()
+            || builder.retained.is_some()
+            || builder.retained_pipeline.is_some()
+        {
+            return Err(unsupported_capability());
+        }
+        if is_pipeline {
+            if !builder.children.is_empty() {
+                return Err(unsupported_capability());
+            }
+            builder.retained_pipeline = Some(Box::new(pause));
+            return Ok(());
+        }
+        current = &mut builder.children;
+        catalog = child_catalog;
+    }
+    Err(invalid_configuration())
+}
+
+/// Retain the original confirmation with its one exact model call.
+fn ordinary_pause_events(
+    events: &[Event],
+    event: &Event,
+) -> Result<(String, Vec<Event>), NativeAgentAssemblyError> {
+    let request = event
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .ok_or_else(invalid_configuration)?;
+    let call_id = request
+        .function_call_id
+        .as_deref()
+        .ok_or_else(invalid_configuration)?;
+    let (interrupt_id, _) = sensitive_call_identity(
+        &event.invocation_id,
+        call_id,
+        &request.tool_name,
+        &request.args,
+    )
+    .map_err(|_| invalid_configuration())?;
+    let mut call_events = events
+        .iter()
+        .filter(|candidate| candidate.invocation_id == event.invocation_id)
+        .filter(|candidate| {
+            candidate.tool_calls().iter().any(|call| {
+                call.call_id == Some(call_id)
+                    && call.name == request.tool_name
+                    && call.args == &request.args
+            })
+        });
+    let call_event = call_events.next().ok_or_else(invalid_configuration)?;
+    if call_events.next().is_some() {
+        return Err(invalid_configuration());
+    }
+    Ok((interrupt_id, vec![call_event.clone(), event.clone()]))
+}
+
+fn insert_retained_pause(
+    builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
+    chain: &[ApplicationCallHop],
+    events: &[Event],
+    applications: &ApplicationToolPresentationCatalog,
+    interrupt_id: String,
+    pause_events: Vec<Event>,
+) -> Result<(), NativeAgentAssemblyError> {
+    let mut current = builders;
+    let mut catalog = applications;
+    for (index, hop) in chain.iter().rev().enumerate() {
+        let child_catalog = catalog
+            .child_tools(&hop.tool_name)
+            .ok_or_else(invalid_configuration)?;
+        let task = application_task_with_variables(&hop.arguments)?;
+        let is_static_leaf = index + 1 == chain.len()
+            && pause_events
+                .last()
+                .map(static_pipeline_tool_pause)
+                .transpose()?
+                .flatten()
+                .is_some();
+        let mut history = if is_static_leaf {
+            Vec::new()
+        } else {
+            vec![Content::new("user").with_text(task)]
+        };
+        if !is_static_leaf {
+            history.extend(application_resume_history(
+                events,
+                &hop.owned_invocation_id,
+            )?);
+        }
+        let builder =
+            current
+                .entry(hop.call_id.clone())
+                .or_insert_with(|| ChildApplicationResumeBuilder {
+                    batch_event_id: hop.event_id.clone(),
+                    tool_name: hop.tool_name.clone(),
+                    arguments: hop.arguments.clone(),
+                    ordinal: hop.ordinal,
+                    owned_invocation_id: hop.owned_invocation_id.clone(),
+                    history,
+                    decision: None,
+                    children: HashMap::new(),
+                    pipeline: None,
+                    pipeline_descendants: None,
+                    pipeline_static: None,
+                    pipeline_boundary_event_id: None,
+                    retained: None,
+                    retained_pipeline: None,
+                });
+        if builder.batch_event_id != hop.event_id
+            || builder.tool_name != hop.tool_name
+            || builder.arguments != hop.arguments
+            || builder.ordinal != hop.ordinal
+            || builder.owned_invocation_id != hop.owned_invocation_id
+        {
+            return Err(invalid_configuration());
+        }
+        if index + 1 == chain.len() {
+            if builder.decision.is_some()
+                || builder.pipeline.is_some()
+                || builder.pipeline_descendants.is_some()
+                || builder.pipeline_static.is_some()
+                || builder.retained_pipeline.is_some()
+                || !builder.children.is_empty()
+                || builder
+                    .retained
+                    .replace(Box::new(RetainedApplicationPause {
+                        interrupt_id,
+                        parent_call_id: hop.call_id.clone(),
+                        events: pause_events,
+                    }))
+                    .is_some()
+            {
+                return Err(unsupported_capability());
+            }
+            return Ok(());
+        }
+        if builder.decision.is_some()
+            || builder.pipeline.is_some()
+            || builder.pipeline_descendants.is_some()
+            || builder.pipeline_static.is_some()
+            || builder.retained.is_some()
+            || builder.retained_pipeline.is_some()
+        {
+            return Err(unsupported_capability());
+        }
+        current = &mut builder.children;
+        catalog = child_catalog;
+    }
+    Err(invalid_configuration())
+}
+
+/// Reproject an untouched pause without adding another original confirmation to durable history.
+pub(super) fn retained_application_events(
+    event: &Event,
+) -> Result<Option<Vec<Event>>, NativeAgentAssemblyError> {
+    let (encoded, is_pipeline, max_bytes) = if let Some(encoded) = event
+        .provider_metadata
+        .get(APPLICATION_RETAINED_PIPELINE_KEY)
+    {
+        (encoded, true, MAX_PIPELINE_TOOL_PENDING_BYTES)
+    } else if let Some(encoded) = event.provider_metadata.get(APPLICATION_RETAINED_PAUSE_KEY) {
+        (encoded, false, MAX_RETAINED_PAUSE_BYTES)
+    } else {
+        return Ok(None);
+    };
+    if encoded.len() > max_bytes
+        || event.provider_metadata.len() != 1
+        || event.content().is_some()
+        || event.actions.tool_confirmation.is_some()
+        || event.actions.tool_confirmation_decision.is_some()
+        || !event.actions.state_delta.is_empty()
+        || !event.actions.artifact_delta.is_empty()
+        || event.actions.transfer_to_agent.is_some()
+        || event.actions.escalate
+    {
+        return Err(invalid_configuration());
+    }
+    if is_pipeline {
+        let mut pause: RetainedPipelinePause =
+            serde_json::from_str(encoded).map_err(|_| invalid_configuration())?;
+        pause.validate()?;
+        for retained in &mut pause.events {
+            rebind_pipeline_tool_boundary(retained, &event.invocation_id)?;
+        }
+        return Ok(Some(pause.events));
+    }
+    let mut pause: RetainedApplicationPause =
+        serde_json::from_str(encoded).map_err(|_| invalid_configuration())?;
+    if pause.events.is_empty()
+        || pause.events.len() > 2
+        || pause.parent_call_id.is_empty()
+        || pause.parent_call_id.len() > 512
+    {
+        return Err(invalid_configuration());
+    }
+    let confirmation = pause.events.last().ok_or_else(invalid_configuration)?;
+    let expected = if let Some(request) = &confirmation.actions.tool_confirmation {
+        if pause.events.len() != 2 {
+            return Err(invalid_configuration());
+        }
         let call_id = request
             .function_call_id
             .as_deref()
             .ok_or_else(invalid_configuration)?;
-        let (interrupt_id, _) = sensitive_call_identity(
-            &event.invocation_id,
+        let call_event = &pause.events[0];
+        if call_event.invocation_id != confirmation.invocation_id
+            || !call_event.tool_calls().iter().any(|call| {
+                call.call_id == Some(call_id)
+                    && call.name == request.tool_name
+                    && call.args == &request.args
+            })
+        {
+            return Err(invalid_configuration());
+        }
+        sensitive_call_identity(
+            &confirmation.invocation_id,
             call_id,
             &request.tool_name,
             &request.args,
         )
-        .map_err(|_| invalid_configuration())?;
-        if !pending.insert(interrupt_id) {
+        .map_err(|_| invalid_configuration())?
+        .0
+    } else {
+        if pause.events.len() != 1 {
             return Err(invalid_configuration());
         }
+        if let Some(pause) = static_pipeline_tool_pause(confirmation)? {
+            pause.pause_id
+        } else {
+            pipeline_pause_identity(confirmation)
+                .map_err(|_| invalid_configuration())?
+                .ok_or_else(invalid_configuration)?
+                .interrupt_id
+        }
+    };
+    if expected != pause.interrupt_id {
+        return Err(invalid_configuration());
     }
-    // #973: a child PIPELINE's card is a graph interrupt, so it carries no
-    // `tool_confirmation` and the scan above cannot see it. Counting it here is
-    // what keeps "every card of this pause must be answered" true when one of
-    // them belongs to a pipeline child.
+    for retained in &mut pause.events {
+        let (_, parent) = persisted_parent_route(retained)?.ok_or_else(invalid_configuration)?;
+        if parent != pause.parent_call_id {
+            return Err(invalid_configuration());
+        }
+        if static_pipeline_tool_pause(retained)?.is_some() {
+            rebind_pipeline_tool_boundary(retained, &event.invocation_id)?;
+        } else {
+            retained.provider_metadata.insert(
+                DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+                event.invocation_id.clone(),
+            );
+        }
+    }
+    Ok(Some(pause.events))
+}
+
+fn nested_resume_markers(events: &[Event]) -> Result<Vec<Content>, NativeAgentAssemblyError> {
+    let mut invocations = HashSet::new();
     for event in events {
-        let Some(pause) = pipeline_pause_identity(event).map_err(|_| invalid_configuration())?
-        else {
-            continue;
-        };
-        let (call_event, _, _) = exact_application_call(
-            events,
-            &pause.container_invocation_id,
-            &pause.parent_call_id,
-        )?;
-        if call_event.id != root_event_id {
-            continue;
-        }
-        if !pending.insert(pause.interrupt_id) {
-            return Err(invalid_configuration());
+        if replay_batch(event)?.is_some() {
+            invocations.insert(event.invocation_id.as_str());
         }
     }
-    if &pending != submitted_interrupt_ids {
-        return Err(unsupported_capability());
-    }
-    Ok(())
+    Ok(events
+        .iter()
+        .filter(|event| {
+            event.author == "user" && invocations.contains(event.invocation_id.as_str())
+        })
+        .filter_map(|event| event.content().cloned())
+        .collect())
 }
 
 fn nested_resume_user_content(interrupt_ids: &HashSet<String>) -> Content {
@@ -835,6 +2310,8 @@ struct ApplicationReplayModel {
     delegate: Arc<dyn Llm>,
     state: AtomicU8,
     calls: Vec<ApplicationReplayCall>,
+    batch: ApplicationReplayBatch,
+    previous_markers: Vec<Content>,
     replay_marker: Content,
 }
 
@@ -882,6 +2359,7 @@ impl Llm for ApplicationReplayModel {
                     }),
                     finish_reason: Some(FinishReason::Stop),
                     turn_complete: true,
+                    provider_metadata: Some(json!({APPLICATION_REPLAY_BATCH_KEY: self.batch})),
                     ..LlmResponse::default()
                 };
                 Ok(Box::pin(stream::once(async move { Ok(response) })))
@@ -900,18 +2378,12 @@ impl Llm for ApplicationReplayModel {
                     self.validate_calls(&request, ApplicationReplayState::Completed)?;
                 }
                 self.delegate
-                    .generate_content(
-                        super::replay_history::model_continuation(request, &self.replay_marker)?,
-                        stream_response,
-                    )
+                    .generate_content(self.model_continuation(request)?, stream_response)
                     .await
             }
             Err(_) => {
                 self.delegate
-                    .generate_content(
-                        super::replay_history::model_continuation(request, &self.replay_marker)?,
-                        stream_response,
-                    )
+                    .generate_content(self.model_continuation(request)?, stream_response)
                     .await
             }
         }
@@ -919,6 +2391,16 @@ impl Llm for ApplicationReplayModel {
 }
 
 impl ApplicationReplayModel {
+    fn model_continuation(&self, mut request: LlmRequest) -> adk_rust::Result<LlmRequest> {
+        request.contents.retain(|content| {
+            !self
+                .previous_markers
+                .iter()
+                .any(|marker| content.role == marker.role && content.parts == marker.parts)
+        });
+        super::replay_history::model_continuation(request, &self.replay_marker)
+    }
+
     fn validate_calls(
         &self,
         request: &LlmRequest,
@@ -1003,6 +2485,7 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     /// pipeline children — the pipeline PARENT is exactly that caller, because
     /// it owns its pipeline participants itself through its graph.
     conversation_thread_id: Option<String>,
+    materialization: ApplicationMaterializationPath,
 }
 
 impl<'a> ApplicationToolDependencies<'a> {
@@ -1023,6 +2506,7 @@ impl<'a> ApplicationToolDependencies<'a> {
             resume: None,
             model_scopes: None,
             conversation_thread_id: None,
+            materialization: ApplicationMaterializationPath::default(),
         }
     }
 
@@ -1039,6 +2523,11 @@ impl<'a> ApplicationToolDependencies<'a> {
         self
     }
 
+    pub(super) fn with_materialization(mut self, path: ApplicationMaterializationPath) -> Self {
+        self.materialization = path;
+        self
+    }
+
     /// Admit saved PIPELINE children, namespaced under this conversation's
     /// durable thread (#973).
     #[must_use]
@@ -1052,6 +2541,7 @@ impl<'a> ApplicationToolDependencies<'a> {
 pub(crate) struct MaterializedApplicationTool {
     pub(crate) alias: String,
     pub(crate) agent_type: String,
+    pub(crate) saved_agent_fingerprint: Option<SavedAgentFingerprint>,
     model_name: String,
     child_tools: ApplicationToolPresentationCatalog,
     sensitive_tools: SensitiveToolCatalog,
@@ -1061,6 +2551,7 @@ pub(crate) struct MaterializedApplicationTool {
 }
 
 struct BuiltApplication {
+    saved_agent_fingerprint: Option<SavedAgentFingerprint>,
     instruction_template: String,
     variables: super::variables::AgentCallVariables,
     agent: Arc<LazyNestedAgent>,
@@ -1255,7 +2746,7 @@ async fn materialize_pipeline_children(
             runtime_context,
             Arc::clone(&elitea_context),
             Arc::clone(&dependencies.model_facade),
-            dependencies.mcp_connector.as_ref(),
+            &dependencies.mcp_connector,
             dependencies.mcp_tokens,
             Arc::clone(&dependencies.policy),
             fallback_profile,
@@ -1267,9 +2758,11 @@ async fn materialize_pipeline_children(
                 .clone()
                 .ok_or_else(invalid_configuration)?,
             dependencies.code.clone(),
+            conversation_thread_id.clone(),
+            dependencies.materialization.clone(),
         )
         .await;
-        let (definition, runtimes) = match built {
+        let (definition, runtimes, child_tools) = match built {
             Ok(built) => built,
             Err(error) => {
                 tracing::warn!(
@@ -1303,10 +2796,11 @@ async fn materialize_pipeline_children(
         tools.push(MaterializedApplicationTool {
             alias: reference.alias,
             agent_type: "pipeline".to_owned(),
+            saved_agent_fingerprint: None,
             // The child graph owns its own per-node models; the presentation
             // label names what the parent delegated to, not one model.
             model_name: "pipeline".to_owned(),
-            child_tools: ApplicationToolPresentationCatalog::default(),
+            child_tools,
             sensitive_tools: SensitiveToolCatalog::default(),
             delegated_authorization: DelegatedAuthorizationCatalog::default(),
             internal_tools: InternalToolCatalog::default(),
@@ -1353,6 +2847,9 @@ pub(crate) async fn materialize_application_tools(
         event_sender: dependencies.event_sender,
         resume: dependencies.resume,
         model_scopes: dependencies.model_scopes,
+        code: dependencies.code,
+        conversation_thread_id: dependencies.conversation_thread_id,
+        materialization: dependencies.materialization,
     };
     let mut tools = Vec::with_capacity(references.len());
     for reference in references {
@@ -1363,6 +2860,7 @@ pub(crate) async fn materialize_application_tools(
         tools.push(MaterializedApplicationTool {
             alias,
             agent_type,
+            saved_agent_fingerprint: application.saved_agent_fingerprint,
             model_name: application.model_name.clone(),
             child_tools: application.child_tools.clone(),
             sensitive_tools: application.sensitive_tools.clone(),
@@ -1394,6 +2892,9 @@ struct ApplicationAssemblyState<'a> {
     event_sender: Option<ApplicationEventSender>,
     resume: Option<ApplicationResumeCoordinator>,
     model_scopes: Option<ModelScopeSessions>,
+    code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
+    conversation_thread_id: Option<String>,
+    materialization: ApplicationMaterializationPath,
 }
 
 impl ApplicationAssemblyState<'_> {
@@ -1428,6 +2929,7 @@ impl ApplicationAssemblyState<'_> {
                 }) {
                     return Err(invalid_configuration());
                 }
+                let next_path = self.materialization.enter_agent(identity)?;
                 if let Some(application) = self.applications.get(&identity) {
                     tracing::Span::current().record("cache_hit", true);
                     return Ok(application.clone());
@@ -1437,7 +2939,9 @@ impl ApplicationAssemblyState<'_> {
                     return Err(invalid_configuration());
                 }
                 tracing::Span::current().record("stage", "resolve_version");
+                let parent_path = std::mem::replace(&mut self.materialization, next_path);
                 let result = self.build_uncached(reference, tier).await;
+                self.materialization = parent_path;
                 self.resolving.remove(&identity);
                 if let Ok(application) = &result {
                     self.applications.insert(identity, application.clone());
@@ -1473,7 +2977,9 @@ impl ApplicationAssemblyState<'_> {
             )
             .await
             .map_err(NativeAgentAssemblyError::from)?;
+        let saved_agent_fingerprint = loaded.saved_agent_fingerprint();
         let version = loaded.into_version_details();
+        self.materialization.admit_version(&version)?;
         let profile = OrdinaryNoToolProfile::from_nested_version(&version, self.fallback_profile)?;
         let frozen = FrozenToolSnapshot::from_version_details(&version)
             .map_err(snapshot_error)?
@@ -1500,9 +3006,17 @@ impl ApplicationAssemblyState<'_> {
             && sensitive_tools.is_empty()
             && delegated_authorization.is_empty()
             && internal_tools.is_empty();
+        let pipeline_children = self
+            .materialize_nested_pipeline_children(&frozen, &profile)
+            .await?;
         let mut reserved_toolsets = BTreeSet::from([ASK_USER_TOOLSET_NAME.to_owned()]);
         let (nested_toolset, child_tools) = self
-            .build_nested_toolset(nested_references, reference.identity, tier)
+            .build_nested_toolset(
+                nested_references,
+                pipeline_children,
+                reference.identity,
+                tier,
+            )
             .await?;
         if let Some(nested_toolset) = nested_toolset {
             reserved_toolsets.insert(nested_toolset.name().to_owned());
@@ -1543,6 +3057,7 @@ impl ApplicationAssemblyState<'_> {
                 .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
         });
         Ok(Arc::new(BuiltApplication {
+            saved_agent_fingerprint,
             instruction_template: version
                 .get("instructions")
                 .and_then(Value::as_str)
@@ -1558,19 +3073,63 @@ impl ApplicationAssemblyState<'_> {
         }))
     }
 
+    async fn materialize_nested_pipeline_children(
+        &self,
+        frozen: &AdmittedToolSnapshot<'_>,
+        profile: &OrdinaryNoToolProfile,
+    ) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
+        if !self.materialization.scoped_ready() {
+            return Ok(Vec::new());
+        }
+        if self.conversation_thread_id.is_none()
+            && !pipeline_child_references(frozen, None).is_empty()
+        {
+            return Err(invalid_configuration());
+        }
+        let dependencies = ApplicationToolDependencies {
+            code: self.code.clone(),
+            model_facade: self.model_facade.clone(),
+            policy: self.policy.clone(),
+            mcp_connector: self.mcp_connector.clone(),
+            mcp_tokens: self.mcp_tokens,
+            event_sender: self.event_sender.clone(),
+            resume: self.resume.clone(),
+            model_scopes: self.model_scopes.clone(),
+            conversation_thread_id: self.conversation_thread_id.clone(),
+            materialization: self.materialization.clone(),
+        };
+        let built = materialize_pipeline_children(
+            frozen,
+            self.platform,
+            self.runtime_context,
+            self.elitea_context.clone(),
+            profile,
+            &dependencies,
+            None,
+        )
+        .await?;
+        // Scoped projection must contain every frozen pipeline attachment.
+        if !built.skipped.is_empty() {
+            return Err(unsupported_capability());
+        }
+        Ok(built.tools)
+    }
+
     async fn build_nested_toolset(
         &mut self,
         references: Vec<ApplicationReference>,
+        pipeline_children: Vec<MaterializedApplicationTool>,
         parent_identity: ApplicationIdentity,
         tier: usize,
     ) -> Result<
         (Option<Arc<dyn Toolset>>, ApplicationToolPresentationCatalog),
         NativeAgentAssemblyError,
     > {
-        if references.is_empty() {
+        if references.is_empty() && pipeline_children.is_empty() {
             return Ok((None, ApplicationToolPresentationCatalog::default()));
         }
-        let mut tools: Vec<Arc<dyn Tool>> = Vec::with_capacity(references.len());
+        let mut tools: Vec<Arc<dyn Tool>> =
+            Vec::with_capacity(references.len() + pipeline_children.len());
         let mut presentations = ApplicationToolPresentationCatalog::default();
         for reference in references {
             let identity = reference.identity;
@@ -1598,6 +3157,23 @@ impl ApplicationAssemblyState<'_> {
                 )
                 .map_err(|_| invalid_configuration())?;
             tools.push(tool);
+        }
+        for entry in pipeline_children {
+            presentations
+                .insert_runtime(
+                    entry.tool.name().to_owned(),
+                    entry.alias,
+                    entry.agent_type,
+                    entry.model_name,
+                    entry.child_tools,
+                    ApplicationToolGuardCatalogs::new(
+                        entry.sensitive_tools,
+                        entry.delegated_authorization,
+                        entry.internal_tools,
+                    ),
+                )
+                .map_err(|_| invalid_configuration())?;
+            tools.push(entry.tool);
         }
         let name = format!("elitea_nested_{}_{}", parent_identity.0, parent_identity.1);
         Ok((
@@ -2061,7 +3637,13 @@ impl LazyNestedAgent {
             // A pipeline continuation cannot reach an AGENT child: the two are
             // built by different materializers and keyed by different tools, so
             // arriving here means the resume was routed to the wrong child.
-            ChildApplicationResumeAction::Pipeline(_) => Err(application_event_channel_error()),
+            ChildApplicationResumeAction::Pipeline(_)
+            | ChildApplicationResumeAction::PipelineStatic(_)
+            | ChildApplicationResumeAction::PipelineDescendants(_)
+            | ChildApplicationResumeAction::Retained(_)
+            | ChildApplicationResumeAction::RetainedPipeline(_) => {
+                Err(application_event_channel_error())
+            }
             ChildApplicationResumeAction::Direct(decision) => {
                 let mut authorization = self.delegated_authorization.clone();
                 decision.restore_authorization_scope(&mut authorization);
@@ -2094,12 +3676,16 @@ impl LazyNestedAgent {
                 let interrupt_ids =
                     resume_interrupt_ids(&children).map_err(nested_resume_execution_error)?;
                 let user_content = nested_resume_user_content(&interrupt_ids);
+                let batch = application_replay_batch(&children, &interrupt_ids)
+                    .map_err(nested_resume_execution_error)?;
                 let bound = self.bind_model()?;
                 let checkpoint = self.context_checkpoint(&bound, Some(user_content.clone()))?;
                 let model: Arc<dyn Llm> = Arc::new(ApplicationReplayModel {
                     delegate: bound.provider_model(),
                     state: AtomicU8::new(REPLAY_APPLICATIONS_PENDING),
                     calls,
+                    batch,
+                    previous_markers: Vec::new(),
                     replay_marker: user_content.clone(),
                 });
                 Ok(PreparedChildApplicationResume {
@@ -2267,6 +3853,18 @@ impl ApplicationAgentTool {
             }
             None => None,
         };
+        if let Some(resume) = &resume
+            && let Some(result) = resume
+                .retained_result(
+                    ctx.as_ref(),
+                    self.name(),
+                    &arguments,
+                    self.event_sender.as_ref(),
+                )
+                .await?
+        {
+            return Ok(result);
+        }
         let (agent, content, run_config, history, children) = match resume {
             Some(resume) if resume.tool_name == self.name() && resume.arguments == arguments => {
                 let prepared =
@@ -2375,6 +3973,12 @@ impl ApplicationAgentTool {
                     .write()
                     .map_err(|_| application_event_channel_error())?
                     .extend(event.actions.state_delta.clone());
+            }
+            if let Some(coordinator) = &self.resume {
+                coordinator
+                    .observe_call_lineage(&event)
+                    .await
+                    .map_err(|_| application_event_channel_error())?;
             }
             application_batch.observe_calls(&event, &self.application.child_tools)?;
             if event.llm_response.interrupted || event.actions.tool_confirmation.is_some() {
@@ -2511,9 +4115,9 @@ pub(super) fn child_failure_report(
         safe_message.to_owned()
     };
     let recovery = match kind {
-        RuntimeFailureKind::ModelAccessDenied | RuntimeFailureKind::ModelBudgetExhausted => {
-            "ask_administrator"
-        }
+        RuntimeFailureKind::ModelAccessDenied
+        | RuntimeFailureKind::ModelBudgetExhausted
+        | RuntimeFailureKind::CodePreparationUnconfirmed => "ask_administrator",
         _ if retryable => "verify_before_retry",
         _ => "revise_task",
     };
@@ -2705,6 +4309,7 @@ fn is_nested_interrupt_result(value: &Value) -> bool {
 }
 
 pub(crate) struct ApplicationEventStreamingAgent {
+    lineage: Option<ApplicationResumeCoordinator>,
     inner: Arc<dyn Agent>,
     events: ApplicationEventReceiver,
     applications: ApplicationToolPresentationCatalog,
@@ -2721,7 +4326,15 @@ impl ApplicationEventStreamingAgent {
             inner,
             events,
             applications,
+            lineage: None,
         }
+    }
+    pub(crate) fn with_call_lineage(
+        mut self,
+        lineage: Option<ApplicationResumeCoordinator>,
+    ) -> Self {
+        self.lineage = lineage;
+        self
     }
 }
 
@@ -2753,6 +4366,7 @@ impl Agent for ApplicationEventStreamingAgent {
         });
         let mut root_events = self.inner.run(root_ctx).await?;
         let applications = self.applications.clone();
+        let lineage = self.lineage.clone();
         let stream = async_stream::stream! {
             let mut application_batch = ApplicationCallBatch::default();
             loop {
@@ -2793,6 +4407,9 @@ impl Agent for ApplicationEventStreamingAgent {
                                 yield Err(application_event_channel_error());
                                 return;
                             }
+                            if let Some(coordinator)=&lineage
+                                && coordinator.observe_call_lineage(&event).await.is_err() {yield Err(application_event_channel_error());return;}
+
                             if let Err(error) = application_batch.observe_calls(&event, &applications) {
                                 yield Err(error);
                                 return;
@@ -2943,6 +4560,7 @@ impl InvocationContext for ApplicationRootInvocationContext {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep original batch lineage, retained siblings, and transient projection in one ordered path.
 pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_rust::Result<Event> {
     match signal {
         ApplicationEventSignal::ContainerEvent(event) => {
@@ -2956,6 +4574,68 @@ pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_ru
             {
                 return Err(application_event_channel_error());
             }
+            Ok(event)
+        }
+        ApplicationEventSignal::GraphDescendant {
+            root_container_invocation_id,
+            root_parent_call_id,
+            root_checkpoint_thread_id,
+            catalog,
+            lineage,
+            event,
+        } => {
+            let mut event = *event;
+            let checkpoint_thread = match event
+                .provider_metadata
+                .get(DESCENDANT_CHECKPOINT_THREAD_KEY)
+            {
+                Some(thread) => thread.clone(),
+                None => super::pipeline::scoped_applications::checkpoint_thread_for_event(
+                    &root_checkpoint_thread_id,
+                    &catalog,
+                    &event,
+                )
+                .map_err(|_| application_event_channel_error())?
+                .ok_or_else(application_event_channel_error)?,
+            };
+            let admitted = if checkpoint_thread == root_checkpoint_thread_id {
+                catalog.root.is_some()
+            } else {
+                checkpoint_thread
+                    .strip_prefix(&format!("{root_checkpoint_thread_id}/"))
+                    .is_some_and(|path| catalog.descendants.contains_key(path))
+            };
+            let has_inner_boundary = event
+                .provider_metadata
+                .contains_key(super::events::PIPELINE_TOOL_BOUNDARY_METADATA_KEY);
+            if has_inner_boundary {
+                super::application_pipeline::append_outer_boundary(
+                    &mut event,
+                    &root_container_invocation_id,
+                    &root_parent_call_id,
+                    &root_checkpoint_thread_id,
+                    lineage.ok_or_else(application_event_channel_error)?,
+                    &catalog,
+                )
+                .map_err(|_| application_event_channel_error())?;
+                return Ok(event);
+            }
+            if !admitted
+                || !event
+                    .provider_metadata
+                    .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
+                || !event
+                    .provider_metadata
+                    .contains_key(DESCENDANT_PARENT_CALL_KEY)
+            {
+                return Err(application_event_channel_error());
+            }
+            stamp_pipeline_tool_boundary(
+                &mut event,
+                &root_container_invocation_id,
+                &root_parent_call_id,
+                &root_checkpoint_thread_id,
+            )?;
             Ok(event)
         }
         ApplicationEventSignal::Event {
@@ -2985,6 +4665,22 @@ pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_ru
                 .provider_metadata
                 .insert(DESCENDANT_PARENT_CALL_KEY.to_owned(), parent_call_id);
             if let Some(checkpoint_thread_id) = checkpoint_thread_id {
+                let container = event
+                    .provider_metadata
+                    .get(DESCENDANT_CONTAINER_INVOCATION_KEY)
+                    .cloned()
+                    .ok_or_else(application_event_channel_error)?;
+                let parent = event
+                    .provider_metadata
+                    .get(DESCENDANT_PARENT_CALL_KEY)
+                    .cloned()
+                    .ok_or_else(application_event_channel_error)?;
+                stamp_pipeline_tool_boundary(
+                    &mut event,
+                    &container,
+                    &parent,
+                    &checkpoint_thread_id,
+                )?;
                 event.provider_metadata.insert(
                     DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
                     checkpoint_thread_id,
@@ -3005,6 +4701,35 @@ pub(super) fn application_signal_event(signal: ApplicationEventSignal) -> adk_ru
             "child model execution failed",
         )),
     }
+}
+
+fn stamp_pipeline_tool_boundary(
+    event: &mut Event,
+    container: &str,
+    call: &str,
+    thread: &str,
+) -> adk_rust::Result<()> {
+    use super::events::PIPELINE_TOOL_BOUNDARY_METADATA_KEY;
+    if [container, call, thread]
+        .iter()
+        .any(|value| value.is_empty() || value.len() > 1024 || value.chars().any(char::is_control))
+        || event
+            .provider_metadata
+            .contains_key(PIPELINE_TOOL_BOUNDARY_METADATA_KEY)
+    {
+        return Err(application_event_channel_error());
+    }
+    let raw =
+        json!({"schema":"elitea.pipeline.tool-boundary.v1", "container_invocation_id":container,
+        "parent_call_id":call,"checkpoint_thread_id":thread})
+        .to_string();
+    if raw.len() > 4096 {
+        return Err(application_event_channel_error());
+    }
+    event
+        .provider_metadata
+        .insert(PIPELINE_TOOL_BOUNDARY_METADATA_KEY.to_owned(), raw);
+    Ok(())
 }
 
 fn pipeline_application_container(
@@ -3505,6 +5230,178 @@ fn resource_exhausted() -> NativeAgentAssemblyError {
 mod tests {
     use super::*;
 
+    // These fixtures exercise only the retained envelope's local integrity checks.
+    // Typed checkpoint-family/scope validation is separately required before projection.
+    fn retained_pipeline_shape_fixture() -> RetainedPipelinePause {
+        let original_call = application_call_event(
+            "pipeline-batch",
+            "parent-invocation",
+            APPLICATION_BRANCH_ROOT,
+            "pipeline-call",
+            "elitea_agent_41_v_51",
+        );
+        RetainedPipelinePause {
+            schema: APPLICATION_RETAINED_PIPELINE_KEY.to_owned(),
+            batch_event_id: original_call.id.clone(),
+            ordinal: 1,
+            parent_call_id: "pipeline-call".to_owned(),
+            tool_name: "elitea_agent_41_v_51".to_owned(),
+            arguments_digest: application_arguments_digest(original_call.tool_calls()[0].args)
+                .unwrap(),
+            checkpoint_thread_id: "pipeline-thread".to_owned(),
+            interrupt_ids: BTreeSet::from(["interrupt-one".to_owned(), "interrupt-two".to_owned()]),
+            original_call,
+            events: vec![Event::with_id("scope-event", "scope-invocation")],
+        }
+    }
+
+    fn retained_pipeline_probe_resume() -> ChildApplicationResume {
+        let pause = retained_pipeline_shape_fixture();
+        ChildApplicationResume {
+            batch_event_id: pause.batch_event_id.clone(),
+            tool_name: pause.tool_name.clone(),
+            arguments: pause.original_call.tool_calls()[0].args.clone(),
+            ordinal: pause.ordinal,
+            history: Vec::new(),
+            action: ChildApplicationResumeAction::RetainedPipeline(Box::new(pause)),
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_pipeline_resume_probe_keeps_exact_parent_route_without_consuming() {
+        let coordinator = ApplicationResumeCoordinator::default();
+        coordinator
+            .install_root(HashMap::from([(
+                "pipeline-call".to_owned(),
+                retained_pipeline_probe_resume(),
+            )]))
+            .await
+            .unwrap();
+        coordinator
+            .install_children(
+                "nested-owner".to_owned(),
+                HashMap::from([("nested-call".to_owned(), retained_pipeline_probe_resume())]),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !coordinator
+                .has_resume("nested-owner", "pipeline-call")
+                .await
+        );
+        assert!(coordinator.has_resume("nested-owner", "nested-call").await);
+        assert!(coordinator.has_resume("nested-owner", "nested-call").await);
+        assert!(coordinator.has_resume("root-owner", "pipeline-call").await);
+        assert!(coordinator.has_resume("root-owner", "pipeline-call").await);
+        assert!(
+            coordinator
+                .take("root-owner", "pipeline-call")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(!coordinator.has_resume("root-owner", "pipeline-call").await);
+        assert!(coordinator.has_resume("nested-owner", "nested-call").await);
+    }
+
+    #[test]
+    fn retained_pipeline_shape_keeps_original_batch_arguments_and_ordinal() {
+        let pause = retained_pipeline_shape_fixture();
+        pause.validate_basic().unwrap();
+        // A structurally valid local fixture has no checkpoint family authority.
+        assert!(pause.validate().is_err());
+
+        let mut edited_args = retained_pipeline_shape_fixture();
+        edited_args.arguments_digest =
+            application_arguments_digest(&json!({"task":"changed"})).unwrap();
+        assert!(edited_args.validate_basic().is_err());
+        let mut edited_ordinal = retained_pipeline_shape_fixture();
+        edited_ordinal.ordinal = 2;
+        assert!(edited_ordinal.validate_basic().is_err());
+        let mut edited_batch = retained_pipeline_shape_fixture();
+        edited_batch.batch_event_id = "other-batch".to_owned();
+        assert!(edited_batch.validate_basic().is_err());
+        let mut projected_proof = retained_pipeline_shape_fixture();
+        projected_proof
+            .events
+            .push(projected_proof.original_call.clone());
+        assert!(projected_proof.validate_basic().is_err());
+    }
+
+    #[test]
+    fn retained_pipeline_codec_denies_duplicate_leaf_ids_and_v1_payload_confusion() {
+        let mut encoded = serde_json::to_value(retained_pipeline_shape_fixture()).unwrap();
+        encoded["interrupt_ids"] = json!(["interrupt-one", "interrupt-one"]);
+        assert!(serde_json::from_value::<RetainedPipelinePause>(encoded).is_err());
+        let pipeline_encoded = serde_json::to_string(&retained_pipeline_shape_fixture()).unwrap();
+        assert!(serde_json::from_str::<RetainedApplicationPause>(&pipeline_encoded).is_err());
+        let ordinary = RetainedApplicationPause {
+            interrupt_id: "interrupt-one".to_owned(),
+            parent_call_id: "pipeline-call".to_owned(),
+            events: vec![Event::with_id(
+                "ordinary-confirmation",
+                "ordinary-invocation",
+            )],
+        };
+        assert!(
+            serde_json::from_value::<RetainedPipelinePause>(
+                serde_json::to_value(ordinary).unwrap(),
+            )
+            .is_err()
+        );
+        let mut mixed = Event::new("replay-container");
+        mixed.provider_metadata.insert(
+            APPLICATION_RETAINED_PIPELINE_KEY.to_owned(),
+            pipeline_encoded,
+        );
+        mixed
+            .provider_metadata
+            .insert(APPLICATION_RETAINED_PAUSE_KEY.to_owned(), "{}".to_owned());
+        assert!(retained_application_events(&mixed).is_err());
+    }
+
+    #[test]
+    fn retained_pipeline_shape_excludes_completed_results_and_duplicate_events() {
+        let mut completed = retained_pipeline_shape_fixture();
+        completed.events[0].llm_response.content = Some(Content {
+            role: "tool".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_rust::FunctionResponseData::new(
+                    "completed-tool",
+                    json!({"response":"already done"}),
+                ),
+                id: Some("completed-call".to_owned()),
+                annotations: None,
+            }],
+        });
+        assert!(completed.validate_basic().is_err());
+        let mut duplicate = retained_pipeline_shape_fixture();
+        duplicate.events.push(duplicate.events[0].clone());
+        assert!(duplicate.validate_basic().is_err());
+    }
+
+    #[test]
+    fn retained_pipeline_shape_enforces_combined_proof_and_family_bounds() {
+        let mut oversized = retained_pipeline_shape_fixture();
+        oversized.events[0].provider_metadata.insert(
+            "bounded-family-fixture".to_owned(),
+            "x".repeat(MAX_PIPELINE_TOOL_PENDING_BYTES),
+        );
+        assert!(oversized.validate_basic().is_err());
+        let mut too_many = retained_pipeline_shape_fixture();
+        too_many.events = (0..=MAX_RETAINED_PIPELINE_EVENTS)
+            .map(|index| Event::with_id(format!("event-{index}"), "scope-invocation"))
+            .collect();
+        assert!(too_many.validate_basic().is_err());
+        let mut too_many_ids = serde_json::to_value(retained_pipeline_shape_fixture()).unwrap();
+        too_many_ids["interrupt_ids"] = json!(
+            (0..=MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS)
+                .map(|index| format!("interrupt-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert!(serde_json::from_value::<RetainedPipelinePause>(too_many_ids).is_err());
+    }
+
     #[test]
     fn child_resume_task_accepts_bounded_variable_arguments_but_pipeline_api_stays_task_only() {
         let args = json!({"task":"continue", "audience":"operators"});
@@ -3758,5 +5655,57 @@ mod tests {
             error.code(),
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         );
+    }
+}
+
+#[cfg(test)]
+mod pipeline_call_lineage_transport_tests {
+    use super::*;
+    #[test]
+    fn same_bounded_replay_receipt_survives_descendant_transport_and_mismatches_fail_closed() {
+        let batch = ApplicationReplayBatch {
+            event_id: "original-batch".to_owned(),
+            interrupt_ids: BTreeSet::from(["leaf-1".to_owned()]),
+            call_ordinals: BTreeMap::from([("call-1".to_owned(), 2)]),
+        };
+        let mut event = Event::new("replay-runtime");
+        event.llm_response.provider_metadata = Some(
+            json!({"elitea.application.replay_batch.v1":serde_json::to_value(&batch).unwrap()}),
+        );
+        assert_eq!(
+            original_application_batch_id(&event).unwrap(),
+            "original-batch"
+        );
+        assert_eq!(
+            application_replay_ordinal(&event, "call-1").unwrap(),
+            Some(2)
+        );
+        event.provider_metadata.insert(
+            ADK_LLM_RESPONSE_METADATA_KEY.to_owned(),
+            serde_json::to_string(&event.llm_response).unwrap(),
+        );
+        assert_eq!(
+            original_application_batch_id(&event).unwrap(),
+            "original-batch"
+        );
+        let mut changed = event.llm_response.clone();
+        changed.provider_metadata.as_mut().unwrap()[APPLICATION_REPLAY_BATCH_KEY]["event_id"] =
+            json!("changed");
+        event.provider_metadata.insert(
+            ADK_LLM_RESPONSE_METADATA_KEY.to_owned(),
+            serde_json::to_string(&changed).unwrap(),
+        );
+        assert!(original_application_batch_id(&event).is_err());
+        event.provider_metadata.insert(
+            ADK_LLM_RESPONSE_METADATA_KEY.to_owned(),
+            "malformed".to_owned(),
+        );
+        assert!(original_application_batch_id(&event).is_err());
+        event
+            .provider_metadata
+            .remove(ADK_LLM_RESPONSE_METADATA_KEY);
+        event.llm_response.provider_metadata.as_mut().unwrap()[APPLICATION_REPLAY_BATCH_KEY]["call_ordinals"]
+            ["call-1"] = json!(0);
+        assert!(original_application_batch_id(&event).is_err());
     }
 }

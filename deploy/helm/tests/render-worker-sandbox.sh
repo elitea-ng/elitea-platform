@@ -16,6 +16,12 @@ worker:
         image_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         policy_revision: python-js-v1
         timeout_seconds: 120
+        preparation:
+          target: elitea-sandbox-preparation:9448
+          audience: dns:elitea-sandbox-preparation
+          image_digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          policy_revision: python-preparation-v1
+          timeout_seconds: 120
       - language: rust
         target: sandbox-rust:9447
         audience: dns:sandbox-rust
@@ -34,6 +40,8 @@ import json,sys,yaml
 config=json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
 values=yaml.safe_load(open(sys.argv[2]))['worker']['runtime']
 assert config['sandbox_runtimes']==values['sandboxRuntimes']
+assert config['sandbox_runtimes'][0]['preparation']==values['sandboxRuntimes'][0]['preparation']
+assert 'preparation' not in config['sandbox_runtimes'][1]
 assert config['agent_model_checkpoint_recovery'] is True
 assert config['consumer_id'].endswith('__ELITEA_POD_NAME__')
 PY

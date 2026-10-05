@@ -1,0 +1,80 @@
+syntax = "proto3";
+package elitea.runtime.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+// Logical contract for the bounded per-job binary bridge. No new RPC service.
+// The JSON header mapping and byte frame rules are fixed in the companion schema.
+enum CodePlatformOperationV1 {
+  CODE_PLATFORM_OPERATION_V1_UNSPECIFIED = 0;
+  CODE_PLATFORM_OPERATION_V1_APPLICATION_LIST = 1;
+  CODE_PLATFORM_OPERATION_V1_APPLICATION_GET = 2;
+  CODE_PLATFORM_OPERATION_V1_APPLICATION_VERSION_GET = 3;
+  CODE_PLATFORM_OPERATION_V1_USER_GET = 4;
+  CODE_PLATFORM_OPERATION_V1_TOOLKIT_LIST = 5;
+  CODE_PLATFORM_OPERATION_V1_TOOLKIT_CALL = 6;
+  CODE_PLATFORM_OPERATION_V1_SECRET_READ = 7;
+  CODE_PLATFORM_OPERATION_V1_BUCKET_EXISTS = 8;
+  CODE_PLATFORM_OPERATION_V1_BUCKET_CREATE = 9;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_LIST = 10;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_HEAD = 11;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_READ = 12;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_READ_CHUNK = 13;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_WRITE_BEGIN = 14;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_WRITE_CHUNK = 15;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_WRITE_COMMIT = 16;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_APPEND = 17;
+  CODE_PLATFORM_OPERATION_V1_ARTIFACT_DELETE = 18;
+}
+enum CodePlatformReceiptStateV1 {
+  CODE_PLATFORM_RECEIPT_STATE_V1_UNSPECIFIED = 0;
+  CODE_PLATFORM_RECEIPT_STATE_V1_PREPARED = 1;
+  CODE_PLATFORM_RECEIPT_STATE_V1_DISPATCHING = 2;
+  CODE_PLATFORM_RECEIPT_STATE_V1_UNCERTAIN = 3;
+  CODE_PLATFORM_RECEIPT_STATE_V1_COMMITTED = 4;
+}
+message CodePlatformJobBindingV1 {
+  uint32 revision = 1;
+  bytes activation_sha256 = 2;
+  bytes prepared_request_sha256 = 3;
+  bytes policy_sha256 = 4;
+  string retained_runtime_id = 5;
+}
+message CodePlatformCallV1 {
+  uint32 revision = 1;
+  uint64 sequence = 2;
+  CodePlatformOperationV1 operation = 3;
+  bytes exact_resource_json = 4;
+  bytes exact_arguments_json = 5;
+  bytes binary_payload = 6;
+}
+message CodePlatformEffectReceiptV1 {
+  bytes effect_sha256 = 1;
+  bytes call_sha256 = 2;
+  uint64 sequence = 3;
+  CodePlatformReceiptStateV1 state = 4;
+  string encrypted_response_reference = 5;
+  bytes response_sha256 = 6;
+  string owner_receipt = 7;
+}
+
+// POST /runtime/content/executions/{executionID}/generations/{generation}/code-platform/step.
+// Authenticated ContentClaim supplies executing authority. These are selectors only.
+// JSON uses exact lowercase strings and required-nullable effect_id, not Proto bytes.
+message CodePlatformStepRequestV1 {
+  string schema = 1; // elitea.runtime.code-platform-step-request.v1
+  uint32 revision = 2; // 1
+  string dispatch_activation = 3; // exact 64 lowercase hex
+  string prepared_request_fingerprint = 4; // existing domain/length/exact prepared fingerprint
+}
+enum CodePlatformStepDispositionV1 {
+  CODE_PLATFORM_STEP_DISPOSITION_V1_UNSPECIFIED = 0;
+  CODE_PLATFORM_STEP_DISPOSITION_V1_IDLE = 1;
+  CODE_PLATFORM_STEP_DISPOSITION_V1_COMMITTED = 2;
+  CODE_PLATFORM_STEP_DISPOSITION_V1_UNKNOWN = 3;
+}
+message CodePlatformStepResponseV1 {
+  string schema = 1; // elitea.runtime.code-platform-step-response.v1
+  uint32 revision = 2; // 1
+  CodePlatformStepDispositionV1 disposition = 3; // JSON: idle, committed, unknown
+  optional string effect_id = 4; // JSON null only for idle; exact owning 64 lowercase hex otherwise
+}

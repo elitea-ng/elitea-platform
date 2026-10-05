@@ -288,6 +288,7 @@ async fn whole_bundle_deadline_releases_capacity_without_detached_grant_work() {
         staging: directory.path().into(),
         slots: Semaphore::new(1),
         deadline: Duration::from_millis(1),
+        exports: std::sync::Mutex::new(cache::ExportCache::default()),
     };
     assert!(matches!(
         client.download(&root, std::future::pending).await,

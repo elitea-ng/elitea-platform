@@ -190,6 +190,7 @@ async fn exact_child_identity_uses_the_claim_bound_platform_route_once() {
 
     assert_eq!(resolved.application_id(), 31);
     assert_eq!(resolved.version_id(), 41);
+    assert!(resolved.saved_agent_fingerprint().is_none());
     assert_eq!(
         resolved
             .into_version_details()
@@ -207,6 +208,210 @@ async fn exact_child_identity_uses_the_claim_bound_platform_route_once() {
             fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
             body_length: 0,
         }]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn saved_agent_fingerprint_uses_only_the_authenticated_top_level_digest() {
+    let mut raw: serde_json::Value = serde_json::from_str(&application_body(17, 31, 41)).unwrap();
+    raw["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
+    raw["version_details"]["meta"] =
+        serde_json::json!({"frozen_definition_sha256":"34".repeat(32)});
+    let (client, _) = fake_client(
+        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+    let loaded = client
+        .load_application_version(&test_runtime_context_authority(), 31, 41)
+        .await
+        .unwrap();
+    let fingerprint = loaded.saved_agent_fingerprint().unwrap();
+    assert_eq!(fingerprint.application_id(), 31);
+    assert_eq!(fingerprint.version_id(), 41);
+    assert_eq!(fingerprint.definition_digest(), [0x12; 32]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_response_cannot_mint_fingerprint_from_editable_version_metadata() {
+    let mut raw: serde_json::Value = serde_json::from_str(&application_body(17, 31, 41)).unwrap();
+    raw["version_details"]["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
+    raw["version_details"]["meta"] =
+        serde_json::json!({"frozen_definition_sha256":"34".repeat(32)});
+    let (client, _) = fake_client(
+        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+    let loaded = client
+        .load_application_version(&test_runtime_context_authority(), 31, 41)
+        .await
+        .unwrap();
+    assert!(loaded.saved_agent_fingerprint().is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn present_saved_agent_fingerprint_requires_exact_lowercase_hex() {
+    for digest in [
+        serde_json::Value::Null,
+        serde_json::json!(42),
+        serde_json::json!([]),
+        serde_json::json!(""),
+        serde_json::json!("12".repeat(31)),
+        serde_json::json!("12".repeat(33)),
+        serde_json::json!("AB".repeat(32)),
+        serde_json::json!("gg".repeat(32)),
+        serde_json::json!(format!(" {}", "12".repeat(32))),
+        serde_json::json!(format!("sha256:{}", "12".repeat(32))),
+        serde_json::json!("é".repeat(32)),
+    ] {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&application_body(17, 31, 41)).unwrap();
+        raw["frozen_definition_sha256"] = digest;
+        let (client, _) = fake_client(
+            Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+            Duration::from_secs(1),
+            32 * 1_024,
+        );
+        assert!(matches!(
+            client
+                .load_application_version(&test_runtime_context_authority(), 31, 41)
+                .await,
+            Err(RuntimeContextError::InvalidResponse(_))
+        ));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn saved_agent_fingerprint_preserves_opaque_digest_across_credential_redemption() {
+    let mut observed = Vec::new();
+    for credential in ["first-fixture-token", "refreshed-fixture-token"] {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&application_body(17, 31, 41)).unwrap();
+        raw["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
+        raw["version_details"]["tools"] = serde_json::json!([
+            {"settings":{"headers":{"Authorization":credential}}}
+        ]);
+        let (client, _) = fake_client(
+            Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+            Duration::from_secs(1),
+            32 * 1_024,
+        );
+        let loaded = client
+            .load_application_version(&test_runtime_context_authority(), 31, 41)
+            .await
+            .unwrap();
+        observed.push(loaded.saved_agent_fingerprint().unwrap());
+    }
+    assert!(observed[0] == observed[1]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn saved_agent_fingerprint_keeps_claim_bound_identity_validation() {
+    for (project, application, version) in [(18, 31, 41), (17, 32, 41), (17, 31, 42)] {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&application_body(project, application, version)).unwrap();
+        raw["frozen_definition_sha256"] = serde_json::json!("12".repeat(32));
+        let (client, _) = fake_client(
+            Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+            Duration::from_secs(1),
+            32 * 1_024,
+        );
+        assert!(matches!(
+            client
+                .load_application_version(&test_runtime_context_authority(), 31, 41)
+                .await,
+            Err(RuntimeContextError::AuthorizationFailed(_))
+        ));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn saved_agent_fingerprint_accepts_the_main_public_definition_vector() {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fixture {
+        schema_version: String,
+        domain_utf8: String,
+        project_id: u64,
+        application_id: u64,
+        version_id: u64,
+        frozen_pre_redemption_json: String,
+        frozen_pre_redemption_length: usize,
+        frozen_definition_sha256: String,
+    }
+    let fixture: Fixture = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/saved-agent-fingerprint-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(
+        fixture.schema_version,
+        "elitea.runtime.application-definition-digest.fixture.v1"
+    );
+    assert_eq!(
+        fixture.domain_utf8,
+        "elitea.runtime.application-definition.v1\0"
+    );
+    assert_eq!(
+        fixture.frozen_pre_redemption_json.len(),
+        fixture.frozen_pre_redemption_length
+    );
+    let details: serde_json::Value =
+        serde_json::from_str(&fixture.frozen_pre_redemption_json).unwrap();
+    let raw = serde_json::json!({
+        "schema_version":"elitea.runtime.application-version.v1",
+        "project_id":fixture.project_id,
+        "application_id":fixture.application_id,
+        "version_id":fixture.version_id,
+        "version_details":details,
+        "frozen_definition_sha256":fixture.frozen_definition_sha256,
+    });
+    let (client, _) = fake_client(
+        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+    let loaded = client
+        .load_application_version(
+            &test_runtime_context_authority(),
+            fixture.application_id,
+            fixture.version_id,
+        )
+        .await
+        .unwrap();
+    let fingerprint = loaded.saved_agent_fingerprint().unwrap();
+    assert_eq!(fingerprint.application_id(), 31);
+    assert_eq!(fingerprint.version_id(), 41);
+    assert_eq!(
+        fingerprint.definition_digest(),
+        [
+            0x31, 0xe7, 0xaf, 0xf6, 0xb7, 0x02, 0x37, 0x5b, 0x6e, 0xac, 0xa2, 0x4b, 0x12, 0x4c,
+            0xf4, 0x65, 0xff, 0x9b, 0x9c, 0x58, 0x77, 0x56, 0xb6, 0x55, 0xe5, 0x3b, 0x82, 0x56,
+            0x34, 0x23, 0x95, 0xd5,
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn syntactically_valid_zero_definition_digest_remains_opaque() {
+    let mut raw: serde_json::Value = serde_json::from_str(&application_body(17, 31, 41)).unwrap();
+    raw["frozen_definition_sha256"] = serde_json::json!("0".repeat(64));
+    let (client, _) = fake_client(
+        Ok(response(&raw.to_string(), StatusCode::OK, Version::HTTP_2)),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+    let loaded = client
+        .load_application_version(&test_runtime_context_authority(), 31, 41)
+        .await
+        .unwrap();
+    assert_eq!(
+        loaded
+            .saved_agent_fingerprint()
+            .unwrap()
+            .definition_digest(),
+        [0; 32]
     );
 }
 

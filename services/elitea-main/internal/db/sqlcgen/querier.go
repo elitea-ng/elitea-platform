@@ -667,12 +667,20 @@ type Querier interface {
 	// named project does not exist.
 	ResolveCurrentPersonalProjectID(ctx context.Context, userID int32) (int32, error)
 	ResolveCurrentRegeneration(ctx context.Context, arg ResolveCurrentRegenerationParams) (ResolveCurrentRegenerationRow, error)
+	// Static pauses use the original command input and exact persisted response.
+	// Checkpoint state stays in the worker; this query carries only its public proof.
+	ResolveCurrentStaticContinuation(ctx context.Context, arg ResolveCurrentStaticContinuationParams) (ResolveCurrentStaticContinuationRow, error)
+	// Static pauses use the original command input and exact persisted response.
+	// Checkpoint state stays in the worker; this query carries only its public proof.
+	ResolveCurrentStaticToolContinuation(ctx context.Context, arg ResolveCurrentStaticToolContinuationParams) (ResolveCurrentStaticToolContinuationRow, error)
 	ResolveCurrentTenantContext(ctx context.Context, arg ResolveCurrentTenantContextParams) (ResolveCurrentTenantContextRow, error)
 	ResolveIndexMetaInitialization(ctx context.Context, arg ResolveIndexMetaInitializationParams) (pgtype.Timestamptz, error)
 	ResolveRuntimeExecutionEventCapability(ctx context.Context, arg ResolveRuntimeExecutionEventCapabilityParams) (string, error)
 	ResumeCurrentAgentAuthorization(ctx context.Context, arg ResumeCurrentAgentAuthorizationParams) (ResumeCurrentAgentAuthorizationRow, error)
 	ResumeCurrentAgentHITL(ctx context.Context, arg ResumeCurrentAgentHITLParams) (ResumeCurrentAgentHITLRow, error)
 	ResumeCurrentAgentOutputLimit(ctx context.Context, arg ResumeCurrentAgentOutputLimitParams) (ResumeCurrentAgentOutputLimitRow, error)
+	ResumeCurrentAgentStatic(ctx context.Context, arg ResumeCurrentAgentStaticParams) (ResumeCurrentAgentStaticRow, error)
+	ResumeCurrentAgentStaticTools(ctx context.Context, arg ResumeCurrentAgentStaticToolsParams) (ResumeCurrentAgentStaticToolsRow, error)
 	//
 	// Rewrite the text of a question that is being regenerated (issue 980), inside
 	// the SAME admission transaction that resets its answer.

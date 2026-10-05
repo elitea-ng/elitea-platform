@@ -67,6 +67,7 @@ type ContentClaim struct {
 }
 
 type ContentAuthorization struct {
+	InspectionOnly    bool
 	ResourceProjectID string
 	ToolkitType       string
 	// ActorID is the exact durable execution_jobs.actor_id. Materializers own
@@ -100,19 +101,28 @@ type ContentMaterializer interface {
 }
 
 type ContentServer struct {
-	authorizer       ContentAuthorizer
-	store            ContentStore
-	materializer     ContentMaterializer
-	runtimeToken     *EliteaClientTokenService
-	runtimeVersions  *RuntimeApplicationVersionService
-	runtimeObjects   *RuntimeAttachmentObjectService
-	toolkitArtifacts ToolkitDiscoveryArtifactStore
-	runtimeBuilders  *RuntimeEntityBuilderService
-	runtimeArtifacts *RuntimeArtifactObjectService
-	sandboxBundles   *SandboxBundleContentService
-	maxBytes         int64
-	requests         chan struct{}
-	logger           *slog.Logger
+	codePlatformPump    *CodePlatformPump
+	runtimeHTTPActions  *RuntimeHTTPActionService
+	codeWorkspaces      *CodeWorkspaceService
+	codeWorkspaceReads  *CodeWorkspaceReadServer
+	codeDebug           *RuntimeCodeDebugArtifactService
+	originalCodeIntents OriginalCodeIntentStore
+	nodeRecovery        NodeRecoveryControlStore
+	nodeRecoveryResults NodeRecoveryResultStore
+	authorizer          ContentAuthorizer
+	store               ContentStore
+	materializer        ContentMaterializer
+	runtimeToken        *EliteaClientTokenService
+	runtimeVersions     *RuntimeApplicationVersionService
+	runtimeObjects      *RuntimeAttachmentObjectService
+	toolkitArtifacts    ToolkitDiscoveryArtifactStore
+	runtimeBuilders     *RuntimeEntityBuilderService
+	runtimeArtifacts    *RuntimeArtifactObjectService
+	sandboxBundles      *SandboxBundleContentService
+	compiledSnapshots   *CompiledSnapshotContentService
+	maxBytes            int64
+	requests            chan struct{}
+	logger              *slog.Logger
 }
 
 func NewContentServer(authorizer ContentAuthorizer, store ContentStore, maxBytes int64) (*ContentServer, error) {
@@ -334,11 +344,47 @@ func (s *ContentServer) WithRuntimeArtifacts(artifacts *RuntimeArtifactObjectSer
 	return s
 }
 
+func (s *ContentServer) WithCodeDebugArtifacts(debug *RuntimeCodeDebugArtifactService) *ContentServer {
+	if s != nil {
+		s.codeDebug = debug
+	}
+	return s
+}
+
 // Routes exposes only the internal, claim-bound input data plane.
 func (s *ContentServer) Routes() http.Handler {
 	r := chi.NewRouter()
+	if s.codeWorkspaceReads != nil {
+		r.Post("/sandbox-workspaces/{manifestSHA256}/read-manifest", s.PostCodeWorkspaceManifest)
+		r.Post("/sandbox-workspaces/{manifestSHA256}/files/{contentSHA256}/read", s.PostCodeWorkspaceFile)
+	}
+	if s.codeWorkspaces != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/code-workspace", s.PostCodeWorkspace)
+	}
+	if s.codeDebug != nil {
+		r.Mount("/executions/{executionID}/generations/{generation}/code-debug", s.codeDebug.Routes())
+	}
+	if s.codePlatformPump != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/code-platform/step", s.PostCodePlatformStep)
+	}
+	if s.nodeRecovery != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/control", s.PostNodeRecoveryControl)
+		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/ack", s.PostNodeRecoveryAck)
+	}
+	if s.originalCodeIntents != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/code-sandbox/visits", s.PostOriginalCodeVisit)
+		r.Post("/executions/{executionID}/generations/{generation}/code-sandbox/intents", s.PostOriginalCodeIntent)
+	}
+
+	if s.nodeRecoveryResults != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/results/{contentID}/versions/{version}", s.PostNodeRecoveryResult)
+	}
+	if s.compiledSnapshots != nil {
+		r.Mount("/sandbox-compiled-snapshots", s.compiledSnapshots.Routes())
+	}
 	if s.sandboxBundles != nil {
 		r.Mount("/sandbox-bundles", s.sandboxBundles.Routes())
+		r.Mount("/sandbox-native-bundles", s.sandboxBundles.NativeRoutes())
 	}
 	if s.toolkitArtifacts != nil {
 		r.Put("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}/toolkit-discovery-result", s.PutToolkitDiscoveryArtifact)
@@ -347,6 +393,9 @@ func (s *ContentServer) Routes() http.Handler {
 	r.Get("/executions/{executionID}/generations/{generation}/inputs/{contentID}/versions/{version}", s.Get)
 	if s.runtimeToken != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/elitea-client-token", s.PostEliteaClientToken)
+	}
+	if s.runtimeHTTPActions != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/runtime-context/http-actions", s.PostHTTPAction)
 	}
 	if s.runtimeVersions != nil {
 		r.Post(
@@ -474,7 +523,7 @@ func (s *ContentServer) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseData := data
-	if s.materializer != nil {
+	if s.materializer != nil && !authorization.InspectionOnly {
 		responseData, err = s.materializer.MaterializeContent(r.Context(), authorization, data, s.maxBytes)
 		if err != nil {
 			status := http.StatusServiceUnavailable

@@ -79,6 +79,58 @@ func (SandboxJobStatusV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{0}
 }
 
+type RustCompiledPublicationPhaseV1 int32
+
+const (
+	RustCompiledPublicationPhaseV1_RUST_COMPILED_PUBLICATION_PHASE_V1_UNSPECIFIED RustCompiledPublicationPhaseV1 = 0
+	RustCompiledPublicationPhaseV1_RUST_COMPILED_PUBLICATION_PHASE_V1_EXECUTABLE  RustCompiledPublicationPhaseV1 = 1
+	RustCompiledPublicationPhaseV1_RUST_COMPILED_PUBLICATION_PHASE_V1_RELEASE     RustCompiledPublicationPhaseV1 = 2
+	RustCompiledPublicationPhaseV1_RUST_COMPILED_PUBLICATION_PHASE_V1_READY       RustCompiledPublicationPhaseV1 = 3
+)
+
+// Enum value maps for RustCompiledPublicationPhaseV1.
+var (
+	RustCompiledPublicationPhaseV1_name = map[int32]string{
+		0: "RUST_COMPILED_PUBLICATION_PHASE_V1_UNSPECIFIED",
+		1: "RUST_COMPILED_PUBLICATION_PHASE_V1_EXECUTABLE",
+		2: "RUST_COMPILED_PUBLICATION_PHASE_V1_RELEASE",
+		3: "RUST_COMPILED_PUBLICATION_PHASE_V1_READY",
+	}
+	RustCompiledPublicationPhaseV1_value = map[string]int32{
+		"RUST_COMPILED_PUBLICATION_PHASE_V1_UNSPECIFIED": 0,
+		"RUST_COMPILED_PUBLICATION_PHASE_V1_EXECUTABLE":  1,
+		"RUST_COMPILED_PUBLICATION_PHASE_V1_RELEASE":     2,
+		"RUST_COMPILED_PUBLICATION_PHASE_V1_READY":       3,
+	}
+)
+
+func (x RustCompiledPublicationPhaseV1) Enum() *RustCompiledPublicationPhaseV1 {
+	p := new(RustCompiledPublicationPhaseV1)
+	*p = x
+	return p
+}
+
+func (x RustCompiledPublicationPhaseV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RustCompiledPublicationPhaseV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_sandbox_proto_enumTypes[1].Descriptor()
+}
+
+func (RustCompiledPublicationPhaseV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_sandbox_proto_enumTypes[1]
+}
+
+func (x RustCompiledPublicationPhaseV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RustCompiledPublicationPhaseV1.Descriptor instead.
+func (RustCompiledPublicationPhaseV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{1}
+}
+
 // Main checks the original worker's verified mTLS session and active execution
 // fence. The audience is an exact configured supervisor identity, not a URL.
 // Request digests bind a deployment-selected runtime, policy, code and input.
@@ -449,13 +501,263 @@ func (x *AuthorizeSandboxJobResponseV1) GetRejection() *RuntimeErrorV1 {
 	return nil
 }
 
+// Supervisor-only transport. Each retry needs a fresh Main grant and the same
+// prepared request. It reconciles the existing activation; it never restarts it.
+// Workspace content uses a distinct Main endpoint under the owning grant mode.
+// It never accepts dependency-content revision 3 or arbitrary mounts.
+type HydrateSandboxWorkspaceRequestV1 struct {
+	state           protoimpl.MessageState   `protogen:"open.v1"`
+	Grant           *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	PreparedJobJson []byte                   `protobuf:"bytes,2,opt,name=prepared_job_json,json=preparedJobJson,proto3" json:"prepared_job_json,omitempty"`
+	// Exact immutable manifest from claim-authorized Main acquisition.
+	WorkspaceManifestJson []byte `protobuf:"bytes,3,opt,name=workspace_manifest_json,json=workspaceManifestJson,proto3" json:"workspace_manifest_json,omitempty"`
+	// Plain mode requires revision 1 and no compiled fields.
+	// Compile requires revision 4 Compile plus the exact canonical Control.
+	ControlJson []byte `protobuf:"bytes,4,opt,name=control_json,json=controlJson,proto3" json:"control_json,omitempty"`
+	// Cached Execute requires its exact selected descriptor and pinned Read grant.
+	DescriptorJson []byte                   `protobuf:"bytes,5,opt,name=descriptor_json,json=descriptorJson,proto3" json:"descriptor_json,omitempty"`
+	ReadGrant      *SignedSandboxJobGrantV1 `protobuf:"bytes,6,opt,name=read_grant,json=readGrant,proto3" json:"read_grant,omitempty"`
+	// Exact existing signed original Code execution intent for Execute modes.
+	// Compile uses its owning pre-stage visit and preparation admission instead.
+	CodeExecutionIntentJson []byte `protobuf:"bytes,7,opt,name=code_execution_intent_json,json=codeExecutionIntentJson,proto3,oneof" json:"code_execution_intent_json,omitempty"`
+	FileIndex               uint32 `protobuf:"varint,8,opt,name=file_index,json=fileIndex,proto3" json:"file_index,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) Reset() {
+	*x = HydrateSandboxWorkspaceRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HydrateSandboxWorkspaceRequestV1) ProtoMessage() {}
+
+func (x *HydrateSandboxWorkspaceRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HydrateSandboxWorkspaceRequestV1.ProtoReflect.Descriptor instead.
+func (*HydrateSandboxWorkspaceRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetPreparedJobJson() []byte {
+	if x != nil {
+		return x.PreparedJobJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetWorkspaceManifestJson() []byte {
+	if x != nil {
+		return x.WorkspaceManifestJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetControlJson() []byte {
+	if x != nil {
+		return x.ControlJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetDescriptorJson() []byte {
+	if x != nil {
+		return x.DescriptorJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetReadGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.ReadGrant
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetCodeExecutionIntentJson() []byte {
+	if x != nil {
+		return x.CodeExecutionIntentJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxWorkspaceRequestV1) GetFileIndex() uint32 {
+	if x != nil {
+		return x.FileIndex
+	}
+	return 0
+}
+
+type HydrateSandboxWorkspaceResponseV1 struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	Status        SandboxJobStatusV1          `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	Cursor        *WorkspaceHydrationCursorV1 `protobuf:"bytes,2,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HydrateSandboxWorkspaceResponseV1) Reset() {
+	*x = HydrateSandboxWorkspaceResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HydrateSandboxWorkspaceResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HydrateSandboxWorkspaceResponseV1) ProtoMessage() {}
+
+func (x *HydrateSandboxWorkspaceResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HydrateSandboxWorkspaceResponseV1.ProtoReflect.Descriptor instead.
+func (*HydrateSandboxWorkspaceResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *HydrateSandboxWorkspaceResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *HydrateSandboxWorkspaceResponseV1) GetCursor() *WorkspaceHydrationCursorV1 {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+// The immutable manifest and original runtime own this cursor. It is progress,
+// never an authority selector. N,false requires an explicit N finalization call.
+type WorkspaceHydrationCursorV1 struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Revision       uint32                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`                                  // Exactly 1.
+	ManifestSha256 []byte                 `protobuf:"bytes,2,opt,name=manifest_sha256,json=manifestSha256,proto3" json:"manifest_sha256,omitempty"` // Exactly 32 bytes.
+	NextFileIndex  uint32                 `protobuf:"varint,3,opt,name=next_file_index,json=nextFileIndex,proto3" json:"next_file_index,omitempty"`
+	FileCount      uint32                 `protobuf:"varint,4,opt,name=file_count,json=fileCount,proto3" json:"file_count,omitempty"`
+	Ready          bool                   `protobuf:"varint,5,opt,name=ready,proto3" json:"ready,omitempty"` // Original helper verified/exited and Code launch is prepared.
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *WorkspaceHydrationCursorV1) Reset() {
+	*x = WorkspaceHydrationCursorV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceHydrationCursorV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceHydrationCursorV1) ProtoMessage() {}
+
+func (x *WorkspaceHydrationCursorV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceHydrationCursorV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceHydrationCursorV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *WorkspaceHydrationCursorV1) GetRevision() uint32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *WorkspaceHydrationCursorV1) GetManifestSha256() []byte {
+	if x != nil {
+		return x.ManifestSha256
+	}
+	return nil
+}
+
+func (x *WorkspaceHydrationCursorV1) GetNextFileIndex() uint32 {
+	if x != nil {
+		return x.NextFileIndex
+	}
+	return 0
+}
+
+func (x *WorkspaceHydrationCursorV1) GetFileCount() uint32 {
+	if x != nil {
+		return x.FileCount
+	}
+	return 0
+}
+
+func (x *WorkspaceHydrationCursorV1) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
 type SubmitSandboxJobRequestV1 struct {
 	state protoimpl.MessageState   `protogen:"open.v1"`
 	Grant *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
-	// Bounded PreparedJob revision 1 or 2 JSON, at most 1 MiB. Revision 2 adds
+	// Separate Main-signed original whole-Code intent, at most 16 KiB.
+	// This is Execute-only; it never authorizes preparation or owner observation.
+	// See contracts/sandbox-node-code-recovery-v1.md. Historical empty intent
+	// grants no whole-Code recovery audience.
+	CodeExecutionIntentJson []byte `protobuf:"bytes,18,opt,name=code_execution_intent_json,json=codeExecutionIntentJson,proto3" json:"code_execution_intent_json,omitempty"`
+	// Bounded PreparedJob revision 1, 2, or 3 JSON, at most 1 MiB. Revision 2 adds
 	// dependency_bundle_sha256: 64 lowercase hexadecimal characters, for Python
 	// only. Its SHA-256 covers the resolved bundle record and file identities.
-	// Revision 1 has no bundle field. Package bytes use a separate data plane.
+	// Revision 1 has no bundle field. Revision 3 binds native_dependencies:
+	// kind, platform, preparation_sha256, source_sha256; Cargo also binds
+	// literal dependencies_toml. Native bundle revision 2 binds the language,
+	// platform, execution image and policy, preparation request, and payload.
+	// Its root hashes recursively sorted UTF-8 JSON without its digest field.
+	// Native records remain bounded to 128 KiB. No package bytes enter this RPC.
 	// The request digest includes the revision and dependency bundle identity.
 	// Python bundle JSON revision 1 has runtime="pyodide-0.29.0", requirements,
 	// files=[{name,bytes,sha256}], and digest. The root hashes UTF-8 JSON of
@@ -467,13 +769,21 @@ type SubmitSandboxJobRequestV1 struct {
 	// Source and selected state travel only over mTLS, never through a shared
 	// queue or a log field.
 	PreparedJobJson []byte `protobuf:"bytes,2,opt,name=prepared_job_json,json=preparedJobJson,proto3" json:"prepared_job_json,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Revisions 2 and 3 require separate root-bound content authority for this exact
+	// execution activation and request. Revision 1 rejects this field.
+	// Content authority never substitutes for the execution grant.
+	DependencyContentGrant *SignedSandboxJobGrantV1 `protobuf:"bytes,16,opt,name=dependency_content_grant,json=dependencyContentGrant,proto3" json:"dependency_content_grant,omitempty"`
+	// Revisions 2 and 3 carry the same verified metadata used for indexed hydration.
+	// The supervisor compares it to the immutable runtime record before dispatch.
+	// Revision 1 requires this field to be empty. At most 128 KiB, no file bytes.
+	DependencyBundleJson []byte `protobuf:"bytes,17,opt,name=dependency_bundle_json,json=dependencyBundleJson,proto3" json:"dependency_bundle_json,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SubmitSandboxJobRequestV1) Reset() {
 	*x = SubmitSandboxJobRequestV1{}
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -485,7 +795,7 @@ func (x *SubmitSandboxJobRequestV1) String() string {
 func (*SubmitSandboxJobRequestV1) ProtoMessage() {}
 
 func (x *SubmitSandboxJobRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -498,7 +808,7 @@ func (x *SubmitSandboxJobRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitSandboxJobRequestV1.ProtoReflect.Descriptor instead.
 func (*SubmitSandboxJobRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SubmitSandboxJobRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
@@ -508,9 +818,30 @@ func (x *SubmitSandboxJobRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
 	return nil
 }
 
+func (x *SubmitSandboxJobRequestV1) GetCodeExecutionIntentJson() []byte {
+	if x != nil {
+		return x.CodeExecutionIntentJson
+	}
+	return nil
+}
+
 func (x *SubmitSandboxJobRequestV1) GetPreparedJobJson() []byte {
 	if x != nil {
 		return x.PreparedJobJson
+	}
+	return nil
+}
+
+func (x *SubmitSandboxJobRequestV1) GetDependencyContentGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.DependencyContentGrant
+	}
+	return nil
+}
+
+func (x *SubmitSandboxJobRequestV1) GetDependencyBundleJson() []byte {
+	if x != nil {
+		return x.DependencyBundleJson
 	}
 	return nil
 }
@@ -528,7 +859,7 @@ type SubmitSandboxJobResponseV1 struct {
 
 func (x *SubmitSandboxJobResponseV1) Reset() {
 	*x = SubmitSandboxJobResponseV1{}
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -540,7 +871,7 @@ func (x *SubmitSandboxJobResponseV1) String() string {
 func (*SubmitSandboxJobResponseV1) ProtoMessage() {}
 
 func (x *SubmitSandboxJobResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -553,7 +884,7 @@ func (x *SubmitSandboxJobResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitSandboxJobResponseV1.ProtoReflect.Descriptor instead.
 func (*SubmitSandboxJobResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{5}
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SubmitSandboxJobResponseV1) GetStatus() SandboxJobStatusV1 {
@@ -594,7 +925,7 @@ type CancelSandboxJobRequestV1 struct {
 
 func (x *CancelSandboxJobRequestV1) Reset() {
 	*x = CancelSandboxJobRequestV1{}
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +937,7 @@ func (x *CancelSandboxJobRequestV1) String() string {
 func (*CancelSandboxJobRequestV1) ProtoMessage() {}
 
 func (x *CancelSandboxJobRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -619,7 +950,7 @@ func (x *CancelSandboxJobRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelSandboxJobRequestV1.ProtoReflect.Descriptor instead.
 func (*CancelSandboxJobRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{6}
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CancelSandboxJobRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
@@ -640,7 +971,7 @@ type CancelSandboxJobResponseV1 struct {
 
 func (x *CancelSandboxJobResponseV1) Reset() {
 	*x = CancelSandboxJobResponseV1{}
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -652,7 +983,7 @@ func (x *CancelSandboxJobResponseV1) String() string {
 func (*CancelSandboxJobResponseV1) ProtoMessage() {}
 
 func (x *CancelSandboxJobResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -665,7 +996,7 @@ func (x *CancelSandboxJobResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelSandboxJobResponseV1.ProtoReflect.Descriptor instead.
 func (*CancelSandboxJobResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{7}
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CancelSandboxJobResponseV1) GetStatus() SandboxJobStatusV1 {
@@ -676,6 +1007,741 @@ func (x *CancelSandboxJobResponseV1) GetStatus() SandboxJobStatusV1 {
 }
 
 func (x *CancelSandboxJobResponseV1) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
+// Each retry uses fresh revision 1 authority and the same preparation request.
+// The preparation activation derives from the original graph Code activation.
+// The supervisor retains the trusted preparer until publication and cleanup.
+type PrepareSandboxDependenciesRequestV1 struct {
+	state protoimpl.MessageState   `protogen:"open.v1"`
+	Grant *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	// Strict PreparationJob JSON, at most 1 MiB. Revision 1 is Python only.
+	// Native revision 2 adds language/platform, execution_image_digest and
+	// execution_policy_revision. Source is the language-owned acquisition source:
+	// JavaScript/TypeScript code, or the saved Cargo TOML declaration.
+	// Native content uses /sandbox-native-bundles/{root} and flat digest aliases.
+	// Native metadata is elitea-native-bundle-v2.json. Python paths do not change.
+	// Contains literal source, immutable preparer image digest, policy, and timeout.
+	// Contains no input state, user arguments, package list, or content root.
+	// The preparation fingerprint uses a separate domain from code execution.
+	PreparationJobJson []byte `protobuf:"bytes,2,opt,name=preparation_job_json,json=preparationJobJson,proto3" json:"preparation_job_json,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *PrepareSandboxDependenciesRequestV1) Reset() {
+	*x = PrepareSandboxDependenciesRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSandboxDependenciesRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSandboxDependenciesRequestV1) ProtoMessage() {}
+
+func (x *PrepareSandboxDependenciesRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSandboxDependenciesRequestV1.ProtoReflect.Descriptor instead.
+func (*PrepareSandboxDependenciesRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PrepareSandboxDependenciesRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+func (x *PrepareSandboxDependenciesRequestV1) GetPreparationJobJson() []byte {
+	if x != nil {
+		return x.PreparationJobJson
+	}
+	return nil
+}
+
+type PrepareSandboxDependenciesResponseV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Ready metadata remains Pending until publication and confirmed termination.
+	// Completed requires both immutable publication and a terminal preparer.
+	Status SandboxJobStatusV1 `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	// Verified bundle metadata only, at most 128 KiB. No file content.
+	BundleJson     []byte `protobuf:"bytes,2,opt,name=bundle_json,json=bundleJson,proto3" json:"bundle_json,omitempty"`
+	FailureCode    string `protobuf:"bytes,3,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
+	CleanupPending bool   `protobuf:"varint,4,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PrepareSandboxDependenciesResponseV1) Reset() {
+	*x = PrepareSandboxDependenciesResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSandboxDependenciesResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSandboxDependenciesResponseV1) ProtoMessage() {}
+
+func (x *PrepareSandboxDependenciesResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSandboxDependenciesResponseV1.ProtoReflect.Descriptor instead.
+func (*PrepareSandboxDependenciesResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *PrepareSandboxDependenciesResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *PrepareSandboxDependenciesResponseV1) GetBundleJson() []byte {
+	if x != nil {
+		return x.BundleJson
+	}
+	return nil
+}
+
+func (x *PrepareSandboxDependenciesResponseV1) GetFailureCode() string {
+	if x != nil {
+		return x.FailureCode
+	}
+	return ""
+}
+
+func (x *PrepareSandboxDependenciesResponseV1) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
+// Transfer control has no caller-selected path, source, tenant, or content root.
+// The revision 3 grant binds the recorded root and preparation JobScope.
+// Package files use Main's private content listener outside this RPC.
+type PublishSandboxDependenciesRequestV1 struct {
+	state        protoimpl.MessageState   `protogen:"open.v1"`
+	ContentGrant *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=content_grant,json=contentGrant,proto3" json:"content_grant,omitempty"`
+	// Select exactly one file from the supervisor's recorded ordered file list.
+	// The index equals the file count only for final metadata publication.
+	// Publish metadata last, then release the trusted preparer and confirm exit.
+	// Reject an index above the recorded file count. Retries retain the same index.
+	Index         uint32 `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublishSandboxDependenciesRequestV1) Reset() {
+	*x = PublishSandboxDependenciesRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishSandboxDependenciesRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishSandboxDependenciesRequestV1) ProtoMessage() {}
+
+func (x *PublishSandboxDependenciesRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishSandboxDependenciesRequestV1.ProtoReflect.Descriptor instead.
+func (*PublishSandboxDependenciesRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *PublishSandboxDependenciesRequestV1) GetContentGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.ContentGrant
+	}
+	return nil
+}
+
+func (x *PublishSandboxDependenciesRequestV1) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+type PublishSandboxDependenciesResponseV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Completed requires published metadata and confirmed terminal preparation.
+	Status         SandboxJobStatusV1 `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	FailureCode    string             `protobuf:"bytes,2,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
+	CleanupPending bool               `protobuf:"varint,3,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PublishSandboxDependenciesResponseV1) Reset() {
+	*x = PublishSandboxDependenciesResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishSandboxDependenciesResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishSandboxDependenciesResponseV1) ProtoMessage() {}
+
+func (x *PublishSandboxDependenciesResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishSandboxDependenciesResponseV1.ProtoReflect.Descriptor instead.
+func (*PublishSandboxDependenciesResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *PublishSandboxDependenciesResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *PublishSandboxDependenciesResponseV1) GetFailureCode() string {
+	if x != nil {
+		return x.FailureCode
+	}
+	return ""
+}
+
+func (x *PublishSandboxDependenciesResponseV1) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
+// Reserve the exact execution runtime without dispatching user code. Each file
+// uses fresh execution and content grants for the final Code activation. Files
+// survive retries in the original inert runtime; existing bytes are immutable.
+type HydrateSandboxDependenciesRequestV1 struct {
+	state           protoimpl.MessageState   `protogen:"open.v1"`
+	ExecutionGrant  *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=execution_grant,json=executionGrant,proto3" json:"execution_grant,omitempty"`
+	ContentGrant    *SignedSandboxJobGrantV1 `protobuf:"bytes,2,opt,name=content_grant,json=contentGrant,proto3" json:"content_grant,omitempty"`
+	PreparedJobJson []byte                   `protobuf:"bytes,3,opt,name=prepared_job_json,json=preparedJobJson,proto3" json:"prepared_job_json,omitempty"`
+	// Verified metadata only, at most 128 KiB; package bytes never enter RPC.
+	BundleJson []byte `protobuf:"bytes,4,opt,name=bundle_json,json=bundleJson,proto3" json:"bundle_json,omitempty"`
+	// An ordered file index; file count selects final metadata import. The
+	// supervisor verifies every referenced file before acknowledging ready.
+	Index uint32 `protobuf:"varint,5,opt,name=index,proto3" json:"index,omitempty"`
+	// Carry the refreshed, signed original Execute intent before runtime staging.
+	// Verify exact job, peer, scope, and dispatch identity before registering bindings.
+	// Platform-enabled jobs require this field. Legacy plain jobs can omit it.
+	CodeExecutionIntentJson []byte `protobuf:"bytes,16,opt,name=code_execution_intent_json,json=codeExecutionIntentJson,proto3" json:"code_execution_intent_json,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) Reset() {
+	*x = HydrateSandboxDependenciesRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HydrateSandboxDependenciesRequestV1) ProtoMessage() {}
+
+func (x *HydrateSandboxDependenciesRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HydrateSandboxDependenciesRequestV1.ProtoReflect.Descriptor instead.
+func (*HydrateSandboxDependenciesRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) GetExecutionGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.ExecutionGrant
+	}
+	return nil
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) GetContentGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.ContentGrant
+	}
+	return nil
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) GetPreparedJobJson() []byte {
+	if x != nil {
+		return x.PreparedJobJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) GetBundleJson() []byte {
+	if x != nil {
+		return x.BundleJson
+	}
+	return nil
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *HydrateSandboxDependenciesRequestV1) GetCodeExecutionIntentJson() []byte {
+	if x != nil {
+		return x.CodeExecutionIntentJson
+	}
+	return nil
+}
+
+type HydrateSandboxDependenciesResponseV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A successful response acknowledges this index. False requires the next
+	// indexed transfer with fresh grants. True means the runtime is ready, or
+	// the exact execution already crossed dispatch and Submit must reconcile it.
+	// A busy lease returns Aborted, never a false file acknowledgement.
+	Ready         bool `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HydrateSandboxDependenciesResponseV1) Reset() {
+	*x = HydrateSandboxDependenciesResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HydrateSandboxDependenciesResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HydrateSandboxDependenciesResponseV1) ProtoMessage() {}
+
+func (x *HydrateSandboxDependenciesResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HydrateSandboxDependenciesResponseV1.ProtoReflect.Descriptor instead.
+func (*HydrateSandboxDependenciesResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *HydrateSandboxDependenciesResponseV1) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
+// Separate from ordinary execution and package preparation authority.
+type SubmitRustCompiledSnapshotRequestV1 struct {
+	state                  protoimpl.MessageState   `protogen:"open.v1"`
+	Grant                  *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
+	PreparedJobJson        []byte                   `protobuf:"bytes,2,opt,name=prepared_job_json,json=preparedJobJson,proto3" json:"prepared_job_json,omitempty"`                      // Exact existing PreparedJob, at most 1 MiB.
+	ControlJson            []byte                   `protobuf:"bytes,3,opt,name=control_json,json=controlJson,proto3" json:"control_json,omitempty"`                                    // Exact canonical runner Control, at most 16 KiB.
+	DescriptorJson         []byte                   `protobuf:"bytes,4,opt,name=descriptor_json,json=descriptorJson,proto3" json:"descriptor_json,omitempty"`                           // Empty for compile; required for cached execution.
+	ReadGrant              *SignedSandboxJobGrantV1 `protobuf:"bytes,5,opt,name=read_grant,json=readGrant,proto3" json:"read_grant,omitempty"`                                          // Execute requires separate pinned Read authority.
+	DependencyContentGrant *SignedSandboxJobGrantV1 `protobuf:"bytes,6,opt,name=dependency_content_grant,json=dependencyContentGrant,proto3" json:"dependency_content_grant,omitempty"` // Separate native Content authority for Compile or selected Execute.
+	DependencyBundleJson   []byte                   `protobuf:"bytes,7,opt,name=dependency_bundle_json,json=dependencyBundleJson,proto3" json:"dependency_bundle_json,omitempty"`       // Exact verified native dependency record; never execution authority.
+	ReconcileOnly          bool                     `protobuf:"varint,8,opt,name=reconcile_only,json=reconcileOnly,proto3" json:"reconcile_only,omitempty"`                             // Read existing Compile or Execute identity; never reserve or provision.
+	// Inert native import. Compile renews Compile and separate Content grants per index.
+	// Selected Execute renews independent Execute, pinned Read, and native Content grants.
+	// Receipt-only recovery accepts no index or content. No index dispatches a runtime.
+	// The file-count index verifies every original object and commits readiness.
+	NativeHydrationIndex *uint32 `protobuf:"varint,9,opt,name=native_hydration_index,json=nativeHydrationIndex,proto3,oneof" json:"native_hydration_index,omitempty"`
+	// Separate Main-signed original whole-Code intent. Accepted only for Execute.
+	// Compile and every non-Execute purpose reject it. No generated output is
+	// authoritative until this versioned source is adopted by the generator.
+	CodeExecutionIntentJson []byte `protobuf:"bytes,10,opt,name=code_execution_intent_json,json=codeExecutionIntentJson,proto3" json:"code_execution_intent_json,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) Reset() {
+	*x = SubmitRustCompiledSnapshotRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitRustCompiledSnapshotRequestV1) ProtoMessage() {}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitRustCompiledSnapshotRequestV1.ProtoReflect.Descriptor instead.
+func (*SubmitRustCompiledSnapshotRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetPreparedJobJson() []byte {
+	if x != nil {
+		return x.PreparedJobJson
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetControlJson() []byte {
+	if x != nil {
+		return x.ControlJson
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetDescriptorJson() []byte {
+	if x != nil {
+		return x.DescriptorJson
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetReadGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.ReadGrant
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetDependencyContentGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.DependencyContentGrant
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetDependencyBundleJson() []byte {
+	if x != nil {
+		return x.DependencyBundleJson
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetReconcileOnly() bool {
+	if x != nil {
+		return x.ReconcileOnly
+	}
+	return false
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetNativeHydrationIndex() uint32 {
+	if x != nil && x.NativeHydrationIndex != nil {
+		return *x.NativeHydrationIndex
+	}
+	return 0
+}
+
+func (x *SubmitRustCompiledSnapshotRequestV1) GetCodeExecutionIntentJson() []byte {
+	if x != nil {
+		return x.CodeExecutionIntentJson
+	}
+	return nil
+}
+
+type SubmitRustCompiledSnapshotResponseV1 struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Status            SandboxJobStatusV1     `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	ResultJson        []byte                 `protobuf:"bytes,2,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`                        // Execution result or original compiler terminal receipt.
+	DescriptorJson    []byte                 `protobuf:"bytes,3,opt,name=descriptor_json,json=descriptorJson,proto3" json:"descriptor_json,omitempty"`            // Captured retained compile metadata; at most 16 KiB.
+	CompilationJobKey []byte                 `protobuf:"bytes,4,opt,name=compilation_job_key,json=compilationJobKey,proto3" json:"compilation_job_key,omitempty"` // Original compiler ledger key; no runtime override.
+	FailureCode       string                 `protobuf:"bytes,5,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
+	CleanupPending    bool                   `protobuf:"varint,6,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	NeedsAdmission    bool                   `protobuf:"varint,7,opt,name=needs_admission,json=needsAdmission,proto3" json:"needs_admission,omitempty"` // Reconcile-only observed Missing or Reserved, not dispatch.
+	// A successful indexed reply acknowledges the exact requested index.
+	// Busy ownership returns Aborted; false never acknowledges a skipped transfer.
+	NativeHydrationReady bool `protobuf:"varint,8,opt,name=native_hydration_ready,json=nativeHydrationReady,proto3" json:"native_hydration_ready,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) Reset() {
+	*x = SubmitRustCompiledSnapshotResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitRustCompiledSnapshotResponseV1) ProtoMessage() {}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitRustCompiledSnapshotResponseV1.ProtoReflect.Descriptor instead.
+func (*SubmitRustCompiledSnapshotResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetResultJson() []byte {
+	if x != nil {
+		return x.ResultJson
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetDescriptorJson() []byte {
+	if x != nil {
+		return x.DescriptorJson
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetCompilationJobKey() []byte {
+	if x != nil {
+		return x.CompilationJobKey
+	}
+	return nil
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetFailureCode() string {
+	if x != nil {
+		return x.FailureCode
+	}
+	return ""
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetNeedsAdmission() bool {
+	if x != nil {
+		return x.NeedsAdmission
+	}
+	return false
+}
+
+func (x *SubmitRustCompiledSnapshotResponseV1) GetNativeHydrationReady() bool {
+	if x != nil {
+		return x.NativeHydrationReady
+	}
+	return false
+}
+
+// Preserve the recorded compiler runtime. Publish has no code execution authority.
+type PublishRustCompiledSnapshotRequestV1 struct {
+	state         protoimpl.MessageState         `protogen:"open.v1"`
+	PublishGrant  *SignedSandboxJobGrantV1       `protobuf:"bytes,1,opt,name=publish_grant,json=publishGrant,proto3" json:"publish_grant,omitempty"`
+	Phase         RustCompiledPublicationPhaseV1 `protobuf:"varint,2,opt,name=phase,proto3,enum=elitea.runtime.v1.RustCompiledPublicationPhaseV1" json:"phase,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublishRustCompiledSnapshotRequestV1) Reset() {
+	*x = PublishRustCompiledSnapshotRequestV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishRustCompiledSnapshotRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishRustCompiledSnapshotRequestV1) ProtoMessage() {}
+
+func (x *PublishRustCompiledSnapshotRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishRustCompiledSnapshotRequestV1.ProtoReflect.Descriptor instead.
+func (*PublishRustCompiledSnapshotRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PublishRustCompiledSnapshotRequestV1) GetPublishGrant() *SignedSandboxJobGrantV1 {
+	if x != nil {
+		return x.PublishGrant
+	}
+	return nil
+}
+
+func (x *PublishRustCompiledSnapshotRequestV1) GetPhase() RustCompiledPublicationPhaseV1 {
+	if x != nil {
+		return x.Phase
+	}
+	return RustCompiledPublicationPhaseV1_RUST_COMPILED_PUBLICATION_PHASE_V1_UNSPECIFIED
+}
+
+type PublishRustCompiledSnapshotResponseV1 struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Status         SandboxJobStatusV1     `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.SandboxJobStatusV1" json:"status,omitempty"`
+	FailureCode    string                 `protobuf:"bytes,2,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
+	CleanupPending bool                   `protobuf:"varint,3,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PublishRustCompiledSnapshotResponseV1) Reset() {
+	*x = PublishRustCompiledSnapshotResponseV1{}
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishRustCompiledSnapshotResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishRustCompiledSnapshotResponseV1) ProtoMessage() {}
+
+func (x *PublishRustCompiledSnapshotResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_sandbox_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishRustCompiledSnapshotResponseV1.ProtoReflect.Descriptor instead.
+func (*PublishRustCompiledSnapshotResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_sandbox_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PublishRustCompiledSnapshotResponseV1) GetStatus() SandboxJobStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return SandboxJobStatusV1_SANDBOX_JOB_STATUS_V1_UNSPECIFIED
+}
+
+func (x *PublishRustCompiledSnapshotResponseV1) GetFailureCode() string {
+	if x != nil {
+		return x.FailureCode
+	}
+	return ""
+}
+
+func (x *PublishRustCompiledSnapshotResponseV1) GetCleanupPending() bool {
 	if x != nil {
 		return x.CleanupPending
 	}
@@ -722,10 +1788,35 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\tsignature\x18\x03 \x01(\fR\tsignatureJ\x04\b\x04\x10\x10\"\xa8\x01\n" +
 	"\x1dAuthorizeSandboxJobResponseV1\x12@\n" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12?\n" +
-	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\x8f\x01\n" +
-	"\x19SubmitSandboxJobRequestV1\x12@\n" +
+	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\xe5\x03\n" +
+	" HydrateSandboxWorkspaceRequestV1\x12@\n" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12*\n" +
-	"\x11prepared_job_json\x18\x02 \x01(\fR\x0fpreparedJobJsonJ\x04\b\x03\x10\x10\"\xce\x01\n" +
+	"\x11prepared_job_json\x18\x02 \x01(\fR\x0fpreparedJobJson\x126\n" +
+	"\x17workspace_manifest_json\x18\x03 \x01(\fR\x15workspaceManifestJson\x12!\n" +
+	"\fcontrol_json\x18\x04 \x01(\fR\vcontrolJson\x12'\n" +
+	"\x0fdescriptor_json\x18\x05 \x01(\fR\x0edescriptorJson\x12I\n" +
+	"\n" +
+	"read_grant\x18\x06 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\treadGrant\x12@\n" +
+	"\x1acode_execution_intent_json\x18\a \x01(\fH\x00R\x17codeExecutionIntentJson\x88\x01\x01\x12\x1d\n" +
+	"\n" +
+	"file_index\x18\b \x01(\rR\tfileIndexB\x1d\n" +
+	"\x1b_code_execution_intent_jsonJ\x04\b\t\x10\x10\"\xaf\x01\n" +
+	"!HydrateSandboxWorkspaceResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12E\n" +
+	"\x06cursor\x18\x02 \x01(\v2-.elitea.runtime.v1.WorkspaceHydrationCursorV1R\x06cursorJ\x04\b\x03\x10\x10\"\xc4\x01\n" +
+	"\x1aWorkspaceHydrationCursorV1\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\rR\brevision\x12'\n" +
+	"\x0fmanifest_sha256\x18\x02 \x01(\fR\x0emanifestSha256\x12&\n" +
+	"\x0fnext_file_index\x18\x03 \x01(\rR\rnextFileIndex\x12\x1d\n" +
+	"\n" +
+	"file_count\x18\x04 \x01(\rR\tfileCount\x12\x14\n" +
+	"\x05ready\x18\x05 \x01(\bR\x05readyJ\x04\b\x06\x10\x10\"\xe8\x02\n" +
+	"\x19SubmitSandboxJobRequestV1\x12@\n" +
+	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12;\n" +
+	"\x1acode_execution_intent_json\x18\x12 \x01(\fR\x17codeExecutionIntentJson\x12*\n" +
+	"\x11prepared_job_json\x18\x02 \x01(\fR\x0fpreparedJobJson\x12d\n" +
+	"\x18dependency_content_grant\x18\x10 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x16dependencyContentGrant\x124\n" +
+	"\x16dependency_bundle_json\x18\x11 \x01(\fR\x14dependencyBundleJsonJ\x04\b\x03\x10\x10\"\xce\x01\n" +
 	"\x1aSubmitSandboxJobResponseV1\x12=\n" +
 	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12\x1f\n" +
 	"\vresult_json\x18\x02 \x01(\fR\n" +
@@ -736,17 +1827,85 @@ const file_elitea_runtime_v1_sandbox_proto_rawDesc = "" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grantJ\x04\b\x02\x10\x10\"\x8a\x01\n" +
 	"\x1aCancelSandboxJobResponseV1\x12=\n" +
 	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12'\n" +
-	"\x0fcleanup_pending\x18\x02 \x01(\bR\x0ecleanupPendingJ\x04\b\x03\x10\x10*\xef\x01\n" +
+	"\x0fcleanup_pending\x18\x02 \x01(\bR\x0ecleanupPendingJ\x04\b\x03\x10\x10\"\x9f\x01\n" +
+	"#PrepareSandboxDependenciesRequestV1\x12@\n" +
+	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x120\n" +
+	"\x14preparation_job_json\x18\x02 \x01(\fR\x12preparationJobJsonJ\x04\b\x03\x10\x10\"\xd8\x01\n" +
+	"$PrepareSandboxDependenciesResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12\x1f\n" +
+	"\vbundle_json\x18\x02 \x01(\fR\n" +
+	"bundleJson\x12!\n" +
+	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\x12'\n" +
+	"\x0fcleanup_pending\x18\x04 \x01(\bR\x0ecleanupPendingJ\x04\b\x05\x10\x10\"\x92\x01\n" +
+	"#PublishSandboxDependenciesRequestV1\x12O\n" +
+	"\rcontent_grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\fcontentGrant\x12\x14\n" +
+	"\x05index\x18\x02 \x01(\rR\x05indexJ\x04\b\x03\x10\x10\"\xb7\x01\n" +
+	"$PublishSandboxDependenciesResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12!\n" +
+	"\ffailure_code\x18\x02 \x01(\tR\vfailureCode\x12'\n" +
+	"\x0fcleanup_pending\x18\x03 \x01(\bR\x0ecleanupPendingJ\x04\b\x04\x10\x10\"\xf1\x02\n" +
+	"#HydrateSandboxDependenciesRequestV1\x12S\n" +
+	"\x0fexecution_grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x0eexecutionGrant\x12O\n" +
+	"\rcontent_grant\x18\x02 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\fcontentGrant\x12*\n" +
+	"\x11prepared_job_json\x18\x03 \x01(\fR\x0fpreparedJobJson\x12\x1f\n" +
+	"\vbundle_json\x18\x04 \x01(\fR\n" +
+	"bundleJson\x12\x14\n" +
+	"\x05index\x18\x05 \x01(\rR\x05index\x12;\n" +
+	"\x1acode_execution_intent_json\x18\x10 \x01(\fR\x17codeExecutionIntentJsonJ\x04\b\x06\x10\x10\"B\n" +
+	"$HydrateSandboxDependenciesResponseV1\x12\x14\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05readyJ\x04\b\x02\x10\x10\"\x86\x05\n" +
+	"#SubmitRustCompiledSnapshotRequestV1\x12@\n" +
+	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12*\n" +
+	"\x11prepared_job_json\x18\x02 \x01(\fR\x0fpreparedJobJson\x12!\n" +
+	"\fcontrol_json\x18\x03 \x01(\fR\vcontrolJson\x12'\n" +
+	"\x0fdescriptor_json\x18\x04 \x01(\fR\x0edescriptorJson\x12I\n" +
+	"\n" +
+	"read_grant\x18\x05 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\treadGrant\x12d\n" +
+	"\x18dependency_content_grant\x18\x06 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x16dependencyContentGrant\x124\n" +
+	"\x16dependency_bundle_json\x18\a \x01(\fR\x14dependencyBundleJson\x12%\n" +
+	"\x0ereconcile_only\x18\b \x01(\bR\rreconcileOnly\x129\n" +
+	"\x16native_hydration_index\x18\t \x01(\rH\x00R\x14nativeHydrationIndex\x88\x01\x01\x12;\n" +
+	"\x1acode_execution_intent_json\x18\n" +
+	" \x01(\fR\x17codeExecutionIntentJsonB\x19\n" +
+	"\x17_native_hydration_indexJ\x04\b\v\x10 \"\x90\x03\n" +
+	"$SubmitRustCompiledSnapshotResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12\x1f\n" +
+	"\vresult_json\x18\x02 \x01(\fR\n" +
+	"resultJson\x12'\n" +
+	"\x0fdescriptor_json\x18\x03 \x01(\fR\x0edescriptorJson\x12.\n" +
+	"\x13compilation_job_key\x18\x04 \x01(\fR\x11compilationJobKey\x12!\n" +
+	"\ffailure_code\x18\x05 \x01(\tR\vfailureCode\x12'\n" +
+	"\x0fcleanup_pending\x18\x06 \x01(\bR\x0ecleanupPending\x12'\n" +
+	"\x0fneeds_admission\x18\a \x01(\bR\x0eneedsAdmission\x124\n" +
+	"\x16native_hydration_ready\x18\b \x01(\bR\x14nativeHydrationReadyJ\x04\b\t\x10 \"\xc6\x01\n" +
+	"$PublishRustCompiledSnapshotRequestV1\x12O\n" +
+	"\rpublish_grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\fpublishGrant\x12G\n" +
+	"\x05phase\x18\x02 \x01(\x0e21.elitea.runtime.v1.RustCompiledPublicationPhaseV1R\x05phaseJ\x04\b\x03\x10 \"\xb8\x01\n" +
+	"%PublishRustCompiledSnapshotResponseV1\x12=\n" +
+	"\x06status\x18\x01 \x01(\x0e2%.elitea.runtime.v1.SandboxJobStatusV1R\x06status\x12!\n" +
+	"\ffailure_code\x18\x02 \x01(\tR\vfailureCode\x12'\n" +
+	"\x0fcleanup_pending\x18\x03 \x01(\bR\x0ecleanupPendingJ\x04\b\x04\x10 *\xef\x01\n" +
 	"\x12SandboxJobStatusV1\x12%\n" +
 	"!SANDBOX_JOB_STATUS_V1_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dSANDBOX_JOB_STATUS_V1_PENDING\x10\x01\x12#\n" +
 	"\x1fSANDBOX_JOB_STATUS_V1_COMPLETED\x10\x02\x12 \n" +
 	"\x1cSANDBOX_JOB_STATUS_V1_FAILED\x10\x03\x12#\n" +
 	"\x1fSANDBOX_JOB_STATUS_V1_CANCELLED\x10\x04\x12#\n" +
-	"\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x052\xfc\x01\n" +
-	"\x18SandboxSupervisorService\x12o\n" +
+	"\x1fSANDBOX_JOB_STATUS_V1_UNCERTAIN\x10\x05*\xe5\x01\n" +
+	"\x1eRustCompiledPublicationPhaseV1\x122\n" +
+	".RUST_COMPILED_PUBLICATION_PHASE_V1_UNSPECIFIED\x10\x00\x121\n" +
+	"-RUST_COMPILED_PUBLICATION_PHASE_V1_EXECUTABLE\x10\x01\x12.\n" +
+	"*RUST_COMPILED_PUBLICATION_PHASE_V1_RELEASE\x10\x02\x12,\n" +
+	"(RUST_COMPILED_PUBLICATION_PHASE_V1_READY\x10\x032\xd6\b\n" +
+	"\x18SandboxSupervisorService\x12\x84\x01\n" +
+	"\x17HydrateSandboxWorkspace\x123.elitea.runtime.v1.HydrateSandboxWorkspaceRequestV1\x1a4.elitea.runtime.v1.HydrateSandboxWorkspaceResponseV1\x12\x8d\x01\n" +
+	"\x1aSubmitRustCompiledSnapshot\x126.elitea.runtime.v1.SubmitRustCompiledSnapshotRequestV1\x1a7.elitea.runtime.v1.SubmitRustCompiledSnapshotResponseV1\x12\x90\x01\n" +
+	"\x1bPublishRustCompiledSnapshot\x127.elitea.runtime.v1.PublishRustCompiledSnapshotRequestV1\x1a8.elitea.runtime.v1.PublishRustCompiledSnapshotResponseV1\x12o\n" +
 	"\x10SubmitSandboxJob\x12,.elitea.runtime.v1.SubmitSandboxJobRequestV1\x1a-.elitea.runtime.v1.SubmitSandboxJobResponseV1\x12o\n" +
-	"\x10CancelSandboxJob\x12,.elitea.runtime.v1.CancelSandboxJobRequestV1\x1a-.elitea.runtime.v1.CancelSandboxJobResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x10CancelSandboxJob\x12,.elitea.runtime.v1.CancelSandboxJobRequestV1\x1a-.elitea.runtime.v1.CancelSandboxJobResponseV1\x12\x8d\x01\n" +
+	"\x1aPrepareSandboxDependencies\x126.elitea.runtime.v1.PrepareSandboxDependenciesRequestV1\x1a7.elitea.runtime.v1.PrepareSandboxDependenciesResponseV1\x12\x8d\x01\n" +
+	"\x1aPublishSandboxDependencies\x126.elitea.runtime.v1.PublishSandboxDependenciesRequestV1\x1a7.elitea.runtime.v1.PublishSandboxDependenciesResponseV1\x12\x8d\x01\n" +
+	"\x1aHydrateSandboxDependencies\x126.elitea.runtime.v1.HydrateSandboxDependenciesRequestV1\x1a7.elitea.runtime.v1.HydrateSandboxDependenciesResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_sandbox_proto_rawDescOnce sync.Once
@@ -760,42 +1919,86 @@ func file_elitea_runtime_v1_sandbox_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_sandbox_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_elitea_runtime_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_elitea_runtime_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_elitea_runtime_v1_sandbox_proto_goTypes = []any{
-	(SandboxJobStatusV1)(0),               // 0: elitea.runtime.v1.SandboxJobStatusV1
-	(*AuthorizeSandboxJobRequestV1)(nil),  // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
-	(*SandboxJobGrantClaimsV1)(nil),       // 2: elitea.runtime.v1.SandboxJobGrantClaimsV1
-	(*SignedSandboxJobGrantV1)(nil),       // 3: elitea.runtime.v1.SignedSandboxJobGrantV1
-	(*AuthorizeSandboxJobResponseV1)(nil), // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
-	(*SubmitSandboxJobRequestV1)(nil),     // 5: elitea.runtime.v1.SubmitSandboxJobRequestV1
-	(*SubmitSandboxJobResponseV1)(nil),    // 6: elitea.runtime.v1.SubmitSandboxJobResponseV1
-	(*CancelSandboxJobRequestV1)(nil),     // 7: elitea.runtime.v1.CancelSandboxJobRequestV1
-	(*CancelSandboxJobResponseV1)(nil),    // 8: elitea.runtime.v1.CancelSandboxJobResponseV1
-	(*ExecutionIdentityV1)(nil),           // 9: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),              // 10: elitea.runtime.v1.ExecutionFenceV1
-	(*SignedWorkerCommandEnvelopeV1)(nil), // 11: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	(*RuntimeErrorV1)(nil),                // 12: elitea.runtime.v1.RuntimeErrorV1
+	(SandboxJobStatusV1)(0),                       // 0: elitea.runtime.v1.SandboxJobStatusV1
+	(RustCompiledPublicationPhaseV1)(0),           // 1: elitea.runtime.v1.RustCompiledPublicationPhaseV1
+	(*AuthorizeSandboxJobRequestV1)(nil),          // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	(*SandboxJobGrantClaimsV1)(nil),               // 3: elitea.runtime.v1.SandboxJobGrantClaimsV1
+	(*SignedSandboxJobGrantV1)(nil),               // 4: elitea.runtime.v1.SignedSandboxJobGrantV1
+	(*AuthorizeSandboxJobResponseV1)(nil),         // 5: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	(*HydrateSandboxWorkspaceRequestV1)(nil),      // 6: elitea.runtime.v1.HydrateSandboxWorkspaceRequestV1
+	(*HydrateSandboxWorkspaceResponseV1)(nil),     // 7: elitea.runtime.v1.HydrateSandboxWorkspaceResponseV1
+	(*WorkspaceHydrationCursorV1)(nil),            // 8: elitea.runtime.v1.WorkspaceHydrationCursorV1
+	(*SubmitSandboxJobRequestV1)(nil),             // 9: elitea.runtime.v1.SubmitSandboxJobRequestV1
+	(*SubmitSandboxJobResponseV1)(nil),            // 10: elitea.runtime.v1.SubmitSandboxJobResponseV1
+	(*CancelSandboxJobRequestV1)(nil),             // 11: elitea.runtime.v1.CancelSandboxJobRequestV1
+	(*CancelSandboxJobResponseV1)(nil),            // 12: elitea.runtime.v1.CancelSandboxJobResponseV1
+	(*PrepareSandboxDependenciesRequestV1)(nil),   // 13: elitea.runtime.v1.PrepareSandboxDependenciesRequestV1
+	(*PrepareSandboxDependenciesResponseV1)(nil),  // 14: elitea.runtime.v1.PrepareSandboxDependenciesResponseV1
+	(*PublishSandboxDependenciesRequestV1)(nil),   // 15: elitea.runtime.v1.PublishSandboxDependenciesRequestV1
+	(*PublishSandboxDependenciesResponseV1)(nil),  // 16: elitea.runtime.v1.PublishSandboxDependenciesResponseV1
+	(*HydrateSandboxDependenciesRequestV1)(nil),   // 17: elitea.runtime.v1.HydrateSandboxDependenciesRequestV1
+	(*HydrateSandboxDependenciesResponseV1)(nil),  // 18: elitea.runtime.v1.HydrateSandboxDependenciesResponseV1
+	(*SubmitRustCompiledSnapshotRequestV1)(nil),   // 19: elitea.runtime.v1.SubmitRustCompiledSnapshotRequestV1
+	(*SubmitRustCompiledSnapshotResponseV1)(nil),  // 20: elitea.runtime.v1.SubmitRustCompiledSnapshotResponseV1
+	(*PublishRustCompiledSnapshotRequestV1)(nil),  // 21: elitea.runtime.v1.PublishRustCompiledSnapshotRequestV1
+	(*PublishRustCompiledSnapshotResponseV1)(nil), // 22: elitea.runtime.v1.PublishRustCompiledSnapshotResponseV1
+	(*ExecutionIdentityV1)(nil),                   // 23: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),                      // 24: elitea.runtime.v1.ExecutionFenceV1
+	(*SignedWorkerCommandEnvelopeV1)(nil),         // 25: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	(*RuntimeErrorV1)(nil),                        // 26: elitea.runtime.v1.RuntimeErrorV1
 }
 var file_elitea_runtime_v1_sandbox_proto_depIdxs = []int32{
-	9,  // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	10, // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	11, // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	3,  // 3: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
-	12, // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	3,  // 5: elitea.runtime.v1.SubmitSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
-	0,  // 6: elitea.runtime.v1.SubmitSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
-	3,  // 7: elitea.runtime.v1.CancelSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
-	0,  // 8: elitea.runtime.v1.CancelSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
-	5,  // 9: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:input_type -> elitea.runtime.v1.SubmitSandboxJobRequestV1
-	7,  // 10: elitea.runtime.v1.SandboxSupervisorService.CancelSandboxJob:input_type -> elitea.runtime.v1.CancelSandboxJobRequestV1
-	6,  // 11: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:output_type -> elitea.runtime.v1.SubmitSandboxJobResponseV1
-	8,  // 12: elitea.runtime.v1.SandboxSupervisorService.CancelSandboxJob:output_type -> elitea.runtime.v1.CancelSandboxJobResponseV1
-	11, // [11:13] is the sub-list for method output_type
-	9,  // [9:11] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	23, // 0: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	24, // 1: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	25, // 2: elitea.runtime.v1.AuthorizeSandboxJobRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	4,  // 3: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	26, // 4: elitea.runtime.v1.AuthorizeSandboxJobResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	4,  // 5: elitea.runtime.v1.HydrateSandboxWorkspaceRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	4,  // 6: elitea.runtime.v1.HydrateSandboxWorkspaceRequestV1.read_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 7: elitea.runtime.v1.HydrateSandboxWorkspaceResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	8,  // 8: elitea.runtime.v1.HydrateSandboxWorkspaceResponseV1.cursor:type_name -> elitea.runtime.v1.WorkspaceHydrationCursorV1
+	4,  // 9: elitea.runtime.v1.SubmitSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	4,  // 10: elitea.runtime.v1.SubmitSandboxJobRequestV1.dependency_content_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 11: elitea.runtime.v1.SubmitSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	4,  // 12: elitea.runtime.v1.CancelSandboxJobRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 13: elitea.runtime.v1.CancelSandboxJobResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	4,  // 14: elitea.runtime.v1.PrepareSandboxDependenciesRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 15: elitea.runtime.v1.PrepareSandboxDependenciesResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	4,  // 16: elitea.runtime.v1.PublishSandboxDependenciesRequestV1.content_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 17: elitea.runtime.v1.PublishSandboxDependenciesResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	4,  // 18: elitea.runtime.v1.HydrateSandboxDependenciesRequestV1.execution_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	4,  // 19: elitea.runtime.v1.HydrateSandboxDependenciesRequestV1.content_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	4,  // 20: elitea.runtime.v1.SubmitRustCompiledSnapshotRequestV1.grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	4,  // 21: elitea.runtime.v1.SubmitRustCompiledSnapshotRequestV1.read_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	4,  // 22: elitea.runtime.v1.SubmitRustCompiledSnapshotRequestV1.dependency_content_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	0,  // 23: elitea.runtime.v1.SubmitRustCompiledSnapshotResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	4,  // 24: elitea.runtime.v1.PublishRustCompiledSnapshotRequestV1.publish_grant:type_name -> elitea.runtime.v1.SignedSandboxJobGrantV1
+	1,  // 25: elitea.runtime.v1.PublishRustCompiledSnapshotRequestV1.phase:type_name -> elitea.runtime.v1.RustCompiledPublicationPhaseV1
+	0,  // 26: elitea.runtime.v1.PublishRustCompiledSnapshotResponseV1.status:type_name -> elitea.runtime.v1.SandboxJobStatusV1
+	6,  // 27: elitea.runtime.v1.SandboxSupervisorService.HydrateSandboxWorkspace:input_type -> elitea.runtime.v1.HydrateSandboxWorkspaceRequestV1
+	19, // 28: elitea.runtime.v1.SandboxSupervisorService.SubmitRustCompiledSnapshot:input_type -> elitea.runtime.v1.SubmitRustCompiledSnapshotRequestV1
+	21, // 29: elitea.runtime.v1.SandboxSupervisorService.PublishRustCompiledSnapshot:input_type -> elitea.runtime.v1.PublishRustCompiledSnapshotRequestV1
+	9,  // 30: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:input_type -> elitea.runtime.v1.SubmitSandboxJobRequestV1
+	11, // 31: elitea.runtime.v1.SandboxSupervisorService.CancelSandboxJob:input_type -> elitea.runtime.v1.CancelSandboxJobRequestV1
+	13, // 32: elitea.runtime.v1.SandboxSupervisorService.PrepareSandboxDependencies:input_type -> elitea.runtime.v1.PrepareSandboxDependenciesRequestV1
+	15, // 33: elitea.runtime.v1.SandboxSupervisorService.PublishSandboxDependencies:input_type -> elitea.runtime.v1.PublishSandboxDependenciesRequestV1
+	17, // 34: elitea.runtime.v1.SandboxSupervisorService.HydrateSandboxDependencies:input_type -> elitea.runtime.v1.HydrateSandboxDependenciesRequestV1
+	7,  // 35: elitea.runtime.v1.SandboxSupervisorService.HydrateSandboxWorkspace:output_type -> elitea.runtime.v1.HydrateSandboxWorkspaceResponseV1
+	20, // 36: elitea.runtime.v1.SandboxSupervisorService.SubmitRustCompiledSnapshot:output_type -> elitea.runtime.v1.SubmitRustCompiledSnapshotResponseV1
+	22, // 37: elitea.runtime.v1.SandboxSupervisorService.PublishRustCompiledSnapshot:output_type -> elitea.runtime.v1.PublishRustCompiledSnapshotResponseV1
+	10, // 38: elitea.runtime.v1.SandboxSupervisorService.SubmitSandboxJob:output_type -> elitea.runtime.v1.SubmitSandboxJobResponseV1
+	12, // 39: elitea.runtime.v1.SandboxSupervisorService.CancelSandboxJob:output_type -> elitea.runtime.v1.CancelSandboxJobResponseV1
+	14, // 40: elitea.runtime.v1.SandboxSupervisorService.PrepareSandboxDependencies:output_type -> elitea.runtime.v1.PrepareSandboxDependenciesResponseV1
+	16, // 41: elitea.runtime.v1.SandboxSupervisorService.PublishSandboxDependencies:output_type -> elitea.runtime.v1.PublishSandboxDependenciesResponseV1
+	18, // 42: elitea.runtime.v1.SandboxSupervisorService.HydrateSandboxDependencies:output_type -> elitea.runtime.v1.HydrateSandboxDependenciesResponseV1
+	35, // [35:43] is the sub-list for method output_type
+	27, // [27:35] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_sandbox_proto_init() }
@@ -806,13 +2009,15 @@ func file_elitea_runtime_v1_sandbox_proto_init() {
 	file_elitea_runtime_v1_common_proto_init()
 	file_elitea_runtime_v1_envelope_proto_init()
 	file_elitea_runtime_v1_errors_proto_init()
+	file_elitea_runtime_v1_sandbox_proto_msgTypes[4].OneofWrappers = []any{}
+	file_elitea_runtime_v1_sandbox_proto_msgTypes[17].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_sandbox_proto_rawDesc), len(file_elitea_runtime_v1_sandbox_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   8,
+			NumEnums:      2,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

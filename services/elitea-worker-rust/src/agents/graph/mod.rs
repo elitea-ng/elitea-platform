@@ -6,12 +6,20 @@
 
 mod agent;
 mod application;
+mod application_activation;
 #[cfg(test)]
 mod application_tests;
 mod code;
+pub(crate) mod code_debug;
+pub(crate) mod http_action;
+pub(crate) use code_debug::{
+    CodeDebugAdmission, CodeDebugArtifactReference, CodeDebugArtifactSink, CodeDebugFailure,
+};
 mod code_remote;
 mod code_result;
 mod code_runtime;
+pub(crate) mod code_trace;
+mod code_workspace;
 pub(crate) use code_remote::CodeRuntimeFactory;
 mod code_state;
 #[cfg(test)]
@@ -31,7 +39,24 @@ mod hitl_tests;
 mod llm;
 #[cfg(test)]
 mod llm_tests;
+pub(crate) mod map_authority;
+pub(crate) mod map_reduce;
+#[cfg(test)]
+mod map_reduce_tests;
+pub(crate) mod map_turn;
+mod map_yaml;
 mod node_events;
+pub(crate) mod node_recovery;
+#[cfg(test)]
+mod node_recovery_compiler_tests;
+pub(crate) mod node_recovery_owner;
+pub(crate) mod node_recovery_receipt;
+pub(crate) mod node_recovery_runtime;
+pub(crate) use map_authority::MapCheckpointAuthority;
+pub(crate) use map_reduce::{
+    FrozenMapItem, MapActivation, MapChildCheckpoint, MapChildCheckpointerFactory,
+    MapExecutionIdentity, MapWorkerKind,
+};
 mod parallel;
 #[cfg(test)]
 mod parallel_tests;
@@ -45,8 +70,12 @@ mod routing_tests;
 mod state_modifier;
 #[cfg(test)]
 mod state_modifier_tests;
+pub(crate) mod static_pause;
+#[cfg(test)]
+mod static_pause_tests;
+pub(crate) mod static_tool_pause;
 pub(crate) mod turn_checkpointer;
-mod yaml;
+pub(crate) mod yaml;
 
 pub(crate) use agent::{
     EliteaGraphAgent, PIPELINE_COMPLETED_CONTENT, PIPELINE_COMPLETED_METADATA_KEY,
@@ -59,7 +88,7 @@ pub(crate) use application::{
 };
 pub(crate) use direct_tool::{
     DirectToolExecutionError, DirectToolNodeKind, DirectToolSelection, PipelineDirectToolResolver,
-    ResolvedDirectTool,
+    ResolvedDirectTool, scoped_pipeline_tool_context,
 };
 pub(crate) use llm::{
     LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, LlmToolkitSelection,
@@ -78,7 +107,8 @@ pub use yaml::{
 };
 
 pub(crate) use parallel::{
-    ParallelActivation, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
+    ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

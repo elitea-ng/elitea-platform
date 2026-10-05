@@ -167,9 +167,9 @@ func TestNestedApplicationVersionServesTheFrozenClaimScopedDefinition(t *testing
 	// the key SET is part of the contract, not only the values.
 	var envelope map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
-	require.Len(t, envelope, 5)
+	require.Len(t, envelope, 6)
 	for _, key := range []string{
-		"schema_version", "project_id", "application_id", "version_id", "version_details",
+		"schema_version", "project_id", "application_id", "version_id", "version_details", "frozen_definition_sha256",
 	} {
 		require.Contains(t, envelope, key)
 	}
@@ -180,6 +180,7 @@ func TestNestedApplicationVersionServesTheFrozenClaimScopedDefinition(t *testing
 	require.EqualValues(t, 90106, value.ProjectID)
 	require.EqualValues(t, 1, value.ApplicationID)
 	require.EqualValues(t, 2, value.VersionID)
+	require.Regexp(t, `^[0-9a-f]{64}$`, value.FrozenDefinitionSHA256)
 
 	var frozen map[string]any
 	require.NoError(t, json.Unmarshal(value.VersionDetails, &frozen))

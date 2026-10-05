@@ -8,6 +8,7 @@ import (
 	"time"
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	codeplatform "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
@@ -20,6 +21,7 @@ const toolRunRequestDigestDomain = "elitea.toolkit.call_tool.admission.v1\x00"
 var ErrInvalidToolRunAdmission = errors.New("invalid tool-run admission")
 
 type SubmitRequest struct {
+	CodeParent     *codeplatform.ParentEffect
 	Identity       executionapp.AdmissionIdentity
 	IdempotencyKey string
 	Inputs         AuthoritativeInputs
@@ -28,8 +30,9 @@ type SubmitRequest struct {
 // Admission is the atomic unit the store persists: input bytes, job and outbox
 // commit together or not at all.
 type Admission struct {
-	Record  executiondomain.Admission
-	Binding executiondomain.ToolkitCallToolBinding
+	CodeParent *codeplatform.ParentEffect
+	Record     executiondomain.Admission
+	Binding    executiondomain.ToolkitCallToolBinding
 }
 
 type AtomicAdmissionStore interface {
@@ -123,8 +126,9 @@ func (s *AdmissionService) Submit(ctx context.Context, request SubmitRequest) (A
 	}
 
 	outcome, err := s.store.AdmitToolkitCallTool(ctx, Admission{
-		Record:  record,
-		Binding: binding,
+		Record:     record,
+		CodeParent: request.CodeParent,
+		Binding:    binding,
 	})
 	if err != nil {
 		return AdmittedRun{}, fmt.Errorf("admit tool run: %w", err)

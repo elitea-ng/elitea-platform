@@ -2,7 +2,12 @@
 //! Outer CPU/memory/PID/network/filesystem isolation remains mandatory.
 #![forbid(unsafe_code)]
 
+mod compiled_code;
+mod compiled_lifecycle;
 mod lifecycle;
+mod native_finalization;
+mod workspace_content;
+mod workspace_lifecycle;
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -31,7 +36,23 @@ struct Receipt {
 }
 
 fn validate(request: &Request) -> bool {
-    !request.argv.is_empty()
+    // These switches are immutable supervisor launch configuration ONLY after
+    // verified role-specific authority; callers cannot request/set them.
+    let snapshot_role = if std::env::var_os("ELITEA_COMPILED_CODE_JOB_PURPOSE").is_some() {
+        match compiled_code::enabled_purpose() {
+            Ok(compiled_code::Purpose::Compile) => {
+                request.argv == ["/usr/local/bin/elitea-code-rust", "--compile-snapshot"]
+            }
+            Ok(compiled_code::Purpose::Execute) => {
+                request.argv == ["/usr/local/bin/elitea-code-rust", "--execute-snapshot"]
+            }
+            Err(_) => false,
+        }
+    } else {
+        true
+    };
+    snapshot_role
+        && !request.argv.is_empty()
         && request.argv.len() <= 64
         && request
             .argv
@@ -132,7 +153,7 @@ async fn execute(request: Request) -> Receipt {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(command) = std::env::args().nth(1) {
-        lifecycle::run(&command)?;
+        lifecycle::run(&command).await?;
         return Ok(());
     }
     // The supervisor writes this file before signaling container dispatch.

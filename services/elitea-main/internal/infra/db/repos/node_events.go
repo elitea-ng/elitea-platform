@@ -354,6 +354,11 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 					return err
 				}
 			}
+			if capabilityID == executiondomain.AgentApplicationCapability || capabilityID == executiondomain.AgentAdhocCapability {
+				if err := projectNodeRecovery(ctx, tx, projectionProjectID, frame, authorityClaimID); err != nil {
+					return err
+				}
+			}
 			if capabilityID == executiondomain.IndexIngestCapability && persistTaskRestamp {
 				if err := persistCurrentIndexMetaTaskRestampIntent(
 					ctx,

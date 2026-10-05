@@ -298,6 +298,9 @@ spec:
             {{- end }}
             - name: material
               mountPath: /run/elitea-runtime
+              {{- if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }}
+              readOnly: true
+              {{- end }}
             - name: spool
               mountPath: {{ .Values.worker.runtime.spoolRoot }}
             - name: tmp

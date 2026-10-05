@@ -258,6 +258,13 @@ describe('deriveChatBoxInputState', () => {
     hasPendingHitlInterrupt: false, isActiveParticipantBroken: false,
   };
 
+  it('blocks a new turn while keeping the editor draft available during recovery', () => {
+    const paused = deriveChatBoxInputState({ ...base, isEditorTest: true, isStreaming: true, hasPendingNodeRecovery: true });
+    expect(paused.disabledSend).toBe(true);
+    expect(paused.isInputLoading).toBe(true);
+    expect(paused.isDraftInputBusy).toBe(false);
+  });
+
   it('not loading/disabled when all false', () => {
     const r = deriveChatBoxInputState(base);
     expect(r.isInputLoading).toBe(false);
@@ -312,6 +319,32 @@ describe('deriveChatBoxInputState', () => {
     const uploading = deriveChatBoxInputState({ ...base, isStreaming: true, isUploadingAttachments: true });
     expect(uploading.isComposerBusy).toBe(true);
     expect(uploading.disabledSend).toBe(true);
+  });
+
+  it.each(['isLoadingConversation', 'isFetchingParticipantDetails'] as const)(
+    'keeps editor Test drafts editable during %s while Send remains blocked', (flag) => {
+      const preparing = deriveChatBoxInputState({ ...base, isEditorTest: true, [flag]: true });
+      expect(preparing.isDraftInputBusy).toBe(false);
+      expect(preparing.isComposerBusy).toBe(true);
+      expect(preparing.isInputLoading).toBe(true);
+      expect(preparing.disabledSend).toBe(true);
+      expect(deriveChatBoxInputState({ ...base, [flag]: true }).isDraftInputBusy).toBe(true);
+    },
+  );
+
+  it.each(['isUploadingAttachments', 'isUpdatingInternalToolsConfig', 'isConversationSending', 'isActiveParticipantWithdrawn'] as const)(
+    'keeps the editor Test input and Send blocked during %s', (flag) => {
+      const busy = deriveChatBoxInputState({ ...base, isEditorTest: true, [flag]: true });
+      expect(busy.isDraftInputBusy).toBe(true);
+      expect(busy.disabledSend).toBe(true);
+    },
+  );
+
+  it('keeps selected editor Test playback read-only', () => {
+    const playback = deriveChatBoxInputState({ ...base, isEditorTest: true, activeConversation: { isPlayback: true } });
+    expect(playback.isDraftInputBusy).toBe(true);
+    expect(playback.disabledSend).toBe(true);
+    expect(deriveChatBoxInputState({ ...base, activeConversation: { isPlayback: true } }).isDraftInputBusy).toBe(false);
   });
 
   it('disabled when no chat input', () => {

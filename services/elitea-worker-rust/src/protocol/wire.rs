@@ -72,6 +72,12 @@ pub(crate) enum Schema {
     SignedCommandEnvelope,
     #[cfg(feature = "sandbox-supervisor")]
     SandboxGrant,
+    #[cfg(feature = "sandbox-supervisor")]
+    CompiledSnapshotGrant,
+    #[cfg(feature = "sandbox-supervisor")]
+    OriginalCodeVisitAccess,
+    #[cfg(feature = "sandbox-supervisor")]
+    OriginalCodeVisitReference,
     Digest,
     WorkerCommand,
     InputBundleReference,
@@ -209,6 +215,24 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::SandboxGrant => match field {
             1 | 3 | 9..=11 | 32 => Some(varint()),
             2 | 4..=8 | 33 => Some(length()),
+            _ => None,
+        },
+        #[cfg(feature = "sandbox-supervisor")]
+        Schema::CompiledSnapshotGrant => match field {
+            1 | 3 | 9..=11 | 34 | 41 => Some(varint()),
+            2 | 4..=8 | 35..=40 | 42 => Some(length()),
+            _ => None,
+        },
+        #[cfg(feature = "sandbox-supervisor")]
+        Schema::OriginalCodeVisitAccess => match field {
+            1 | 2 | 5 => Some(length()),
+            3 | 4 => Some(varint()),
+            _ => None,
+        },
+        #[cfg(feature = "sandbox-supervisor")]
+        Schema::OriginalCodeVisitReference => match field {
+            1 | 3 => Some(length()),
+            2 => Some(varint()),
             _ => None,
         },
         Schema::SignedCommandEnvelope => match field {

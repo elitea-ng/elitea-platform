@@ -1,3 +1,4 @@
+import { FixedParallelNodeDefaults } from './parallel.constants';
 /**
  * `InitialNodeData` — the default `data` payload seeded onto a freshly
  * created YAML node, keyed by `PipelineNodeTypes` (baseline
@@ -20,6 +21,7 @@
  * strings — that `validate_target` refuses. See the per-factory comments.
  */
 import { PipelineNodeTypes } from './flowEditor.constants';
+import { GraphExtensionDefaults } from './graphExtensionDefaults.constants';
 
 
 const createBaseNodeData = () => ({
@@ -230,6 +232,8 @@ const createHitlNodeData = () => ({
  * this module's doc comment.
  */
 export const InitialNodeData: Readonly<Record<string, Record<string, unknown>>> = {
+  ...GraphExtensionDefaults,
+  [PipelineNodeTypes.Parallel]: FixedParallelNodeDefaults,
   [PipelineNodeTypes.Tool]: createToolNodeData(),
   [PipelineNodeTypes.Agent]: createAgentNodeData(),
   [PipelineNodeTypes.Pipeline]: createTransitionNodeData(),

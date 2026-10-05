@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
@@ -8,16 +8,20 @@ use std::time::Duration;
 
 use adk_rust::graph::checkpoint::{Checkpointer, MemoryCheckpointer};
 use adk_rust::graph::{
-    CompiledGraph, ExecutionConfig, GraphError, Node, NodeContext, NodeOutput, START, State,
-    StateGraph,
+    Checkpoint, CompiledGraph, ExecutionConfig, FunctionNode, GraphError, Node, NodeContext,
+    NodeOutput, START, State, StateGraph,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 
 use super::parallel::{
-    AdkParallelBranchRuntime, DurableParallelNode, ParallelActivation, ParallelBranchGraphFactory,
-    ParallelChildCheckpoint, ParallelChildCheckpointerFactory, projected_input_digest,
+    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
+    PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelBranchExecution,
+    ParallelBranchGraphFactory, ParallelBranchPause, ParallelBranchTerminal,
+    ParallelCheckpointAppender, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelDecision, ParallelNodeOutcome, ParallelOccurrenceCheckpointer, ParallelPauseCard,
+    PreparedParallelActivation, PreparedParallelBranch, projected_input_digest,
 };
 use super::{ParallelBranchDefinition, ParallelNodeDefinition};
 
@@ -25,9 +29,137 @@ type BehaviorFuture = Pin<Box<dyn Future<Output = Result<Value, GraphError>> + S
 type Behavior = Arc<dyn Fn() -> BehaviorFuture + Send + Sync>;
 
 #[derive(Default)]
+struct AtomicParentRows {
+    checkpoints: Vec<Checkpoint>,
+    before_append: Option<Checkpoint>,
+}
+
+#[derive(Default)]
+struct AtomicParentCheckpoints {
+    rows: Mutex<AtomicParentRows>,
+}
+
+fn checkpoint_equal(left: &Checkpoint, right: &Checkpoint) -> Result<bool, GraphError> {
+    Ok(serde_json::to_value(left)? == serde_json::to_value(right)?)
+}
+
+fn insert_immutable(
+    rows: &mut AtomicParentRows,
+    checkpoint: &Checkpoint,
+) -> Result<String, GraphError> {
+    if let Some(existing) = rows
+        .checkpoints
+        .iter()
+        .find(|row| row.checkpoint_id == checkpoint.checkpoint_id)
+    {
+        return if checkpoint_equal(existing, checkpoint)? {
+            Ok(existing.checkpoint_id.clone())
+        } else {
+            Err(GraphError::CheckpointError(
+                "immutable checkpoint conflict".to_owned(),
+            ))
+        };
+    }
+    rows.checkpoints.push(checkpoint.clone());
+    Ok(checkpoint.checkpoint_id.clone())
+}
+
+#[async_trait]
+impl Checkpointer for AtomicParentCheckpoints {
+    async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        let mut rows = self.rows.lock().await;
+        insert_immutable(&mut rows, checkpoint)
+    }
+
+    async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|row| row.thread_id == thread)
+            .cloned())
+    }
+
+    async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .checkpoints
+            .iter()
+            .find(|row| row.checkpoint_id == id)
+            .cloned())
+    }
+
+    async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .checkpoints
+            .iter()
+            .filter(|row| row.thread_id == thread)
+            .cloned()
+            .collect())
+    }
+
+    async fn delete(&self, thread: &str) -> Result<(), GraphError> {
+        self.rows
+            .lock()
+            .await
+            .checkpoints
+            .retain(|row| row.thread_id != thread);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ParallelCheckpointAppender for AtomicParentCheckpoints {
+    async fn append_after(
+        &self,
+        expected: Option<&Checkpoint>,
+        candidate: &Checkpoint,
+    ) -> Result<String, GraphError> {
+        let mut rows = self.rows.lock().await;
+        // This models a competing committed writer after the wrapper's load and
+        // before its atomic comparison. Ordinary writer fencing is insufficient.
+        if let Some(competing) = rows.before_append.take() {
+            insert_immutable(&mut rows, &competing)?;
+        }
+        if rows
+            .checkpoints
+            .iter()
+            .any(|row| row.checkpoint_id == candidate.checkpoint_id)
+        {
+            return insert_immutable(&mut rows, candidate);
+        }
+        let latest = rows
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|row| row.thread_id == candidate.thread_id);
+        let matches = match (expected, latest) {
+            (Some(expected), Some(latest)) => checkpoint_equal(expected, latest)?,
+            (None, None) => true,
+            _ => false,
+        };
+        if !matches {
+            return Err(GraphError::CheckpointError(
+                "atomic expected-parent conflict".to_owned(),
+            ));
+        }
+        insert_immutable(&mut rows, candidate)
+    }
+}
+
+#[derive(Default)]
 struct MemoryChildCheckpoints {
     stores: Mutex<HashMap<String, Arc<MemoryCheckpointer>>>,
     issued_threads: Mutex<Vec<String>>,
+    parent: Arc<AtomicParentCheckpoints>,
 }
 
 #[async_trait]
@@ -55,6 +187,7 @@ impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
         self.issued_threads.lock().await.push(thread_id.clone());
         let checkpointer: Arc<dyn Checkpointer> = store;
         Ok(ParallelChildCheckpoint {
+            admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
             thread_id,
             checkpointer,
         })
@@ -66,11 +199,22 @@ struct TestBranchGraphs {
     rejected_target: Option<String>,
 }
 
+#[async_trait]
 impl ParallelBranchGraphFactory for TestBranchGraphs {
+    fn owned_definition_digest(
+        &self,
+        branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        let mut result = [0; 32];
+        result.copy_from_slice(
+            ring::digest::digest(&ring::digest::SHA256, branch.node().as_bytes()).as_ref(),
+        );
+        Ok(result)
+    }
     fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
         if self.rejected_target.as_deref() == Some(branch.node()) {
             return Err(GraphError::InvalidGraph(
-                "parallel branches cannot contain pausing nodes in v1".to_owned(),
+                "the branch definition is not an admitted Agent".to_owned(),
             ));
         }
         if !self.behaviors.contains_key(branch.node()) {
@@ -82,7 +226,7 @@ impl ParallelBranchGraphFactory for TestBranchGraphs {
     fn compile_branch(
         &self,
         branch: &ParallelBranchDefinition,
-        checkpointer: Arc<dyn Checkpointer>,
+        execution: ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
         let behavior = Arc::clone(
             self.behaviors
@@ -90,19 +234,19 @@ impl ParallelBranchGraphFactory for TestBranchGraphs {
                 .ok_or_else(|| GraphError::NodeNotFound(branch.node().to_owned()))?,
         );
         StateGraph::with_channels(&["branch_input", "branch_result"])
-            .add_node_fn("run", move |_| {
+            .add_node(execution.wrap_node(FunctionNode::new("run", move |_| {
                 let behavior = Arc::clone(&behavior);
                 async move {
                     let value = behavior().await?;
                     Ok(NodeOutput::new().with_update("branch_result", value))
                 }
-            })
+            })))
             .add_edge(START, "run")
             .add_edge("run", adk_rust::graph::END)
             .compile()
             .map(|graph| {
                 graph
-                    .with_checkpointer_arc(checkpointer)
+                    .with_checkpointer_arc(execution.checkpointer())
                     .with_strict_channels()
             })
     }
@@ -122,10 +266,36 @@ impl ParallelBranchGraphFactory for TestBranchGraphs {
         &self,
         _branch: &ParallelBranchDefinition,
         child: &State,
-    ) -> Result<Value, GraphError> {
-        child.get("branch_result").cloned().ok_or_else(|| {
-            GraphError::SerializationError("branch result projection is missing".to_owned())
-        })
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        child
+            .get("branch_result")
+            .and_then(Value::as_object)
+            .cloned()
+            .map(ParallelBranchTerminal::Completed)
+            .ok_or_else(|| {
+                GraphError::SerializationError("branch result projection is missing".to_owned())
+            })
+    }
+
+    fn pause_cards(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        _pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        Err(GraphError::InvalidGraph(
+            "this fixture does not produce pauses".to_owned(),
+        ))
+    }
+
+    async fn resume_input(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        _pause: &ParallelBranchPause,
+        _decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        Err(GraphError::InvalidGraph(
+            "this fixture does not resume pauses".to_owned(),
+        ))
     }
 }
 
@@ -144,6 +314,7 @@ fn runtime(
     checkpoints: Arc<MemoryChildCheckpoints>,
     behaviors: HashMap<String, Behavior>,
 ) -> Arc<AdkParallelBranchRuntime> {
+    let parent: Arc<dyn ParallelCheckpointAppender> = checkpoints.parent.clone();
     let checkpoint_factory: Arc<dyn ParallelChildCheckpointerFactory> = checkpoints;
     let graph_factory: Arc<dyn ParallelBranchGraphFactory> = Arc::new(TestBranchGraphs {
         behaviors,
@@ -152,6 +323,7 @@ fn runtime(
     Arc::new(AdkParallelBranchRuntime::new(
         checkpoint_factory,
         graph_factory,
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
     ))
 }
 
@@ -159,12 +331,14 @@ fn parent_graph(
     definition: ParallelNodeDefinition,
     runtime: Arc<AdkParallelBranchRuntime>,
 ) -> CompiledGraph {
-    StateGraph::with_channels(&["input", "gathered"])
+    let parent = runtime.parent_checkpointer();
+    StateGraph::with_channels(&["input", "gathered", PARALLEL_RESUME_STATE_KEY])
         .add_node(DurableParallelNode::new(definition, runtime))
         .add_edge(START, "gather")
         .add_edge("gather", adk_rust::graph::END)
         .compile()
         .expect("compile parent graph")
+        .with_checkpointer_arc(parent)
         .with_strict_channels()
 }
 
@@ -289,8 +463,8 @@ async fn declared_order_is_stable_when_branches_finish_in_reverse_order() {
     assert_eq!(
         result["gathered"],
         json!([
-            {"branch_id": "a", "node": "first", "result": {"value": "first"}},
-            {"branch_id": "b", "node": "second", "result": {"value": "second"}},
+            {"branch_id": "a", "node": "first", "outputs": {"value": "first"}},
+            {"branch_id": "b", "node": "second", "outputs": {"value": "second"}},
         ])
     );
 }
@@ -442,7 +616,7 @@ async fn failure_drains_a_slow_inflight_sibling_without_admitting_pending_work()
 }
 
 #[tokio::test]
-async fn retry_reuses_same_input_checkpoint_and_changed_input_mints_a_new_lineage() {
+async fn failed_branch_is_stable_and_changed_input_is_refused() {
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
     let short_runs = Arc::new(AtomicUsize::new(0));
     let short_counter = Arc::clone(&short_runs);
@@ -494,26 +668,20 @@ async fn retry_reuses_same_input_checkpoint_and_changed_input_mints_a_new_lineag
             HashMap::from([("input".to_owned(), json!("original"))]),
             ExecutionConfig::new("root-restart"),
         )
-        .await
-        .expect("restart completes missing branch");
-
+        .await;
+    assert!(same_input.is_err());
     assert_eq!(short_runs.load(Ordering::SeqCst), 1);
-    assert_eq!(long_runs.load(Ordering::SeqCst), 2);
-    assert_eq!(
-        same_input["gathered"][0]["result"],
-        json!({"value": "short"})
-    );
+    assert_eq!(long_runs.load(Ordering::SeqCst), 1);
 
     let changed = parent_graph(definition, runtime(checkpoints, behaviors))
         .invoke(
             HashMap::from([("input".to_owned(), json!("changed-after-restart"))]),
             ExecutionConfig::new("root-restart"),
         )
-        .await
-        .expect("changed input runs a distinct child lineage");
-    assert_eq!(short_runs.load(Ordering::SeqCst), 2);
-    assert_eq!(long_runs.load(Ordering::SeqCst), 3);
-    assert_eq!(changed["gathered"].as_array().map(Vec::len), Some(2));
+        .await;
+    assert!(changed.is_err());
+    assert_eq!(short_runs.load(Ordering::SeqCst), 1);
+    assert_eq!(long_runs.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -604,6 +772,17 @@ async fn loop_visits_get_distinct_child_checkpoint_threads() {
     ))
     .await
     .expect("first loop visit");
+    // Simulate the owning parent's successful frontier advancement.
+    let parent: Arc<dyn ParallelCheckpointAppender> = checkpoints.parent.clone();
+    parent
+        .save(&adk_rust::graph::Checkpoint::new(
+            "root-loop",
+            State::new(),
+            4,
+            vec!["gather".to_owned()],
+        ))
+        .await
+        .expect("parent advancement");
     node.execute(&NodeContext::new(
         State::new(),
         ExecutionConfig::new("root-loop"),
@@ -618,8 +797,756 @@ async fn loop_visits_get_distinct_child_checkpoint_threads() {
     assert_ne!(threads[1], threads[3]);
 }
 
+struct PausingBranchGraphs {
+    runs: Arc<HashMap<String, AtomicUsize>>,
+    complete: BTreeSet<String>,
+}
+
+#[async_trait]
+impl ParallelBranchGraphFactory for PausingBranchGraphs {
+    fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
+        if self.runs.contains_key(branch.node()) {
+            Ok(())
+        } else {
+            Err(GraphError::NodeNotFound(branch.node().to_owned()))
+        }
+    }
+
+    fn owned_definition_digest(
+        &self,
+        branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        let mut digest = [0; 32];
+        digest.copy_from_slice(
+            ring::digest::digest(&ring::digest::SHA256, branch.node().as_bytes()).as_ref(),
+        );
+        Ok(digest)
+    }
+
+    fn compile_branch(
+        &self,
+        branch: &ParallelBranchDefinition,
+        execution: ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        let runs = Arc::clone(&self.runs);
+        let name = branch.node().to_owned();
+        let node_name = name.clone();
+        let complete = self.complete.contains(&name);
+        let node = FunctionNode::new(&name, move |context| {
+            let runs = Arc::clone(&runs);
+            let name = node_name.clone();
+            async move {
+                runs[&name].fetch_add(1, Ordering::SeqCst);
+                if !complete && !context.state.contains_key("__elitea_hitl_resume_v1") {
+                    return Ok(NodeOutput::interrupt_with_data(
+                        "Child paused.",
+                        json!({"interrupt_id": format!("card-{name}"), "tool_call_id": format!("call-{name}")}),
+                    ));
+                }
+                let blocked = context
+                    .state
+                    .get("__elitea_hitl_resume_v1")
+                    .and_then(|value| value.get("action"))
+                    .and_then(Value::as_str)
+                    == Some("reject");
+                Ok(NodeOutput::new()
+                    .with_update("branch_result", json!({"output": name, "blocked": blocked})))
+            }
+        });
+        StateGraph::with_channels(&["branch_input", "branch_result", "__elitea_hitl_resume_v1"])
+            .add_node(execution.wrap_node(node))
+            .add_edge(START, &name)
+            .add_edge(&name, adk_rust::graph::END)
+            .compile()
+            .map(|graph| {
+                graph
+                    .with_checkpointer_arc(execution.checkpointer())
+                    .with_strict_channels()
+            })
+    }
+
+    fn project_input(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        parent: &State,
+    ) -> Result<State, GraphError> {
+        Ok(HashMap::from([(
+            "branch_input".to_owned(),
+            parent.get("input").cloned().unwrap_or(Value::Null),
+        )]))
+    }
+
+    fn project_result(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        let result = child
+            .get("branch_result")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(|| GraphError::Other("result missing".to_owned()))?;
+        if result.get("blocked") == Some(&json!(true)) {
+            Ok(ParallelBranchTerminal::Blocked)
+        } else {
+            Ok(ParallelBranchTerminal::Completed(result))
+        }
+    }
+
+    fn pause_cards(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        let adk_rust::graph::interrupt::Interrupt::Dynamic {
+            data: Some(data), ..
+        } = &pause.interrupt
+        else {
+            return Err(GraphError::Other("pause missing".to_owned()));
+        };
+        Ok(vec![serde_json::from_value(data.clone()).map_err(
+            |_| GraphError::Other("pause malformed".to_owned()),
+        )?])
+    }
+
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        assert!(!pause.thread_id.is_empty());
+        assert!(!pause.checkpoint_id.is_empty());
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].interrupt_id, format!("card-{}", branch.node()));
+        Ok(HashMap::from([(
+            "__elitea_hitl_resume_v1".to_owned(),
+            json!({"action": decisions[0].action}),
+        )]))
+    }
+}
+
+fn pausing_runtime(
+    checkpoints: &Arc<MemoryChildCheckpoints>,
+    runs: &Arc<HashMap<String, AtomicUsize>>,
+    complete: &[&str],
+) -> Arc<AdkParallelBranchRuntime> {
+    let factory: Arc<dyn ParallelChildCheckpointerFactory> = checkpoints.clone();
+    let parent: Arc<dyn ParallelCheckpointAppender> = checkpoints.parent.clone();
+    Arc::new(AdkParallelBranchRuntime::new(
+        factory,
+        Arc::new(PausingBranchGraphs {
+            runs: Arc::clone(runs),
+            complete: complete.iter().map(|name| (*name).to_owned()).collect(),
+        }),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ))
+}
+
+fn ready_branches(prepared: PreparedParallelActivation) -> Vec<PreparedParallelBranch> {
+    match prepared {
+        PreparedParallelActivation::Ready(branches) => branches,
+        PreparedParallelActivation::Blocked(_) => panic!("unexpected blocked fixture"),
+    }
+}
+
+fn stored_activation(checkpoint: &Checkpoint) -> ParallelActivation {
+    serde_json::from_value(
+        checkpoint.metadata["elitea.graph.parallel.occurrence.v1"]["activation"].clone(),
+    )
+    .unwrap()
+}
+
+fn pause_data(output: NodeOutput) -> Value {
+    let Some(adk_rust::graph::interrupt::Interrupt::Dynamic {
+        data: Some(data), ..
+    }) = output.interrupt
+    else {
+        panic!("expected aggregate pause");
+    };
+    assert_eq!(data["schema"], PARALLEL_INTERRUPT_SCHEMA);
+    assert!(
+        !serde_json::to_string(&data)
+            .unwrap()
+            .contains("checkpoint_id")
+    );
+    assert!(!serde_json::to_string(&data).unwrap().contains("thread_id"));
+    data
+}
+
+fn resume_state(pause: &Value, input: &str) -> State {
+    let decisions = pause["cards"].as_array().unwrap().iter().map(|card| json!({"interrupt_id": card["interrupt_id"], "tool_call_id": card["tool_call_id"], "action": "approve", "value": ""})).collect::<Vec<_>>();
+    HashMap::from([
+        ("input".to_owned(), json!(input)),
+        (
+            PARALLEL_RESUME_STATE_KEY.to_owned(),
+            json!({"schema": PARALLEL_INTERRUPT_SCHEMA, "parallel_activation": pause["parallel_activation"], "decisions": decisions}),
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn child_pause_and_completion_survive_loss_before_parent_pause_save() {
+    use super::parallel::ParallelBranchRuntime;
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("done".to_owned(), AtomicUsize::new(0)),
+        ("pause".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("done", "done"), ("pause", "pause")], 2);
+    let runtime = pausing_runtime(&checkpoints, &runs, &["done"]);
+    let context = NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        ExecutionConfig::new("root-cutpoint"),
+        4,
+    );
+    let mut activation = ParallelActivation {
+        root_thread_id: "root-cutpoint".to_owned(),
+        node_id: "gather".to_owned(),
+        step: 4,
+        config_digest: definition.config_digest(),
+    };
+    let prepared = ready_branches(
+        runtime
+            .prepare(&mut activation, &definition, &context)
+            .await
+            .unwrap(),
+    );
+    for branch in prepared {
+        let _ = runtime.invoke(&activation, branch, &context).await;
+    }
+    // The parent has no published aggregate receipt at this cutpoint.
+    let recreated = DurableParallelNode::new(
+        definition.clone(),
+        pausing_runtime(&checkpoints, &runs, &["done"]),
+    );
+    let pause = pause_data(recreated.execute(&context).await.unwrap());
+    assert_eq!(pause["cards"].as_array().unwrap().len(), 1);
+    assert_eq!(runs["done"].load(Ordering::SeqCst), 1);
+    assert_eq!(runs["pause"].load(Ordering::SeqCst), 1);
+    let resume = NodeContext::new(
+        resume_state(&pause, "original"),
+        ExecutionConfig::new("root-cutpoint"),
+        4,
+    );
+    let output = recreated.execute(&resume).await.unwrap();
+    assert_eq!(output.updates["gathered"][0]["outputs"]["output"], "done");
+    assert_eq!(output.updates["gathered"][1]["outputs"]["output"], "pause");
+    assert_eq!(runs["done"].load(Ordering::SeqCst), 1);
+    assert_eq!(runs["pause"].load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn full_decision_redelivery_survives_one_resumed_child_completion() {
+    use super::parallel::ParallelBranchRuntime;
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let context = NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        ExecutionConfig::new("root-resume-cutpoint"),
+        2,
+    );
+    let pause = pause_data(
+        DurableParallelNode::new(
+            definition.clone(),
+            pausing_runtime(&checkpoints, &runs, &[]),
+        )
+        .execute(&context)
+        .await
+        .unwrap(),
+    );
+    let resume = NodeContext::new(
+        resume_state(&pause, "original"),
+        ExecutionConfig::new("root-resume-cutpoint"),
+        2,
+    );
+    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
+    let mut activation = ParallelActivation {
+        root_thread_id: "root-resume-cutpoint".to_owned(),
+        node_id: "gather".to_owned(),
+        step: 2,
+        config_digest: definition.config_digest(),
+    };
+    let mut prepared = ready_branches(
+        runtime
+            .prepare(&mut activation, &definition, &resume)
+            .await
+            .unwrap(),
+    )
+    .into_iter();
+    let _ = runtime
+        .invoke(&activation, prepared.next().unwrap(), &resume)
+        .await;
+    drop(prepared); // Process loss before the second admitted child runs.
+    let output = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]))
+        .execute(&resume)
+        .await
+        .unwrap();
+    assert!(output.interrupt.is_none());
+    assert_eq!(output.updates["gathered"].as_array().unwrap().len(), 2);
+    assert_eq!(runs["a"].load(Ordering::SeqCst), 2);
+    assert_eq!(runs["b"].load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn partial_duplicate_stale_foreign_and_changed_input_decisions_run_no_child() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let node = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]));
+    let context = NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        ExecutionConfig::new("root-invalid-decisions"),
+        0,
+    );
+    let pause = pause_data(node.execute(&context).await.unwrap());
+    for variation in 0..5 {
+        let mut state = resume_state(&pause, "original");
+        let decisions = state[PARALLEL_RESUME_STATE_KEY]["decisions"]
+            .as_array()
+            .unwrap()
+            .clone();
+        match variation {
+            0 => {
+                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"] =
+                    json!([decisions[0]]);
+            }
+            1 => {
+                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"] =
+                    json!([decisions[0], decisions[0]]);
+            }
+            2 => {
+                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["parallel_activation"] =
+                    json!("p1:stale");
+            }
+            3 => {
+                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"][0]["interrupt_id"] =
+                    json!("foreign-card");
+            }
+            4 => {
+                state.insert("input".to_owned(), json!("changed"));
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            node.execute(&NodeContext::new(
+                state,
+                ExecutionConfig::new("root-invalid-decisions"),
+                0
+            ))
+            .await
+            .is_err()
+        );
+        assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
+        assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn a_blocked_branch_is_typed_and_the_adk_parent_cannot_report_success() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
+    let parent = runtime.parent_checkpointer();
+    let successor_runs = Arc::new(AtomicUsize::new(0));
+    let successor_counter = Arc::clone(&successor_runs);
+    let graph = StateGraph::with_channels(&["input", "gathered", PARALLEL_RESUME_STATE_KEY])
+        .add_node(DurableParallelNode::new(definition.clone(), runtime))
+        .add_node(FunctionNode::new("after", move |_| {
+            let counter = Arc::clone(&successor_counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(NodeOutput::new())
+            }
+        }))
+        .add_edge(START, "gather")
+        .add_edge("gather", "after")
+        .add_edge("after", adk_rust::graph::END)
+        .compile()
+        .unwrap()
+        .with_checkpointer_arc(parent);
+    let thread = "root-blocked";
+    let interrupted = graph
+        .invoke(
+            HashMap::from([("input".to_owned(), json!("original"))]),
+            ExecutionConfig::new(thread),
+        )
+        .await
+        .unwrap_err();
+    let GraphError::Interrupted(interrupted) = interrupted else {
+        panic!("expected parent pause")
+    };
+    let adk_rust::graph::interrupt::Interrupt::Dynamic {
+        data: Some(pause), ..
+    } = interrupted.interrupt
+    else {
+        panic!("expected aggregate pause")
+    };
+    let mut state = resume_state(&pause, "original");
+    state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"][0]["action"] = json!("reject");
+    let error = graph
+        .invoke(
+            state.clone(),
+            ExecutionConfig::new(thread).with_resume_from(&interrupted.checkpoint_id),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, GraphError::NodeExecutionFailed { .. }));
+    assert!(error.to_string().contains("graph.parallel.blocked"));
+    assert_eq!(successor_runs.load(Ordering::SeqCst), 0);
+    let saved = checkpoints.parent.load(thread).await.unwrap().unwrap();
+    assert!(!saved.state.contains_key("gathered"));
+    assert_eq!(saved.pending_nodes, ["gather"]);
+    let activation = stored_activation(&saved);
+    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
+    let expected = ParallelBlocked {
+        branch_id: "a".to_owned(),
+        node: "a".to_owned(),
+        ordinal: 0,
+    };
+    assert_eq!(
+        runtime
+            .occurrence_checkpointer()
+            .blocked_at(&saved.checkpoint_id, &activation)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    let node = DurableParallelNode::new(definition, runtime);
+    let outcome = node
+        .execute_outcome(&NodeContext::new(
+            state,
+            ExecutionConfig::new(thread),
+            saved.step,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, ParallelNodeOutcome::Blocked(blocked) if blocked == expected));
+    assert_eq!(runs["a"].load(Ordering::SeqCst), 2);
+    assert_eq!(runs["b"].load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn freeze_rejects_a_competing_parent_before_any_child_is_admitted() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let thread = "root-freeze-race";
+    let original = Checkpoint::new(
+        thread,
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        0,
+        vec!["gather".to_owned()],
+    );
+    checkpoints.parent.save(&original).await.unwrap();
+    let competing = Checkpoint::new(
+        thread,
+        HashMap::from([("input".to_owned(), json!("newer"))]),
+        1,
+        vec!["after".to_owned()],
+    );
+    checkpoints.parent.rows.lock().await.before_append = Some(competing.clone());
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let node = DurableParallelNode::new(
+        definition,
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("a".to_owned(), constant(json!({"output": "a"}))),
+                ("b".to_owned(), constant(json!({"output": "b"}))),
+            ]),
+        ),
+    );
+    assert!(
+        node.execute(&NodeContext::new(
+            original.state,
+            ExecutionConfig::new(thread),
+            0
+        ))
+        .await
+        .is_err()
+    );
+    assert!(checkpoints.issued_threads.lock().await.is_empty());
+    assert!(
+        checkpoint_equal(
+            &checkpoints.parent.load(thread).await.unwrap().unwrap(),
+            &competing
+        )
+        .unwrap()
+    );
+    assert_eq!(checkpoints.parent.list(thread).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
+    use super::parallel::ParallelBranchRuntime;
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
+    let context = NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        ExecutionConfig::new("root-pause-race"),
+        0,
+    );
+    let mut activation = ParallelActivation {
+        root_thread_id: context.config.thread_id.clone(),
+        node_id: "gather".to_owned(),
+        step: 0,
+        config_digest: definition.config_digest(),
+    };
+    for branch in ready_branches(
+        runtime
+            .prepare(&mut activation, &definition, &context)
+            .await
+            .unwrap(),
+    ) {
+        let _ = runtime.invoke(&activation, branch, &context).await;
+    }
+    let competing = Checkpoint::new(
+        &context.config.thread_id,
+        HashMap::from([("input".to_owned(), json!("newer"))]),
+        1,
+        vec!["after".to_owned()],
+    );
+    checkpoints.parent.rows.lock().await.before_append = Some(competing.clone());
+    assert!(
+        DurableParallelNode::new(definition, runtime)
+            .execute(&context)
+            .await
+            .is_err()
+    );
+    let latest = checkpoints
+        .parent
+        .load(&context.config.thread_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(checkpoint_equal(&latest, &competing).unwrap());
+    assert!(
+        !latest
+            .metadata
+            .contains_key("elitea.graph.parallel.occurrence.v1")
+    );
+    assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
+    assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn decisions_cannot_overwrite_competing_business_state_or_receipts() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let node = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]));
+    let thread = "root-decision-race";
+    let context = NodeContext::new(
+        HashMap::from([
+            ("input".to_owned(), json!("original")),
+            ("unmapped".to_owned(), json!("preserved")),
+        ]),
+        ExecutionConfig::new(thread),
+        0,
+    );
+    let pause = pause_data(node.execute(&context).await.unwrap());
+    let original = checkpoints.parent.load(thread).await.unwrap().unwrap();
+    let mut missing_business = resume_state(&pause, "original");
+    assert!(
+        node.execute(&NodeContext::new(
+            missing_business.clone(),
+            ExecutionConfig::new(thread),
+            0
+        ))
+        .await
+        .is_err()
+    );
+    assert!(
+        checkpoint_equal(
+            &checkpoints.parent.load(thread).await.unwrap().unwrap(),
+            &original
+        )
+        .unwrap()
+    );
+    missing_business.insert("unmapped".to_owned(), json!("preserved"));
+    let mut competing = original.clone();
+    let fresh = Checkpoint::new(
+        thread,
+        original.state.clone(),
+        original.step,
+        original.pending_nodes.clone(),
+    );
+    competing.checkpoint_id = fresh.checkpoint_id;
+    competing.created_at = fresh.created_at;
+    competing
+        .state
+        .insert("unmapped".to_owned(), json!("newer"));
+    competing
+        .metadata
+        .insert("unrelated_receipt".to_owned(), json!("newer"));
+    checkpoints.parent.rows.lock().await.before_append = Some(competing.clone());
+    assert!(
+        node.execute(&NodeContext::new(
+            missing_business,
+            ExecutionConfig::new(thread),
+            0
+        ))
+        .await
+        .is_err()
+    );
+    assert!(
+        checkpoint_equal(
+            &checkpoints.parent.load(thread).await.unwrap().unwrap(),
+            &competing
+        )
+        .unwrap()
+    );
+    assert!(competing.metadata["elitea.graph.parallel.occurrence.v1"]["decisions"].is_null());
+    assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
+    assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn immutable_pre_freeze_replay_stays_unchanged_and_does_not_replace_latest() {
+    use super::parallel::ParallelBranchRuntime;
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let thread = "root-immutable-replay";
+    let original = Checkpoint::new(
+        thread,
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        0,
+        vec!["gather".to_owned()],
+    );
+    checkpoints.parent.save(&original).await.unwrap();
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let runtime = runtime(
+        Arc::clone(&checkpoints),
+        HashMap::from([
+            ("a".to_owned(), constant(json!({"output": "a"}))),
+            ("b".to_owned(), constant(json!({"output": "b"}))),
+        ]),
+    );
+    let context = NodeContext::new(original.state.clone(), ExecutionConfig::new(thread), 0);
+    let mut activation = ParallelActivation {
+        root_thread_id: thread.to_owned(),
+        node_id: "gather".to_owned(),
+        step: 0,
+        config_digest: definition.config_digest(),
+    };
+    let _ = runtime
+        .prepare(&mut activation, &definition, &context)
+        .await
+        .unwrap();
+    let frozen = checkpoints.parent.load(thread).await.unwrap().unwrap();
+    assert_ne!(frozen.checkpoint_id, original.checkpoint_id);
+    assert_eq!(
+        runtime.parent_checkpointer().save(&original).await.unwrap(),
+        original.checkpoint_id
+    );
+    assert!(
+        checkpoint_equal(
+            &checkpoints
+                .parent
+                .load_by_id(&original.checkpoint_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            &original
+        )
+        .unwrap()
+    );
+    assert!(
+        checkpoint_equal(
+            &checkpoints.parent.load(thread).await.unwrap().unwrap(),
+            &frozen
+        )
+        .unwrap()
+    );
+    let mut conflicting = original;
+    conflicting
+        .state
+        .insert("input".to_owned(), json!("changed"));
+    assert!(
+        runtime
+            .parent_checkpointer()
+            .save(&conflicting)
+            .await
+            .is_err()
+    );
+    assert_eq!(checkpoints.parent.list(thread).await.unwrap().len(), 2);
+}
+
+struct DropObserver(Arc<AtomicUsize>);
+
+impl Drop for DropObserver {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn deadline_stops_admission_and_owned_future_cleanup_is_bounded() {
+    let entered = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let behavior: Behavior = {
+        let entered = Arc::clone(&entered);
+        let dropped = Arc::clone(&dropped);
+        Arc::new(move || {
+            let entered = Arc::clone(&entered);
+            let dropped = Arc::clone(&dropped);
+            Box::pin(async move {
+                entered.fetch_add(1, Ordering::SeqCst);
+                let _observer = DropObserver(dropped);
+                std::future::pending::<Result<Value, GraphError>>().await
+            })
+        })
+    };
+    let runtime = runtime(
+        Arc::new(MemoryChildCheckpoints::default()),
+        HashMap::from([
+            ("a".to_owned(), Arc::clone(&behavior)),
+            ("b".to_owned(), Arc::clone(&behavior)),
+            ("later".to_owned(), behavior),
+        ]),
+    );
+    let node = DurableParallelNode::new(
+        definition(&[("a", "a"), ("b", "b"), ("later", "later")], 2),
+        runtime,
+    )
+    .with_deadline(tokio::time::Instant::now() + Duration::from_secs(1));
+    let error = node
+        .execute(&NodeContext::new(
+            State::new(),
+            ExecutionConfig::new("root-deadline"),
+            0,
+        ))
+        .await
+        .err()
+        .expect("parallel cancellation error");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.parallel.cancellation_cleanup_failed")
+    );
+    assert_eq!(entered.load(Ordering::SeqCst), 2);
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+}
+
 #[test]
-fn pausing_branch_is_rejected_before_the_parent_graph_runs() {
+fn unadmitted_branch_is_rejected_before_the_parent_graph_runs() {
     let definition = definition(&[("a", "safe"), ("b", "pause")], 2);
     let checkpoint_factory: Arc<dyn ParallelChildCheckpointerFactory> =
         Arc::new(MemoryChildCheckpoints::default());
@@ -633,6 +1560,9 @@ fn pausing_branch_is_rejected_before_the_parent_graph_runs() {
     let runtime = Arc::new(AdkParallelBranchRuntime::new(
         checkpoint_factory,
         graph_factory,
+        Arc::new(ParallelOccurrenceCheckpointer::new(Arc::new(
+            AtomicParentCheckpoints::default(),
+        ))),
     ));
 
     assert!(
@@ -642,5 +1572,129 @@ fn pausing_branch_is_rejected_before_the_parent_graph_runs() {
             .add_edge("gather", adk_rust::graph::END)
             .compile()
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn new_parallel_revision_consumes_previous_graph_call_marker_and_retains_receipt_bytes() {
+    use super::parallel::ParallelBranchRuntime;
+    use crate::agents::pipeline::scope_receipts::{
+        GRAPH_CALL_RECEIPTS_METADATA_KEY, GRAPH_CALL_REVISION_METADATA_KEY,
+    };
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let runs = Arc::new(HashMap::from([
+        ("a".to_owned(), AtomicUsize::new(0)),
+        ("b".to_owned(), AtomicUsize::new(0)),
+    ]));
+    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
+    let state = State::from([("input".to_owned(), json!("original"))]);
+    let mut previous = adk_rust::graph::Checkpoint::new(
+        "receipt-marker",
+        state.clone(),
+        0,
+        vec!["gather".to_owned()],
+    );
+    let original = json!({"retained": "opaque exact original bytes"});
+    previous.metadata.insert(
+        GRAPH_CALL_RECEIPTS_METADATA_KEY.to_owned(),
+        original.clone(),
+    );
+    previous.metadata.insert(
+        GRAPH_CALL_REVISION_METADATA_KEY.to_owned(),
+        json!({"parent": "old-frontier"}),
+    );
+    checkpoints.parent.save(&previous).await.unwrap();
+    let mut activation = ParallelActivation {
+        root_thread_id: "receipt-marker".to_owned(),
+        node_id: "gather".to_owned(),
+        step: 0,
+        config_digest: definition.config_digest(),
+    };
+    runtime
+        .prepare(
+            &mut activation,
+            &definition,
+            &NodeContext::new(state, ExecutionConfig::new("receipt-marker"), 0),
+        )
+        .await
+        .unwrap();
+    let latest = checkpoints
+        .parent
+        .load("receipt-marker")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.metadata[GRAPH_CALL_RECEIPTS_METADATA_KEY], original);
+    assert!(
+        !latest
+            .metadata
+            .contains_key(GRAPH_CALL_REVISION_METADATA_KEY)
+    );
+    assert_ne!(latest.checkpoint_id, previous.checkpoint_id);
+    assert_eq!(
+        checkpoints
+            .parent
+            .load_by_id(&previous.checkpoint_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata,
+        previous.metadata
+    );
+}
+
+#[test]
+fn structural_input_bounds_precede_recursive_hash() {
+    let mut deep = Value::Null;
+    for _ in 0..256 {
+        deep = Value::Array(vec![deep]);
+    }
+    assert!(projected_input_digest(&State::from([("input".into(), deep)])).is_err());
+}
+
+#[tokio::test]
+async fn structural_parent_rejection_precedes_checkpoint_mint_and_child_effects() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = Arc::new(AtomicUsize::new(0));
+    let make_behavior = || {
+        let runs = Arc::clone(&runs);
+        Arc::new(move || {
+            let runs = Arc::clone(&runs);
+            Box::pin(async move {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"value": "should not run"}))
+            }) as BehaviorFuture
+        }) as Behavior
+    };
+    let node = DurableParallelNode::new(
+        definition(&[("a", "first"), ("b", "second")], 2),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("first".into(), make_behavior()),
+                ("second".into(), make_behavior()),
+            ]),
+        ),
+    );
+    let mut deep = Value::Null;
+    for _ in 0..256 {
+        deep = Value::Array(vec![deep]);
+    }
+    let context = NodeContext::new(
+        State::from([("input".into(), deep)]),
+        ExecutionConfig::new("deep-parent"),
+        0,
+    );
+    assert!(node.execute_outcome(&context).await.is_err());
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    assert!(checkpoints.issued_threads.lock().await.is_empty());
+    assert!(
+        checkpoints
+            .parent
+            .list("deep-parent")
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

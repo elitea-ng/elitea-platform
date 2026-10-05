@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::application_activation::ApplicationActivationCheckpointer;
 use super::direct_tool::{ensure_state_type, pipeline_tool_context};
 use super::llm::render_fstring;
 use super::node_events::{
@@ -29,6 +30,8 @@ use super::node_events::{
 };
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::agents::application_tools::nested_application_interrupt_ids;
+use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, PipelineGraphCallReceipt};
+use adk_rust::{Content, Event, Part};
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_MAPPING_VALUE_BYTES: usize = 240 * 1024;
@@ -200,6 +203,15 @@ impl ApplicationNodeDefinition {
         &self.output
     }
 
+    pub(super) fn validate_map_fixed_inputs(&self) -> Result<(), GraphError> {
+        super::map_reduce::validate_values(self.variables.values().filter_map(|mapping| {
+            match mapping {
+                ApplicationInputMapping::Fixed(value) => Some(value),
+                _ => None,
+            }
+        }))
+    }
+
     pub(super) fn mapped_variables(&self) -> impl Iterator<Item = &str> {
         std::iter::once(&self.task)
             .chain(self.variables.values())
@@ -332,13 +344,67 @@ impl ApplicationNodeDefinition {
     }
 }
 
+#[path = "parallel_application.rs"]
+mod parallel_application;
+pub(super) use parallel_application::PARALLEL_AGENT_INPUTS_STATE_KEY;
+
 /// Invocation-owned lookup of an already resolved saved Application tool.
 pub(crate) trait PipelineApplicationResolver: Send + Sync {
+    /// Admit only the original saved identity and an effect-free, nonpausing cohort.
+    fn map_worker_definition_digest(
+        &self,
+        _node: &str,
+    ) -> Result<[u8; 32], ApplicationExecutionError> {
+        Err(ApplicationExecutionError::Unavailable)
+    }
+    fn for_map_events(
+        &self,
+        _events: PipelineNodeEventSender,
+    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
+        Err(ApplicationExecutionError::Unavailable)
+    }
+
+    /// One frozen saved participant fingerprint retained by admitted assembly.
+    /// Aliases, tool names, and containing graph digests are not substitutes.
+    fn fixed_parallel_definition_digest(
+        &self,
+        _node: &str,
+    ) -> Result<[u8; 32], ApplicationExecutionError> {
+        Err(ApplicationExecutionError::Unavailable)
+    }
+
+    /// Rebind the existing frozen resolver to one exact branch event sender.
+    fn for_parallel_events(
+        &self,
+        _events: PipelineNodeEventSender,
+    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
+        Err(ApplicationExecutionError::Unavailable)
+    }
+
     fn resolve(
         &self,
         selection: &PipelineApplicationSelection,
         checkpointer: Arc<dyn Checkpointer>,
     ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError>;
+    // Explicit test opt-in; production occurrence ownership is supplied by graph_call_owner.
+    #[cfg(test)]
+    fn test_activation_checkpoints(&self) -> bool {
+        false
+    }
+    fn graph_call_owner(
+        &self,
+        _node: &str,
+    ) -> Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>> {
+        None
+    }
+    fn resolve_node(
+        &self,
+        _node_id: &str,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        self.resolve(selection, checkpointer)
+    }
 }
 
 /// One exact saved participant after claim-bound materialization.
@@ -346,10 +412,15 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
 pub(crate) enum ResolvedApplicationParticipant {
     /// A direct saved agent invoked through ADK `AgentTool` semantics.
     Agent(Arc<dyn Tool>),
+    ScopedAgent {
+        tool: Arc<dyn Tool>,
+        scope: Arc<crate::agents::pipeline::scoped_runtime::PipelineApplicationNodeRuntime>,
+    },
     /// A saved pipeline invoked as a checkpointed native ADK subgraph.
     Pipeline {
         graph: Arc<CompiledGraph>,
         variable_types: BTreeMap<String, String>,
+        static_pauses: super::static_pause::StaticPauseCatalog,
         events: Option<PipelineNodeEventSender>,
         display_name: String,
     },
@@ -360,6 +431,9 @@ pub(super) struct ApplicationNode {
     state_types: BTreeMap<String, String>,
     participant: ResolvedApplicationParticipant,
     checkpointer: Arc<dyn Checkpointer>,
+    activation_checkpointer: Option<Arc<ApplicationActivationCheckpointer>>,
+    graph_call_owner: Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>>,
+    parallel_inputs: bool,
 }
 
 impl ApplicationNode {
@@ -369,7 +443,20 @@ impl ApplicationNode {
         resolver: &dyn PipelineApplicationResolver,
         checkpointer: Arc<dyn Checkpointer>,
     ) -> Result<Self, ApplicationExecutionError> {
-        let participant = resolver.resolve(definition.selection(), Arc::clone(&checkpointer))?;
+        let graph_call_owner = resolver.graph_call_owner(definition.id());
+        let activation_enabled = graph_call_owner.is_some();
+        #[cfg(test)]
+        let activation_enabled = activation_enabled || resolver.test_activation_checkpoints();
+        let activation_checkpointer = activation_enabled.then(|| {
+            Arc::new(ApplicationActivationCheckpointer::new(Arc::clone(
+                &checkpointer,
+            )))
+        });
+        let child_checkpointer: Arc<dyn Checkpointer> = activation_checkpointer
+            .as_ref()
+            .map_or_else(|| checkpointer.clone(), |owner| owner.clone());
+        let participant =
+            resolver.resolve_node(definition.id(), definition.selection(), child_checkpointer)?;
         if !definition.variables.is_empty() {
             match &participant {
                 ResolvedApplicationParticipant::Pipeline { variable_types, .. } => {
@@ -381,7 +468,8 @@ impl ApplicationNode {
                         return Err(ApplicationExecutionError::InvalidTask);
                     }
                 }
-                ResolvedApplicationParticipant::Agent(tool) => {
+                ResolvedApplicationParticipant::Agent(tool)
+                | ResolvedApplicationParticipant::ScopedAgent { tool, .. } => {
                     let schema = tool
                         .parameters_schema()
                         .ok_or(ApplicationExecutionError::InvalidTask)?;
@@ -404,6 +492,9 @@ impl ApplicationNode {
             state_types,
             participant,
             checkpointer,
+            activation_checkpointer,
+            graph_call_owner,
+            parallel_inputs: false,
         })
     }
 
@@ -432,6 +523,8 @@ impl ApplicationNode {
             super::hitl::HITL_RESUME_STATE_KEY,
             super::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY,
             super::llm::LLM_TOOL_RESUME_STATE_KEY,
+            super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY,
+            super::static_pause::STATIC_TEXT_RESUME_STATE_KEY,
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY,
         ] {
             if node.graph().schema().channels.contains_key(channel) {
@@ -441,6 +534,7 @@ impl ApplicationNode {
         node
     }
 
+    #[allow(clippy::too_many_lines)] // Keep original activation, durable completion, and event emission visibly ordered.
     async fn execute_pipeline(
         &self,
         context: &NodeContext,
@@ -468,16 +562,20 @@ impl ApplicationNode {
                 .collect();
             let mut mapped = BTreeMap::new();
             for (key, mapping) in &self.definition.variables {
-                let value = match mapping {
-                    ApplicationInputMapping::Fixed(value) => value.clone(),
-                    ApplicationInputMapping::Variable(source) => user_state
-                        .get(source)
-                        .cloned()
-                        .ok_or_else(|| node_failure(self.name()))?,
-                    ApplicationInputMapping::Template(template) => Value::String(
-                        render_fstring(template, &user_state)
-                            .map_err(|_| node_failure(self.name()))?,
-                    ),
+                let value = if self.parallel_inputs {
+                    self.parallel_variable(&context.state, key)?
+                } else {
+                    match mapping {
+                        ApplicationInputMapping::Fixed(value) => value.clone(),
+                        ApplicationInputMapping::Variable(source) => user_state
+                            .get(source)
+                            .cloned()
+                            .ok_or_else(|| node_failure(self.name()))?,
+                        ApplicationInputMapping::Template(template) => Value::String(
+                            render_fstring(template, &user_state)
+                                .map_err(|_| node_failure(self.name()))?,
+                        ),
+                    }
                 };
                 validate_child_input(self.name(), key, &value, variable_types, events).await?;
                 mapped.insert(self.definition.variable_channel(key), value);
@@ -491,15 +589,76 @@ impl ApplicationNode {
             }
             state.extend(mapped);
         }
-        let call_id = format!("pipeline:{}:{}", self.name(), context.step);
+        let mut activation_inputs = serde_json::Map::from_iter([("task".to_owned(), json!(task))]);
+        for key in self.definition.variables.keys() {
+            let value = state
+                .get(&self.definition.variable_channel(key))
+                .cloned()
+                .ok_or_else(|| node_failure(self.name()))?;
+            activation_inputs.insert(key.clone(), value);
+        }
+        let _activation = self
+            .activation_checkpointer
+            .as_ref()
+            .map(|owner| {
+                owner.enter(
+                    &context.config.thread_id,
+                    self.name(),
+                    context.step,
+                    self.definition.config_digest(),
+                    &Value::Object(activation_inputs.clone()),
+                )
+            })
+            .transpose()?;
+        let parent_scope = PipelineNodeEventScope::from_state(
+            context.state.get(PIPELINE_NODE_EVENT_SCOPE_STATE_KEY),
+        )
+        .map_err(|_| node_failure(self.name()))?;
+        let graph_receipt = match &self.graph_call_owner {
+            Some(owner) => Some(
+                owner
+                    .prepare(
+                        context,
+                        self.checkpointer.as_ref(),
+                        display_name,
+                        &Value::Object(activation_inputs.clone()),
+                    )
+                    .await?,
+            ),
+            None => None,
+        };
+        let call_id = graph_receipt.as_ref().map_or_else(
+            || {
+                if parent_scope.is_some() {
+                    crate::agents::pipeline::scoped_applications::scoped_graph_call_id(
+                        &context.config.thread_id,
+                        self.name(),
+                        context.step,
+                        self.definition.config_digest(),
+                    )
+                } else {
+                    format!("pipeline:{}:{}", self.name(), context.step)
+                }
+            },
+            |receipt| receipt.activation().call_id().to_owned(),
+        );
         let checkpoint_thread_id = format!("{}/{}", context.config.thread_id, self.name());
+        let task = state
+            .get(super::static_pause::STATIC_TEXT_RESUME_STATE_KEY)
+            .and_then(|value| value.get(&checkpoint_thread_id))
+            .and_then(Value::as_str)
+            .unwrap_or(task);
+        let task = task.to_owned();
         state.insert(APPLICATION_TASK_STATE_KEY.to_owned(), json!(task));
         state.insert(
             APPLICATION_MESSAGES_STATE_KEY.to_owned(),
             json!([{"role": "user", "content": task}]),
         );
         let event_scope = events
-            .map(|_| PipelineNodeEventScope::new(&call_id, display_name, &checkpoint_thread_id))
+            .map(|_| {
+                PipelineNodeEventScope::new(&call_id, display_name, &checkpoint_thread_id)
+                    .and_then(|scope| scope.with_parent(parent_scope.clone()))
+            })
             .transpose()
             .map_err(|_| node_failure(self.name()))?;
         if let (Some(events), Some(event_scope)) = (events, event_scope.as_ref()) {
@@ -509,10 +668,70 @@ impl ApplicationNode {
                     .to_state_value()
                     .map_err(|_| node_failure(self.name()))?,
             );
-            events
-                .send_application_start(display_name, &call_id)
-                .await
-                .map_err(|_| node_failure(self.name()))?;
+            if let Some(receipt) = &graph_receipt {
+                events
+                    .send_original_application_event(
+                        receipt.original_start().clone(),
+                        parent_scope.as_ref(),
+                        context
+                            .config
+                            .parent_context
+                            .as_ref()
+                            .ok_or_else(|| node_failure(self.name()))?
+                            .invocation_id(),
+                    )
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            } else {
+                events
+                    .send_application_start_scoped(
+                        display_name,
+                        &call_id,
+                        &Value::Object(activation_inputs),
+                        parent_scope.as_ref(),
+                    )
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            }
+        }
+        if let Some(receipt) = &graph_receipt
+            && let GraphCallOutcome::Completed { result, terminal } = receipt.outcome()
+        {
+            let response = result
+                .get("response")
+                .and_then(Value::as_str)
+                .ok_or_else(|| node_failure(self.name()))?;
+            let values: State = serde_json::from_value(
+                result
+                    .get("values")
+                    .ok_or_else(|| node_failure(self.name()))?
+                    .clone(),
+            )
+            .map_err(|_| node_failure(self.name()))?;
+            if result.as_object().is_none_or(|object| object.len() != 2)
+                || values
+                    .keys()
+                    .any(|key| !self.definition.output.contains(key))
+            {
+                return Err(node_failure(self.name()));
+            }
+            let output = self.projected_output_with_values(response, &values)?;
+            if let Some(events) = events {
+                events
+                    .send_original_application_event(
+                        terminal.clone(),
+                        parent_scope.as_ref(),
+                        context
+                            .config
+                            .parent_context
+                            .as_ref()
+                            .ok_or_else(|| node_failure(self.name()))?
+                            .invocation_id(),
+                    )
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            }
+            return Ok(output);
         }
         let mut child_context = NodeContext::new(state, context.config.clone(), context.step);
         child_context.set_parent_schema(parent_schema);
@@ -528,16 +747,28 @@ impl ApplicationNode {
         if output.goto.is_some() || output.goto_parent.is_some() || !output.events.is_empty() {
             return Err(node_failure(self.name()));
         }
-        self.finish_pipeline_output(output, events, display_name, &call_id)
-            .await
+        self.finish_pipeline_output(
+            output,
+            events,
+            display_name,
+            &call_id,
+            parent_scope.as_ref(),
+            context,
+            graph_receipt.as_ref(),
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)] // Exact occurrence context and original receipt stay visible at commit.
     async fn finish_pipeline_output(
         &self,
         mut output: NodeOutput,
         events: Option<&PipelineNodeEventSender>,
         display_name: &str,
         call_id: &str,
+        parent_scope: Option<&PipelineNodeEventScope>,
+        context: &NodeContext,
+        receipt: Option<&PipelineGraphCallReceipt>,
     ) -> Result<NodeOutput, GraphError> {
         let response = output
             .updates
@@ -551,9 +782,61 @@ impl ApplicationNode {
         {
             return Err(node_failure(self.name()));
         }
+        if let Some(receipt) = receipt {
+            // Validate the mapping before committing completion; replay needs no child poll.
+            let projected = self.projected_output_with_values(&response, &output.updates)?;
+            let result = json!({"response":response,"values":output.updates});
+            let mut terminal = Event::new(receipt.invocation_id());
+            terminal.author = receipt.author().to_owned();
+            terminal.branch = receipt.branch().to_owned();
+            terminal.llm_response.content = Some(Content {
+                role: "function".to_owned(),
+                parts: vec![Part::FunctionResponse {
+                    function_response: adk_rust::FunctionResponseData::new(
+                        display_name,
+                        result.clone(),
+                    ),
+                    id: Some(receipt.activation().call_id().to_owned()),
+                    annotations: None,
+                }],
+            });
+            receipt
+                .activation()
+                .stamp_with_branch(&mut terminal, receipt.branch().to_owned())
+                .map_err(|_| node_failure(self.name()))?;
+            let completed = self
+                .graph_call_owner
+                .as_ref()
+                .ok_or_else(|| node_failure(self.name()))?
+                .finish(
+                    context,
+                    self.checkpointer.as_ref(),
+                    receipt,
+                    GraphCallOutcome::Completed { result, terminal },
+                )
+                .await?;
+            if let Some(events) = events
+                && let GraphCallOutcome::Completed { terminal, .. } = completed.outcome()
+            {
+                events
+                    .send_original_application_event(
+                        terminal.clone(),
+                        parent_scope,
+                        context
+                            .config
+                            .parent_context
+                            .as_ref()
+                            .ok_or_else(|| node_failure(self.name()))?
+                            .invocation_id(),
+                    )
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            }
+            return Ok(projected);
+        }
         if let Some(events) = events {
             events
-                .send_application_end(display_name, call_id)
+                .send_application_end_scoped(display_name, call_id, parent_scope)
                 .await
                 .map_err(|_| node_failure(self.name()))?;
         }
@@ -581,7 +864,8 @@ impl ApplicationNode {
         event_scope: Option<&PipelineNodeEventScope>,
     ) -> Result<(), GraphError> {
         let adk_rust::graph::interrupt::Interrupt::Dynamic {
-            data: Some(data), ..
+            message,
+            data: Some(data),
         } = interrupt
         else {
             return Err(node_failure(self.name()));
@@ -605,6 +889,22 @@ impl ApplicationNode {
             .ok_or_else(|| node_failure(self.name()))?;
         if checkpoint.thread_id != expected_thread || checkpoint.pending_nodes.len() != 1 {
             return Err(node_failure(self.name()));
+        }
+        if !wrapper.contains_key("data") {
+            let ResolvedApplicationParticipant::Pipeline { static_pauses, .. } = &self.participant
+            else {
+                return Err(node_failure(self.name()));
+            };
+            let inner_message = message
+                .strip_prefix(&format!("{}: ", self.name()))
+                .ok_or_else(|| node_failure(self.name()))?;
+            let metadata = static_pauses
+                .bind_native_message(inner_message, &checkpoint)
+                .ok_or_else(|| node_failure(self.name()))?;
+            wrapper.insert(
+                "data".to_owned(),
+                serde_json::to_value(metadata).map_err(|_| node_failure(self.name()))?,
+            );
         }
         wrapper.insert(
             "checkpoint_id".to_owned(),
@@ -659,6 +959,7 @@ impl Node for ApplicationNode {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Keep original activation, durable completion, and event emission visibly ordered.
     async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
         let span = tracing::info_span!(
             "agent.pipeline.application_node",
@@ -671,35 +972,51 @@ impl Node for ApplicationNode {
         );
         let result = async {
             tracing::Span::current().record("stage", "input_mapping");
-            let task = self
-                .definition
-                .map_task(&context.state)
-                .map_err(|_| node_failure(self.name()))?;
+            let task = self.mapped_task(&context.state)?;
             tracing::Span::current().record("stage", "child_execution");
             match &self.participant {
-                ResolvedApplicationParticipant::Agent(tool) => {
+                ResolvedApplicationParticipant::Agent(tool)
+                | ResolvedApplicationParticipant::ScopedAgent { tool, .. } => {
                     let tool_context = pipeline_tool_context(context, self.name(), tool.name());
                     let mut arguments =
                         serde_json::Map::from_iter([("task".to_owned(), json!(task))]);
                     for (key, mapping) in &self.definition.variables {
-                        let value = match mapping {
-                            ApplicationInputMapping::Fixed(value) => value.clone(),
-                            ApplicationInputMapping::Variable(source) => context
-                                .state
-                                .get(source)
-                                .cloned()
-                                .ok_or_else(|| node_failure(self.name()))?,
-                            ApplicationInputMapping::Template(template) => Value::String(
-                                render_fstring(template, &context.state)
-                                    .map_err(|_| node_failure(self.name()))?,
-                            ),
+                        let value = if self.parallel_inputs {
+                            self.parallel_variable(&context.state, key)?
+                        } else {
+                            match mapping {
+                                ApplicationInputMapping::Fixed(value) => value.clone(),
+                                ApplicationInputMapping::Variable(source) => context
+                                    .state
+                                    .get(source)
+                                    .cloned()
+                                    .ok_or_else(|| node_failure(self.name()))?,
+                                ApplicationInputMapping::Template(template) => Value::String(
+                                    render_fstring(template, &context.state)
+                                        .map_err(|_| node_failure(self.name()))?,
+                                ),
+                            }
                         };
                         arguments.insert(key.clone(), value);
                     }
-                    let result = tool
-                        .execute(Arc::clone(&tool_context), Value::Object(arguments))
-                        .await
-                        .map_err(|_| node_failure(self.name()))?;
+                    let (result, call_id) = match &self.participant {
+                        ResolvedApplicationParticipant::ScopedAgent { scope, .. } => {
+                            scope
+                                .execute(
+                                    context,
+                                    self.checkpointer.as_ref(),
+                                    tool,
+                                    Value::Object(arguments),
+                                )
+                                .await?
+                        }
+                        _ => (
+                            tool.execute(Arc::clone(&tool_context), Value::Object(arguments))
+                                .await
+                                .map_err(|_| node_failure(self.name()))?,
+                            tool_context.function_call_id().to_owned(),
+                        ),
+                    };
                     if let Some(interrupt_ids) = nested_application_interrupt_ids(&result) {
                         return Ok(NodeOutput::interrupt_with_data(
                             PIPELINE_APPLICATION_HITL_MESSAGE,
@@ -710,7 +1027,7 @@ impl Node for ApplicationNode {
                                 "node_name": self.name(),
                                 "message": PIPELINE_APPLICATION_HITL_MESSAGE,
                                 "definition_digest": self.definition.digest_label(),
-                                "application_call_id": tool_context.function_call_id(),
+                                "application_call_id": call_id,
                                 "application_tool_name": tool.name(),
                                 "interrupt_ids": interrupt_ids,
                             }),

@@ -11,6 +11,7 @@
  */
 import { appendToolOutputChunk } from './toolOutputChunks';
 
+import { codeDebugToolMeta, parseCodeDebugProof, type CodeDebugProof } from '@/shared/lib/codeDebugArtifact';
 import { convertJsonToString } from '@/shared/lib/json';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
 import { buildAuthorizationActions } from '@/entities/message';
@@ -94,6 +95,53 @@ export function mcpSessionFromFrame(
   return { serverUrl, sessionId };
 }
 
+function completedDebugShape(frame: ChatStreamFrame, proof: CodeDebugProof): boolean {
+  const attrs = frame.response_metadata;
+  const name = `${proof.node_id} / debug export`;
+  const inputs = attrs?.tool_inputs;
+  const start = attrs?.timestamp_start;
+  return attrs?.tool_name === name && attrs.tool_meta?.name === name && attrs.finish_reason === 'stop'
+    && attrs.tool_output === null && attrs['error'] === null && frame.content === null
+    && typeof inputs === 'object' && inputs !== null && !Array.isArray(inputs) && Object.keys(inputs).length === 0
+    && typeof start === 'string' && Number.isFinite(Date.parse(start)) && attrs.timestamp_finish === start;
+}
+function sameDebugVisit(previous: CodeDebugProof, next: CodeDebugProof): boolean {
+  const identity = (proof: CodeDebugProof) => JSON.stringify([proof.execution_id, proof.generation, proof.original_visit,
+    proof.attempt, proof.node_id, proof.activation_id, proof.request_sha256]);
+  return identity(previous) === identity(next);
+}
+/** Worker emits this inert receipt without tool start. Ordinary unmatched ends remain inert. */
+function reduceCodeDebugCompletion(
+  history: readonly ChatMessage[], frame: ChatStreamFrame, index: number, current: ChatMessage,
+): readonly ChatMessage[] {
+  const proof = parseCodeDebugProof(codeDebugToolMeta(frame.response_metadata)['code_debug_v1']);
+  const runId = frame.response_metadata?.tool_run_id;
+  if (!proof || !runId || runId.length !== 75 || !/^code-debug-[0-9a-f]{64}$/u.test(runId)
+    || frame.response_metadata?.['run_id'] !== runId || !completedDebugShape(frame, proof)) return history;
+  if (current.role !== 'assistant' || current.id !== frame.message_id || !current.isStreaming || current.exception || current.failureCode
+    // Browser generation fences the active response; Main validates the proof's separate runtime generation.
+    || !frame.execution_generation || current.executionGeneration !== frame.execution_generation
+    || (frame['execution_id'] !== undefined && frame['execution_id'] !== proof.execution_id)) return history;
+  const existing = findToolAction(current, runId);
+  if (existing) {
+    const previous = parseCodeDebugProof(existing.toolMeta?.['code_debug_v1']);
+    if (!previous || !sameDebugVisit(previous, proof) || previous.artifact || JSON.stringify(previous) === JSON.stringify(proof)) return history;
+  }
+  const metadata = toolMetadata(frame);
+  const hierarchy = normalizeExecutionHierarchy(metadata, frame.response_metadata);
+  const completed: ToolAction = {
+    ...hierarchy, id: runId, type: TOOL_ACTION_TYPES.Tool, status: ToolActionStatus.complete,
+    name: `${proof.node_id} / debug export`, original_name: proof.node_id,
+    toolInputs: {}, toolOutputs: null, content: '',
+    created_at: frame.response_metadata?.timestamp_start, ended_at: frame.response_metadata?.timestamp_finish,
+    timestamp: frame.response_metadata?.timestamp_finish,
+    toolMeta: { ...metadata, ...hierarchy, code_debug_v1: proof },
+  };
+  return replaceAt(history, index, { toolActions: existing
+    ? replaceToolAction(current, runId, action => ({ ...action, ...completed }))
+    : [...((current.toolActions ?? []) as readonly ToolAction[]), completed] });
+}
+
 /**
  * Reduce one tool-lifecycle frame, or return `undefined` for a frame this
  * family does not own so the dispatcher can offer it to the next one.
@@ -163,7 +211,12 @@ export function reduceToolFrame(
       if (index === -1) return history;
       const current = history[index];
       const runId = frame.response_metadata?.tool_run_id;
-      if (!current || !runId || !findToolAction(current, runId)) return history;
+      if (!current || !runId) return history;
+      const debug = codeDebugToolMeta(frame.response_metadata);
+      if (Object.hasOwn(debug, 'code_debug_v1') || findToolAction(current, runId)?.toolMeta?.['code_debug_v1'] !== undefined) {
+        return type === SocketMessageType.AgentToolEnd ? reduceCodeDebugCompletion(history, frame, index, current) : history;
+      }
+      if (!findToolAction(current, runId)) return history;
       const metadata = toolMetadata(frame);
       const isError = type === SocketMessageType.AgentToolError;
       if (isError && frame.response_metadata?.tool_output_chunk_v1 === undefined) {

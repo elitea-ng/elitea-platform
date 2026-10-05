@@ -40,7 +40,7 @@ func newClaimsRepository(store sharedStore, newClaimID func() (string, error), n
 }
 
 func (r *ClaimsRepository) ClaimValidation(ctx context.Context, request executionapp.ClaimRequest, leaseTTL executionapp.ClaimLeaseTTLMillis) (executionapp.ClaimDecision, error) {
-	if request.CommandID == "" || request.OutboxID == "" || request.ExecutionID == "" || request.Generation == 0 || !claimCapabilityAllowed(request.CapabilityID) || request.SignedEnvelopeDigest.IsZero() || request.WorkloadIdentity == "" || request.WorkloadSessionID == "" || request.ProducerID == "" || !leaseTTL.Valid() {
+	if (request.NodeRecovery && (request.AgentModelCheckpointRecovery || (request.CapabilityID != executiondomain.AgentApplicationCapability && request.CapabilityID != executiondomain.AgentAdhocCapability))) || request.CommandID == "" || request.OutboxID == "" || request.ExecutionID == "" || request.Generation == 0 || !claimCapabilityAllowed(request.CapabilityID) || request.SignedEnvelopeDigest.IsZero() || request.WorkloadIdentity == "" || request.WorkloadSessionID == "" || request.ProducerID == "" || !leaseTTL.Valid() {
 		return executionapp.ClaimDecision{}, executionapp.ErrInvalidClaim
 	}
 	var decision executionapp.ClaimDecision
@@ -215,6 +215,12 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 				if state == executiondomain.JobRunning {
 					decision.Disposition = executionapp.ClaimRecoverRunningNoACK
 				}
+				if request.NodeRecovery && state == executiondomain.JobRunning &&
+					(desired == runtimedomain.DesiredRunning || desired == runtimedomain.DesiredSuspended) {
+					if err := selectNodeRecoveryClaim(ctx, tx, request, existing, invocationState, &decision); err != nil {
+						return err
+					}
+				}
 			}
 			return nil
 		case err == nil:
@@ -258,7 +264,15 @@ WHERE claim_id = $1 AND released_at IS NULL`, existing.ClaimID); err != nil {
 				runningRecoveryOnly = expired
 			}
 		}
-		if desired != runtimedomain.DesiredRunning && !terminalRecoveryOnly && !runningRecoveryOnly {
+		nodeRecoveryOnly := false
+		if request.NodeRecovery && desired == runtimedomain.DesiredSuspended && state == executiondomain.JobRunning && (request.CapabilityID == executiondomain.AgentApplicationCapability || request.CapabilityID == executiondomain.AgentAdhocCapability) {
+			if _, err := loadNodeRecoveryClaimReceipt(ctx, tx, request.ExecutionID, request.Generation, desired); err == nil {
+				nodeRecoveryOnly = true
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
+		if desired != runtimedomain.DesiredRunning && !terminalRecoveryOnly && !runningRecoveryOnly && !nodeRecoveryOnly {
 			// CLAIMED/RUNNING and other ambiguous states require the existing live
 			// owner or explicit reconciliation; DRAINING remains non-terminal.
 			decision = executionapp.ClaimDecision{
@@ -461,6 +475,11 @@ WHERE claim_id = $1 AND released_at IS NULL`, lease.ClaimID)
 				}
 			}
 		}
+		if request.NodeRecovery && state == executiondomain.JobRunning && (desired == runtimedomain.DesiredSuspended || desired == runtimedomain.DesiredRunning) && (decision.Disposition == executionapp.ClaimAccepted || decision.Disposition == executionapp.ClaimRecoverAmbiguousInvocationNoACK) {
+			if err := selectNodeRecoveryClaim(ctx, tx, request, lease, invocationState, &decision); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -500,6 +519,7 @@ WHERE j.execution_id = $1
   AND c.lease_epoch = $8
   AND c.fence_token = $9
   AND c.released_at IS NULL
+  AND c.recovery_mode <> 'NODE_RECOVERY'
 FOR UPDATE OF j, c`,
 			fence.ExecutionID,
 			int64(fence.Generation),
@@ -605,6 +625,7 @@ WHERE j.execution_id = $1
   AND c.lease_epoch = $8
   AND c.fence_token = $9
   AND c.released_at IS NULL
+  AND c.recovery_mode <> 'NODE_RECOVERY'
 FOR UPDATE OF j, c`,
 			fence.ExecutionID,
 			int64(fence.Generation),

@@ -816,7 +816,36 @@ impl RuntimeAttachmentObject {
 pub(crate) struct RuntimeApplicationVersion {
     application_id: u64,
     version_id: u64,
+    saved_agent_fingerprint: Option<SavedAgentFingerprint>,
     version_details: Map<String, Value>,
+}
+
+/// Main's pre-redemption definition identity from one claim-bound response.
+///
+/// The transport owns construction. Editable version fields cannot mint this
+/// identity. The digest is opaque and never recomputed from redeemed settings.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct SavedAgentFingerprint {
+    application_id: u64,
+    version_id: u64,
+    definition_digest: [u8; 32],
+}
+
+impl SavedAgentFingerprint {
+    #[must_use]
+    pub(crate) const fn application_id(&self) -> u64 {
+        self.application_id
+    }
+
+    #[must_use]
+    pub(crate) const fn version_id(&self) -> u64 {
+        self.version_id
+    }
+
+    #[must_use]
+    pub(crate) const fn definition_digest(&self) -> [u8; 32] {
+        self.definition_digest
+    }
 }
 
 impl RuntimeApplicationVersion {
@@ -828,6 +857,11 @@ impl RuntimeApplicationVersion {
     #[must_use]
     pub(crate) const fn version_id(&self) -> u64 {
         self.version_id
+    }
+
+    #[must_use]
+    pub(crate) const fn saved_agent_fingerprint(&self) -> Option<SavedAgentFingerprint> {
+        self.saved_agent_fingerprint
     }
 
     pub(crate) fn into_version_details(self) -> Map<String, Value> {
@@ -1373,6 +1407,13 @@ async fn load_application_response(
     Ok(RuntimeApplicationVersion {
         application_id,
         version_id,
+        saved_agent_fingerprint: decoded.frozen_definition_sha256.0.map(|definition_digest| {
+            SavedAgentFingerprint {
+                application_id,
+                version_id,
+                definition_digest,
+            }
+        }),
         version_details: decoded.version_details,
     })
 }
@@ -1735,7 +1776,44 @@ struct ApplicationVersionResponse {
     project_id: u64,
     application_id: u64,
     version_id: u64,
+    #[serde(default)]
+    frozen_definition_sha256: OptionalFrozenDefinitionDigest,
     version_details: Map<String, Value>,
+}
+
+/// Omission supports legacy responses. Present null is not an omission.
+#[derive(Default)]
+struct OptionalFrozenDefinitionDigest(Option<[u8; 32]>);
+
+impl<'de> Deserialize<'de> for OptionalFrozenDefinitionDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let bytes = value.as_bytes();
+        if bytes.len() != 64
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
+            return Err(serde::de::Error::custom(
+                "the frozen application definition digest is malformed",
+            ));
+        }
+        let nibble = |byte: u8| {
+            if byte.is_ascii_digit() {
+                byte - b'0'
+            } else {
+                byte - b'a' + 10
+            }
+        };
+        let mut digest = [0_u8; 32];
+        for (output, pair) in digest.iter_mut().zip(bytes.chunks_exact(2)) {
+            *output = (nibble(pair[0]) << 4) | nibble(pair[1]);
+        }
+        Ok(Self(Some(digest)))
+    }
 }
 
 struct SecretToken(Zeroizing<String>);
@@ -1750,3 +1828,6 @@ impl<'de> Deserialize<'de> for SecretToken {
             .map(Self)
     }
 }
+
+#[path = "code_debug.rs"]
+mod code_debug;

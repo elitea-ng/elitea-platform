@@ -565,7 +565,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// Feature migrations 127 through 133 retain their SQL bytes.
 	// Reconcile existing rehearsal ledgers before deployment.
-	require.EqualValues(t, 133, Head(shared))
+	// Code authority, workspace, broker, debug, and saved source require 0134 through 0141.
+	// HTTP schema remains inactive until its runtime gate is enabled.
+	require.EqualValues(t, 141, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -710,5 +712,5 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// database, so its ledger advances independently of the tenant one.
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 10, Head(agentState))
+	require.EqualValues(t, 13, Head(agentState))
 }

@@ -1,0 +1,44 @@
+[
+  {
+    "file": "code_prepared_workspace_legacy_v1.json",
+    "sha256": "1e2b7cb20a69df00a6bc0acc218bfbed3171a3af5f8a8e73e9fee78034c7c376",
+    "fingerprint": "637e1fb0e28a9837e8a50cc288e0e7e3ada333d8acdcad24b049df8246c40edd",
+    "pre_workspace_sha256": "1e2b7cb20a69df00a6bc0acc218bfbed3171a3af5f8a8e73e9fee78034c7c376",
+    "pre_workspace_fingerprint": "637e1fb0e28a9837e8a50cc288e0e7e3ada333d8acdcad24b049df8246c40edd"
+  },
+  {
+    "file": "code_prepared_workspace_python_v2.json",
+    "sha256": "c8906ebd60f7b63a4e63e7f98afe8e1253bbe67250420d34fb269c70cbdccad4",
+    "fingerprint": "bd63330030beb683b771d249ee9500ddb5b89bcc14ccb46c9b1ecf16d4fce471",
+    "pre_workspace_sha256": "c8906ebd60f7b63a4e63e7f98afe8e1253bbe67250420d34fb269c70cbdccad4",
+    "pre_workspace_fingerprint": "bd63330030beb683b771d249ee9500ddb5b89bcc14ccb46c9b1ecf16d4fce471"
+  },
+  {
+    "file": "code_prepared_workspace_native_v3.json",
+    "sha256": "7af0e12c5a31054832d797f6ff00d4e798fd9582ab7817e48b8182fa8da2f131",
+    "fingerprint": "720f6be0689e65ed9f4ab2814d1136ec606cee684152014dc43638681b5b6a34",
+    "pre_workspace_sha256": "7af0e12c5a31054832d797f6ff00d4e798fd9582ab7817e48b8182fa8da2f131",
+    "pre_workspace_fingerprint": "720f6be0689e65ed9f4ab2814d1136ec606cee684152014dc43638681b5b6a34"
+  },
+  {
+    "file": "code_prepared_workspace_only_v4.json",
+    "sha256": "16c4b07af3a48b38769910f218cd6530e33fb0c43b537f338295eb34da530d47",
+    "fingerprint": "10c59deabb425038c9881122ea73436d00d3779d3ada0f80d02868a2e568d548",
+    "pre_workspace_sha256": "1e2b7cb20a69df00a6bc0acc218bfbed3171a3af5f8a8e73e9fee78034c7c376",
+    "pre_workspace_fingerprint": "637e1fb0e28a9837e8a50cc288e0e7e3ada333d8acdcad24b049df8246c40edd"
+  },
+  {
+    "file": "code_prepared_workspace_broker_v5.json",
+    "sha256": "d1f266c3a5c0ec3ab75bdba449b6ccd68be468789b2432a752a9cf20119e152b",
+    "fingerprint": "80ed33dd53d1bb06cee90f66c2eef4cb450b5084690f6fe7bece779461a74fd7",
+    "pre_workspace_sha256": "d1f266c3a5c0ec3ab75bdba449b6ccd68be468789b2432a752a9cf20119e152b",
+    "pre_workspace_fingerprint": "80ed33dd53d1bb06cee90f66c2eef4cb450b5084690f6fe7bece779461a74fd7"
+  },
+  {
+    "file": "code_prepared_workspace_both_v5.json",
+    "sha256": "4be0de37aa37445337ae83ae5174909b18e19c883300c020ad10551e985484ae",
+    "fingerprint": "7d4984f697e9ef31bf752191dca9bc72da64363e30d3a13be1c151f84a148c78",
+    "pre_workspace_sha256": "d1f266c3a5c0ec3ab75bdba449b6ccd68be468789b2432a752a9cf20119e152b",
+    "pre_workspace_fingerprint": "80ed33dd53d1bb06cee90f66c2eef4cb450b5084690f6fe7bece779461a74fd7"
+  }
+]

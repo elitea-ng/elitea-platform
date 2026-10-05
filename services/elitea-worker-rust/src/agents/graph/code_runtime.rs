@@ -9,22 +9,127 @@ use std::{collections::BTreeMap, sync::Arc};
 use super::code::{CodeLanguage, CodeNodeDefinition, CodeProvenance};
 use super::code_result::project_code_receipt;
 use super::code_state::CodeStateBoundary;
+use super::node_recovery::{NodeFailure, NodeFailureClass, ReplaySafety};
+use super::node_recovery_runtime::{
+    NodeAttemptAuthority, NodeAttemptBody, NodeAttemptReportedFailure,
+};
+
+#[path = "code_committed.rs"]
+mod committed;
+pub(super) use committed::CodeCommittedProjector;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CodeAttemptPhase {
+    Admission,
+    Input,
+    Preparation,
+    Hydration,
+    Dispatch,
+    Observation,
+    Projection,
+}
+
+/// Finite caller-safe facts. Owner error text never enters this type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CodePreparationFailure {
+    Failed,
+    Cancelled,
+    Unconfirmed,
+}
+
+impl CodePreparationFailure {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Failed => "pipeline.code_preparation_failed",
+            Self::Cancelled => "pipeline.code_preparation_cancelled",
+            Self::Unconfirmed => "pipeline.code_preparation_unconfirmed",
+        }
+    }
+    pub(super) fn graph_error(self) -> GraphError {
+        code_error(crate::protocol::output::model_failure(Some(self.code())).safe_message())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CodeAttemptFailure {
+    pub(crate) phase: CodeAttemptPhase,
+    pub(crate) failure: NodeFailure,
+    // Owning call detail; generic graph recovery still uses the whole dispatch.
+    pub(crate) platform_call_effect: Option<[u8; 32]>,
+    pub(crate) preparation: Option<CodePreparationFailure>,
+}
+
+impl CodeAttemptFailure {
+    pub(crate) const fn new(
+        phase: CodeAttemptPhase,
+        class: NodeFailureClass,
+        replay: ReplaySafety,
+    ) -> Self {
+        Self {
+            phase,
+            failure: NodeFailure { class, replay },
+            platform_call_effect: None,
+            preparation: None,
+        }
+    }
+    pub(crate) fn with_preparation_failure(mut self, failure: CodePreparationFailure) -> Self {
+        self.preparation = Some(failure);
+        self
+    }
+    pub(crate) fn with_platform_call_effect(mut self, effect: Option<[u8; 32]>) -> Self {
+        self.platform_call_effect = effect;
+        self
+    }
+}
 
 /// No Debug: source and selected state can contain user data.
 pub(in crate::agents) struct CodeInvocation<'a> {
     pub(super) activation: [u8; 32],
     pub(super) language: CodeLanguage,
+    pub(super) platform_client: bool,
     pub(super) source: &'a str,
+    pub(super) dependencies_toml: Option<&'a str>,
     pub(super) provenance: CodeProvenance,
     pub(super) input_json: Vec<u8>,
+    pub(super) trace: Option<super::code_trace::CodeTraceContext>,
+    pub(super) original: Option<super::code_workspace::CodeOriginalDeclaration>,
+    pub(super) debug: Option<super::code_debug::CodeDebugSelection>,
+    pub(super) workspace: Option<super::code_workspace::CodeWorkspaceInvocation>,
 }
 
 #[async_trait]
 pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
+    /// Bind only the actual Main registered saved family at the compiler seam.
+    /// Default runtimes cannot acquire scoped authority from a child definition.
+    fn bind_saved_child_scope(
+        &self,
+        _provider: Arc<
+            dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider,
+        >,
+    ) -> Result<Arc<dyn CodeSandboxRuntime>, GraphError> {
+        Err(code_error("Scoped Code runtime authority is unavailable."))
+    }
     /// Return the terminal receipt for this exact activation. Implementations
     /// must authorize each submission and reconcile pending jobs without minting
     /// a replacement identity. Failure/cancellation must return an error.
     async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError>;
+
+    /// Use typed facts. The default cannot establish safe replay from `GraphError` text.
+    async fn execute_attempt(
+        &self,
+        invocation: CodeInvocation<'_>,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<Vec<u8>, CodeAttemptFailure> {
+        self.execute(invocation).await.map_err(|_| {
+            CodeAttemptFailure::new(
+                CodeAttemptPhase::Observation,
+                NodeFailureClass::Unknown,
+                ReplaySafety::UnknownExternalEffect {
+                    effect_id: authority.dispatch_activation(),
+                },
+            )
+        })
+    }
 }
 
 pub(super) struct CodeNode {
@@ -41,6 +146,9 @@ impl CodeNode {
         types: BTreeMap<String, String>,
         runtime: Arc<dyn CodeSandboxRuntime>,
     ) -> Result<Self, GraphError> {
+        definition
+            .validate_source_types(&types)
+            .map_err(code_error)?;
         let boundary = CodeStateBoundary::new(&types).map_err(code_error)?;
         Ok(Self {
             definition,
@@ -91,14 +199,42 @@ impl CodeNode {
             .boundary
             .input_json(&context.state, self.definition.input_keys())
             .map_err(code_error)?;
+        let trace = self
+            .events
+            .as_ref()
+            .map(|sender| {
+                super::code_trace::CodeTraceContext::new(
+                    self.definition.id(),
+                    self.definition.language(),
+                    &activation,
+                    context,
+                    sender.clone(),
+                )
+            })
+            .transpose()?;
         let receipt = self
             .runtime
             .execute(CodeInvocation {
                 activation,
                 language: self.definition.language(),
-                source: source.source,
-                provenance: source.provenance,
+                platform_client: self.definition.platform_client(),
+                source: source.source(),
+                dependencies_toml: self.definition.dependencies_toml(),
+                provenance: source.provenance(),
                 input_json,
+                trace,
+                original: self
+                    .definition
+                    .original_declaration(context)
+                    .map_err(code_error)?,
+                debug: self
+                    .definition
+                    .debug_selection(context)
+                    .map_err(code_error)?,
+                workspace: self
+                    .definition
+                    .workspace_selection(context)
+                    .map_err(code_error)?,
             })
             .await?;
         let updates = project_code_receipt(
@@ -113,6 +249,144 @@ impl CodeNode {
             output = output.with_update(&key, value);
         }
         Ok(output)
+    }
+}
+
+#[async_trait]
+impl NodeAttemptBody for CodeNode {
+    fn legacy_dispatch_identity(
+        &self,
+        context: &NodeContext,
+    ) -> Result<Option<[u8; 32]>, GraphError> {
+        activation(&self.definition, context).map(Some)
+    }
+
+    async fn execute_attempt(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<NodeOutput, NodeFailure> {
+        self.execute_attempt_reported(context, authority)
+            .await
+            .map_err(|failure| failure.failure)
+    }
+
+    async fn execute_attempt_reported(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<NodeOutput, NodeAttemptReportedFailure> {
+        let reject = |class| {
+            NodeAttemptReportedFailure::from(NodeFailure {
+                class,
+                replay: ReplaySafety::NoExternalEffect,
+            })
+        };
+        if !authority.matches(
+            self.definition.id(),
+            self.definition.validated_digest(),
+            context.step,
+        ) {
+            return Err(reject(NodeFailureClass::AuthorizationDenied));
+        }
+        let source = self
+            .definition
+            .resolve_source(&context.state, &self.types)
+            .map_err(|_| reject(NodeFailureClass::InvalidInput))?;
+        let input_json = self
+            .boundary
+            .input_json(&context.state, self.definition.input_keys())
+            .map_err(|_| reject(NodeFailureClass::InvalidInput))?;
+        let activation = authority.dispatch_activation();
+        let trace = self
+            .events
+            .as_ref()
+            .map(|sender| {
+                super::code_trace::CodeTraceContext::new(
+                    self.definition.id(),
+                    self.definition.language(),
+                    &activation,
+                    context,
+                    sender.clone(),
+                )
+            })
+            .transpose()
+            .map_err(|_| reject(NodeFailureClass::InvalidInput))?;
+        let receipt = self
+            .runtime
+            .execute_attempt(
+                CodeInvocation {
+                    activation,
+                    language: self.definition.language(),
+                    platform_client: self.definition.platform_client(),
+                    source: source.source(),
+                    dependencies_toml: self.definition.dependencies_toml(),
+                    provenance: source.provenance(),
+                    input_json,
+                    trace,
+                    original: self
+                        .definition
+                        .original_declaration(context)
+                        .map_err(|_| reject(NodeFailureClass::InvalidConfiguration))?,
+                    debug: self
+                        .definition
+                        .debug_selection(context)
+                        .map_err(|_| reject(NodeFailureClass::InvalidConfiguration))?,
+                    workspace: self
+                        .definition
+                        .workspace_selection(context)
+                        .map_err(|_| reject(NodeFailureClass::InvalidConfiguration))?,
+                },
+                authority,
+            )
+            .await
+            .map_err(|failure| NodeAttemptReportedFailure {
+                failure: failure.failure,
+                terminal_code: failure.preparation.map(CodePreparationFailure::code),
+            })?;
+        let updates = project_code_receipt(
+            &receipt,
+            &self.boundary,
+            self.definition.output_keys(),
+            self.definition.structured_output(),
+        )
+        .map_err(|_| {
+            NodeAttemptReportedFailure::from(NodeFailure {
+                class: NodeFailureClass::InvalidResult,
+                replay: ReplaySafety::CompletedExternalEffect {
+                    receipt_id: authority.dispatch_activation(),
+                },
+            })
+        })?;
+        let mut output = NodeOutput::new();
+        for (key, value) in updates {
+            output = output.with_update(&key, value);
+        }
+        Ok(output)
+    }
+
+    async fn report_terminal_failure(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+        code: &'static str,
+    ) -> Result<(), GraphError> {
+        tracing::error!(
+            node_id = self.definition.id(),
+            graph_thread_id = context.config.thread_id,
+            activation_id = %crate::sandbox::code_recovery::hex(&authority.dispatch_activation()),
+            attempt = authority.attempt(),
+            phase = "preparation",
+            error_code = code,
+            "pipeline Code dependency preparation stopped"
+        );
+        if let Some(events) = &self.events {
+            events
+                .send_execution_failure(code)
+                .await
+                .map_err(|_| code_error("The pipeline failure channel closed."))?;
+        }
+        Ok(())
     }
 }
 
@@ -168,6 +442,7 @@ mod tests {
         async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
             assert_eq!(invocation.language, CodeLanguage::Python);
             assert_eq!(invocation.source, "7");
+            assert_eq!(invocation.dependencies_toml, None);
             assert_eq!(invocation.provenance, CodeProvenance::SavedLiteral);
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&invocation.input_json).unwrap(),
@@ -214,6 +489,46 @@ mod tests {
         assert_eq!(visits[0], visits[1]);
         assert_ne!(visits[0], visits[2]);
         assert_ne!(visits[0], visits[3]);
+    }
+    #[tokio::test]
+    async fn rust_dependencies_are_saved_metadata_and_not_selected_state_input() {
+        const DECLARATION: &str = "[dependencies]\nregex = \"1\"\n";
+        struct DependencyRuntime;
+        #[async_trait]
+        impl CodeSandboxRuntime for DependencyRuntime {
+            async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+                assert_eq!(invocation.language, CodeLanguage::Rust);
+                assert_eq!(invocation.source, "7");
+                assert_eq!(invocation.dependencies_toml, Some(DECLARATION));
+                assert_eq!(invocation.provenance, CodeProvenance::SavedLiteral);
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&invocation.input_json).unwrap(),
+                    json!({"count": 2})
+                );
+                Ok(
+                    serde_json::to_vec(&json!({"revision":1,"status":"completed","exit_code":0,
+                    "stdout":"{\"revision\":1,\"result\":7}","stderr":""}))
+                    .unwrap(),
+                )
+            }
+        }
+        let definition = CodeNodeDefinition::from_yaml(&format!(
+            "{YAML}language: rust\ndependencies: {}\n",
+            serde_json::to_string(DECLARATION).unwrap()
+        ))
+        .unwrap();
+        let node = CodeNode::new(
+            definition,
+            BTreeMap::from([("count".into(), "int".into())]),
+            Arc::new(DependencyRuntime),
+        )
+        .unwrap();
+        let mut invocation_context = context("root", 4);
+        invocation_context
+            .state
+            .insert("dependencies".into(), json!("private state value"));
+        let output = node.execute(&invocation_context).await.unwrap();
+        assert_eq!(output.updates, State::from([("count".into(), json!(7))]));
     }
     #[tokio::test]
     async fn invalid_input_does_not_dispatch_and_runtime_failure_has_no_state_update() {
@@ -350,6 +665,108 @@ mod tests {
             assert_eq!(runtime.visits.lock().unwrap().len(), 1);
         }
     }
+    #[derive(Default)]
+    struct TemplateRuntime {
+        visits: Mutex<Vec<[u8; 32]>>,
+    }
+    #[async_trait]
+    impl CodeSandboxRuntime for TemplateRuntime {
+        async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+            assert_eq!(invocation.source, "result = 7");
+            assert_eq!(invocation.provenance, CodeProvenance::StateTemplate);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&invocation.input_json).unwrap(),
+                json!({"count": 2})
+            );
+            self.visits.lock().unwrap().push(invocation.activation);
+            Ok(
+                serde_json::to_vec(&json!({"revision":1,"status":"completed","exit_code":0,
+                "stdout":"{\"revision\":1,\"result\":7}","stderr":""}))
+                .unwrap(),
+            )
+        }
+    }
+
+    fn template_pipeline_yaml(source_type: &str) -> String {
+        format!(
+            "state:\n  count: int\n  source: {source_type}\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: {{type: fstring, value: 'result = {{source}}'}}\n    input: [count]\n    output: [count]\n    transition: END\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn compiled_template_resolves_before_runtime_and_keeps_dynamic_provenance() {
+        let runtime = Arc::new(TemplateRuntime::default());
+        for (kind, source) in [("str", json!("7")), ("int", json!(7))] {
+            let definition = PipelineDefinition::from_yaml(&template_pipeline_yaml(kind)).unwrap();
+            let graph = definition
+                .compile_subgraph_with_runtime(
+                    Arc::new(MemoryCheckpointer::new()),
+                    &PipelineNodeRuntimes::default().with_code(runtime.clone()),
+                )
+                .unwrap();
+            let state = State::from([("count".into(), json!(2)), ("source".into(), source)]);
+            let output = graph
+                .invoke(
+                    state,
+                    ExecutionConfig::new(&format!("compiled-template-{kind}")),
+                )
+                .await
+                .unwrap();
+            assert_eq!(output["count"], 7);
+        }
+        assert_eq!(runtime.visits.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compiler_binding_rejects_undeclared_or_unsupported_template_fields_before_runtime() {
+        let runtime = Arc::new(TemplateRuntime::default());
+        for yaml in [
+            template_pipeline_yaml("float"),
+            template_pipeline_yaml("str").replace("  source: str\n", ""),
+        ] {
+            let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+            assert!(
+                definition
+                    .compile_subgraph_with_runtime(
+                        Arc::new(MemoryCheckpointer::new()),
+                        &PipelineNodeRuntimes::default().with_code(runtime.clone()),
+                    )
+                    .is_err()
+            );
+        }
+        assert!(runtime.visits.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_template_values_fail_before_runtime_dispatch() {
+        let runtime = Arc::new(TemplateRuntime::default());
+        let definition = CodeNodeDefinition::from_yaml("id: run\ntype: code\ncode: {type: fstring, value: '{source}'}\ninput: [count]\noutput: [count]\ntransition: END\n").unwrap();
+        let node = CodeNode::new(
+            definition,
+            BTreeMap::from([
+                ("count".into(), "int".into()),
+                ("source".into(), "str".into()),
+            ]),
+            runtime.clone(),
+        )
+        .unwrap();
+        for source in [
+            None,
+            Some(json!(7)),
+            Some(json!("")),
+            Some(json!("PRIVATE_MARKER\0")),
+            Some(json!("x".repeat(256 * 1024 + 1))),
+        ] {
+            let mut invocation = context("invalid-template", 1);
+            if let Some(source) = source {
+                invocation.state.insert("source".into(), source);
+            }
+            let error = node.execute(&invocation).await.err().unwrap();
+            assert!(!error.to_string().contains("PRIVATE_MARKER"));
+        }
+        assert!(runtime.visits.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn lost_response_recovery_reuses_activation_and_terminal_checkpoint_skips_dispatch() {
         use adk_rust::graph::Checkpointer;

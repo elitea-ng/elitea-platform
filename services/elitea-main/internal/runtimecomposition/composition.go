@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
@@ -17,15 +18,18 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
+	recoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/noderecovery"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
+	toolkitcallapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/currentcore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -78,12 +82,22 @@ const (
 )
 
 type Dependencies struct {
-	AdmissionPool                    *pgxpool.Pool
-	ControlPool                      *pgxpool.Pool
-	OutputPool                       *pgxpool.Pool
-	ReplayPool                       *pgxpool.Pool
-	TerminalEffectsPool              *pgxpool.Pool
-	ContentPool                      *pgxpool.Pool
+	AdmissionPool                 *pgxpool.Pool
+	OriginalCodeDefinitions       repos.CodeDefinitionSourceReader
+	OriginalCodeWorkspaceVerifier storage.OriginalCodeWorkspaceVerifier
+	OriginalCodeBrokerVerifier    storage.OriginalCodeBrokerVerifier
+	CodeWorkspaceCapabilities     *storage.CodeRepositoryCapabilities
+	CodeWorkspacePolicy           *storage.CodeWorkspacePolicy
+	CodePlatform                  *CodePlatformConfig
+	CodeBrokerPolicies            []storage.CodeBrokerPolicy
+	CodeDebugStatePool            *pgxpool.Pool
+	ControlPool                   *pgxpool.Pool
+	OutputPool                    *pgxpool.Pool
+	ReplayPool                    *pgxpool.Pool
+	TerminalEffectsPool           *pgxpool.Pool
+	ContentPool                   *pgxpool.Pool
+	// Optional original supervisor state DB, owned and closed by the calling command.
+	CompiledSnapshotStatePool        *pgxpool.Pool
 	CurrentConfigurations            *CurrentConfigurationsRuntime
 	ConfigurationLifecycleReconciler configurationapp.CurrentConfigurationLifecycleReconciler
 	ActorTokenIssuer                 storage.ActorTokenIssuer
@@ -141,6 +155,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	toolkitRoute, err := configuredToolkitRoute(config, dependencies.WorkerToolkitCapability)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateCompiledSnapshotDependencies(config, dependencies); err != nil {
 		return nil, err
 	}
 	if err := validateDependencies(dependencies); err != nil {
@@ -502,6 +519,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
 	var agentStart *agentexecutionapp.CurrentApplicationStartService
+	var nodeRecovery *recoveryapp.Service
+	var nodeRecoveryStore *repos.NodeRecoveryRepository
+	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
+	var originalCodeIntents *repos.CodeIntentRepository
+	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
+	var codeToolkitReader toolkitexecutionapp.CurrentMCPToolkitReader
+	var codeToolkitSettings toolkitexecutionapp.CurrentToolkitSettingsResolver
 	var agentCancel *agentexecutionapp.CurrentAgentCancellationService
 	var agentTaskStatus *agentexecutionapp.CurrentAgentTaskStatusService
 	var agentPublisher publisherRunner
@@ -588,6 +615,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent start resolver: %w", targetErr)
+		}
+		var recoveryErr error
+		nodeRecoveryStore, recoveryErr = repos.NewNodeRecoveryRepository(dependencies.AdmissionPool, recoveryOwners)
+		if recoveryErr != nil {
+			return nil, recoveryErr
+		}
+		nodeRecovery, recoveryErr = recoveryapp.New(nodeRecoveryStore)
+		if recoveryErr != nil {
+			return nil, recoveryErr
 		}
 		agentCancellation, cancelErr := repos.NewCurrentAgentCancelRepository(dependencies.AdmissionPool)
 		if cancelErr != nil {
@@ -680,6 +716,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// the SAME admission pool every other resolver in this block uses
 		// (agentGuardrails, agentVersions above), not RouterConfig's
 		// MemoriesRepo (main.go) — see that field's own comment.
+		if codeSources != nil {
+			agentStart.WithOriginalSourceDefinitions(codeSources)
+		}
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
 		agentStart = agentStart.WithContextPolicy(repos.NewCurrentAgentContextPolicyRepository(dependencies.AdmissionPool))
 		// Project Context injection (#946). Same post-construction setter
@@ -749,6 +788,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if toolkitErr != nil {
 			return nil, fmt.Errorf("construct current direct toolkit reader: %w", toolkitErr)
 		}
+		codeToolkitReader, codeToolkitSettings = toolkitReader, toolkitSettings
 		if toolkitRoute.rust {
 			standaloneToolkitReader = toolkitReader
 			standaloneToolkitSettings = toolkitSettings
@@ -852,6 +892,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("compose agent admission reservation reaper: %w", err)
 		}
 	}
+	var replayMaintenance *executionReplayRetentionJanitor
 	var nodeEvents *repos.NodeEventsRepository
 	var replayWake *redisExecutionReplayWakeBus
 	var replayWaiter executionapi.ReplayWaiter = pollingReplayWaiter{
@@ -885,6 +926,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if retentionErr != nil {
 			return nil, fmt.Errorf("construct execution replay retention janitor: %w", retentionErr)
 		}
+		replayMaintenance = replayRetention
 		publisherRoot, err = newPublisherSet(publisherRoot, replayRetention)
 		if err != nil {
 			return nil, fmt.Errorf("compose execution replay retention janitor: %w", err)
@@ -1039,13 +1081,44 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct sandbox grant issuer: %w", err)
 		}
 	}
+	compiledSnapshots, compiledProfiles, err := configureCompiledSnapshotAuthority(ctx, config, dependencies)
+	if err != nil {
+		return nil, err
+	}
+	compiledFrameLimit := 0
+	if compiledSnapshots != nil {
+		compiledFrameLimit = compiledSnapshotRequestLimit
+	}
+	originalCodeIntents, codeOwnerClient, codeOwnerSigner, err := configureCodeOwner(config, dependencies.AdmissionPool, privateKey, compiledSnapshots, compiledProfiles, codeDefinitions)
+	if err != nil {
+		return nil, err
+	}
+	if originalCodeIntents != nil {
+		originalCodeIntents.WithPreparedExtensions(dependencies.OriginalCodeWorkspaceVerifier, dependencies.OriginalCodeBrokerVerifier)
+	}
+	if codeOwnerClient != nil {
+		defer func() {
+			if codeOwnerClient != nil && closeRedis {
+				codeOwnerClient.Close()
+			}
+		}()
+	}
+	recoveryOwners.Code = originalCodeIntents
+
+	var compiledAuthority runtimedomain.RustSnapshotIndex
+	if compiledSnapshots != nil {
+		compiledAuthority = compiledSnapshots
+	}
 	controlServer, err := control.NewServer(control.ServerConfig{
-		SandboxGrants:         sandboxGrants,
-		SandboxBundles:        config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil,
-		MaxInputManifestBytes: maxInputManifestBytes,
-		MaxInputEntries:       maxInputEntries,
-		MaxInputContentBytes:  maxInputContentBytes,
-		MaxStringBytes:        maxSafeStringBytes,
+		SandboxGrants:          sandboxGrants,
+		CompiledSnapshots:      compiledAuthority,
+		CompiledProfiles:       compiledProfiles,
+		OriginalCodeWorkspaces: originalCodeIntents,
+		SandboxBundles:         config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil,
+		MaxInputManifestBytes:  maxInputManifestBytes,
+		MaxInputEntries:        maxInputEntries,
+		MaxInputContentBytes:   maxInputContentBytes,
+		MaxStringBytes:         maxSafeStringBytes,
 	}, controlPeerAuthorizer, verifier, controlClaims, inputs, settlements)
 	if err != nil {
 		return nil, err
@@ -1251,6 +1324,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var contentServer *storage.ContentServer
 	var indexStart indexingapi.StartUseCase
 	var toolkitCallTool toolkitrun.UseCase
+	var codeToolkitRuns *toolkitcallapp.RunService
 	var toolkitDiscovery discovery.UseCase
 	var toolkitDiscoveryRuntime *currentToolkitDiscoveryRuntime
 	var currentIndex *currentIndexRuntime
@@ -1315,6 +1389,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct nested application version context: %w", err)
 		}
+	}
+	if nestedApplicationVersions != nil && codeSources != nil {
+		nestedApplicationVersions.WithFrozenSavedChildVersionCapture(codeSources)
 	}
 	// attachmentObjects is what lets an attached DOCUMENT reach the model as
 	// text rather than as a filename. The native runtime has no other channel
@@ -1777,6 +1854,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, toolRunErr
 		}
 		toolkitCallTool = toolkitCallToolRuntime.run
+		codeToolkitRuns = toolkitCallToolRuntime.run
 		publisherRoot, err = newPublisherSet(publisherRoot, toolkitCallToolRuntime)
 		if err != nil {
 			return nil, err
@@ -1810,6 +1888,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// the honest old behaviour — the native worker skips the toolkit — instead
 	// of gaining a family whose every call answers 503.
 	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
+	if originalCodeIntents != nil {
+		contentServer.WithOriginalCodeIntents(originalCodeIntents)
+	}
+	if nodeRecoveryStore != nil {
+		contentServer.WithNodeRecoveryControl(nodeRecoveryStore).WithNodeRecoveryResults(nodeRecoveryStore)
+	}
 	if config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil {
 		sandboxSpoolDir, err = os.MkdirTemp("", "elitea-sandbox-bundles-")
 		if err != nil {
@@ -1824,28 +1908,42 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct sandbox bundle content service: %w", err)
 		}
 		contentServer.WithSandboxBundles(bundleContent)
+		if err = attachCodeConsumers(contentServer, config, dependencies, originalCodeIntents, codeOwnerClient, codeOwnerSigner, sandboxGrants, bundleStore, contentRepository, codeToolkitReader, codeToolkitSettings, codeToolkitRuns, replayMaintenance); err != nil {
+			return nil, err
+		}
+		if compiledSnapshots != nil {
+			compiledContent, err := storage.NewCompiledSnapshotContentService(bundleStore, compiledSnapshots, verificationKeys, config.SandboxAudiences, time.Now)
+			if err != nil {
+				return nil, fmt.Errorf("construct compiled snapshot content: %w", err)
+			}
+			contentServer.WithCompiledSnapshots(compiledContent)
+			if err = attachCompiledSnapshotMaintenance(replayMaintenance, bundleStore, compiledSnapshots, "compiled-snapshot-"+filepath.Base(sandboxSpoolDir)); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
-		ControlAddress:          config.ControlAddress,
-		OutputAddress:           config.OutputAddress,
-		ContentAddress:          config.ContentAddress,
-		ControlTLS:              controlTLS,
-		OutputTLS:               outputTLS,
-		ContentTLS:              contentTLS,
-		ControlMaxRequestBytes:  maxGRPCRequestBytes,
-		ControlMaxResponseBytes: maxGRPCResponseBytes,
-		OutputMaxRequestBytes:   maxGRPCRequestBytes,
-		OutputMaxResponseBytes:  maxGRPCResponseBytes,
-		ControlGRPC:             phaseOneGRPCPolicy(16),
-		OutputGRPC:              phaseOneGRPCPolicy(4),
-		ContentMaxConnections:   64,
-		ContentMaxStreams:       maxContentRequests,
-		ContentReadTimeout:      10 * time.Second,
-		ContentWriteTimeout:     30 * time.Second,
-		ContentIdleTimeout:      time.Minute,
-		ContentMaxHeaderBytes:   16 * 1024,
-		ShutdownTimeout:         15 * time.Second,
+		ControlAddress:                  config.ControlAddress,
+		OutputAddress:                   config.OutputAddress,
+		ContentAddress:                  config.ContentAddress,
+		ControlTLS:                      controlTLS,
+		OutputTLS:                       outputTLS,
+		ContentTLS:                      contentTLS,
+		ControlMaxRequestBytes:          maxGRPCRequestBytes,
+		CompiledSnapshotMaxRequestBytes: compiledFrameLimit,
+		ControlMaxResponseBytes:         maxGRPCResponseBytes,
+		OutputMaxRequestBytes:           maxGRPCRequestBytes,
+		OutputMaxResponseBytes:          maxGRPCResponseBytes,
+		ControlGRPC:                     phaseOneGRPCPolicy(16),
+		OutputGRPC:                      phaseOneGRPCPolicy(4),
+		ContentMaxConnections:           64,
+		ContentMaxStreams:               maxContentRequests,
+		ContentReadTimeout:              10 * time.Second,
+		ContentWriteTimeout:             30 * time.Second,
+		ContentIdleTimeout:              time.Minute,
+		ContentMaxHeaderBytes:           16 * 1024,
+		ShutdownTimeout:                 15 * time.Second,
 	}, runtimegrpc.PrivateServices{
 		Control: controlServer,
 		Output:  outputServer,
@@ -1892,6 +1990,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			publicRoutes.IndexScheduleDelete = currentIndex.scheduleDelete
 		}
 	}
+	if nodeRecovery != nil {
+		publicRoutes.NodeRecovery = nodeRecovery
+	}
 	if agentCancel != nil {
 		publicRoutes.AgentCancel = agentCancel
 	}
@@ -1908,6 +2009,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		private:                privateServers,
 		controlRedis:           controlRedis,
 		sandboxSpoolDir:        sandboxSpoolDir,
+		codeOwnerClient:        codeOwnerClient,
 		publicRoutes:           publicRoutes,
 		configurationValidator: currentSDKConfigurationValidator,
 	}, nil

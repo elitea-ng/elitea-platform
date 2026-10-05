@@ -28,6 +28,7 @@ export const SocketMessageType = {
   AgentStart: 'agent_start',
   AgentContextStatus: 'agent_context_status',
   AgentResponse: 'agent_response',
+  FullMessage: 'full_message',
   AgentResultChunk: 'agent_result_chunk',
   AgentException: 'agent_exception',
   AgentToolStart: 'agent_tool_start',
@@ -41,6 +42,7 @@ export const SocketMessageType = {
   AgentToolOutputChunk: 'agent_tool_output_chunk',
   AgentRequiresConfirmation: 'agent_requires_confirmation',
   AgentHitlInterrupt: 'agent_hitl_interrupt',
+  AgentNodeRecoveryRequired: 'agent_node_recovery_required',
   McpAuthorizationRequired: 'mcp_authorization_required',
   AgentLlmStart: 'agent_llm_start',
   AgentLlmChunk: 'agent_llm_chunk',
@@ -92,6 +94,7 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.AIMessageChunk,
   SocketMessageType.AgentLlmEnd,
   SocketMessageType.AgentResponse,
+  SocketMessageType.FullMessage,
   SocketMessageType.AgentResultChunk,
   SocketMessageType.References,
   SocketMessageType.PipelineFinish,
@@ -105,6 +108,7 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.AgentThinkingStep,
   SocketMessageType.AgentThinkingStepUpdate,
   SocketMessageType.AgentHitlInterrupt,
+  SocketMessageType.AgentNodeRecoveryRequired,
   SocketMessageType.AgentRequiresConfirmation,
   SocketMessageType.McpAuthorizationRequired,
   SocketMessageType.SwarmChildMessage,
@@ -208,6 +212,7 @@ export interface ThinkingStep {
  * has to tolerate a frame that identifies nothing.
  */
 export interface ChatStreamFrame {
+  readonly execution_generation?: string | undefined;
   readonly type?: string | undefined;
   readonly message_id?: string | undefined;
   readonly question_id?: string | undefined;

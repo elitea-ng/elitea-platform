@@ -313,6 +313,7 @@ fn map_handle_retirement_error(error: &RedisStreamsError) -> RedisRetirementClie
             RedisRetirementClientError::DependencyUnavailable
         }
         RedisStreamsErrorKind::Configuration
+        | RedisStreamsErrorKind::ConsumerGroupMissing
         | RedisStreamsErrorKind::Protocol
         | RedisStreamsErrorKind::ResourceExhausted => RedisRetirementClientError::Protocol,
     }

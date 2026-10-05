@@ -6,7 +6,7 @@
  * test is therefore evidence that a real recorded run renders through the real
  * SSE seam — not that a hand-written frame satisfies a hand-written reducer.
  */
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1465,4 +1465,96 @@ it('refreshes root occupancy on admission, root measurement and terminal failure
   expect(contextRefreshes).toEqual([7,7]);
   await act(() => registry.emit('execution.failed', JSON.stringify({safe_message:'The runtime operation failed.'})));
   expect(contextRefreshes).toEqual([7,7,7]);
+});
+
+
+describe("editor Test observer recovery", () => {
+  const run = {
+    response_message_id: RESPONSE_MESSAGE_ID,
+    question_id: QUESTION_ID,
+    execution_id: "exec-1",
+    execution_generation: "generation-original",
+    phase: "RUNNING" as const,
+    state: "RUNNING",
+    desired_state: "RUNNING",
+    admitted_at: "2026-10-02T00:00:00Z",
+    settled_at: null,
+    input_reference: {
+      bundle_id: "original",
+      entry_id: "request",
+      immutable_version: "v1",
+      content_digest: "a".repeat(64),
+    },
+    can_control: true,
+    events_url: EVENTS_URL,
+  };
+  it("attaches with zero admission and cancels only the original response", async () => {
+    const starts = vi.fn();
+    const stops = vi.fn();
+    server.use(
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/7/uuid-1`, () => {
+        starts();
+        return HttpResponse.json({});
+      }),
+      http.delete(
+        `${BASE}/elitea_core/task/prompt_lib/7/${RESPONSE_MESSAGE_ID}`,
+        () => {
+          stops();
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+    const hook = renderHook(() =>
+      useChatStreamTransport({
+        conversationUuid: "uuid-1",
+        setChatHistory: () => {},
+      }),
+    );
+    act(() =>
+      expect(
+        hook.result.current.attachExistingRun({
+          conversationUuid: "uuid-1",
+          projectId: 7,
+          run,
+        }),
+      ).toBe(true),
+    );
+    expect(starts).not.toHaveBeenCalled();
+    expect(registry.getOpen()).toHaveLength(1);
+    act(() => hook.result.current.stop());
+    await waitFor(() => expect(stops).toHaveBeenCalledTimes(1));
+    hook.unmount();
+    expect(registry.getOpen()).toHaveLength(0);
+    expect(stops).toHaveBeenCalledTimes(1);
+  });
+  it("refuses stale, paused, foreign URL and unauthorized attachment without effects", () => {
+    const hook = renderHook(() =>
+      useChatStreamTransport({
+        conversationUuid: "current",
+        setChatHistory: () => {},
+      }),
+    );
+    for (const target of [
+      { conversationUuid: "stale", projectId: 7, run },
+      {
+        conversationUuid: "current",
+        projectId: 7,
+        run: { ...run, phase: "PAUSED" as const },
+      },
+      {
+        conversationUuid: "current",
+        projectId: 7,
+        run: { ...run, can_control: false },
+      },
+      {
+        conversationUuid: "current",
+        projectId: 7,
+        run: { ...run, events_url: "/api/v2/executions/8/foreign/events" },
+      },
+    ])
+      act(() =>
+        expect(hook.result.current.attachExistingRun(target)).toBe(false),
+      );
+    expect(registry.getSources()).toHaveLength(0);
+  });
 });

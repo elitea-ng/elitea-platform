@@ -23,10 +23,11 @@ const (
 	DesiredRunning   DesiredState = "RUNNING"
 	DesiredCancelled DesiredState = "CANCELLED"
 	DesiredDraining  DesiredState = "DRAINING"
+	DesiredSuspended DesiredState = "SUSPENDED"
 )
 
 func (s DesiredState) Valid() bool {
-	return s == DesiredRunning || s == DesiredCancelled || s == DesiredDraining
+	return s == DesiredRunning || s == DesiredCancelled || s == DesiredDraining || s == DesiredSuspended
 }
 
 // Fence names one claim generation. Every output and control mutation must

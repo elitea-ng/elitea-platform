@@ -63,3 +63,26 @@ Compare the final JSON with `expected.json`. Ignore variable timing fields durin
 Reload the persistent chat. Verify one unchanged final result.
 Verify four completed supervisor receipts and execution-resource cleanup for each run.
 Repeat this fixture after the artifact path is implemented.
+
+## Verify native dependency delivery
+
+The native delivery path prepares packages before execution. It does not require these packages in the execution image.
+Keep the four programs unchanged. Add this field to the Rust node in `pipeline.yaml`:
+
+```yaml
+    dependencies: |
+      [dependencies]
+      serde = { version = "=1.0.229", features = ["derive"] }
+      base64 = "=0.22.1"
+      flate2 = "=1.1.2"
+      futures = { version = "=0.3.31", default-features = false, features = ["std", "executor"] }
+```
+
+The wrapper supplies its pinned `serde_json` dependency. Do not add it to this field.
+Python, JavaScript, and TypeScript keep their inline package requests.
+Deploy the native preparation profiles before you run the pipeline.
+Verify separate preparation and execution receipts for each language.
+Verify that execution containers have no network access.
+Compare the persistent chat result and editor Test result with `expected.json`.
+Record preparation, hydration, compilation, and execution timings separately when the receipts supply them.
+Runner-only verification does not prove worker recovery or browser behavior.

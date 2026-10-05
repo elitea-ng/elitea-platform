@@ -287,7 +287,7 @@ describe('useHITLNodeModel', () => {
 
     expect(setYamlJsonObject).toHaveBeenCalledWith(
       expect.objectContaining({
-        nodes: [expect.objectContaining({ id: 'Node1', routes: { approve: 'NewTarget' }, transition: undefined })],
+        nodes: [{ id: 'Node1', routes: { approve: 'NewTarget' } }],
       }),
     );
 

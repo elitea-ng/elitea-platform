@@ -30,8 +30,9 @@ use super::events::{
 };
 use super::graph::resume::{
     PipelineContinuationDecision, PipelineMcpAuthorizationContinuation, PipelineResumeError,
-    PipelineResumeErrorCode, PrinterContinuation,
+    PipelineResumeErrorCode,
 };
+use super::graph::static_pause::PipelineTextContinuation;
 use super::pipeline::PipelineExecutionProfile;
 use super::request::AgentExecutionRequest;
 use super::session::{AuthorizedNativeCommandBinding, OrdinaryNativeAgentPlan};
@@ -394,7 +395,30 @@ pub(super) fn admit_pipeline_plan<'a>(
     tracing::Span::current().record("stage", "start_admission");
     let has_continuation = has_continuation(request);
     let start = if has_continuation {
-        if request.payload.should_continue && !request.payload.hitl_resume {
+        if request
+            .payload
+            .meta
+            .contains_key(super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY)
+        {
+            let decisions =
+                super::graph::static_tool_pause::parse_static_tool_decisions(&request.payload.meta)
+                    .map_err(|_| {
+                        NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the static graph selection is malformed",
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the static graph selection is missing",
+                        )
+                    })?;
+            // The common typed transport rejects HITL/meta mixing and client checkpoint selectors.
+            DirectHitlDecisionSet::from_payload(&request.payload)
+                .map_err(|error| direct_hitl_admission_error(&error))?;
+            PipelineNativeStart::StaticTools(decisions)
+        } else if request.payload.should_continue && !request.payload.hitl_resume {
             if !request.payload.mcp_tokens.is_empty()
                 || !request.payload.ignored_mcp_servers.is_empty()
                 || !request.payload.user_declined_mcp_servers.is_empty()
@@ -403,8 +427,8 @@ pub(super) fn admit_pipeline_plan<'a>(
                     .map(PipelineNativeStart::McpAuthorization)
                     .map_err(|error| pipeline_hitl_admission_error(&error))?
             } else {
-                PrinterContinuation::from_payload(&request.payload)
-                    .map(PipelineNativeStart::Printer)
+                PipelineTextContinuation::from_payload(&request.payload)
+                    .map(PipelineNativeStart::Text)
                     .map_err(|error| pipeline_hitl_admission_error(&error))?
             }
         } else {
@@ -419,6 +443,9 @@ pub(super) fn admit_pipeline_plan<'a>(
     };
     tracing::Span::current().record("stage", "profile_validation");
     let mut profile = match &start {
+        PipelineNativeStart::StaticTools(_) => {
+            PipelineExecutionProfile::validate_guardrail_authorization_resume(request)?
+        }
         PipelineNativeStart::McpAuthorization(_) => {
             PipelineExecutionProfile::validate_mcp_authorization_resume(request)?
         }
@@ -450,7 +477,8 @@ pub(crate) enum PipelineNativeStart {
     Regenerate,
     Hitl(PipelineContinuationDecision),
     McpAuthorization(PipelineMcpAuthorizationContinuation),
-    Printer(PrinterContinuation),
+    Text(PipelineTextContinuation),
+    StaticTools(Vec<super::graph::static_tool_pause::StaticToolDecision>),
 }
 
 impl PipelineNativeStart {
@@ -676,6 +704,17 @@ fn admit_native_start(
     if payload.truncated_content.is_some() {
         return Ok(AdmittedNativeStart::OutputContinuation);
     }
+    // Static leaf selection owns its typed transport even when the original
+    // claim-fetched execution input contains existing MCP runtime credentials.
+    // Parsing and durable family proof remain separate from that authority.
+    if payload
+        .meta
+        .contains_key(super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY)
+    {
+        return DirectHitlDecisionSet::from_payload(payload)
+            .map(AdmittedNativeStart::DirectHitl)
+            .map_err(|error| direct_hitl_admission_error(&error));
+    }
     if payload.should_continue
         && !payload.hitl_resume
         && (!payload.mcp_tokens.is_empty() || !payload.user_declined_mcp_servers.is_empty())
@@ -752,6 +791,21 @@ fn tool_snapshot_error(
 pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
     type Completion: NativeAgentCompletionSelector;
 
+    async fn inspect_node_recovery(
+        &self,
+        _request: &AgentExecutionRequest,
+        _command: &AuthorizedNativeCommandBinding,
+        _session: ClaimBoundSessionAuthority,
+        _lease: Arc<dyn StateWriterLease>,
+        _receipt: &super::graph::node_recovery_receipt::NodeRecoveryRequiredReceipt,
+    ) -> Result<super::node_recovery_checkpoint::OpenedNodeRecoveryVisit, NativeAgentAssemblyError>
+    {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "node recovery inspection is unavailable",
+        ))
+    }
+
     fn sandbox_stop_delivery(
         &self,
     ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
@@ -781,6 +835,17 @@ pub(crate) trait NativeAgentAssembler: Send + Sync + 'static {
         ))
     }
 
+    async fn assemble_node_checkpoint(
+        &self,
+        _assembly: AuthorizedNativeAssembly<'_>,
+        _authority: &crate::protocol::control::NodeRecoveryAssemblyAuthorization,
+    ) -> Result<PendingRecoveredAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "node checkpoint restoration is unavailable",
+        ))
+    }
+
     async fn assemble(
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
@@ -794,6 +859,22 @@ pub(crate) struct PendingRecoveredAgentInvocation<S> {
 }
 
 impl<S> PendingRecoveredAgentInvocation<S> {
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Preserve existing ownership and caller contracts."
+    )]
+    pub(crate) fn authorize_node_lifecycle(
+        self,
+        authority: crate::protocol::control::NodeRecoveryAssemblyAuthorization,
+    ) -> Result<AssembledNativeAgentInvocation<S>, NativeAgentAssemblyError> {
+        if !authority.matches(&self.checkpoint) {
+            return Err(NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::AuthorizationFailed,
+                "the restored node frontier differs from its authorization",
+            ));
+        }
+        Ok(self.assembled)
+    }
     pub(crate) fn new(
         assembled: AssembledNativeAgentInvocation<S>,
         checkpoint: super::session::ValidatedModelCheckpoint,
@@ -1250,5 +1331,38 @@ mod error_redaction_tests {
             NativeAgentRuntimeError::start_deferred().upstream_code(),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod static_transport_tests {
+    use super::super::assembly_tests::ordinary_request;
+    use super::super::request::AgentExecutionKind;
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn exact_static_selection_precedes_existing_mcp_authorization_inference() {
+        let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+        request.payload.should_continue = true;
+        request.payload.meta.insert(
+            super::super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY.to_owned(),
+            json!({"revision":1,"decisions":[{
+                "pause_id":format!("pipeline-static:sha256:{}","a".repeat(64)),
+                "child_thread_id":"child-root","tool_call_id":"original-call",
+                "action":"continue","value":"continue"}]}),
+        );
+        request.payload.mcp_tokens.insert(
+            "https://mcp.example.invalid/v1".to_owned(),
+            json!({"source":"claim-owned-fixture"}),
+        );
+        let original_authority = request.payload.mcp_tokens.clone();
+        assert!(matches!(
+            admit_native_start(&request).unwrap(),
+            AdmittedNativeStart::DirectHitl(_)
+        ));
+        assert_eq!(request.payload.mcp_tokens, original_authority);
+        request.payload.hitl_resume = true;
+        assert!(admit_native_start(&request).is_err());
     }
 }

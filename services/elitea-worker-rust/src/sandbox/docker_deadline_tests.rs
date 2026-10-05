@@ -300,7 +300,7 @@ async fn phase_deadline_slow_reservation_keeps_fresh_readiness_and_execution_bud
     };
     let (result, dispatched) = tokio::time::timeout(WAIT, async {
         tokio::join!(
-            supervisor.run_owned(&scope, &lease, Some(&request)),
+            supervisor.run_owned(&scope, &lease, Some(&request), None),
             progress
         )
     })
@@ -404,7 +404,7 @@ async fn phase_deadline_expired_readiness_stops_before_dispatch_after_takeover()
     let record = terminal(
         tokio::time::timeout(
             WAIT,
-            supervisor.run_owned(&scope, &replacement, Some(&request)),
+            supervisor.run_owned(&scope, &replacement, Some(&request), None),
         )
         .await
         .expect("expired readiness must finish"),
@@ -503,7 +503,10 @@ async fn phase_deadline_cancellation_during_readiness_keeps_dispatch_timestamp_a
         bound
     };
     let (result, bound) = tokio::time::timeout(WAIT, async {
-        tokio::join!(supervisor.run_owned(&scope, &lease, Some(&request)), cancel)
+        tokio::join!(
+            supervisor.run_owned(&scope, &lease, Some(&request), None),
+            cancel
+        )
     })
     .await
     .expect("readiness cancellation must finish");
@@ -610,17 +613,19 @@ async fn phase_deadline_migration_and_old_writer_preserve_conservative_legacy_bu
     let record = terminal(
         tokio::time::timeout(
             WAIT,
-            supervisor.run_owned(&old_bound_scope, &takeover, Some(&request)),
+            supervisor.run_owned(&old_bound_scope, &takeover, Some(&request), None),
         )
         .await
-        .expect("legacy readiness takeover must retain its expired budget"),
+        .expect("legacy takeover must retain its expired allocation budget"),
     );
     assert_eq!(record.phase, Phase::Failed);
+    // Allocation retention expires before readiness for this two-hour legacy binding.
     assert_eq!(
         record.failure_code.as_deref(),
-        Some("sandbox.preparation_incomplete")
+        Some("sandbox.hydration_deadline_exceeded")
     );
-    let inherited: bool = sqlx::query_scalar("SELECT runtime_bound_at=created_at AND dispatched_at IS NULL FROM elitea_runtime.sandbox_jobs WHERE job_key=$1")
+    // Expiry uses the legacy creation clock without provisioning or writing new phase clocks.
+    let inherited: bool = sqlx::query_scalar("SELECT runtime_bound_at IS NULL AND dispatched_at IS NULL FROM elitea_runtime.sandbox_jobs WHERE job_key=$1")
         .bind([63_u8; 32].as_slice()).fetch_one(&database.pool).await.unwrap();
     assert!(inherited);
     runtime.assert_counts(0, 0, 1);

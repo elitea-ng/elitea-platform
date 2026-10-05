@@ -16,6 +16,7 @@ import (
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	codeplatform "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/codeplatform"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"google.golang.org/protobuf/proto"
 )
@@ -313,6 +314,10 @@ func (e *PendingRun) Error() string {
 func (e *PendingRun) Unwrap() error { return ErrToolRunDeadlineExceeded }
 
 func (s *RunService) RunTool(ctx context.Context, request RunRequest) (RunOutcome, error) {
+	return s.runTool(ctx, request, nil, nil)
+}
+
+func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevision *[32]byte, parent *codeplatform.ParentEffect) (RunOutcome, error) {
 	if s == nil || ctx == nil {
 		return RunOutcome{}, ErrInvalidToolRun
 	}
@@ -329,6 +334,14 @@ func (s *RunService) RunTool(ctx context.Context, request RunRequest) (RunOutcom
 	inputs, err := s.resolver.Resolve(ctx, request.Clone())
 	if err != nil {
 		return RunOutcome{}, err
+	}
+	if exactRevision != nil {
+		actual := CodeToolkitRevision(inputs)
+		if actual != *exactRevision {
+			return RunOutcome{}, ErrCodeToolkitRevisionConflict
+		}
+		// Bind the admitted child to the checked saved identity.
+		inputs.ToolkitVersion = "code-v1:" + hex.EncodeToString(actual[:])
 	}
 	// The unrunnable-type refusal, before ANY durable write. See
 	// ToolkitTypeVerdict for why it belongs here and not after dispatch.
@@ -359,6 +372,7 @@ func (s *RunService) RunTool(ctx context.Context, request RunRequest) (RunOutcom
 		},
 		IdempotencyKey: idempotencyKey,
 		Inputs:         inputs,
+		CodeParent:     parent,
 	})
 	if err != nil {
 		return RunOutcome{}, err

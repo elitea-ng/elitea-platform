@@ -1,7 +1,8 @@
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
-import { dumpYaml } from './dumpYaml.helpers';
+import { dumpYaml, serializePipelineYaml } from './dumpYaml.helpers';
+import { readPipelineStateOrder, renamePipelineStateOrder } from './pipelineYamlState.helpers';
 
 describe('dumpYaml', () => {
   it('round-trips a plain object through YAML', () => {
@@ -75,5 +76,84 @@ describe('dumpYaml', () => {
     expect(load(dumpYaml('hello'))).toBe('hello');
     expect(load(dumpYaml(42))).toBe(42);
     expect(load(dumpYaml(null))).toBeNull();
+  });
+});
+
+describe('pipeline compatibility serialization', () => {
+  const source =
+    '# Original spelling\r\nstate:\r\n  "10": list\r\n  "2": {type: dict, value: null, future: {unknown: true}}\r\n  input: str\r\nnodes: []\r\n';
+
+  it('returns the exact original bytes for no-op and layout-only instructions', () => {
+    expect(serializePipelineYaml(load(source), { originalYaml: source })).toBe(source);
+    expect(dumpYaml(load(source), { originalYaml: source })).toBe(source);
+  });
+
+  it('preserves state order and unknown/default/null forms during a real edit', () => {
+    const parsed = load(source) as Record<string, unknown>;
+    const edited = { ...parsed, entry_point: 'new_entry' };
+    const result = serializePipelineYaml(edited, { originalYaml: source });
+    expect(load(result)).toEqual(edited);
+    expect(readPipelineStateOrder(result)).toEqual(['10', '2', 'input']);
+    expect((load(result) as { state: Record<string, unknown> }).state['10']).toBe('list');
+  });
+
+  it('preserves explicit non-numeric declaration order without a source snapshot', () => {
+    const result = serializePipelineYaml({
+      state: { zeta: 'list', alpha: 'dict' },
+    });
+    expect(readPipelineStateOrder(result)).toEqual(['zeta', 'alpha']);
+  });
+
+  it('keeps state roots named id and type in their explicit declaration order', () => {
+    const text = 'state: {type: str, id: str}\nnodes: []\n';
+    const parsed = load(text) as Record<string, unknown>;
+    expect(
+      readPipelineStateOrder(serializePipelineYaml({ ...parsed, entry_point: 'n' }, { originalYaml: text })),
+    ).toEqual(['type', 'id']);
+  });
+
+  it('renames a quoted numeric root at the supplied original ordinal', () => {
+    const parsed = load(source) as { state: Record<string, unknown> };
+    const state: Record<string, unknown> = {
+      ...parsed.state,
+      renamed: parsed.state['10'],
+    };
+    delete state['10'];
+    const result = serializePipelineYaml(
+      { ...parsed, state },
+      {
+        originalYaml: source,
+        stateKeyOrder: renamePipelineStateOrder(readPipelineStateOrder(source), '10', 'renamed'),
+      },
+    );
+    expect(readPipelineStateOrder(result)).toEqual(['renamed', '2', 'input']);
+  });
+
+  it('preserves prototype-like unknown fields as own data properties', () => {
+    const text = 'state: {payload: {type: dict, value: {"__proto__": {name: keep}}}}\nnodes: []';
+    const parsed = load(text) as Record<string, unknown>;
+    expect(load(serializePipelineYaml({ ...parsed, entry_point: 'n' }, { originalYaml: text }))).toEqual({
+      ...parsed,
+      entry_point: 'n',
+    });
+  });
+
+  it('preserves multiline strings and heterogeneous JSON values during a content edit', () => {
+    const text =
+      'state:\n  payload: {type: list, value: [{name: first}, null, 2, last]}\n  text: {type: str, value: "one\\ntwo"}\nnodes: []';
+    const parsed = load(text) as Record<string, unknown>;
+    expect(load(serializePipelineYaml({ ...parsed, entry_point: 'n' }, { originalYaml: text }))).toEqual({
+      ...parsed,
+      entry_point: 'n',
+    });
+  });
+
+  it('refuses a mismatched explicit sequence through the strict write API', () => {
+    expect(() =>
+      serializePipelineYaml(load(source), {
+        originalYaml: source,
+        stateKeyOrder: ['2'],
+      }),
+    ).toThrow('does not match');
   });
 });

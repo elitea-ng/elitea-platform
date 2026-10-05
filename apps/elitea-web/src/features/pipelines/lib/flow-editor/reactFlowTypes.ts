@@ -18,6 +18,8 @@
  */
 import type { Edge, Node } from '@xyflow/react';
 
+import type { PipelineYamlEditOptions } from '../pipelineYamlDocument.helpers';
+
 import type { YamlConditionSpec, YamlDecisionSpec, YamlPipelineDocument } from './helpers/pipelineFlow.types';
 
 /** `node.data` — fields read/written by flowNodeUpdate/layout/deletionOperations helpers. */
@@ -43,7 +45,7 @@ export type FlowEdge = Edge<FlowEdgeData>;
 
 export type SetFlowNodes = (updater: FlowNode[] | ((prev: FlowNode[]) => FlowNode[])) => void;
 export type SetFlowEdges = (updater: FlowEdge[] | ((prev: FlowEdge[]) => FlowEdge[])) => void;
-export type SetYamlJsonObject = (next: YamlPipelineDocument) => void;
+export type SetYamlJsonObject = (next: YamlPipelineDocument, options?: PipelineYamlEditOptions) => void;
 
 export interface YamlPipelineDocumentRef {
   current: YamlPipelineDocument;

@@ -1,4 +1,5 @@
 from elitea.runtime.v1 import common_pb2 as _common_pb2
+from elitea.runtime.v1 import compiled_code_pb2 as _compiled_code_pb2
 from elitea.runtime.v1 import envelope_pb2 as _envelope_pb2
 from elitea.runtime.v1 import errors_pb2 as _errors_pb2
 from elitea.runtime.v1 import input_pb2 as _input_pb2
@@ -26,6 +27,7 @@ class ClaimDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CLAIM_DISPOSITION_V1_RECOVER_RUNNING_NOACK: _ClassVar[ClaimDispositionV1]
     CLAIM_DISPOSITION_V1_RECOVER_AMBIGUOUS_INVOCATION_NOACK: _ClassVar[ClaimDispositionV1]
     CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT: _ClassVar[ClaimDispositionV1]
+    CLAIM_DISPOSITION_V1_RECOVER_NODE_VISIT: _ClassVar[ClaimDispositionV1]
 
 class BeginExecutionDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -50,6 +52,7 @@ CLAIM_DISPOSITION_V1_RETIRED_ACK: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_RUNNING_NOACK: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_AMBIGUOUS_INVOCATION_NOACK: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT: ClaimDispositionV1
+CLAIM_DISPOSITION_V1_RECOVER_NODE_VISIT: ClaimDispositionV1
 BEGIN_EXECUTION_DISPOSITION_V1_UNSPECIFIED: BeginExecutionDispositionV1
 BEGIN_EXECUTION_DISPOSITION_V1_STARTED_NOW: BeginExecutionDispositionV1
 BEGIN_EXECUTION_DISPOSITION_V1_ALREADY_STARTED: BeginExecutionDispositionV1
@@ -58,16 +61,18 @@ AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW: AuthorizeInvocationDispositi
 AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED: AuthorizeInvocationDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
-    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery")
+    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery")
     WORKLOAD_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PRODUCER_ID_FIELD_NUMBER: _ClassVar[int]
     SIGNED_COMMAND_FIELD_NUMBER: _ClassVar[int]
     AGENT_MODEL_CHECKPOINT_RECOVERY_FIELD_NUMBER: _ClassVar[int]
+    NODE_RECOVERY_FIELD_NUMBER: _ClassVar[int]
     workload_session_id: str
     producer_id: str
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
     agent_model_checkpoint_recovery: bool
-    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: bool = ...) -> None: ...
+    node_recovery: bool
+    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: bool = ..., node_recovery: bool = ...) -> None: ...
 
 class SettlementRecoveryV1(_message.Message):
     __slots__ = ("proposal", "proposal_digest", "idempotency_key", "settlement_receipt_id", "outcome")
@@ -84,7 +89,7 @@ class SettlementRecoveryV1(_message.Message):
     def __init__(self, proposal: _Optional[_Union[_output_pb2.SettlementProposalV1, _Mapping]] = ..., proposal_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., settlement_receipt_id: _Optional[str] = ..., outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ...) -> None: ...
 
 class ClaimReceiptV1(_message.Message):
-    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros")
+    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json")
     DISPOSITION_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     FENCE_FIELD_NUMBER: _ClassVar[int]
@@ -97,6 +102,7 @@ class ClaimReceiptV1(_message.Message):
     SETTLEMENT_RECOVERY_FIELD_NUMBER: _ClassVar[int]
     RETIREMENT_FIELD_NUMBER: _ClassVar[int]
     CLAIM_STARTED_AT_UNIX_MICROS_FIELD_NUMBER: _ClassVar[int]
+    NODE_RECOVERY_RECEIPT_JSON_FIELD_NUMBER: _ClassVar[int]
     disposition: ClaimDispositionV1
     identity: _common_pb2.ExecutionIdentityV1
     fence: _common_pb2.ExecutionFenceV1
@@ -109,7 +115,8 @@ class ClaimReceiptV1(_message.Message):
     settlement_recovery: SettlementRecoveryV1
     retirement: _errors_pb2.RuntimeErrorV1
     claim_started_at_unix_micros: int
-    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ...) -> None: ...
+    node_recovery_receipt_json: bytes
+    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ...) -> None: ...
 
 class ClaimCommandResponseV1(_message.Message):
     __slots__ = ("receipt", "rejection")

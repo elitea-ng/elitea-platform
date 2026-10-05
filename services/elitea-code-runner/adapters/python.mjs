@@ -3,16 +3,24 @@
 import { loadPyodide } from "npm:pyodide@0.29.0";
 import { verifyPythonCodePackages } from "./prepare_python_code.mjs";
 
+import {preparedCapabilities,writePlatformResult} from "./platform_prepared.mjs";
+import {retainedPipeExchange} from "./platform_pipe.mjs";
 const encoder = new TextEncoder();
 const MAX_RESULT_BYTES = 256 * 1024;
 
-export async function executePython(source, input, packageCacheDir) {
+export async function executePython(source, input, packageCacheDir, platform = null, workspace = null) {
   const python = await loadPyodide({
     packageCacheDir,
     lockFileURL: `${packageCacheDir}/elitea-python-lock.json`,
     stdout: (text) => console.error(text),
     stderr: (text) => console.error(text),
   });
+  if (workspace) {
+    // The fixed native entrypoint already verified the exact manifest and RO
+    // kernel mount. Pyodide sees only this repository through NodeFS.
+    python.FS.mkdirTree("/workspace/repository");
+    python.FS.mount(python.FS.filesystems.NODEFS, { root: "/workspace/repository" }, "/workspace/repository");
+  }
   // State crosses as JSON data, never interpolated executable Python source.
   python.globals.set("_elitea_input_json", JSON.stringify(input));
   python.globals.set("_elitea_source", source);
@@ -23,6 +31,31 @@ from pyodide.code import find_imports as _elitea_find_imports
 elitea_state = _elitea_json.loads(_elitea_input_json)
 alita_state = elitea_state.copy()
 `);
+  if (platform) {
+    const exchange=retainedPipeExchange(Deno.stdin,Deno.stdout);
+    const clientSource=await Deno.readTextFile("/opt/elitea-code/platform_client.py");
+    if (encoder.encode(clientSource).length>128*1024) throw new Error("Code client image asset exceeds its bound");
+    python.globals.set("_elitea_platform_module_source",clientSource);
+    python.globals.set("_elitea_platform_max_calls",platform.max_calls);
+    python.globals.set("_elitea_platform_exchange",async (frame)=>{
+      const bytes=frame?.toJs ? frame.toJs() : frame;
+      const reply=await exchange(new Uint8Array(bytes));
+      return python.toPy(reply);
+    });
+    await python.runPythonAsync(`
+import types as _elitea_types
+import sys as _elitea_sys
+from importlib.machinery import ModuleSpec as _elitea_platform_spec
+_elitea_platform_module = _elitea_types.ModuleType("elitea_platform")
+_elitea_platform_module.__spec__ = _elitea_platform_spec("elitea_platform", loader=None)
+exec(compile(_elitea_platform_module_source, "<elitea-image-platform-client>", "exec"), _elitea_platform_module.__dict__)
+_elitea_sys.modules["elitea_platform"] = _elitea_platform_module
+async def _elitea_retained_exchange(frame):
+    return bytes(await _elitea_platform_exchange(frame))
+elitea_client = _elitea_platform_module.SandboxClient(_elitea_retained_exchange, _elitea_platform_max_calls)
+alita_client = elitea_client
+`);
+  }
   // Preserve automatic preparation, including frozen import-name mappings.
   await python.loadPackage("micropip", {
     messageCallback: (text) => console.error(text),
@@ -65,10 +98,11 @@ if 'micropip' not in _elitea_imports:
 }
 
 export async function executePythonRequest(request, packageCacheDir) {
+  const capability=preparedCapabilities(request);
   const hasBundle = Object.hasOwn(request, "dependency_bundle_sha256");
   if (
-    !((request.revision === 1 && !hasBundle) ||
-      (request.revision === 2 && hasBundle &&
+    !((capability.baseRevision === 1 && !hasBundle) ||
+      (capability.baseRevision === 2 && hasBundle &&
         typeof request.dependency_bundle_sha256 === "string" &&
         /^[a-f0-9]{64}$/.test(request.dependency_bundle_sha256) &&
         request.dependency_bundle_sha256.length === 64)) ||
@@ -90,6 +124,8 @@ export async function executePythonRequest(request, packageCacheDir) {
     request.source,
     request.input,
     packageCacheDir,
+    capability.broker,
+    request.workspace ?? null,
   );
 }
 
@@ -100,5 +136,6 @@ if (import.meta.main) {
   }
   const request = JSON.parse(await Deno.readTextFile(path));
   const result = await executePythonRequest(request, packageCacheDir);
-  console.log(JSON.stringify({ revision: 1, result }));
+  if (preparedCapabilities(request).broker) await writePlatformResult(result);
+  else console.log(JSON.stringify({ revision: 1, result }));
 }

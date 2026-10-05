@@ -96,6 +96,8 @@ export interface ToolCallStepWire {
     readonly display_name?: string;
     readonly icon_meta?: unknown;
     readonly metadata?: {
+      /** Main projects this inert proof. The UI parses its exact versioned shape. */
+      readonly code_debug_v1?: unknown;
       readonly toolkit_name?: string;
       readonly toolkit_type?: string;
       readonly display_name?: string;
@@ -103,6 +105,8 @@ export interface ToolCallStepWire {
     };
   };
   readonly metadata?: {
+    /** Main projects the same proof in both metadata copies. */
+    readonly code_debug_v1?: unknown;
     readonly original_name?: string;
     readonly checkpoint_ns?: string;
     readonly toolkit_type?: string;
@@ -142,6 +146,10 @@ export interface HitlInterruptRawWire {
 
 /** `message_group.meta` (lines 45, 121, 131-139, 271-275). */
 export interface MessageGroupMetaWire {
+  readonly node_recovery_required_v1?: unknown;
+  readonly execution_generation?: string;
+  readonly pipeline_static_v1?: unknown;
+  readonly pipeline_static_tools_v1?: unknown;
   readonly interaction_uuid?: string;
   readonly references?: unknown;
   readonly is_error?: boolean;

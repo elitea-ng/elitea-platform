@@ -18,6 +18,7 @@ import (
 )
 
 type PublicRoutes struct {
+	NodeRecovery    agentexecutionapi.CurrentNodeRecoveryUseCase
 	Validation      http.Handler
 	ExecutionEvents http.Handler
 	// IndexStart is composed only when the complete index control/data plane is

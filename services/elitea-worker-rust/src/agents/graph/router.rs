@@ -18,6 +18,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::state_modifier::template_value;
 use super::yaml::{valid_graph_id, valid_output_key};
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
@@ -291,7 +292,13 @@ fn render_condition(
         .map_err(|_| RouterExecutionError::Template)?;
     let mut writer = BoundedWriter::new(MAX_RENDERED_BYTES);
     template
-        .render_captured_to(input, &mut writer)
+        .render_captured_to(
+            input
+                .iter()
+                .map(|(key, value)| (key.as_str(), template_value(value)))
+                .collect::<BTreeMap<_, _>>(),
+            &mut writer,
+        )
         .map_err(|_| RouterExecutionError::Template)?;
     String::from_utf8(writer.into_inner()).map_err(|_| RouterExecutionError::Template)
 }
@@ -311,7 +318,7 @@ fn json_loads_filter(
         text
     };
     serde_json::from_str::<Value>(text)
-        .map(JinjaValue::from_serialize)
+        .map(|value| template_value(&value))
         .map_err(|_| JinjaError::new(ErrorKind::InvalidOperation, "json_loads input is invalid"))
 }
 

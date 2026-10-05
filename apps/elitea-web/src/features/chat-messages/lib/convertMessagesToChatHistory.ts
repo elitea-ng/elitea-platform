@@ -1,3 +1,5 @@
+import { nodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
+import { staticPauseBinding } from './staticPipelinePause';
 /**
  * Ported from `apps/elitea-ui/src/common/convertChatConversationMessages.js`
  * (392 lines) — the full message-group → chat-history converter used by a
@@ -305,10 +307,19 @@ export function convertMessagesToChatHistory(
 
     // Convert AI answer using entities-level normaliser.
     const persisted = persistedTraceStepsByGroup?.get(String(messageGroup.id));
-    const aiMessage = splitPersistedReasoning(
+    const normalised = splitPersistedReasoning(
       normaliseAssistantMessage(messageGroup, sortedMessages, participants, persisted) as unknown as ChatMessage,
     );
 
+    const meta = messageGroup.meta;
+    const aiMessage: ChatMessage = {
+      ...normalised,
+      ...(meta?.execution_generation ? { executionGeneration: meta.execution_generation } : {}),
+      ...(meta?.thread_id ? { threadId: meta.thread_id } : {}),
+      nodeRecoveryRequired: messageGroup.is_streaming === true && meta?.is_error !== true && !normalised.exception && !normalised.failureCode
+        ? nodeRecoveryBinding(uuid, meta?.execution_generation, meta?.node_recovery_required_v1) : undefined,
+      staticPause: staticPauseBinding(uuid, meta?.execution_generation, meta?.thread_id, meta?.pipeline_static_v1, meta?.pipeline_static_tools_v1),
+    };
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
 
     // Attach child messages as SwarmChild toolActions.

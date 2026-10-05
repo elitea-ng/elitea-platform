@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-02. Main integration baseline: `20f0dfd04` (PR 883 merged).
+Updated: 2026-10-05. Main integration baseline: `20f0dfd04` (PR 883 merged).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -18,7 +18,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 4 is accepted for progression on 2026-09-28. The final audit records every required contract and its evidence.
 - Gate 5 is active. [Direct HITL admission](source-mapping/pipeline-hitl-admission-20260928.md) records main-chat history, repeated edits, paused-worker recovery, and transaction evidence.
 - PR 883 is merged. Its final CI reports 67 successful checks and three configured skips. Pending Point 5 work remains preserved.
-- Point 5 now uses separate feature PRs. Each feature requires its own source mapping, verification, and release decision.
+- The user requests complete Point 5 delivery in one PR. Each internal component requires its own source mapping and acceptance evidence.
 - Persistent and ephemeral four-language benchmarks pass on the existing rehearsal backend with matching prepared runtime images.
 - The [point 4 acceptance audit](source-mapping/point4-acceptance-audit-20260928.md) records the final requirement review and explicit acceptance limits. Chats 727/728 verify parent completion after child access-denial and rate-limit failures.
 - [Provider context accounting](source-mapping/provider-context-accounting-20260928.md) records provider usage retention, native cache normalization, and the combined-window context meter. Chat 717 passes fresh-browser synthetic/Haiku measurements, model switching, regeneration, and reload. Chat 719 verifies per-call pipeline continuation and repair measurements without replacing the root meter. Chat 721 verifies repeated Haiku input accounting without proving its adapter. Confirmed native-adapter regeneration and reload pass in chat 720; cache counters remain zero. Chat 720 exposes generic diagnostics for the separate 64 KiB instruction limit. The [instruction capacity correction](source-mapping/instruction-content-capacity-20260928.md) passes chat 720 regeneration and reload with the original large instructions. [Input-admission diagnostics](source-mapping/input-admission-diagnostics-20260928.md) add a separate public failure code; chat 723 verifies deployment, live UI, support details, reload, and ERROR logs. The user-message bound correction passes regeneration in chat 723. Recovery accounting passes in chat 724. Full-window accounting after compaction passes in chat 708. Section-specific input guidance passes deployed agent-settings rejection and reload in chat 725. Real-provider cache savings remain unproven; the final audit records this performance limitation.
@@ -56,6 +56,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 | 5b | Pipeline node recovery policies | Add explicit retry conditions, attempt limits, backoff, failure routes, and operator recovery controls. Persist attempts and prevent unsafe repetition of external effects. |
 | 5c | Data shaping nodes | Define SplitOut and Aggregate contracts, item identity, ordering, empty inputs, bounded output, and YAML/editor parity. |
 | 5d | HTTP action nodes | Reuse admitted HTTP execution with typed requests, credentials, response contracts, artifact bodies, and durable effect handling. |
+| 5e | Database action nodes, planned | Define explicit database actions, driver extensibility, scoped credentials, bounded results, transactions, and durable write recovery. |
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
 | 7 | Artifact-backed capabilities | Complete attachment authority, object grants, storage behavior, and affected toolkit operations. |
 | 7a | Built-in runtime modules | Complete Attachments, Data Analysis, Image Creation, Ask User, Planner, Python Sandbox, and Smart Tools Selection. Reuse builder contracts and exclude Swarm. Verify runtime behavior and UI controls before indexing. |
@@ -65,6 +66,10 @@ Current-platform code defines business behavior, not a requirement to copy its i
 Read-only runtime tool binding already works for supported native families.
 It does not close standalone editor discovery or toolkit Test.
 OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or other explicitly supported toolkit flow.
+
+All Code workspace integration moves to the [post-worker feature backlog](wanted_feature.md#wf-01--code-workspaces) on 2026-10-05.
+The former Point 5f does not belong to the active worker gaps or their acceptance register.
+The user schedules it after completion and release of the full Rust worker.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
 The deployed Docker path passes Python/Pyodide, JavaScript, TypeScript, and Rust execution through the pipeline test chat.
@@ -122,20 +127,25 @@ Three isolated Docker runs, the editor Test chat, and persistent chat 771 pass e
 The test Cargo profile adds locked dependencies. It does not implement user-selected runtime packages.
 Persistent reload preserves one result. All eight browser-run sandbox jobs complete and remove their Pods.
 Local probe runs take 9.5–10.0 seconds. Deployed four-receipt spans take 16.4–16.5 seconds.
-On-demand preparation, user-selected Cargo profiles, and compiled-artifact caching remain open.
+Python on-demand preparation passes Docker and Kubernetes browser execution. User-selected Cargo profiles and compiled-artifact caching remain open.
 The [phase deadline feature](source-mapping/sandbox-phase-deadlines-20261002.md) separates durable sandbox readiness and execution deadlines.
 PR 1014 passes deployed four-language execution in persistent chat and editor Test chat on Docker and hybrid Kubernetes.
 Both backends persist the new clocks and remove terminal execution workloads. Persistent reload preserves the exact result.
-Python shared delivery follows with offline reuse, replacement recovery, and browser acceptance.
-JavaScript/TypeScript and Rust dependency execution follow as separate features.
+The [Python shared delivery feature](source-mapping/code-python-delivery-feature-20261002.md) integrates trusted preparation, durable bundle receipts, indexed publication, and inert offline hydration.
+Its builds, focused tests, and receipt reconciliation pass. Docker automatic imports and explicit transitive dependencies pass Test chat and persistent chat.
+Active execution Stop, the preparation sentinel, and missing-package refusal pass.
+Kubernetes Test chat and a fresh persistent request pass native dependency execution with cleanup.
+Complete replacement recovery, other negative cases, earlier-phase Stop, and remaining Kubernetes acceptance remain required.
+JavaScript/TypeScript and Rust require native dependency delivery and product acceptance within the complete Point 5 scope.
 Each feature preserves the existing sandbox authority and resource limits.
-Do not combine these features into another broad release PR.
+These component boundaries specify technical ownership and acceptance within the requested complete Point 5 delivery.
 The [Python preparation component](source-mapping/code-python-demand-preparation-20261001.md) now discovers literal requirements and freezes native resolution.
 Focused integrity checks and offline execution pass with packages absent from the original image.
-This component is not connected to worker or supervisor dispatch. On-demand UI and recovery acceptance remain open.
+The delivery feature now connects this component to worker and supervisor dispatch. Docker and Kubernetes on-demand UI execution pass; complete recovery acceptance remains open.
 The [bundle admission consumer](source-mapping/code-python-bundle-admission-20261001.md) binds resolved Python content to the signed job.
 Offline execution and fifteen container probes verify content checks before user code and unchanged legacy receipts.
-Automatic preparation, shared content delivery, restart verification, and integrated UI acceptance remain open.
+Automatic preparation and shared content delivery pass Docker and Kubernetes Test chat and persistent chat execution.
+Execution completes after worker restart with the original runtime identity. Reload, one execution dispatch, and cleanup pass.
 The [shared bundle storage record](source-mapping/code-python-shared-storage-20261001.md) verifies native content through Main's existing object store.
 Rehearsal RustFS publication, replacement-store reads, project separation, and offline execution of downloaded content pass.
 The [bundle transport record](source-mapping/code-python-bundle-transport-20261001.md) adds content-only grants and verified supervisor TLS delivery.
@@ -146,21 +156,113 @@ The [preparation authority foundation](source-mapping/code-python-preparation-au
 Preparation and execution grants cannot substitute for each other. Focused request and authority tests pass.
 The [preparation receipt](source-mapping/code-python-preparation-receipt-20261001.md) passes five selected live PostgreSQL checks, including existing receipt and dispatch behavior.
 The [trusted preparation adapter](source-mapping/code-python-preparation-runner-20261001.md) retains native files through real shared publication and confirmed release.
-Automatic supervisor dispatch, backend delivery, recovery integration, and on-demand browser acceptance remain open.
+Automatic supervisor dispatch, backend delivery, and recovery integration are assembled in the Python delivery feature.
+Current builds, Check, Clippy, and selected sandbox, grant, Code, runner, and PostgreSQL tests pass.
+Native acquisition, positive Docker browser execution, active Stop, the preparation sentinel, and missing-package refusal pass.
+Complete infrastructure recovery, other negative cases, earlier-phase Stop, and remaining Kubernetes acceptance remain open.
 These functional gaps remain open; isolation tests do not close them.
 Gate 7a reuses this execution foundation for agent tools, with separate module admission and browser acceptance.
 
 ### Point 5 feature status, 2026-10-02
 
-Prepared package profiles and isolated execution are deployed. They do not provide automatic acquisition of user-selected dependencies.
-The preserved checkpoint connects Python preparation, publication, hydration, and recovery; the optional preparation profile is not deployed.
-Its private execution-export correction still requires compilation, runtime verification, and integrated UI acceptance.
-JavaScript/TypeScript and Rust have separate native preparation components. Shared delivery and product execution remain open for both.
+Prepared package profiles and isolated execution are deployed. Python Docker execution also acquires dependencies from automatic imports and literal package requirements.
+The current Python feature connects preparation, publication, hydration, and recovery; its execution-export correction compiles and passes focused tests.
+The optional preparation profile is deployed with the exact feature images on Docker and Kubernetes. Main is healthy.
+
+Isolated-copy and live receipt reconciliation pass; the unchanged normal migrator succeeds twice across all tenants.
+The live shared ledger reaches head 133 with 104 receipts; the tenant ledger reaches head 138.
+All 26 historical unfinished August jobs remain unchanged.
+
+The preparation-lock correction resolves pipeline 142's initial `sandbox.preparation_failed` result; its focused regression and strict Clippy pass.
+Pipeline 142 Test chat passes automatic `yaml` imports and a seven-file explicit dependency closure over 20,000 records.
+
+Persistent chat 782 matches the fixture result and preserves it through reload without duplication.
+The delayed request completes after worker restart with the same runtime identity; two requests produce two exact UI results.
+Reload preserves both results. The request records one preparation dispatch and one execution dispatch, both resolved; the runner-image container inventory is empty.
+
+Active Stop records `sandbox.cancelled`, removes the runtime, and adds no UI result.
+The sentinel source completes preparation, fails only during execution, and blocks its downstream node with an explicit UI error.
+Both sentinel phase dispatches resolve, and cleanup passes.
+Missing-package preparation fails before any execution job is created; the UI reports the Code failure and shows no unreachable result.
+Current preparation failure wording does not name the missing package.
+Earlier-phase recovery and Stop, supervisor replacement, and other negative cases remain open.
+
+Kubernetes applies seven parity resources and selected patches. Main, supervisor, and one worker are Ready on feature images; the Docker worker is paused.
+Two operator-approved CDN CIDRs permit preparation TCP 443. TLS HEAD checks pass, and execution DNS and registry probes time out.
+These static address routes provide no FQDN enforcement; HEAD responses provide no artifact-byte proof.
+
+Separate native Test chat 142 and persistent chat 782 requests match the 20,000-record fixture result, demonstrating real dependency download.
+Reload retains exactly three expected 20,000-record outputs for the three successful requests, with no Stop control.
+Both preparation and execution namespaces contain no Pods after settlement and reload.
+Kubernetes Stop, negative cases, and replacement recovery remain open.
+
+The hydration-failure cleanup correction passes source Check, formatting, diff checks, and strict all-target/all-feature Clippy.
+All twelve actual PostgreSQL regressions pass, with zero failures or ignored tests. The corrected cleanup code is not deployed.
+JavaScript/TypeScript and Rust now have shared native delivery source and separately verified production runner paths.
+Actual npm/JSR acquisition, inert export/import/hydration, and exact offline JavaScript/TypeScript execution pass.
+Cargo resolves 21 locked packages and passes offline structs, traits, async, CSV, and selected-state processing.
+Missing-package, undeclared-import, lifecycle-script, and runtime-permission negatives fail before unsafe execution.
+These runner proofs do not cover live Main authority, storage, worker recovery, or browser execution.
+The seven-profile Docker rollout starts all Supervisor listeners and the worker delivery consumers.
+Persistent chat 785 completes Python preparation and execution, then exposes a JavaScript marker serialization mismatch.
+The corrected marker writer passes eight offline Linux runner tests and the exact-byte Rust consumer regression.
+Pipeline 143 passes the 20,000-record four-language on-demand fixture in persistent chat 785 and editor Test chat.
+Persistent reload retains one exact successful output. Sixteen exact dispatches resolve and all original runtimes are removed.
+See the [native browser acceptance record](source-mapping/code-native-browser-acceptance-20261002.md) for identities and measured boundaries.
+The malformed-marker cleanup correction passes 17 actual PostgreSQL preparation tests; deployment and real backend negatives remain open.
+Native editor cancellation resolves its original dispatches and removes all bound runtimes.
+The empty cancelled History receipt passes the deployed Main retention correction and full browser reload.
+Kubernetes native browser acceptance remains open.
+Native Worker restart during original JavaScript hydration passes with eight original dispatches and one new persisted browser result.
+Separate Main and Supervisor immediate restarts retain their original runtimes, eight successful dispatches each, and one browser result per request.
+Reload retains five distinct successful requests and no Stop control.
+The [combined native recovery record](source-mapping/code-native-combined-recovery-20261004.md) verifies Main, Worker, and Supervisor loss before bundle commit.
+The original preparer, checkpoints, request digests, and bundle roots survive; one exact result appears and persists after reload.
+Acquisition-specific outages, preparer destruction, and native Kubernetes recovery remain open.
+The [editor Test lifecycle](source-mapping/pipeline-editor-test-lifecycle-20261002.md) is integrated in source.
+The integrated History amendment passes 87 focused UI tests and nine actual PostgreSQL scenarios with zero skips.
+It fences trace reads to the original response and derives duration from execution clocks.
+Main and Web lifecycle deployment passes four-language Test execution and running observer restoration after reload.
+Restore sends no replacement start; Clear releases only the browser pointer.
+The assembled static and History-refresh browser changes pass 249 focused UI tests and typechecking.
+The narrow Main retention correction passes early Stop before sandbox allocation and fresh History reads after reload.
+Thirteen required editor PostgreSQL scenarios pass with race detection and zero skips.
+Fresh Test-context readiness passes deployed browser acceptance with one original four-language result and eight settled dispatches.
+Clear, History after reload, and Restore preserve the original result without another execution start.
+The new Code-node trace producer still requires deployed acceptance.
+All five feature images build with immutable identities and non-root users.
+Shared strict Clippy, Helm renders, chart lint, and 28 actual PostgreSQL regressions pass.
 Existing activation recovery retains its recorded bundle root. Later-run lookup from requirements to a prior frozen bundle remains unproven.
 
-Repository workspace authorization, the scoped platform client, debug artifacts, state-variable approval, and compiled-artifact caching remain open.
+Repository workspace authorization, the sandbox-facing scoped platform client, and debug artifacts require Code integration.
+Saved fixed, variable, and template source admission is implemented under the selected pipeline authority.
+Its recorded browser and recovery acceptance covers the Python Docker cohort; other required backend acceptance remains open.
+Compiled-artifact caching has isolated Docker acceptance; publication crash recovery and current Kubernetes acceptance remain open.
+Compiled Main and runner source is integrated with generated protocol bindings and default-disabled deployment wiring.
+The [final native image acceptance](source-mapping/code-final-native-image-20261004.md) passes ordinary Rust dependency execution in persistent chat 801.
+Its exact saved input, typed checkpoint, single answer, reload, and original sandbox cleanup verify independently.
+Published dependency bytes and the actual inert-image release audit also verify.
+The owning AgentState migration applies the additive cache history.
+Isolated cold compilation and warm reuse pass in persistent chats 803 and 804 with exact original compiler provenance and distinct execution sandboxes.
+Each result survives reload without duplication; all original sandbox removals verify independently.
+Ten required PostgreSQL instances pass with race detection and zero skips; the runner passes 64 instances with two existing network skips.
+The shipping Rust runtime image builds and passes isolated Docker cache execution.
+Editor Test chat 805 reuses the original compiled descriptor and returns one exact result.
+History survives reload; Restore observes that original run without another start.
+General compiled admission remains disabled; publication crash recovery and Kubernetes compiled acceptance remain open.
+Persistent chat 806 independently verifies another cold compiled result, original content provenance, runtime cleanup, and stable browser reload.
+Its restart safety check refuses the Main stop; this natural completion provides no publication crash-recovery proof.
+Persistent chat 807 verifies a third cold result, exact saved source, original prepared binding, cleanup, and stable browser reload.
+Its compiler-runtime safety check also refuses the Main stop before any restart.
+Publication crash recovery remains open; natural completion does not replace that proof.
+The 20,000-record fixture generates CSV bytes in memory. Gate 7 must repeat it with authorized artifact input and actual storage.
+Indexed cold compiler imports renew separate Compile and Content grants without changing the original compiler identity.
+Nested graph-call receipts append immutable revisions with atomic parent/frontier checks.
+Two required PostgreSQL 18 receipt tests pass with zero failures or ignored tests.
+Two wrapper completion regressions preserve the original terminal event and avoid polling a completed child after simulated parent failure.
+Those tests use in-memory fixtures; deployed composition acceptance remains open before scoped admission can enable.
 Graph acceptance also retains deeper composition, static pauses, concurrent mixed guards, and collaborative decision requirements.
-These requirements need separate feature decisions and acceptance evidence. Point 5 remains open.
+These requirements need component decisions and acceptance evidence. Point 5 remains open.
 
 ### Deployment acceptance order
 
@@ -487,6 +589,34 @@ A retry policy must never reinterpret either decision as permission.
 Preserve completed work for diagnosis, but do not treat partial state as the missing node result.
 A future rejection route must define its own valid downstream contract.
 
+## Gate 5e: database action nodes, planned
+
+The user adds this future gap on 2026-10-04. It does not expand today's Code-node delivery boundary.
+Assess ADK database actions and SQLx before selecting the execution adapter.
+Do not assume one SQL library supports every customer database engine.
+
+- Define supported engines and explicit driver capability metadata. Add other engines through reviewed adapters.
+- Bind a saved credential reference to the authorized project and exact database target.
+- Prefer parameterized query and action contracts. Bound rows, response bytes, execution time and connection concurrency.
+- Define query, mutation, transaction and schema-operation authority separately.
+- Preserve sensitive-operation rejection. Never reinterpret a rejected database operation as permission to retry.
+- Persist intent and effect receipts for writes. Reconcile unknown transaction outcomes before repeating effects.
+- Define typed result channels, empty results, SQL errors, cancellation and terminal downstream behavior.
+- Reuse the existing checkpoint owner and explicit node recovery policy.
+- Verify YAML/editor parity, credential isolation, driver behavior and crash recovery before admission.
+
+Database actions do not themselves implement platform-owned data tables.
+Keep that customer capability explicit when its storage and lifecycle contract is defined.
+
+### State reducer compatibility for data shaping
+
+SplitOut, Aggregate and Map require explicit typed collection and reduction contracts.
+The [data shaping catalog](data-shaping-node-catalog.md) also tracks projection, selection, ordering, combination, reshaping and validation families.
+Expose reducers per declared state variable, with bounded inputs, deterministic ordering and atomic validated results.
+Keep existing overwrite behavior as the default. Never migrate an existing variable to append or merge implicitly.
+Reuse suitable ADK channel reducers after checking their exact ordering, type and recovery semantics.
+Document additional reducers as explicit capabilities, rather than inferring them from a shaping node.
+
 
 ### Gate 4 verification update, 2026-09-24
 
@@ -620,3 +750,141 @@ The synthetic provider reports 10,000 input tokens including 8,000 cached, and 2
 The UI correctly shows 10,023 total through regeneration and reload.
 See [deployed evidence and limits](source-mapping/provider-context-accounting-20260928.md#nonzero-cached-usage-deployed-acceptance).
 This does not establish an actual cache hit from the real provider. That separate check remains open.
+
+The [restart contract](source-mapping/code-restart-contract-20261002.md) defines Main, Worker, Supervisor, and browser recovery ownership.
+The integrated Rust library suite passes 1,514 tests with zero failures and 55 integration skips.
+Strict Clippy passes across all targets and features.
+These checks cover the assembled launch and scoped-static source, before the later optional startup and warm-hydration changes.
+Thirty Main/UI static-control tests and UI typechecking pass.
+Main application, repository, and continuation-route packages pass.
+The complete OpenAPI conformance fixture now supplies its actual continuation dependency.
+Two obsolete allowlist entries are removed.
+All four Main packages pass after that correction.
+The optional compiled-cache startup wiring is integrated but remains disabled in deployment.
+The Linux probe confirms Cargo hard-links its output executable.
+Capture normalization verifies the fixed alias and publishes a fresh immutable single-link copy.
+The assembled runner passes 71 tests and strict Clippy; two network preparation tests remain ignored.
+Restricted Linux cold/warm checks and five image-matched process-cleanup tests pass.
+Warm execution uses a distinct sandbox and performs zero compilation calls.
+These synthetic component checks do not prove deployed cache publication, grant delivery, restart recovery, or browser acceptance.
+Those acceptance gates remain open.
+
+The later outer static-scope assembly passes 1,539 tests, with zero failures and the same 55 ignored integrations.
+The reviewed materialization assembly passes 1,548 tests on 2026-10-04, with zero failures and the same 55 ignored integrations.
+Formatting, strict Clippy across all targets and features, and documentation with warnings denied pass.
+Scoped continuation admission remains disabled. Deeper activation chains and deployed replacement recovery remain open.
+Separate selections pass 40 PostgreSQL integrations, six Docker integrations, and one native mTLS transfer integration.
+Both required graph-receipt tests and Main shared-store conformance also pass.
+Seven Kubernetes integrations and one manual timing measurement remain. These component results do not close deployed product acceptance.
+Main and Web shipping images are deployed. Playwright verifies the original terminal Test history and one restored result.
+See [assembled acceptance and limits](source-mapping/code-assembled-acceptance-20261002.md).
+Compiled-cache product acceptance and native Kubernetes acceptance remain open. Point 5 remains open.
+
+## Code acceptance update: 2026-10-04
+
+The [source and recovery record](source-mapping/code-source-ui-recovery-acceptance-20261004.md) verifies the authorized saved pipeline 144.
+Variable, template, and fixed Python source execute with exact selected inputs and typed state.
+Invalid variable and template sources fail before sandbox dispatch and leave initial state unchanged.
+Worker loss resumes the original job and runtime identities.
+Persistent chat reload retains one prompt and one exact result without another Send.
+
+The [first-focus amendment](source-mapping/pipeline-test-focus-draft-20261004.md) passes fresh browser acceptance on the final Web image.
+The exact two-line draft survives Test preparation; one explicit Send produces one result.
+Clear and History restore retain the original terminal execution without resubmission.
+The [YAML caller record](source-mapping/pipeline-yaml-state-preservation-20261004.md) verifies saved declaration shapes, attachment synchronization, and exact layout-only saves.
+The assembled UI selection passes 1,059 tests across 103 files, full TypeScript checking, and lint.
+
+The Code candidate passes 1,671 tests, with zero failures and 55 ignored integrations.
+Strict all-target, all-feature Clippy passes.
+These Code checks precede the later reviewed Parallel and Main definition-fingerprint source adoption.
+The later reviewed Parallel and Main producer assembly passes 1,721 Rust tests, with zero failures and the same 55 ignored integrations.
+Formatting and strict all-target, all-feature Clippy pass for that exact assembly.
+Main passes 16 definition contract tests and 17 subtests, with zero failures or skips; package vet also passes.
+All 632 frozen Worker build inputs retain their hashes through verification.
+These checks do not enable new graph production admission or prove deployed continuation and external-effect behavior.
+
+The actual-image Docker cache cohort passes cold compilation, warm reuse, and editor Test execution.
+Current Kubernetes cache acceptance remains open.
+The [publication record](source-mapping/code-publication-recovery-20261004.md) verifies a fresh Rust run and its exact typed checkpoint.
+Its first run completes naturally; the fault guard refuses, and the browser requires a reload.
+Fresh persistent chat 809 later passes Main restart while the compiled snapshot remains Publishing.
+The original command and generation complete with one exact answer and a matching typed checkpoint.
+The live browser displays that answer without a reload. Compile and execution cleanup confirm independently.
+This proof covers the recorded Docker cohort. It does not identify the earlier display failure or prove an interrupted upload.
+The [shipping diagnostics record](source-mapping/compiled-diagnostics-shipping-20261004.md) passes seventeen focused tests and strict Supervisor library Clippy.
+Those checks change diagnostics only and do not prove deployed publication recovery.
+Combined Main, Worker, and Supervisor loss passes the [current Docker recovery test](source-mapping/code-native-combined-recovery-20261004.md).
+Native acquisition-specific outages, preparer destruction, and current-cohort Kubernetes recovery, negatives, and Stop remain required.
+Earlier four-language evidence remains valid for its recorded images and does not prove replacement cohorts.
+Later-run requirements lookup to a prior bundle remains unproven.
+Repository workspace access, scoped platform-client access, and debug artifacts retain their separate authorization gates.
+Parallel, Map/Reduce, resilience, data shaping, and HTTP actions remain distinct Point 5 subpoints.
+
+## Code acceptance update: 2026-10-05
+
+The [combined source record](source-mapping/code-root-composition-20261005.md) captures Main, Worker, Supervisor, Runner, Web, and generated contract integration.
+The combined private Main suite passes 11,892 cases, with zero failures and 1,697 explicit skips.
+Shared Main build and vet pass. The browser application build and Rust Runner image build pass.
+New migration DDL passes isolated PostgreSQL application and rollback checks without changing the runtime schema.
+
+Workspace policy, scoped platform operations, and debug artifacts now have strict Main startup and deployment wiring.
+Main startup checks pass with 284 tests and subtests, zero skips, and passing build and vet.
+The integrated debug renderer and Code Debug switch pass their focused tests, TypeScript, and lint checks.
+Runner public receipt trust packaging passes its focused checks and independent non-root read-back in both rebuilt image variants.
+These source and container checks do not prove deployed functionality or a live signed receipt exchange.
+The [broker startup correction](source-mapping/code-platform-startup-20261005.md) connects explicit Worker routes and both Supervisor backend selectors.
+Twelve new startup tests and focused regressions pass. Pure Rust and broker Rust retain separate cache profiles.
+The corrected Worker and Supervisor pass native ARM release builds with non-root image users.
+The combined Docker cohort starts with shared schema 141 and AgentState schema 12.
+Main health and the four service image identities pass read-back.
+Migration preserves the fenced durable backlog. This startup proof does not prove Code execution.
+Fresh editor version 163 fails during Python preparation before workload dispatch.
+PostgreSQL reports missing whole-Code recovery columns. The private storage proposal was absent from the owning migration corpus.
+AgentState migration 0013 adds these fields. Forty disposable PostgreSQL tests and subtests pass, with zero failures and zero skips.
+The rehearsal forward upgrade reaches AgentState head 13. Shared head 141 remains unchanged.
+A fresh backup passes hash and catalog checks. Historical job and dispatch fields match before restart, and the five added fields remain null.
+The corrected Main image and unchanged Worker, Supervisor, and Web pass readiness. Repeated missing-schema cleanup errors stop.
+The fresh editor run reaches hydration and execution. Its final result and persistent-chat acceptance remain required.
+Safe preparation diagnostics and non-retryable schema classification are integrated in source. Focused Main checks and 34 combined Rust checks pass.
+These diagnostics still require deployment.
+The fresh Python sandbox times out while waiting for its platform-call reply. Worker services this call only after Supervisor returns.
+Main persists a recovery pause with desired state `SUSPENDED`. The current UI omits its recovery notice.
+The [concurrent observation record](source-mapping/code-platform-concurrent-observation-20261005.md) describes the scoped handoff correction. Source and browser checks remain required.
+Native acquisition outages, preparer destruction, and later-run dependency bundle lookup remain unproven.
+Current-cohort Kubernetes cache, recovery, negatives, and Stop remain required.
+Earlier deployed results remain valid for their recorded images. Code acceptance remains open.
+
+The [indexed hydration correction](source-mapping/code-indexed-hydration-20261005.md) resolves the later JavaScript setup stall.
+The native helper now validates dependency revisions inside workspace and platform request envelopes.
+Hydration forwards and registers the exact original signed execution intent before runtime provisioning.
+Thirty Runner lifecycle tests and 76 Worker/Supervisor checks pass, with no failures or skips.
+The refreshed Docker editor run completes all four languages in 22 seconds.
+Persistent chat 814 completes in 19 seconds and retains one identical answer after reload.
+Each run commits eight platform calls; whole/broker bindings, dispatch resolution, and execution runtime cleanup pass independent checks.
+This closes that hydration failure, not the remaining Code recovery and authorization acceptance gates.
+The pure Rust route now has a coordinated measured image/catalog update and fresh cold/warm cache acceptance.
+All repository and mounted workspace integration remains deferred in the post-worker feature backlog.
+
+The [fresh pure Rust record](source-mapping/code-pure-rust-refresh-20261005.md) verifies new-image dependency execution in persistent chat 816.
+The typed CSV result survives reload and both original dispatches resolve.
+Actual-image measurement and final compiled catalog adoption pass independent read-back.
+Fresh cold/warm runs complete in about 73 and six seconds on this local fixture.
+One verified compilation serves two executions with the same immutable descriptor; all three runtime removals pass independent inspection.
+The initial debug completion renderer passes 152 focused tests, full TypeScript, and lint.
+Fresh deployed testing still misses the debug download card despite committed artifacts and successful execution.
+Its completion gate compares a browser request selector with a numeric runtime generation; the identity domains need separate validation.
+The follow-up correction preserves both identity domains and passes 153 focused tests, full TypeScript, and lint.
+Its Web deployment succeeds. Fresh editor and persistent runs complete, but the grouped renderer still omits the download control.
+Code actions use `SubAgentAccordion`; its generic rows do not open `ToolModal`.
+The next narrow UI correction reuses the existing artifact renderer within that group.
+The debug-disabled editor fixture completes in six seconds, with zero debug exports and zero debug trace proofs.
+The positive snapshot preview matches the committed 206-byte receipt and SHA-256. This does not prove a downloaded file.
+The grouped Code correction passes 119 regression tests and four recorded-stream download cases.
+The new Web deployment opens both restored and fresh snapshot modals in persistent chat 819.
+A fresh Code run returns one exact result in seven seconds; the explicit download action shows no artifact or console error.
+The browser automation cannot expose a saved download path, so separate downloaded-file inspection is unconfirmed.
+Permission acceptance, current-cohort recovery and Kubernetes checks remain open.
+All workspace integration is deferred until after full worker completion and does not block the current Code-node delivery.
+The current worktree changes still require selective Code delivery to PR #1014 and CI at the pushed head.
+Preserve working shared foundations with their imported modules, tests, migrations and protocol companions.
+Do not strip or stash dependencies merely because their future feature acceptance is deferred.

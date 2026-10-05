@@ -16,6 +16,7 @@ class DesiredExecutionStateV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper)
     DESIRED_EXECUTION_STATE_V1_RUNNING: _ClassVar[DesiredExecutionStateV1]
     DESIRED_EXECUTION_STATE_V1_CANCELLED: _ClassVar[DesiredExecutionStateV1]
     DESIRED_EXECUTION_STATE_V1_DRAINING: _ClassVar[DesiredExecutionStateV1]
+    DESIRED_EXECUTION_STATE_V1_SUSPENDED: _ClassVar[DesiredExecutionStateV1]
 
 class ExecutionOutcomeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -30,6 +31,7 @@ DESIRED_EXECUTION_STATE_V1_UNSPECIFIED: DesiredExecutionStateV1
 DESIRED_EXECUTION_STATE_V1_RUNNING: DesiredExecutionStateV1
 DESIRED_EXECUTION_STATE_V1_CANCELLED: DesiredExecutionStateV1
 DESIRED_EXECUTION_STATE_V1_DRAINING: DesiredExecutionStateV1
+DESIRED_EXECUTION_STATE_V1_SUSPENDED: DesiredExecutionStateV1
 EXECUTION_OUTCOME_V1_UNSPECIFIED: ExecutionOutcomeV1
 EXECUTION_OUTCOME_V1_SUCCEEDED: ExecutionOutcomeV1
 EXECUTION_OUTCOME_V1_FAILED: ExecutionOutcomeV1

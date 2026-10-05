@@ -1,0 +1,13 @@
+entry_point: run
+state:
+  input: &saved_descriptor {type: str, value: ''}
+  answer: *saved_descriptor
+nodes: &saved_nodes
+  - id: run
+    type: code
+    language: python
+    code: &saved_source {type: fixed, value: "input['input']\n"}
+    input: &saved_inputs [input]
+    output: [&saved_output answer]
+    debug: true
+    transition: END

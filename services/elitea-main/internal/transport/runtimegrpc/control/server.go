@@ -10,6 +10,7 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -47,12 +48,15 @@ type ClaimInputResolver interface {
 }
 
 type ServerConfig struct {
-	SandboxGrants         *SandboxGrantIssuer
-	SandboxBundles        bool
-	MaxInputManifestBytes int
-	MaxInputEntries       int
-	MaxInputContentBytes  uint64
-	MaxStringBytes        int
+	SandboxGrants          *SandboxGrantIssuer
+	OriginalCodeWorkspaces storage.OriginalCodeWorkspaceCompileAuthorizer
+	SandboxBundles         bool
+	CompiledSnapshots      runtimedomain.RustSnapshotIndex
+	CompiledProfiles       *runtimedomain.RustSnapshotProfiles
+	MaxInputManifestBytes  int
+	MaxInputEntries        int
+	MaxInputContentBytes   uint64
+	MaxStringBytes         int
 }
 
 type Server struct {
@@ -104,6 +108,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		WorkloadSessionID:            request.GetWorkloadSessionId(),
 		ProducerID:                   request.GetProducerId(),
 		AgentModelCheckpointRecovery: request.GetAgentModelCheckpointRecovery(),
+		NodeRecovery:                 request.GetNodeRecovery(),
 	})
 	if err != nil {
 		return claimRejectionFor(err), nil
@@ -140,19 +145,20 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The retirement receipt is unavailable.", false), nil
 	}
 	receipt := &runtimev1.ClaimReceiptV1{
-		Disposition:           wireDisposition,
-		Identity:              identity,
-		DesiredState:          desiredState,
-		ClaimHandoffWatermark: decision.ClaimHandoffWatermark,
-		SettlementRecovery:    recovery,
-		Retirement:            retirement,
+		Disposition:             wireDisposition,
+		Identity:                identity,
+		DesiredState:            desiredState,
+		ClaimHandoffWatermark:   decision.ClaimHandoffWatermark,
+		SettlementRecovery:      recovery,
+		NodeRecoveryReceiptJson: []byte(decision.NodeRecoveryReceipt),
+		Retirement:              retirement,
 	}
 	if lease != (runtimedomain.ActiveLease{}) {
 		receipt.Fence = fenceProto(lease.Fence)
 		receipt.LeaseExpiresAtUnixMillis = lease.ExpiresAt.UTC().UnixMilli()
 		receipt.ClaimId = lease.ClaimID
 	}
-	if disposition != executionapp.ClaimAccepted && disposition != executionapp.ClaimRecoverAgentModelCheckpoint {
+	if disposition != executionapp.ClaimAccepted && disposition != executionapp.ClaimRecoverAgentModelCheckpoint && disposition != executionapp.ClaimRecoverNodeVisit {
 		return &runtimev1.ClaimCommandResponseV1{Receipt: receipt}, nil
 	}
 	claimStartedAtUnixMicros := decision.LeaseObservedAt.UTC().UnixMicro()
@@ -638,6 +644,8 @@ func desiredStateProto(state runtimedomain.DesiredState) (runtimev1.DesiredExecu
 		return runtimev1.DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_RUNNING, nil
 	case runtimedomain.DesiredCancelled:
 		return runtimev1.DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_CANCELLED, nil
+	case runtimedomain.DesiredSuspended:
+		return runtimev1.DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_SUSPENDED, nil
 	case runtimedomain.DesiredDraining:
 		return runtimev1.DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_DRAINING, nil
 	default:
@@ -647,6 +655,8 @@ func desiredStateProto(state runtimedomain.DesiredState) (runtimev1.DesiredExecu
 
 func claimDispositionProto(disposition executionapp.ClaimDisposition) (runtimev1.ClaimDispositionV1, error) {
 	switch disposition {
+	case executionapp.ClaimRecoverNodeVisit:
+		return runtimev1.ClaimDispositionV1_CLAIM_DISPOSITION_V1_RECOVER_NODE_VISIT, nil
 	case executionapp.ClaimRecoverAgentModelCheckpoint:
 		return runtimev1.ClaimDispositionV1_CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT, nil
 	case executionapp.ClaimAccepted:

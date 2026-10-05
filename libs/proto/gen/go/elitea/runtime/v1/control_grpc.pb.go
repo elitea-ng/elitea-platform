@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	RuntimeControlService_AuthorizeSandboxJob_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob"
+	RuntimeControlService_AuthorizeRustCompiledSnapshot_FullMethodName = "/elitea.runtime.v1.RuntimeControlService/AuthorizeRustCompiledSnapshot"
 	RuntimeControlService_ClaimCommand_FullMethodName                  = "/elitea.runtime.v1.RuntimeControlService/ClaimCommand"
 	RuntimeControlService_BeginExecution_FullMethodName                = "/elitea.runtime.v1.RuntimeControlService/BeginExecution"
 	RuntimeControlService_AuthorizeInvocation_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/AuthorizeInvocation"
@@ -34,6 +35,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RuntimeControlServiceClient interface {
 	AuthorizeSandboxJob(ctx context.Context, in *AuthorizeSandboxJobRequestV1, opts ...grpc.CallOption) (*AuthorizeSandboxJobResponseV1, error)
+	AuthorizeRustCompiledSnapshot(ctx context.Context, in *AuthorizeRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*AuthorizeRustCompiledSnapshotResponseV1, error)
 	ClaimCommand(ctx context.Context, in *ClaimCommandRequestV1, opts ...grpc.CallOption) (*ClaimCommandResponseV1, error)
 	BeginExecution(ctx context.Context, in *BeginExecutionRequestV1, opts ...grpc.CallOption) (*BeginExecutionResponseV1, error)
 	AuthorizeInvocation(ctx context.Context, in *AuthorizeInvocationRequestV1, opts ...grpc.CallOption) (*AuthorizeInvocationResponseV1, error)
@@ -55,6 +57,16 @@ func (c *runtimeControlServiceClient) AuthorizeSandboxJob(ctx context.Context, i
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthorizeSandboxJobResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeControlService_AuthorizeSandboxJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeControlServiceClient) AuthorizeRustCompiledSnapshot(ctx context.Context, in *AuthorizeRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*AuthorizeRustCompiledSnapshotResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthorizeRustCompiledSnapshotResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_AuthorizeRustCompiledSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +148,7 @@ func (c *runtimeControlServiceClient) PrepareSettlement(ctx context.Context, in 
 // for forward compatibility.
 type RuntimeControlServiceServer interface {
 	AuthorizeSandboxJob(context.Context, *AuthorizeSandboxJobRequestV1) (*AuthorizeSandboxJobResponseV1, error)
+	AuthorizeRustCompiledSnapshot(context.Context, *AuthorizeRustCompiledSnapshotRequestV1) (*AuthorizeRustCompiledSnapshotResponseV1, error)
 	ClaimCommand(context.Context, *ClaimCommandRequestV1) (*ClaimCommandResponseV1, error)
 	BeginExecution(context.Context, *BeginExecutionRequestV1) (*BeginExecutionResponseV1, error)
 	AuthorizeInvocation(context.Context, *AuthorizeInvocationRequestV1) (*AuthorizeInvocationResponseV1, error)
@@ -155,6 +168,9 @@ type UnimplementedRuntimeControlServiceServer struct{}
 
 func (UnimplementedRuntimeControlServiceServer) AuthorizeSandboxJob(context.Context, *AuthorizeSandboxJobRequestV1) (*AuthorizeSandboxJobResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AuthorizeSandboxJob not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) AuthorizeRustCompiledSnapshot(context.Context, *AuthorizeRustCompiledSnapshotRequestV1) (*AuthorizeRustCompiledSnapshotResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AuthorizeRustCompiledSnapshot not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) ClaimCommand(context.Context, *ClaimCommandRequestV1) (*ClaimCommandResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClaimCommand not implemented")
@@ -212,6 +228,24 @@ func _RuntimeControlService_AuthorizeSandboxJob_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeControlServiceServer).AuthorizeSandboxJob(ctx, req.(*AuthorizeSandboxJobRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeControlService_AuthorizeRustCompiledSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthorizeRustCompiledSnapshotRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).AuthorizeRustCompiledSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_AuthorizeRustCompiledSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).AuthorizeRustCompiledSnapshot(ctx, req.(*AuthorizeRustCompiledSnapshotRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -352,6 +386,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AuthorizeSandboxJob",
 			Handler:    _RuntimeControlService_AuthorizeSandboxJob_Handler,
+		},
+		{
+			MethodName: "AuthorizeRustCompiledSnapshot",
+			Handler:    _RuntimeControlService_AuthorizeRustCompiledSnapshot_Handler,
 		},
 		{
 			MethodName: "ClaimCommand",

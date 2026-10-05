@@ -43,7 +43,8 @@ use super::attachments;
 use super::context_management::ContextManagementPlan;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecision, DirectHitlDecisionSet,
-    DirectHitlError, DirectHitlErrorCode, DirectHitlRunInput, ResolvedDirectHitlStart,
+    DirectHitlError, DirectHitlErrorCode, DirectHitlRunInput, ResolvedDirectHitlDecision,
+    ResolvedDirectHitlStart,
 };
 use super::events::{
     AgentEventProjectionContext, AgentEventProjectionError, AgentEventProjectionErrorCode,
@@ -170,14 +171,82 @@ impl ApplicationRuntimeProjection {
         }
     }
 
-    #[cfg(test)]
     #[must_use]
-    pub(crate) const fn presentations(presentations: ApplicationToolPresentationCatalog) -> Self {
+    pub(crate) const fn from_presentations(
+        presentations: ApplicationToolPresentationCatalog,
+    ) -> Self {
         Self {
             presentations,
             events: None,
             resume: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn coordinated_fixture(
+        presentations: ApplicationToolPresentationCatalog,
+        resume: ApplicationResumeCoordinator,
+    ) -> Self {
+        Self {
+            presentations,
+            events: None,
+            resume: Some(resume),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn presentations(presentations: ApplicationToolPresentationCatalog) -> Self {
+        Self::from_presentations(presentations)
+    }
+
+    pub(crate) fn event_receiver(&self) -> Option<ApplicationEventReceiver> {
+        self.events.clone()
+    }
+    pub(crate) fn resume_coordinator(&self) -> Option<ApplicationResumeCoordinator> {
+        self.resume.clone()
+    }
+    pub(crate) fn presentation_catalog(&self) -> ApplicationToolPresentationCatalog {
+        self.presentations.clone()
+    }
+
+    pub(crate) async fn install_scope_resume(
+        &self,
+        events: &[Event],
+        decisions: Vec<ResolvedDirectHitlDecision>,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let coordinator = self.resume.as_ref().ok_or_else(invalid_configuration)?;
+        install_nested_application_resume(events, decisions, &self.presentations, coordinator).await
+    }
+
+    pub(crate) async fn install_scope_static_resume(
+        &self,
+        events: &[Event],
+        decisions: Vec<super::graph::static_tool_pause::StaticToolDecision>,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let coordinator = self.resume.as_ref().ok_or_else(invalid_configuration)?;
+        super::application_tools::install_static_application_resume(
+            events,
+            decisions,
+            &self.presentations,
+            coordinator,
+        )
+        .await
+    }
+
+    pub(crate) fn insert_pipeline_presentation(
+        &mut self,
+        tool_name: String,
+        display_name: String,
+        children: ApplicationToolPresentationCatalog,
+    ) -> Result<(), AgentEventProjectionError> {
+        self.presentations.insert_runtime(
+            tool_name,
+            display_name,
+            "pipeline".to_owned(),
+            "nested-model".to_owned(),
+            children,
+            super::events::ApplicationToolGuardCatalogs::default(),
+        )
     }
 
     pub(crate) fn insert_presentation(
@@ -274,12 +343,11 @@ fn application_event_agent(
     agent: Arc<dyn Agent>,
     events: ApplicationEventReceiver,
     applications: ApplicationToolPresentationCatalog,
+    lineage: Option<ApplicationResumeCoordinator>,
 ) -> Arc<dyn Agent> {
-    Arc::new(ApplicationEventStreamingAgent::new(
-        agent,
-        events,
-        applications,
-    ))
+    Arc::new(
+        ApplicationEventStreamingAgent::new(agent, events, applications).with_call_lineage(lineage),
+    )
 }
 
 pub(crate) fn delegated_authorization_agent(
@@ -687,9 +755,12 @@ impl OrdinaryNativeAgentPlan {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn session_id(&self) -> &str {
         self.session_id.as_ref()
+    }
+
+    pub(super) fn resource_project_id(&self) -> &str {
+        &self.resource_project_id
     }
 
     #[cfg(test)]
@@ -962,6 +1033,28 @@ impl NativePipelineStateBackend {
         plan: &OrdinaryNativeAgentPlan,
         pipeline_definition: &PipelineDefinition,
     ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
+        let paths = pipeline_definition
+            .application_node_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        self.open_with_application_paths(
+            authority,
+            state_writer_lease,
+            plan,
+            pipeline_definition,
+            &paths,
+        )
+        .await
+    }
+
+    pub(super) async fn open_with_application_paths(
+        &self,
+        authority: ClaimBoundSessionAuthority,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        plan: &OrdinaryNativeAgentPlan,
+        pipeline_definition: &PipelineDefinition,
+        application_paths: &[String],
+    ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
         let claim = authority.into_writer_binding();
         if claim.tenant_id != plan.tenant_id
             || claim.resource_project_id != plan.resource_project_id
@@ -985,6 +1078,7 @@ impl NativePipelineStateBackend {
                     state_writer_lease,
                     plan,
                     pipeline_definition,
+                    application_paths,
                 )
                 .await
             }
@@ -998,6 +1092,8 @@ impl NativePipelineStateBackend {
                 Ok(PipelineStateServices {
                     sessions: Arc::clone(sessions),
                     checkpointer: Arc::clone(checkpointer),
+                    parallel_authority: None,
+                    node_recovery_authority: None,
                     model_scopes: plan.model_scope_sessions(
                         super::model_scope::ModelScopeBackend::Local(sessions.clone()),
                     ),
@@ -1007,6 +1103,7 @@ impl NativePipelineStateBackend {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Keep claim, checkpoint, continuation proof, and Runner assembly visibly ordered.
 async fn activate_pipeline_postgres(
     pool: &PgPool,
     session_limits: SessionLimits,
@@ -1015,6 +1112,7 @@ async fn activate_pipeline_postgres(
     state_writer_lease: Arc<dyn StateWriterLease>,
     plan: &OrdinaryNativeAgentPlan,
     pipeline_definition: &PipelineDefinition,
+    application_paths: &[String],
 ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
     let resource_project_id = claim
         .resource_project_id
@@ -1089,16 +1187,23 @@ async fn activate_pipeline_postgres(
     .await
     .map_err(|error| checkpoint_activation_error(&error))?;
     let checkpointer = checkpointer
-        .with_application_children(pipeline_definition.application_node_ids())
+        .with_application_paths(application_paths)
         .await
         .map_err(|error| checkpoint_activation_error(&error))?;
     let sessions = Arc::new(sessions);
     let model_scopes = plan.model_scope_sessions(super::model_scope::ModelScopeBackend::Postgres(
         sessions.clone(),
     ));
+    let holder = Arc::new(checkpointer);
+    let node_recovery_authority: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory> =
+        holder.clone();
+    let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = holder;
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
     Ok(PipelineStateServices {
         sessions,
-        checkpointer: Arc::new(checkpointer),
+        checkpointer,
+        parallel_authority: Some(authority),
+        node_recovery_authority: Some(node_recovery_authority),
         model_scopes,
     })
 }
@@ -1106,10 +1211,101 @@ async fn activate_pipeline_postgres(
 pub(super) struct PipelineStateServices {
     sessions: Arc<dyn SessionService>,
     checkpointer: Arc<dyn Checkpointer>,
+    parallel_authority: Option<Arc<dyn super::graph::ParallelCheckpointAuthority>>,
+    node_recovery_authority:
+        Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
     pub(super) model_scopes: super::model_scope::ModelScopeSessions,
 }
 
 impl PipelineStateServices {
+    pub(super) async fn inspect_node_recovery(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+        definition: &PipelineDefinition,
+        receipt: &super::graph::node_recovery_receipt::NodeRecoveryRequiredReceipt,
+    ) -> Result<super::node_recovery_checkpoint::OpenedNodeRecoveryVisit, NativeAgentAssemblyError>
+    {
+        use super::graph::node_recovery_runtime::NodeAttemptActivation;
+        use adk_rust::graph::{ExecutionConfig, NodeContext};
+        let checkpoint = self
+            .checkpointer
+            .load(plan.session_id.as_str())
+            .await
+            .map_err(|_| dependency_unavailable())?
+            .ok_or_else(invalid_configuration)?;
+        if !receipt.validate()
+            || receipt.graph_thread != plan.session_id.as_str()
+            || checkpoint.thread_id != receipt.graph_thread
+            || checkpoint.step as u64 != receipt.step
+            || checkpoint.pending_nodes.as_slice() != [receipt.node_id.as_str()]
+            || checkpoint.cleared_interrupt.is_some()
+            || checkpoint.metadata.get("elitea.pipeline.execution.v1")
+                != Some(&serde_json::json!([plan.execution_id, plan.generation]))
+        {
+            return Err(invalid_configuration());
+        }
+        let (node_digest, policy) = definition
+            .node_recovery_spec(&receipt.node_id)
+            .ok_or_else(invalid_configuration)?;
+        let context = NodeContext::new(
+            checkpoint.state,
+            ExecutionConfig::new(&receipt.graph_thread),
+            checkpoint.step,
+        );
+        let activation =
+            NodeAttemptActivation::from_context(&receipt.node_id, node_digest, &context)
+                .map_err(|_| invalid_configuration())?;
+        let journal = self
+            .node_recovery_authority
+            .as_ref()
+            .ok_or_else(invalid_configuration)?
+            .open(&activation, &policy)
+            .await
+            .map_err(|_| invalid_configuration())?;
+        journal
+            .verify_pending_receipt(&activation, receipt)
+            .await
+            .map_err(|_| invalid_configuration())?;
+        let evidence = self.inspect_checkpoint(plan, definition).await?;
+        let projector = definition
+            .node_result_projector(&receipt.node_id, &plan.execution_id, plan.generation)
+            .map_err(|_| invalid_configuration())?;
+        Ok(
+            super::node_recovery_checkpoint::OpenedNodeRecoveryVisit::inspected(
+                activation,
+                journal,
+                evidence,
+                receipt.clone(),
+                context,
+                projector,
+            ),
+        )
+    }
+
+    pub(super) fn node_recovery_authority(
+        &self,
+    ) -> Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>> {
+        self.node_recovery_authority.clone()
+    }
+    /// Preserve the single `PostgreSQL` capability holder before trait erasure.
+    #[allow(dead_code)] // Fixed Parallel admission is still gated.
+    pub(super) fn parallel_authority(
+        &self,
+    ) -> Option<Arc<dyn super::graph::ParallelCheckpointAuthority>> {
+        self.parallel_authority.clone()
+    }
+
+    /// Root-only read through the already admitted exact-thread checkpointer owner.
+    pub(super) async fn application_checkpoint(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+    ) -> Result<Option<adk_rust::graph::Checkpoint>, NativeAgentAssemblyError> {
+        self.checkpointer
+            .load(plan.session_id())
+            .await
+            .map_err(|_| dependency_unavailable())
+    }
+
     pub(super) async fn inspect_checkpoint(
         &self,
         plan: &OrdinaryNativeAgentPlan,
@@ -1398,16 +1594,35 @@ pub(super) async fn assemble_pipeline_native(
         events: application_events,
         resume: application_resume,
     } = application_runtime;
+    let node_runtimes = match state.node_recovery_authority() {
+        Some(authority) => node_runtimes.with_node_recovery_authority(authority),
+        None => node_runtimes,
+    };
     let printer_catalog = definition.printer_pause_catalog();
-    let printer_resume = matches!(&start, PipelineNativeStart::Printer(_));
+    let static_catalog = definition.static_pause_catalog();
+    let static_family = super::graph::static_pause::StaticPauseFamily::new(
+        static_catalog.clone(),
+        node_runtimes
+            .composition_definitions()
+            .map(|definitions| {
+                definitions
+                    .iter()
+                    .map(|(path, definition)| (path.clone(), definition.static_pause_catalog()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    );
+    let text_resume = matches!(&start, PipelineNativeStart::Text(_));
     let checkpoint_recovery = matches!(&start, PipelineNativeStart::Checkpoint);
     let resume = resolve_pipeline_start(
         start,
         &state,
         &plan,
         &printer_catalog,
+        &static_family,
         &application_tools,
         application_resume.as_ref(),
+        node_runtimes.application_scopes(),
     )
     .await?;
     let is_resume = resume.is_some();
@@ -1445,14 +1660,20 @@ pub(super) async fn assemble_pipeline_native(
     // TurnCheckpointer isolates fresh input without deleting recovery history.
     let agent: Arc<dyn Agent> = Arc::new(
         EliteaGraphAgent::new(graph)
-            .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog),
+            .with_printer_interrupts(Arc::clone(&state.checkpointer), printer_catalog)
+            .with_static_interrupts(Arc::clone(&state.checkpointer), static_catalog),
     );
     let agent = instruction_plan.wrap(agent);
     let agent = node_events.map_or(agent.clone(), |events| {
         Arc::new(PipelineNodeEventStreamingAgent::new(agent, events)) as Arc<dyn Agent>
     });
     let agent = application_events.map_or(agent.clone(), |events| {
-        application_event_agent(agent, events, application_tools.clone())
+        application_event_agent(
+            agent,
+            events,
+            application_tools.clone(),
+            application_resume.clone(),
+        )
     });
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
@@ -1470,7 +1691,7 @@ pub(super) async fn assemble_pipeline_native(
     .map_err(projection_configuration)?;
     let input = if checkpoint_recovery {
         Content::new("user")
-    } else if printer_resume {
+    } else if text_resume {
         user_content
     } else if is_resume {
         Content::new("user").with_text(PIPELINE_RESUME_MARKER)
@@ -1484,13 +1705,18 @@ pub(super) async fn assemble_pipeline_native(
     ))
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Keep claim, checkpoint, continuation proof, and Runner assembly visibly ordered.
 async fn resolve_pipeline_start(
     start: PipelineNativeStart,
     state: &PipelineStateServices,
     plan: &OrdinaryNativeAgentPlan,
     printer_catalog: &super::graph::PrinterPauseCatalog,
+    static_family: &super::graph::static_pause::StaticPauseFamily,
     application_tools: &ApplicationToolPresentationCatalog,
     application_resume: Option<&ApplicationResumeCoordinator>,
+    application_scopes: Option<
+        &super::pipeline::scoped_applications::PipelineApplicationScopeRegistry,
+    >,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
     if matches!(start, PipelineNativeStart::Regenerate) {
         // ADK loads the latest checkpoint even without an explicit resume ID.
@@ -1527,6 +1753,28 @@ async fn resolve_pipeline_start(
             }
             None
         }
+        PipelineNativeStart::StaticTools(decisions) => {
+            let session = restore_pipeline_session(state, plan).await?;
+            let events = session.events().all();
+            let interrupt = events.last().ok_or_else(invalid_configuration)?;
+            let binding = super::events::pipeline_application_event_binding(
+                interrupt,
+                ROOT_AGENT_NAME,
+                plan.session_id.as_ref(),
+            )
+            .map_err(projection_configuration)?;
+            application_scopes
+                .ok_or_else(invalid_configuration)?
+                .install_root_static_continuation(
+                    plan.session_id.as_ref(),
+                    state.checkpointer.as_ref(),
+                    &binding,
+                    &events,
+                    decisions,
+                )
+                .await?;
+            Some(super::graph::resume::PipelineResume::empty())
+        }
         PipelineNativeStart::Hitl(decision) => {
             let session = restore_pipeline_session(state, plan).await?;
             let resolved = decision
@@ -1540,14 +1788,50 @@ async fn resolve_pipeline_start(
                 .map_err(|error| pipeline_resume_error(&error))?;
             let (resume, application_decisions) = resolved.into_parts();
             if let Some(decisions) = application_decisions {
-                let coordinator = application_resume.ok_or_else(invalid_configuration)?;
-                install_nested_application_resume(
-                    &session.events().all(),
-                    decisions,
-                    application_tools,
-                    coordinator,
+                let events = session.events().all();
+                let interrupt = events.last().ok_or_else(invalid_configuration)?;
+                let binding = super::events::pipeline_application_event_binding(
+                    interrupt,
+                    ROOT_AGENT_NAME,
+                    plan.session_id.as_ref(),
                 )
-                .await?;
+                .map_err(projection_configuration)?;
+                if let Some(scopes) = application_scopes {
+                    scopes
+                        .install_root_continuation(
+                            plan.session_id.as_ref(),
+                            state.checkpointer.as_ref(),
+                            &binding,
+                            &events,
+                            decisions,
+                        )
+                        .await?;
+                } else {
+                    // Preserve the legacy path's all-decisions rule and coordinator ownership.
+                    let expected = binding
+                        .interrupt_ids()
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    let submitted = decisions
+                        .iter()
+                        .map(ResolvedDirectHitlDecision::interrupt_id)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if submitted != expected {
+                        return Err(NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the checkpointed pipeline decision was rejected",
+                        ));
+                    }
+                    let coordinator = application_resume.ok_or_else(invalid_configuration)?;
+                    install_nested_application_resume(
+                        &events,
+                        decisions,
+                        application_tools,
+                        coordinator,
+                    )
+                    .await?;
+                }
             }
             Some(resume)
         }
@@ -1565,18 +1849,17 @@ async fn resolve_pipeline_start(
                     .map_err(|error| pipeline_resume_error(&error))?,
             )
         }
-        PipelineNativeStart::Printer(continuation) => {
+        PipelineNativeStart::Text(continuation) => {
             let session = restore_pipeline_session(state, plan).await?;
             Some(
                 continuation
-                    .resolve(
-                        super::graph::resume::PrinterResumeContext::new(
-                            session.as_ref(),
-                            state.checkpointer.as_ref(),
-                            ROOT_AGENT_NAME,
-                            plan.session_id.as_ref(),
-                            printer_catalog,
-                        ),
+                    .resolve_with_family(
+                        session.as_ref(),
+                        state.checkpointer.as_ref(),
+                        ROOT_AGENT_NAME,
+                        plan.session_id.as_ref(),
+                        printer_catalog,
+                        static_family,
                         &plan
                             .user_content
                             .parts
@@ -1589,7 +1872,8 @@ async fn resolve_pipeline_start(
                             .join("\n"),
                     )
                     .await
-                    .map_err(|error| pipeline_resume_error(&error))?,
+                    .map_err(|error| pipeline_resume_error(&error))?
+                    .preserve_descendant_static_inputs(),
             )
         }
     })
@@ -1996,7 +2280,7 @@ fn build_runtime_agent(
     let ApplicationRuntimeProjection {
         presentations: application_tools,
         events: application_events,
-        resume: _,
+        resume: application_resume,
     } = application_runtime;
     let agent: Arc<dyn Agent> = Arc::new(builder.build().map_err(|_| invalid_configuration())?);
     let agent: Arc<dyn Agent> = context_events.map_or(agent.clone(), |events| {
@@ -2006,7 +2290,12 @@ fn build_runtime_agent(
     let agent = delegated_authorization_agent(agent, delegated_authorization.clone());
     let agent = clarifying_question_agent(agent, internal_tools);
     let agent = application_events.map_or(agent.clone(), |events| {
-        application_event_agent(agent, events, application_tools.clone())
+        application_event_agent(
+            agent,
+            events,
+            application_tools.clone(),
+            application_resume.clone(),
+        )
     });
     let projector = AgentEventProjector::with_runtime_catalogs(
         projection,
@@ -2114,6 +2403,7 @@ struct PreparedDirectResume {
     parallel_applications: bool,
 }
 
+#[allow(clippy::too_many_lines)] // Keep claim, checkpoint, continuation proof, and Runner assembly visibly ordered.
 async fn prepare_direct_resume(
     model: Arc<dyn Llm>,
     stored: &dyn Session,
@@ -2168,6 +2458,24 @@ async fn prepare_direct_resume(
             let (replay_model, run_input, toolsets) = prepared.into_parts(toolsets);
             (replay_model, run_input, toolsets, false)
         }
+        ResolvedDirectHitlStart::StaticTools(decisions) => {
+            let coordinator = resume.as_ref().ok_or_else(invalid_configuration)?;
+            let prepared = super::application_tools::prepare_static_application_resume(
+                &stored.events().all(),
+                decisions,
+                &application_tools,
+                coordinator,
+                model,
+            )
+            .await?;
+            let (replay_model, user_content, run_config) = prepared.into_parts();
+            (
+                replay_model,
+                DirectHitlRunInput::from_parts(user_content, run_config),
+                toolsets,
+                true,
+            )
+        }
         ResolvedDirectHitlStart::Nested(decisions) => {
             let coordinator = resume.as_ref().ok_or_else(invalid_configuration)?;
             let prepared = prepare_nested_application_resume(
@@ -2197,7 +2505,7 @@ async fn prepare_direct_resume(
             ApplicationRuntimeProjection {
                 presentations: application_tools,
                 events: application_events,
-                resume: None,
+                resume,
             },
         )
         .with_internal_tools(internal_tools)

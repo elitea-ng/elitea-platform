@@ -25,6 +25,27 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
         ordinal: usize,
         input_digest: &[u8; 32],
     ) -> Result<ParallelChildCheckpoint, adk_rust::graph::GraphError> {
+        let child = self
+            .activate_parallel_branch(activation, branch, ordinal, input_digest)
+            .await?;
+        let thread_id = child.scope.authority.thread_id.clone();
+        let checkpointer: Arc<dyn Checkpointer> = Arc::new(child);
+        Ok(ParallelChildCheckpoint {
+            admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
+            thread_id,
+            checkpointer,
+        })
+    }
+}
+
+impl PostgresCheckpointer {
+    pub(super) async fn activate_parallel_branch(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+    ) -> Result<Self, adk_rust::graph::GraphError> {
         if activation.root_thread_id != self.scope.authority.thread_id {
             return Err(adk_rust::graph::GraphError::CheckpointError(
                 "checkpoint.invalid_scope: the parallel activation is not bound to this checkpoint family"
@@ -45,11 +66,7 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
             Arc::clone(&self.state_writer_lease),
         )
         .await?;
-        let checkpointer: Arc<dyn Checkpointer> = Arc::new(child);
-        Ok(ParallelChildCheckpoint {
-            thread_id,
-            checkpointer,
-        })
+        Ok(child)
     }
 }
 

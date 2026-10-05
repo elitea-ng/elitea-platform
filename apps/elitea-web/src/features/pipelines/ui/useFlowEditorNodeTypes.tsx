@@ -40,6 +40,10 @@ import type { EdgeTypes, NodeProps, NodeTypes } from '@xyflow/react';
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
 import { FlowEditorConstants } from '../lib/flow-editor/constants';
 import type { FlowNode } from '../lib/flow-editor/reactFlowTypes';
+import { ParallelNode } from './nodes/ParallelNode';
+import { MapNode } from './nodes/MapNode';
+import { SplitOutNode } from './nodes/SplitOutNode';
+import { AggregateNode } from './nodes/AggregateNode';
 import { AgentNode } from './nodes/AgentNode';
 import { CodeNode } from './nodes/CodeNode';
 import { CustomEdge } from './nodes/CustomEdge';
@@ -155,6 +159,10 @@ const EDGE_TYPES: EdgeTypes = { custom: CustomEdge };
 function buildNodeTypes(versionTools: readonly PipelineToolEntry[] | undefined, llmSettings: AiAssistantLlmSettings | null | undefined): NodeTypes {
   const types = FlowEditorConstants.PipelineNodeTypes;
   return {
+    [types.Parallel]: ParallelNode,
+    [types.Map]: MapNode,
+    [types.SplitOut]: SplitOutNode,
+    [types.Aggregate]: AggregateNode,
     [types.Tool]: withVersionTools(asAnyNodeComponent(ToolNode), versionTools),
     [types.Agent]: withVersionTools(asAnyNodeComponent(AgentNode), versionTools),
     [types.Pipeline]: withVersionTools(asAnyNodeComponent(SubgraphNode), versionTools),

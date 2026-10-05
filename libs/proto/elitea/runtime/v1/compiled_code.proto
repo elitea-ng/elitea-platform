@@ -1,0 +1,146 @@
+syntax = "proto3";
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/envelope.proto";
+import "elitea/runtime/v1/sandbox.proto";
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// Main/worker integration must bind one of these distinct purposes into verified
+// authority before the supervisor derives immutable PID 1 launch configuration.
+// This enum alone grants nothing. Its isolated authority RPC is default-off.
+enum RustCompiledSnapshotPurposeV1 {
+  RUST_COMPILED_SNAPSHOT_PURPOSE_V1_UNSPECIFIED = 0;
+  RUST_COMPILED_SNAPSHOT_PURPOSE_V1_COMPILE = 1;
+  RUST_COMPILED_SNAPSHOT_PURPOSE_V1_PUBLISH = 2;
+  RUST_COMPILED_SNAPSHOT_PURPOSE_V1_READ = 3;
+  RUST_COMPILED_SNAPSHOT_PURPOSE_V1_EXECUTE = 4;
+}
+
+// This isolated source contract is default-off until runtime authority is assembled.
+// Compile, publication, content read and execution require distinct scoped
+// authority in Main. Snapshot reuse is explicit and default-off. A retry after
+// unknown dispatch reconciles the same activation; it cannot launch a fresh job.
+// PreparedJob revision 1/3 remains unchanged. The runner's auxiliary control
+// JSON carries these values with snake_case names, strict fields, lowercase hex
+// SHA-256 strings, and exact canonical JSON ordering defined in compiled_code.rs.
+// Exact base request bytes bind source, input, timeout and dependency identity.
+// This is an output snapshot policy, not a claim of arbitrary build determinism.
+message RustCompiledSnapshotBindingV1 {
+  uint32 revision = 1;
+  string reuse_policy = 2; // exactly "snapshot_v1"
+  string tenant_id = 3;
+  int32 project_id = 4;
+  bytes base_prepared_request_sha256 = 5;
+  bytes source_sha256 = 6;
+  string compilation_image_digest = 7;
+  string execution_image_digest = 8;
+  string platform = 9; // exactly linux/arm64/gnu or linux/amd64/gnu
+  string target = 10;
+  string policy_revision = 11;
+  bytes cargo_manifest_sha256 = 12;
+  bytes cargo_lock_sha256 = 13;
+  bytes cargo_config_sha256 = 14;
+  bytes vendor_sha256 = 15;
+  bytes toolchain_sha256 = 16;
+  bytes adapter_sha256 = 17;
+  bytes wrapper_sha256 = 18;
+  bytes compiler_flags_sha256 = 19;
+  reserved 20 to 31;
+}
+
+// Strict runner JSON is at most 16 KiB, one regular executable at most 32 MiB.
+// No caller path, argv, target tree, native shared library or arbitrary sidecar.
+// The immutable image supplies all non-executable runtime files.
+message RustCompiledSnapshotDescriptorV1 {
+  uint32 revision = 1;
+  RustCompiledSnapshotBindingV1 binding = 2;
+  bytes snapshot_key_sha256 = 3;
+  bytes executable_sha256 = 4;
+  uint64 executable_bytes = 5;
+  reserved 6 to 31;
+}
+message RustCompiledSnapshotControlV1 {
+  uint32 revision = 1;
+  RustCompiledSnapshotBindingV1 binding = 2;
+  bytes snapshot_key_sha256 = 3;
+  // Empty for compilation; required for cached execution and fixed import.
+  bytes descriptor_sha256 = 4;
+  reserved 5 to 31;
+}
+
+// Revision 4 uses the existing SignedSandboxJobGrantV1 and Ed25519 domain.
+// Verify before decode. Older grant decoders reject these unknown fields.
+// Purpose is exact. Package, cancellation and compiled roles do not substitute.
+// Server-owned original visit selection; identity alone grants no resource or Execute authority.
+message OriginalCodeVisitRefV1 {
+  string visit_id = 1; // nonzero lowercase64hex
+  uint64 revision = 2; // exactly1
+  string digest_sha256 = 3; // exact Main immutable visit record hash
+  reserved 4 to 15;
+}
+// Signed Compile-only access for completed immutable workspace content.
+// Current claim is distinct from original same-generation visit facts.
+message OriginalCodeVisitAccessV1 {
+  OriginalCodeVisitRefV1 original_visit = 1;
+  string claim_id = 2;
+  uint64 claim_attempt = 3;
+  uint64 lease_epoch = 4;
+  bytes fence_sha256 = 5; // exact32bytes
+  reserved 6 to 15;
+}
+
+message RustCompiledSnapshotGrantClaimsV1 {
+  uint32 revision = 1;
+  string tenant_id = 2;
+  int32 project_id = 3;
+  string execution_id = 4;
+  string activation_id = 5;
+  bytes request_digest = 6;
+  string submitter_workload_identity = 7;
+  string audience = 8;
+  int64 issued_at_unix_millis = 9;
+  int64 expires_at_unix_millis = 10;
+  uint64 generation = 11;
+  reserved 12 to 33;
+  RustCompiledSnapshotPurposeV1 purpose = 34;
+  bytes base_prepared_request_sha256 = 35;
+  bytes snapshot_key_sha256 = 36;
+  // Empty for compilation. Main resolves this root for every other purpose.
+  bytes descriptor_sha256 = 37;
+  // Publication binds the exact successful original compile job and runtime.
+  bytes compilation_job_key = 38;
+  string compilation_runtime_id = 39;
+  bytes compilation_request_digest = 40;
+  // Immutable original captured export epoch. Current publication lease is separate.
+  uint64 compilation_lease_epoch = 41;
+  OriginalCodeVisitAccessV1 original_code_visit_access = 42;
+  reserved 43 to 63;
+}
+
+message AuthorizeRustCompiledSnapshotRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  SignedWorkerCommandEnvelopeV1 signed_command = 3;
+  string activation_id = 4;
+  string audience = 5;
+  RustCompiledSnapshotPurposeV1 purpose = 6;
+  // Exact unchanged Rust PreparedJob bytes, at most 1 MiB.
+  bytes prepared_job_json = 7;
+  // Strict canonical Binding bytes, at most 16 KiB. Main verifies its profile.
+  bytes binding_json = 8;
+  // Publication only. No caller-selected root or executable descriptor.
+  bytes compilation_job_key = 9;
+  // Empty only for initial Read. Execute must pin the exact selected root.
+  bytes selected_descriptor_sha256 = 10;
+  // Compile-with-workspace only. Absent preserves legacy nonworkspace bytes.
+  OriginalCodeVisitRefV1 original_code_visit = 11;
+  reserved 12 to 31;
+}
+message AuthorizeRustCompiledSnapshotResponseV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  // Empty for compilation. Root bytes always come from authoritative storage.
+  bytes descriptor_json = 2;
+  reserved 3 to 31;
+}

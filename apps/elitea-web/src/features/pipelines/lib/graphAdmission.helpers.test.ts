@@ -101,18 +101,83 @@ describe('document rules', () => {
     expect(issues.map((issue) => issue.citation)).toContain('compiler.rs:464');
   });
 
-  it('document.static-interrupts: refuses any static interrupt (compiler.rs:470)', () => {
-    const issues = documentLevelIssues(collectGraphAdmissionIssues(baseDocument({ interrupt_before: ['LLM_1'] })));
-
-    expect(issues[0]?.rule).toBe('document.static-interrupts');
-    expect(issues[0]?.field).toBe('interrupt_before');
-    expect(issues[0]?.message).toContain('not supported by the native runtime');
-    expect(issues[0]?.citation).toBe('compiler.rs:470');
+  it('document.static-interrupts: admits before entry and after END-transition pauses', () => {
+    expect(collectGraphAdmissionIssues(baseDocument({ interrupt_before: ['LLM_1'], interrupt_after: ['LLM_1'] }))).toEqual([]);
   });
 
-  it('document.static-interrupts: an empty interrupt list is fine (compiler.rs:470 tests `is_empty`)', () => {
+  it('document.static-interrupts: an empty interrupt list is fine', () => {
     expect(collectGraphAdmissionIssues(baseDocument({ interrupt_before: [], interrupt_after: [] }))).toEqual([]);
   });
+
+  for (const field of ['interrupt_before', 'interrupt_after'] as const) {
+    it.each(['Unknown', 'END', '__elitea_subgraph_result_v1'])('%s does not admit an unstored pause node in ' + field, (nodeId) => {
+      const issues = documentLevelIssues(collectGraphAdmissionIssues(baseDocument({ [field]: [nodeId] })));
+
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ rule: 'document.static-interrupts', field: `${field}[0]`, subject: nodeId, citation: 'compiler.rs:1978' });
+      expect(issues[0]?.message).toContain('does not name any stored node');
+    });
+
+    it.each(['', 'LLM 1', 'LLM_1\n', 'x'.repeat(129)])('refuses malformed pause id %j in ' + field, (nodeId) => {
+      const issues = collectGraphAdmissionIssues(baseDocument({ [field]: [nodeId] }));
+
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ rule: 'document.static-interrupts', field: `${field}[0]`, subject: nodeId });
+      expect(issues[0]?.message).toContain('legal node identifier');
+    });
+
+    it.each(['LLM_1', { node: 'LLM_1' }, null, 1])('refuses a non-list pause field %j in ' + field, (value) => {
+      const malformed = baseDocument({ [field]: value });
+      const issues = collectGraphAdmissionIssues(malformed);
+
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ rule: 'document.static-interrupts', field, citation: 'compiler.rs:217' });
+      expect(issues[0]?.message).toContain('declare a list');
+    });
+
+    it.each([1, null, { node: 'LLM_1' }])('refuses a non-string pause entry %j in ' + field, (value) => {
+      const malformed = baseDocument({ [field]: [value] });
+
+      expect(collectGraphAdmissionIssues(malformed)).toMatchObject([{ rule: 'document.static-interrupts', field: `${field}[0]` }]);
+    });
+
+    it('refuses duplicate pause ids in ' + field, () => {
+      const issues = collectGraphAdmissionIssues(baseDocument({ [field]: ['LLM_1', 'LLM_1'] }));
+
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ rule: 'document.static-interrupts', field: `${field}[1]`, subject: 'LLM_1' });
+      expect(issues[0]?.message).toContain('already appears');
+    });
+
+    it('admits 128 unique stored pause nodes and refuses 129 entries in ' + field, () => {
+      const nodes = Array.from({ length: 128 }, (_, index) => ({ ...ADMISSIBLE_LLM_NODE, id: `LLM_${String(index)}` }));
+      const ids = nodes.map((node) => node.id);
+      const document = baseDocument({ nodes, [field]: ids });
+
+      expect(collectGraphAdmissionIssues(document)).toEqual([]);
+      expect(collectGraphAdmissionIssues({ ...document, [field]: [...ids, 'LLM_1'] })).toMatchObject([
+        { rule: 'document.static-interrupts', field, subject: '129', citation: 'compiler.rs:204' },
+      ]);
+    });
+  }
+
+  it('admits an explicit Printer pause with its existing node settings', () => {
+    const document = baseDocument({
+      entry_point: 'Print_1',
+      nodes: [{ id: 'Print_1', type: 'printer', input_mapping: { printer: { type: 'fixed', value: 'printed' } }, transition: 'END' }],
+      interrupt_after: ['Print_1'],
+    });
+
+    expect(collectGraphAdmissionIssues(document)).toEqual([]);
+  });
+
+  it('retains node-family admission guards on a graph with valid pauses', () => {
+    const issues = collectGraphAdmissionIssues(withNode({ type: 'custom' }, { interrupt_before: ['LLM_1'], interrupt_after: ['LLM_1'] }));
+
+    expect(issues.map((issue) => issue.rule)).toContain('node.type');
+    expect(issues.map((issue) => issue.rule)).not.toContain('document.static-interrupts');
+  });
+
 });
 
 describe('state rules', () => {

@@ -35,6 +35,7 @@ import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
 import { SimpleLLMInputs } from '../settings/SimpleLLMInputs';
+import { CodeDebugSettings } from '../settings/CodeDebugSettings';
 import { t } from '@/shared/i18n';
 
 export interface CodeNodeProps {
@@ -138,8 +139,10 @@ export const CodeNode = memo(function CodeNode({ id, data, selected, llmSettings
         defaultValues={defaultValues}
         disabled={isRunningPipeline || disabled}
         modelConfig={pipelineLLMConfig as never}
+        codeLanguage={typeof yamlNode?.language === 'string' ? yamlNode.language : undefined}
       />
       <CodeLanguageSelect id={id} disabled={Boolean(isRunningPipeline || disabled)} />
+      <CodeDebugSettings id={id} disabled={Boolean(isRunningPipeline || disabled)} />
       <InputSelect
         id={id}
         label={t('pipelines.flowEditor.codeNode.inputLabel', 'Input')}

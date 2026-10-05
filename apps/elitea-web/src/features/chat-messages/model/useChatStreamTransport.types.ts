@@ -1,3 +1,4 @@
+import type { EditorTestRun } from '@/shared/api/generated/model';
 import type { ExecutionEventData } from '@/shared/api/sse';
 import type { ChatMessage } from '../lib/convertMessagesToChatHistory';
 import type { ChatStreamContext } from '../lib/chatStreamReducer';
@@ -51,6 +52,7 @@ export interface UseChatStreamTransportResult extends ChatStreamRunStarters {
    * spinner because the history it would settle is the one now on screen,
    * which belongs to a different conversation.
    */
+  readonly attachExistingRun: (target: { readonly projectId: string | number; readonly conversationUuid: string; readonly run: EditorTestRun }) => boolean;
   readonly close: () => void;
   /**
    * The user pressed Stop. Cancels the run SERVER-SIDE (`DELETE

@@ -222,7 +222,7 @@ fn runtime_context_with_ask_user_child(
 ) -> (RuntimeContextClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let paths = Arc::new(Mutex::new(Vec::new()));
-    let responses = (0..3)
+    let responses = (0..4)
         .flat_map(|_| {
             let mut child = nested_agent_version(
                 "Resolve only the delegated name.",
@@ -384,6 +384,10 @@ fn colliding_mcp_tool_call_response() -> Response<Body> {
 }
 
 fn ask_user_tool_call_response() -> Response<Body> {
+    ask_user_tool_call_response_with_id("call_ask_user")
+}
+
+fn ask_user_tool_call_response_with_id(call_id: &str) -> Response<Body> {
     let arguments = serde_json::json!({
         "questions": [{
             "question": "Which full name should I resolve?",
@@ -401,7 +405,7 @@ fn ask_user_tool_call_response() -> Response<Body> {
             "delta": {
                 "tool_calls": [{
                     "index": 0,
-                    "id": "call_ask_user",
+                    "id": call_id,
                     "type": "function",
                     "function": {"name": "ask_user", "arguments": arguments}
                 }]
@@ -2166,6 +2170,7 @@ async fn saved_agent_is_resolved_once_and_runs_as_an_adk_agent_tool() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // Both partial decisions and effect counts form one proof.
 async fn parallel_nested_sensitive_calls_persist_distinct_hierarchical_interrupts() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);
@@ -2243,12 +2248,29 @@ async fn parallel_nested_sensitive_calls_persist_distinct_hierarchical_interrupt
     assert_eq!(captured.lock().expect("captured model requests").len(), 3);
 
     assert_persisted_nested_interrupts(&sessions, &user_id, &session_id, 0).await;
-    assert_partial_nested_resume_is_rejected(&assembler, &interrupt_ids[0]).await;
-    assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+    let pending = resume_partial_nested_sensitive_call(&assembler, &interrupt_ids[0]).await;
+    assert_eq!(pending.len(), 1);
+    let original_pending = public_interrupts
+        .iter()
+        .find(|card| {
+            card["response_metadata"]["hitl_interrupts"][0]["interrupt_id"] == interrupt_ids[1]
+        })
+        .unwrap();
+    assert_eq!(
+        pending[0]["response_metadata"]["parent_agent_path"],
+        original_pending["response_metadata"]["parent_agent_path"]
+    );
+    assert_eq!(
+        pending[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"],
+        interrupt_ids[1]
+    );
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1);
     assert_eq!(context_calls.load(Ordering::Acquire), 4);
     assert_eq!(connector.calls.load(Ordering::Acquire), 2);
-    assert_eq!(captured.lock().expect("captured model requests").len(), 3);
-    let final_output = resume_parallel_nested_sensitive_calls(&assembler, interrupt_ids).await;
+    assert_eq!(captured.lock().expect("captured model requests").len(), 4);
+    assert_persisted_nested_interrupts(&sessions, &user_id, &session_id, 1).await;
+    let final_output =
+        resume_parallel_nested_sensitive_calls(&assembler, vec![interrupt_ids[1].clone()]).await;
     assert_eq!(final_output, "root resumed answer");
     assert_eq!(tool_calls.load(Ordering::Acquire), 2);
     assert_eq!(context_calls.load(Ordering::Acquire), 6);
@@ -2259,16 +2281,21 @@ async fn parallel_nested_sensitive_calls_persist_distinct_hierarchical_interrupt
 
 #[tokio::test(flavor = "current_thread")]
 async fn parallel_nested_ask_user_resumes_each_exact_child_without_replanning() {
-    parallel_nested_ask_user_resume_proof(false).await;
+    parallel_nested_ask_user_resume_proof(false, false).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn parallel_child_variables_survive_clarification_resume_independently() {
-    parallel_nested_ask_user_resume_proof(true).await;
+    parallel_nested_ask_user_resume_proof(true, false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parallel_nested_ask_user_partial_decisions_accept_reverse_order() {
+    parallel_nested_ask_user_resume_proof(false, true).await;
 }
 
 #[allow(clippy::too_many_lines)] // Initial parallel pause and atomic exact-child resume are one proof.
-async fn parallel_nested_ask_user_resume_proof(with_variables: bool) {
+async fn parallel_nested_ask_user_resume_proof(with_variables: bool, reverse: bool) {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);
     let (runtime_context, context_calls) = runtime_context_with_ask_user_child(with_variables);
@@ -2352,6 +2379,9 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool) {
         })
         .collect::<Vec<_>>();
     decisions.sort_unstable();
+    if reverse {
+        decisions.reverse();
+    }
     assert_eq!(decisions.len(), 2);
     assert_eq!(context_calls.load(Ordering::Acquire), 2);
     assert_eq!(captured.lock().expect("captured model requests").len(), 3);
@@ -2370,32 +2400,59 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool) {
         "action": "answer",
         "value": decisions[0].1,
     })];
+    let pending = drain_nested_pause(&assembler, partial).await;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"],
+        decisions[1].0
+    );
+    assert_eq!(
+        pending[0]["response_metadata"]["hitl_interrupts"][0]["tool_call_id"],
+        "call_ask_user"
+    );
+    assert_eq!(context_calls.load(Ordering::Acquire), 4);
+    assert_eq!(captured.lock().expect("captured model requests").len(), 4);
+
+    let mut duplicate = ordinary_request(AgentExecutionKind::Application);
+    duplicate.binding.request_content_digest = [25; 32];
+    attach_nested_agent(&mut duplicate);
+    duplicate.payload.should_continue = true;
+    duplicate.payload.hitl_resume = true;
+    duplicate.payload.hitl_action = Some("answer".to_owned());
+    duplicate.payload.hitl_value = Some(serde_json::json!({"q1": "Changed answer"}).to_string());
+    duplicate.payload.hitl_decisions = vec![serde_json::json!({
+        "interrupt_id": decisions[0].0,
+        "tool_call_id": "call_ask_user",
+        "guardrail_type": "clarifying_question",
+        "action": "answer",
+        "value": serde_json::json!({"q1": "Changed answer"}).to_string(),
+    })];
     let Err(error) = assembler
         .assemble(AuthorizedNativeAssembly::new(
-            &partial,
+            &duplicate,
             test_runtime_context_authority(),
             AuthorizedNativeCommandBinding::fixture(),
         ))
         .await
     else {
-        panic!("partial parallel clarification set must fail closed");
+        panic!("a consumed child decision cannot be replaced");
     };
     assert_eq!(
         error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
+        NativeAgentAssemblyErrorCode::InvalidConfiguration
     );
-    assert_eq!(context_calls.load(Ordering::Acquire), 4);
-    assert_eq!(captured.lock().expect("captured model requests").len(), 3);
+    assert_eq!(captured.lock().expect("captured model requests").len(), 4);
 
     let mut resume = ordinary_request(AgentExecutionKind::Application);
     resume.binding.request_content_digest = [24; 32];
     attach_nested_agent(&mut resume);
     resume.payload.should_continue = true;
     resume.payload.hitl_resume = true;
-    resume.payload.hitl_action = None;
-    resume.payload.hitl_value = None;
+    resume.payload.hitl_action = Some("answer".to_owned());
+    resume.payload.hitl_value = Some(decisions[1].1.clone());
     resume.payload.hitl_decisions = decisions
         .into_iter()
+        .skip(1)
         .map(|(interrupt_id, answer)| {
             serde_json::json!({
                 "interrupt_id": interrupt_id,
@@ -2408,10 +2465,14 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool) {
         .collect();
     let output = drain_nested_resume(&assembler, resume).await;
     assert_eq!(output, "root clarified answer");
-    assert_eq!(context_calls.load(Ordering::Acquire), 6);
+    assert_eq!(context_calls.load(Ordering::Acquire), 8);
 
     let captured = captured.lock().expect("captured model requests");
-    assert_eq!(captured.len(), 6, "resume must not replan child calls");
+    assert_eq!(
+        captured.len(),
+        6,
+        "partial resume must not replan or repeat completed children"
+    );
     if with_variables {
         for indices in [[1, 2], [3, 4]] {
             let systems = indices
@@ -2463,6 +2524,347 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool) {
             "User answered:\n- Which full name should I resolve?: Olivia Lovelace".to_owned(),
             "User answered:\n- Which full name should I resolve?: Sasha Grey".to_owned(),
         ])
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parallel_nested_new_child_pause_keeps_untouched_sibling_identity() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let (runtime_context, _) = runtime_context_with_ask_user_child(false);
+    let (gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(ask_user_tool_call_response()),
+            TestModelGatewayOutcome::Response(ask_user_tool_call_response()),
+            TestModelGatewayOutcome::Response(ask_user_tool_call_response_with_id(
+                "call_followup_question",
+            )),
+            TestModelGatewayOutcome::Response(text_response("first child completed")),
+            TestModelGatewayOutcome::Response(text_response("second child completed")),
+            TestModelGatewayOutcome::Response(text_response("parent completed after followup")),
+        ],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(gateway)),
+        empty_tool_policy(),
+    )
+    .with_sessions(sessions);
+    let cards = drain_nested_pause(&assembler, request).await;
+    assert_eq!(cards.len(), 2);
+    let answer = serde_json::json!({"q1": "Olivia Lovelace"}).to_string();
+    let pending = drain_nested_pause(
+        &assembler,
+        nested_card_decision_request(&cards[0], "answer", &answer, 33),
+    )
+    .await;
+    assert_eq!(pending.len(), 2);
+    let original_pending = pending
+        .iter()
+        .find(|card| {
+            card["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+                == cards[1]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+        })
+        .expect("the original sibling remains pending");
+    assert_eq!(
+        original_pending["response_metadata"]["parent_agent_path"],
+        cards[1]["response_metadata"]["parent_agent_path"]
+    );
+    let followup = pending
+        .iter()
+        .find(|card| {
+            card["response_metadata"]["hitl_interrupts"][0]["tool_call_id"]
+                == "call_followup_question"
+        })
+        .expect("the addressed child publishes its new pause");
+    assert_ne!(
+        followup["response_metadata"]["hitl_interrupts"][0]["interrupt_id"],
+        cards[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+    );
+    let remaining = drain_nested_pause(
+        &assembler,
+        nested_card_decision_request(followup, "answer", &answer, 34),
+    )
+    .await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(
+        remaining[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"],
+        cards[1]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+    );
+    let output = drain_nested_resume(
+        &assembler,
+        nested_card_decision_request(&cards[1], "answer", &answer, 35),
+    )
+    .await;
+    assert_eq!(output, "parent completed after followup");
+    assert_eq!(captured.lock().unwrap().len(), 7);
+}
+
+fn runtime_context_with_mixed_guard_child() -> RuntimeContextClient {
+    let mut child = nested_agent_version(
+        "Resolve only the delegated name.",
+        "child-model",
+        23,
+        vec![remote_mcp_tool()],
+    );
+    child["meta"] = serde_json::json!({"internal_tools": ["ask_user"]});
+    let responses = (0..4).flat_map(|_| [
+        runtime_context_response(&serde_json::json!({
+            "schema_version": "elitea.runtime.elitea-client-token.v1", "project_id": 17, "token": TOKEN,
+        })),
+        application_version_response(31, 41, child.clone()),
+    ]).collect();
+    runtime_context_client_from(
+        responses,
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+}
+
+fn nested_card_decision_request(
+    card: &serde_json::Value,
+    action: &str,
+    value: &str,
+    digest: u8,
+) -> super::request::AgentExecutionRequest {
+    let metadata = &card["response_metadata"];
+    let pending = if metadata["hitl_interrupts"].is_array() {
+        &metadata["hitl_interrupts"][0]
+    } else {
+        metadata
+    };
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    request.binding.request_content_digest = [digest; 32];
+    attach_nested_agent(&mut request);
+    request.payload.should_continue = true;
+    request.payload.hitl_resume = true;
+    request.payload.hitl_action = Some(action.to_owned());
+    request.payload.hitl_value = Some(value.to_owned());
+    request.payload.hitl_decisions = vec![serde_json::json!({
+        "interrupt_id": pending["interrupt_id"], "tool_call_id": pending["tool_call_id"],
+        "guardrail_type": pending["guardrail_type"], "action": action, "value": value,
+    })];
+    if action == "authorize" {
+        request.payload.mcp_tokens.insert(
+            "https://mcp.example.invalid/v1/mcp".to_owned(),
+            serde_json::json!({"access_token": "runtime-secret"}),
+        );
+    }
+    request
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parallel_nested_mixed_partial_decisions_survive_assembler_reconstruction_in_both_orders() {
+    for authorization_first in [false, true] {
+        run_mixed_partial_child_resume(authorization_first).await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parallel_nested_new_pause_preserves_completed_protected_tool_history() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let (gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(ask_user_tool_call_response()),
+            TestModelGatewayOutcome::Response(mcp_authorization_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_batch_response(1)),
+            TestModelGatewayOutcome::Response(ask_user_tool_call_response_with_id(
+                "call_followup_question",
+            )),
+            TestModelGatewayOutcome::Response(text_response("protected child completed")),
+            TestModelGatewayOutcome::Response(text_response("clarified child completed")),
+            TestModelGatewayOutcome::Response(text_response(
+                "parent completed after protected read",
+            )),
+        ],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context_with_mixed_guard_child()),
+        Arc::new(ModelFacade::from_gateway(gateway)),
+        empty_tool_policy(),
+    )
+    .with_mcp_connector(Arc::new(AgentDelegatedAuthorizationMcpConnector {
+        calls: AtomicUsize::new(0),
+        tool_calls: Arc::clone(&tool_calls),
+    }))
+    .with_sessions(Arc::new(InMemorySessionService::new()));
+    let cards = drain_nested_pause(&assembler, request).await;
+    let authorization = cards
+        .iter()
+        .find(|card| card["type"] == "mcp_authorization_required")
+        .unwrap();
+    let untouched = cards
+        .iter()
+        .find(|card| card["type"] == "agent_hitl_interrupt")
+        .unwrap();
+    let pending = drain_nested_pause(
+        &assembler,
+        nested_card_decision_request(authorization, "authorize", "", 36),
+    )
+    .await;
+    assert_eq!(pending.len(), 2);
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1);
+    let followup = pending
+        .iter()
+        .find(|card| {
+            card["response_metadata"]["hitl_interrupts"][0]["tool_call_id"]
+                == "call_followup_question"
+        })
+        .expect("the protected child publishes its new clarification");
+    let answer = serde_json::json!({"q1": "Olivia Lovelace"}).to_string();
+    let remaining = drain_nested_pause(
+        &assembler,
+        nested_card_decision_request(followup, "answer", &answer, 37),
+    )
+    .await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(
+        remaining[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"],
+        untouched["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+    );
+    let output = drain_nested_resume(
+        &assembler,
+        nested_card_decision_request(untouched, "answer", &answer, 38),
+    )
+    .await;
+    assert_eq!(output, "parent completed after protected read");
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1);
+    let captured = captured.lock().unwrap();
+    assert_eq!(captured.len(), 8);
+    let followup_request: serde_json::Value = serde_json::from_slice(&captured[5].body).unwrap();
+    assert_eq!(
+        followup_request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| {
+                message["role"] == "tool" && message["tool_call_id"] == "call_operation"
+            })
+            .count(),
+        1,
+        "the next child resume must retain its completed protected-tool result"
+    );
+}
+
+#[allow(clippy::too_many_lines)] // Reconstruction and exact sibling reuse form one proof.
+async fn run_mixed_partial_child_resume(authorization_first: bool) {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let mut outcomes = vec![
+        TestModelGatewayOutcome::Response(parallel_nested_agent_call_response()),
+        TestModelGatewayOutcome::Response(ask_user_tool_call_response()),
+        TestModelGatewayOutcome::Response(mcp_authorization_response()),
+    ];
+    if !authorization_first {
+        outcomes.push(TestModelGatewayOutcome::Response(text_response(
+            "clarified child",
+        )));
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(mcp_tool_batch_response(
+        1,
+    )));
+    outcomes.push(TestModelGatewayOutcome::Response(text_response(
+        "authorized child",
+    )));
+    if authorization_first {
+        outcomes.push(TestModelGatewayOutcome::Response(text_response(
+            "clarified child",
+        )));
+    }
+    outcomes.push(TestModelGatewayOutcome::Response(text_response(
+        "mixed parent completed",
+    )));
+    let (gateway, captured) =
+        test_model_gateway_client(outcomes, test_model_gateway_config()).unwrap();
+    let platform = platform_client(runtime_context_with_mixed_guard_child());
+    let facade = Arc::new(ModelFacade::from_gateway(gateway));
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let connector = Arc::new(AgentDelegatedAuthorizationMcpConnector {
+        calls: AtomicUsize::new(0),
+        tool_calls: Arc::clone(&tool_calls),
+    });
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        Arc::clone(&platform),
+        Arc::clone(&facade),
+        empty_tool_policy(),
+    )
+    .with_mcp_connector(connector.clone())
+    .with_sessions(Arc::clone(&sessions));
+    let cards = drain_nested_pause(&assembler, request).await;
+    assert_eq!(cards.len(), 2);
+    let clarification = cards
+        .iter()
+        .find(|card| card["type"] == "agent_hitl_interrupt")
+        .unwrap();
+    let authorization = cards
+        .iter()
+        .find(|card| card["type"] == "mcp_authorization_required")
+        .unwrap();
+    let answer = serde_json::json!({"q1": "Olivia Lovelace"}).to_string();
+    let (first, first_action, first_value, last, last_action, last_value) = if authorization_first {
+        (
+            authorization,
+            "authorize",
+            "",
+            clarification,
+            "answer",
+            answer.as_str(),
+        )
+    } else {
+        (
+            clarification,
+            "answer",
+            answer.as_str(),
+            authorization,
+            "authorize",
+            "",
+        )
+    };
+    let pending = drain_nested_pause(
+        &assembler,
+        nested_card_decision_request(first, first_action, first_value, 31),
+    )
+    .await;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["type"], last["type"]);
+    assert_eq!(
+        pending[0]["response_metadata"]["parent_agent_path"],
+        last["response_metadata"]["parent_agent_path"]
+    );
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        usize::from(authorization_first)
+    );
+    drop(assembler);
+    let reconstructed = OrdinaryNativeAgentAssembler::new(platform, facade, empty_tool_policy())
+        .with_mcp_connector(connector)
+        .with_sessions(sessions);
+    let output = drain_nested_resume(
+        &reconstructed,
+        nested_card_decision_request(last, last_action, last_value, 32),
+    )
+    .await;
+    assert_eq!(output, "mixed parent completed");
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        1,
+        "the completed protected child cannot execute twice"
+    );
+    let captured = captured.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        7,
+        "only addressed children and the final parent invoke the provider"
     );
 }
 
@@ -2608,31 +3010,24 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
                 "server_url": "https://mcp.example.invalid/v1/mcp"
             }));
     }
-    let Err(error) = assembler
-        .assemble(AuthorizedNativeAssembly::new(
-            &partial,
-            test_runtime_context_authority(),
-            AuthorizedNativeCommandBinding::fixture(),
-        ))
-        .await
-    else {
-        panic!("partial parallel authorization set must fail closed");
-    };
+    let pending = drain_nested_pause(&assembler, partial).await;
+    assert_eq!(pending.len(), 1);
     assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
+        pending[0]["response_metadata"]["interrupt_id"],
+        interrupt_ids[1]
     );
-    assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+    assert_eq!(tool_calls.load(Ordering::Acquire), usize::from(authorize));
 
     let mut resume = ordinary_request(AgentExecutionKind::Application);
     resume.binding.request_content_digest = if authorize { [21; 32] } else { [22; 32] };
     attach_nested_agent(&mut resume);
     resume.payload.should_continue = true;
     resume.payload.hitl_resume = true;
-    resume.payload.hitl_action = None;
-    resume.payload.hitl_value = None;
+    resume.payload.hitl_action = Some(action.to_owned());
+    resume.payload.hitl_value = Some(String::new());
     resume.payload.hitl_decisions = interrupt_ids
         .iter()
+        .skip(1)
         .map(|interrupt_id| {
             serde_json::json!({
                 "interrupt_id": interrupt_id,
@@ -2924,26 +3319,60 @@ fn assert_recursive_parallel_interrupts(events: &[serde_json::Value]) -> Vec<Str
     interrupt_ids.into_iter().collect()
 }
 
-async fn assert_partial_nested_resume_is_rejected(
+async fn resume_partial_nested_sensitive_call(
     assembler: &OrdinaryNativeAgentAssembler,
     interrupt_id: &str,
-) {
+) -> Vec<serde_json::Value> {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     request.binding.request_content_digest = [8; 32];
     attach_nested_agent(&mut request);
     admit_approved_resume(&mut request, interrupt_id);
-    let assembly = AuthorizedNativeAssembly::new(
-        &request,
-        test_runtime_context_authority(),
-        AuthorizedNativeCommandBinding::fixture(),
+    drain_nested_pause(assembler, request).await
+}
+
+async fn drain_nested_pause(
+    assembler: &OrdinaryNativeAgentAssembler,
+    request: super::request::AgentExecutionRequest,
+) -> Vec<serde_json::Value> {
+    let mut invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .expect("partial nested resume assembly");
+    invocation
+        .project_start(chrono::Utc::now())
+        .expect("partial nested resume start");
+    let (mut native, mut projector, _) = invocation.start().expect("partial native start");
+    let mut cards = Vec::new();
+    while let Some(event) = native
+        .next_event()
+        .await
+        .expect("partial nested resume event")
+    {
+        for projected in projector
+            .project(&event)
+            .expect("partial nested projection")
+        {
+            let value: serde_json::Value = serde_json::from_slice(
+                &encode_current_node_event_json(&projected).expect("partial browser event"),
+            )
+            .expect("partial browser JSON");
+            if matches!(
+                value["type"].as_str(),
+                Some("agent_hitl_interrupt" | "mcp_authorization_required")
+            ) {
+                cards.push(value);
+            }
+        }
+    }
+    assert!(
+        projector.is_paused(),
+        "untouched children must keep the parent paused"
     );
-    let Err(error) = assembler.assemble(assembly).await else {
-        panic!("partial parallel nested resume must fail closed");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
+    cards
 }
 
 fn assert_parallel_nested_interrupts(public_interrupts: &[serde_json::Value]) -> Vec<String> {
@@ -2990,8 +3419,8 @@ async fn resume_parallel_nested_sensitive_calls(
     attach_nested_agent(&mut request);
     request.payload.should_continue = true;
     request.payload.hitl_resume = true;
-    request.payload.hitl_action = None;
-    request.payload.hitl_value = None;
+    request.payload.hitl_action = (interrupt_ids.len() == 1).then(|| "approve".to_owned());
+    request.payload.hitl_value = (interrupt_ids.len() == 1).then(String::new);
     request.payload.hitl_decisions = interrupt_ids
         .into_iter()
         .map(|interrupt_id| {

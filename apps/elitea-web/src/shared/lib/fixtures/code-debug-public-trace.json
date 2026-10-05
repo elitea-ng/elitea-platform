@@ -1,0 +1,255 @@
+{
+  "provenance": "Source-derived authored fixtures; no execution, admission or committed durable publication claimed.",
+  "first_attempt_history": {
+    "tool_name": "run / debug export",
+    "tool_run_id": "code-debug-9e5f41c828ea2ce791fddb1ac5c166450bec67baa40454cd6ab17630c39d012a",
+    "run_id": "code-debug-9e5f41c828ea2ce791fddb1ac5c166450bec67baa40454cd6ab17630c39d012a",
+    "tool_meta": {
+      "name": "run / debug export",
+      "metadata": {
+        "langgraph_node": "run",
+        "original_name": "run",
+        "node_type": "code",
+        "code_debug_v1": {
+          "revision": 1,
+          "original_visit": {
+            "visit_id": "1111111111111111111111111111111111111111111111111111111111111111",
+            "revision": 1,
+            "digest_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          "attempt": 1,
+          "execution_id": "execution-1",
+          "generation": "7",
+          "node_id": "run",
+          "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "status": "committed",
+          "artifact": {
+            "schema_version": "elitea.runtime.code-debug-artifact.v1",
+            "project_id": 7,
+            "bucket": "code-debug",
+            "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "media_type": "application/json",
+            "byte_length": 148,
+            "sha256": "f3fd6aa16017cf6d2d0b02b226ca42c3fdb191a3324a5ae0b71ce99781eb2a49"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "langgraph_node": "run",
+      "original_name": "run",
+      "node_type": "code",
+      "code_debug_v1": {
+        "revision": 1,
+        "original_visit": {
+          "visit_id": "1111111111111111111111111111111111111111111111111111111111111111",
+          "revision": 1,
+          "digest_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "attempt": 1,
+        "execution_id": "execution-1",
+        "generation": "7",
+        "node_id": "run",
+        "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "committed",
+        "artifact": {
+          "schema_version": "elitea.runtime.code-debug-artifact.v1",
+          "project_id": 7,
+          "bucket": "code-debug",
+          "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+          "media_type": "application/json",
+          "byte_length": 148,
+          "sha256": "f3fd6aa16017cf6d2d0b02b226ca42c3fdb191a3324a5ae0b71ce99781eb2a49"
+        }
+      }
+    },
+    "tool_inputs": {},
+    "tool_output": null,
+    "timestamp_start": "2026-10-04T00:00:00Z",
+    "timestamp_finish": "2026-10-04T00:00:00Z",
+    "finish_reason": "stop",
+    "error": null
+  },
+  "same_visit_claim_replacement_warning": {
+    "tool_name": "run / debug export",
+    "tool_run_id": "code-debug-9e5f41c828ea2ce791fddb1ac5c166450bec67baa40454cd6ab17630c39d012a",
+    "run_id": "code-debug-9e5f41c828ea2ce791fddb1ac5c166450bec67baa40454cd6ab17630c39d012a",
+    "tool_meta": {
+      "name": "run / debug export",
+      "metadata": {
+        "langgraph_node": "run",
+        "original_name": "run",
+        "node_type": "code",
+        "code_debug_v1": {
+          "revision": 1,
+          "original_visit": {
+            "visit_id": "1111111111111111111111111111111111111111111111111111111111111111",
+            "revision": 1,
+            "digest_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          "attempt": 1,
+          "execution_id": "execution-1",
+          "generation": "7",
+          "node_id": "run",
+          "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "status": "unavailable"
+        }
+      }
+    },
+    "metadata": {
+      "langgraph_node": "run",
+      "original_name": "run",
+      "node_type": "code",
+      "code_debug_v1": {
+        "revision": 1,
+        "original_visit": {
+          "visit_id": "1111111111111111111111111111111111111111111111111111111111111111",
+          "revision": 1,
+          "digest_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "attempt": 1,
+        "execution_id": "execution-1",
+        "generation": "7",
+        "node_id": "run",
+        "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "unavailable"
+      }
+    },
+    "tool_inputs": {},
+    "tool_output": null,
+    "timestamp_start": "2026-10-04T00:00:00Z",
+    "timestamp_finish": "2026-10-04T00:00:00Z",
+    "finish_reason": "stop",
+    "error": null
+  },
+  "retry_current_warning": {
+    "tool_name": "run / debug export",
+    "tool_run_id": "code-debug-04a8b51111c1b7eeec3a0f4b9ff40b8325a4f4ef4f4bb8196aea3c574c2d1208",
+    "run_id": "code-debug-04a8b51111c1b7eeec3a0f4b9ff40b8325a4f4ef4f4bb8196aea3c574c2d1208",
+    "tool_meta": {
+      "name": "run / debug export",
+      "metadata": {
+        "langgraph_node": "run",
+        "original_name": "run",
+        "node_type": "code",
+        "code_debug_v1": {
+          "revision": 1,
+          "original_visit": {
+            "visit_id": "3333333333333333333333333333333333333333333333333333333333333333",
+            "revision": 1,
+            "digest_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          },
+          "attempt": 2,
+          "execution_id": "execution-1",
+          "generation": "7",
+          "node_id": "run",
+          "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "status": "unavailable"
+        }
+      }
+    },
+    "metadata": {
+      "langgraph_node": "run",
+      "original_name": "run",
+      "node_type": "code",
+      "code_debug_v1": {
+        "revision": 1,
+        "original_visit": {
+          "visit_id": "3333333333333333333333333333333333333333333333333333333333333333",
+          "revision": 1,
+          "digest_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 2,
+        "execution_id": "execution-1",
+        "generation": "7",
+        "node_id": "run",
+        "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "unavailable"
+      }
+    },
+    "tool_inputs": {},
+    "tool_output": null,
+    "timestamp_start": "2026-10-04T00:00:00Z",
+    "timestamp_finish": "2026-10-04T00:00:00Z",
+    "finish_reason": "stop",
+    "error": null
+  },
+  "retry_committed": {
+    "tool_name": "run / debug export",
+    "tool_run_id": "code-debug-04a8b51111c1b7eeec3a0f4b9ff40b8325a4f4ef4f4bb8196aea3c574c2d1208",
+    "run_id": "code-debug-04a8b51111c1b7eeec3a0f4b9ff40b8325a4f4ef4f4bb8196aea3c574c2d1208",
+    "tool_meta": {
+      "name": "run / debug export",
+      "metadata": {
+        "langgraph_node": "run",
+        "original_name": "run",
+        "node_type": "code",
+        "code_debug_v1": {
+          "revision": 1,
+          "original_visit": {
+            "visit_id": "3333333333333333333333333333333333333333333333333333333333333333",
+            "revision": 1,
+            "digest_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          },
+          "attempt": 2,
+          "execution_id": "execution-1",
+          "generation": "7",
+          "node_id": "run",
+          "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "status": "committed",
+          "artifact": {
+            "schema_version": "elitea.runtime.code-debug-artifact.v1",
+            "project_id": 7,
+            "bucket": "code-debug",
+            "name": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "media_type": "application/json",
+            "byte_length": 148,
+            "sha256": "f3fd6aa16017cf6d2d0b02b226ca42c3fdb191a3324a5ae0b71ce99781eb2a49"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "langgraph_node": "run",
+      "original_name": "run",
+      "node_type": "code",
+      "code_debug_v1": {
+        "revision": 1,
+        "original_visit": {
+          "visit_id": "3333333333333333333333333333333333333333333333333333333333333333",
+          "revision": 1,
+          "digest_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 2,
+        "execution_id": "execution-1",
+        "generation": "7",
+        "node_id": "run",
+        "activation_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "committed",
+        "artifact": {
+          "schema_version": "elitea.runtime.code-debug-artifact.v1",
+          "project_id": 7,
+          "bucket": "code-debug",
+          "name": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+          "media_type": "application/json",
+          "byte_length": 148,
+          "sha256": "f3fd6aa16017cf6d2d0b02b226ca42c3fdb191a3324a5ae0b71ce99781eb2a49"
+        }
+      }
+    },
+    "tool_inputs": {},
+    "tool_output": null,
+    "timestamp_start": "2026-10-04T00:00:00Z",
+    "timestamp_finish": "2026-10-04T00:00:00Z",
+    "finish_reason": "stop",
+    "error": null
+  }
+}

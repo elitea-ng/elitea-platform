@@ -202,14 +202,48 @@ func (store *SandboxBundleStore) admit(ctx context.Context) (func(), error) {
 	}
 }
 
-func sandboxRef(scope SandboxBundleScope, bundle *PythonSandboxBundle, name string) (ObjectRef, error) {
-	if scope.key == "" || bundle == nil {
+type sandboxStoredBundle interface {
+	Digest() string
+	file(string) (sandboxBundleFile, error)
+	nativeBytes() []byte
+	metadataName() string
+	storagePrefix() string
+	recordedFiles() []sandboxBundleFile
+}
+
+func (b *PythonSandboxBundle) nativeBytes() []byte                { return b.native }
+func (b *PythonSandboxBundle) metadataName() string               { return "elitea-python-bundle.json" }
+func (b *PythonSandboxBundle) storagePrefix() string              { return "" }
+func (b *PythonSandboxBundle) recordedFiles() []sandboxBundleFile { return b.record.Files }
+
+func sandboxBundlePresent(bundle sandboxStoredBundle) bool {
+	switch b := bundle.(type) {
+	case *PythonSandboxBundle:
+		return b != nil
+	case *NativeSandboxBundle:
+		return b != nil
+	case *RustCompiledSnapshot:
+		return b != nil
+	case *CodeWorkspaceManifest:
+		return b != nil
+	default:
+		return false
+	}
+}
+
+func sandboxRef(scope SandboxBundleScope, bundle sandboxStoredBundle, name string) (ObjectRef, error) {
+	if scope.key == "" || !sandboxBundlePresent(bundle) {
 		return ObjectRef{}, ErrContentUnauthorized
 	}
-	if !sandboxDigest(bundle.Digest()) || len(bundle.native) == 0 || name != "elitea-python-bundle.json" && !sandboxFileName(name) {
+	if !sandboxDigest(bundle.Digest()) || len(bundle.nativeBytes()) == 0 {
 		return ObjectRef{}, ErrContentRejected
 	}
-	return NewPlatformObjectRef(sandboxBundleBucket, scope.key+"/"+bundle.Digest()+"/"+name)
+	if name != bundle.metadataName() {
+		if _, err := bundle.file(name); err != nil {
+			return ObjectRef{}, err
+		}
+	}
+	return NewPlatformObjectRef(sandboxBundleBucket, scope.key+"/"+bundle.storagePrefix()+bundle.Digest()+"/"+name)
 }
 
 type sandboxContextReader struct {
@@ -238,7 +272,7 @@ func verifySandboxFile(ctx context.Context, body io.Reader, output io.Writer, fi
 
 // PutFile verifies the complete bounded body before any object-store write.
 // The caller owns body cancellation. Failed staging never replaces cached content.
-func (store *SandboxBundleStore) PutFile(ctx context.Context, scope SandboxBundleScope, bundle *PythonSandboxBundle, name string, body io.Reader) (result error) {
+func (store *SandboxBundleStore) PutFile(ctx context.Context, scope SandboxBundleScope, bundle sandboxStoredBundle, name string, body io.Reader) (result error) {
 	ref, err := sandboxRef(scope, bundle, name)
 	if err != nil {
 		return err
@@ -270,7 +304,7 @@ func (store *SandboxBundleStore) PutFile(ctx context.Context, scope SandboxBundl
 }
 
 // FetchFile writes only to caller-owned staging. Verify before publishing or executing it.
-func (store *SandboxBundleStore) FetchFile(ctx context.Context, scope SandboxBundleScope, bundle *PythonSandboxBundle, name string, output io.Writer) (result error) {
+func (store *SandboxBundleStore) FetchFile(ctx context.Context, scope SandboxBundleScope, bundle sandboxStoredBundle, name string, output io.Writer) (result error) {
 	release, err := store.admit(ctx)
 	if err != nil {
 		return err
@@ -279,7 +313,7 @@ func (store *SandboxBundleStore) FetchFile(ctx context.Context, scope SandboxBun
 	return store.fetchFile(ctx, scope, bundle, name, output)
 }
 
-func (store *SandboxBundleStore) fetchFile(ctx context.Context, scope SandboxBundleScope, bundle *PythonSandboxBundle, name string, output io.Writer) (result error) {
+func (store *SandboxBundleStore) fetchFile(ctx context.Context, scope SandboxBundleScope, bundle sandboxStoredBundle, name string, output io.Writer) (result error) {
 	ref, err := sandboxRef(scope, bundle, name)
 	if err != nil {
 		return err
@@ -301,8 +335,11 @@ func (store *SandboxBundleStore) fetchFile(ctx context.Context, scope SandboxBun
 
 // Publish verifies all shared files before it publishes the immutable bundle record.
 // Persist the preparation receipt only after this operation succeeds.
-func (store *SandboxBundleStore) Publish(ctx context.Context, scope SandboxBundleScope, bundle *PythonSandboxBundle) error {
-	ref, err := sandboxRef(scope, bundle, "elitea-python-bundle.json")
+func (store *SandboxBundleStore) Publish(ctx context.Context, scope SandboxBundleScope, bundle sandboxStoredBundle) error {
+	if !sandboxBundlePresent(bundle) {
+		return ErrContentUnauthorized
+	}
+	ref, err := sandboxRef(scope, bundle, bundle.metadataName())
 	if err != nil {
 		return err
 	}
@@ -311,12 +348,12 @@ func (store *SandboxBundleStore) Publish(ctx context.Context, scope SandboxBundl
 		return err
 	}
 	defer release()
-	for _, file := range bundle.record.Files {
+	for _, file := range bundle.recordedFiles() {
 		if err := store.fetchFile(ctx, scope, bundle, file.Name, io.Discard); err != nil {
 			return err
 		}
 	}
-	_, err = store.store.Put(ctx, ref, bytes.NewReader(bundle.native), PutOptions{ContentType: "application/json", ContentLength: int64(len(bundle.native))})
+	_, err = store.store.Put(ctx, ref, bytes.NewReader(bundle.nativeBytes()), PutOptions{ContentType: "application/json", ContentLength: int64(len(bundle.nativeBytes()))})
 	return err
 }
 

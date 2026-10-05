@@ -17,6 +17,52 @@
 set -eu
 
 SRC=/src
+COMPILED_ENABLED=${ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED:-false}
+case "$COMPILED_ENABLED" in
+  false) [ -z "${ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256:-}" ] || exit 1 ;;
+  true)
+    pin=${ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256:-}
+    [ "${#pin}" -eq 64 ] || exit 1
+    case "$pin" in *[!a-f0-9]*) exit 1 ;; esac
+    for name in rust-compiled-profiles.json agent-checkpoint-connection; do
+      [ -f "$SRC/$name" ] && [ ! -L "$SRC/$name" ] || exit 1
+    done
+    size=$(wc -c < "$SRC/rust-compiled-profiles.json")
+    [ "$size" -gt 0 ] && [ "$size" -le 1048576 ] || exit 1
+    size=$(wc -c < "$SRC/agent-checkpoint-connection")
+    [ "$size" -gt 0 ] && [ "$size" -le 16384 ] || exit 1
+    measured=$(sha256sum "$SRC/rust-compiled-profiles.json")
+    [ "${measured%% *}" = "$pin" ] || exit 1
+    ;;
+  *) exit 1 ;;
+esac
+CODE_OWNER_ENABLED=${ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED:-false}
+CODE_PLATFORM_ENABLED=${ELITEA_RUNTIME_CODE_PLATFORM_ENABLED:-false}
+CODE_DEBUG_ENABLED=${ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED:-false}
+for flag in "$CODE_OWNER_ENABLED" "$CODE_PLATFORM_ENABLED" "$CODE_DEBUG_ENABLED"; do
+  case "$flag" in true|false) ;; *) exit 1 ;; esac
+done
+if [ "$CODE_PLATFORM_ENABLED" = true ] || [ "$CODE_DEBUG_ENABLED" = true ]; then
+  [ "$CODE_OWNER_ENABLED" = true ] || exit 1
+fi
+# These files enter Main's volume only. No private broker material enters a runner.
+if [ "$CODE_OWNER_ENABLED" = true ]; then
+  for name in code-owner-client.crt code-owner-client.key; do
+    [ -f "$SRC/$name" ] && [ ! -L "$SRC/$name" ] || exit 1
+    size=$(wc -c < "$SRC/$name")
+    [ "$size" -gt 0 ] && [ "$size" -le 1048576 ] || exit 1
+  done
+fi
+if [ "$CODE_PLATFORM_ENABLED" = true ]; then
+  [ -f "$SRC/code-platform-content-keys.json" ] && [ ! -L "$SRC/code-platform-content-keys.json" ] || exit 1
+  size=$(wc -c < "$SRC/code-platform-content-keys.json")
+  [ "$size" -gt 0 ] && [ "$size" -le 4096 ] || exit 1
+fi
+if [ "$CODE_DEBUG_ENABLED" = true ]; then
+  [ -f "$SRC/agent-checkpoint-connection" ] && [ ! -L "$SRC/agent-checkpoint-connection" ] || exit 1
+  size=$(wc -c < "$SRC/agent-checkpoint-connection")
+  [ "$size" -gt 0 ] && [ "$size" -le 16384 ] || exit 1
+fi
 [ -r "$SRC/runtime-ca.crt" ] || {
   echo "ERROR: $SRC/runtime-ca.crt missing — run deploy/scripts/gen-runtime-certs.sh" >&2
   exit 1
@@ -77,5 +123,22 @@ EDGE=/dst/edge
 mkdir -p "$EDGE"; chown 0:0 "$EDGE"; chmod 755 "$EDGE"
 install_files "$EDGE" 0:0 0644 platform-edge.crt
 install_files "$EDGE" 0:0 0600 platform-edge.key
+
+if [ "$COMPILED_ENABLED" = true ]; then
+  install_files "$MAIN" 65532:65532 0644 rust-compiled-profiles.json
+  install_files "$MAIN" 65532:65532 0600 agent-checkpoint-connection
+  install_files "$WORKER" 10001:10001 0600 rust-compiled-profiles.json
+fi
+
+if [ "$CODE_OWNER_ENABLED" = true ]; then
+  install_files "$MAIN" 65532:65532 0644 code-owner-client.crt
+  install_files "$MAIN" 65532:65532 0600 code-owner-client.key
+fi
+if [ "$CODE_PLATFORM_ENABLED" = true ]; then
+  install_files "$MAIN" 65532:65532 0600 code-platform-content-keys.json
+fi
+if [ "$CODE_DEBUG_ENABLED" = true ]; then
+  install_files "$MAIN" 65532:65532 0600 agent-checkpoint-connection
+fi
 
 echo "runtime material installed"

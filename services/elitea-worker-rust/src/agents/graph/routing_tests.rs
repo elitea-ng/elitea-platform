@@ -108,6 +108,84 @@ input: []
     );
 }
 
+#[tokio::test]
+async fn router_preserves_numeric_state_and_json_loaded_loop_routes() {
+    for (condition, key, value, expected) in [
+        (
+            "{{ 'tick' if count < 3 else 'END' }}",
+            "count",
+            json!(0),
+            "tick",
+        ),
+        (
+            "{{ 'tick' if count < 3 else 'END' }}",
+            "count",
+            json!(1),
+            "tick",
+        ),
+        (
+            "{{ 'tick' if count < 3 else 'END' }}",
+            "count",
+            json!(2),
+            "tick",
+        ),
+        (
+            "{{ 'tick' if count < 3 else 'END' }}",
+            "count",
+            json!(3),
+            "END",
+        ),
+        (
+            "{{ 'tick' if count < 3 else 'END' }}",
+            "count",
+            json!(1.5),
+            "tick",
+        ),
+        (
+            "{{ 'tick' if payload.count < 3 else 'END' }}",
+            "payload",
+            json!({"count": 1}),
+            "tick",
+        ),
+        (
+            "{{ 'tick' if payload.rows[0].count < 3 else 'END' }}",
+            "payload",
+            json!({"rows": [{"count": 1}]}),
+            "tick",
+        ),
+        (
+            "{{ 'tick' if (payload | json_loads).count < 3 else 'END' }}",
+            "payload",
+            json!(r#"{"count":1}"#),
+            "tick",
+        ),
+    ] {
+        let definition = RouterNodeDefinition::from_yaml(&format!(
+            "id: choose\ntype: router\ncondition: \"{condition}\"\nroutes: [tick, END]\ndefault_output: END\ninput: [{key}]\n"
+        ))
+        .unwrap();
+        let output = RouterNode::new(definition)
+            .execute(&NodeContext::new(
+                HashMap::from([(key.to_owned(), value)]),
+                ExecutionConfig::new("numeric-router-loop"),
+                0,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            output.updates.get("router_output"),
+            Some(&json!(expected)),
+            "condition: {condition}",
+        );
+        let target = if expected == "END" {
+            "__end__"
+        } else {
+            expected
+        };
+        assert_eq!(output.goto.as_deref(), Some(&[target.to_owned()][..]));
+    }
+}
+
 #[test]
 fn router_rejects_ambiguous_labels_unknown_fields_and_invalid_inputs() {
     for yaml in [
