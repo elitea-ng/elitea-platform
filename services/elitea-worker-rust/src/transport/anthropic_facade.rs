@@ -42,8 +42,9 @@ use zeroize::Zeroizing;
 use super::openai_compatible_facade::{
     BoundedSseEvent, MAX_EXECUTION_ID_BYTES, ModelFacadeError, ModelFacadeInvocation,
     ModelGatewayClient, ModelReasoningEffort, SseParser, bounded_header_text, budget_refusal,
-    model_error, next_response_chunk, valid_tool_call_id, valid_tool_name, validate_invocation,
-    validate_llm_request, validate_response_head,
+    is_generic_rejection, model_error, next_response_chunk, rejection_with_detail,
+    valid_tool_call_id, valid_tool_name, validate_invocation, validate_llm_request,
+    validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
@@ -357,6 +358,11 @@ impl Llm for EliteaAnthropicModel {
                 && response.version() == Version::HTTP_2
             {
                 return Err(budget_refusal(response, self.config.response_header_timeout).await);
+            }
+            if is_generic_rejection(response.status()) && response.version() == Version::HTTP_2 {
+                return Err(
+                    rejection_with_detail(response, self.config.response_header_timeout).await,
+                );
             }
             validate_response_head(&response)?;
             Ok(anthropic_response_stream(

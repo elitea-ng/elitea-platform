@@ -422,6 +422,55 @@ WHERE source = 'agent_turn' AND tool_name = 'list_issues'`).Scan(
 	}
 }
 
+// Demo issue 6: a frame from the native worker names the toolkit in
+// tool_meta.metadata only, with the frozen toolkit row id. The record keeps
+// the name, the type AND the id, so the Analytics Tools tab can tell two
+// toolkits with a tool of the same name apart.
+func TestPostgresCurrentAgentTraceRecordsTheWorkersToolkitID(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentActivitySchemas(t, pool)
+
+	const (
+		conversationID   = "10000000-0000-4000-8000-000000000606"
+		responseID       = "20000000-0000-4000-8000-000000000606"
+		clientGeneration = "30000000-0000-4000-8000-000000000606"
+	)
+	admitted := admitPostgresAgentExecution(t, pool, conversationID, responseID, clientGeneration)
+	seedCurrentAgentResponseGroup(t, pool, conversationID, responseID, clientGeneration, admitted.ExecutionID)
+
+	projector := &postgresCurrentAgentTraceProjector{}
+	store, err := newPostgresSharedStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	projectCurrentAgentFrame(t, store, projector, currentAgentPartialFrame(
+		admitted.ExecutionID, conversationID, responseID, clientGeneration, fmt.Sprintf(`{
+  "tool_calls":{"tool-gh":{"tool_name":"get_commits","tool_run_id":"tool-gh","run_id":"tool-gh","tool_inputs":{},"metadata":{},"tool_meta":{"name":"get_commits","metadata":{"toolkit_name":"my_github","toolkit_type":"github","toolkit_id":17}},"timestamp_start":%q}},
+  "thinking_steps":[]
+}`, started)))
+
+	var (
+		toolkitName string
+		toolkitType string
+		toolkitID   *int64
+	)
+	if err := pool.QueryRow(t.Context(), `
+SELECT toolkit_name, toolkit_type, toolkit_id
+FROM elitea_runtime.tool_call_records
+WHERE source = 'agent_turn' AND tool_name = 'get_commits'`).Scan(
+		&toolkitName, &toolkitType, &toolkitID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if toolkitName != "my_github" || toolkitType != "github" {
+		t.Fatalf("toolkit = %q/%q, want my_github/github", toolkitName, toolkitType)
+	}
+	if toolkitID == nil || *toolkitID != 17 {
+		t.Fatalf("toolkit_id = %v, want the worker's 17", toolkitID)
+	}
+}
+
 func projectCurrentAgentFrame(
 	t *testing.T,
 	store *postgresSharedStore,

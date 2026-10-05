@@ -392,3 +392,42 @@ func TestChat_DoesNotTouchTheAudioCounters(t *testing.T) {
 			unpriced, nonToken)
 	}
 }
+
+// TestChat_FallbackTokenPriceDoesNotLogAsAudio is the regression for a demo
+// finding on 3.3.0. Every plain text chat on an unpriced vLLM model logged
+// "audio: billed a token price the catalog did not supply" and moved
+// gateway_audio_default_priced_total. updateUsage passed surfaceAudio for the
+// token routes, so the audio check ran on requests with no audio units. The
+// test above cannot see it: its estimator reports a CATALOG price. A chat
+// priced from the fallback table is billed as before and leaves every audio
+// counter still.
+func TestChat_FallbackTokenPriceDoesNotLogAsAudio(t *testing.T) {
+	delta := audioMetrics(t)
+	defaultPriced := audioDefaultPricedDelta(t)
+	gate := allowingGate()
+	calc := &fakeCostEstimator{inputRateNano: 2, outputRateNano: 4, source: cost.SourceFallback}
+	router := &trackingRouter{}
+	router.chatResp = &schemas.BifrostChatResponse{
+		ID:    "chat-fallback",
+		Usage: &schemas.BifrostLLMUsage{PromptTokens: 30, CompletionTokens: 7},
+	}
+	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+
+	rec := httptest.NewRecorder()
+	h.Chat(rec, chatReqWithProject(t, "42", false))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	gate.waitForUpdate(t)
+
+	if got := gate.getLastUpdateCostNano(); got != 30*2+7*4 {
+		t.Fatalf("billed = %d nano, want %d: chat billing must be unchanged", got, 30*2+7*4)
+	}
+	if got := defaultPriced(); got != 0 {
+		t.Fatalf("a text chat moved MetricAudioDefaultPriced by %d, want 0", got)
+	}
+	if unpriced, nonToken := delta(); unpriced != 0 || nonToken != 0 {
+		t.Fatalf("a text chat moved the audio counters by (unpriced=%d, non_token=%d), want (0, 0)",
+			unpriced, nonToken)
+	}
+}

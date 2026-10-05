@@ -189,6 +189,10 @@ type ToolRunRecord struct {
 	ActorUserID int64
 	ToolkitID   int64
 	ToolkitType string
+	// ToolkitName is the toolkit's runtime name at run time. Before demo
+	// issue 6 the explicit run recorded only the id, and the Analytics Tools
+	// tab showed the row with an empty toolkit.
+	ToolkitName string
 	ToolName    string
 	ExecutionID string
 	StartedAt   time.Time
@@ -447,6 +451,7 @@ func (s *RunService) record(
 		ActorUserID: request.ActorUserID,
 		ToolkitID:   admitted.Binding.ToolkitID,
 		ToolkitType: toolkitType,
+		ToolkitName: inputs.ToolkitName,
 		ToolName:    toolName,
 		ExecutionID: admitted.Outcome.ExecutionID,
 		StartedAt:   admitted.Outcome.AdmittedAt,

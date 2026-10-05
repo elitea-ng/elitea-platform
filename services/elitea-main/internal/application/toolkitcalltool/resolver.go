@@ -166,6 +166,7 @@ func (r *CurrentAuthoritativeInputResolver) Resolve(
 	return AuthoritativeInputs{
 		RuntimeContext: runtimeContext,
 		ToolkitType:    toolkit.Type,
+		ToolkitName:    toolkitName(toolkit.Name, toolkit.Type),
 		ToolkitID:      int64(toolkit.ID),
 		ToolName:       request.ToolName,
 		Settings:       settings,

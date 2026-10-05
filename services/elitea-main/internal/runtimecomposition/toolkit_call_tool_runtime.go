@@ -179,6 +179,7 @@ func (a toolRunRecorderAdapter) RecordToolRun(
 		// than counting the call twice.
 		SourceRef:   record.ExecutionID,
 		ToolkitID:   record.ToolkitID,
+		ToolkitName: record.ToolkitName,
 		ToolkitType: record.ToolkitType,
 		ToolName:    record.ToolName,
 		StartedAt:   record.StartedAt,

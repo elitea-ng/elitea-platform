@@ -2081,10 +2081,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		orchestrator := v2evaluation.NewOrchestrator(
 			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
 		// Started with the PROCESS context, so the workers and the recovery
-		// sweep stop on SIGTERM. A run in flight then leaves its row `running`
-		// with a fresh heartbeat, and the next process re-queues it once the
-		// heartbeat goes stale — which is what makes a restart lose nothing.
+		// sweep stop on SIGTERM. A run in flight then hands its row back to
+		// `created`, and the next process resumes it at startup; a process
+		// that dies without that write is re-queued once its heartbeat goes
+		// stale — which is what makes a restart lose nothing.
 		orchestrator.Start(ctx)
+		// Deferred AFTER `defer pool.Close()`, so it runs BEFORE it: the
+		// workers write their shutdown release while the pool is still open.
+		defer orchestrator.Stop(evalShutdownTimeout)
 		evalOrchestrator = orchestrator
 	}
 
@@ -2596,6 +2600,10 @@ func analyticsRepository(pool *pgxpool.Pool) v2analytics.Repository {
 }
 
 const maxAuthConfigPathBytes = 4096
+
+// evalShutdownTimeout bounds how long shutdown waits for the evaluation
+// workers to write their release. Each release write has its own 5 s bound.
+const evalShutdownTimeout = 10 * time.Second
 
 func configuredAuthConfigPath(lookup func(string) (string, bool)) (string, bool, error) {
 	if lookup == nil {

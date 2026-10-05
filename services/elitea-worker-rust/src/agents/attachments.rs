@@ -95,7 +95,7 @@ use crate::transport::runtime_context::RuntimeContextError;
 /// The namespaced marker object. Its name and contents are fixed by the
 /// admission path (attachments.go, `attachmentExtractionMarkerKey`); this module
 /// only reads them.
-const ATTACHMENT_MARKER_KEY: &str = "elitea_attachment";
+pub(super) const ATTACHMENT_MARKER_KEY: &str = "elitea_attachment";
 const ATTACHMENT_MARKER_EXTRACT_FIELD: &str = "needs_content_extraction";
 
 /// The Go admission transaction caps ONE turn at 64 attachments, and each can
@@ -322,7 +322,7 @@ pub(super) fn append_attachment_parts(
 /// a present reference field must be bounded; and a marker that ASKS for
 /// extraction must name both a bucket and a key, because a marker demanding an
 /// impossible read is a contract disagreement, not a missing file.
-fn validate_marker(marker: Option<&Value>) -> Result<(), NativeAgentAssemblyError> {
+pub(super) fn validate_marker(marker: Option<&Value>) -> Result<(), NativeAgentAssemblyError> {
     let marker = match marker {
         None | Some(Value::Null) => return Ok(()),
         Some(Value::Object(marker)) => marker,

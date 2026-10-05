@@ -63,6 +63,11 @@ func TestResolverFreezesActualPolicyAndRefusesPolicyFailure(t *testing.T) {
 		if string(inputs.Arguments) != string(request.Arguments) {
 			t.Fatal("arguments changed")
 		}
+		// Demo issue 6: the tool-call record names the toolkit by the same
+		// runtime name the worker receives in `toolkit_name`.
+		if inputs.ToolkitName != toolkitName("saved", "github") || inputs.ToolkitName == "" {
+			t.Fatalf("toolkit name = %q", inputs.ToolkitName)
+		}
 	}
 }
 func TestRuntimeContextRejectsMissingPolicyAndCredentialMaterial(t *testing.T) {

@@ -806,7 +806,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// so the list's "last modified" order and age follow chat activity
 	// (Agent Zefir E2E DEF-R7). A trigger and no permission, so no shared
 	// sibling.
-	require.EqualValues(t, 145, Head(tenant))
+	// 146: tenant/0146_eval_run_resume_count.sql, `eval_runs.resume_count`
+	// counts the sweep's resumes of a run whose process died, so the sweep
+	// fails a run that keeps dying after MaxResumes and not after a fixed age.
+	// A column and no permission, so no shared sibling.
+	require.EqualValues(t, 146, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

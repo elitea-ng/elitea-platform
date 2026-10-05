@@ -37,7 +37,11 @@ var ErrInvalidAuthoritativeToolRunInput = errors.New("invalid authoritative tool
 // redeems them under a claimed data-plane grant. Arguments are caller content
 // and are treated as such everywhere below.
 type AuthoritativeInputs struct {
-	ToolkitType    string
+	ToolkitType string
+	// ToolkitName is the toolkit's runtime name, for the tool-call record
+	// only (demo issue 6). It is not part of the input bundle, the digest or
+	// the idempotency key, so a rename does not change a run's identity.
+	ToolkitName    string
 	ToolkitID      int64
 	ToolkitVersion string
 	ToolName       string

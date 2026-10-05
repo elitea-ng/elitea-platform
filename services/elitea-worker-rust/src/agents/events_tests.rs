@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use super::events::{
     AgentEventProjectionContext, AgentEventProjectionErrorCode, AgentEventProjector,
     ApplicationToolPresentationCatalog, CompletedAgentBrowserOutput,
-    DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY,
+    DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_KEY, ToolkitAttributionCatalog,
 };
 use super::graph::pipeline_result_event;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
@@ -1194,6 +1194,75 @@ fn tool_calls_and_results_follow_the_current_browser_lifecycle() {
         finish[0]["response_metadata"]["tool_output"],
         "{\"title\":\"Bounded result\"}"
     );
+}
+
+// Demo issue 6: the Analytics Tools tab showed MCP and GitHub rows with an
+// empty toolkit, because the tool frame named no toolkit. The frame now names
+// the toolkit the tool was bound from, in both places Main reads it.
+#[test]
+fn toolkit_tool_frames_name_their_toolkit() {
+    let catalog = ToolkitAttributionCatalog::from_bindings(
+        [("my_github", Some(17), "github"), ("docs_mcp", None, "mcp")],
+        [
+            ("my_github", "get_commits", "get_commits"),
+            ("docs_mcp", "search", "docs_mcp_search"),
+            ("elitea_skills", "load_skill", "load_skill"),
+        ],
+    );
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector")
+        .with_toolkit_attribution(catalog);
+    projector.start(timestamp(0)).expect("start");
+    let calls = event(
+        "llm-tool",
+        1,
+        false,
+        true,
+        vec![
+            Part::FunctionCall {
+                name: "get_commits".to_owned(),
+                args: json!({}),
+                id: Some("call-1".to_owned()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "docs_mcp_search".to_owned(),
+                args: json!({}),
+                id: Some("call-2".to_owned()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "load_skill".to_owned(),
+                args: json!({}),
+                id: Some("call-3".to_owned()),
+                thought_signature: None,
+            },
+        ],
+    );
+    let starts = projector
+        .project(&calls)
+        .expect("tool start")
+        .into_iter()
+        .map(|event| current(&event))
+        .filter(|event| event["type"] == "agent_tool_start")
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 3);
+
+    let github = &starts[0]["response_metadata"];
+    for metadata in [&github["metadata"], &github["tool_meta"]["metadata"]] {
+        assert_eq!(metadata["toolkit_name"], "my_github");
+        assert_eq!(metadata["toolkit_type"], "github");
+        assert_eq!(metadata["toolkit_id"], 17);
+    }
+    let mcp = &starts[1]["response_metadata"]["tool_meta"]["metadata"];
+    assert_eq!(mcp["toolkit_name"], "docs_mcp");
+    assert_eq!(mcp["toolkit_type"], "mcp");
+    assert!(
+        mcp.get("toolkit_id").is_none(),
+        "an unknown id is omitted, not invented"
+    );
+    // An internal toolset has no frozen toolkit reference and gets nothing.
+    assert_eq!(starts[2]["response_metadata"]["metadata"], json!({}));
 }
 
 #[test]
