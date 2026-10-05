@@ -136,6 +136,11 @@ type CredentialResolution uint8
 const (
 	CredentialAccepted CredentialResolution = iota + 1
 	CredentialRejected
+	// CredentialRevoked is a rejected NATIVE credential whose device session
+	// is revoked (auth.ErrDeviceRevoked, ADR-0025). It is a rejection in every
+	// respect except the answer: a bearer caller is told device_revoked so a
+	// native client wipes instead of refreshing.
+	CredentialRevoked
 )
 
 type CredentialResult struct {
@@ -175,6 +180,10 @@ const (
 	ReasonAuthenticationRequired
 	ReasonDependencyUnavailable
 	ReasonMalformedDependencyResult
+	// ReasonCredentialRevoked is a deny whose credential was a revoked native
+	// device session (CredentialRevoked). Appended last so no existing value
+	// moves.
+	ReasonCredentialRevoked
 )
 
 type AuthenticationType uint8

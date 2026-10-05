@@ -14,9 +14,11 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/adminui"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/gateway"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/health"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	nativeapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
@@ -31,6 +33,7 @@ import (
 	v2contextmgr "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
@@ -61,6 +64,7 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
@@ -69,6 +73,7 @@ import (
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -77,6 +82,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
@@ -145,6 +151,43 @@ type RouterConfig struct {
 	// login page can never disagree about the brand. Nil builds one here
 	// from BrandPackPath and Pool — the shape every test uses.
 	Branding *v2branding.Resolver
+	// DeploymentKind is published in the discovery document (ADR-0025
+	// decision 1): "saas" or "self_hosted", read from ELITEA_DEPLOYMENT_KIND
+	// in cmd/elitea-main/deployment_kind_config.go. Empty means self_hosted.
+	DeploymentKind string
+	// PublicOrigin is the deployment's public origin
+	// (publicorigin.Normalize(DEPLOYMENT_URL)). The discovery document and
+	// /api/v2/branding/pack.json make their URLs absolute against it. Empty
+	// derives the origin from each request and marks the response Vary.
+	PublicOrigin string
+	// NativeAuth and ClientPolicy feed the discovery document (ADR-0025
+	// WP2/WP4). Nil means `native_auth: null` and the default public policy.
+	// Keep them nil INTERFACES: a typed nil pointer here would be called.
+	NativeAuth   v2discovery.NativeAuthSource
+	ClientPolicy v2discovery.ClientPolicySource
+	// NativeClients and NativeStore are the native authorization server
+	// (ADR-0025 WP2): the effective client registry (file layer + DB layer)
+	// and its PostgreSQL store. Both nil mounts no native route at all; the
+	// discovery document then says `native_auth: null`. main.go builds both
+	// whenever a pool exists, so the routes are mounted and answer 404 until
+	// a client is registered.
+	NativeClients *nativeauth.Registry
+	NativeStore   *nativeauth.Store
+	// NativeSecureCookies selects the `__Host-` binder cookie
+	// (COOKIE_SECURE != "false").
+	NativeSecureCookies bool
+	// NativeTokenDecorator adds fields to every native token response. Nil
+	// uses the native client policy's: `client_policy` (WP4).
+	NativeTokenDecorator nativeapi.TokenResponseDecorator
+	// NativePolicy is the one cached reader of the `native_client_policy`
+	// section (ADR-0025 WP4), shared by discovery, the token response, the
+	// 426 gate and the admin save that invalidates it. Nil builds one here
+	// from Pool and NativeClients — the shape every test uses.
+	NativePolicy *nativepolicy.Service
+	// NativeAccess resolves the client of a native bearer token for the 426
+	// gate when the principal came from the edge's forwarded identity (which
+	// carries no client id). Nil skips that fallback.
+	NativeAccess *nativeauth.AccessValidator
 	// Mailer is outbound e-mail (ADR-0024 WP7): invitations, moderation
 	// notices, the Branding page's test message. Nil means none is sent and
 	// every invite reports invitation_delivered: false.
@@ -1218,7 +1261,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	//
 	// brandingResolver is built above the browser-auth routes. The admin
 	// routes below invalidate the same resolver on a save.
-	brandingHandler := v2branding.NewHandler(v2branding.Config{Resolver: brandingResolver})
+	brandingHandler := v2branding.NewHandler(v2branding.Config{
+		Resolver:     brandingResolver,
+		PublicOrigin: cfg.PublicOrigin,
+	})
 	// A nil *Composer must stay a nil INTERFACE for the With* options to
 	// recognise "no mailer"; a typed nil inside the interface would pass
 	// their check and panic on first use.
@@ -1233,6 +1279,85 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	brandingPackages := cfg.BrandingPackages
 	r.Get("/api/v2/branding/bootstrap.js", brandingHandler.Bootstrap)
 	r.Head("/api/v2/branding/bootstrap.js", brandingHandler.Bootstrap)
+	// The same resolved pack as JSON, with absolute references, for clients
+	// that are not a browser on this origin (ADR-0025 decision 2). Public for
+	// the same reason as the bootstrap script: it is the brand a sign-in
+	// screen renders, before any credential exists.
+	r.Get(v2branding.PackJSONPath, brandingHandler.PackJSON)
+	r.Head(v2branding.PackJSONPath, brandingHandler.PackJSON)
+	// The discovery document (ADR-0025 decision 1): what a client given only
+	// this deployment's origin needs before it signs in. Root-mounted under
+	// /.well-known/ (RFC 8615), above the Auth group like the routes around
+	// it, and forwarded by every browser edge as an exact path.
+	//
+	// The native authorization server (ADR-0025 WP2) is mounted first, because
+	// the discovery document reports its endpoints. Its five routes are
+	// root-mounted siblings of /api/v2 like the bootstrap script, so the
+	// group's JSON 401 never reaches the two browser pages; `continue` and
+	// `decision` authenticate with the SAME credential set the group uses,
+	// through apimw.BrowserSignInRequired. Each route answers 404 while no
+	// client is registered.
+	nativeDiscovery := cfg.NativeAuth
+	nativePolicy := cfg.NativePolicy
+	if nativePolicy == nil {
+		var registered nativepolicy.Clients
+		if cfg.NativeClients != nil {
+			registered = cfg.NativeClients
+		}
+		nativePolicy = nativepolicy.New(cfg.Pool, registered)
+	}
+	nativeTokenDecorator := cfg.NativeTokenDecorator
+	if nativeTokenDecorator == nil {
+		nativeTokenDecorator = nativePolicy.Decorate
+	}
+	clientPolicySource := cfg.ClientPolicy
+	if clientPolicySource == nil {
+		clientPolicySource = nativePolicyDiscovery{policy: nativePolicy}
+	}
+	var nativeHandler *nativeapi.Handler
+	if cfg.NativeClients != nil && cfg.NativeStore != nil {
+		var nativeAddresses nativeapi.ClientAddresses
+		if cfg.SCIMClientAddresses != nil {
+			nativeAddresses = cfg.SCIMClientAddresses
+		}
+		nativeHandler = nativeapi.New(nativeapi.Config{
+			Registry:     cfg.NativeClients,
+			Store:        cfg.NativeStore,
+			PublicOrigin: cfg.PublicOrigin,
+			Pages:        browserauth.NewNativePages(brandingResolver),
+			Authenticate: apimw.Auth(apimw.AuthConfig{
+				Validator:                  cfg.AuthValidator,
+				PrincipalValidator:         cfg.PrincipalValidator,
+				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				SessionSecret:              cfg.SessionSecret,
+				SessionStore:               cfg.Auth.SessionStore,
+				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
+			}),
+			Addresses:     nativeAddresses,
+			Audit:         auditRecorder,
+			SecureCookies: cfg.NativeSecureCookies,
+			Decorate:      nativeTokenDecorator,
+			// The same rule the API group's ClientVersion gate applies.
+			MinimumClientVersion: nativePolicy.MinimumFor,
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(apimw.NoStore)
+			nativeHandler.Mount(r)
+		})
+		if nativeDiscovery == nil {
+			nativeDiscovery = nativeHandler
+		}
+	}
+	discoveryHandler := v2discovery.NewHandler(v2discovery.Config{
+		ServerVersion:  buildinfo.Version,
+		DeploymentKind: cfg.DeploymentKind,
+		PublicOrigin:   cfg.PublicOrigin,
+		Brand:          brandingResolver,
+		NativeAuth:     nativeDiscovery,
+		ClientPolicy:   clientPolicySource,
+	})
+	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
+	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
 	// Uploaded brand assets (ADR-0024 decision 3): public for the same
 	// reason as /icons — <img src>, <link rel="icon"> and @font-face fetches
 	// carry no credential. Content-addressed and immutable; the route
@@ -1562,6 +1687,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			Resolver: permissionResolver,
 		}))
 
+		// The minimum client version (ADR-0025 WP4), directly AFTER
+		// Maintenance: a 503 ("come back later") is the truer answer during a
+		// window than a 426 ("upgrade"). After Auth, because only a caller
+		// authenticated by a NATIVE access token is gated (coordinator
+		// decision 13); PAT and cookie callers pass whatever they send.
+		var nativeClientForToken func(context.Context, string) (string, bool, error)
+		if cfg.NativeAccess != nil {
+			nativeClientForToken = cfg.NativeAccess.ClientID
+		}
+		r.Use(apimw.ClientVersion(apimw.ClientVersionConfig{
+			MinimumFor:           nativePolicy.MinimumFor,
+			NativeClientForToken: nativeClientForToken,
+		}))
+
 		// The audit-trail emitter for `centry.audit_events` — the producer the
 		// admin Audit Trail page never had (internal/api/middleware/audit.go
 		// carries the four decisions: level, scope, failure policy, retention).
@@ -1660,6 +1799,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			} else {
 				authOptions = append(authOptions, v2auth.WithTokenSigningKey(cfg.SessionSecret))
 			}
+			// The native device registry (ADR-0025 WP3): a user's own
+			// devices, with any credential the group accepts. Static
+			// routes, so they win over the /auth mount below; 404 while no
+			// native client is registered (coordinator decision 4).
+			if nativeHandler != nil {
+				r.With(nativeHandler.RegisteredOnly).
+					Get("/auth/native/devices", nativeHandler.ListDevices)
+				r.With(nativeHandler.RegisteredOnly).
+					Delete("/auth/native/devices/{deviceID}", nativeHandler.RevokeDevice)
+			}
 			r.Mount("/auth", v2auth.NewHandler(cfg.Pool, authOptions...).Routes())
 
 			// === Projects endpoints ===
@@ -1724,6 +1873,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
 					admin.WithBranding(brandingResolver),
+					// A save of the native_client_policy section drops the
+					// one cached policy discovery, the token response and the
+					// 426 gate read.
+					admin.WithNativeClientPolicy(nativePolicy),
 					admin.WithBrandingAssets(brandingAssets),
 					admin.WithMailer(adminMailer),
 					admin.WithEmailSettings(emailResolver.Store(), emailResolver),
@@ -2028,6 +2181,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// deployment fact with no project-scoped view, so another mode
 				// 404s rather than being answered under a scope that does not
 				// apply.
+				// The native client registry (ADR-0025 WP2). One permission
+				// guards both native admin surfaces (coordinator decision 6);
+				// shared 0141 grants it. Mounted whenever the native server
+				// is, registered or not: these routes are how the first
+				// client is registered.
+				if nativeHandler != nil {
+					requireNativeClients := central("configuration.native_clients")
+					r.With(requireNativeClients).
+						Get("/native_clients/administration", nativeHandler.AdminList)
+					r.With(requireNativeClients).
+						Put("/native_clients/administration/{clientID}", nativeHandler.AdminSave)
+					r.With(requireNativeClients).
+						Delete("/native_clients/administration/{clientID}", nativeHandler.AdminDelete)
+					// Every user's devices (ADR-0025 WP3), gated like user
+					// suspension and SCIM clients: whoever may suspend an
+					// account may cut off its devices.
+					r.With(requireAdminUsers).
+						Get("/native_devices/administration", nativeHandler.AdminListDevices)
+					r.With(requireAdminUsers).
+						Delete("/native_devices/administration/{deviceID}", nativeHandler.AdminRevokeDevice)
+				}
 				r.With(requireRuntimePlugins).
 					Get("/identity_providers/administration", adminHandler.IdentityProviderList)
 				r.With(requireRuntimePlugins).

@@ -125,6 +125,10 @@ type Querier interface {
 	// without their dependencies, which the repository refuses.
 	CurrentFolderAccessState(ctx context.Context) (int32, error)
 	CurrentNotificationHighWater(ctx context.Context, userID int32) (int64, error)
+	// The database clock a `changes_since` page is computed against (ADR-0025
+	// WP6): the stamps are written by triggers on this clock, so the settle
+	// bound and the expiry check must read it too, not the application's.
+	CurrentNotificationSyncClock(ctx context.Context) (pgtype.Timestamptz, error)
 	// entity_skill_mapping is polymorphic and has no version FK. Remove only the
 	// bindings of the version actually deleted, including on create compensation.
 	DeleteApplicationVersionWithSkills(ctx context.Context, arg DeleteApplicationVersionWithSkillsParams) (int64, error)
@@ -172,6 +176,9 @@ type Querier interface {
 	// models by data.name. A two-row sentinel lets the adapter reject duplicate
 	// mutable definitions instead of selecting one silently.
 	FindCurrentEmbeddingConfigurations(ctx context.Context, arg FindCurrentEmbeddingConfigurationsParams) ([]FindCurrentEmbeddingConfigurationsRow, error)
+	// `token.uuid IS NOT NULL` is load-bearing twice over: the durable-execution
+	// actor issuer signs the selected row as a PAT JWT, and a native device anchor
+	// (ADR-0025, uuid NULL) must never be signed into one.
 	GetActivePATForUser(ctx context.Context, userID int32) (GetActivePATForUserRow, error)
 	GetActivePATPrincipalByID(ctx context.Context, tokenID int32) (GetActivePATPrincipalByIDRow, error)
 	// This is the single query the credential validator runs for every request.
@@ -416,7 +423,12 @@ type Querier interface {
 	ListCurrentIndexScheduleProjects(ctx context.Context, arg ListCurrentIndexScheduleProjectsParams) ([]int32, error)
 	ListCurrentIndexScheduleToolkits(ctx context.Context, arg ListCurrentIndexScheduleToolkitsParams) ([]ListCurrentIndexScheduleToolkitsRow, error)
 	ListCurrentModelConfigurations(ctx context.Context, arg ListCurrentModelConfigurationsParams) ([]ListCurrentModelConfigurationsRow, error)
+	// The caller's notifications whose sync_at stamp (shared 0144) is after the
+	// cursor position, oldest change first.
+	ListCurrentNotificationChanges(ctx context.Context, arg ListCurrentNotificationChangesParams) ([]ListCurrentNotificationChangesRow, error)
 	ListCurrentNotificationEventsAfter(ctx context.Context, arg ListCurrentNotificationEventsAfterParams) ([]ListCurrentNotificationEventsAfterRow, error)
+	// The caller's notification deletions after the cursor position.
+	ListCurrentNotificationTombstones(ctx context.Context, arg ListCurrentNotificationTombstonesParams) ([]ListCurrentNotificationTombstonesRow, error)
 	ListCurrentNotifications(ctx context.Context, arg ListCurrentNotificationsParams) ([]ListCurrentNotificationsRow, error)
 	ListCurrentProjectAuthors(ctx context.Context, projectID int32) ([]ListCurrentProjectAuthorsRow, error)
 	ListCurrentSharedConfigurations(ctx context.Context, arg ListCurrentSharedConfigurationsParams) ([]ListCurrentSharedConfigurationsRow, error)
@@ -433,6 +445,10 @@ type Querier interface {
 	// The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 	// see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
 	// LEFT JOIN because an unbound token is the default and must still be listed.
+	// A row with uuid NULL is not a personal access token: no PAT JWT can name it.
+	// Native device sessions (ADR-0025, shared 0141) anchor on exactly such rows,
+	// so the filter keeps a signed-in phone from showing up in Settings > Tokens
+	// as a key named `native:<client>`. The device registry lists those instead.
 	ListOwnedPATs(ctx context.Context, userID int32) ([]ListOwnedPATsRow, error)
 	ListPendingAgentExecutionIDs(ctx context.Context, arg ListPendingAgentExecutionIDsParams) ([]string, error)
 	ListPendingToolkitExecuteReadIDs(ctx context.Context, arg ListPendingToolkitExecuteReadIDsParams) ([]string, error)

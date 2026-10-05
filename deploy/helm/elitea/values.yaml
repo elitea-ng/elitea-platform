@@ -942,6 +942,12 @@ main:
     # common single-domain deployment is guarded with no extra configuration.
     # Empty here leaves that convenience path off; see the note above — with
     # ELITEA_SELF_LLM_ORIGINS also empty, §2.6 guard #1 is inert.
+    #
+    # It is also the deployment's PUBLIC ORIGIN for ADR-0025: the discovery
+    # document (/.well-known/elitea-client) and /api/v2/branding/pack.json make
+    # their URLs absolute against it (internal/publicorigin). Empty there means
+    # "derive the origin from each request's Host" with `Vary`, which is fine
+    # for a single-host install; set it on any deployment native clients use.
     DEPLOYMENT_URL: ""
 
     # --- OIDC email policy ------------------------------------------------------
@@ -1033,6 +1039,32 @@ main:
     # Empty means 1h. A value outside the range stops the boot.
     ELITEA_SCIM_ACCESS_TOKEN_TTL: ""
 
+    # --- Native authorization (ADR-0025 WP2) ----------------------------------
+    # Lifetimes of the tokens a registered native (mobile or desktop) client
+    # receives from /api/v2/auth/native/token. Each is a Go duration; empty
+    # takes the default; a value outside its range STOPS the boot.
+    #   ELITEA_NATIVE_ACCESS_TOKEN_TTL           access token, 5m..1h, default 15m
+    #   ELITEA_NATIVE_REFRESH_IDLE_TTL           a device unused this long must sign
+    #                                            in again, 24h..2160h, default 720h;
+    #                                            stamped per device at sign-in, so a
+    #                                            change applies to new devices only
+    #   ELITEA_NATIVE_SESSION_MAX_LIFETIME       absolute cap per device, 0 (none,
+    #                                            the default) or 24h..8760h
+    #   ELITEA_NATIVE_REFRESH_REDELIVERY_WINDOW  how long a refresh token that was
+    #                                            just used still returns the SAME new
+    #                                            pair (a response lost on a mobile
+    #                                            network must not wipe the device),
+    #                                            0 (strict) or 1s..5m, default 30s
+    # NATIVE_CLIENTS_PATH names an optional file (JSON or YAML) of registered
+    # clients — [{client_id, display_name, redirect_uris, enabled}] — under the
+    # admin editor's database rows. Once any client is registered, DEPLOYMENT_URL
+    # MUST be set: it is the issuer every native sign-in carries.
+    ELITEA_NATIVE_ACCESS_TOKEN_TTL: ""
+    ELITEA_NATIVE_REFRESH_IDLE_TTL: ""
+    ELITEA_NATIVE_SESSION_MAX_LIFETIME: ""
+    ELITEA_NATIVE_REFRESH_REDELIVERY_WINDOW: ""
+    NATIVE_CLIENTS_PATH: ""
+
     # ELITEA_TRUSTED_PROXY_CIDRS lists the proxies (ingress, gateway) whose
     # X-Forwarded-For is believed, as comma-separated CIDRs, for example the
     # pod network "10.42.0.0/16". The SCIM token endpoint keys its failure
@@ -1116,6 +1148,13 @@ main:
     # cmd/elitea-main/brand_pack_config.go; mounted by fileConfig.brandPack
     # above. Discovered unwired while verifying S17's env-drift gate.
     BRAND_PACK_PATH: ""
+
+    # Who operates this deployment, published in the anonymous discovery
+    # document at /.well-known/elitea-client (ADR-0025 decision 1):
+    # "saas" | "self_hosted". Empty means self_hosted. Any other value REFUSES
+    # to start, so a typo never publishes the wrong kind to every client.
+    # Read in cmd/elitea-main/deployment_kind_config.go.
+    ELITEA_DEPLOYMENT_KIND: "self_hosted"
 
     # --- Outbound e-mail (ADR-0024 WP7; gap G7) ---------------------------------
     # These are the BOOTSTRAP DEFAULTS, not the whole configuration. Since gap
@@ -2126,6 +2165,12 @@ scheduler:
     # keeps repeating with the ceiling raised, the next step is monthly RANGE
     # partitioning of the table on `timestamp` — not a bigger number here.
     AUDIT_RETENTION_MAX_BATCHES: "50"
+    # Incremental-sync tombstone retention (ADR-0025 WP6): how long the
+    # deletion and lost-access records behind `changes_since` are kept. 97 is
+    # the FLOOR — the longest offline_retention_days (90) plus a week, the
+    # window elitea-main still serves a cursor for — and a lower value is
+    # raised to it with a warning. Raise it only to keep tombstones longer.
+    SYNC_TOMBSTONE_RETENTION_DAYS: "97"
 
     # Tracing (issue #250): same OTLP collector endpoint and kill switch as
     # the `main.env` map — see that chart's values.yaml for the

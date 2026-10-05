@@ -227,6 +227,14 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The native client policy's ranges and version grammar (ADR-0025 WP4).
+	if section.id == platformconfig.SectionNativeClientPolicy {
+		if reason := validateNativeClientPolicyValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
 	principal, _ := auth.UserFromContext(r.Context())
 	author := principal.Email
 	if author == "" {
@@ -238,6 +246,9 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 			"error": "could not write the platform configuration store",
 		})
 		return
+	}
+	if section.id == platformconfig.SectionNativeClientPolicy {
+		h.invalidateNativeClientPolicy()
 	}
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()

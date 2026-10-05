@@ -325,7 +325,13 @@ func (s *Service) Complete(
 				err,
 			)
 		}
-		return CompleteResult{}, sanitizedError(ctx, ErrUnauthenticated, "verify provider assertion", err)
+		// The return target survives a wrong password (ADR-0025 WP2, §3.9):
+		// the Form page sends the browser back to /auth/login with it, so a
+		// typo on the way to a deep link — or to a native sign-in's consent
+		// page — does not strand the user on the default landing page. Only
+		// ReturnTarget is set; no session is.
+		return CompleteResult{ReturnTarget: transaction.ReturnTarget},
+			sanitizedError(ctx, ErrUnauthenticated, "verify provider assertion", err)
 	}
 	assertion = cloneAssertion(assertion)
 	if assertion.Validate() != nil || assertion.Provider != transaction.Provider ||

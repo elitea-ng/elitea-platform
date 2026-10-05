@@ -70,6 +70,7 @@ import type {
   AuthorDetail,
   BatchReplaceVersionReferencesParams,
   CapabilityUnavailableResponse,
+  ClientUpgradeRequiredResponse,
   DefaultIcon,
   DeleteApplicationVersionParams,
   DocumentLoadersResponse,
@@ -104,6 +105,7 @@ import type {
   IconUploadResponse,
   ImportWizardRequest,
   ImportWizardResponse,
+  InvalidClientVersionResponse,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
@@ -13447,15 +13449,27 @@ export type listProjectsResponse200 = {
   status: 200;
 };
 
+export type listProjectsResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type listProjectsResponse401 = {
   data: N401Response;
   status: 401;
 };
 
+export type listProjectsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listProjectsResponseSuccess = listProjectsResponse200 & {
   headers: Headers;
 };
-export type listProjectsResponseError = listProjectsResponse401 & {
+export type listProjectsResponseError = (
+  listProjectsResponse400 | listProjectsResponse401 | listProjectsResponse426
+) & {
   headers: Headers;
 };
 
@@ -13519,7 +13533,8 @@ export const getListProjectsQueryKey = (
 
 export const getListProjectsQueryOptions = <
   TData = Awaited<ReturnType<typeof listProjects>>,
-  TError = N401Response,
+  TError =
+    InvalidClientVersionResponse | N401Response | ClientUpgradeRequiredResponse,
 >(
   publicProjectId: number,
   params?: ListProjectsParams,
@@ -13554,11 +13569,13 @@ export const getListProjectsQueryOptions = <
 export type ListProjectsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listProjects>>
 >;
-export type ListProjectsQueryError = N401Response;
+export type ListProjectsQueryError =
+  InvalidClientVersionResponse | N401Response | ClientUpgradeRequiredResponse;
 
 export function useListProjects<
   TData = Awaited<ReturnType<typeof listProjects>>,
-  TError = N401Response,
+  TError =
+    InvalidClientVersionResponse | N401Response | ClientUpgradeRequiredResponse,
 >(
   publicProjectId: number,
   params: undefined | ListProjectsParams,
@@ -13582,7 +13599,8 @@ export function useListProjects<
 };
 export function useListProjects<
   TData = Awaited<ReturnType<typeof listProjects>>,
-  TError = N401Response,
+  TError =
+    InvalidClientVersionResponse | N401Response | ClientUpgradeRequiredResponse,
 >(
   publicProjectId: number,
   params?: ListProjectsParams,
@@ -13606,7 +13624,8 @@ export function useListProjects<
 };
 export function useListProjects<
   TData = Awaited<ReturnType<typeof listProjects>>,
-  TError = N401Response,
+  TError =
+    InvalidClientVersionResponse | N401Response | ClientUpgradeRequiredResponse,
 >(
   publicProjectId: number,
   params?: ListProjectsParams,
@@ -13626,7 +13645,8 @@ export function useListProjects<
 
 export function useListProjects<
   TData = Awaited<ReturnType<typeof listProjects>>,
-  TError = N401Response,
+  TError =
+    InvalidClientVersionResponse | N401Response | ClientUpgradeRequiredResponse,
 >(
   publicProjectId: number,
   params?: ListProjectsParams,

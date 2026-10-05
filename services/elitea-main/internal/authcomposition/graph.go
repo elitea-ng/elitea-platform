@@ -44,6 +44,12 @@ type FormGraphDependencies struct {
 	// Form handler holds NO users: no configured password is accepted
 	// anywhere. The zero value is the safe one on purpose.
 	FormSignInEnabled bool
+	// NativeTokens validates native access tokens (ADR-0025 WP2) at the
+	// gateway edge (/forward-auth) as well as in the API group: without it a
+	// Form-plane edge refuses every native call before it reaches
+	// elitea-main. Nil — a nil INTERFACE, never a typed nil pointer — keeps
+	// the edge PAT-only.
+	NativeTokens authsvc.TokenValidator
 }
 
 // FormGraph owns the Form browser routes and the separate current-Main gateway
@@ -166,7 +172,9 @@ func newFormGraph(
 		dependencies.PostgreSQL,
 		material.patSigningKey,
 	)
-	credentials, err := forwardapp.NewTokenCredentialAuthenticator(patValidator)
+	credentials, err := forwardapp.NewTokenCredentialAuthenticator(
+		authsvc.NewNativeAwareValidator(patValidator, dependencies.NativeTokens),
+	)
 	if err != nil {
 		return nil, composeError("credential authenticator", err)
 	}

@@ -675,7 +675,31 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // (`GET /elitea_core/eval_run_analytics/prompt_lib/{project_id}/{run_id}`). The
 // generated hooks have no caller yet: the Run History and evaluation analytics
 // screens that read them land in their own change.
-const GENERATED_OPERATION_COUNT = 276;
+// 276 -> 278 (ADR-0025 WP1): getClientDiscovery (`GET /.well-known/elitea-client`,
+// path-level `servers: [{url: /}]`) and getBrandingPackJSON
+// (`GET /branding/pack.json`). Both are for native clients; the web app reads
+// its brand through bootstrap.js, so neither has a browser caller and the
+// manifest count is unchanged.
+// 278 -> 284 (ADR-0025 WP2): authorizeNativeClient, exchangeNativeToken and
+// revokeNativeToken (native public clients only; the browser never calls
+// them) and listNativeClients, saveNativeClient and deleteNativeClient (the
+// native_clients admin registry, whose web editor does not exist yet). No
+// browser caller, so the manifest count is unchanged.
+// 284 -> 288 (ADR-0025 WP3): listNativeDevices, revokeNativeDevice,
+// listNativeDevicesAdministration and revokeNativeDeviceAdministration (the
+// device registry; its Settings and admin screens are follow-up web work).
+// No browser caller yet, so the manifest count is unchanged.
+// 288 -> 303 (ADR-0025 WP5): the native client contract describes fifteen
+// operations the web app already calls through hand-written clients —
+// createConversation, getConversation, deleteConversation,
+// listConversationMessages, sendChatMessage, regenerateChatMessage,
+// continueChatExecution, uploadConversationAttachment,
+// streamExecutionEvents, listNotifications, markNotificationsSeen,
+// deleteNotifications, markNotificationSeen, deleteNotification and
+// streamNotificationEvents. Their manifest entries stay `handwritten` (the
+// web callers are not migrated in this change), so the manifest count is
+// unchanged; thirteen ids came off the reverse-check allowlist.
+const GENERATED_OPERATION_COUNT = 303;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -56,6 +56,7 @@ export const ListConversationsParams = zod.object({
     .max(listConversationsParamsLimitMax)
     .default(listConversationsParamsLimitDefault),
   offset: zod.int().default(listConversationsParamsOffsetDefault),
+  changes_since: zod.string().optional(),
 });
 
 export type ListConversationsParams = zod.input<typeof ListConversationsParams>;

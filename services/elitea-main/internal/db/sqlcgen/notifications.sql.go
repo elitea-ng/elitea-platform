@@ -95,6 +95,20 @@ func (q *Queries) CountCurrentNotifications(ctx context.Context, arg CountCurren
 	return column_1, err
 }
 
+const currentNotificationSyncClock = `-- name: CurrentNotificationSyncClock :one
+SELECT clock_timestamp()::timestamptz AS now
+`
+
+// The database clock a `changes_since` page is computed against (ADR-0025
+// WP6): the stamps are written by triggers on this clock, so the settle
+// bound and the expiry check must read it too, not the application's.
+func (q *Queries) CurrentNotificationSyncClock(ctx context.Context) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, currentNotificationSyncClock)
+	var now pgtype.Timestamptz
+	err := row.Scan(&now)
+	return now, err
+}
+
 const deleteCurrentNotification = `-- name: DeleteCurrentNotification :execrows
 DELETE FROM centry.notifications
 WHERE id = $1
@@ -161,6 +175,139 @@ func (q *Queries) GetCurrentNotification(ctx context.Context, arg GetCurrentNoti
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listCurrentNotificationChanges = `-- name: ListCurrentNotificationChanges :many
+SELECT id,
+       uuid::text AS uuid,
+       is_seen,
+       project_id,
+       user_id,
+       meta,
+       event_type,
+       created_at,
+       updated_at,
+       sync_at
+FROM centry.notifications
+WHERE user_id = $1
+  AND (sync_at, id) > ($2::timestamptz, $3::bigint)
+ORDER BY sync_at, id
+LIMIT $4
+`
+
+type ListCurrentNotificationChangesParams struct {
+	UserID    int32              `db:"user_id" json:"user_id"`
+	AfterAt   pgtype.Timestamptz `db:"after_at" json:"after_at"`
+	AfterID   int64              `db:"after_id" json:"after_id"`
+	PageLimit int32              `db:"page_limit" json:"page_limit"`
+}
+
+type ListCurrentNotificationChangesRow struct {
+	ID        int32              `db:"id" json:"id"`
+	Uuid      string             `db:"uuid" json:"uuid"`
+	IsSeen    bool               `db:"is_seen" json:"is_seen"`
+	ProjectID int32              `db:"project_id" json:"project_id"`
+	UserID    int32              `db:"user_id" json:"user_id"`
+	Meta      []byte             `db:"meta" json:"meta"`
+	EventType string             `db:"event_type" json:"event_type"`
+	CreatedAt pgtype.Timestamp   `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamp   `db:"updated_at" json:"updated_at"`
+	SyncAt    pgtype.Timestamptz `db:"sync_at" json:"sync_at"`
+}
+
+// The caller's notifications whose sync_at stamp (shared 0144) is after the
+// cursor position, oldest change first.
+func (q *Queries) ListCurrentNotificationChanges(ctx context.Context, arg ListCurrentNotificationChangesParams) ([]ListCurrentNotificationChangesRow, error) {
+	rows, err := q.db.Query(ctx, listCurrentNotificationChanges,
+		arg.UserID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCurrentNotificationChangesRow{}
+	for rows.Next() {
+		var i ListCurrentNotificationChangesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uuid,
+			&i.IsSeen,
+			&i.ProjectID,
+			&i.UserID,
+			&i.Meta,
+			&i.EventType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentNotificationTombstones = `-- name: ListCurrentNotificationTombstones :many
+SELECT id,
+       notification_id,
+       COALESCE(notification_uuid::text, ''::text)::text AS notification_uuid,
+       deleted_at
+FROM centry.notification_tombstones
+WHERE user_id = $1
+  AND (deleted_at, id) > ($2::timestamptz, $3::bigint)
+ORDER BY deleted_at, id
+LIMIT $4
+`
+
+type ListCurrentNotificationTombstonesParams struct {
+	UserID    int32              `db:"user_id" json:"user_id"`
+	AfterAt   pgtype.Timestamptz `db:"after_at" json:"after_at"`
+	AfterID   int64              `db:"after_id" json:"after_id"`
+	PageLimit int32              `db:"page_limit" json:"page_limit"`
+}
+
+type ListCurrentNotificationTombstonesRow struct {
+	ID               int64              `db:"id" json:"id"`
+	NotificationID   int32              `db:"notification_id" json:"notification_id"`
+	NotificationUuid string             `db:"notification_uuid" json:"notification_uuid"`
+	DeletedAt        pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
+}
+
+// The caller's notification deletions after the cursor position.
+func (q *Queries) ListCurrentNotificationTombstones(ctx context.Context, arg ListCurrentNotificationTombstonesParams) ([]ListCurrentNotificationTombstonesRow, error) {
+	rows, err := q.db.Query(ctx, listCurrentNotificationTombstones,
+		arg.UserID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCurrentNotificationTombstonesRow{}
+	for rows.Next() {
+		var i ListCurrentNotificationTombstonesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.NotificationID,
+			&i.NotificationUuid,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listCurrentNotifications = `-- name: ListCurrentNotifications :many

@@ -34,6 +34,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 // ErrNotFound reports that no account carries the identifier.
@@ -408,6 +410,14 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 	default:
 		return User{}, err
 	}
+	// Both branches above suspend only when the client STATED active:false.
+	// That write revokes the account's native devices and browser sessions in
+	// this transaction (ADR-0025 WP3); for a brand-new account it is a no-op.
+	if user.ActiveStated && !user.Active {
+		if err := revokeOnDeactivation(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+	}
 
 	if err := upsertSCIMFacts(ctx, tx, id, user.ExternalID); err != nil {
 		return User{}, err
@@ -473,6 +483,11 @@ func (s *Store) Replace(ctx context.Context, id int, user User) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
+	if !user.Active {
+		if err := revokeOnDeactivation(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+	}
 
 	if err := upsertSCIMFacts(ctx, tx, id, user.ExternalID); err != nil {
 		return User{}, err
@@ -508,6 +523,12 @@ func (s *Store) SetActive(ctx context.Context, id int, active bool) (User, error
 	if _, err := tx.Exec(ctx,
 		`UPDATE auth_core__user SET suspended = $2 WHERE id = $1`, id, !active); err != nil {
 		return User{}, err
+	}
+	// SCIM PATCH active:false and SCIM DELETE (Deactivate) both land here.
+	if !active {
+		if err := revokeOnDeactivation(ctx, tx, id); err != nil {
+			return User{}, err
+		}
 	}
 	// Moves `meta.lastModified`, creating the SCIM row when the account was
 	// made by a first login rather than by a directory push.
@@ -595,6 +616,11 @@ func (s *Store) ApplyUserChanges(ctx context.Context, id int, changes UserChange
 		if _, err := tx.Exec(ctx, `UPDATE auth_core__user SET suspended = $2 WHERE id = $1`,
 			id, !*changes.Active); err != nil {
 			return User{}, err
+		}
+		if !*changes.Active {
+			if err := revokeOnDeactivation(ctx, tx, id); err != nil {
+				return User{}, err
+			}
 		}
 	}
 	if changes.ExternalID != nil {
@@ -726,4 +752,13 @@ func scanUser(row rowScanner) (User, error) {
 // query that fails at the database with an error naming none of this.
 func argumentIndex(position int) string {
 	return strconv.Itoa(position)
+}
+
+// revokeOnDeactivation is the ADR-0025 deactivation hook for an identity
+// provider push: the account's native device sessions and browser sessions are
+// revoked in the same transaction as the suspension, with no operator recorded.
+// Reactivation later restores the account, never the sessions.
+func revokeOnDeactivation(ctx context.Context, tx pgx.Tx, id int) error {
+	_, err := nativeauth.RevokeUserSessions(ctx, tx, int64(id), nativeauth.ReasonUserDeactivated, nil)
+	return err
 }

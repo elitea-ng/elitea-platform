@@ -577,12 +577,39 @@ func TestFormAuthorizeMapsCredentialAndDependencyFailuresGenerically(t *testing.
 	t.Run("credential", func(t *testing.T) {
 		handler, dependencies := newTestHandler(t)
 		dependencies.flow.completeErr = browserapp.ErrUnauthenticated
+		dependencies.flow.completeResult = browserapp.CompleteResult{}
 		recorder := authorize(t, handler, dependencies, "unknown-user", "secret-canary")
 		if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != BasePath+LoginPath+"?error=true" {
 			t.Fatalf("status = %d location = %q", recorder.Code, recorder.Header().Get("Location"))
 		}
 		if strings.Contains(recorder.Body.String(), "unknown-user") || strings.Contains(recorder.Body.String(), "secret-canary") {
 			t.Fatalf("response leaked credential input: %q", recorder.Body.String())
+		}
+	})
+
+	// ADR-0025 §3.9: a wrong password keeps the return target, so a typo on
+	// the way to a deep link (or a native sign-in's consent page) does not
+	// strand the user on the default landing page.
+	t.Run("credential keeps the return target", func(t *testing.T) {
+		handler, dependencies := newTestHandler(t)
+		dependencies.flow.completeErr = browserapp.ErrUnauthenticated
+		dependencies.flow.completeResult = browserapp.CompleteResult{
+			ReturnTarget: "/api/v2/auth/native/authorize/continue?request=abc",
+		}
+		recorder := authorize(t, handler, dependencies, "unknown-user", "secret-canary")
+		want := BasePath + LoginPath + "?error=true&target_to=%2Fapi%2Fv2%2Fauth%2Fnative%2Fauthorize%2Fcontinue%3Frequest%3Dabc"
+		if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != want {
+			t.Fatalf("status = %d location = %q, want %q", recorder.Code, recorder.Header().Get("Location"), want)
+		}
+	})
+
+	t.Run("credential drops a non-canonical target", func(t *testing.T) {
+		handler, dependencies := newTestHandler(t)
+		dependencies.flow.completeErr = browserapp.ErrUnauthenticated
+		dependencies.flow.completeResult = browserapp.CompleteResult{ReturnTarget: "https://evil.example/"}
+		recorder := authorize(t, handler, dependencies, "unknown-user", "secret-canary")
+		if recorder.Header().Get("Location") != BasePath+LoginPath+"?error=true" {
+			t.Fatalf("location = %q", recorder.Header().Get("Location"))
 		}
 	})
 

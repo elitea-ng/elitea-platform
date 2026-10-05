@@ -85,6 +85,7 @@ updates:
       - /gen/go
       - /libs/proto/gen/go
       - /tools/uictl
+      - /conformance/nativeclient
     schedule:
       interval: weekly
       day: saturday

@@ -426,6 +426,24 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PackPath: brandPack.Path,
 		Pool:     pool,
 	})
+	// ADR-0025 WP1: the discovery document and the brand pack JSON are
+	// anonymous documents with absolute URLs. Both settings are read once.
+	deploymentKind, err := deploymentKindFromEnv(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load deployment kind: %w", err)
+	}
+	publicOrigin, err := publicOriginFromEnv(os.LookupEnv, logger)
+	if err != nil {
+		return fmt.Errorf("load public origin: %w", err)
+	}
+	// ADR-0025 WP2: the native authorization server. Built whenever a pool
+	// exists, so its routes are mounted and answer 404 until a client is
+	// registered; the access-token validator joins the API group, the /auth
+	// edge endpoint and the Form graph's gateway edge below.
+	native, err := nativeAuthFromEnv(ctx, os.Getenv, pool, publicOrigin, logger)
+	if err != nil {
+		return fmt.Errorf("load native authorization: %w", err)
+	}
 
 	// Outbound e-mail (ADR-0024 WP7, gap G7). The environment is the BOOTSTRAP
 	// DEFAULT; the admin E-mail page's rows lay over it, and the resolver
@@ -493,6 +511,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			MainRoutePublicRules: api.CurrentMainRoutePublicRules(),
 			Brand:                brandingResolver,
 			FormSignInEnabled:    formSignInEnabled,
+			NativeTokens:         native.graphTokens(),
 		})
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
@@ -706,7 +725,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if secretKey := os.Getenv("APPLICATION_SECRET_KEY"); secretKey != "" && pool != nil {
 		sessionTokens = authsvc.NewLocalValidator(pool, secretKey)
 	}
-	apiGroupAuth := apiGroupAuthConfig(
+	apiGroupAuth := withNativeTokens(apiGroupAuthConfig(
 		formGraph,
 		principalValidator,
 		forwardedIdentityVerifier,
@@ -715,7 +734,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		os.Getenv("APPLICATION_SECRET_KEY"),
 		oidcSessionHandler != nil,
 		sessionManager,
-	)
+	), native.apiTokens())
 
 	// The browser-only routes: the project switcher, the notification list and
 	// the notification event stream.
@@ -2230,6 +2249,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
 		Branding:                     brandingResolver,
+		DeploymentKind:               deploymentKind,
+		PublicOrigin:                 publicOrigin,
+		NativeClients:                native.registry,
+		NativeStore:                  native.store,
+		NativePolicy:                 native.policy(pool),
+		NativeAccess:                 native.validator,
+		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                       mailComposer,
 		EmailSettings:                emailResolver,
 		BrandingPackages:             brandingPackages,
