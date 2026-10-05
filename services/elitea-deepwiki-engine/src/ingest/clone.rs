@@ -21,10 +21,26 @@
 //! system, global or environment git configuration, so no credential
 //! helper, `url.*.insteadOf` rewrite or `http.extraHeader` of the host
 //! machine applies, and the credential callback answers "no credentials"
-//! instead of prompting. gitoxide refuses to follow a redirect once extra
-//! headers are configured, so the header cannot be carried to another
-//! host. A credential is refused on plain `http` unless the host is a
+//! instead of prompting. No redirect is followed, with or without a
+//! credential: the host connected to is always the one the allowlist
+//! admitted (gitoxide's default follows the first redirect of an anonymous
+//! clone, to any host). A repository that moved must be given by its new
+//! URL. A credential is refused on plain `http` unless the host is a
 //! loopback address (the tests' local server).
+//!
+//! # Memory while fetching
+//!
+//! Resolving the pack decodes each object in memory. An object can claim
+//! any size and compress a thousandfold (512 MiB of zeros is half a
+//! megabyte on the wire), so the repository is opened with
+//! `gitoxide.objects.allocLimit` at `MAX_FILE_BYTES` (at least
+//! [`MIN_ALLOC_LIMIT`]): a larger object, or a pack whose delta tree needs
+//! more, fails the fetch before the allocation. The resolution runs on at
+//! most [`PACK_THREADS`] threads, each holding a few buffers up to that
+//! limit, so the fetch's peak memory is bounded by about
+//! `3 × PACK_THREADS × MAX_FILE_BYTES` plus the delta tree. That bound is
+//! large; the deployment control is the job's memory limit (the pod or
+//! container limit), which this does not replace.
 //!
 //! # What the checkout can and cannot write
 //!
@@ -56,6 +72,7 @@
 //! * The directory is always fresh: the scratch directory is per job, so a
 //!   leftover directory of that name is removed, not reused.
 //! * Python had no clone timeout and no size limits.
+//! * Python's `git clone` followed HTTP redirects; this clone follows none.
 
 use super::egress::AdmittedTarget;
 use super::identity::RepoIdentity;
@@ -98,6 +115,17 @@ const STOP_BYTES: u8 = 3;
 
 /// How often the watchdog looks at the clone.
 const WATCH_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The fewest bytes one allocation of the pack resolution may take, however
+/// small `MAX_FILE_BYTES` is: the delta tree of a large pack needs some.
+pub const MIN_ALLOC_LIMIT: u64 = 16 << 20;
+
+/// The most threads that resolve the pack.
+pub const PACK_THREADS: usize = 4;
+
+/// How many tree entries are admitted between two looks at the deadline
+/// and the cancel flag.
+const ADMIT_CHECK_EVERY: u64 = 1024;
 
 fn runtime_error(message: String) -> EngineError {
     EngineError::new(ErrorType::Runtime, message)
@@ -195,6 +223,8 @@ fn transport_options(target: &CloneTarget) -> Result<http::Options, EngineError>
     }
     options.user_agent =
         Some(concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")).to_owned());
+    // Never to another host than the admitted one (see the module docs).
+    options.follow_redirects = http::options::FollowRedirects::None;
     Ok(options)
 }
 
@@ -562,12 +592,17 @@ fn fetch_and_checkout(
 ) -> Result<(gix::Repository, TreeStats), EngineError> {
     let options = transport_options(target)?;
     let interrupt = AtomicBool::new(false);
+    let alloc_limit = limits.max_file_bytes.max(MIN_ALLOC_LIMIT);
+    let open = gix::open::Options::isolated().config_overrides([
+        format!("gitoxide.objects.allocLimit={alloc_limit}"),
+        format!("pack.threads={PACK_THREADS}"),
+    ]);
     let mut prepare = gix::clone::PrepareFetch::new(
         target.url(),
         destination,
         gix::create::Kind::WithWorktree,
         gix::create::Options::default(),
-        gix::open::Options::isolated(),
+        open,
     )
     .map_err(|e| classify_failure(target, &e))?
     .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(NonZeroU32::MIN))
@@ -594,10 +629,25 @@ fn fetch_and_checkout(
     if let Some(error) = stop_error(reason, seen, target, limits, "fetching") {
         return Err(error);
     }
-    let (mut checkout, _outcome) = fetched.map_err(|e| classify_failure(target, &e))?;
+    let (mut checkout, _outcome) = fetched.map_err(|e| {
+        // gitoxide's error tree (`{:#}`) names the allocation limit; its
+        // `source()` chain stops above it.
+        if format!("{e:#}").contains("too large to fit in memory") {
+            object_too_large(target, alloc_limit)
+        } else {
+            classify_failure(target, &e)
+        }
+    })?;
 
     // The tree is admitted BEFORE anything is written to the working tree.
-    let tree = admit_tree(checkout.repo(), target, limits, dir_bytes(&git_dir))?;
+    let tree = admit_tree(
+        checkout.repo(),
+        target,
+        limits,
+        dir_bytes(&git_dir),
+        cancel,
+        deadline,
+    )?;
 
     let (checked_out, reason, seen) = watched(
         &interrupt,
@@ -624,12 +674,31 @@ fn fetch_and_checkout(
     Ok((repo, tree))
 }
 
-/// Admit the fetched commit's tree against the limits.
+/// The error for a pack the resolution refused to decode: an object (or
+/// the pack's delta tree) larger than the allocation limit.
+fn object_too_large(target: &CloneTarget, alloc_limit: u64) -> EngineError {
+    EngineError::new(
+        ErrorType::Value,
+        format!(
+            "The repository {} holds an object larger than this deployment accepts: over {alloc_limit} bytes once decompressed (ELITEA_DEEPWIKI_MAX_FILE_BYTES) (while fetching)",
+            py_repr(target.repo_identifier())
+        ),
+    )
+}
+
+/// Admit the fetched commit's tree against the limits, entry by entry, as
+/// the traversal visits it: the walk stops at the first limit passed, at
+/// the deadline and on cancellation. A tree may list the same subtree any
+/// number of times (a few objects can describe billions of files), so
+/// nothing is collected first, and directories count against
+/// `MAX_FILE_COUNT` too.
 fn admit_tree(
     repo: &gix::Repository,
     target: &CloneTarget,
     limits: &IngestLimits,
     fetched_bytes: u64,
+    cancel: &AtomicBool,
+    deadline: Instant,
 ) -> Result<TreeStats, EngineError> {
     let fail = |e: &dyn std::error::Error| classify_failure(target, e);
     let tree = repo
@@ -637,21 +706,150 @@ fn admit_tree(
         .map_err(|e| fail(&e))?
         .tree()
         .map_err(|e| fail(&e))?;
-    let mut recorder = gix::traverse::tree::Recorder::default();
-    tree.traverse()
-        .breadthfirst(&mut recorder)
-        .map_err(|e| fail(&e))?;
-    let mut budget = TreeBudget::new(limits, target.repo_identifier(), fetched_bytes);
-    for entry in &recorder.records {
-        if entry.mode.is_commit() {
-            budget.add_submodule();
-        } else if entry.mode.is_blob_or_symlink() {
-            let size = repo.find_header(entry.oid).map_err(|e| fail(&e))?.size();
-            let path = entry.filepath.to_str_lossy();
-            budget.add_blob(&path, size, entry.mode.is_link())?;
+    let mut admission = Admission {
+        repo,
+        target,
+        limits,
+        budget: TreeBudget::new(limits, target.repo_identifier(), fetched_bytes),
+        cancel,
+        deadline,
+        visited: 0,
+        directories: 0,
+        path: gix::bstr::BString::default(),
+        queued_paths: std::collections::VecDeque::new(),
+        stopped: None,
+    };
+    let walked = tree.traverse().breadthfirst(&mut admission);
+    if let Some(error) = admission.stopped {
+        return Err(error);
+    }
+    walked.map_err(|e| fail(&e))?;
+    Ok(admission.budget.finish())
+}
+
+/// The tree walk's delegate: each entry goes to the budget as it is seen.
+struct Admission<'a> {
+    repo: &'a gix::Repository,
+    target: &'a CloneTarget,
+    limits: &'a IngestLimits,
+    budget: TreeBudget<'a>,
+    cancel: &'a AtomicBool,
+    deadline: Instant,
+    visited: u64,
+    directories: u64,
+    /// The path of the entry being visited, and those of the trees queued.
+    path: gix::bstr::BString,
+    queued_paths: std::collections::VecDeque<gix::bstr::BString>,
+    /// Why the walk stopped early.
+    stopped: Option<EngineError>,
+}
+
+impl Admission<'_> {
+    fn stop(&mut self, error: EngineError) -> gix::traverse::tree::visit::Action {
+        self.stopped = Some(error);
+        std::ops::ControlFlow::Break(())
+    }
+
+    /// The deadline and the cancel flag, every [`ADMIT_CHECK_EVERY`]
+    /// entries.
+    fn interrupted(&mut self) -> Option<EngineError> {
+        self.visited += 1;
+        if !self.visited.is_multiple_of(ADMIT_CHECK_EVERY) {
+            return None;
+        }
+        let reason = if self.cancel.load(Ordering::Acquire) {
+            STOP_CANCELLED
+        } else if Instant::now() >= self.deadline {
+            STOP_DEADLINE
+        } else {
+            STOP_NONE
+        };
+        stop_error(reason, 0, self.target, self.limits, "admitting the tree")
+    }
+
+    fn pop_element(&mut self) {
+        if let Some(position) = self.path.rfind_byte(b'/') {
+            self.path.truncate(position);
+        } else {
+            self.path.clear();
         }
     }
-    Ok(budget.finish())
+
+    fn push_element(&mut self, name: &gix::bstr::BStr) {
+        if name.is_empty() {
+            return;
+        }
+        if !self.path.is_empty() {
+            self.path.push(b'/');
+        }
+        self.path.extend_from_slice(name);
+    }
+}
+
+impl gix::traverse::tree::Visit for Admission<'_> {
+    fn pop_back_tracked_path_and_set_current(&mut self) {
+        self.path = self.queued_paths.pop_back().unwrap_or_default();
+    }
+
+    fn pop_front_tracked_path_and_set_current(&mut self) {
+        self.path = self.queued_paths.pop_front().unwrap_or_default();
+    }
+
+    fn push_back_tracked_path_component(&mut self, component: &gix::bstr::BStr) {
+        self.push_element(component);
+        self.queued_paths.push_back(self.path.clone());
+    }
+
+    fn push_path_component(&mut self, component: &gix::bstr::BStr) {
+        self.push_element(component);
+    }
+
+    fn pop_path_component(&mut self) {
+        self.pop_element();
+    }
+
+    fn visit_tree(
+        &mut self,
+        _entry: &gix::objs::tree::EntryRef<'_>,
+    ) -> gix::traverse::tree::visit::Action {
+        if let Some(error) = self.interrupted() {
+            return self.stop(error);
+        }
+        self.directories += 1;
+        if self.directories > self.limits.max_file_count {
+            return self.stop(EngineError::new(
+                ErrorType::Value,
+                format!(
+                    "The repository {} has more than ELITEA_DEEPWIKI_MAX_FILE_COUNT={} directories",
+                    py_repr(self.target.repo_identifier()),
+                    self.limits.max_file_count
+                ),
+            ));
+        }
+        std::ops::ControlFlow::Continue(true)
+    }
+
+    fn visit_nontree(
+        &mut self,
+        entry: &gix::objs::tree::EntryRef<'_>,
+    ) -> gix::traverse::tree::visit::Action {
+        if let Some(error) = self.interrupted() {
+            return self.stop(error);
+        }
+        if entry.mode.is_commit() {
+            self.budget.add_submodule();
+        } else if entry.mode.is_blob_or_symlink() {
+            let size = match self.repo.find_header(entry.oid) {
+                Ok(header) => header.size(),
+                Err(error) => return self.stop(classify_failure(self.target, &error)),
+            };
+            let path = self.path.to_str_lossy().into_owned();
+            if let Err(error) = self.budget.add_blob(&path, size, entry.mode.is_link()) {
+                return self.stop(error);
+            }
+        }
+        std::ops::ControlFlow::Continue(true)
+    }
 }
 
 /// Check, from outside gitoxide, that the checkout stayed inside `root`.

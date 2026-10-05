@@ -27,7 +27,10 @@
 //! The type-state is the enforcement: the clone takes an
 //! [`AdmittedTarget`], and the only way to get one is [`EgressPolicy::admit`].
 //! So no code path can reach the transport — where the credential is
-//! read — without the check.
+//! read — without the check. The admitted host is also the only host the
+//! transport connects to: the clone follows no HTTP redirect, with or
+//! without a credential (`clone::transport_options`), since a redirect
+//! would take an anonymous clone to a host this check never saw.
 
 use super::providers::CloneTarget;
 use crate::errors::{EngineError, ErrorType};

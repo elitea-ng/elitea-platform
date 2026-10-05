@@ -815,6 +815,130 @@ async fn a_symlinked_directory_is_never_written_through() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A tree bomb: every directory lists the same subtree 16 times, six
+/// levels deep, so 7 small objects describe 16.7 million files. The tree
+/// was walked into memory whole, outside the deadline, before the file
+/// count was checked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tree_bomb_stops_at_the_file_count() {
+    let root = scratch("treebomb");
+    let served = malicious_repository(&root, |bare| {
+        let blob = write_object(bare, "blob", b"x\n");
+        let names: Vec<String> = (0..16).map(|i| format!("e{i:02}")).collect();
+        let level = |id: &str, mode: &str| {
+            let entries: Vec<(&str, &str, &str)> =
+                names.iter().map(|n| (mode, n.as_str(), id)).collect();
+            raw_tree(&entries)
+        };
+        let mut id = write_object(bare, "tree", &level(&blob, "100644"));
+        for _ in 0..4 {
+            id = write_object(bare, "tree", &level(&id, "40000"));
+        }
+        level(&id, "40000")
+    });
+    let http = serve(&served, None, Duration::ZERO).await;
+    let job = root.join("job");
+    let started = Instant::now();
+    let error = ingest_admitted(
+        admitted(http.port, "o/evil", "main", None),
+        limits(),
+        &job,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+    .unwrap_err();
+    let elapsed = started.elapsed();
+    eprintln!("tree bomb: {error} after {elapsed:?}");
+    assert!(error.message.contains("MAX_FILE_COUNT"), "{error}");
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An anonymous clone whose remote redirects to a host off the allowlist
+/// is refused: the redirect is not followed, so nothing reaches that host.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_redirect_off_the_allowlist_is_not_followed() {
+    let root = scratch("redirect");
+    let (served, _main, _dev) = served_repository(&root);
+    let http = serve(&served, None, Duration::ZERO).await;
+    // The redirector: every request goes to `localhost`, which the
+    // allowlist (`127.0.0.1`) does not name.
+    let port = http.port;
+    let redirector = axum::Router::new().fallback(move |request: Request| async move {
+        let tail = request
+            .uri()
+            .path_and_query()
+            .map(|p| p.as_str().to_owned())
+            .unwrap_or_default();
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::FOUND;
+        response.headers_mut().insert(
+            "location",
+            HeaderValue::from_str(&format!("http://localhost:{port}{tail}")).unwrap(),
+        );
+        response
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let redirect_port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, redirector).await.unwrap() });
+
+    let result = ingest_admitted(
+        admitted(redirect_port, "o/r", "main", None),
+        limits(),
+        &root.join("job"),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
+    let reached = http.seen.lock().unwrap().len();
+    eprintln!("redirect: {result:?}, {reached} request(s) reached the redirect target");
+    assert!(result.is_err(), "the clone followed the redirect");
+    assert_eq!(reached, 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// One 512 MiB blob of zeros is half a megabyte in the pack. Resolving the
+/// pack decoded it whole in memory before any limit looked at it; now an
+/// object larger than `MAX_FILE_BYTES` is refused while fetching.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_decompression_bomb_is_refused_while_fetching() {
+    let root = scratch("zipbomb");
+    let served = malicious_repository(&root, |bare| {
+        let mut child = Command::new("git")
+            .args(["hash-object", "-t", "blob", "-w", "--stdin"])
+            .current_dir(bare)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let zeros = vec![0u8; 1 << 20];
+        for _ in 0..512 {
+            stdin.write_all(&zeros).unwrap();
+        }
+        drop(stdin);
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        let blob = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        raw_tree(&[("100644", "zeros.bin", &blob)])
+    });
+    let http = serve(&served, None, Duration::ZERO).await;
+    let error = ingest_admitted(
+        admitted(http.port, "o/evil", "main", None),
+        limits(),
+        &root.join("job"),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+    .unwrap_err();
+    eprintln!("decompression bomb: {error}");
+    assert!(
+        error.message.contains("MAX_FILE_BYTES") && error.message.ends_with("(while fetching)"),
+        "{error}"
+    );
+    assert_eq!(classify(error.error_type, &error.message), "invalid_input");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_settings_path_refuses_a_host_off_the_allowlist() {
     let settings = IngestSettings {

@@ -92,8 +92,10 @@ runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
    reports the identity `{repo}:{branch}:{sha8}` of the commit checked out.
 
 The credential is an in-memory extra header for one connection: never in a
-URL, `argv`, `.git/config` or an error message, and not sent after a
-redirect (gitoxide refuses to follow one once headers are set). The
+URL, `argv`, `.git/config` or an error message. No HTTP redirect is
+followed, with or without a credential, so a clone only ever connects to the
+host the allowlist admitted (a repository that moved must be given by its new
+URL). The
 repository is opened isolated, so no host git configuration (credential
 helpers, `insteadOf`, `extraHeader`) applies. Paths are validated by
 gitoxide (no `..`, no `.git`), a file is never written below a symlink,
@@ -105,14 +107,23 @@ Git LFS are not supported, on purpose.
 | --- | --- | --- |
 | `ELITEA_DEEPWIKI_GIT_ALLOWLIST` | unset = refuse all | hosts a clone may reach |
 | `ELITEA_DEEPWIKI_MAX_CLONE_BYTES` | 2 GiB | pack bytes received (watched during the fetch) + blobs to check out |
-| `ELITEA_DEEPWIKI_MAX_FILE_COUNT` | 100 000 | files in the tree, before checkout |
-| `ELITEA_DEEPWIKI_MAX_FILE_BYTES` | 100 MiB | one blob, before checkout |
+| `ELITEA_DEEPWIKI_MAX_FILE_COUNT` | 100 000 | files (and, separately, directories) in the tree, before checkout; the tree walk stops at the first limit passed |
+| `ELITEA_DEEPWIKI_MAX_FILE_BYTES` | 100 MiB | one blob, before checkout; also the largest allocation of the pack resolution (at least 16 MiB), so a decompression bomb fails while fetching |
 | `ELITEA_DEEPWIKI_MAX_PARSED_BYTES` | 512 MiB | blobs discovery would parse, before checkout |
 | `ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS` | 600 | ls-remote + fetch + checkout |
 | `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the per-job scratch directories |
 
 A limit is a `ValueError` (`invalid_input`) naming the setting; the
-timeout is `timeout_error`. `tests/ingest_clone.rs` runs every path against
+timeout is `timeout_error`. The tree admission walks the fetched tree entry
+by entry (a few objects can describe billions of files) and also stops at the
+deadline and on cancellation.
+
+Residual risk: the pack resolution decodes objects in memory on at most 4
+threads, each holding a few buffers up to the allocation limit, so a fetch
+can still peak at about `3 × 4 × MAX_FILE_BYTES` plus the pack's delta tree.
+gitoxide offers a per-allocation limit and a thread count, not a total; the
+deployment control is the job's memory limit (container or pod), which
+should stay above that figure. `tests/ingest_clone.rs` runs every path against
 `git http-backend` on loopback (git is a TEST dependency only);
 `ELITEA_DEEPWIKI_LIVE_CLONE=1` adds a clone of this repository from GitHub.
 
