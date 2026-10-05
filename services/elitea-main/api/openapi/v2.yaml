@@ -3274,6 +3274,27 @@ components:
               properties:
                 name: { type: string }
                 display_name: { type: string }
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): a thinking or model step's display metadata
+                (internal/infra/db/repos/agent_trace.go:775); its keys follow
+                the step type.
+            tool_output_chunks:
+              type: object
+              description: >-
+                Present on a tool call whose output was chunked: how many of
+                its `total` chunks were `received`, and whether the
+                reassembly is `complete` (its SHA-256 matched).
+              properties:
+                received: { type: integer }
+                total: { type: integer }
+                complete: { type: boolean }
+                tool_output_sha256: { type: string }
+                sanitized:
+                  type: boolean
+                  description: A NUL byte was stripped from at least one chunk.
 
     MessageTraceStepDetail:
       allOf:

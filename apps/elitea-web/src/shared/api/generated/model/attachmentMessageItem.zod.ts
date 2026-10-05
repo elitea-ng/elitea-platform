@@ -40,52 +40,20 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AttachmentMessageItemDetails } from "./attachmentMessageItemDetails.zod";
 
-export const ChatContinueRequest = zod
+export const AttachmentMessageItem = zod
   .object({
-    project_id: zod.int(),
-    conversation_uuid: zod.uuid(),
-    message_id: zod.uuid().describe("The paused answer's message id."),
-    thread_id: zod.string().optional(),
-    hitl_resume: zod
-      .boolean()
-      .optional()
-      .describe(
-        "True for `agent.continue.hitl.v1` and for a batched authorization answer.",
-      ),
-    hitl_action: zod
-      .string()
-      .optional()
-      .describe(
-        "The single-pause decision, one the pause frame's `available_actions` offered: `approve`, `reject`, `edit`, `block_with_comment` or `answer`.",
-      ),
-    hitl_value: zod
-      .unknown()
-      .optional()
-      .describe(
-        "The decision's value; its type follows the action. `approve`, `reject`: absent. `edit`: a non-empty STRING — the edited value (for a tool-call pause, the edited arguments as JSON text). `block_with_comment`: a non-empty string, the comment. `answer` (an ask_user pause): an OBJECT keyed by question id (each value the chosen option(s) or free text), or a plain string. The same rule applies to each `hitl_decisions[].value`.",
-      ),
-    hitl_decisions: zod
-      .array(zod.record(zod.string(), zod.unknown()))
-      .optional()
-      .describe(
-        "Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.",
-      ),
-    mcp_tokens: zod.record(zod.string(), zod.unknown()).optional(),
-    ignored_mcp_servers: zod.array(zod.string()).optional(),
-    user_declined_mcp_servers: zod.array(zod.string()).optional(),
-    user_input: zod.string().optional(),
-    authorization_request_id: zod.string().optional(),
-    authorization_action: zod
-      .string()
-      .optional()
-      .describe(
-        "`authorize` or `skip` (agent.continue.authorization.v1, single request).",
-      ),
+    id: zod.int(),
+    item_type: zod.string().describe("`attachment_message`."),
+    order_index: zod.int(),
+    item_details: AttachmentMessageItemDetails,
   })
   .describe(
-    "Resume a paused turn. NOTE(W2): internal/api/v2/agentexecution/route.go:201 (`currentContinuationBody`); which fields are allowed depends on the `execution_contract` (route.go:484-540).\n",
+    "One file sent with a message (`item_type` `attachment_message`). `item_details.filepath` is `/{bucket}/{conversation_uuid}/{name}`; download it with downloadConversationAttachment using the last segment as the name.",
   );
 
-export type ChatContinueRequest = zod.input<typeof ChatContinueRequest>;
-export type ChatContinueRequestOutput = zod.output<typeof ChatContinueRequest>;
+export type AttachmentMessageItem = zod.input<typeof AttachmentMessageItem>;
+export type AttachmentMessageItemOutput = zod.output<
+  typeof AttachmentMessageItem
+>;

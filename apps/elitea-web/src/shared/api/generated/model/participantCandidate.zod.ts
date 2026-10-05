@@ -41,51 +41,22 @@
  */
 import * as zod from "zod";
 
-export const ChatContinueRequest = zod
+export const ParticipantCandidate = zod
   .object({
-    project_id: zod.int(),
-    conversation_uuid: zod.uuid(),
-    message_id: zod.uuid().describe("The paused answer's message id."),
-    thread_id: zod.string().optional(),
-    hitl_resume: zod
-      .boolean()
-      .optional()
+    user_id: zod
+      .int()
       .describe(
-        "True for `agent.continue.hitl.v1` and for a batched authorization answer.",
+        "The USER id — `entity_meta.id` of a user participant and a `user_ids` mention entry.",
       ),
-    hitl_action: zod
-      .string()
-      .optional()
-      .describe(
-        "The single-pause decision, one the pause frame's `available_actions` offered: `approve`, `reject`, `edit`, `block_with_comment` or `answer`.",
-      ),
-    hitl_value: zod
-      .unknown()
-      .optional()
-      .describe(
-        "The decision's value; its type follows the action. `approve`, `reject`: absent. `edit`: a non-empty STRING — the edited value (for a tool-call pause, the edited arguments as JSON text). `block_with_comment`: a non-empty string, the comment. `answer` (an ask_user pause): an OBJECT keyed by question id (each value the chosen option(s) or free text), or a plain string. The same rule applies to each `hitl_decisions[].value`.",
-      ),
-    hitl_decisions: zod
-      .array(zod.record(zod.string(), zod.unknown()))
-      .optional()
-      .describe(
-        "Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.",
-      ),
-    mcp_tokens: zod.record(zod.string(), zod.unknown()).optional(),
-    ignored_mcp_servers: zod.array(zod.string()).optional(),
-    user_declined_mcp_servers: zod.array(zod.string()).optional(),
-    user_input: zod.string().optional(),
-    authorization_request_id: zod.string().optional(),
-    authorization_action: zod
-      .string()
-      .optional()
-      .describe(
-        "`authorize` or `skip` (agent.continue.authorization.v1, single request).",
-      ),
+    name: zod.string(),
+    email: zod.string().optional(),
+    already_participant: zod.boolean(),
   })
   .describe(
-    "Resume a paused turn. NOTE(W2): internal/api/v2/agentexecution/route.go:201 (`currentContinuationBody`); which fields are allowed depends on the `execution_contract` (route.go:484-540).\n",
+    "A project member. NOTE(W2): internal/api/v2/conversations/candidates.go:40 (`ParticipantCandidate`).",
   );
 
-export type ChatContinueRequest = zod.input<typeof ChatContinueRequest>;
-export type ChatContinueRequestOutput = zod.output<typeof ChatContinueRequest>;
+export type ParticipantCandidate = zod.input<typeof ParticipantCandidate>;
+export type ParticipantCandidateOutput = zod.output<
+  typeof ParticipantCandidate
+>;

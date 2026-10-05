@@ -65,7 +65,15 @@ export const getListNotificationsResponseMock = (
       is_seen: faker.datatype.boolean(),
       project_id: faker.number.int(),
       user_id: faker.number.int(),
-      meta: {},
+      meta: {
+        sender: faker.helpers.arrayElement([
+          {
+            id: faker.number.int(),
+            name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          },
+          undefined,
+        ]),
+      },
       created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
       updated_at: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -120,7 +128,15 @@ export const getMarkNotificationSeenResponseMock = (
   is_seen: faker.datatype.boolean(),
   project_id: faker.number.int(),
   user_id: faker.number.int(),
-  meta: {},
+  meta: {
+    sender: faker.helpers.arrayElement([
+      {
+        id: faker.number.int(),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      undefined,
+    ]),
+  },
   created_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
   updated_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),

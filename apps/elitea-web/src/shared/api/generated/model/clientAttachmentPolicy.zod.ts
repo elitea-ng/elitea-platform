@@ -41,51 +41,52 @@
  */
 import * as zod from "zod";
 
-export const ChatContinueRequest = zod
+export const ClientAttachmentPolicy = zod
   .object({
-    project_id: zod.int(),
-    conversation_uuid: zod.uuid(),
-    message_id: zod.uuid().describe("The paused answer's message id."),
-    thread_id: zod.string().optional(),
-    hitl_resume: zod
+    max_files: zod.int().describe("Files one message carries in the composer."),
+    max_total_bytes: zod
+      .int()
+      .describe(
+        "One upload, all chunks of one file (ARTIFACT_ATTACHMENT_MAX_TOTAL_MB).",
+      ),
+    max_file_bytes: zod
+      .int()
+      .describe("One non-image file (ARTIFACT_ATTACHMENT_MAX_FILE_MB)."),
+    max_image_bytes: zod
+      .int()
+      .describe("One image (ARTIFACT_ATTACHMENT_MAX_IMAGE_MB)."),
+    chunk_bytes: zod
+      .int()
+      .describe(
+        "The largest single upload request; send a larger file in chunks of at most this size.",
+      ),
+    accepted_extensions: zod
+      .array(zod.string())
+      .describe("Lower-case, leading-dot extensions the model can read."),
+    max_extract_bytes: zod
+      .int()
+      .describe(
+        "The largest document whose text is extracted for the model; a larger one is stored but not read.",
+      ),
+    inline_image_max_bytes: zod
+      .int()
+      .describe(
+        "The largest image (raw bytes) handed to the model as an image.",
+      ),
+    inline_image_formats: zod
+      .array(zod.string())
+      .describe("Extensions handed to the model as images."),
+    inline_image_downscale: zod
       .boolean()
-      .optional()
       .describe(
-        "True for `agent.continue.hitl.v1` and for a batched authorization answer.",
-      ),
-    hitl_action: zod
-      .string()
-      .optional()
-      .describe(
-        "The single-pause decision, one the pause frame's `available_actions` offered: `approve`, `reject`, `edit`, `block_with_comment` or `answer`.",
-      ),
-    hitl_value: zod
-      .unknown()
-      .optional()
-      .describe(
-        "The decision's value; its type follows the action. `approve`, `reject`: absent. `edit`: a non-empty STRING — the edited value (for a tool-call pause, the edited arguments as JSON text). `block_with_comment`: a non-empty string, the comment. `answer` (an ask_user pause): an OBJECT keyed by question id (each value the chosen option(s) or free text), or a plain string. The same rule applies to each `hitl_decisions[].value`.",
-      ),
-    hitl_decisions: zod
-      .array(zod.record(zod.string(), zod.unknown()))
-      .optional()
-      .describe(
-        "Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.",
-      ),
-    mcp_tokens: zod.record(zod.string(), zod.unknown()).optional(),
-    ignored_mcp_servers: zod.array(zod.string()).optional(),
-    user_declined_mcp_servers: zod.array(zod.string()).optional(),
-    user_input: zod.string().optional(),
-    authorization_request_id: zod.string().optional(),
-    authorization_action: zod
-      .string()
-      .optional()
-      .describe(
-        "`authorize` or `skip` (agent.continue.authorization.v1, single request).",
+        "True when the server downscales a larger image in one of `inline_image_formats` to fit `inline_image_max_bytes`, so a client need not.",
       ),
   })
   .describe(
-    "Resume a paused turn. NOTE(W2): internal/api/v2/agentexecution/route.go:201 (`currentContinuationBody`); which fields are allowed depends on the `execution_contract` (route.go:484-540).\n",
+    "The deployment's chat attachment limits (client contract 1.1), so a client can refuse a file before uploading it; the server enforces every one of them again. Byte values are bytes. A project's storage policy may set a different per-file cap, which the upload's 400 names. NOTE(W2): internal/api/v2/discovery/document.go:60 (`AttachmentPolicy`), filled by internal/api/v2/conversations/attachment_limits.go:47 (`CurrentAttachmentLimits`).",
   );
 
-export type ChatContinueRequest = zod.input<typeof ChatContinueRequest>;
-export type ChatContinueRequestOutput = zod.output<typeof ChatContinueRequest>;
+export type ClientAttachmentPolicy = zod.input<typeof ClientAttachmentPolicy>;
+export type ClientAttachmentPolicyOutput = zod.output<
+  typeof ClientAttachmentPolicy
+>;

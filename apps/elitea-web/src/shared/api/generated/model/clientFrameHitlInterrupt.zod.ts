@@ -40,52 +40,33 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ClientFrameEnvelope } from "./clientFrameEnvelope.zod";
+import { ClientFrameHitlInterruptDetail } from "./clientFrameHitlInterruptDetail.zod";
+import { ClientFrameToolMetadata } from "./clientFrameToolMetadata.zod";
 
-export const ChatContinueRequest = zod
-  .object({
-    project_id: zod.int(),
-    conversation_uuid: zod.uuid(),
-    message_id: zod.uuid().describe("The paused answer's message id."),
-    thread_id: zod.string().optional(),
-    hitl_resume: zod
-      .boolean()
-      .optional()
-      .describe(
-        "True for `agent.continue.hitl.v1` and for a batched authorization answer.",
-      ),
-    hitl_action: zod
-      .string()
-      .optional()
-      .describe(
-        "The single-pause decision, one the pause frame's `available_actions` offered: `approve`, `reject`, `edit`, `block_with_comment` or `answer`.",
-      ),
-    hitl_value: zod
-      .unknown()
-      .optional()
-      .describe(
-        "The decision's value; its type follows the action. `approve`, `reject`: absent. `edit`: a non-empty STRING — the edited value (for a tool-call pause, the edited arguments as JSON text). `block_with_comment`: a non-empty string, the comment. `answer` (an ask_user pause): an OBJECT keyed by question id (each value the chosen option(s) or free text), or a plain string. The same rule applies to each `hitl_decisions[].value`.",
-      ),
-    hitl_decisions: zod
-      .array(zod.record(zod.string(), zod.unknown()))
-      .optional()
-      .describe(
-        "Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.",
-      ),
-    mcp_tokens: zod.record(zod.string(), zod.unknown()).optional(),
-    ignored_mcp_servers: zod.array(zod.string()).optional(),
-    user_declined_mcp_servers: zod.array(zod.string()).optional(),
-    user_input: zod.string().optional(),
-    authorization_request_id: zod.string().optional(),
-    authorization_action: zod
-      .string()
-      .optional()
-      .describe(
-        "`authorize` or `skip` (agent.continue.authorization.v1, single request).",
-      ),
-  })
-  .describe(
-    "Resume a paused turn. NOTE(W2): internal/api/v2/agentexecution/route.go:201 (`currentContinuationBody`); which fields are allowed depends on the `execution_contract` (route.go:484-540).\n",
-  );
+export const ClientFrameHitlInterrupt = ClientFrameEnvelope.and(
+  zod.object({
+    response_metadata: zod.object({
+      thread_id: zod.string().nullish(),
+      message: zod.string().nullish(),
+      available_actions: zod.array(zod.string()).nullish(),
+      hitl_interrupt: ClientFrameHitlInterruptDetail.optional(),
+      hitl_interrupts: zod
+        .array(ClientFrameHitlInterruptDetail)
+        .nullish()
+        .describe(
+          "Every pending interrupt; a parallel pause carries several, one decision each.",
+        ),
+      metadata: ClientFrameToolMetadata.optional(),
+    }),
+  }),
+).describe(
+  "The turn paused for a human decision. Terminal, unless it is a fan-out child pause (`response_metadata.metadata` carries both `parent_agent_name` and `child_thread_id`): then siblings keep streaming and only the parent's terminal frame ends the turn. Answer it with continueChatExecution and `agent.continue.hitl.v1`.",
+);
 
-export type ChatContinueRequest = zod.input<typeof ChatContinueRequest>;
-export type ChatContinueRequestOutput = zod.output<typeof ChatContinueRequest>;
+export type ClientFrameHitlInterrupt = zod.input<
+  typeof ClientFrameHitlInterrupt
+>;
+export type ClientFrameHitlInterruptOutput = zod.output<
+  typeof ClientFrameHitlInterrupt
+>;

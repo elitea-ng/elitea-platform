@@ -48,7 +48,21 @@ export const Notification = zod
     is_seen: zod.boolean(),
     project_id: zod.int(),
     user_id: zod.int(),
-    meta: zod.record(zod.string(), zod.unknown()),
+    meta: zod
+      .object({
+        sender: zod
+          .object({
+            id: zod.int(),
+            name: zod.string(),
+          })
+          .optional()
+          .describe(
+            "`chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved.",
+          ),
+      })
+      .describe(
+        "Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds.",
+      ),
     created_at: zod.string(),
     updated_at: zod.string().nullable(),
     event_type: zod.string(),

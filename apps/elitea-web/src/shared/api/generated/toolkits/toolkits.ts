@@ -53,6 +53,7 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ClientUpgradeRequiredResponse,
   ErrorResponse,
   GetToolkitToolResult202,
   GetToolkitToolResultParams,
@@ -60,6 +61,7 @@ import type {
   IndexWriteAck,
   IndexWriteRefusal,
   InternalMcpPatStatus,
+  InvalidClientVersionResponse,
   ListToolkitAvailableTools200,
   ListToolkitInstancesParams,
   McpDcrProxyRequest,
@@ -1861,6 +1863,11 @@ export type listToolkitInstancesResponse200 = {
   status: 200;
 };
 
+export type listToolkitInstancesResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type listToolkitInstancesResponse401 = {
   data: N401Response;
   status: 401;
@@ -1869,6 +1876,11 @@ export type listToolkitInstancesResponse401 = {
 export type listToolkitInstancesResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type listToolkitInstancesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type listToolkitInstancesResponse500 = {
@@ -1881,8 +1893,10 @@ export type listToolkitInstancesResponseSuccess =
     headers: Headers;
   };
 export type listToolkitInstancesResponseError = (
+  | listToolkitInstancesResponse400
   | listToolkitInstancesResponse401
   | listToolkitInstancesResponse403
+  | listToolkitInstancesResponse426
   | listToolkitInstancesResponse500
 ) & {
   headers: Headers;
@@ -1946,7 +1960,12 @@ export const getListToolkitInstancesQueryKey = (
 
 export const getListToolkitInstancesQueryOptions = <
   TData = Awaited<ReturnType<typeof listToolkitInstances>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListToolkitInstancesParams,
@@ -1988,11 +2007,20 @@ export type ListToolkitInstancesQueryResult = NonNullable<
   Awaited<ReturnType<typeof listToolkitInstances>>
 >;
 export type ListToolkitInstancesQueryError =
-  N401Response | N403Response | N500Response;
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useListToolkitInstances<
   TData = Awaited<ReturnType<typeof listToolkitInstances>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params: undefined | ListToolkitInstancesParams,
@@ -2020,7 +2048,12 @@ export function useListToolkitInstances<
 };
 export function useListToolkitInstances<
   TData = Awaited<ReturnType<typeof listToolkitInstances>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListToolkitInstancesParams,
@@ -2048,7 +2081,12 @@ export function useListToolkitInstances<
 };
 export function useListToolkitInstances<
   TData = Awaited<ReturnType<typeof listToolkitInstances>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListToolkitInstancesParams,
@@ -2072,7 +2110,12 @@ export function useListToolkitInstances<
 
 export function useListToolkitInstances<
   TData = Awaited<ReturnType<typeof listToolkitInstances>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListToolkitInstancesParams,
@@ -2389,6 +2432,11 @@ export type listToolkitAvailableToolsResponse422 = {
   status: 422;
 };
 
+export type listToolkitAvailableToolsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listToolkitAvailableToolsResponse500 = {
   data: N500Response;
   status: 500;
@@ -2409,6 +2457,7 @@ export type listToolkitAvailableToolsResponseError = (
   | listToolkitAvailableToolsResponse403
   | listToolkitAvailableToolsResponse404
   | listToolkitAvailableToolsResponse422
+  | listToolkitAvailableToolsResponse426
   | listToolkitAvailableToolsResponse500
   | listToolkitAvailableToolsResponse503
 ) & {
@@ -2465,6 +2514,7 @@ export const getListToolkitAvailableToolsQueryOptions = <
     | N403Response
     | N404Response
     | void
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2519,6 +2569,7 @@ export type ListToolkitAvailableToolsQueryError =
   | N403Response
   | N404Response
   | void
+  | ClientUpgradeRequiredResponse
   | N500Response;
 
 export function useListToolkitAvailableTools<
@@ -2529,6 +2580,7 @@ export function useListToolkitAvailableTools<
     | N403Response
     | N404Response
     | void
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2563,6 +2615,7 @@ export function useListToolkitAvailableTools<
     | N403Response
     | N404Response
     | void
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2597,6 +2650,7 @@ export function useListToolkitAvailableTools<
     | N403Response
     | N404Response
     | void
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
@@ -2627,6 +2681,7 @@ export function useListToolkitAvailableTools<
     | N403Response
     | N404Response
     | void
+    | ClientUpgradeRequiredResponse
     | N500Response,
 >(
   projectId: string,
