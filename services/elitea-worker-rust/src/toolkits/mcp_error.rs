@@ -148,8 +148,28 @@ pub(crate) fn model_visible_mcp_error(
             Some(detail) => format!("the remote MCP server rejected the call: {detail}"),
             None => "the remote MCP server rejected the call".to_owned(),
         }
-    } else {
+    } else if let Some(rest) = error.message.strip_prefix("Task execution failed: ") {
+        // A task-capable tool (adk-tool 2.2.0 `McpTool::execute` -> `TaskError`).
+        task_phrase(rest, redaction)
+    } else if error.message.starts_with(&call_prefix)
+        || error
+            .message
+            .contains("result is uncertain and was not replayed")
+    {
         transport_phrase(&error.message).to_owned()
+    } else if error.message == "MCP tool returned no content"
+        || error.message.starts_with("Invalid MCP result from ")
+        || error.message.contains("result invalid: ")
+    {
+        "the remote MCP tool returned an empty or unreadable result".to_owned()
+    } else if error.message == "Tool arguments must be an object" {
+        "the tool arguments must be a JSON object".to_owned()
+    } else if error.message.contains("unresolved MRTR input request") {
+        "the remote MCP tool asked for more input, which this runtime cannot supply".to_owned()
+    } else {
+        // An ADK message this module does not know. Its text may hold
+        // internals, so only a neutral phrase passes.
+        "the remote MCP tool failed".to_owned()
     };
     AdkError::new(
         ErrorComponent::Tool,
@@ -162,6 +182,31 @@ pub(crate) fn model_visible_mcp_error(
         retry_after_ms: None,
         max_attempts: Some(1),
     })
+}
+
+/// The model-visible text of a failed MCP task (`TaskError` display). Only a
+/// failed task's own error, which the server wrote, passes, through the same
+/// redaction and bound as an `isError` result.
+fn task_phrase(rest: &str, redaction: &McpErrorRedaction) -> String {
+    if let Some((_, detail)) = rest
+        .strip_prefix("Task '")
+        .and_then(|rest| rest.split_once("' failed: "))
+    {
+        return match bounded_detail(detail, redaction) {
+            Some(detail) => format!("the remote MCP tool returned an error: {detail}"),
+            None => "the remote MCP tool returned an error without a description".to_owned(),
+        };
+    }
+    if rest.starts_with("Task '") && rest.contains("' timed out after ") {
+        "the remote MCP task did not finish in time".to_owned()
+    } else if rest.starts_with("Task '") && rest.ends_with("' was cancelled") {
+        "the remote MCP task was cancelled".to_owned()
+    } else if rest.starts_with("Task '") && rest.contains("' requires input: ") {
+        "the remote MCP tool asked for more input, which this runtime cannot supply".to_owned()
+    } else {
+        // Create or poll failures carry transport text.
+        "the remote MCP task could not be completed".to_owned()
+    }
 }
 
 /// A fixed phrase per transport failure class. No transport text passes.

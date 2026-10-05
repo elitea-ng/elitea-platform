@@ -86,8 +86,63 @@ fn transport_failures_keep_only_a_fixed_phrase() {
     // Another tool's message prefix is not this tool's error result.
     assert_eq!(
         visible("MCP tool 'other' execution failed: leaked text"),
-        "the remote MCP server could not be reached"
+        "the remote MCP tool failed"
     );
+}
+
+/// The ADK errors that are not transport failures keep their own meaning, and
+/// a failed task keeps the server's explanation.
+#[test]
+fn task_and_result_failures_are_not_reported_as_unreachable() {
+    for (message, expected) in [
+        (
+            "Task execution failed: Task 't-1' failed: {\"content\":[{\"type\":\"text\",\"text\":\"Repository not found\"}],\"isError\":true}",
+            "the remote MCP tool returned an error: {\"content\":[{\"type\":\"text\",\"text\":\"Repository not found\"}],\"isError\":true}",
+        ),
+        (
+            "Task execution failed: Task 't-1' timed out after 30000ms",
+            "the remote MCP task did not finish in time",
+        ),
+        (
+            "Task execution failed: Task 't-1' was cancelled",
+            "the remote MCP task was cancelled",
+        ),
+        (
+            "Task execution failed: Task 't-1' requires input: pick a branch",
+            "the remote MCP tool asked for more input, which this runtime cannot supply",
+        ),
+        (
+            "Task execution failed: Failed to poll task: error sending request for url (https://mcp.internal.example:8443/v1/mcp)",
+            "the remote MCP task could not be completed",
+        ),
+        (
+            "MCP tool returned no content",
+            "the remote MCP tool returned an empty or unreadable result",
+        ),
+        (
+            "Invalid MCP result from 'read_wiki': bad structured content",
+            "the remote MCP tool returned an empty or unreadable result",
+        ),
+        (
+            "MCP tool 'read_wiki' result invalid: bad structured content",
+            "the remote MCP tool returned an empty or unreadable result",
+        ),
+        (
+            "Tool arguments must be an object",
+            "the tool arguments must be a JSON object",
+        ),
+        (
+            "MCP tool 'read_wiki' returned an unresolved MRTR input request",
+            "the remote MCP tool asked for more input, which this runtime cannot supply",
+        ),
+    ] {
+        assert_eq!(visible(message), expected, "{message}");
+    }
+    let leaked = visible(&format!(
+        "Task execution failed: Task 't-1' failed: denied for {PAT} at {ENDPOINT}"
+    ));
+    assert!(!leaked.contains("pat-1234567890abcdef"), "{leaked}");
+    assert!(!leaked.contains("mcp.internal.example"), "{leaked}");
 }
 
 #[test]
