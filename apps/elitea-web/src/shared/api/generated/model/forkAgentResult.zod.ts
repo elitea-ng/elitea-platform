@@ -53,7 +53,9 @@ export const ForkAgentResult = zod
     webhook_secret: zod
       .unknown()
       .nullable()
-      .describe("Always null today (handler.go:3380)."),
+      .describe(
+        "Deprecated, and always null. An agent's webhook is its inbound trigger, whose secret is in the vault and is never part of a version or fork payload.\n",
+      ),
     versions: zod.array(
       zod.object({
         id: zod.string(),

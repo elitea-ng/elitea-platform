@@ -43,6 +43,10 @@ import * as zod from "zod";
 
 export const pipelineInboundTriggerModeRequestSignatureHeaderMax = 128;
 
+export const pipelineInboundTriggerModeRequestEventsItemMax = 64;
+
+export const pipelineInboundTriggerModeRequestEventsMax = 32;
+
 export const PipelineInboundTriggerModeRequest = zod
   .object({
     type: zod
@@ -67,6 +71,20 @@ export const PipelineInboundTriggerModeRequest = zod
       .optional()
       .describe(
         "The header to read the signature from. Required by `hmac_sha256` when no preset names one; overrides the preset's own header when both are given. `standard_webhooks_hmac` always reads `webhook-signature`, and any other name is refused.\n",
+      ),
+    events: zod
+      .array(zod.string().max(pipelineInboundTriggerModeRequestEventsItemMax))
+      .min(1)
+      .max(pipelineInboundTriggerModeRequestEventsMax)
+      .optional()
+      .describe(
+        'The provider events the trigger admits, for a GitHub or GitLab trigger only. `["*"]` admits every event. An empty list, and a list on a custom trigger, are refused with 400. Without this field a rotation keeps the stored list; a new trigger gets the default described on `PipelineInboundTrigger.events`.\n',
+      ),
+    allow_variable_overrides: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Let the inbound body's `variables` re-value the agent's declared variables. Without this field a rotation keeps the stored value, and a new trigger is off.\n",
       ),
   })
   .describe(

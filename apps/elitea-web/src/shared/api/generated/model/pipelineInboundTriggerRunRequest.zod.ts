@@ -46,12 +46,14 @@ export const PipelineInboundTriggerRunRequest = zod
     input: zod
       .string()
       .optional()
-      .describe("The text placed in front of the pipeline or the agent."),
+      .describe(
+        "The text placed in front of the pipeline or the agent. At most 16 KiB; a longer `input` is refused with 400, never cut.\n",
+      ),
     variables: zod
       .record(zod.string(), zod.unknown())
       .optional()
       .describe(
-        "AGENT versions only. New values for the variables the agent version declares, by name. A name the version does not declare is ignored. A string is used as it is, and a number or a boolean as its JSON text. Other values are ignored. A pipeline ignores this field.\n",
+        "AGENT versions only, and only when the trigger sets `allow_variable_overrides`; otherwise this field is ignored. New values for the variables the agent version declares, by name. A name the version does not declare is ignored. A string is used as it is, and a number or a boolean as its JSON text. Other values are ignored. A pipeline ignores this field.\n",
       ),
   })
   .describe(
