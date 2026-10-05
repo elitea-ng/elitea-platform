@@ -665,6 +665,9 @@ func reconstructCurrentAgentTrace(
 			if toolMeta := currentAgentMap(row.attrs, "tool_meta"); toolMeta != nil {
 				entry["tool_meta"] = cloneCurrentAgentMap(toolMeta)
 			}
+			if pause := currentAgentMap(row.attrs, "pause"); pause != nil {
+				entry["pause"] = cloneCurrentAgentMap(pause)
+			}
 			// The chunk progress travels back onto the entry so the NEXT
 			// chunk knows which index it is waiting for. Without it every
 			// chunk would look like index 0 against a fresh row and only the
@@ -736,6 +739,7 @@ func currentAgentToolCallToRow(
 	if err := validateCurrentAgentAttrs(attrs); err != nil {
 		return currentAgentTraceRow{}, err
 	}
+	isError, finishReason := currentAgentToolCallOutcome(entry)
 	return currentAgentTraceRow{
 		messageGroupID:    messageGroupID,
 		kind:              "tool_call",
@@ -744,12 +748,12 @@ func currentAgentToolCallToRow(
 		parentAgentCallID: boundedCurrentAgentString(currentAgentString(hierarchy["parent_agent_call_id"])),
 		startedAt:         parseCurrentAgentTime(entry["timestamp_start"]),
 		finishedAt:        parseCurrentAgentTime(entry["timestamp_finish"]),
-		isError:           currentAgentTruthy(entry["error"]),
+		isError:           isError,
 		hasVisibleContent: true,
 		toolName:          boundedCurrentAgentString(toolName),
 		toolInputs:        toolInputs,
 		toolOutput:        currentAgentStringPointer(entry["tool_output"]),
-		finishReason:      boundedCurrentAgentString(currentAgentString(entry["finish_reason"])),
+		finishReason:      finishReason,
 		attrs:             attrs,
 	}, nil
 }
@@ -984,6 +988,86 @@ func currentAgentHierarchyMetadata(entry map[string]any) map[string]any {
 	return result
 }
 
+// The finish reasons of a tool call that PAUSED for the user rather than
+// ending (issue 1066): a sensitive-tool approval, a clarifying question, or
+// another LangGraph interrupt. A paused call is not a failed one — the client
+// contract's frame catalogue documents them on `agent_tool_paused`.
+var currentAgentToolCallPauseReasons = map[string]bool{
+	"awaiting_approval": true,
+	"awaiting_input":    true,
+	"interrupted":       true,
+}
+
+// currentAgentLegacyInterruptErrorPrefix is how a Python worker built before
+// issue 1066 reported a pause: the call's error was
+// `_trace_text(GraphInterrupt(...))`, i.e. `json.dumps(str(exc))`, so the
+// repr arrives still wrapped in one pair of JSON quotes (and possibly
+// truncated, losing the closing one). Recognising it keeps a mixed-version
+// rollout from storing a pause as a failure. The text itself is never stored
+// (it carries the call's arguments).
+//
+// The text is a tool's exception message, which a tool or remote server
+// controls, so only the full head of the SDK's HITL payload counts (both the
+// sensitive-tool guard and ask_user open with `type: hitl` and a `hitl_`
+// interrupt id), and only on a call the worker ended as an error. Any other
+// interrupt from a pre-1066 worker stays a failure, as it was before.
+const currentAgentLegacyInterruptErrorPrefix = "(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_"
+
+// currentAgentLegacyClarifyingQuestionMarker is the ask_user guardrail inside
+// that repr: a question to the user, which the current worker reports as
+// awaiting_input rather than awaiting_approval.
+const currentAgentLegacyClarifyingQuestionMarker = "'guardrail_type': 'clarifying_question'"
+
+// currentAgentLegacyInterruptReason is the pause finish reason of a pre-1066
+// worker's interrupt-repr error, or "" when the text is not one.
+func currentAgentLegacyInterruptReason(finishReason, text string) string {
+	if finishReason != "error" {
+		return ""
+	}
+	text = strings.TrimPrefix(text, `"`)
+	if !strings.HasPrefix(text, currentAgentLegacyInterruptErrorPrefix) {
+		return ""
+	}
+	if strings.Contains(text, currentAgentLegacyClarifyingQuestionMarker) {
+		return "awaiting_input"
+	}
+	return "awaiting_approval"
+}
+
+// currentAgentToolCallOutcome is the stored (is_error, finish_reason) of one
+// tool call entry.
+func currentAgentToolCallOutcome(entry map[string]any) (bool, string) {
+	finishReason := boundedCurrentAgentString(currentAgentString(entry["finish_reason"]))
+	if currentAgentToolCallPauseReasons[finishReason] {
+		return false, finishReason
+	}
+	if text, ok := entry["error"].(string); ok {
+		if reason := currentAgentLegacyInterruptReason(finishReason, text); reason != "" {
+			return false, reason
+		}
+	}
+	return currentAgentTruthy(entry["error"]), finishReason
+}
+
+// currentAgentToolCallPauseAttrs keeps the two identity fields of a paused
+// call that tie it to its approval card, and nothing else from the pause.
+func currentAgentToolCallPauseAttrs(entry map[string]any) map[string]any {
+	pause := currentAgentMap(entry, "pause")
+	if pause == nil {
+		return nil
+	}
+	kept := map[string]any{}
+	for _, key := range []string{"interrupt_id", "guardrail_type"} {
+		if value := boundedCurrentAgentString(currentAgentString(pause[key])); value != "" {
+			kept[key] = value
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
 func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	attrs := map[string]any{}
 	if chunk, ok := entry["tool_output_chunk_v1"]; ok {
@@ -1025,6 +1109,9 @@ func currentAgentToolCallAttrs(entry map[string]any) map[string]any {
 	}
 	if progress := currentAgentChunkProgressAttrs(entry); progress != nil {
 		attrs[currentAgentChunkProgressKey] = progress
+	}
+	if pause := currentAgentToolCallPauseAttrs(entry); pause != nil {
+		attrs["pause"] = pause
 	}
 	if len(attrs) == 0 {
 		return nil

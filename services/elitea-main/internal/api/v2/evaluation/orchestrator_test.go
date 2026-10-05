@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -108,6 +109,14 @@ func (f *fakeRunRepo) ListResults(_ context.Context, _, runID string, _ ResultPa
 			out = append(out, result)
 		}
 	}
+	// A stable order, as the repository's ORDER BY gives: map iteration is
+	// random, and a test that pages through the rows must not see one twice.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DatasetCaseID != out[j].DatasetCaseID {
+			return out[i].DatasetCaseID < out[j].DatasetCaseID
+		}
+		return out[i].DimensionID < out[j].DimensionID
+	})
 	return out, len(out), nil
 }
 

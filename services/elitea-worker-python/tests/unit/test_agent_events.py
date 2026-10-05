@@ -701,6 +701,254 @@ def test_small_transition_also_omits_duplicate_transcript_state() -> None:
     assert "private skill instructions" not in str(event)
 
 
+# Issue 1065. elitea-main inlines an image attachment up to
+# `inline_image_max_bytes` (discovery; 48 KiB) as a base64 data URL, which is
+# about 64 KiB of text: over the 60 KiB node-event frame on its own. The SDK's
+# TransitionalEdge echoes the whole graph state, whose `input` channel holds
+# that multimodal human message, so every turn with a real photo failed with
+# RESOURCE_EXHAUSTED before the model was ever called.
+_INLINE_IMAGE_MAX_BYTES = 48 * 1024
+
+
+def _inline_image_content(raw_bytes: int = _INLINE_IMAGE_MAX_BYTES):
+    import base64
+
+    url = "data:image/jpeg;base64," + base64.b64encode(b"\xff" * raw_bytes).decode()
+    return url, [
+        {"type": "text", "text": "what is on this photo?"},
+        {"type": "image_url", "image_url": {"url": url}},
+    ]
+
+
+def test_sdk_transition_with_an_inline_image_at_the_budget_does_not_fail_the_turn() -> None:
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables import RunnableLambda
+    from elitea_sdk.runtime.langchain.langraph_agent import TransitionalEdge
+
+    callback, events = _callback()
+    url, content = _inline_image_content()
+    edge = TransitionalEdge("agent")
+    # The real SDK edge, dispatching through LangChain's callback manager:
+    # exactly the path the issue's worker log names.
+    runnable = RunnableLambda(lambda state, config: edge.invoke(state, config))
+
+    next_step = runnable.invoke(
+        {"input": content, "messages": [HumanMessage(content=content)]},
+        config={"callbacks": [callback]},
+    )
+
+    callback.raise_if_failed()
+    assert next_step == "agent"
+    assert [_json(event)["type"] for event in events] == ["agent_on_transitional_edge"]
+    raw = encode_current_node_event_json(events[0])
+    assert len(raw) <= 60 * 1024
+    assert url.split(",", 1)[1][:64] not in raw.decode("utf-8")
+
+
+def test_transition_state_replaces_inline_binary_with_a_reference() -> None:
+    callback, events = _callback()
+    url, content = _inline_image_content()
+
+    callback.on_custom_event(
+        "on_transitional_edge",
+        {
+            "next_step": "agent",
+            "state": {
+                "input": content,
+                "business_state": {"preserved": True},
+                # A pipeline variable that happens to hold a repr of a message.
+                "summary": f"HumanMessage(content=[{{'url': '{url}'}}])",
+            },
+        },
+        run_id="transition-image",
+    )
+
+    event = _json(events[0])
+    state = event["response_metadata"]["state"]
+    assert state["business_state"] == {"preserved": True}
+    assert state["input"][0] == {"type": "text", "text": "what is on this photo?"}
+    reference = state["input"][1]["image_url"]["url"]
+    assert reference.startswith("[inline image/jpeg omitted")
+    assert "data:image/jpeg;base64," not in state["summary"]
+    assert event["response_metadata"]["state_projection"]["omitted_inline_data"] == 2
+    assert len(encode_current_node_event_json(events[0])) <= 60 * 1024
+
+
+def test_transition_state_too_large_after_projection_is_dropped_not_fatal() -> None:
+    callback, events = _callback()
+
+    callback.on_custom_event(
+        "on_transitional_edge",
+        {
+            "next_step": "agent",
+            "state": {"report": "x" * 90_000, "small": 1},
+        },
+        run_id="transition-oversized",
+        metadata={"langgraph_node": "writer"},
+    )
+
+    callback.raise_if_failed()
+    event = _json(events[0])
+    metadata = event["response_metadata"]
+    assert metadata["next_step"] == "agent"
+    assert metadata["metadata"] == {"langgraph_node": "writer"}
+    assert metadata["state"] == {}
+    assert metadata["state_projection"]["state_omitted"] == "exceeds_frame"
+    assert len(encode_current_node_event_json(events[0])) <= 60 * 1024
+
+
+def test_inline_image_echoed_in_a_node_tool_result_is_scrubbed_not_fatal() -> None:
+    # Review F3 on #1067: graph events echo more than `state`. A pipeline
+    # function node whose tool_result repeats the multimodal input carries
+    # the same base64 image, and must neither fail the turn nor leak it.
+    callback, events = _callback()
+    url, content = _inline_image_content()
+
+    callback.on_custom_event(
+        "on_function_tool_node",
+        {
+            "state": {"step": 1},
+            "input_variables": ["input"],
+            "input_mapping": {"input": {"type": "variable", "value": "input"}},
+            "tool_result": {"echo": content},
+        },
+        run_id="function-node-image",
+    )
+
+    callback.raise_if_failed()
+    metadata = _json(events[0])["response_metadata"]
+    raw = encode_current_node_event_json(events[0]).decode("utf-8")
+    assert url.split(",", 1)[1][:64] not in raw
+    assert metadata["tool_result"]["echo"][0] == {"type": "text", "text": "what is on this photo?"}
+    assert metadata["tool_result"]["echo"][1]["image_url"]["url"].startswith("[inline image/jpeg omitted")
+    assert metadata["state"] == {"step": 1}
+    assert metadata["state_projection"]["omitted_inline_data"] == 1
+    assert len(raw.encode("utf-8")) <= 60 * 1024
+
+
+def test_oversized_echo_outside_state_is_dropped_not_fatal() -> None:
+    # A loop node's accumulated_response has no bound in the SDK, and a tool
+    # node's tool_result is capped far above one frame: progress, not outcome.
+    callback, events = _callback()
+
+    callback.on_custom_event(
+        "on_loop_node",
+        {
+            "state": {"small": 1},
+            "input_variables": ["input"],
+            "accumulated_response": "x" * 90_000,
+        },
+        run_id="loop-oversized",
+        metadata={"langgraph_node": "loop"},
+    )
+
+    callback.raise_if_failed()
+    metadata = _json(events[0])["response_metadata"]
+    assert metadata["metadata"] == {"langgraph_node": "loop"}
+    assert metadata["input_variables"] == ["input"]
+    assert metadata["accumulated_response"] is None
+    assert metadata["state_projection"]["fields_omitted"] == ["accumulated_response"]
+    assert len(encode_current_node_event_json(events[0])) <= 60 * 1024
+
+
+def test_small_inline_text_that_only_looks_like_base64_is_untouched() -> None:
+    callback, events = _callback()
+
+    callback.on_custom_event(
+        "on_transitional_edge",
+        {"next_step": "agent", "state": {"note": "data:text/plain;base64,aGk="}},
+        run_id="transition-tiny",
+    )
+
+    event = _json(events[0])
+    assert event["response_metadata"]["state"] == {"note": "data:text/plain;base64,aGk="}
+    assert "state_projection" not in event["response_metadata"]
+
+
+# Issue 1066. A sensitive tool paused for approval raises LangGraph's
+# GraphInterrupt out of the tool, which LangChain reports to on_tool_error.
+# It is a pause, not a failure: the call must not be emitted or stored as one.
+def _graph_interrupt(value):
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
+
+    return GraphInterrupt((Interrupt(value=value, id="lg-interrupt-1"),))
+
+
+def test_sensitive_tool_pause_is_not_reported_as_a_tool_error() -> None:
+    callback, events = _callback()
+    callback.on_tool_start(
+        {"name": "mock_tool_status"},
+        "ignored",
+        run_id="run-paused",
+        metadata={"toolkit_name": "openapi"},
+        inputs={"id": 1},
+    )
+    callback.on_tool_error(
+        _graph_interrupt(
+            {
+                "type": "hitl",
+                "interrupt_id": "hitl_abc",
+                "guardrail_type": "sensitive_tool",
+                "tool_name": "mock_tool_status",
+                "tool_args": {"secret_arg": "do-not-leak"},
+                "_pending_messages": [{"content": "pending-ai-text"}],
+            }
+        ),
+        run_id="run-paused",
+    )
+
+    callback.raise_if_failed()
+    decoded = [_json(event) for event in events]
+    types = [event["type"] for event in decoded]
+    assert "agent_tool_error" not in types
+    assert types == [
+        "agent_tool_start",
+        "partial_message",
+        "agent_tool_paused",
+        "partial_message",
+    ]
+    paused = decoded[2]["response_metadata"]
+    assert paused["tool_run_id"] == "run-paused"
+    assert paused["finish_reason"] == "awaiting_approval"
+    assert paused["error"] is None
+    assert paused["tool_output"] is None
+    assert paused["pause"] == {
+        "interrupt_id": "hitl_abc",
+        "guardrail_type": "sensitive_tool",
+    }
+    stored = decoded[3]["response_metadata"]["tool_calls"]["run-paused"]
+    assert stored["finish_reason"] == "awaiting_approval"
+    assert stored["error"] is None
+    assert decoded[2]["content"] is None
+    rendered = str(decoded)
+    assert "do-not-leak" not in rendered
+    assert "pending-ai-text" not in rendered
+    assert "Interrupt(" not in rendered
+
+
+def test_clarifying_question_pause_awaits_input() -> None:
+    callback, events = _callback()
+    callback.on_tool_start({"name": "ask_user"}, "ignored", run_id="run-ask", inputs={})
+    callback.on_tool_error(
+        _graph_interrupt(
+            {"type": "hitl", "interrupt_id": "hitl_q", "guardrail_type": "clarifying_question"}
+        ),
+        run_id="run-ask",
+    )
+
+    paused = [_json(event) for event in events if _json(event)["type"] == "agent_tool_paused"]
+    assert paused[0]["response_metadata"]["finish_reason"] == "awaiting_input"
+
+
+def test_a_real_tool_error_is_still_an_error() -> None:
+    callback, events = _callback()
+    callback.on_tool_start({"name": "read"}, "ignored", run_id="run-err", inputs={})
+    callback.on_tool_error(RuntimeError("boom"), run_id="run-err")
+
+    assert "agent_tool_error" in [_json(event)["type"] for event in events]
+
+
 def test_agent_event_frame_uses_durable_execution_fence_and_sequence() -> None:
     callback, events = _callback()
     callback.emit_agent_start(invoked_skills=[{"name": "review"}])

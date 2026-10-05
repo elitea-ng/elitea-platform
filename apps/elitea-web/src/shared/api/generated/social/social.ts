@@ -54,6 +54,7 @@ import type {
 
 import type {
   AuthorUpdateRequest,
+  ClientUpgradeRequiredResponse,
   CreateFeedbackResponse,
   CurrentAvatarResponse,
   ErrorResponse,
@@ -99,15 +100,29 @@ export type getCurrentAuthorResponse200 = {
   status: 200;
 };
 
+export type getCurrentAuthorResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type getCurrentAuthorResponse401 = {
   data: N401Response;
   status: 401;
 };
 
+export type getCurrentAuthorResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getCurrentAuthorResponseSuccess = getCurrentAuthorResponse200 & {
   headers: Headers;
 };
-export type getCurrentAuthorResponseError = getCurrentAuthorResponse401 & {
+export type getCurrentAuthorResponseError = (
+  | getCurrentAuthorResponse400
+  | getCurrentAuthorResponse401
+  | getCurrentAuthorResponse426
+) & {
   headers: Headers;
 };
 
@@ -123,6 +138,14 @@ export const getGetCurrentAuthorUrl = () => {
  * centry.social_users joined to auth_core__user; on no matching row or
  * any query error, falls back to a defaulted response built from the
  * auth context (:98-107) — still 200, never surfaced as an error.
+ *
+ * Client contract 1.2: this is the client's "who am I" read. `id` is
+ * the caller's user id, `name` the display name, `email`, `avatar` (a
+ * URL, absolute or relative to the deployment origin such as
+ * `/avatars/{project_id}/{file}`; "" when none is set) and `personal_project_id` — the project
+ * a client opens by default. `personal_project_id` is "" while the
+ * account's personal project is still being provisioned (a fresh
+ * account's first read starts it); a client polls until it is set.
  * @summary Get the authenticated user's own social/author profile
  */
 export const getCurrentAuthor = async (
@@ -140,7 +163,7 @@ export const getGetCurrentAuthorQueryKey = () => {
 
 export const getGetCurrentAuthorQueryOptions = <
   TData = Awaited<ReturnType<typeof getCurrentAuthor>>,
-  TError = N401Response,
+  TError = N400Response | N401Response | ClientUpgradeRequiredResponse,
 >(options?: {
   query?: Partial<
     UseQueryOptions<Awaited<ReturnType<typeof getCurrentAuthor>>, TError, TData>
@@ -165,11 +188,12 @@ export const getGetCurrentAuthorQueryOptions = <
 export type GetCurrentAuthorQueryResult = NonNullable<
   Awaited<ReturnType<typeof getCurrentAuthor>>
 >;
-export type GetCurrentAuthorQueryError = N401Response;
+export type GetCurrentAuthorQueryError =
+  N400Response | N401Response | ClientUpgradeRequiredResponse;
 
 export function useGetCurrentAuthor<
   TData = Awaited<ReturnType<typeof getCurrentAuthor>>,
-  TError = N401Response,
+  TError = N400Response | N401Response | ClientUpgradeRequiredResponse,
 >(
   options: {
     query: Partial<
@@ -195,7 +219,7 @@ export function useGetCurrentAuthor<
 };
 export function useGetCurrentAuthor<
   TData = Awaited<ReturnType<typeof getCurrentAuthor>>,
-  TError = N401Response,
+  TError = N400Response | N401Response | ClientUpgradeRequiredResponse,
 >(
   options?: {
     query?: Partial<
@@ -221,7 +245,7 @@ export function useGetCurrentAuthor<
 };
 export function useGetCurrentAuthor<
   TData = Awaited<ReturnType<typeof getCurrentAuthor>>,
-  TError = N401Response,
+  TError = N400Response | N401Response | ClientUpgradeRequiredResponse,
 >(
   options?: {
     query?: Partial<
@@ -243,7 +267,7 @@ export function useGetCurrentAuthor<
 
 export function useGetCurrentAuthor<
   TData = Awaited<ReturnType<typeof getCurrentAuthor>>,
-  TError = N401Response,
+  TError = N400Response | N401Response | ClientUpgradeRequiredResponse,
 >(
   options?: {
     query?: Partial<

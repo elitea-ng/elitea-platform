@@ -34,6 +34,12 @@ export const SocketMessageType = {
   AgentToolEnd: 'agent_tool_end',
   AgentToolError: 'agent_tool_error',
   /**
+   * Client contract 1.2 (#1066): the tool call paused for the user — a
+   * sensitive-tool approval or a clarifying question — and did NOT fail. The
+   * pause itself arrives next as `agent_hitl_interrupt`.
+   */
+  AgentToolPaused: 'agent_tool_paused',
+  /**
    * One slice of a tool result too large for a single output frame (#956).
    * See `chatStreamToolOutputChunks.ts`; the completed call that follows
    * carries `tool_output_chunks` instead of the text.
@@ -101,6 +107,7 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.AgentToolStart,
   SocketMessageType.AgentToolEnd,
   SocketMessageType.AgentToolError,
+  SocketMessageType.AgentToolPaused,
   SocketMessageType.AgentToolOutputChunk,
   SocketMessageType.AgentThinkingStep,
   SocketMessageType.AgentThinkingStepUpdate,
