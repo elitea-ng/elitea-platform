@@ -53,6 +53,9 @@ func (a *TokenCredentialAuthenticator) AuthenticateCredential(
 		if contextErr := requestContextError(ctx, err); contextErr != nil {
 			return CredentialResult{}, contextErr
 		}
+		if errors.Is(err, auth.ErrDeviceRevoked) {
+			return CredentialResult{Resolution: CredentialRevoked}, nil
+		}
 		if errors.Is(err, auth.ErrCredentialRejected) {
 			return CredentialResult{Resolution: CredentialRejected}, nil
 		}

@@ -346,6 +346,8 @@ services:
       AUDIT_RETENTION_INTERVAL: "1h"
       AUDIT_RETENTION_BATCH_SIZE: "1000"
       AUDIT_RETENTION_MAX_BATCHES: "50"
+      # ADR-0025 WP6: sync tombstone retention; 97 days is the floor.
+      SYNC_TOMBSTONE_RETENTION_DAYS: "97"
     depends_on:
       postgres:
         condition: service_healthy

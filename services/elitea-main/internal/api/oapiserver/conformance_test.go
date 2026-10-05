@@ -22,6 +22,7 @@ package oapiserver_test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"net/http"
 	"os"
 	"strings"
@@ -116,7 +117,16 @@ const (
 	// deleteSkillVersion, setDefaultVersion, import, export, exportVersion)
 	// all came off in the same change that gave skills real multi-version
 	// history, compare and rollback.
-	maxAllowlistEntries = 65
+	//
+	// 65 -> 51 (ADR-0025 WP5), when the native client contract described the
+	// operations it depends on. The cap was one above the file (64 ids) when
+	// this change started, so the true drop is 13: conversation.create,
+	// conversation.delete, conversation.messageList, conversation.regenerate,
+	// conversation.startAgentExecution, runtime.executionEvents,
+	// toolkits.getIndexHistoryConversationDetails (the conversation detail
+	// read) and the six notifications.* ids. The cap is now pinned to the
+	// file's size again.
+	maxAllowlistEntries = 51
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production
@@ -136,6 +146,14 @@ func buildFullSurfaceConfig() api.RouterConfig {
 			OIDCHandler:    &v2auth.OIDCHandler{},
 		},
 		AppsRepo: struct{ applications.Repository }{},
+
+		// The native authorization server (ADR-0025 WP2). MANDATORY here:
+		// v2.yaml describes authorizeNativeClient, exchangeNativeToken,
+		// revokeNativeToken and the three native_clients admin operations,
+		// which resolve to no route unless both fields are non-nil. This walk
+		// never serves a request, so neither touches a database.
+		NativeClients: nativeauth.NewRegistry(nil, nil),
+		NativeStore:   nativeauth.NewStore(nil, nativeauth.Config{}),
 
 		// Agent Evaluation (#617). All three are MANDATORY here, not optional
 		// stubs, and the third is the one that is easy to forget: the run
@@ -203,6 +221,21 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// right stub — every route answers 503 for one rather than panicking,
 		// and this walk never serves a request.
 		PipelineTriggers: v2pipelinetriggers.NewHandler(nil),
+
+		// The native client contract (ADR-0025 WP5). MANDATORY here: v2.yaml
+		// describes sendChatMessage, regenerateChatMessage,
+		// continueChatExecution, streamExecutionEvents and
+		// streamNotificationEvents, and each of them is registered ONLY when
+		// its handler is composed (production_router.go's CurrentAgentStart
+		// and CurrentNotificationEvents blocks, router.go's
+		// mountRuntimeRoutes, which needs both runtime handlers). This walk
+		// never serves a request, so an inert handler is enough.
+		CurrentAgentStart:         http.NotFoundHandler(),
+		CurrentNotificationEvents: http.NotFoundHandler(),
+		RuntimeRoutes: api.RuntimeRoutes{
+			Validation:      http.NotFoundHandler(),
+			ExecutionEvents: http.NotFoundHandler(),
+		},
 	}
 }
 

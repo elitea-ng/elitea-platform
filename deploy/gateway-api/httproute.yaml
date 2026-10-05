@@ -103,6 +103,13 @@ spec:
         - path:
             type: Exact
             value: /healthz
+        # The discovery document (ADR-0025 decision 1), public on both layers
+        # (go.discovery.well_known): a native client reads it from an origin
+        # alone, before any credential exists. Exact, so the rest of
+        # /.well-known/ (an ACME http-01 challenge) is not sent here.
+        - path:
+            type: Exact
+            value: /.well-known/elitea-client
         # Public project icons and author avatars (router.go: DownloadIcon and
         # DownloadAvatar). A browser <img src> carries no Authorization header,
         # so both reads are public by design. These two prefixes are the ones

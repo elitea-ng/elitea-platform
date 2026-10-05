@@ -74,6 +74,8 @@ var rootMountedGoPaths = map[string]string{
 	"/artifacts/1/bucket/k":         "router.go: the artifacts download family",
 	"/admin/app":                    "router.go: the admin SPA mount",
 	"/api/v2/branding/bootstrap.js": "router.go: the branding bootstrap, inside /api/",
+	"/api/v2/branding/pack.json":    "router.go: the brand pack as JSON (ADR-0025 decision 2), inside /api/",
+	"/.well-known/elitea-client":    "router.go: the discovery document (ADR-0025 decision 1)",
 	"/api/v2/branding/assets/logo-full/" + strings.Repeat("ab", 32) + ".svg": "router.go: uploaded brand assets, inside /api/, public like /icons",
 }
 
@@ -262,6 +264,7 @@ var requiredWalkedFamilies = []string{
 	"/auth/",
 	"/avatars/",
 	"/auth/",
+	"/.well-known/elitea-client",
 	"/healthz",
 	"/icons/",
 	"/llm/",

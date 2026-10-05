@@ -156,11 +156,24 @@ VALUES (7, 'owner@example.test', false), (42, 'collision@example.test', false);`
 	if len(listed) != 1 || listed[0].ID != created.ID {
 		t.Fatalf("listed = %+v", listed)
 	}
+	// A PAT whose name is NULL is listed, with the NULL kept rather than
+	// coerced to "".
 	var nullableMetadataID int64
 	if err := pool.QueryRow(ctx, `
 INSERT INTO public.auth_core__token (uuid, user_id, name)
-VALUES (NULL, 7, NULL)
+VALUES (gen_random_uuid()::text, 7, NULL)
 RETURNING id`).Scan(&nullableMetadataID); err != nil {
+		t.Fatal(err)
+	}
+	// A row with uuid NULL is not a personal access token: no PAT JWT can
+	// name it, and native device sessions (ADR-0025, shared 0141) anchor on
+	// exactly such rows. ListOwnedPATs filters it, so a signed-in phone never
+	// appears in Settings > Tokens; the device registry lists it instead.
+	var deviceAnchorID int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO public.auth_core__token (uuid, user_id, name)
+VALUES (NULL, 7, 'native:test-client')
+RETURNING id`).Scan(&deviceAnchorID); err != nil {
 		t.Fatal(err)
 	}
 	listed, err = repository.List(ctx, 7)
@@ -169,9 +182,12 @@ RETURNING id`).Scan(&nullableMetadataID); err != nil {
 	}
 	var nullableMetadataFound bool
 	for _, record := range listed {
+		if record.ID == deviceAnchorID {
+			t.Fatalf("uuid-NULL device anchor %d was listed as a PAT: %+v", deviceAnchorID, listed)
+		}
 		if record.ID == nullableMetadataID {
 			nullableMetadataFound = true
-			if record.UUID != nil || record.Name != nil {
+			if record.UUID == nil || record.Name != nil {
 				t.Fatalf("nullable PAT metadata was coerced: %+v", record)
 			}
 		}

@@ -175,12 +175,19 @@ func (s ProviderState) Validate() error {
 	if s.PKCEVerifier == "" {
 		return nil
 	}
-	if len(s.PKCEVerifier) < MinPKCEVerifierBytes || len(s.PKCEVerifier) > MaxPKCEVerifierBytes {
+	return ValidatePKCEVerifier(s.PKCEVerifier)
+}
+
+// ValidatePKCEVerifier accepts an RFC 7636 §4.1 code verifier: 43 to 128
+// characters from the unreserved set [A-Za-z0-9-._~]. The native token
+// endpoint (ADR-0025) checks a client's verifier with the same rule this
+// package applies to the verifier it sends an identity provider.
+func ValidatePKCEVerifier(verifier string) error {
+	if len(verifier) < MinPKCEVerifierBytes || len(verifier) > MaxPKCEVerifierBytes {
 		return ErrInvalidValue
 	}
-	for index := range len(s.PKCEVerifier) {
-		character := s.PKCEVerifier[index]
-		if !isPKCEVerifierCharacter(character) {
+	for index := range len(verifier) {
+		if !isPKCEVerifierCharacter(verifier[index]) {
 			return ErrInvalidValue
 		}
 	}

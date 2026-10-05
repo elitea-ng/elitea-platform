@@ -2,6 +2,10 @@ openapi: "3.0.3"
 info:
   title: Elitea Platform API
   version: "2.0.0"
+  # The client contract (ADR-0025 decision 6): the major/minor version of the
+  # `client`-tagged subset. internal/api/clientcontract pins it to the lock
+  # file of the same major and to what discovery serves.
+  x-elitea-client-contract: "1.0"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -109,6 +113,21 @@ tags:
   - name: tracing
   - name: webhooks
     description: OpenTelemetry trace ingest (collect/otlp proxy) and status
+  - name: branding
+    description: |
+      The deployment's resolved brand pack (ADR-0024), as served to clients
+      before sign-in.
+  - name: discovery
+    description: |
+      The public discovery document (ADR-0025 decision 1): what a client given
+      only a deployment's origin needs to know before it signs in.
+  - name: client
+    description: |
+      Operations a native client depends on. Additive-only within a
+      client_contract major version (ADR-0025 decision 6); the gate is
+      internal/api/clientcontract and the rules are in API_CONTRACT.md.
+      Always the LAST tag of an operation: the web client's generator files an
+      operation under its FIRST tag.
 
 # ---------------------------------------------------------------------------
 # Reusable components
@@ -128,6 +147,18 @@ components:
       name: elitea_session
 
   parameters:
+    XClientVersion:
+      name: X-Client-Version
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        The native client's version, MAJOR.MINOR.PATCH with an optional
+        -prerelease (ADR-0025 decision 5). Judged only for a caller
+        authenticated by a native access token (and on the native token
+        endpoint): below the minimum answers 426, a value that does not parse
+        answers 400. Ignored for every other caller.
     ProjectId:
       name: project_id
       in: path
@@ -1969,6 +2000,12 @@ components:
 
     ConversationListing:
       type: object
+      description: >
+        The legacy page carries `total` and `rows` only. With `changes_since`
+        (ADR-0025 WP6) the same two keys keep their meaning — the rows are the
+        legacy row shape, oldest change first, and `total` is the size of the
+        caller's whole filtered list now — and `tombstones`, `next_cursor` and
+        `has_more` are added.
       required: [total, rows]
       properties:
         total: { type: integer }
@@ -1976,6 +2013,685 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ConversationSummary'
+        tombstones:
+          type: array
+          description: >
+            Delta mode only. Conversations deleted (`deleted`) or gone from
+            this list for this caller (`access_lost`: made private, the caller
+            removed as a participant, or no longer matching the list filter)
+            since the cursor. A private conversation's deletion is told only to
+            its author, its former user participants and project admins.
+          items:
+            $ref: '#/components/schemas/SyncTombstone'
+        next_cursor:
+          type: string
+          description: >
+            Delta mode only. The opaque cursor for the next call. It never
+            moves past the database clock minus a 5 s settle window, so rows
+            changed within that window come back again; upsert by id.
+        has_more:
+          type: boolean
+          description: >
+            Delta mode only. True when this page was cut short by `limit`; call
+            again with `next_cursor` straight away.
+
+    SyncTombstone:
+      type: object
+      description: >
+        One removal in a `changes_since` delta (ADR-0025 WP6). NOTE(W2):
+        internal/application/changesync/changesync.go (`Tombstone`).
+      required: [id, uuid, reason, deleted_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: The removed item's integer id (for a message, the message group id).
+        uuid:
+          type: string
+          nullable: true
+          description: The removed item's uuid; null only where none was stored.
+        reason:
+          type: string
+          enum: [deleted, access_lost]
+        deleted_at:
+          type: string
+          format: date-time
+
+    SyncCursorError:
+      type: object
+      description: >
+        A refused `changes_since` request (ADR-0025 WP6). `error` is
+        `invalid_sync_cursor` (400: the cursor does not decode, or was issued
+        for another list, scope or filter), `invalid_limit` (400) or
+        `sync_cursor_expired` (410: the cursor is older than the tombstone
+        retention, 97 days; resync with `changes_since=0`). NOTE(W2):
+        internal/application/changesync/changesync.go (`ErrorBody`).
+      required: [error, message]
+      properties:
+        error: { type: string }
+        message: { type: string }
+
+    # --- ADR-0025 WP5: the chat, execution and notification operations a
+    # native client depends on. Every schema below is derived from the Go
+    # handler that marshals it; citations are in each description.
+
+    ConversationParticipant:
+      type: object
+      description: >
+        One participant of a conversation (a user, an agent or pipeline, a
+        toolkit, a model). NOTE(W2): internal/api/v2/conversations/handler.go:240
+        (`Participant`).
+      required: [id, entity_name]
+      properties:
+        id: { type: integer }
+        entity_name:
+          type: string
+          description: '`user`, `application`, `toolkit`, `llm` and similar; read it, do not enumerate it.'
+        entity_meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the `chat_participants.entity_meta` jsonb column, copied
+            into `Participant.EntityMeta` verbatim
+            (internal/api/v2/conversations/handler.go:243). Its keys depend on
+            `entity_name` (a user carries `id`, an application `id` and
+            `project_id`), so one closed shape would describe one kind only.
+        entity_settings:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the per-conversation settings document of the
+            participant (internal/api/v2/conversations/handler.go:244), written
+            by the entity-settings routes with whatever keys the participant
+            kind uses (variables, llm_settings, version ids).
+        meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the participant's display metadata
+            (internal/api/v2/conversations/handler.go:245) — name, icon and
+            kind-specific keys copied from the entity when it was added.
+
+    ConversationCreateRequest:
+      type: object
+      description: >
+        NOTE(W2): read key by key from a free JSON body by
+        internal/api/v2/conversations/handler.go:653 (`Create`). Unknown keys
+        are ignored.
+      properties:
+        name: { type: string }
+        is_private:
+          type: boolean
+          description: Defaults to private when absent. A non-boolean value is a 400.
+        source:
+          type: string
+          description: The conversation's origin (`chat` by default; `deepwiki` and similar for hidden ones).
+        instructions: { type: string }
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): stored verbatim as `chat_conversations.meta`
+            (internal/api/v2/conversations/handler.go:671); the composer sends
+            `steps_limit` and `internal_tools` here, and other writers add
+            their own flags.
+        participants:
+          type: array
+          maxItems: 100
+          description: >
+            Participants to add at creation. Each needs `entity_name` and
+            `entity_meta`; `entity_meta.project_id` defaults to this project.
+          items:
+            $ref: '#/components/schemas/ConversationParticipant'
+
+    CreatedConversation:
+      type: object
+      description: >
+        A conversation as the create route answers it (201). `id` is the
+        numeric id AS A STRING; `uuid` is the id the chat send path takes.
+        NOTE(W2): internal/api/v2/conversations/handler.go:32
+        (`Conversation`), written at :740 (201).
+      required: [id, project_id, name, created_at, updated_at, created_by, message_count]
+      properties:
+        id: { type: string }
+        uuid: { type: string, format: uuid }
+        project_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_by: { type: string }
+        message_count: { type: integer }
+        folder_id: { type: string, nullable: true }
+        is_private: { type: boolean }
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the `chat_conversations.meta` jsonb column, re-emitted
+            verbatim (internal/api/v2/conversations/handler.go:68). Several
+            writers own keys in it (steps_limit, internal_tools, is_hidden,
+            single_participant), so its key set is not fixed by this route.
+        source: { type: string }
+        instructions: { type: string }
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationParticipant'
+
+    ConversationDetail:
+      type: object
+      description: >
+        One conversation with its participants, and with its newest message
+        groups when `messages_limit` is set. NOTE(W2):
+        internal/api/v2/conversations/handler.go:581 (`Get`); the map is
+        built at :604-628.
+      required: [id, project_id, name, created_at, updated_at, created_by, message_count, participants, meta, is_private]
+      properties:
+        id: { type: string }
+        uuid: { type: string, format: uuid }
+        project_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_by: { type: string }
+        message_count: { type: integer }
+        source: { type: string }
+        instructions: { type: string }
+        folder_id:
+          type: string
+          nullable: true
+          description: Null when the conversation sits outside every folder.
+        is_private:
+          type: boolean
+          description: Always present; a row that cannot say reads as private.
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): always an object, never absent
+            (internal/api/v2/conversations/handler.go:627, `metaOrEmpty`); the
+            stored `chat_conversations.meta` document re-emitted verbatim.
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationParticipant'
+        message_groups:
+          type: array
+          description: >
+            Present only when `messages_limit` > 0. The legacy message-group
+            projection (items and their details). Prefer the message list
+            (listConversationMessages) for a transcript: it is the read that
+            supports `changes_since`.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): `ListMessageGroups` returns `[]map[string]any` built
+              row by row from the message-group, item and text tables
+              (internal/api/v2/conversations/handler.go:647). Its item details
+              vary by item type (text, attachment, canvas), so the group is
+              passed through; typing it is tracked as follow-up of ADR-0025
+              decision 14.
+
+    ConversationMessage:
+      type: object
+      description: >
+        One message group of a transcript. NOTE(W2):
+        internal/api/v2/conversations/handler.go:74 (`Message`). Delta rows
+        (`changes_since`) use the same projection, byte for byte.
+      required: [id, uid, conversation_id, role, content, created_at]
+      properties:
+        id:
+          type: string
+          description: The message group's numeric id, as a string. Tombstones carry it as an integer.
+        uid:
+          type: string
+          description: The message group's UUID. For an assistant answer this is the `response_message_id` the send returned.
+        conversation_id: { type: string }
+        role:
+          type: string
+          description: '`user` or `assistant`.'
+        content: { type: string }
+        content_type: { type: string }
+        author_participant_id: { type: integer }
+        sent_to_id: { type: integer }
+        reply_to_id: { type: integer }
+        metadata:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the message group's `meta` jsonb, re-emitted verbatim
+            (internal/api/v2/conversations/handler.go:92). The runtime writes
+            what a turn produced (`is_error`, `finish_reason`, tool and HITL
+            state) and the key set grows with the runtime, so it is not closed
+            here.
+        message_items:
+          type: array
+          description: Omitted, not empty, for a group with no attachments.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one `{id, item_type, order_index, item_details}` entry
+              per attachment (internal/api/v2/conversations/handler.go:110);
+              `item_details` is built per item type, so the entry is passed
+              through.
+        is_streaming:
+          type: boolean
+          description: Present (true) only while the turn is in flight.
+        task_id:
+          type: string
+          description: The in-flight turn's execution id; present only with `is_streaming`.
+        created_at: { type: string, format: date-time }
+        updated_at:
+          type: string
+          format: date-time
+          description: When the group was last rewritten (an answer finalised or regenerated). Omitted when never.
+
+    ConversationMessageListing:
+      type: object
+      description: >
+        The transcript page. Legacy mode carries `items`, `total`, `page`,
+        `page_size` and `total_pages` (NOTE(W2):
+        internal/api/v2/conversations/handler.go:148). With `changes_since`
+        (ADR-0025 WP6) it carries `items` (changed groups, oldest change
+        first), `total` (groups in the conversation now), `tombstones`,
+        `next_cursor` and `has_more` (internal/api/v2/conversations/changes.go,
+        `MessageChanges`).
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationMessage'
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+        total_pages: { type: integer }
+        tombstones:
+          type: array
+          description: Delta mode only. Message groups deleted since the cursor (`id` is the group id).
+          items:
+            $ref: '#/components/schemas/SyncTombstone'
+        next_cursor:
+          type: string
+          description: Delta mode only. See ConversationListing.next_cursor.
+        has_more:
+          type: boolean
+          description: Delta mode only. See ConversationListing.has_more.
+
+    ConversationAttachmentUploaded:
+      type: object
+      description: >
+        One stored file. Send `filepath` back verbatim in the chat send's
+        `payload.attachments`. NOTE(W2):
+        internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`).
+      required: [filepath, file_size]
+      properties:
+        filepath:
+          type: string
+          description: '`/{bucket}/{conversation_uuid}/{file name}`.'
+        file_size: { type: integer, format: int64 }
+
+    ConversationAttachmentChunkReceived:
+      type: object
+      description: >
+        A chunk of a chunked upload was stored; the file is assembled when the
+        last chunk arrives, and that request answers 201. NOTE(W2):
+        internal/api/v2/conversations/attachments.go:409.
+      required: [status, file_id, chunk_index, total_chunks, message]
+      properties:
+        status:
+          type: string
+          description: Always `chunk_received`.
+        file_id: { type: string }
+        chunk_index: { type: integer }
+        total_chunks: { type: integer }
+        message: { type: string }
+
+    ChatStartAttachment:
+      type: object
+      required: [filepath]
+      properties:
+        filepath:
+          type: string
+          description: Exactly the `filepath` the attachment upload returned.
+        name:
+          type: string
+          description: Display name; ignored by the server.
+
+    ChatSendRequest:
+      type: object
+      description: >
+        The body of a chat send. NOTE(W2):
+        internal/api/v2/agentexecution/route.go:143
+        (`currentApplicationStartBody`). The body must be ONE JSON value of at
+        most 512 KiB.
+      required: [payload, project_id, conversation_uuid, question_id]
+      properties:
+        payload:
+          type: object
+          required: [user_input]
+          properties:
+            user_input:
+              type: string
+              minLength: 1
+            attachments:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChatStartAttachment'
+        project_id:
+          type: integer
+          format: int64
+          description: Must equal the path's project id.
+        participant_id:
+          type: integer
+          format: int64
+          description: >
+            The participant that answers. Required (> 0) for
+            `agent.execute.application.v1`; 0 or absent for a model chat
+            (`agent.execute.adhoc.v1`).
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: Must equal the path's conversation id.
+        question_id:
+          type: string
+          format: uuid
+          description: >
+            REQUIRED, client generated, a LOWERCASE canonical UUID
+            (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`; an upper-case spelling is
+            refused). It is the admission idempotency key of the turn: generate
+            it once per user message, persist it with the unsent message, and
+            send the same value on every retry.
+        interaction_uuid:
+          type: string
+          format: uuid
+        llm_settings:
+          type: object
+          additionalProperties: true
+          description: Required for `agent.execute.adhoc.v1` (the model and its settings); must be absent for an application turn.
+          x-elitea-passthrough: >-
+            NOTE(W2): read as json.RawMessage
+            (internal/api/v2/agentexecution/route.go:158) and validated by the
+            admission use case against the project's model catalogue; its keys
+            follow the model provider, so the object is passed through.
+        mcp_tokens:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): read as json.RawMessage
+            (internal/api/v2/agentexecution/route.go:159); keyed by MCP server
+            name, each value the token material that server's OAuth flow
+            produced.
+        user_ids:
+          type: array
+          description: Users this message mentions (at most 64). `userIds` is accepted as an alias.
+          items: { type: integer, format: int64 }
+        is_mentioning_everyone: { type: boolean }
+
+    ChatRegenerateRequest:
+      type: object
+      description: >
+        NOTE(W2): internal/api/v2/agentexecution/route.go:183
+        (`currentRegenerationBody`). `message_id` and `stream_id` must both
+        equal the path's message id.
+      required: [payload, project_id, conversation_uuid, question_id, message_id, stream_id, regeneration_id]
+      properties:
+        payload:
+          type: object
+          required: [user_input]
+          properties:
+            user_input: { type: string, minLength: 1 }
+            llm_settings:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): read as json.RawMessage
+                (internal/api/v2/agentexecution/route.go:186); same shape as
+                the send's `llm_settings`.
+            mcp_tokens:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): read as json.RawMessage
+                (internal/api/v2/agentexecution/route.go:188); same shape as
+                the send's `mcp_tokens`.
+        project_id: { type: integer, format: int64 }
+        participant_id: { type: integer, format: int64 }
+        conversation_uuid: { type: string, format: uuid }
+        question_id:
+          type: string
+          format: uuid
+          description: The question being re-answered (lowercase canonical UUID).
+        message_id:
+          type: string
+          format: uuid
+          description: The answer being regenerated; equals the path's message id.
+        stream_id:
+          type: string
+          format: uuid
+          description: Equals `message_id`.
+        regeneration_id:
+          type: string
+          format: uuid
+          description: >
+            Client generated, lowercase canonical UUID: the idempotency key of
+            this regeneration. A retry with the same id replays it.
+        updated_items:
+          type: array
+          maxItems: 1
+          description: >
+            Absent or empty for a plain retry. One `text_message` item to
+            regenerate from an EDITED question.
+          items:
+            type: object
+            required: [content, item_type]
+            properties:
+              uuid: { type: string }
+              content: { type: string }
+              item_type:
+                type: string
+                description: Must be `text_message`.
+
+    ChatContinueRequest:
+      type: object
+      description: >
+        Resume a paused turn. NOTE(W2):
+        internal/api/v2/agentexecution/route.go:201
+        (`currentContinuationBody`); which fields are allowed depends on the
+        `execution_contract` (route.go:484-540).
+      required: [project_id, conversation_uuid, message_id]
+      properties:
+        project_id: { type: integer, format: int64 }
+        conversation_uuid: { type: string, format: uuid }
+        message_id:
+          type: string
+          format: uuid
+          description: The paused answer's message id.
+        thread_id: { type: string }
+        hitl_resume:
+          type: boolean
+          description: True for `agent.continue.hitl.v1` and for a batched authorization answer.
+        hitl_action:
+          type: string
+          description: The single-pause decision (`approve`, `reject`, `edit`, `respond` and similar, as the pause frame offered).
+        hitl_value:
+          description: The decision's value (an edited value, a free-text answer); its type follows the action.
+          x-elitea-passthrough: >-
+            NOTE(W2): read as json.RawMessage
+            (internal/api/v2/agentexecution/route.go:208) and validated per
+            action by `currentHITLValue`; a string for `respond`, an object
+            for `edit`, absent otherwise.
+        hitl_decisions:
+          type: array
+          description: Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): read as json.RawMessage
+              (internal/api/v2/agentexecution/route.go:209) and parsed by
+              `currentHITLDecisions` / `currentAuthorizationDecisions`; each
+              entry names its interrupt id and carries the same action/value
+              pair as a single pause.
+        mcp_tokens:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): read as json.RawMessage
+            (internal/api/v2/agentexecution/route.go:210); keyed by MCP server
+            name. Must be `{}` for a HITL resume.
+        ignored_mcp_servers:
+          type: array
+          items: { type: string }
+        user_declined_mcp_servers:
+          type: array
+          items: { type: string }
+        user_input: { type: string }
+        authorization_request_id: { type: string }
+        authorization_action:
+          type: string
+          description: '`authorize` or `skip` (agent.continue.authorization.v1, single request).'
+
+    ChatExecutionStarted:
+      type: object
+      description: >
+        The admitted (or replayed) turn. NOTE(W2):
+        internal/api/v2/agentexecution/route.go:330-337, :423-430 and
+        :550-557 (one shape for send, regenerate and continue).
+      required: [task_id, execution_id, command_id, response_message_id, events_url, created]
+      properties:
+        task_id:
+          type: string
+          description: Equal to `execution_id` (legacy name).
+        execution_id: { type: string }
+        command_id: { type: string }
+        response_message_id:
+          type: string
+          description: The UUID of the assistant message group the turn writes (its `uid` in the message list).
+        events_url:
+          type: string
+          description: >
+            The turn's event stream, ALWAYS a same-origin absolute path
+            (`/api/v2/executions/{project_id}/{execution_id}/events`), never a
+            full URL. Resolve it against the deployment origin.
+        created:
+          type: boolean
+          description: >
+            True when this request admitted the turn; false when it replayed an
+            earlier admission with the same idempotency key (the same
+            `execution_id` and `events_url` come back).
+
+    ChatExecutionError:
+      type: object
+      description: >
+        A refused send, regenerate or continue. NOTE(W2):
+        internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and
+        :601 (`writeUnsupported`). `error` is a machine code for 409 and 422
+        (`agent_regeneration_pending`, `agent_hitl_already_resolved`,
+        `agent_authorization_already_resolved`,
+        `agent_output_limit_already_resolved`, `unsupported_agent_execution`)
+        and a message otherwise; the idempotency conflict is a 409 whose
+        `error` is the message "Agent execution request conflicts with an
+        existing turn".
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        retryable: { type: boolean }
+
+    Notification:
+      type: object
+      description: >
+        NOTE(W2): internal/api/v2/notifications/api.go:153
+        (`currentNotificationResponse`). In a list `created_at`/`updated_at`
+        are RFC 3339 to the second; a single read keeps microseconds without
+        a zone.
+      required: [id, uuid, is_seen, project_id, user_id, meta, created_at, updated_at, event_type]
+      properties:
+        id: { type: integer }
+        uuid: { type: string }
+        is_seen: { type: boolean }
+        project_id: { type: integer }
+        user_id: { type: integer }
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the `centry.notifications.meta` jsonb column as
+            json.RawMessage (internal/api/v2/notifications/api.go:159). Each
+            `event_type` writes its own keys (the entity, its project, the
+            actor), so the object is passed through.
+        created_at: { type: string }
+        updated_at: { type: string, nullable: true }
+        event_type: { type: string }
+
+    NotificationListing:
+      type: object
+      description: >
+        `total` alone with `only_total=true`; `total` and `rows` otherwise.
+        With `changes_since` (ADR-0025 WP6) `tombstones`, `next_cursor` and
+        `has_more` are added and `total` counts all of the caller's
+        notifications. NOTE(W2): internal/api/v2/notifications/api.go:202 and
+        :561.
+      required: [total]
+      properties:
+        total: { type: integer, format: int64 }
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+        tombstones:
+          type: array
+          description: Delta mode only. Notifications deleted since the cursor.
+          items:
+            $ref: '#/components/schemas/SyncTombstone'
+        next_cursor:
+          type: string
+          description: Delta mode only. See ConversationListing.next_cursor.
+        has_more:
+          type: boolean
+          description: Delta mode only. See ConversationListing.has_more.
+
+    NotificationBulkSeenRequest:
+      type: object
+      required: [ids, is_seen]
+      description: "NOTE(W2): internal/api/v2/notifications/api.go:383 (`decodeCurrentNotificationBulkUpdate`)."
+      properties:
+        ids:
+          description: The string `all`, or an array of notification ids.
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: integer }
+        is_seen: { type: boolean }
+
+    NotificationBulkDeleteRequest:
+      type: object
+      required: [ids]
+      description: "NOTE(W2): internal/api/v2/notifications/api.go:405 (`decodeCurrentNotificationBulkDelete`)."
+      properties:
+        ids:
+          type: array
+          items: { type: integer }
+
+    NotificationErrorResponse:
+      type: object
+      required: [ok, error]
+      description: >
+        NOTE(W2): the notification routes write the pylon `{"ok": false,
+        "error": ...}` envelope on every failure, including "Notification is
+        not found", which answers 400 rather than 404
+        (internal/api/v2/notifications/api.go:479-491).
+      properties:
+        ok: { type: boolean }
+        error: { type: string }
 
     MessageTraceStep:
       type: object
@@ -9026,6 +9742,367 @@ components:
           description: Unquoted content hash of the served bootstrap body.
         saved:
           type: boolean
+    DiscoveryDocument:
+      type: object
+      description: >-
+        The public discovery document served at
+        `/.well-known/elitea-client` (ADR-0025 decision 1). The key set is a
+        contract: adding a key is additive, renaming or removing one bumps
+        `client_contract`. NOTE(W2): marshalled from
+        internal/api/v2/discovery/document.go:36 (`Document`).
+      required:
+        - server_version
+        - client_contract
+        - deployment_kind
+        - display_name
+        - brand_pack_url
+        - native_auth
+        - client_policy
+        - min_client_version
+      properties:
+        server_version:
+          type: string
+          description: >-
+            The server release as `major.minor` only (the full build string
+            is admin-only), or `dev` for a build without a release version.
+          example: "1.62"
+        client_contract:
+          type: string
+          description: The client contract version this server speaks (ADR-0025 decision 6).
+          example: "1.0"
+        deployment_kind:
+          type: string
+          enum: [saas, self_hosted]
+          description: Who operates the deployment (ELITEA_DEPLOYMENT_KIND).
+        display_name:
+          type: string
+          description: The product name from the resolved brand pack.
+        brand_pack_url:
+          type: string
+          description: >-
+            Absolute, content-addressed URL of the brand pack JSON
+            (`.../api/v2/branding/pack.json?v=<etag>`).
+        native_auth:
+          description: >-
+            The native authorization endpoints, or null while no native
+            client is registered on this deployment.
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/NativeAuthEndpoints'
+        client_policy:
+          $ref: '#/components/schemas/ClientPublicPolicy'
+        min_client_version:
+          type: object
+          description: >-
+            Registered, enabled client id → the effective minimum version
+            this deployment serves that client: the higher of
+            `client_policy.min_client_version` and the client's own minimum.
+            A client with no effective minimum is absent, so a client reads
+            its own entry and falls back to `client_policy.min_client_version`.
+            Always an object.
+          additionalProperties: { type: string }
+    NativeAuthEndpoints:
+      type: object
+      description: >-
+        Endpoints of the native authorization server (ADR-0025 decision 3).
+        Every URL is absolute. NOTE(W2): internal/api/v2/discovery/document.go:54
+        (`NativeAuth`).
+      required:
+        - issuer
+        - authorization_endpoint
+        - token_endpoint
+        - revocation_endpoint
+        - code_challenge_methods_supported
+      properties:
+        issuer:
+          type: string
+          description: >-
+            The deployment origin; a client compares an authorization
+            response's `iss` (RFC 9207) against it.
+        authorization_endpoint: { type: string }
+        token_endpoint: { type: string }
+        revocation_endpoint: { type: string }
+        code_challenge_methods_supported:
+          type: array
+          items: { type: string }
+    ClientPublicPolicy:
+      type: object
+      description: >-
+        The public subset of the native client policy (ADR-0025 decision 5);
+        the full policy travels with every token response. NOTE(W2):
+        internal/api/v2/discovery/document.go:65 (`PublicPolicy`).
+      required: [require_device_lock, offline_enabled, min_client_version]
+      properties:
+        require_device_lock:
+          type: boolean
+          description: The client must refuse to run without a device passcode or biometric lock.
+        offline_enabled:
+          type: boolean
+          description: Offline storage is allowed.
+        min_client_version:
+          type: string
+          description: >-
+            Deployment-wide minimum client version; empty means none. The
+            document's per-client `min_client_version` entry, when present,
+            is never lower than this.
+    NativeOAuthError:
+      type: object
+      description: >-
+        RFC 6749 section 5.2 error of the native authorization endpoints.
+        NOTE(W2): internal/api/nativeauth/token.go:271 (`writeOAuthError`).
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: >-
+            invalid_request, invalid_client, invalid_grant,
+            unsupported_grant_type, temporarily_unavailable or not_found.
+        error_description:
+          type: string
+    NativeTokenRequest:
+      type: object
+      description: >-
+        The token request form. NOTE(W2): internal/api/nativeauth/token.go:40
+        (`tokenParameters`).
+      required: [grant_type, client_id]
+      properties:
+        grant_type:
+          type: string
+          description: authorization_code or refresh_token.
+        client_id: { type: string }
+        code: { type: string, description: The authorization code (authorization_code grant). }
+        redirect_uri: { type: string, description: The redirect URI the code was issued to (authorization_code grant). }
+        code_verifier: { type: string, description: 'The PKCE verifier, 43 to 128 unreserved characters (authorization_code grant).' }
+        refresh_token: { type: string, description: The current refresh token (refresh_token grant). }
+        client_version: { type: string, description: "The client's version, recorded on the device (refresh_token grant)." }
+    NativeTokenResponse:
+      type: object
+      description: >-
+        A native token pair. Both tokens are opaque. NOTE(W2):
+        internal/api/nativeauth/token.go:242 (`writeGrant`).
+      required: [access_token, token_type, expires_in, refresh_token, refresh_token_expires_in, device_id]
+      properties:
+        access_token: { type: string, description: 'Opaque bearer token, prefix elnat_.' }
+        token_type: { type: string, description: Always Bearer. }
+        expires_in: { type: integer, format: int64, description: Seconds until the access token expires. }
+        refresh_token: { type: string, description: 'Opaque refresh token, prefix elnrt_; rotated on every use.' }
+        refresh_token_expires_in: { type: integer, format: int64, description: Seconds of idle time before the device must sign in again. }
+        device_id: { type: string, description: The device session (refresh-token family) id. }
+        client_policy:
+          description: >-
+            The full native client policy, with `min_client_version` resolved
+            for this client. Present on every token response; absent only if
+            the policy could not be read since this server started, in which
+            case the client keeps the policy it last received.
+          allOf:
+            - $ref: '#/components/schemas/NativeClientPolicy'
+    NativeClientPolicy:
+      type: object
+      description: >-
+        The server-driven native client policy (ADR-0025 decision 5), the
+        `native_client_policy` admin Configuration section. The device-side
+        fields are enforced by the client; the server refuses versions below
+        `min_client_version` with 426. Adding a field is additive; renaming or
+        removing one bumps `client_contract`. NOTE(W2):
+        internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`).
+      required:
+        - require_device_lock
+        - idle_lock_seconds
+        - allow_screenshots
+        - offline_retention_days
+        - offline_max_mb
+        - offline_attachments
+        - min_client_version
+      properties:
+        require_device_lock:
+          type: boolean
+          description: Refuse to run on a device without a passcode or biometric lock.
+        idle_lock_seconds:
+          type: integer
+          format: int64
+          description: Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.
+        allow_screenshots:
+          type: boolean
+          description: When false, block screenshots and screen recording where the platform allows it.
+        offline_retention_days:
+          type: integer
+          format: int64
+          description: >-
+            How long data may stay on the device without reaching the server;
+            0 disables offline storage. 0 to 90.
+        offline_max_mb:
+          type: integer
+          format: int64
+          description: The most the app may store for offline use, in megabytes.
+        offline_attachments:
+          type: boolean
+          description: Whether attachments may be stored offline, or only messages.
+        min_client_version:
+          type: string
+          description: >-
+            The lowest version this deployment serves this client; empty means
+            none. MAJOR.MINOR.PATCH with an optional -prerelease.
+    InvalidClientVersionError:
+      type: object
+      description: >-
+        The 400 answer to a native client whose `X-Client-Version` does not
+        parse (ADR-0025 decision 5). NOTE(W2):
+        internal/api/middleware/client_version.go:190
+        (`WriteInvalidClientVersion`).
+      required: [error, error_description]
+      properties:
+        error: { type: string, description: Always invalid_client_version. }
+        error_description: { type: string }
+    ClientUpgradeRequiredError:
+      type: object
+      description: >-
+        The 426 answer to a native client whose `X-Client-Version` is below
+        the minimum (ADR-0025 decision 5). Only callers authenticated by a
+        native access token, and the native token endpoint, are judged.
+        NOTE(W2): internal/api/middleware/client_version.go:176
+        (`WriteClientUpgradeRequired`).
+      required: [error, min_client_version]
+      properties:
+        error: { type: string, description: Always client_upgrade_required. }
+        error_description: { type: string }
+        min_client_version: { type: string, description: The minimum this client must update to. }
+    NativeRevokeRequest:
+      type: object
+      description: The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:277.
+      required: [token, client_id]
+      properties:
+        token: { type: string }
+        token_type_hint: { type: string, description: Ignored; the token's prefix decides. }
+        client_id: { type: string }
+    NativeDevice:
+      type: object
+      description: >-
+        One native device session (refresh-token family). NOTE(W2):
+        internal/api/nativeauth/devices.go:36 (`UserDevice`).
+      required: [id, client_id, client_name, device_name, platform, client_version, created_at, last_seen_at, revoked_at, revoke_reason, current]
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string }
+        client_name: { type: string }
+        device_name: { type: string, description: The name the app claimed at sign-in. }
+        platform: { type: string, description: 'ios, android, macos, windows, linux or other.' }
+        client_version: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        revoke_reason:
+          type: string
+          nullable: true
+          description: >-
+            signed_out, user, admin, refresh_reuse, code_replay,
+            user_deactivated, client_disabled, client_removed or expired.
+        current: { type: boolean, description: The device whose token authenticated this request. }
+    NativeDeviceList:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/devices.go:108.
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/NativeDevice'
+    NativeAdminDevice:
+      description: NOTE(W2) internal/api/nativeauth/devices.go:52 (`AdminDevice`).
+      allOf:
+        - $ref: '#/components/schemas/NativeDevice'
+        - type: object
+          required: [user_id, email]
+          properties:
+            user_id: { type: integer, format: int64 }
+            email: { type: string }
+    NativeAdminDeviceList:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/devices.go:178.
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/NativeAdminDevice'
+        total: { type: integer, format: int64 }
+    DeviceRevokedError:
+      type: object
+      description: >-
+        The ADR-0025 `device_revoked` answer: FLAT, unlike the nested error
+        envelope, so a native client tells "wipe local data" (`error` is the
+        string device_revoked) from "refresh once" (`error` is an object).
+        Sent only for native credentials, with
+        `WWW-Authenticate: Bearer error="invalid_token", error_description="device_revoked"`.
+        NOTE(W2): internal/api/middleware/auth.go:453 (`DeviceRevokedBody`).
+      required: [error]
+      properties:
+        error: { type: string, description: Always device_revoked. }
+        error_description: { type: string }
+    NativeClient:
+      type: object
+      description: >-
+        One registered native client, merged from the file and database
+        layers. NOTE(W2): internal/nativeauth/registry.go:38 (`Client`) and
+        internal/api/nativeauth/admin.go:28 (`AdminClientRow`).
+      required: [client_id, display_name, redirect_uris, enabled, min_client_version, source, overridden_file, active_devices]
+      properties:
+        client_id: { type: string }
+        display_name: { type: string }
+        redirect_uris:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }
+        min_client_version:
+          type: string
+          description: >-
+            This client's own minimum version, empty for none. It can only
+            raise the native_client_policy minimum, never lower it.
+        source: { type: string, description: 'Which layer decides the client: db or file.' }
+        overridden_file: { type: boolean, description: A database row that shadows a file entry. }
+        active_devices: { type: integer, format: int64 }
+    NativeClientList:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:49.
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/NativeClient'
+    NativeClientSaveRequest:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:52 (`adminClientBody`); unknown fields are refused.
+      required: [display_name, redirect_uris]
+      properties:
+        display_name: { type: string }
+        redirect_uris:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean, description: Defaults to true. }
+        min_client_version:
+          type: string
+          description: >-
+            Optional per-client minimum version (MAJOR.MINOR.PATCH with an
+            optional -prerelease); empty or absent sets none.
+    NativeClientWriteResult:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:107.
+      required: [client_id, revoked_devices]
+      properties:
+        client_id: { type: string }
+        revoked_devices: { type: integer, format: int64, description: Devices revoked by this write. }
+    NativeClientValidationError:
+      type: object
+      description: NOTE(W2) internal/api/nativeauth/admin.go:91.
+      required: [error, reasons]
+      properties:
+        error: { type: string, description: Always invalid_native_client. }
+        reasons:
+          type: object
+          description: >-
+            One reason per invalid field, keyed client_id, display_name,
+            redirect_uris, redirect_uris[N] or min_client_version.
+          additionalProperties: { type: string }
     BrandPack:
       type: object
       description: >-
@@ -10421,6 +11498,45 @@ components:
 
 
   responses:
+    SyncCursorInvalid:
+      description: >-
+        400: `changes_since` is not a cursor this list issued, or `limit` is
+        not a positive integer.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SyncCursorError'
+    SyncCursorExpired:
+      description: >-
+        410 Gone: the `changes_since` cursor is older than the tombstone
+        retention; the client discards its cache for this list and resyncs
+        with `changes_since=0`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SyncCursorError'
+    InvalidClientVersion:
+      description: >-
+        400: a native client's `X-Client-Version` does not parse as
+        MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5).
+        Only callers authenticated by a native access token are judged.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InvalidClientVersionError'
+    ClientUpgradeRequired:
+      description: >-
+        426 Upgrade Required: the native client's `X-Client-Version` is below
+        the minimum this deployment serves it; `X-Min-Client-Version` repeats
+        the minimum. Deliberately WITHOUT the `Upgrade` header RFC 9110
+        requires on a 426: the upgrade is of the app, not of a protocol.
+      headers:
+        X-Min-Client-Version:
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ClientUpgradeRequiredError'
     400:
       description: Bad request
       content:
@@ -10477,6 +11593,486 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /.well-known/elitea-client:
+    # Root-mounted (RFC 8615), outside /api/v2 and outside the auth group
+    # (internal/api/router.go). The path-level server override is what puts
+    # it at the origin root instead of under the global /api/v2 base; the
+    # conformance loader honours it (internal/api/oapiserver/conformance.go).
+    servers:
+      - url: /
+        description: The deployment origin root
+    get:
+      operationId: getClientDiscovery
+      summary: Public discovery document for clients
+      description: |
+        What a client given only a deployment's origin needs before it signs
+        in (ADR-0025 decision 1): the server version (`major.minor`), the
+        client contract version, the deployment kind, the brand's display
+        name and pack URL, the native authorization endpoints (`null` while
+        no native client is registered), the public client policy and the
+        minimum client version per registered client id. It discloses nothing
+        the deployment's login page does not.
+
+        Caching: strong `ETag` (hash of the body), `Cache-Control: no-cache`
+        (the body follows database state), `If-None-Match` answers 304. When
+        the deployment has no configured public origin the URLs are built
+        from the request's Host and the response carries
+        `Vary: Host, X-Forwarded-Proto`. A failing source answers 503
+        `no-store` rather than a document that would wrongly say "no native
+        sign-in".
+      tags: [discovery, client]
+      security: []
+      responses:
+        '200':
+          description: The discovery document.
+          headers:
+            ETag:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveryDocument'
+        '304':
+          description: If-None-Match matched the current entity tag.
+          headers:
+            ETag:
+              schema: { type: string }
+        '503':
+          description: A source of the document is unavailable; retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/native/authorize:
+    get:
+      operationId: authorizeNativeClient
+      summary: Start a native sign-in (RFC 8252 authorization request)
+      description: |
+        A BROWSER NAVIGATION, not an API call: a registered native client
+        opens this URL in the system browser (ADR-0025 decision 3). The
+        deployment's existing sign-in runs (SSO chooser, OIDC, SAML or the
+        form), the user confirms the client and device on a one-line page,
+        and the browser is redirected to the client's registered
+        `redirect_uri` with a single-use `code` valid for 60 seconds, the
+        `state` and `iss` (RFC 9207, the deployment origin; equal to the
+        discovery `issuer`).
+
+        An unknown or disabled client, a missing or unregistered
+        `redirect_uri`, or a missing or malformed `state` answers an HTML
+        error page and NEVER redirects. Every later error redirects with
+        `error`, `error_description`, `state` and `iss`.
+        `scope`, `nonce` and `prompt` are ignored; `prompt=login` and
+        `max_age` are not supported. Answers 404 while no native client is
+        registered. NOTE(W2): internal/api/nativeauth/authorize.go:36.
+      tags: [auth, client]
+      security: []
+      parameters:
+        - { name: response_type, in: query, required: true, schema: { type: string }, description: Must be `code`. }
+        - { name: client_id, in: query, required: true, schema: { type: string } }
+        - name: redirect_uri
+          in: query
+          required: true
+          description: >-
+            One of the client's registered URIs: byte-for-byte for a
+            private-use scheme; for a loopback URI any port is accepted.
+          schema: { type: string }
+        - { name: code_challenge, in: query, required: true, schema: { type: string }, description: 'BASE64URL(SHA256(code_verifier)), 43 characters.' }
+        - { name: code_challenge_method, in: query, required: true, schema: { type: string }, description: Must be `S256`; plain is refused. }
+        - { name: state, in: query, required: true, schema: { type: string }, description: 1 to 512 printable ASCII characters. }
+        - { name: device_name, in: query, required: true, schema: { type: string }, description: "1 to 64 bytes, shown to the user as the app's claim." }
+        - { name: platform, in: query, required: true, schema: { type: string }, description: 'One of: ios, android, macos, windows, linux, other.' }
+        - { name: client_version, in: query, required: false, schema: { type: string }, description: 'Up to 32 characters of letters, digits and . + -' }
+      responses:
+        '302':
+          description: To the sign-in flow, or an error redirect to the app.
+          headers:
+            Location:
+              schema: { type: string }
+        '400':
+          description: An HTML error page (unknown client, unregistered redirect, bad state).
+          content:
+            text/html:
+              schema: { type: string }
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '503':
+          description: An HTML error page; the registry or the public origin is unavailable.
+          content:
+            text/html:
+              schema: { type: string }
+  /auth/native/token:
+    post:
+      operationId: exchangeNativeToken
+      summary: Exchange a native authorization code or refresh token
+      description: |
+        The token endpoint for registered native PUBLIC clients (RFC 6749
+        section 4.1.3 and 6, ADR-0025 decision 3). No client authentication:
+        `client_id` is in the body and an `Authorization` header is refused.
+        The body is `application/x-www-form-urlencoded` (at most 8 KiB) and no
+        parameter may repeat.
+
+        `grant_type=authorization_code` takes `code`, `redirect_uri`,
+        `client_id` and `code_verifier` (PKCE S256). A code is single-use; a
+        replayed code revokes the device session it produced.
+        `grant_type=refresh_token` takes `refresh_token`, `client_id` and an
+        optional `client_version`. The refresh token rotates on every use.
+        Presenting the IMMEDIATELY previous refresh token again within the
+        re-delivery window (default 30 seconds) returns the SAME new pair; any
+        other reuse revokes the whole device session.
+
+        Errors are RFC 6749 section 5.2 JSON. A revoked, expired, deactivated
+        or reused device session answers 401 with the flat
+        `{"error":"device_revoked"}` body (the client wipes its local data);
+        clients must persist the new pair before using it and serialise
+        refreshes. Failures are rate limited per
+        (client, address) and per address (429 with Retry-After). Answers 404
+        while no native client is registered.
+
+        A client states its version in `X-Client-Version` (a refresh grant's
+        `client_version` is used when the header is absent and it parses).
+        Below the minimum for `client_id` the endpoint answers 426 BEFORE the
+        code or refresh token is consumed, so the same credential works once
+        the app is updated. Every 200 carries the full `client_policy`.
+        NOTE(W2): internal/api/nativeauth/token.go:47.
+      tags: [auth, client]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/NativeTokenRequest'
+      responses:
+        '200':
+          description: A new token pair. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeTokenResponse'
+        '400':
+          description: invalid_request (including an X-Client-Version that does not parse), unsupported_grant_type or invalid_grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '401':
+          description: >-
+            invalid_client (the client is unknown or disabled), or
+            device_revoked: the refresh token's device session was revoked,
+            expired, deactivated or reused, and the client must wipe its
+            local data.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NativeOAuthError'
+                  - $ref: '#/components/schemas/DeviceRevokedError'
+        '426':
+          $ref: '#/components/responses/ClientUpgradeRequired'
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '429':
+          description: Too many failed requests; see Retry-After.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '503':
+          description: temporarily_unavailable; retry after Retry-After.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /auth/native/revoke:
+    post:
+      operationId: revokeNativeToken
+      summary: Revoke a native device session (RFC 7009)
+      description: |
+        Revokes the WHOLE device session (refresh-token family) the presented
+        refresh or access token belongs to (reason `signed_out`). An unknown or
+        already-revoked token, or one for another client, also answers 200 with
+        no body, so the answer reveals nothing. Form body: `token`,
+        `client_id`, optional `token_type_hint`. Answers 404 while no native
+        client is registered. NOTE(W2): internal/api/nativeauth/token.go:277.
+      tags: [auth, client]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/NativeRevokeRequest'
+      responses:
+        '200':
+          description: Revoked, or nothing to revoke. No body.
+        '400':
+          description: invalid_request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '401':
+          description: invalid_client (the client is not registered).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '429':
+          description: Too many requests from this address; see Retry-After.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+        '503':
+          description: temporarily_unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /auth/native/devices:
+    get:
+      operationId: listNativeDevices
+      summary: List the caller's native devices
+      description: |
+        The caller's own device sessions (refresh-token families, ADR-0025
+        decision 4), newest first. `current` marks the device whose token
+        authenticated this request. Revoked devices are listed only with
+        `include_revoked=true`. Answers 404 while no native client is
+        registered. NOTE(W2): internal/api/nativeauth/devices.go:90.
+      tags: [auth, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: include_revoked
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
+        '200':
+          description: The caller's devices.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeDeviceList'
+        '401': { $ref: '#/components/responses/401' }
+        '404':
+          description: No native client is registered on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /auth/native/devices/{device_id}:
+    parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: revokeNativeDevice
+      summary: Revoke one of the caller's native devices
+      description: |
+        Revokes the device session (reason `user`). Another user's device, or
+        an unknown id, is a 404, so ownership is not disclosed. Revoking the
+        device in use is allowed; its next call answers `device_revoked`.
+        NOTE(W2): internal/api/nativeauth/devices.go:114.
+      tags: [auth, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/401' }
+        '404':
+          description: Not one of the caller's devices.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /admin/native_devices/administration:
+    get:
+      operationId: listNativeDevicesAdministration
+      summary: List native devices across users
+      description: |
+        Every user's device sessions, for an administrator holding
+        `admin.auth.users` (the permission that gates user suspension).
+        `state` is active (the default), revoked or all; `limit` defaults to
+        50 and is capped at 200. NOTE(W2): internal/api/nativeauth/devices.go:138.
+      tags: [admin]
+      parameters:
+        - { name: user_id, in: query, required: false, schema: { type: integer, format: int64 } }
+        - { name: client_id, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string }, description: 'active, revoked or all.' }
+        - { name: limit, in: query, required: false, schema: { type: integer } }
+        - { name: offset, in: query, required: false, schema: { type: integer } }
+      responses:
+        '200':
+          description: One page of devices and the total.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeAdminDeviceList'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+  /admin/native_devices/administration/{device_id}:
+    parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: revokeNativeDeviceAdministration
+      summary: Revoke any user's native device
+      description: |
+        Revokes the device session (reason `admin`) and records the operator
+        as `revoked_by`. NOTE(W2): internal/api/nativeauth/devices.go:182.
+      tags: [admin]
+      responses:
+        '204':
+          description: Revoked.
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such device.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeOAuthError'
+  /admin/native_clients/administration:
+    get:
+      operationId: listNativeClients
+      summary: List registered native clients
+      description: |
+        The effective native client registry (ADR-0025 WP2): the
+        NATIVE_CLIENTS_PATH file layer overlaid by the rows saved here, with
+        each client's live device count. Requires
+        `configuration.native_clients` in the administration mode.
+        NOTE(W2): internal/api/nativeauth/admin.go:34.
+      tags: [admin]
+      responses:
+        '200':
+          description: The registry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The store did not answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/native_clients/administration/{client_id}:
+    parameters:
+      - name: client_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: 3 to 64 characters of lower-case letters, digits, dot, underscore or hyphen.
+    put:
+      operationId: saveNativeClient
+      summary: Register or update a native client
+      description: |
+        Upserts the database layer for one client; it overrides a file entry
+        with the same id. Redirect URIs must be private-use reverse-domain
+        schemes (`com.example.app:/oauth/callback`) or loopback
+        (`http://127.0.0.1/path`, registered without a port). Disabling a
+        client revokes every device of it in the same transaction; enabling it
+        again resurrects none. 409 while DEPLOYMENT_URL is not set (the issuer
+        every native sign-in carries). NOTE(W2): internal/api/nativeauth/admin.go:61.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NativeClientSaveRequest'
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientWriteResult'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: DEPLOYMENT_URL is not set on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The definition is invalid; one reason per field and per redirect URI.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientValidationError'
+        '503':
+          description: The store did not answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteNativeClient
+      summary: Remove a native client's database row
+      description: |
+        Removes the database row and revokes every device of the client in the
+        same transaction. A file entry with the same id applies again.
+        NOTE(W2): internal/api/nativeauth/admin.go:112.
+      tags: [admin]
+      responses:
+        '200':
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NativeClientWriteResult'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No database row has that id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The store did not answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /elitea_core/mcp_oauth_proxy/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -11762,6 +13358,74 @@ paths:
               schema: { type: string, format: binary }
         '404': { $ref: '#/components/responses/404' }
 
+  /branding/pack.json:
+    # Served OUTSIDE the auth group like bootstrap.js (ADR-0025 decision 2;
+    # route registered at internal/api/router.go, root level).
+    get:
+      operationId: getBrandingPackJSON
+      summary: The resolved brand pack as JSON, with absolute references
+      description: |
+        Serves the same resolved brand pack as `GET /branding/bootstrap.js`
+        (one resolver), as JSON, with every same-origin reference
+        (`assets.*`, `typography.fontFaces[].url`, `product.docsUrl`) made
+        absolute against the deployment's public origin (`DEPLOYMENT_URL`).
+        Unauthenticated by design: a native client brands its sign-in screen
+        with it.
+
+        On a deployment with no brand pack of its own the response is the
+        product default pack (200), and `X-Elitea-Brand-Layers` says
+        `default`. That header lists the contributing layers bottom first:
+        `default` or `file`, then `db` when the admin Branding section
+        contributed.
+
+        Caching follows bootstrap.js, with pack.json's OWN entity tag: the
+        strong `ETag` is the hash of this response body (which carries the
+        public origin and, unbranded, the product default, neither of which
+        is in bootstrap.js's tag); `no-cache` on the bare URL;
+        `public, max-age=31536000, immutable` when `?v=` equals the current
+        ETag value; a stale `?v=` answers 302 to the current URL;
+        `If-None-Match` answers 304. When the deployment has no configured
+        public origin the absolute URLs are built from the request's Host,
+        the response carries `Vary: Host, X-Forwarded-Proto`, and it is
+        never immutable.
+      tags: [branding, client]
+      security: []
+      parameters:
+        - name: v
+          in: query
+          required: false
+          schema: { type: string }
+          description: >-
+            Content version token — the current ETag value without quotes,
+            as `brand_pack_url` in the discovery document carries it.
+      responses:
+        '200':
+          description: The resolved brand pack.
+          headers:
+            ETag:
+              description: Strong entity tag of this response body.
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+            X-Elitea-Brand-Layers:
+              description: Comma-separated contributing layers (`default`, `file`, `db`).
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrandPack'
+        '302':
+          description: >-
+            The `?v=` token does not match the current ETag value; Location
+            points at the current-version URL.
+          headers:
+            Location:
+              schema: { type: string }
+        '304':
+          description: If-None-Match matched the current entity tag.
+          headers:
+            ETag:
+              schema: { type: string }
   /branding/bootstrap.js:
     # NOTE(W3): served OUTSIDE the auth group — the SPA shell loads this
     # script before a session exists (UI reimplementation spec §4.3 delivery
@@ -12909,11 +14573,10 @@ paths:
         everybody's — see the handler's own comment on why that is a safety
         property, not a convenience.
 
-        The route also serves POST (create a conversation), which is
-        handwritten in entities/conversation's own conversationApi and is not
-        documented here.
-      tags: [chat]
+        The route also serves POST, createConversation below.
+      tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: source
           in: query
           required: false
@@ -12942,20 +14605,962 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 10, maximum: 100 }
+          description: >
+            Page size, at most 100. In delta mode the default is 100, and rows
+            and tombstones are each bounded by it.
         - name: offset
           in: query
           required: false
           schema: { type: integer, default: 0 }
+          description: Legacy paging only; ignored with `changes_since`.
+        - name: changes_since
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged.
+            Empty or `0`: a full sync from the beginning in delta shape.
+            Otherwise the opaque `next_cursor` of a previous delta of THIS list
+            — the same project and the same `source`, `entity_name`,
+            `entity_meta_id`, `mine` and `hidden` values; a cursor from another
+            list is a 400. Rows come oldest change first. Losing access to the
+            whole project is not a tombstone: the client sees 403 and drops
+            that project's cache.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
-          description: The matching conversations, newest first.
+          description: >
+            The matching conversations, newest first; with `changes_since`,
+            the conversations changed since the cursor, oldest change first,
+            plus tombstones and the next cursor.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConversationListing'
+        '400':
+          description: >-
+            `changes_since` is not a cursor this list issued, or `limit` is
+            not a positive integer (SyncCursorError); or, for a native client,
+            `X-Client-Version` does not parse (InvalidClientVersionError).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SyncCursorError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '410': { $ref: '#/components/responses/SyncCursorExpired' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: createConversation
+      summary: Create a conversation
+      description: |
+        Creates a conversation owned by the caller, private unless
+        `is_private: false` is sent, with the caller's personalization and the
+        project's chat defaults applied. Answers 201 with the stored
+        conversation; its `uuid` is the id the chat send and the attachment
+        upload take.
+      tags: [chat, client]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationCreateRequest'
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '201':
+          description: The created conversation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedConversation'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  # --- ADR-0025 WP5: the chat, execution and notification operations of the
+  # `client` contract that the document did not describe before.
+
+  /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+    get:
+      operationId: getConversation
+      summary: One conversation with its participants
+      description: |
+        Needs `models.chat.conversation.details` and access to the
+        conversation itself (a private conversation is visible only to the
+        callers the chat authority admits; anyone else gets 403 or 404).
+        `messages_limit` > 0 embeds the newest message groups in the legacy
+        projection; a client that keeps a transcript reads the message list
+        instead.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: messages_limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+          description: Embed this many message groups (0 or absent embeds none).
+        - name: sort_order
+          in: query
+          required: false
+          schema: { type: string }
+          description: Order of the embedded groups, `asc` or `desc`.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
+        '200':
+          description: The conversation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetail'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteConversation
+      summary: Delete a conversation and its stored attachments
+      description: |
+        Removes the conversation, every message group and the bytes of every
+        attachment its messages carried. A client that syncs sees ONE
+        `deleted` tombstone for the conversation on the conversation list (no
+        per-message tombstones). A 500 after the rows are gone means the byte
+        cleanup failed; the conversation is still deleted.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/messages/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: >
+          The conversation. The list takes its numeric id or its UUID; the
+          send takes the UUID only, and it must equal the body's
+          `conversation_uuid`.
+    get:
+      operationId: listConversationMessages
+      summary: A conversation's transcript, paged or as a delta
+      description: |
+        Legacy mode pages message groups newest first (`limit`, default 10,
+        at most 100; `offset`). With `changes_since` (ADR-0025 WP6) it answers
+        the groups changed since the cursor, oldest change first, the
+        tombstones of deleted groups and the next cursor; `offset`, `page`,
+        `sort_by`, `sort_order` and `query` are then ignored. A group that is
+        still streaming changes again when it settles, so a delta returns it
+        again; upsert by `id`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100 }
+          description: Page size, at most 100 (default 10; 100 in delta mode, for rows and tombstones each).
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Legacy alias, converted through `limit`; `offset` wins when both are sent.
+        - name: page_size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Legacy alias of `limit`; `limit` wins.
+        - name: sort_by
+          in: query
+          required: false
+          schema: { type: string }
+        - name: sort_order
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only `asc` flips the default `desc`.
+        - name: query
+          in: query
+          required: false
+          schema: { type: string }
+          description: Literal (not wildcard) text search over message text.
+        - name: changes_since
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Incremental sync (ADR-0025 WP6), as on listConversations. Empty or
+            `0` is a full sync; otherwise the `next_cursor` of a previous delta
+            of THIS conversation's transcript.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The transcript page or delta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationMessageListing'
+        '400':
+          description: >-
+            `changes_since` is not a cursor this list issued, or `limit` is
+            not a positive integer (SyncCursorError); or, for a native client,
+            `X-Client-Version` does not parse (InvalidClientVersionError).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SyncCursorError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '410': { $ref: '#/components/responses/SyncCursorExpired' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: sendChatMessage
+      summary: Send a chat message and start the answering turn
+      description: |
+        Admits one turn and answers at once with the turn's `events_url`; the
+        answer streams on that URL (streamExecutionEvents) and is stored in
+        the transcript as it settles.
+
+        IDEMPOTENCY. `question_id` is required, client generated and a
+        LOWERCASE canonical UUID. It is the admission idempotency key:
+        - the same `question_id` with the same body replays the original
+          admission — 200 with `created: false` and the SAME `execution_id`,
+          `response_message_id` and `events_url`;
+        - the same `question_id` with a different body answers 409
+          (`Agent execution request conflicts with an existing turn`).
+        So a client that lost the response (timeout, dropped connection)
+        resends the identical request and follows the `events_url` it gets
+        back; it never mints a new `question_id` for a retry.
+
+        `execution_contract` selects the turn kind:
+        `agent.execute.application.v1` (an agent or pipeline participant,
+        `participant_id` > 0) or `agent.execute.adhoc.v1` (a model chat,
+        `llm_settings` required). A body the current execution path cannot
+        run answers 422 `unsupported_agent_execution`. While the previous
+        answer of this conversation is still settling, the server waits up to
+        about 3 s before it decides.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: execution_contract
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [agent.execute.application.v1, agent.execute.adhoc.v1]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatSendRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: "The turn was admitted (`created` true) or replayed (`created` false)."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionStarted'
+        '400':
+          description: A malformed request, path/body mismatch, an invalid UUID, a bad mention or attachment list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The `question_id` was already used with a different body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '413':
+          description: The body is larger than 512 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '422':
+          description: '`unsupported_agent_execution`: this turn cannot run on the current execution path.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: Admission capacity is full; retry after `Retry-After` with the SAME `question_id`.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+
+  /elitea_core/regenerate/prompt_lib/{project_id}/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The assistant answer to regenerate (its `uid`, the send's `response_message_id`).
+    post:
+      operationId: regenerateChatMessage
+      summary: Regenerate an answer, optionally from an edited question
+      description: |
+        Starts a turn that rewrites the answer in place and answers like the
+        send. `regeneration_id` (client generated, lowercase canonical UUID)
+        is the idempotency key: the same id replays the admission, so a retry
+        reuses it. While the previous answer is still being finalised the
+        route answers 409 `agent_regeneration_pending` with `Retry-After: 1`
+        and `retryable: true`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: execution_contract
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [agent.regenerate.v1]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRegenerateRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The regeneration was admitted or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionStarted'
+        '400':
+          description: A malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: '`agent_regeneration_pending` (retry), or an idempotency conflict.'
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '413':
+          description: The body is larger than 512 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '422':
+          description: '`unsupported_agent_execution`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: Admission capacity is full; retry after `Retry-After`.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+
+  /elitea_core/continue_predict/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The conversation UUID; must equal the body's `conversation_uuid`.
+    post:
+      operationId: continueChatExecution
+      summary: Resume a paused turn (human decision, tool authorization, output limit)
+      description: |
+        Answers a pause the event stream announced and starts the turn's
+        continuation, answering like the send with a new `events_url`.
+        `execution_contract`:
+        - `agent.continue.hitl.v1` — a human-in-the-loop decision
+          (`hitl_resume: true` plus `hitl_action`/`hitl_value`, or
+          `hitl_decisions` for a multi-pause frame);
+        - `agent.continue.authorization.v1` — a toolkit/MCP authorization
+          answer (`authorization_request_id` + `authorization_action`, or
+          batched `hitl_decisions`);
+        - `agent.continue.output-limit.v1` — continue an answer cut at the
+          model's output limit (`message_id` only).
+        A pause that was already answered is a 409 with
+        `agent_hitl_already_resolved`, `agent_authorization_already_resolved`
+        or `agent_output_limit_already_resolved` and `retryable: false`:
+        refresh the transcript instead of retrying.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: execution_contract
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [agent.continue.hitl.v1, agent.continue.authorization.v1, agent.continue.output-limit.v1]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatContinueRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The continuation was admitted or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionStarted'
+        '400':
+          description: A malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The pause was already answered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '413':
+          description: The body is larger than 512 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '422':
+          description: '`unsupported_agent_execution`: the fields do not fit the contract.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: Admission capacity is full; retry after `Retry-After`.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+
+  /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: >
+          The conversation UUID. A numeric id is refused with 400: the file is
+          stored as `{conversation_uuid}/{file name}`.
+    post:
+      operationId: uploadConversationAttachment
+      summary: Upload a file to attach to the next chat message
+      description: |
+        `multipart/form-data` with the bytes in `file`. A small file is one
+        request (201). A large one is split into chunks sent with the same
+        `file_id` and `file_name` and their `chunk_index`/`total_chunks`;
+        every chunk but the last answers 202, the last answers 201 with the
+        assembled file. Send the returned `filepath` in the chat send's
+        `payload.attachments`. Size limits are the project's storage policy
+        (images and documents have separate ceilings); one chunk is at most a
+        few MB.
+      tags: [chat, client]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                file_name:
+                  type: string
+                  description: Defaults to the part's file name; directory parts are stripped.
+                file_id:
+                  type: string
+                  description: Chunked upload only; the same for every chunk of one file.
+                chunk_index:
+                  type: integer
+                  description: Chunked upload only; 0-based.
+                total_chunks:
+                  type: integer
+                  description: Chunked upload only.
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '201':
+          description: The file is stored.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConversationAttachmentUploaded'
+        '202':
+          description: A chunk was stored; send the next one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationAttachmentChunkReceived'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /executions/{project_id}/{execution_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: streamExecutionEvents
+      summary: The durable, resumable event stream of one execution (SSE)
+      description: |
+        Server-Sent Events replayed from PostgreSQL, so any replica serves a
+        resume. Each event is written as
+        `id: <cursor>` / `event: <type>` / `data: <one-line JSON>`. The
+        cursor is a uint64 that strictly increases within the execution.
+
+        RESUME. Send the last `id` you processed as `Last-Event-ID` or as
+        `?cursor=`. Replay is strictly after that cursor, so a resumed
+        client neither loses nor duplicates an event. Both present and
+        different is a 400 `invalid event cursor`. No cursor replays from the
+        start of the execution.
+
+        EVENT TYPES (`event:`): `execution.node_event` (one progress frame of
+        an agent turn — `data.type` names the frame), `execution.failed`
+        (terminal; `code`, `safe_message`, `retryable`),
+        `execution.replay_reset` (frames before this cursor were pruned and
+        will never be delivered; reload the transcript),
+        `index.ingest.completed` and `configuration.validation.completed`
+        (other execution kinds). A client must ignore an unknown type.
+
+        The server does NOT close the stream when a turn ends; the client
+        recognises the terminal frame and closes it (see the client contract
+        in API_CONTRACT.md: `pipeline_finish`, `agent_response` with a
+        `finish_reason`, `error`/`llm_error`/`agent_exception`, a terminal
+        pause, or `execution.failed`). Comment lines (`: connected`,
+        `: heartbeat`) keep the connection alive.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string }
+          description: The last cursor processed (uint64).
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: The same as `Last-Event-ID`, for clients that cannot set headers.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '400':
+          description: A cursor that is not a uint64, or two cursors that differ.
+          content:
+            text/plain:
+              schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidClientVersionError' }
+        '401':
+          description: No authenticated principal.
+          content:
+            text/plain:
+              schema: { type: string }
+        '403':
+          description: The caller may not read this execution.
+          content:
+            text/plain:
+              schema: { type: string }
+        '429':
+          description: Too many open streams for this caller or project; retry after `Retry-After`.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            text/plain:
+              schema: { type: string }
+        '500':
+          description: Replay failed.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /notifications/notifications/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listNotifications
+      summary: The caller's notifications, paged or as a delta
+      description: |
+        The caller's own notifications (the project in the path is the
+        permission scope). Legacy mode pages them (`limit` 1..1000, default
+        10; `offset`; `only_new`; `search`; `event_type`; `sort_by`,
+        `sort_order`; `only_total=true` answers `total` alone). With
+        `changes_since` (ADR-0025 WP6) it answers the notifications changed
+        since the cursor, oldest change first, plus tombstones; combining it
+        with `offset`, `only_new`, `only_total`, `search`, `event_type`,
+        `sort_by` or `sort_order` is a 400 `invalid_sync_request`.
+      tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: only_new
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: only_total
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+        - name: event_type
+          in: query
+          required: false
+          schema: { type: string }
+        - name: sort_by
+          in: query
+          required: false
+          schema: { type: string }
+          description: One of the notification's own fields; default `created_at`.
+        - name: sort_order
+          in: query
+          required: false
+          schema: { type: string }
+          description: '`asc` or `desc` (default).'
+        - name: changes_since
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Incremental sync (ADR-0025 WP6). Empty or `0` is a full sync;
+            otherwise the `next_cursor` of a previous notification delta of
+            the same user.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The page or delta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListing'
+        '400':
+          description: >
+            An invalid query (`{ok, error}`), or a refused delta request
+            (`invalid_sync_cursor`, `invalid_sync_request`, `invalid_limit`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/SyncCursorError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '410': { $ref: '#/components/responses/SyncCursorExpired' }
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The read failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+    put:
+      operationId: markNotificationsSeen
+      summary: Mark several (or all) of the caller's notifications seen or unseen
+      tags: [notifications, client]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationBulkSeenRequest'
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: How many rows changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: integer, format: int64 }
+        '400':
+          description: An invalid body.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The write failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+    delete:
+      operationId: deleteNotifications
+      summary: Delete several of the caller's notifications
+      tags: [notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationBulkDeleteRequest'
+      responses:
+        '200':
+          description: How many rows were deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: integer, format: int64 }
+        '400':
+          description: An invalid body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The write failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+
+  /notifications/notification/prompt_lib/{project_id}/{notification_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: notification_id
+        in: path
+        required: true
+        schema: { type: integer }
+    put:
+      operationId: markNotificationSeen
+      summary: Mark one of the caller's notifications seen
+      description: |
+        Takes no body and answers the notification. An id that is not the
+        caller's answers 400 "Notification is not found" (not 404).
+      tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The notification, now seen.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '400':
+          description: An invalid id, or a notification that is not the caller's.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The write failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+    delete:
+      operationId: deleteNotification
+      summary: Delete one of the caller's notifications
+      tags: [notifications]
+      responses:
+        '204': { description: Deleted. }
+        '400':
+          description: An invalid id, or a notification that is not the caller's.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The write failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationErrorResponse'
+
+  /notifications/events/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: streamNotificationEvents
+      summary: New notifications for the caller, as Server-Sent Events
+      description: |
+        Pushes each new notification of the caller as
+        `event: notifications_notify` with the Notification JSON as `data`
+        and its id as the SSE `id`. The first event is
+        `notifications_ready` with `{"cursor": N}` and `retry: 2000`; it is
+        also sent in place of a notification too large for the stream (then
+        read the list). Resume with `Last-Event-ID` or `?cursor=` (both and
+        different is a 400); without one the stream starts at the newest
+        notification. The list stays authoritative: after a reconnect gap,
+        sync the list (`changes_since`) rather than trusting the stream.
+      tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '400':
+          description: An invalid project or cursor.
+          content:
+            text/plain:
+              schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidClientVersionError' }
+        '401':
+          description: No authenticated principal.
+          content:
+            text/plain:
+              schema: { type: string }
+        '403':
+          description: Not a member of the project.
+          content:
+            text/plain:
+              schema: { type: string }
+        '429':
+          description: Too many open notification streams for this user.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            text/plain:
+              schema: { type: string }
+        '503':
+          description: The stream is unavailable; retry.
+          content:
+            text/plain:
+              schema: { type: string }
 
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:
     parameters:
@@ -15478,8 +18083,9 @@ paths:
         The handler reads `check_public_role` as presence only. Any value, also
         `false`, sets the flag true. The flag reaches the query, which then
         hides the public project from a caller who is not an admin of it.
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: check_public_role
           in: query
           schema: { type: boolean }
@@ -15487,6 +18093,8 @@ paths:
             Presence-only flag. The handler ignores the value, so
             `check_public_role=false` also switches the check on.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Accessible projects
           content:

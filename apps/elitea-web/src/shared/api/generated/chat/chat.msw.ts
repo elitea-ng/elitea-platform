@@ -46,9 +46,15 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   CanvasPresence,
+  ChatExecutionStarted,
   ClearMemories200,
+  ConversationAttachmentChunkReceived,
+  ConversationAttachmentUploaded,
+  ConversationDetail,
   ConversationExport,
   ConversationListing,
+  ConversationMessageListing,
+  CreatedConversation,
   MemoryEntry,
   MemoryEntryList,
   MessageFeedbackSummary,
@@ -316,8 +322,282 @@ export const getListConversationsResponseMock = (
       undefined,
     ]),
   })),
+  tombstones: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.number.int(),
+      uuid: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      reason: faker.helpers.arrayElement(["deleted", "access_lost"] as const),
+      deleted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    })),
+    undefined,
+  ]),
+  next_cursor: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  has_more: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
   ...overrideResponse,
 });
+
+export const getCreateConversationResponseMock = (
+  overrideResponse: Partial<Extract<CreatedConversation, object>> = {},
+): CreatedConversation => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  message_count: faker.number.int(),
+  folder_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  is_private: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  meta: faker.helpers.arrayElement([{}, undefined]),
+  source: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  instructions: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  participants: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.number.int(),
+      entity_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      entity_meta: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([null]),
+        undefined,
+      ]),
+      entity_settings: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([null]),
+        undefined,
+      ]),
+      meta: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([null]),
+        undefined,
+      ]),
+    })),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetConversationResponseMock = (
+  overrideResponse: Partial<Extract<ConversationDetail, object>> = {},
+): ConversationDetail => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  message_count: faker.number.int(),
+  source: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  instructions: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  folder_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  is_private: faker.datatype.boolean(),
+  meta: {},
+  participants: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    entity_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    entity_meta: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      undefined,
+    ]),
+    entity_settings: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      undefined,
+    ]),
+    meta: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      undefined,
+    ]),
+  })),
+  message_groups: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({})),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getListConversationMessagesResponseMock = (
+  overrideResponse: Partial<Extract<ConversationMessageListing, object>> = {},
+): ConversationMessageListing => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    uid: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    conversation_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    role: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    content_type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    author_participant_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      undefined,
+    ]),
+    sent_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    reply_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    metadata: faker.helpers.arrayElement([{}, undefined]),
+    message_items: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({})),
+      undefined,
+    ]),
+    is_streaming: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    task_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+  })),
+  total: faker.number.int(),
+  page: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  page_size: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  total_pages: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  tombstones: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.number.int(),
+      uuid: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      reason: faker.helpers.arrayElement(["deleted", "access_lost"] as const),
+      deleted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    })),
+    undefined,
+  ]),
+  next_cursor: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  has_more: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  ...overrideResponse,
+});
+
+export const getSendChatMessageResponseMock = (
+  overrideResponse: Partial<Extract<ChatExecutionStarted, object>> = {},
+): ChatExecutionStarted => ({
+  task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getRegenerateChatMessageResponseMock = (
+  overrideResponse: Partial<Extract<ChatExecutionStarted, object>> = {},
+): ChatExecutionStarted => ({
+  task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getContinueChatExecutionResponseMock = (
+  overrideResponse: Partial<Extract<ChatExecutionStarted, object>> = {},
+): ChatExecutionStarted => ({
+  task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getUploadConversationAttachmentResponseMock = (
+  overrideResponse: Partial<
+    Extract<
+      ConversationAttachmentUploaded[] | ConversationAttachmentChunkReceived,
+      object
+    >
+  > = {},
+): ConversationAttachmentUploaded[] | ConversationAttachmentChunkReceived =>
+  faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      filepath: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      file_size: faker.number.int(),
+    })),
+    {
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      file_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      chunk_index: faker.number.int(),
+      total_chunks: faker.number.int(),
+      message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      ...overrideResponse,
+    },
+  ]);
+
+export const getStreamExecutionEventsResponseMock = (): string =>
+  faker.word.sample();
 
 export const getListMessageTracesResponseMock = (
   overrideResponse: Partial<Extract<MessageTraceListing, object>> = {},
@@ -846,6 +1126,249 @@ export const getListConversationsMockHandler = (
   );
 };
 
+export const getCreateConversationMockHandler = (
+  overrideResponse?:
+    | CreatedConversation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CreatedConversation> | CreatedConversation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/conversations/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateConversationResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetConversationMockHandler = (
+  overrideResponse?:
+    | ConversationDetail
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConversationDetail> | ConversationDetail),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/conversation/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetConversationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteConversationMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/conversation/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getListConversationMessagesMockHandler = (
+  overrideResponse?:
+    | ConversationMessageListing
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConversationMessageListing> | ConversationMessageListing),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/messages/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConversationMessagesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSendChatMessageMockHandler = (
+  overrideResponse?:
+    | ChatExecutionStarted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ChatExecutionStarted> | ChatExecutionStarted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/messages/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSendChatMessageResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRegenerateChatMessageMockHandler = (
+  overrideResponse?:
+    | ChatExecutionStarted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ChatExecutionStarted> | ChatExecutionStarted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/regenerate/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRegenerateChatMessageResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getContinueChatExecutionMockHandler = (
+  overrideResponse?:
+    | ChatExecutionStarted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ChatExecutionStarted> | ChatExecutionStarted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/continue_predict/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getContinueChatExecutionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUploadConversationAttachmentMockHandler = (
+  overrideResponse?:
+    | ConversationAttachmentUploaded[]
+    | ConversationAttachmentChunkReceived
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<
+            | ConversationAttachmentUploaded[]
+            | ConversationAttachmentChunkReceived
+          >
+        | ConversationAttachmentUploaded[]
+        | ConversationAttachmentChunkReceived),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/attachments/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUploadConversationAttachmentResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getStreamExecutionEventsMockHandler = (
+  overrideResponse?:
+    | string
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<string> | string),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/executions/:projectId/:executionId/events",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const resolvedBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStreamExecutionEventsResponseMock();
+      const textBody =
+        typeof resolvedBody === "string"
+          ? resolvedBody
+          : JSON.stringify(resolvedBody ?? null);
+      return HttpResponse.text(textBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    },
+    options,
+  );
+};
+
 export const getListMessageTracesMockHandler = (
   overrideResponse?:
     | MessageTraceListing
@@ -1110,6 +1633,15 @@ export const getChatMock = () => [
   getHeartbeatCanvasPresenceMockHandler(),
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),
+  getCreateConversationMockHandler(),
+  getGetConversationMockHandler(),
+  getDeleteConversationMockHandler(),
+  getListConversationMessagesMockHandler(),
+  getSendChatMessageMockHandler(),
+  getRegenerateChatMessageMockHandler(),
+  getContinueChatExecutionMockHandler(),
+  getUploadConversationAttachmentMockHandler(),
+  getStreamExecutionEventsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),
   getListMemoriesMockHandler(),

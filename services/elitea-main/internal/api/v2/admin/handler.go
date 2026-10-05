@@ -24,6 +24,9 @@ type Handler struct {
 	// The brand-pack resolver the Branding surface reads and invalidates
 	// (branding.go). Nil unless WithBranding is applied.
 	branding BrandingResolver
+	// nativePolicy is the cached native client policy a save of the
+	// native_client_policy section invalidates (native_client_policy.go).
+	nativePolicy PolicyInvalidator
 	// The brand asset store the upload route writes (branding.go). Nil unless
 	// WithBrandingAssets is applied with an available store.
 	brandingAssets *v2branding.AssetStore

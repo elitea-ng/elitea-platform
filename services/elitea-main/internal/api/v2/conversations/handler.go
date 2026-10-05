@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
@@ -459,23 +460,28 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Build the query with optional filtering by source & participant entity
 	visibility, args := access.Predicate(s, "c", 1, chatauthority.Listing)
-	baseWhere := "WHERE " + visibility
+	// The list filters are kept apart from the visibility predicate because
+	// the delta (changes_since) needs them apart: a conversation the caller
+	// can still see but that no longer matches the filter has left THIS list
+	// (an `access_lost` tombstone), which is a different event from losing
+	// sight of it.
+	filters := "TRUE"
 	argIdx := len(args) + 1
 
 	if source != "" {
-		baseWhere += fmt.Sprintf(" AND c.source = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.source = $%d", argIdx)
 		args = append(args, source)
 		argIdx++
 	}
 
 	// Filter by entity_meta_id + entity_name via conversation.meta->'single_participant'
 	if entityMetaID != "" {
-		baseWhere += fmt.Sprintf(" AND c.meta->'single_participant'->'entity_meta'->>'id' = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.meta->'single_participant'->'entity_meta'->>'id' = $%d", argIdx)
 		args = append(args, entityMetaID)
 		argIdx++
 	}
 	if entityName != "" {
-		baseWhere += fmt.Sprintf(" AND c.meta->'single_participant'->>'entity_name' = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.meta->'single_participant'->>'entity_name' = $%d", argIdx)
 		args = append(args, entityName)
 		argIdx++
 	}
@@ -491,7 +497,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"total": 0, "rows": []any{}})
 			return
 		}
-		baseWhere += fmt.Sprintf(" AND c.author_id = $%d", argIdx)
+		filters += fmt.Sprintf(" AND c.author_id = $%d", argIdx)
 		args = append(args, callerID)
 		argIdx++
 	}
@@ -512,10 +518,25 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	// hidden conversation into the ordinary list. Anything else — including
 	// the absent parameter every existing caller sends — takes the default.
 	if r.URL.Query().Get("hidden") == "only" {
-		baseWhere += " AND c.meta->>'is_hidden' = 'true'"
+		filters += " AND c.meta->>'is_hidden' = 'true'"
 	} else {
 		// Exclude hidden conversations
-		baseWhere += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
+		filters += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
+	}
+
+	baseWhere := "WHERE " + visibility + " AND " + filters
+
+	if raw, delta := changesync.Requested(r.URL.Query()); delta {
+		h.listChanges(w, r, pool, conversationChangesQuery{
+			schema:     s,
+			projectID:  projectID,
+			visibility: visibility,
+			filters:    filters,
+			args:       args,
+			admin:      access.Admin,
+			raw:        raw,
+		})
+		return
 	}
 
 	// Count total
@@ -528,13 +549,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch conversations
 	args = append(args, limit, offset)
-	q := fmt.Sprintf(`
-		SELECT c.id, c.name, c.created_at, COALESCE(c.updated_at, c.created_at), c.meta,
-			(SELECT COUNT(*) FROM %s.chat_message_group mg WHERE mg.conversation_id = c.id)
-		FROM %s.chat_conversations c
+	q := conversationSelectSQL(s, false) + fmt.Sprintf(`
 		%s
 		ORDER BY c.created_at DESC, c.id DESC
-		LIMIT $%d OFFSET $%d`, s, s, baseWhere, argIdx, argIdx+1)
+		LIMIT $%d OFFSET $%d`, baseWhere, argIdx, argIdx+1)
 
 	rows, err := pool.Query(ctx, q, args...)
 	if err != nil {
@@ -545,32 +563,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	result := []map[string]any{}
 	for rows.Next() {
-		var id int
-		var name string
-		var createdAt, updatedAt time.Time
-		var metaBytes []byte
-		var msgCount int
-		if err := rows.Scan(&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount); err != nil {
+		row, _, err := scanConversationRow(rows, false)
+		if err != nil {
 			apierr.Write(w, err)
 			return
-		}
-
-		var meta map[string]any
-		if metaBytes != nil {
-			_ = json.Unmarshal(metaBytes, &meta) // internal DB column; nil map on error is handled below
-		}
-		if meta == nil {
-			meta = map[string]any{}
-		}
-
-		row := map[string]any{
-			"id":                   id,
-			"name":                 name,
-			"created_at":           createdAt.Format("2006-01-02T15:04:05.000000"),
-			"updated_at":           updatedAt.Format("2006-01-02T15:04:05.000000"),
-			"meta":                 meta,
-			"duration":             -1,
-			"message_groups_count": msgCount,
 		}
 		result = append(result, row)
 	}
@@ -961,6 +957,13 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
+
+	// `changes_since` switches to the delta (ADR-0025 WP6). Absent, the
+	// legacy page below is served unchanged.
+	if raw, delta := changesync.Requested(r.URL.Query()); delta {
+		h.listMessageChanges(w, r, projectID, conversationID, raw)
+		return
+	}
 
 	resp, err := h.repo.ListMessages(r.Context(), projectID, conversationID, parseMessagesQuery(r.URL.Query()))
 	if err != nil {

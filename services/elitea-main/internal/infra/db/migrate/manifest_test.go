@@ -604,7 +604,28 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// issues 6802 and 6881). No request-log index: the runner applies every
 	// pending file in one transaction, and a build there would hold the
 	// execution_jobs lock. No new permission.
-	require.EqualValues(t, 140, Head(shared))
+	//
+	// 141: shared/0141_native_auth.sql, native authorization for registered
+	// public clients (ADR-0025 WP2): the native_clients DB layer, the
+	// authorization requests, the device registry (one row per refresh-token
+	// family, anchored on an auth_core__token row with uuid NULL), hashed
+	// refresh and access tokens with the sealed re-delivery successor, and the
+	// `configuration.native_clients` administration grant. 139 and 140 are
+	// main's (landed while this branch was open).
+	//
+	// 143: shared/0143_native_client_min_version.sql, a registered native
+	// client's own minimum version (ADR-0025 WP4), which can only raise the
+	// `native_client_policy` section's deployment-wide minimum. No new
+	// permission: `configuration.native_clients` (0141) guards both. 142 is
+	// unused (reserved for a device-registry file WP3 folded into 0141).
+	//
+	// 144: shared/0144_notification_sync.sql, incremental sync for
+	// notifications (ADR-0025 WP6): a trigger-maintained `sync_at` stamp on
+	// centry.notifications (backfilled from updated_at/created_at, never on
+	// the wire) with a (user_id, sync_at, id) index, and
+	// centry.notification_tombstones filled by an AFTER DELETE trigger. No
+	// permission. Guarded on centry.notifications for bare databases.
+	require.EqualValues(t, 144, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -772,7 +793,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// editor's dead "Webhook secret" model setting wrote into
 	// `application_versions.llm_settings`. No table and no permission, so no
 	// shared sibling.
-	require.EqualValues(t, 143, Head(tenant))
+	// 144: tenant/0144_chat_sync.sql, incremental sync for conversations and
+	// messages (ADR-0025 WP6): a trigger-maintained `sync_at` stamp on
+	// chat_conversations and chat_message_group (internal; `updated_at` keeps
+	// its wire meaning), throttled child -> parent bumps from groups, items,
+	// text and participant mappings, and chat_sync_tombstones for deletions
+	// and lost access. No permission, so no shared sibling (shared 0144 is the
+	// notification half, not a grant). Authored as tenant 0142 and renumbered
+	// at merge: main landed 0141-0143 while this branch was open.
+	require.EqualValues(t, 144, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

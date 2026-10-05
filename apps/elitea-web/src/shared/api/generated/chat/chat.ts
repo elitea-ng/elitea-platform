@@ -55,13 +55,30 @@ import type {
 import type {
   CanvasPresence,
   CanvasPresenceRequest,
+  ChatContinueRequest,
+  ChatExecutionError,
+  ChatExecutionStarted,
+  ChatRegenerateRequest,
+  ChatSendRequest,
   ClearMemories200,
+  ClientUpgradeRequiredResponse,
+  ContinueChatExecutionParams,
+  ConversationAttachmentChunkReceived,
+  ConversationAttachmentUploaded,
+  ConversationCreateRequest,
+  ConversationDetail,
   ConversationExport,
   ConversationListing,
+  ConversationMessageListing,
   CreateSupportConversationBody,
+  CreatedConversation,
   ErrorResponse,
   ExportConversationParams,
+  GetConversationParams,
   GetMessageTraceParams,
+  InvalidClientVersionError,
+  InvalidClientVersionResponse,
+  ListConversationMessagesParams,
   ListConversationsParams,
   ListMemoriesParams,
   ListMessageTracesParams,
@@ -78,12 +95,18 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  RegenerateChatMessageParams,
+  SendChatMessageParams,
+  StreamExecutionEventsParams,
   SupportAssistantConfig,
   SupportConversation,
   SupportConversationDetails,
   SupportConversationList,
   SupportPredictRequest,
   SupportPredictResponse,
+  SyncCursorError,
+  SyncCursorExpiredResponse,
+  UploadConversationAttachmentBody,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -1874,6 +1897,11 @@ export type listConversationsResponse200 = {
   status: 200;
 };
 
+export type listConversationsResponse400 = {
+  data: SyncCursorError | InvalidClientVersionError;
+  status: 400;
+};
+
 export type listConversationsResponse401 = {
   data: N401Response;
   status: 401;
@@ -1882,6 +1910,16 @@ export type listConversationsResponse401 = {
 export type listConversationsResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type listConversationsResponse410 = {
+  data: SyncCursorExpiredResponse;
+  status: 410;
+};
+
+export type listConversationsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type listConversationsResponse500 = {
@@ -1893,8 +1931,11 @@ export type listConversationsResponseSuccess = listConversationsResponse200 & {
   headers: Headers;
 };
 export type listConversationsResponseError = (
+  | listConversationsResponse400
   | listConversationsResponse401
   | listConversationsResponse403
+  | listConversationsResponse410
+  | listConversationsResponse426
   | listConversationsResponse500
 ) & {
   headers: Headers;
@@ -1935,9 +1976,7 @@ export const getListConversationsUrl = (
  * everybody's — see the handler's own comment on why that is a safety
  * property, not a convenience.
  *
- * The route also serves POST (create a conversation), which is
- * handwritten in entities/conversation's own conversationApi and is not
- * documented here.
+ * The route also serves POST, createConversation below.
  * @summary List conversations, optionally scoped to one participant entity
  */
 export const listConversations = async (
@@ -1966,7 +2005,14 @@ export const getListConversationsQueryKey = (
 
 export const getListConversationsQueryOptions = <
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2007,11 +2053,24 @@ export type ListConversationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listConversations>>
 >;
 export type ListConversationsQueryError =
-  N401Response | N403Response | N500Response;
+  | SyncCursorError
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | SyncCursorExpiredResponse
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params: undefined | ListConversationsParams,
@@ -2039,7 +2098,14 @@ export function useListConversations<
 };
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2067,7 +2133,14 @@ export function useListConversations<
 };
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2091,7 +2164,14 @@ export function useListConversations<
 
 export function useListConversations<
   TData = Awaited<ReturnType<typeof listConversations>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConversationsParams,
@@ -2111,6 +2191,3041 @@ export function useListConversations<
 } {
   const queryOptions = getListConversationsQueryOptions(
     projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createConversationResponse201 = {
+  data: CreatedConversation;
+  status: 201;
+};
+
+export type createConversationResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type createConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createConversationResponseSuccess =
+  createConversationResponse201 & {
+    headers: Headers;
+  };
+export type createConversationResponseError = (
+  | createConversationResponse400
+  | createConversationResponse401
+  | createConversationResponse403
+  | createConversationResponse426
+  | createConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type createConversationResponse =
+  createConversationResponseSuccess | createConversationResponseError;
+
+export const getCreateConversationUrl = (projectId: string) => {
+  return `/elitea_core/conversations/prompt_lib/${projectId}`;
+};
+
+/**
+ * Creates a conversation owned by the caller, private unless
+ * `is_private: false` is sent, with the caller's personalization and the
+ * project's chat defaults applied. Answers 201 with the stored
+ * conversation; its `uuid` is the id the chat send and the attachment
+ * upload take.
+ * @summary Create a conversation
+ */
+export const createConversation = async (
+  projectId: string,
+  conversationCreateRequest: ConversationCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createConversationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createConversationResponse>(
+    getCreateConversationUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(conversationCreateRequest),
+    },
+  );
+};
+
+export const getCreateConversationQueryKey = (
+  projectId: string,
+  conversationCreateRequest?: ConversationCreateRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversations/prompt_lib/${projectId}`,
+    conversationCreateRequest,
+  ] as const;
+};
+
+export const getCreateConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationCreateRequest: ConversationCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateConversationQueryKey(projectId, conversationCreateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createConversation>>
+  > = ({ signal }) =>
+    createConversation(projectId, conversationCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createConversation>>
+>;
+export type CreateConversationQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationCreateRequest: ConversationCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConversation>>,
+          TError,
+          Awaited<ReturnType<typeof createConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationCreateRequest: ConversationCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConversation>>,
+          TError,
+          Awaited<ReturnType<typeof createConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationCreateRequest: ConversationCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create a conversation
+ */
+
+export function useCreateConversation<
+  TData = Awaited<ReturnType<typeof createConversation>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationCreateRequest: ConversationCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateConversationQueryOptions(
+    projectId,
+    conversationCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getConversationResponse200 = {
+  data: ConversationDetail;
+  status: 200;
+};
+
+export type getConversationResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
+export type getConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getConversationResponseSuccess = getConversationResponse200 & {
+  headers: Headers;
+};
+export type getConversationResponseError = (
+  | getConversationResponse400
+  | getConversationResponse401
+  | getConversationResponse403
+  | getConversationResponse404
+  | getConversationResponse426
+  | getConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type getConversationResponse =
+  getConversationResponseSuccess | getConversationResponseError;
+
+export const getGetConversationUrl = (
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Needs `models.chat.conversation.details` and access to the
+ * conversation itself (a private conversation is visible only to the
+ * callers the chat authority admits; anyone else gets 403 or 404).
+ * `messages_limit` > 0 embeds the newest message groups in the legacy
+ * projection; a client that keeps a transcript reads the message list
+ * instead.
+ * @summary One conversation with its participants
+ */
+export const getConversation = async (
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getConversationResponse> => {
+  return eliteaFetch<getConversationResponse>(
+    getGetConversationUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+) => {
+  return [
+    `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetConversationQueryKey(projectId, conversationId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getConversation>>> = ({
+    signal,
+  }) =>
+    getConversation(projectId, conversationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConversation>>
+>;
+export type GetConversationQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetConversation<
+  TData = Awaited<ReturnType<typeof getConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params: undefined | GetConversationParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConversation>>,
+          TError,
+          Awaited<ReturnType<typeof getConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConversation<
+  TData = Awaited<ReturnType<typeof getConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConversation>>,
+          TError,
+          Awaited<ReturnType<typeof getConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConversation<
+  TData = Awaited<ReturnType<typeof getConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary One conversation with its participants
+ */
+
+export function useGetConversation<
+  TData = Awaited<ReturnType<typeof getConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: GetConversationParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetConversationQueryOptions(
+    projectId,
+    conversationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteConversationResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteConversationResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
+export type deleteConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type deleteConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteConversationResponseSuccess =
+  deleteConversationResponse204 & {
+    headers: Headers;
+  };
+export type deleteConversationResponseError = (
+  | deleteConversationResponse400
+  | deleteConversationResponse401
+  | deleteConversationResponse403
+  | deleteConversationResponse404
+  | deleteConversationResponse426
+  | deleteConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteConversationResponse =
+  deleteConversationResponseSuccess | deleteConversationResponseError;
+
+export const getDeleteConversationUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Removes the conversation, every message group and the bytes of every
+ * attachment its messages carried. A client that syncs sees ONE
+ * `deleted` tombstone for the conversation on the conversation list (no
+ * per-message tombstones). A 500 after the rows are gone means the byte
+ * cleanup failed; the conversation is still deleted.
+ * @summary Delete a conversation and its stored attachments
+ */
+export const deleteConversation = async (
+  projectId: string,
+  conversationId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteConversationResponse> => {
+  return eliteaFetch<deleteConversationResponse>(
+    getDeleteConversationUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/conversation/prompt_lib/${projectId}/${conversationId}`,
+  ] as const;
+};
+
+export const getDeleteConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteConversationQueryKey(projectId, conversationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteConversation>>
+  > = ({ signal }) =>
+    deleteConversation(projectId, conversationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteConversation>>
+>;
+export type DeleteConversationQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useDeleteConversation<
+  TData = Awaited<ReturnType<typeof deleteConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversation>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversation<
+  TData = Awaited<ReturnType<typeof deleteConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversation>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversation<
+  TData = Awaited<ReturnType<typeof deleteConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete a conversation and its stored attachments
+ */
+
+export function useDeleteConversation<
+  TData = Awaited<ReturnType<typeof deleteConversation>>,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteConversationQueryOptions(
+    projectId,
+    conversationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listConversationMessagesResponse200 = {
+  data: ConversationMessageListing;
+  status: 200;
+};
+
+export type listConversationMessagesResponse400 = {
+  data: SyncCursorError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type listConversationMessagesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConversationMessagesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConversationMessagesResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listConversationMessagesResponse410 = {
+  data: SyncCursorExpiredResponse;
+  status: 410;
+};
+
+export type listConversationMessagesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type listConversationMessagesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listConversationMessagesResponseSuccess =
+  listConversationMessagesResponse200 & {
+    headers: Headers;
+  };
+export type listConversationMessagesResponseError = (
+  | listConversationMessagesResponse400
+  | listConversationMessagesResponse401
+  | listConversationMessagesResponse403
+  | listConversationMessagesResponse404
+  | listConversationMessagesResponse410
+  | listConversationMessagesResponse426
+  | listConversationMessagesResponse500
+) & {
+  headers: Headers;
+};
+
+export type listConversationMessagesResponse =
+  | listConversationMessagesResponseSuccess
+  | listConversationMessagesResponseError;
+
+export const getListConversationMessagesUrl = (
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/messages/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/messages/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Legacy mode pages message groups newest first (`limit`, default 10,
+ * at most 100; `offset`). With `changes_since` (ADR-0025 WP6) it answers
+ * the groups changed since the cursor, oldest change first, the
+ * tombstones of deleted groups and the next cursor; `offset`, `page`,
+ * `sort_by`, `sort_order` and `query` are then ignored. A group that is
+ * still streaming changes again when it settles, so a delta returns it
+ * again; upsert by `id`.
+ * @summary A conversation's transcript, paged or as a delta
+ */
+export const listConversationMessages = async (
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConversationMessagesResponse> => {
+  return eliteaFetch<listConversationMessagesResponse>(
+    getListConversationMessagesUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConversationMessagesQueryKey = (
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+) => {
+  return [
+    `/elitea_core/messages/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListConversationMessagesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConversationMessages>>,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationMessages>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListConversationMessagesQueryKey(projectId, conversationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConversationMessages>>
+  > = ({ signal }) =>
+    listConversationMessages(projectId, conversationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConversationMessages>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConversationMessagesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConversationMessages>>
+>;
+export type ListConversationMessagesQueryError =
+  | SyncCursorError
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | SyncCursorExpiredResponse
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useListConversationMessages<
+  TData = Awaited<ReturnType<typeof listConversationMessages>>,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params: undefined | ListConversationMessagesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationMessages>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversationMessages>>,
+          TError,
+          Awaited<ReturnType<typeof listConversationMessages>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversationMessages<
+  TData = Awaited<ReturnType<typeof listConversationMessages>>,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationMessages>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversationMessages>>,
+          TError,
+          Awaited<ReturnType<typeof listConversationMessages>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversationMessages<
+  TData = Awaited<ReturnType<typeof listConversationMessages>>,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationMessages>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary A conversation's transcript, paged or as a delta
+ */
+
+export function useListConversationMessages<
+  TData = Awaited<ReturnType<typeof listConversationMessages>>,
+  TError =
+    | SyncCursorError
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | SyncCursorExpiredResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListConversationMessagesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationMessages>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConversationMessagesQueryOptions(
+    projectId,
+    conversationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type sendChatMessageResponse200 = {
+  data: ChatExecutionStarted;
+  status: 200;
+};
+
+export type sendChatMessageResponse400 = {
+  data: ChatExecutionError;
+  status: 400;
+};
+
+export type sendChatMessageResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type sendChatMessageResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type sendChatMessageResponse409 = {
+  data: ChatExecutionError;
+  status: 409;
+};
+
+export type sendChatMessageResponse413 = {
+  data: ChatExecutionError;
+  status: 413;
+};
+
+export type sendChatMessageResponse415 = {
+  data: ChatExecutionError;
+  status: 415;
+};
+
+export type sendChatMessageResponse422 = {
+  data: ChatExecutionError;
+  status: 422;
+};
+
+export type sendChatMessageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type sendChatMessageResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type sendChatMessageResponse503 = {
+  data: ChatExecutionError;
+  status: 503;
+};
+
+export type sendChatMessageResponseSuccess = sendChatMessageResponse200 & {
+  headers: Headers;
+};
+export type sendChatMessageResponseError = (
+  | sendChatMessageResponse400
+  | sendChatMessageResponse401
+  | sendChatMessageResponse403
+  | sendChatMessageResponse409
+  | sendChatMessageResponse413
+  | sendChatMessageResponse415
+  | sendChatMessageResponse422
+  | sendChatMessageResponse426
+  | sendChatMessageResponse500
+  | sendChatMessageResponse503
+) & {
+  headers: Headers;
+};
+
+export type sendChatMessageResponse =
+  sendChatMessageResponseSuccess | sendChatMessageResponseError;
+
+export const getSendChatMessageUrl = (
+  projectId: string,
+  conversationId: string,
+  params: SendChatMessageParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/messages/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/messages/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Admits one turn and answers at once with the turn's `events_url`; the
+ * answer streams on that URL (streamExecutionEvents) and is stored in
+ * the transcript as it settles.
+ *
+ * IDEMPOTENCY. `question_id` is required, client generated and a
+ * LOWERCASE canonical UUID. It is the admission idempotency key:
+ * - the same `question_id` with the same body replays the original
+ *   admission — 200 with `created: false` and the SAME `execution_id`,
+ *   `response_message_id` and `events_url`;
+ * - the same `question_id` with a different body answers 409
+ *   (`Agent execution request conflicts with an existing turn`).
+ * So a client that lost the response (timeout, dropped connection)
+ * resends the identical request and follows the `events_url` it gets
+ * back; it never mints a new `question_id` for a retry.
+ *
+ * `execution_contract` selects the turn kind:
+ * `agent.execute.application.v1` (an agent or pipeline participant,
+ * `participant_id` > 0) or `agent.execute.adhoc.v1` (a model chat,
+ * `llm_settings` required). A body the current execution path cannot
+ * run answers 422 `unsupported_agent_execution`. While the previous
+ * answer of this conversation is still settling, the server waits up to
+ * about 3 s before it decides.
+ * @summary Send a chat message and start the answering turn
+ */
+export const sendChatMessage = async (
+  projectId: string,
+  conversationId: string,
+  chatSendRequest: ChatSendRequest,
+  params: SendChatMessageParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<sendChatMessageResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<sendChatMessageResponse>(
+    getSendChatMessageUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(chatSendRequest),
+    },
+  );
+};
+
+export const getSendChatMessageQueryKey = (
+  projectId: string,
+  conversationId: string,
+  chatSendRequest?: ChatSendRequest,
+  params?: SendChatMessageParams,
+) => {
+  return [
+    "POST",
+    `/elitea_core/messages/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+    chatSendRequest,
+  ] as const;
+};
+
+export const getSendChatMessageQueryOptions = <
+  TData = Awaited<ReturnType<typeof sendChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatSendRequest: ChatSendRequest,
+  params: SendChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sendChatMessage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSendChatMessageQueryKey(
+      projectId,
+      conversationId,
+      chatSendRequest,
+      params,
+    );
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof sendChatMessage>>> = ({
+    signal,
+  }) =>
+    sendChatMessage(projectId, conversationId, chatSendRequest, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof sendChatMessage>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SendChatMessageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof sendChatMessage>>
+>;
+export type SendChatMessageQueryError =
+  | ChatExecutionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useSendChatMessage<
+  TData = Awaited<ReturnType<typeof sendChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatSendRequest: ChatSendRequest,
+  params: SendChatMessageParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sendChatMessage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof sendChatMessage>>,
+          TError,
+          Awaited<ReturnType<typeof sendChatMessage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSendChatMessage<
+  TData = Awaited<ReturnType<typeof sendChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatSendRequest: ChatSendRequest,
+  params: SendChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sendChatMessage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof sendChatMessage>>,
+          TError,
+          Awaited<ReturnType<typeof sendChatMessage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSendChatMessage<
+  TData = Awaited<ReturnType<typeof sendChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatSendRequest: ChatSendRequest,
+  params: SendChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sendChatMessage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Send a chat message and start the answering turn
+ */
+
+export function useSendChatMessage<
+  TData = Awaited<ReturnType<typeof sendChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatSendRequest: ChatSendRequest,
+  params: SendChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sendChatMessage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSendChatMessageQueryOptions(
+    projectId,
+    conversationId,
+    chatSendRequest,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type regenerateChatMessageResponse200 = {
+  data: ChatExecutionStarted;
+  status: 200;
+};
+
+export type regenerateChatMessageResponse400 = {
+  data: ChatExecutionError;
+  status: 400;
+};
+
+export type regenerateChatMessageResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type regenerateChatMessageResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type regenerateChatMessageResponse409 = {
+  data: ChatExecutionError;
+  status: 409;
+};
+
+export type regenerateChatMessageResponse413 = {
+  data: ChatExecutionError;
+  status: 413;
+};
+
+export type regenerateChatMessageResponse415 = {
+  data: ChatExecutionError;
+  status: 415;
+};
+
+export type regenerateChatMessageResponse422 = {
+  data: ChatExecutionError;
+  status: 422;
+};
+
+export type regenerateChatMessageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type regenerateChatMessageResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type regenerateChatMessageResponse503 = {
+  data: ChatExecutionError;
+  status: 503;
+};
+
+export type regenerateChatMessageResponseSuccess =
+  regenerateChatMessageResponse200 & {
+    headers: Headers;
+  };
+export type regenerateChatMessageResponseError = (
+  | regenerateChatMessageResponse400
+  | regenerateChatMessageResponse401
+  | regenerateChatMessageResponse403
+  | regenerateChatMessageResponse409
+  | regenerateChatMessageResponse413
+  | regenerateChatMessageResponse415
+  | regenerateChatMessageResponse422
+  | regenerateChatMessageResponse426
+  | regenerateChatMessageResponse500
+  | regenerateChatMessageResponse503
+) & {
+  headers: Headers;
+};
+
+export type regenerateChatMessageResponse =
+  regenerateChatMessageResponseSuccess | regenerateChatMessageResponseError;
+
+export const getRegenerateChatMessageUrl = (
+  projectId: string,
+  messageId: string,
+  params: RegenerateChatMessageParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/regenerate/prompt_lib/${projectId}/${messageId}?${stringifiedParams}`
+    : `/elitea_core/regenerate/prompt_lib/${projectId}/${messageId}`;
+};
+
+/**
+ * Starts a turn that rewrites the answer in place and answers like the
+ * send. `regeneration_id` (client generated, lowercase canonical UUID)
+ * is the idempotency key: the same id replays the admission, so a retry
+ * reuses it. While the previous answer is still being finalised the
+ * route answers 409 `agent_regeneration_pending` with `Retry-After: 1`
+ * and `retryable: true`.
+ * @summary Regenerate an answer, optionally from an edited question
+ */
+export const regenerateChatMessage = async (
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest: ChatRegenerateRequest,
+  params: RegenerateChatMessageParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<regenerateChatMessageResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<regenerateChatMessageResponse>(
+    getRegenerateChatMessageUrl(projectId, messageId, params),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(chatRegenerateRequest),
+    },
+  );
+};
+
+export const getRegenerateChatMessageQueryKey = (
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest?: ChatRegenerateRequest,
+  params?: RegenerateChatMessageParams,
+) => {
+  return [
+    "POST",
+    `/elitea_core/regenerate/prompt_lib/${projectId}/${messageId}`,
+    ...(params ? [params] : []),
+    chatRegenerateRequest,
+  ] as const;
+};
+
+export const getRegenerateChatMessageQueryOptions = <
+  TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest: ChatRegenerateRequest,
+  params: RegenerateChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof regenerateChatMessage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRegenerateChatMessageQueryKey(
+      projectId,
+      messageId,
+      chatRegenerateRequest,
+      params,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof regenerateChatMessage>>
+  > = ({ signal }) =>
+    regenerateChatMessage(projectId, messageId, chatRegenerateRequest, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      messageId !== null &&
+      messageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof regenerateChatMessage>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RegenerateChatMessageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof regenerateChatMessage>>
+>;
+export type RegenerateChatMessageQueryError =
+  | ChatExecutionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useRegenerateChatMessage<
+  TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest: ChatRegenerateRequest,
+  params: RegenerateChatMessageParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof regenerateChatMessage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof regenerateChatMessage>>,
+          TError,
+          Awaited<ReturnType<typeof regenerateChatMessage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRegenerateChatMessage<
+  TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest: ChatRegenerateRequest,
+  params: RegenerateChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof regenerateChatMessage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof regenerateChatMessage>>,
+          TError,
+          Awaited<ReturnType<typeof regenerateChatMessage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRegenerateChatMessage<
+  TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest: ChatRegenerateRequest,
+  params: RegenerateChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof regenerateChatMessage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Regenerate an answer, optionally from an edited question
+ */
+
+export function useRegenerateChatMessage<
+  TData = Awaited<ReturnType<typeof regenerateChatMessage>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  messageId: string,
+  chatRegenerateRequest: ChatRegenerateRequest,
+  params: RegenerateChatMessageParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof regenerateChatMessage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRegenerateChatMessageQueryOptions(
+    projectId,
+    messageId,
+    chatRegenerateRequest,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type continueChatExecutionResponse200 = {
+  data: ChatExecutionStarted;
+  status: 200;
+};
+
+export type continueChatExecutionResponse400 = {
+  data: ChatExecutionError;
+  status: 400;
+};
+
+export type continueChatExecutionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type continueChatExecutionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type continueChatExecutionResponse409 = {
+  data: ChatExecutionError;
+  status: 409;
+};
+
+export type continueChatExecutionResponse413 = {
+  data: ChatExecutionError;
+  status: 413;
+};
+
+export type continueChatExecutionResponse415 = {
+  data: ChatExecutionError;
+  status: 415;
+};
+
+export type continueChatExecutionResponse422 = {
+  data: ChatExecutionError;
+  status: 422;
+};
+
+export type continueChatExecutionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type continueChatExecutionResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type continueChatExecutionResponse503 = {
+  data: ChatExecutionError;
+  status: 503;
+};
+
+export type continueChatExecutionResponseSuccess =
+  continueChatExecutionResponse200 & {
+    headers: Headers;
+  };
+export type continueChatExecutionResponseError = (
+  | continueChatExecutionResponse400
+  | continueChatExecutionResponse401
+  | continueChatExecutionResponse403
+  | continueChatExecutionResponse409
+  | continueChatExecutionResponse413
+  | continueChatExecutionResponse415
+  | continueChatExecutionResponse422
+  | continueChatExecutionResponse426
+  | continueChatExecutionResponse500
+  | continueChatExecutionResponse503
+) & {
+  headers: Headers;
+};
+
+export type continueChatExecutionResponse =
+  continueChatExecutionResponseSuccess | continueChatExecutionResponseError;
+
+export const getContinueChatExecutionUrl = (
+  projectId: string,
+  conversationId: string,
+  params: ContinueChatExecutionParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/continue_predict/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/continue_predict/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Answers a pause the event stream announced and starts the turn's
+ * continuation, answering like the send with a new `events_url`.
+ * `execution_contract`:
+ * - `agent.continue.hitl.v1` — a human-in-the-loop decision
+ *   (`hitl_resume: true` plus `hitl_action`/`hitl_value`, or
+ *   `hitl_decisions` for a multi-pause frame);
+ * - `agent.continue.authorization.v1` — a toolkit/MCP authorization
+ *   answer (`authorization_request_id` + `authorization_action`, or
+ *   batched `hitl_decisions`);
+ * - `agent.continue.output-limit.v1` — continue an answer cut at the
+ *   model's output limit (`message_id` only).
+ * A pause that was already answered is a 409 with
+ * `agent_hitl_already_resolved`, `agent_authorization_already_resolved`
+ * or `agent_output_limit_already_resolved` and `retryable: false`:
+ * refresh the transcript instead of retrying.
+ * @summary Resume a paused turn (human decision, tool authorization, output limit)
+ */
+export const continueChatExecution = async (
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest: ChatContinueRequest,
+  params: ContinueChatExecutionParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<continueChatExecutionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<continueChatExecutionResponse>(
+    getContinueChatExecutionUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(chatContinueRequest),
+    },
+  );
+};
+
+export const getContinueChatExecutionQueryKey = (
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest?: ChatContinueRequest,
+  params?: ContinueChatExecutionParams,
+) => {
+  return [
+    "POST",
+    `/elitea_core/continue_predict/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+    chatContinueRequest,
+  ] as const;
+};
+
+export const getContinueChatExecutionQueryOptions = <
+  TData = Awaited<ReturnType<typeof continueChatExecution>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest: ChatContinueRequest,
+  params: ContinueChatExecutionParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof continueChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getContinueChatExecutionQueryKey(
+      projectId,
+      conversationId,
+      chatContinueRequest,
+      params,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof continueChatExecution>>
+  > = ({ signal }) =>
+    continueChatExecution(
+      projectId,
+      conversationId,
+      chatContinueRequest,
+      params,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof continueChatExecution>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ContinueChatExecutionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof continueChatExecution>>
+>;
+export type ContinueChatExecutionQueryError =
+  | ChatExecutionError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useContinueChatExecution<
+  TData = Awaited<ReturnType<typeof continueChatExecution>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest: ChatContinueRequest,
+  params: ContinueChatExecutionParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof continueChatExecution>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof continueChatExecution>>,
+          TError,
+          Awaited<ReturnType<typeof continueChatExecution>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useContinueChatExecution<
+  TData = Awaited<ReturnType<typeof continueChatExecution>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest: ChatContinueRequest,
+  params: ContinueChatExecutionParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof continueChatExecution>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof continueChatExecution>>,
+          TError,
+          Awaited<ReturnType<typeof continueChatExecution>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useContinueChatExecution<
+  TData = Awaited<ReturnType<typeof continueChatExecution>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest: ChatContinueRequest,
+  params: ContinueChatExecutionParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof continueChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Resume a paused turn (human decision, tool authorization, output limit)
+ */
+
+export function useContinueChatExecution<
+  TData = Awaited<ReturnType<typeof continueChatExecution>>,
+  TError =
+    | ChatExecutionError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  chatContinueRequest: ChatContinueRequest,
+  params: ContinueChatExecutionParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof continueChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getContinueChatExecutionQueryOptions(
+    projectId,
+    conversationId,
+    chatContinueRequest,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type uploadConversationAttachmentResponse201 = {
+  data: ConversationAttachmentUploaded[];
+  status: 201;
+};
+
+export type uploadConversationAttachmentResponse202 = {
+  data: ConversationAttachmentChunkReceived;
+  status: 202;
+};
+
+export type uploadConversationAttachmentResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type uploadConversationAttachmentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type uploadConversationAttachmentResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type uploadConversationAttachmentResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type uploadConversationAttachmentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type uploadConversationAttachmentResponseSuccess = (
+  | uploadConversationAttachmentResponse201
+  | uploadConversationAttachmentResponse202
+) & {
+  headers: Headers;
+};
+export type uploadConversationAttachmentResponseError = (
+  | uploadConversationAttachmentResponse400
+  | uploadConversationAttachmentResponse401
+  | uploadConversationAttachmentResponse403
+  | uploadConversationAttachmentResponse426
+  | uploadConversationAttachmentResponse500
+) & {
+  headers: Headers;
+};
+
+export type uploadConversationAttachmentResponse =
+  | uploadConversationAttachmentResponseSuccess
+  | uploadConversationAttachmentResponseError;
+
+export const getUploadConversationAttachmentUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * `multipart/form-data` with the bytes in `file`. A small file is one
+ * request (201). A large one is split into chunks sent with the same
+ * `file_id` and `file_name` and their `chunk_index`/`total_chunks`;
+ * every chunk but the last answers 202, the last answers 201 with the
+ * assembled file. Send the returned `filepath` in the chat send's
+ * `payload.attachments`. Size limits are the project's storage policy
+ * (images and documents have separate ceilings); one chunk is at most a
+ * few MB.
+ * @summary Upload a file to attach to the next chat message
+ */
+export const uploadConversationAttachment = async (
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody: UploadConversationAttachmentBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<uploadConversationAttachmentResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, uploadConversationAttachmentBody.file);
+  if (uploadConversationAttachmentBody.file_name !== undefined) {
+    formData.append(`file_name`, uploadConversationAttachmentBody.file_name);
+  }
+  if (uploadConversationAttachmentBody.file_id !== undefined) {
+    formData.append(`file_id`, uploadConversationAttachmentBody.file_id);
+  }
+  if (uploadConversationAttachmentBody.chunk_index !== undefined) {
+    formData.append(
+      `chunk_index`,
+      uploadConversationAttachmentBody.chunk_index.toString(),
+    );
+  }
+  if (uploadConversationAttachmentBody.total_chunks !== undefined) {
+    formData.append(
+      `total_chunks`,
+      uploadConversationAttachmentBody.total_chunks.toString(),
+    );
+  }
+
+  return eliteaFetch<uploadConversationAttachmentResponse>(
+    getUploadConversationAttachmentUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      body: formData,
+    },
+  );
+};
+
+export const getUploadConversationAttachmentQueryKey = (
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody?: UploadConversationAttachmentBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}`,
+    uploadConversationAttachmentBody,
+  ] as const;
+};
+
+export const getUploadConversationAttachmentQueryOptions = <
+  TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody: UploadConversationAttachmentBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUploadConversationAttachmentQueryKey(
+      projectId,
+      conversationId,
+      uploadConversationAttachmentBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof uploadConversationAttachment>>
+  > = ({ signal }) =>
+    uploadConversationAttachment(
+      projectId,
+      conversationId,
+      uploadConversationAttachmentBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof uploadConversationAttachment>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UploadConversationAttachmentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof uploadConversationAttachment>>
+>;
+export type UploadConversationAttachmentQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUploadConversationAttachment<
+  TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody: UploadConversationAttachmentBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof uploadConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadConversationAttachment<
+  TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody: UploadConversationAttachmentBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof uploadConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadConversationAttachment<
+  TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody: UploadConversationAttachmentBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Upload a file to attach to the next chat message
+ */
+
+export function useUploadConversationAttachment<
+  TData = Awaited<ReturnType<typeof uploadConversationAttachment>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  uploadConversationAttachmentBody: UploadConversationAttachmentBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUploadConversationAttachmentQueryOptions(
+    projectId,
+    conversationId,
+    uploadConversationAttachmentBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type streamExecutionEventsResponse200 = {
+  data: string;
+  status: 200;
+};
+
+export type streamExecutionEventsResponse400TextPlain = {
+  data: string;
+  status: 400;
+};
+
+export type streamExecutionEventsResponse400ApplicationJson = {
+  data: InvalidClientVersionError;
+  status: 400;
+};
+
+export type streamExecutionEventsResponse401 = {
+  data: string;
+  status: 401;
+};
+
+export type streamExecutionEventsResponse403 = {
+  data: string;
+  status: 403;
+};
+
+export type streamExecutionEventsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type streamExecutionEventsResponse429 = {
+  data: string;
+  status: 429;
+};
+
+export type streamExecutionEventsResponse500 = {
+  data: string;
+  status: 500;
+};
+
+export type streamExecutionEventsResponseSuccess =
+  streamExecutionEventsResponse200 & {
+    headers: Headers;
+  };
+export type streamExecutionEventsResponseError = (
+  | streamExecutionEventsResponse400TextPlain
+  | streamExecutionEventsResponse400ApplicationJson
+  | streamExecutionEventsResponse401
+  | streamExecutionEventsResponse403
+  | streamExecutionEventsResponse426
+  | streamExecutionEventsResponse429
+  | streamExecutionEventsResponse500
+) & {
+  headers: Headers;
+};
+
+export type streamExecutionEventsResponse =
+  streamExecutionEventsResponseSuccess | streamExecutionEventsResponseError;
+
+export const getStreamExecutionEventsUrl = (
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/executions/${projectId}/${executionId}/events?${stringifiedParams}`
+    : `/executions/${projectId}/${executionId}/events`;
+};
+
+/**
+ * Server-Sent Events replayed from PostgreSQL, so any replica serves a
+ * resume. Each event is written as
+ * `id: <cursor>` / `event: <type>` / `data: <one-line JSON>`. The
+ * cursor is a uint64 that strictly increases within the execution.
+ *
+ * RESUME. Send the last `id` you processed as `Last-Event-ID` or as
+ * `?cursor=`. Replay is strictly after that cursor, so a resumed
+ * client neither loses nor duplicates an event. Both present and
+ * different is a 400 `invalid event cursor`. No cursor replays from the
+ * start of the execution.
+ *
+ * EVENT TYPES (`event:`): `execution.node_event` (one progress frame of
+ * an agent turn — `data.type` names the frame), `execution.failed`
+ * (terminal; `code`, `safe_message`, `retryable`),
+ * `execution.replay_reset` (frames before this cursor were pruned and
+ * will never be delivered; reload the transcript),
+ * `index.ingest.completed` and `configuration.validation.completed`
+ * (other execution kinds). A client must ignore an unknown type.
+ *
+ * The server does NOT close the stream when a turn ends; the client
+ * recognises the terminal frame and closes it (see the client contract
+ * in API_CONTRACT.md: `pipeline_finish`, `agent_response` with a
+ * `finish_reason`, `error`/`llm_error`/`agent_exception`, a terminal
+ * pause, or `execution.failed`). Comment lines (`: connected`,
+ * `: heartbeat`) keep the connection alive.
+ * @summary The durable, resumable event stream of one execution (SSE)
+ */
+export const streamExecutionEvents = async (
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<streamExecutionEventsResponse> => {
+  return eliteaFetch<streamExecutionEventsResponse>(
+    getStreamExecutionEventsUrl(projectId, executionId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getStreamExecutionEventsQueryKey = (
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+) => {
+  return [
+    `/executions/${projectId}/${executionId}/events`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getStreamExecutionEventsQueryOptions = <
+  TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamExecutionEvents>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStreamExecutionEventsQueryKey(projectId, executionId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof streamExecutionEvents>>
+  > = ({ signal }) =>
+    streamExecutionEvents(projectId, executionId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof streamExecutionEvents>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StreamExecutionEventsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof streamExecutionEvents>>
+>;
+export type StreamExecutionEventsQueryError =
+  string | InvalidClientVersionError | ClientUpgradeRequiredResponse;
+
+export function useStreamExecutionEvents<
+  TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  executionId: string,
+  params: undefined | StreamExecutionEventsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamExecutionEvents>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamExecutionEvents>>,
+          TError,
+          Awaited<ReturnType<typeof streamExecutionEvents>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStreamExecutionEvents<
+  TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamExecutionEvents>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamExecutionEvents>>,
+          TError,
+          Awaited<ReturnType<typeof streamExecutionEvents>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStreamExecutionEvents<
+  TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamExecutionEvents>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The durable, resumable event stream of one execution (SSE)
+ */
+
+export function useStreamExecutionEvents<
+  TData = Awaited<ReturnType<typeof streamExecutionEvents>>,
+  TError = string | InvalidClientVersionError | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  executionId: string,
+  params?: StreamExecutionEventsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamExecutionEvents>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStreamExecutionEventsQueryOptions(
+    projectId,
+    executionId,
     params,
     options,
   );

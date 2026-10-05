@@ -942,6 +942,17 @@ func (h *Handler) ChatConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Notifications(w http.ResponseWriter, r *http.Request) {
+	// This fallback is shadowed by the reviewed notification API wherever a
+	// store is composed. It has no delta, and silently ignoring
+	// `changes_since` would hand a syncing client a full page it would read
+	// as "nothing was deleted" — so it refuses instead (ADR-0025 WP6).
+	if r.URL.Query().Has("changes_since") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "invalid_sync_request",
+			"message": "changes_since is not supported by this composition",
+		})
+		return
+	}
 	projectID := chi.URLParam(r, "projectID")
 	ctx := r.Context()
 

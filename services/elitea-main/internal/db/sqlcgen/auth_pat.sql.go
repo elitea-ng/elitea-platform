@@ -140,6 +140,9 @@ type GetActivePATForUserRow struct {
 	Email   string           `db:"email" json:"email"`
 }
 
+// `token.uuid IS NOT NULL` is load-bearing twice over: the durable-execution
+// actor issuer signs the selected row as a PAT JWT, and a native device anchor
+// (ADR-0025, uuid NULL) must never be signed into one.
 func (q *Queries) GetActivePATForUser(ctx context.Context, userID int32) (GetActivePATForUserRow, error) {
 	row := q.db.QueryRow(ctx, getActivePATForUser, userID)
 	var i GetActivePATForUserRow
@@ -272,6 +275,7 @@ FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
 WHERE token.uuid = $1::text
+  AND token.uuid IS NOT NULL
   AND token.user_id = $2::integer
 `
 
@@ -315,6 +319,7 @@ FROM public.auth_core__token AS token
 LEFT JOIN elitea_identity.token_project_binding AS binding
        ON binding.token_id = token.id
 WHERE token.user_id = $1::integer
+  AND token.uuid IS NOT NULL
 ORDER BY token.id
 `
 
@@ -330,6 +335,10 @@ type ListOwnedPATsRow struct {
 // The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 // see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
 // LEFT JOIN because an unbound token is the default and must still be listed.
+// A row with uuid NULL is not a personal access token: no PAT JWT can name it.
+// Native device sessions (ADR-0025, shared 0141) anchor on exactly such rows,
+// so the filter keeps a signed-in phone from showing up in Settings > Tokens
+// as a key named `native:<client>`. The device registry lists those instead.
 func (q *Queries) ListOwnedPATs(ctx context.Context, userID int32) ([]ListOwnedPATsRow, error) {
 	rows, err := q.db.Query(ctx, listOwnedPATs, userID)
 	if err != nil {

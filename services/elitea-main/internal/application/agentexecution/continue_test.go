@@ -683,3 +683,60 @@ func TestCurrentOutputContinuationAcceptsLargePartialAndBoundsBytes(t *testing.T
 		}
 	}
 }
+
+// TestContinuationAcceptsAStoredUppercaseGeneration pins the read-back side of
+// the lowercase question_id rule: a turn admitted before that rule with an
+// upper-case question_id stored it verbatim as its execution generation, and a
+// paused turn must still continue. Only client-supplied ids are strict.
+func TestContinuationAcceptsAStoredUppercaseGeneration(t *testing.T) {
+	const stored = "9FBA0A08-5049-42BB-9019-C2F3DF686010"
+	resolver := &currentApplicationResolverStub{
+		continuationTarget: CurrentContinuationTarget{
+			ContinuationKind:    CurrentContinuationOutputLimit,
+			Kind:                CurrentRegenerationApplication,
+			TargetParticipantID: 21,
+			QuestionID:          "ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
+			UserInput:           "Explain durable workers",
+			ThreadID:            "thread-current-output-1",
+			ExecutionGeneration: stored,
+			TruncatedContent:    "partial",
+			OutputLimitSequence: 2,
+		},
+		target: CurrentApplicationTarget{
+			ApplicationID: 31, ApplicationVersionID: 41,
+			Variables: json.RawMessage(`[]`),
+			VersionDetails: json.RawMessage(`{
+  "id":41,"application_id":31,"agent_type":"agent","instructions":"Be precise",
+  "llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},
+  "meta":{},"tools":[]
+}`),
+			ChatHistory: json.RawMessage(`[]`),
+		},
+	}
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-output-continue", CommandID: "command-output-continue", Created: true,
+	}}
+	service, err := NewCurrentApplicationStartService(
+		resolver, resolver, resolver, resolver, resolver, &currentAgentGuardrailStub{},
+		&currentApplicationVersionFreezerStub{}, admissions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.ContinueCurrentAgent(context.Background(), CurrentContinuationRequest{
+		ProjectID: 7, ActorUserID: 11,
+		ConversationUUID:  "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+		ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a",
+		Kind:              CurrentContinuationOutputLimit,
+	})
+	if err != nil || len(admissions.requests) != 1 {
+		t.Fatalf("a stored upper-case generation must continue: err=%v admissions=%d", err, len(admissions.requests))
+	}
+	if got := admissions.requests[0].CurrentContinueTurn.ExecutionGeneration; got != stored {
+		t.Fatalf("the stored generation is carried verbatim (string-compared downstream): got %q", got)
+	}
+	resolver.continuationTarget.ExecutionGeneration = "not-a-uuid"
+	if err := resolver.continuationTarget.Validate(); err != ErrUnsupportedCurrentAgentStart {
+		t.Fatalf("a malformed stored generation is still refused: %v", err)
+	}
+}

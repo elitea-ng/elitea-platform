@@ -59,6 +59,8 @@ var cookielessEdgePaths = map[string]string{
 	"/app/application_icon/1":       "a Go file server under the SPA prefix, loaded by <img src>",
 	"/app/application_tool_icon/1":  "same as /app/application_icon",
 	"/api/v2/branding/bootstrap.js": "index.html loads it with a blocking <script src> before any session exists",
+	"/api/v2/branding/pack.json":    "a native client brands its sign-in screen with it before any credential exists (ADR-0025 decision 2)",
+	"/.well-known/elitea-client":    "the discovery document: a native client reads it from an origin alone, before it can hold a credential (ADR-0025 decision 1)",
 	"/api/v2/branding/assets/logo-full/" + strings.Repeat("ab", 32) + ".svg": "uploaded brand assets, loaded by <img src>, <link rel=icon> and @font-face",
 }
 

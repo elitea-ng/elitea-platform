@@ -1,0 +1,27 @@
+# Native client conformance overlay (ADR-0025 WP7) for
+# docker-compose.standalone-full.yml.
+#
+#   STANDALONE_OVERLAY=deploy/docker-compose.native-conformance.yml \
+#     deploy/scripts/standalone-stack.sh up
+#
+# or, for the whole lifecycle, deploy/scripts/native-conformance.sh.
+#
+# What it changes, and why each line is needed:
+#
+#   DEPLOYMENT_URL  The native authorization server's issuer (RFC 9207 `iss`)
+#                   and the origin every absolute URL in the discovery document
+#                   is built on. elitea-main refuses to boot with a native
+#                   client registered and no public origin (coordinator
+#                   decision 9), and /authorize answers 503 without one. It is
+#                   the browser-facing origin, traefik on STANDALONE_PORT.
+#
+# What it deliberately does NOT do: register a native client. The suite
+# registers its own client through the admin API (the DB layer of the
+# registry), after it has asserted the negative leg — with no client
+# registered, discovery says `native_auth: null` and every native endpoint
+# answers 404. A file-layer client (NATIVE_CLIENTS_PATH) cannot be removed at
+# run time, so it would make that leg unprovable on the same stack.
+services:
+  elitea-main:
+    environment:
+      DEPLOYMENT_URL: "http://localhost:${STANDALONE_PORT:-8084}"

@@ -138,15 +138,24 @@ type AuthCoreUserRole struct {
 }
 
 type CentryNotification struct {
-	ID        int32            `db:"id" json:"id"`
-	Uuid      pgtype.UUID      `db:"uuid" json:"uuid"`
-	IsSeen    bool             `db:"is_seen" json:"is_seen"`
-	ProjectID int32            `db:"project_id" json:"project_id"`
-	UserID    int32            `db:"user_id" json:"user_id"`
-	Meta      []byte           `db:"meta" json:"meta"`
-	EventType string           `db:"event_type" json:"event_type"`
-	CreatedAt pgtype.Timestamp `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamp `db:"updated_at" json:"updated_at"`
+	ID        int32              `db:"id" json:"id"`
+	Uuid      pgtype.UUID        `db:"uuid" json:"uuid"`
+	IsSeen    bool               `db:"is_seen" json:"is_seen"`
+	ProjectID int32              `db:"project_id" json:"project_id"`
+	UserID    int32              `db:"user_id" json:"user_id"`
+	Meta      []byte             `db:"meta" json:"meta"`
+	EventType string             `db:"event_type" json:"event_type"`
+	CreatedAt pgtype.Timestamp   `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamp   `db:"updated_at" json:"updated_at"`
+	SyncAt    pgtype.Timestamptz `db:"sync_at" json:"sync_at"`
+}
+
+type CentryNotificationTombstone struct {
+	ID               int64              `db:"id" json:"id"`
+	NotificationID   int32              `db:"notification_id" json:"notification_id"`
+	NotificationUuid pgtype.UUID        `db:"notification_uuid" json:"notification_uuid"`
+	UserID           int32              `db:"user_id" json:"user_id"`
+	DeletedAt        pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
 }
 
 type CentryProject struct {

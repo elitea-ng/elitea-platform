@@ -56,6 +56,7 @@ func (k *Kernel) Authorize(ctx context.Context, request Request) (Decision, erro
 	}
 
 	credentialPresent := false
+	denyReason := ReasonCredentialRejected
 	for _, credential := range request.Credentials {
 		if !credential.Present {
 			continue
@@ -78,12 +79,15 @@ func (k *Kernel) Authorize(ctx context.Context, request Request) (Decision, erro
 				return dependencyDecision(request.Source, ReasonMalformedDependencyResult), nil
 			}
 			return tokenDecision(request.Source, result.Principal), nil
-		case CredentialRejected:
+		case CredentialRejected, CredentialRevoked:
 			if !emptyUser(result.Principal) {
 				return dependencyDecision(request.Source, ReasonMalformedDependencyResult), nil
 			}
+			if result.Resolution == CredentialRevoked {
+				denyReason = ReasonCredentialRevoked
+			}
 			if request.Traversal == DirectHTTPTraversal {
-				return k.publicOrDeny(request.Source), nil
+				return k.publicOrDeny(request.Source, denyReason), nil
 			}
 			continue
 		default:
@@ -91,16 +95,17 @@ func (k *Kernel) Authorize(ctx context.Context, request Request) (Decision, erro
 		}
 	}
 	if credentialPresent {
-		return k.sessionThenFallback(ctx, request, true)
+		return k.sessionThenFallback(ctx, request, true, denyReason)
 	}
 
-	return k.sessionThenFallback(ctx, request, false)
+	return k.sessionThenFallback(ctx, request, false, denyReason)
 }
 
 func (k *Kernel) sessionThenFallback(
 	ctx context.Context,
 	request Request,
 	credentialRejected bool,
+	denyReason DecisionReason,
 ) (Decision, error) {
 	if request.BrowserSession.Present {
 		authorization, err := k.sessions.Authorize(ctx, request.BrowserSession.ID)
@@ -125,16 +130,16 @@ func (k *Kernel) sessionThenFallback(
 		return publicDecision(request.Source, publicMatch), nil
 	}
 	if credentialRejected {
-		return denyDecision(request.Source, ReasonCredentialRejected), nil
+		return denyDecision(request.Source, denyReason), nil
 	}
 	return loginDecision(request.Source), nil
 }
 
-func (k *Kernel) publicOrDeny(source Source) Decision {
+func (k *Kernel) publicOrDeny(source Source, reason DecisionReason) Decision {
 	if publicMatch, ok := k.public.match(source); ok {
 		return publicDecision(source, publicMatch)
 	}
-	return denyDecision(source, ReasonCredentialRejected)
+	return denyDecision(source, reason)
 }
 
 func validTokenPrincipal(principal auth.User) bool {
