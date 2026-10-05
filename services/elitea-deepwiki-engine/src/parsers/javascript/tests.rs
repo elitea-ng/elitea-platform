@@ -414,7 +414,7 @@ fn relative_specifiers_resolve_through_the_file_system() {
     );
     let from = dir.join("a/m.js").to_string_lossy().into_owned();
     let root = dir.to_string_lossy().into_owned();
-    let resolve = |s: &str| resolve_import_path(&from, s);
+    let resolve = |s: &str| resolve_import_path(&from, s, Some(&root));
     assert_eq!(resolve("./x"), Some(format!("{root}/a/x.js")));
     assert_eq!(resolve("./x.js"), Some(format!("{root}/a/x.js")));
     // The suffix is replaced, not appended.
@@ -447,5 +447,44 @@ fn a_this_call_resolves_only_in_a_file_named_after_its_class() {
     };
     assert_eq!(call("Dog.js"), Some(Some(json!("instance_method"))));
     assert_eq!(call("cat.js"), Some(None));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A relative import never reaches the file system outside the files'
+/// directory, and never through a symlink.
+#[test]
+fn imports_do_not_leave_the_repository_or_follow_symlinks() {
+    let dir = write_tree(
+        "confined",
+        &[
+            ("repo/src/a.js", b"import { x } from './x';\n"),
+            ("repo/src/x.js", b"export const x = 1;\n"),
+            ("repo/src/real/y.js", b"export const y = 1;\n"),
+            ("outside/secret.js", b"export const s = 1;\n"),
+        ],
+    );
+    let src = dir.join("repo/src");
+    let link = |target: &Path, at: &str| {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, src.join(at)).expect("symlink");
+    };
+    link(&dir.join("outside/secret.js"), "leak.js");
+    link(&src.join("real"), "alias");
+    let a = src.join("a.js").to_string_lossy().into_owned();
+    let root = dir.join("repo").to_string_lossy().into_owned();
+    let resolve = |specifier: &str| resolve_import_path(&a, specifier, Some(&root));
+    // Inside, no link: found as before (`..` kept in the string).
+    assert_eq!(
+        resolve("./x"),
+        Some(src.join("x.js").to_string_lossy().into_owned())
+    );
+    assert_eq!(
+        resolve("./real/../x"),
+        Some(src.join("real/../x.js").to_string_lossy().into_owned())
+    );
+    // Outside the repository, through a file link, through a directory link.
+    assert_eq!(resolve("../../outside/secret"), None);
+    assert_eq!(resolve("./leak"), None);
+    assert_eq!(resolve("./alias/y"), None);
     let _ = std::fs::remove_dir_all(&dir);
 }

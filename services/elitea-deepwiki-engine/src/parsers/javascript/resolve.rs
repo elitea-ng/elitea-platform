@@ -17,6 +17,9 @@ use std::collections::{HashMap, HashSet};
 /// The read-only cross-file state every file's enhancement uses.
 struct Index<'a> {
     files: &'a [String],
+    /// The deepest directory holding every file of the pass: no import is
+    /// looked up outside it.
+    root: Option<String>,
     /// File path → index (`target_file in per_file_exports`).
     by_path: HashMap<&'a str, usize>,
     /// `per_file_exports`.
@@ -99,6 +102,7 @@ pub(super) fn resolve_cross_file(files: &[String], outputs: Vec<FileOutput>) -> 
 
     let index = Index {
         files,
+        root: common_directory(files),
         by_path: files
             .iter()
             .enumerate()
@@ -129,8 +133,12 @@ fn resolve_bindings<'a>(
 ) -> HashMap<&'a str, Vec<Candidate<'a>>> {
     let mut resolved = HashMap::new();
     for (local, binding) in bindings {
-        let target = resolve_import_path(&index.files[file], &binding.source_path)
-            .and_then(|t| index.by_path.get(t.as_str()).copied());
+        let target = resolve_import_path(
+            &index.files[file],
+            &binding.source_path,
+            index.root.as_deref(),
+        )
+        .and_then(|t| index.by_path.get(t.as_str()).copied());
         let candidates: Vec<Candidate<'a>> = if let Some(target) = target {
             let entries = index.exports[target].iter().map(|e| (target, e));
             if binding.is_namespace {
@@ -422,19 +430,33 @@ impl PyPath {
 /// Python quirk: the joined path keeps `..` (pathlib does not collapse it),
 /// so `../x` is found as `dir/../x.js`, a string no file of the pass has;
 /// such an import resolves only through the global export index.
-pub(super) fn resolve_import_path(from_file: &str, source_path: &str) -> Option<String> {
+///
+/// Deliberate difference: Python asks the file system about any path,
+/// following symlinks (`is_file`, `realpath`). Here a path is looked up
+/// only inside `root` (the directory of the pass's files; `None` finds
+/// nothing), one component at a time without following a symlink, and the
+/// resolved form collapses `..` by name. Where no symlink is involved and
+/// the path stays inside `root`, the answer is Python's; any other path is
+/// not a file of the pass, so its import resolves through the global
+/// export index as before.
+pub(super) fn resolve_import_path(
+    from_file: &str,
+    source_path: &str,
+    root: Option<&str>,
+) -> Option<String> {
     if !(source_path.starts_with("./") || source_path.starts_with("../")) {
         return None;
     }
+    let root = root?;
     let candidate = PyPath::parse(from_file).parent().join(source_path);
     let raw = candidate.render();
     let mut variants = vec![raw.clone()];
-    if let Some(resolved) = realpath(&raw)
+    if let Some(resolved) = collapse_parents(&raw)
         && resolved != raw
     {
         variants.push(resolved);
     }
-    let is_file = |p: &str| std::path::Path::new(p).is_file();
+    let is_file = |p: &str| lstat_within(root, p).is_some_and(|m| m.is_file());
     for variant in variants {
         if is_file(&variant) {
             return Some(variant);
@@ -447,7 +469,7 @@ pub(super) fn resolve_import_path(from_file: &str, source_path: &str) -> Option<
                 return Some(p);
             }
         }
-        if std::path::Path::new(&variant).is_dir() {
+        if lstat_within(root, &variant).is_some_and(|m| m.is_dir()) {
             for ext in [".js", ".jsx"] {
                 let p = path.join(&format!("index{ext}")).render();
                 if is_file(&p) {
@@ -459,70 +481,90 @@ pub(super) fn resolve_import_path(from_file: &str, source_path: &str) -> Option<
     None
 }
 
-/// `os.path.realpath(path, strict=False)`: symlinks resolved component by
-/// component, `..` collapsed, a missing tail kept as written. `None` where
-/// Python's `resolve()` would raise or loop (its caller then ignores the
-/// resolved variant).
-fn realpath(path: &str) -> Option<String> {
-    let absolute = if path.starts_with('/') {
-        path.to_owned()
-    } else {
-        let cwd = std::env::current_dir().ok()?;
-        format!("{}/{path}", cwd.to_string_lossy())
-    };
-    let mut parts = Vec::new();
-    let mut seen = HashMap::new();
-    join_real(&mut parts, &absolute, &mut seen, 0)?;
-    Some(format!("/{}", parts.join("/")))
+/// The deepest directory that holds every one of `files` (absolute paths),
+/// or `None` for no files or relative ones.
+fn common_directory(files: &[String]) -> Option<String> {
+    let mut common: Option<Vec<&str>> = None;
+    for file in files {
+        let directory = file
+            .strip_prefix('/')?
+            .rsplit_once('/')
+            .map_or("", |(d, _)| d);
+        let parts: Vec<&str> = directory.split('/').filter(|p| !p.is_empty()).collect();
+        common = Some(match common {
+            None => parts,
+            Some(previous) => previous
+                .iter()
+                .zip(&parts)
+                .take_while(|(a, b)| a == b)
+                .map(|(a, _)| *a)
+                .collect(),
+        });
+    }
+    common.map(|parts| format!("/{}", parts.join("/")))
 }
 
-/// `_joinrealpath`. `seen` maps a link to its resolution (`None` while it is
-/// being resolved, which is a loop).
-fn join_real(
-    parts: &mut Vec<String>,
-    rest: &str,
-    seen: &mut HashMap<String, Option<Vec<String>>>,
-    depth: usize,
-) -> Option<()> {
-    if depth > 64 {
+/// What the file system says about `path`, walked from `root` one name at a
+/// time as the kernel would (`..` leaves a directory, a missing or
+/// non-directory step fails), but never through a symlink and never above
+/// `root`. `None` when the path is outside `root`, missing, or reached
+/// through a symlink.
+fn lstat_within(root: &str, path: &str) -> Option<std::fs::Metadata> {
+    let rest = if root == "/" {
+        path.strip_prefix('/')?
+    } else {
+        path.strip_prefix(root)?.strip_prefix('/')?
+    };
+    let mut current = std::path::PathBuf::from(root);
+    let mut depth = 0usize;
+    let mut meta = std::fs::symlink_metadata(&current).ok()?;
+    if meta.file_type().is_symlink() {
         return None;
     }
-    if rest.starts_with('/') {
-        parts.clear();
+    for name in rest.split('/') {
+        match name {
+            "" | "." => {}
+            ".." => {
+                // Leaving a directory: the step must be one, and inside root.
+                if !meta.is_dir() || depth == 0 {
+                    return None;
+                }
+                current.pop();
+                depth -= 1;
+                meta = std::fs::symlink_metadata(&current).ok()?;
+            }
+            _ => {
+                if !meta.is_dir() {
+                    return None;
+                }
+                current.push(name);
+                depth += 1;
+                meta = std::fs::symlink_metadata(&current).ok()?;
+                if meta.file_type().is_symlink() {
+                    return None;
+                }
+            }
+        }
     }
+    Some(meta)
+}
+
+/// `os.path.realpath` of an absolute path with no symlink on it: `.` and
+/// `..` collapsed by name (`/..` is `/`). `None` for a relative path (its
+/// resolved form is never a file of the pass).
+fn collapse_parents(path: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    let mut parts: Vec<&str> = Vec::new();
     for name in rest.split('/') {
         match name {
             "" | "." => {}
             ".." => {
                 parts.pop();
             }
-            _ => {
-                let new_path = format!(
-                    "/{}",
-                    [parts.as_slice(), &[name.to_owned()]].concat().join("/")
-                );
-                let is_link =
-                    std::fs::symlink_metadata(&new_path).is_ok_and(|m| m.file_type().is_symlink());
-                if !is_link {
-                    parts.push(name.to_owned());
-                    continue;
-                }
-                match seen.get(&new_path) {
-                    Some(Some(resolved)) => {
-                        parts.clone_from(resolved);
-                        continue;
-                    }
-                    Some(None) => return None,
-                    None => {}
-                }
-                seen.insert(new_path.clone(), None);
-                let target = std::fs::read_link(&new_path).ok()?;
-                join_real(parts, &target.to_string_lossy(), seen, depth + 1)?;
-                seen.insert(new_path, Some(parts.clone()));
-            }
+            _ => parts.push(name),
         }
     }
-    Some(())
+    Some(format!("/{}", parts.join("/")))
 }
 
 #[cfg(test)]
@@ -559,11 +601,28 @@ mod tests {
     }
 
     #[test]
-    fn realpath_collapses_parent_segments() {
+    fn parent_segments_collapse_by_name() {
         assert_eq!(
-            realpath("/nonexistent-dwjs/a/../b").as_deref(),
+            collapse_parents("/nonexistent-dwjs/a/../b").as_deref(),
             Some("/nonexistent-dwjs/b")
         );
-        assert_eq!(realpath("/..").as_deref(), Some("/"));
+        assert_eq!(collapse_parents("/..").as_deref(), Some("/"));
+        assert_eq!(collapse_parents("a/../b"), None);
+    }
+
+    #[test]
+    fn the_common_directory_of_the_files() {
+        let files = |list: &[&str]| list.iter().map(|f| (*f).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            common_directory(&files(&["/r/a/x.js", "/r/a/b/y.js", "/r/a/c/z.js"])).as_deref(),
+            Some("/r/a")
+        );
+        assert_eq!(common_directory(&files(&["/x.js"])).as_deref(), Some("/"));
+        assert_eq!(
+            common_directory(&files(&["/r/a/x.js", "/s/y.js"])).as_deref(),
+            Some("/")
+        );
+        assert_eq!(common_directory(&files(&["rel/x.js"])), None);
+        assert_eq!(common_directory(&[]), None);
     }
 }

@@ -150,6 +150,14 @@ registry is filled and read in sorted path order.
 - **Symlinks are never followed** by discovery or by any pass that reads a
   file. Python followed them, so a link to a secret file was read, sent to the
   model and published.
+- **JavaScript relative imports stay inside the repository.** Python's
+  `_resolve_import_path` asked the file system about any `./` or `../` path
+  (`is_file`, `realpath`), following symlinks and leaving the repository. The
+  Rust resolver looks a path up only inside the directory of the parsed files,
+  one name at a time, never through a symlink, and collapses `..` by name. A
+  path outside, or through a link, is never a parsed file, so the import
+  resolves through the global export index as before; on the parity corpora
+  nothing changes.
 - **Deep nesting fails a file later, and never the process.** Python's
   recursive visitors fail a file at its 1,000-frame recursion limit (about
   450–600 nesting levels for Java, C#, C++ and JavaScript). The exact depth
