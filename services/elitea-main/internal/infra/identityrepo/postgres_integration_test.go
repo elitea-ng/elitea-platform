@@ -43,7 +43,7 @@ INSERT INTO public.auth_core__project_role (project_id, name) VALUES
 			InitialGlobalAdmins: []string{"Initial-Admin"},
 			ProjectEnrollment: identity.ProjectEnrollmentPolicy{
 				ProjectID:      7,
-				AllowedDomains: "centry.user",
+				AllowedDomains: "example.test",
 				// This is the effective deployment override, not only the
 				// elitea_core plugin default. Roles absent from project 7 are
 				// intentionally ignored by the repository.
@@ -56,6 +56,7 @@ INSERT INTO public.auth_core__project_role (project_id, name) VALUES
 		result, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 			Provider:          "oidc",
 			ProviderReference: "Initial-Admin",
+			Email:             "Initial-Admin@example.test",
 			GivenName:         "Initial",
 			FamilyName:        "Admin",
 		}})
@@ -65,7 +66,7 @@ INSERT INTO public.auth_core__project_role (project_id, name) VALUES
 		if result.UserID <= 0 {
 			t.Fatalf("result = %+v", result)
 		}
-		assertUser(t, ctx, pool, result.UserID, "initial-admin@centry.user", "Initial Admin", true, false)
+		assertUser(t, ctx, pool, result.UserID, "initial-admin@example.test", "Initial Admin", true, false)
 		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_provider WHERE user_id = $1 AND provider_ref = 'Initial-Admin'`, result.UserID)
 		assertCount(t, ctx, pool, 1, `
 SELECT count(*)
@@ -81,6 +82,7 @@ WHERE ur.user_id = $1 AND role.mode = 'administration' AND role.name = 'super_ad
 		repeated, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 			Provider:          "oidc",
 			ProviderReference: "Initial-Admin",
+			Email:             "Initial-Admin@example.test",
 			Name:              "Replacement",
 		}})
 		if err != nil {
@@ -89,7 +91,7 @@ WHERE ur.user_id = $1 AND role.mode = 'administration' AND role.name = 'super_ad
 		if repeated.UserID != result.UserID {
 			t.Fatalf("repeated user = %d, want %d", repeated.UserID, result.UserID)
 		}
-		assertUser(t, ctx, pool, result.UserID, "initial-admin@centry.user", "Preserved", true, false)
+		assertUser(t, ctx, pool, result.UserID, "initial-admin@example.test", "Preserved", true, false)
 		assertProjectRoles(t, ctx, pool, result.UserID, 7, []string{"public_admin", "viewer"})
 	})
 
@@ -259,6 +261,7 @@ WHERE ur.user_id = $1 AND role.mode = 'administration' AND role.name = 'super_ad
 		result, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 			Provider:          "form",
 			ProviderReference: "missing-role-user",
+			Email:             "missing-role-user@example.test",
 		}})
 		if err != nil {
 			t.Fatal(err)

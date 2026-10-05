@@ -45,7 +45,7 @@ type FormGraphDependencies struct {
 type FormGraph struct {
 	routes           http.Handler
 	browserRoutes    http.Handler
-	mainEdgeAuth  http.Handler
+	mainEdgeAuth     http.Handler
 	mainKernel       *forwardapp.Kernel
 	patIssuer        *authsvc.LocalIssuer
 	projectPATIssuer *authsvc.ProjectSystemIssuer
@@ -53,6 +53,7 @@ type FormGraph struct {
 	patSigningKey    []byte
 	proxyResolver    *browserapi.TrustedProxyResolver
 	redis            *redis.Client
+	formUsers        FormUserReport
 	closeOnce        sync.Once
 	closeErr         error
 }
@@ -246,7 +247,7 @@ func newFormGraph(
 	graph := &FormGraph{
 		routes:           routes,
 		browserRoutes:    formHandler.Routes(),
-		mainEdgeAuth:  mainHandler,
+		mainEdgeAuth:     mainHandler,
 		mainKernel:       mainKernel,
 		patIssuer:        patIssuer,
 		projectPATIssuer: projectPATIssuer,
@@ -257,9 +258,33 @@ func newFormGraph(
 		patSigningKey: append([]byte(nil), material.patSigningKey...),
 		proxyResolver: proxyResolver,
 		redis:         redisClient,
+		formUsers: FormUserReport{
+			Configured:          material.formProvider.UserCount(),
+			MisconfiguredLogins: material.formProvider.MisconfiguredLogins(),
+		},
 	}
 	committed = true
 	return graph, nil
+}
+
+// FormUserReport is what the Form users file holds, for the boot log. It
+// carries logins (operator-chosen names) and never a password or attribute.
+type FormUserReport struct {
+	Configured int
+	// MisconfiguredLogins are users with no usable email address. They load,
+	// and their sign-in is refused (browserauth.FormProvider).
+	MisconfiguredLogins []string
+}
+
+// FormUsers reports the configured Form users.
+func (graph *FormGraph) FormUsers() FormUserReport {
+	if graph == nil {
+		return FormUserReport{}
+	}
+	return FormUserReport{
+		Configured:          graph.formUsers.Configured,
+		MisconfiguredLogins: append([]string(nil), graph.formUsers.MisconfiguredLogins...),
+	}
 }
 
 // ForwardedIdentityVerifier returns the same trusted-peer policy used by the

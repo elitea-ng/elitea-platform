@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -314,4 +316,32 @@ func publicMainRequest(uri string) forwardapp.Request {
 
 func unusedRedisOpener(context.Context, Config, *materializedFiles) (*redis.Client, error) {
 	panic("Redis opener called for invalid dependencies")
+}
+
+// The boot log names the Form users whose sign-in will be refused because
+// their configuration has no usable address. The graph carries the report.
+func TestNewFormGraphReportsFormUsersWithoutEmail(t *testing.T) {
+	config := writeMaterialFixture(t)
+	if err := os.WriteFile(config.Provider.Form.UsersJSONFile, []byte(`{"users":[
+		{"login":"no-address","password":"correct horse battery staple one"},
+		{"login":"has-address","password":"correct horse battery staple two","email":"has@example.test"}
+	]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := newFormGraph(
+		context.Background(),
+		config,
+		FormGraphDependencies{PostgreSQL: newUnconnectedPool(t), MainRoutePublicRules: []forwardapp.PublicRule{}},
+		func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
+			return redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1}), nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer graph.Close()
+	report := graph.FormUsers()
+	if report.Configured != 2 || !reflect.DeepEqual(report.MisconfiguredLogins, []string{"no-address"}) {
+		t.Fatalf("Form user report = %+v", report)
+	}
 }

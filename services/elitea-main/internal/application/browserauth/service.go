@@ -354,6 +354,15 @@ func (s *Service) Complete(
 			errors.Is(err, identity.ErrIdentityConflict) {
 			return CompleteResult{}, ErrUnauthenticated
 		}
+		// A configuration error, not an outage: the provider asserted no
+		// usable address. Refuse with the generic failure (never a 503) and
+		// say why in the server log.
+		if errors.Is(err, identity.ErrMissingEmail) {
+			slog.ErrorContext(ctx, "browser sign-in refused: the identity has no usable email address",
+				"provider", assertion.Provider, "provider_reference", assertion.ProviderReference,
+				"error", err)
+			return CompleteResult{}, ErrUnauthenticated
+		}
 		return CompleteResult{}, sanitizedError(
 			ctx,
 			ErrDependencyUnavailable,

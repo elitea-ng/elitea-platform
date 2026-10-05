@@ -489,6 +489,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				runErr = fmt.Errorf("close production Form authentication: %w", err)
 			}
 		}()
+		logFormUserConfiguration(logger, formGraph.FormUsers())
 		productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
 		if err != nil {
 			return fmt.Errorf("mount production Form authentication: %w", err)
@@ -627,6 +628,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
 	}
+
+	// People whom an earlier release signed in as `<login>@centry.user`. A
+	// warning only; see warnReservedDomainSignInAccounts.
+	warnReservedDomainSignInAccounts(ctx, logger, pool)
 
 	// ONE call site, placed AFTER both assignments above.
 	//

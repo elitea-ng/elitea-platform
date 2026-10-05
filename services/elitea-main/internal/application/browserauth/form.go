@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -37,9 +38,10 @@ type formConfiguration struct {
 type formUserConfiguration struct {
 	Login    string `json:"login"`
 	Password string `json:"password"`
-	// Email is emitted by the current Admin schema but ignored by the current
-	// Form route. Keep accepting that exact field without changing the
-	// downstream login@centry.user fallback contract.
+	// Email is the Admin schema's field for the account address, and it is
+	// the PRIMARY source of it. attributes.email is the fallback. A user with
+	// neither is a configuration error (see formUser.misconfigured); no
+	// address is ever synthesized from the login.
 	Email      string          `json:"email,omitempty"`
 	Attributes json.RawMessage `json:"attributes,omitempty"`
 }
@@ -53,7 +55,20 @@ type formUser struct {
 	givenName      string
 	familyName     string
 	name           string
+	// misconfigured marks a user whose configuration names no usable address:
+	// no top-level email, no attributes.email, or an address in the reserved
+	// system-identity domain. The user's credentials still verify (so a
+	// mismatch and a misconfiguration take the same time and give the same
+	// answer to anyone who does not hold the password), but a MATCH is
+	// refused with a logged configuration error instead of signing in.
+	misconfigured bool
 }
+
+// ReservedEmailDomain is the system-identity domain. Addresses in it belong
+// to platform accounts (system@, system_user_<n>@); the admin surface, SCIM and
+// analytics all treat `%@centry.user` as "not a person". A Form user must never
+// be given one, neither by synthesis nor by configuration.
+const ReservedEmailDomain = "@centry.user"
 
 // FormProvider is an immutable, concurrency-safe snapshot of configured Form
 // users. It retains password digests rather than raw configured passwords.
@@ -124,6 +139,30 @@ func newFormProvider(rawConfiguration []byte, now func() time.Time) (*FormProvid
 	return &FormProvider{users: users, digestKey: digestKey, now: now}, nil
 }
 
+// UserCount reports how many Form users the configuration names.
+func (p *FormProvider) UserCount() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.users)
+}
+
+// MisconfiguredLogins lists the logins whose configuration names no usable
+// email address, in configuration order. They are reported at load and
+// refused at sign-in; a login is an operator-chosen name, not a secret.
+func (p *FormProvider) MisconfiguredLogins() []string {
+	if p == nil {
+		return nil
+	}
+	var logins []string
+	for index := range p.users {
+		if p.users[index].misconfigured {
+			logins = append(logins, p.users[index].login)
+		}
+	}
+	return logins
+}
+
 // AssertionVerifier snapshots the submitted credentials as digests. Invalid
 // submissions deliberately produce the same verifier error as a mismatch.
 func (p *FormProvider) AssertionVerifier(submission FormSubmission) *FormAssertionVerifier {
@@ -177,6 +216,15 @@ func (v *FormAssertionVerifier) Verify(
 	}
 
 	user := v.provider.users[matchedIndex]
+	if user.misconfigured {
+		// The password was right; the CONFIGURATION is wrong. The browser
+		// gets the generic sign-in failure, and the operator gets the cause.
+		slog.ErrorContext(ctx, "Form sign-in refused: the Form user has no email address configured",
+			"login", user.login,
+			"fix", "set the user's top-level \"email\" (or attributes.email) in the Form users JSON to the person's real address; "+
+				"addresses in the reserved "+ReservedEmailDomain+" domain are refused")
+		return browserflow.VerifiedAssertion{}, ErrUnauthenticated
+	}
 	providerAttributes, err := json.Marshal(struct {
 		NameID       string          `json:"nameid"`
 		Attributes   json.RawMessage `json:"attributes"`
@@ -233,6 +281,16 @@ func formUserFromConfiguration(configured formUserConfiguration, digestKey [sha2
 	if err != nil {
 		return formUser{}, ErrInvalidConfiguration
 	}
+	// The top-level field wins: it is what the Admin schema writes. Validate
+	// it with the same rule as an attribute-supplied address.
+	if configured.Email != "" {
+		if !validFormEmail(configured.Email) {
+			return formUser{}, ErrInvalidConfiguration
+		}
+		claims.Email = configured.Email
+	}
+	misconfigured := strings.TrimSpace(claims.Email) == "" ||
+		strings.HasSuffix(strings.ToLower(claims.Email), ReservedEmailDomain)
 	worstCaseAttributes, err := json.Marshal(struct {
 		NameID       string          `json:"nameid"`
 		Attributes   json.RawMessage `json:"attributes"`
@@ -263,7 +321,16 @@ func formUserFromConfiguration(configured formUserConfiguration, digestKey [sha2
 		givenName:      claims.GivenName,
 		familyName:     claims.FamilyName,
 		name:           claims.Name,
+		misconfigured:  misconfigured,
 	}, nil
+}
+
+func validFormEmail(value string) bool {
+	return (browserflow.VerifiedAssertion{
+		Provider:          FormProviderName,
+		ProviderReference: "probe",
+		Email:             value,
+	}).Validate() == nil && !strings.ContainsFunc(value, unicode.IsSpace)
 }
 
 func credentialDigest(key [sha256.Size]byte, domain string, value string) [sha256.Size]byte {

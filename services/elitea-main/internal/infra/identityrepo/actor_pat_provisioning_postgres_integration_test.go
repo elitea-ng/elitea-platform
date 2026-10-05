@@ -83,7 +83,7 @@ func TestFormProvisioningIssuesTheActorPAT(t *testing.T) {
 	t.Run("an account that already has its own key gets nothing extra", func(t *testing.T) {
 		var userID int64
 		if err := pool.QueryRow(ctx, `
-INSERT INTO public.auth_core__user (email, name) VALUES ('own-key@centry.user', 'Own Key')
+INSERT INTO public.auth_core__user (email, name) VALUES ('own-key@example.test', 'Own Key')
 RETURNING id`).Scan(&userID); err != nil {
 			t.Fatal(err)
 		}
@@ -104,11 +104,12 @@ INSERT INTO public.auth_core__token (uuid, user_id, name) VALUES ('own-key-uuid'
 	t.Run("a suspended account is provisioned nothing", func(t *testing.T) {
 		mustExec(t, ctx, pool, `
 INSERT INTO public.auth_core__user (email, name, suspended)
-VALUES ('suspended@centry.user', 'Suspended', true)`)
+VALUES ('suspended@example.test', 'Suspended', true)`)
 
 		_, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 			Provider:          "form",
 			ProviderReference: "suspended",
+			Email:             "suspended@example.test",
 		}})
 		if !errors.Is(err, identity.ErrIdentitySuspended) {
 			t.Fatalf("error = %v, want %v", err, identity.ErrIdentitySuspended)
@@ -116,7 +117,7 @@ VALUES ('suspended@centry.user', 'Suspended', true)`)
 		assertCount(t, ctx, pool, 0, `
 SELECT count(*) FROM public.auth_core__token AS t
 JOIN public.auth_core__user AS u ON u.id = t.user_id
-WHERE u.email = 'suspended@centry.user'`)
+WHERE u.email = 'suspended@example.test'`)
 	})
 
 	// ── the way it must heal ──────────────────────────────────────────────
@@ -164,6 +165,7 @@ func TestFormProvisioningRollbackLeavesNoActorPAT(t *testing.T) {
 	_, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 		Provider:          "form",
 		ProviderReference: "rollback-form",
+		Email:             "rollback-form@example.test",
 	}})
 	if !errors.Is(err, identity.ErrProvisioningFailed) {
 		t.Fatalf("error = %v, want %v", err, identity.ErrProvisioningFailed)
@@ -181,6 +183,7 @@ func provisionForm(
 	result, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 		Provider:          "form",
 		ProviderReference: reference,
+		Email:             reference + "@example.test",
 	}})
 	if err != nil {
 		t.Fatal(err)

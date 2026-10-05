@@ -15,7 +15,11 @@ import (
 )
 
 const (
-	fallbackEmailDomain = "centry.user"
+	// reservedEmailDomain is the system-identity domain (system@,
+	// system_user_<n>@). It is never synthesized for, and never accepted from,
+	// a person's sign-in; see scimdirectory.reservedAddressDomain for the SCIM
+	// side of the same rule.
+	reservedEmailDomain = "@centry.user"
 	projectViewerRole   = "viewer"
 
 	// InitialAdministrationMode / InitialAdministrationRole name the single
@@ -36,13 +40,19 @@ const (
 )
 
 var (
-	ErrInvalidAssertion          = errors.New("invalid verified identity assertion")
-	ErrIdentitySuspended         = errors.New("authenticated identity is suspended")
+	ErrInvalidAssertion = errors.New("invalid verified identity assertion")
+	// ErrMissingEmail reports an assertion with no usable address. There used
+	// to be a fallback here that invented `<provider reference>@centry.user`,
+	// which put a person's account in the system-identity domain: hidden from
+	// the Users page, excluded from analytics and refused by SCIM. A sign-in
+	// with no address is now refused instead.
+	ErrMissingEmail      = errors.New("verified identity assertion carries no usable email address")
+	ErrIdentitySuspended = errors.New("authenticated identity is suspended")
 	// ErrIdentityConflict reports that the asserted address names an account
 	// this provider may not adopt: another federated subject holds it, or a
 	// SCIM client provisioned it and the provider is not configured to adopt
 	// such accounts (identityrepo.AdoptionGuard).
-	ErrIdentityConflict = errors.New("authenticated identity names an account this provider may not adopt")
+	ErrIdentityConflict          = errors.New("authenticated identity names an account this provider may not adopt")
 	ErrProvisioningFailed        = errors.New("authenticated identity provisioning failed")
 	ErrInvalidProvisioningResult = errors.New("identity repository returned an invalid provisioning result")
 )
@@ -180,6 +190,9 @@ func (a VerifiedAssertion) validate() error {
 	if !validOptionalText(a.Email, MaxEmailBytes) || strings.ContainsFunc(a.Email, unicode.IsSpace) {
 		return ErrInvalidAssertion
 	}
+	if a.Email == "" || strings.HasSuffix(lowerLikePython(a.Email), reservedEmailDomain) {
+		return ErrMissingEmail
+	}
 	if !validOptionalText(a.GivenName, MaxNameClaimBytes) ||
 		!validOptionalText(a.FamilyName, MaxNameClaimBytes) ||
 		!validOptionalText(a.Name, MaxNameClaimBytes) {
@@ -201,11 +214,8 @@ func validText(value string) bool {
 }
 
 func deriveCommand(assertion VerifiedAssertion, policy ProvisioningPolicy) ProvisionCommand {
-	email := assertion.Email
-	if email == "" {
-		email = assertion.ProviderReference + "@" + fallbackEmailDomain
-	}
-	email = lowerLikePython(email)
+	// validate() refused an empty or reserved address; nothing is synthesized.
+	email := lowerLikePython(assertion.Email)
 
 	name := email
 	if assertion.GivenName != "" && assertion.FamilyName != "" {
