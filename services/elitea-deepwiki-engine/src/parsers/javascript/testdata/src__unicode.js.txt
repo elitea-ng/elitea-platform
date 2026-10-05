@@ -1,0 +1,7 @@
+﻿// bom file
+const café = "€ uro";
+function naïve(x) {
+  return café + x; // 😀
+}
+class École { m() { return naïve(1); } }
+const after = new École();

@@ -1,0 +1,7 @@
+package com.acme.service;
+
+import com.acme.model.Owner;
+
+public interface OwnerService {
+    Owner find(int id);
+}

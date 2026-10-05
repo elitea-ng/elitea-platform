@@ -1,0 +1,6 @@
+class Broken : public {
+  void f( { int x = ; }
+  int g() { return h(1, ; }
+};
+struct Fine { void ok(); };
+void Fine::ok() { Broken b; b.g(); }

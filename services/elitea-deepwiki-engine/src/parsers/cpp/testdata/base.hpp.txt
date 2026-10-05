@@ -1,0 +1,14 @@
+#ifndef BASE_HPP
+#define BASE_HPP
+struct Point { double x, y; };
+class Named {
+public:
+    virtual const char* name() const { return "named"; }
+};
+template <class K, class V> struct Pair { K first; V second; };
+#if __cplusplus >= 202002L
+template <typename T>
+concept Number = requires(T t) { t + t; };
+template <Number T> T twice(T v) { return v + v; }
+#endif
+#endif

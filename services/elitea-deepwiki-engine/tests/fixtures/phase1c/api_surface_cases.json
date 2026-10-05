@@ -1,0 +1,1775 @@
+{
+ "cases": [
+  {
+   "language": "python",
+   "symbol_name": "list_items",
+   "symbol_type": "function",
+   "rel_path": "app/items.py",
+   "source_text": "@router.get(\"/items/\")\n@router.head(\"/items\")\ndef list_items(): ...",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /items",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/items",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "HEAD /items",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "HEAD",
+      "path": "/items",
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "h",
+   "symbol_type": "function",
+   "rel_path": "app/main.py",
+   "source_text": "router = APIRouter(prefix=\"/api/v1/users\")\n@router.post(\"/me\")\ndef h(): ...",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "POST /api/v1/users/me",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/api/v1/users/me",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /users/me",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "POST",
+      "path": "/users/me",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "idx",
+   "symbol_type": "function",
+   "rel_path": "app/flask.py",
+   "source_text": "@bp.route(\"/a\", methods=[\"GET\", \"post\", 'PUT', \"BREW\"])\ndef idx(): ...\n@app.route(\"/b\")\ndef b(): ...",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /a",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/a",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /a",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/a",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "PUT /a",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "PUT",
+      "path": "/a",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /b",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/b",
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "nope",
+   "symbol_type": "function",
+   "rel_path": "app/x.py",
+   "source_text": "@app.get(x)\ndef nope(): ...",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": []
+  },
+  {
+   "language": "typescript",
+   "symbol_name": "Ctl",
+   "symbol_type": "class",
+   "rel_path": "src/ctl.ts",
+   "source_text": "@Controller('x')\nclass Ctl {\n  @Get()\n  a() {}\n  @Post(':id')\n  b() {}\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /:id",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/:id",
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "javascript",
+   "symbol_name": "routes",
+   "symbol_type": "function",
+   "rel_path": "src/app.js",
+   "source_text": "app.get('/api/users/:id', h); router.POST(\"/rest/v2beta3/things\", h); app.use(x, y)",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /api/users/:id",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/users/:id",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /users/:id",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/users/:id",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /rest/v2beta3/things",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/rest/v2beta3/things",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /things",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "POST",
+      "path": "/things",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "typescript",
+   "symbol_name": "client",
+   "symbol_type": "function",
+   "rel_path": "src/client.ts",
+   "source_text": "axios.get('/api/v1/items'); client.post(`/graphql`); api.delete(\"/x/\"); fetch('/api/login', { method: 'post', body }); fetch(\"/health\")",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /api/v1/items",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v1/items",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /items",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/items",
+      "prefix_stripped": true,
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /graphql",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/graphql",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /x",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/x",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /api/login",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/api/login",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /login",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "POST",
+      "path": "/login",
+      "prefix_stripped": true,
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /health",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/health",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "typescript",
+   "symbol_name": "req",
+   "symbol_type": "function",
+   "rel_path": "src/gen.ts",
+   "source_text": "return __request(OpenAPI, {\n  method: 'POST',\n  url: '/api/v1/items/',\n});\nreturn __request(OpenAPI, { url: '/api/v1/items/{id}', method: \"DELETE\" })",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "POST /api/v1/items",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/api/v1/items",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /items",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "POST",
+      "path": "/items",
+      "prefix_stripped": true,
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /api/v1/items/{id}",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/api/v1/items/{id}",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /items/{id}",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/items/{id}",
+      "prefix_stripped": true,
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "java",
+   "symbol_name": "Res",
+   "symbol_type": "class",
+   "rel_path": "src/Res.java",
+   "source_text": "@Path(\"/orders\")\npublic class Res {\n  @GET\n  public List<O> all() {}\n  @POST public O add() {}\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /orders",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/orders",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /orders",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/orders",
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "java",
+   "symbol_name": "Ctl",
+   "symbol_type": "class",
+   "rel_path": "src/Ctl.java",
+   "source_text": "@RestController\n@RequestMapping(\"/owners\")\nclass Ctl {\n  @GetMapping(\"/{id}\")\n  O get() {}\n  @PostMapping\n  void add() {}\n  @DeleteMapping(value = \"/x\")\n  void d() {}\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /{id}",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/{id}",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /value",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/value",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /owners",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/owners",
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "routes",
+   "symbol_type": "function",
+   "rel_path": "cmd/routes.go",
+   "source_text": "r.GET(\"/api/v1/ping\", ping)\nr.POST('/users', create)\ng.Group(\"/x\")",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /api/v1/ping",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v1/ping",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /ping",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/ping",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /users",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "POST",
+      "path": "/users",
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "prefixes",
+   "symbol_type": "function",
+   "rel_path": "cmd/p.go",
+   "source_text": "r.GET(\"/api/v1x/a\", h)\nr.GET(\"/api/v12/b\", h)\nr.GET(\"/API/V2/c\", h)\nr.GET(\"/api\", h)\nr.GET(\"/apis/d\", h)\nr.GET(\"/graphql/v1rc2\", h)\nr.GET(\"/rest/v3alpha/e/\", h)",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /api/v1x/a",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v1x/a",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /v1x/a",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/v1x/a",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /api/v12/b",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v12/b",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /b",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/b",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /API/V2/c",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/API/V2/c",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /c",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/c",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /api",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/api",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /apis/d",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/apis/d",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /graphql/v1rc2",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/graphql/v1rc2",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /rest/v3alpha/e",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/rest/v3alpha/e",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /e",
+     "weight_hint": 0.6,
+     "metadata": {
+      "method": "GET",
+      "path": "/e",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "proto",
+   "symbol_name": "svc",
+   "symbol_type": "service",
+   "rel_path": "api/cart.proto",
+   "source_text": "service CartService {\n  rpc AddItem(AddItemRequest) returns (Empty) {}\n  rpc GetCart(GetCartRequest) returns (Cart);\n}\nservice Other { rpc Ping(P) returns (P); }",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/AddItem",
+     "weight_hint": 0.8,
+     "metadata": {
+      "service": "CartService",
+      "method": "AddItem"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/GetCart",
+     "weight_hint": 0.8,
+     "metadata": {
+      "service": "CartService",
+      "method": "GetCart"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:Other/Ping",
+     "weight_hint": 0.8,
+     "metadata": {
+      "service": "Other",
+      "method": "Ping"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "CartServicer",
+   "symbol_type": "class",
+   "rel_path": "srv/cart.py",
+   "source_text": "class CartServicer(object):\n    def AddItem(self, request, context): ...\n    def helper(self): ...\n    def GetCart( self, r, c): ...",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:Cart/AddItem",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Cart",
+      "method": "AddItem"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:Cart/GetCart",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Cart",
+      "method": "GetCart"
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "srv",
+   "symbol_type": "interface",
+   "rel_path": "pb/cart_grpc.pb.go",
+   "source_text": "type CartServiceServer interface {\n\tAddItem(context.Context, *Req) (*Empty, error)\n\tGetCart(ctx context.Context) error\n\tmustEmbedUnimplemented()\n}\nconst (\n\tCartService_AddItem_FullMethodName = \"/hipstershop.CartService/AddItem\"\n)",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/AddItem",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "AddItem"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/GetCart",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "GetCart"
+     }
+    }
+   ]
+  },
+  {
+   "language": "java",
+   "symbol_name": "AdService",
+   "symbol_type": "class",
+   "rel_path": "src/AdService.java",
+   "source_text": "class AdServiceImpl extends hipstershop.AdServiceGrpc.AdServiceImplBase {\n  public void getAds(AdRequest req, StreamObserver<AdResponse> obs) {}\n  public void listAds(Foo f, StreamObserver<X> o) {}\n  private void helper() {}\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:AdService/GetAds",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "AdService",
+      "method": "GetAds"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:AdService/ListAds",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "AdService",
+      "method": "ListAds"
+     }
+    }
+   ]
+  },
+  {
+   "language": "csharp",
+   "symbol_name": "CartService",
+   "symbol_type": "class",
+   "rel_path": "src/CartService.cs",
+   "source_text": "public class CartService : Hipstershop.CartService.CartServiceBase {\n  public override async Task<Empty> AddItem(AddItemRequest r, ServerCallContext c) {}\n  public override Task<Cart> GetCart(GetCartRequest r, ServerCallContext c) {}\n}\nclass Nope : A.B.CBase { public override Task X() {} }\nclass Twice : X.Y.YBase.Z.ZBase { public override Task Q() {} }",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/AddItem",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "AddItem"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/GetCart",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "GetCart"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:Z/Q",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Z",
+      "method": "Q"
+     }
+    }
+   ]
+  },
+  {
+   "language": "javascript",
+   "symbol_name": "main",
+   "symbol_type": "function",
+   "rel_path": "src/server.js",
+   "source_text": "server.addService(proto.PaymentService.service, { charge: chargeHandler, refund });",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:PaymentService/Charge",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "PaymentService",
+      "method": "Charge"
+     }
+    }
+   ]
+  },
+  {
+   "language": "cpp",
+   "symbol_name": "Impl",
+   "symbol_type": "class",
+   "rel_path": "src/impl.cc",
+   "source_text": "class Impl final : public Greeter::Service {\n  Status SayHello(ServerContext* ctx, const Req* r, Rep* p) override;\n  grpc::Status SayBye(grpc::ServerContext* c) {}\n};",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:Greeter/SayHello",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Greeter",
+      "method": "SayHello"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:Greeter/SayBye",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Greeter",
+      "method": "SayBye"
+     }
+    }
+   ]
+  },
+  {
+   "language": "rust",
+   "symbol_name": "impl",
+   "symbol_type": "impl",
+   "rel_path": "src/svc.rs",
+   "source_text": "#[tonic::async_trait]\nimpl Greeter for MyGreeter {\n    async fn say_hello(&self, r: Request<H>) {}\n    async fn _private(&self) {}\n}\nimpl fmt::Display for X { }\nimpl self_thing for Y { async fn z_y(&self) {} }",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:Greeter/SayHello",
+     "weight_hint": 0.6,
+     "metadata": {
+      "service": "Greeter",
+      "method": "SayHello"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:Greeter/ZY",
+     "weight_hint": 0.6,
+     "metadata": {
+      "service": "Greeter",
+      "method": "ZY"
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "call",
+   "symbol_type": "function",
+   "rel_path": "fe/rpc.go",
+   "source_text": "resp, err := pb.NewCartServiceClient(fe.cartConn).\n\t\tGetCart(ctx, &pb.GetCartRequest{})\ncs := pb.NewCurrencyServiceClient(conn)\ncs.Convert(ctx, req)\ncs.helper()",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/GetCart",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "GetCart",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:CurrencyService/Convert",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CurrencyService",
+      "method": "Convert",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "recommend",
+   "symbol_type": "function",
+   "rel_path": "rec/server.py",
+   "source_text": "stub = demo_pb2_grpc.ProductCatalogServiceStub(channel)\nresp = stub.ListProducts(Empty())\nx = ShippingServiceStub(ch).GetQuote(req)",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:ShippingService/GetQuote",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "ShippingService",
+      "method": "GetQuote",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:ProductCatalogService/ListProducts",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "ProductCatalogService",
+      "method": "ListProducts",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "use_stub",
+   "symbol_type": "function",
+   "rel_path": "rec/other.py",
+   "source_text": "return catalog.ListProducts(req)",
+   "plugin_name": "",
+   "bindings": {
+    "catalog": "ProductCatalogService"
+   },
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:ProductCatalogService/ListProducts",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "ProductCatalogService",
+      "method": "ListProducts",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "java",
+   "symbol_name": "client",
+   "symbol_type": "class",
+   "rel_path": "src/C.java",
+   "source_text": "private final AdServiceGrpc.AdServiceBlockingStub blockingStub;\nblockingStub = AdServiceGrpc.newBlockingStub(channel);\nblockingStub.getAds(req);",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:AdService/GetAds",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "AdService",
+      "method": "GetAds",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "csharp",
+   "symbol_name": "client",
+   "symbol_type": "method",
+   "rel_path": "src/C.cs",
+   "source_text": "var client = new CartService.CartServiceClient(channel);\nawait client.GetCartAsync(req);\nclient.Async();",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/GetCart",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "GetCart",
+      "role": "client"
+     }
+    },
+    {
+     "kind": "grpc",
+     "surface": "grpc:CartService/Async",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "CartService",
+      "method": "Async",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "typescript",
+   "symbol_name": "c",
+   "symbol_type": "function",
+   "rel_path": "src/c.ts",
+   "source_text": "const c = new pkg.PaymentServiceClient(addr, creds); c.charge(req, cb);",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:PaymentService/Charge",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "PaymentService",
+      "method": "Charge",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "cpp",
+   "symbol_name": "c",
+   "symbol_type": "function",
+   "rel_path": "src/c.cc",
+   "source_text": "std::unique_ptr<Greeter::Stub> stub_;\nauto s2 = helloworld::Greeter::NewStub(channel);\nstub_->SayHello(&ctx, req, &rep);",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:Greeter/SayHello",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Greeter",
+      "method": "SayHello",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "rust",
+   "symbol_name": "c",
+   "symbol_type": "function",
+   "rel_path": "src/c.rs",
+   "source_text": "let mut client = GreeterClient::connect(\"http://[::1]:50051\").await?;\nclient.say_hello(req).await?;",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "grpc",
+     "surface": "grpc:Greeter/SayHello",
+     "weight_hint": 0.7,
+     "metadata": {
+      "service": "Greeter",
+      "method": "SayHello",
+      "role": "client"
+     }
+    }
+   ]
+  },
+  {
+   "language": "graphql",
+   "symbol_name": "schema",
+   "symbol_type": "schema",
+   "rel_path": "schema.graphql",
+   "source_text": "type Query {\n  me: User\n}\nextend type Mutation {\n  x: Int\n}\nEXTEND   TYPE subscription {}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "graphql",
+     "surface": "gql:query",
+     "weight_hint": 0.6,
+     "metadata": {
+      "root": "query"
+     }
+    },
+    {
+     "kind": "graphql",
+     "surface": "gql:mutation",
+     "weight_hint": 0.6,
+     "metadata": {
+      "root": "mutation"
+     }
+    },
+    {
+     "kind": "graphql",
+     "surface": "gql:subscription",
+     "weight_hint": 0.6,
+     "metadata": {
+      "root": "subscription"
+     }
+    }
+   ]
+  },
+  {
+   "language": "typescript",
+   "symbol_name": "R",
+   "symbol_type": "class",
+   "rel_path": "src/r.ts",
+   "source_text": "@Resolver()\nclass R {\n  @Query(() => User)\n  me() {}\n  @FieldResolver() f() {}\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "graphql",
+     "surface": "gql:resolver",
+     "weight_hint": 0.5,
+     "metadata": {
+      "resolver": "resolver"
+     }
+    },
+    {
+     "kind": "graphql",
+     "surface": "gql:query",
+     "weight_hint": 0.5,
+     "metadata": {
+      "resolver": "query"
+     }
+    },
+    {
+     "kind": "graphql",
+     "surface": "gql:fieldresolver",
+     "weight_hint": 0.5,
+     "metadata": {
+      "resolver": "fieldresolver"
+     }
+    }
+   ]
+  },
+  {
+   "language": "rust",
+   "symbol_name": "compute_hash",
+   "symbol_type": "function",
+   "rel_path": "src/ffi.rs",
+   "source_text": "#[no_mangle]\npub extern \"C\" fn compute_hash(p: *const u8) -> u64 { 0 }",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "ffi",
+     "surface": "ffi:compute_hash",
+     "weight_hint": 0.6,
+     "metadata": {
+      "symbol": "compute_hash"
+     }
+    }
+   ]
+  },
+  {
+   "language": "java",
+   "symbol_name": "Native",
+   "symbol_type": "class",
+   "rel_path": "src/N.java",
+   "source_text": "class N { public native int add(int a, int b); }",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "ffi",
+     "surface": "ffi:Native",
+     "weight_hint": 0.6,
+     "metadata": {
+      "symbol": "Native"
+     }
+    }
+   ]
+  },
+  {
+   "language": "csharp",
+   "symbol_name": "compute_hash",
+   "symbol_type": "method",
+   "rel_path": "src/N.cs",
+   "source_text": "[DllImport(\"libnative\")]\nstatic extern ulong compute_hash(byte[] d);\n[DllImport('compute_hash')] static extern void x();",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "ffi",
+     "surface": "ffi:libnative",
+     "weight_hint": 0.7,
+     "metadata": {
+      "library": "libnative"
+     }
+    },
+    {
+     "kind": "ffi",
+     "surface": "ffi:compute_hash",
+     "weight_hint": 0.6,
+     "metadata": {
+      "symbol": "compute_hash",
+      "library": "libnative"
+     }
+    }
+   ]
+  },
+  {
+   "language": "rust",
+   "symbol_name": "greet",
+   "symbol_type": "function",
+   "rel_path": "src/w.rs",
+   "source_text": "#[wasm_bindgen]\npub fn greet() {}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "ffi",
+     "surface": "ffi:greet",
+     "weight_hint": 0.6,
+     "metadata": {
+      "symbol": "greet"
+     }
+    }
+   ]
+  },
+  {
+   "language": "json",
+   "symbol_name": "",
+   "symbol_type": "json_document",
+   "rel_path": "a/.oxlintrc.json",
+   "source_text": "[File: a/.oxlintrc.json]\n{\"rules\": {\"extern 'C'\": 1}}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": []
+  },
+  {
+   "language": "python",
+   "symbol_name": "UserPublic",
+   "symbol_type": "class",
+   "rel_path": "models.py",
+   "source_text": "class UserPublic(BaseModel):\n    id: int\n    full_name: str | None = None  # c\n    __slots__: tuple\n    def f(self) -> int: ...\nclass Empty:\n    pass\nclass Item(SQLModel, table=True):\n    ownerId: uuid.UUID = Field()",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "obj",
+     "surface": "obj:user_public#full_name,id",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "UserPublic",
+      "fields": [
+       "full_name",
+       "id"
+      ]
+     }
+    },
+    {
+     "kind": "obj",
+     "surface": "obj:item#owner_id",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Item",
+      "fields": [
+       "owner_id"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "typescript",
+   "symbol_name": "UserPublic",
+   "symbol_type": "type_alias",
+   "rel_path": "client/types.gen.ts",
+   "source_text": "export type UserPublic = {\n  id: string;\n  readonly full_name?: string | null;\n  isActive: boolean,\n};\nexport interface Item extends Base<T> { title: string; ownerId: string }\ninterface E {}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "obj",
+     "surface": "obj:item#owner_id,title",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Item",
+      "fields": [
+       "owner_id",
+       "title"
+      ]
+     }
+    },
+    {
+     "kind": "obj",
+     "surface": "obj:user_public#full_name,id,is_active",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "UserPublic",
+      "fields": [
+       "full_name",
+       "id",
+       "is_active"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "User",
+   "symbol_type": "struct",
+   "rel_path": "models.go",
+   "source_text": "type User struct {\n\tID   string `json:\"id\"`\n\tFullName string `json:\"full_name,omitempty\"`\n\tage int\n\tTags []string\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "obj",
+     "surface": "obj:user#full_name,id,tags",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "User",
+      "fields": [
+       "full_name",
+       "id",
+       "tags"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "java",
+   "symbol_name": "Owner",
+   "symbol_type": "class",
+   "rel_path": "Owner.java",
+   "source_text": "public class Owner extends Person {\n  private String address;\n  protected final List<Pet> pets = new ArrayList<>();\n  public String getAddress() { return address; }\n}\npublic record Point(int x, Map<String, List<Integer>> y, final long z) {}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "obj",
+     "surface": "obj:owner#address,pets",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Owner",
+      "fields": [
+       "address",
+       "pets"
+      ]
+     }
+    },
+    {
+     "kind": "obj",
+     "surface": "obj:point#x,y,z",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Point",
+      "fields": [
+       "x",
+       "y",
+       "z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "rust",
+   "symbol_name": "Order",
+   "symbol_type": "struct",
+   "rel_path": "src/order.rs",
+   "source_text": "pub struct Order {\n    #[serde(rename = \"orderId\")]\n    pub id: u64,\n    pub total_cents: i64,\n    items: Vec<Item>,\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "obj",
+     "surface": "obj:order#items,order_id,total_cents",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Order",
+      "fields": [
+       "items",
+       "order_id",
+       "total_cents"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "csharp",
+   "symbol_name": "Order",
+   "symbol_type": "class",
+   "rel_path": "Order.cs",
+   "source_text": "public sealed class Order : Entity {\n  public int OrderId { get; set; }\n  internal string Name = \"\";\n  private readonly List<Item> _items;\n  public void Do() {}\n}\npublic record Money(decimal Amount, string Currency);",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "obj",
+     "surface": "obj:order#_items,name,order_id",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Order",
+      "fields": [
+       "_items",
+       "name",
+       "order_id"
+      ]
+     }
+    },
+    {
+     "kind": "obj",
+     "surface": "obj:money#amount,currency",
+     "weight_hint": 0.65,
+     "metadata": {
+      "type": "Money",
+      "fields": [
+       "amount",
+       "currency"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "step",
+   "symbol_type": "function",
+   "rel_path": "steps.py",
+   "source_text": "@given('a user named \"x\"')\n@then(\"it works\")\ndef step(): ...",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "bdd",
+     "surface": "bdd:it works",
+     "weight_hint": 0.7,
+     "metadata": {
+      "kind": "then"
+     }
+    }
+   ]
+  },
+  {
+   "language": "gherkin",
+   "symbol_name": "f",
+   "symbol_type": "document",
+   "rel_path": "features/login.feature",
+   "source_text": "Feature: login\n  Scenario: ok\n    Given a registered user\n    When  they log in  \n    And But nothing\n    Then it works",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "bdd",
+     "surface": "bdd:a registered user",
+     "weight_hint": 0.6,
+     "metadata": {
+      "kind": "given"
+     }
+    },
+    {
+     "kind": "bdd",
+     "surface": "bdd:they log in",
+     "weight_hint": 0.6,
+     "metadata": {
+      "kind": "when"
+     }
+    },
+    {
+     "kind": "bdd",
+     "surface": "bdd:but nothing",
+     "weight_hint": 0.6,
+     "metadata": {
+      "kind": "and"
+     }
+    },
+    {
+     "kind": "bdd",
+     "surface": "bdd:it works",
+     "weight_hint": 0.6,
+     "metadata": {
+      "kind": "then"
+     }
+    }
+   ]
+  },
+  {
+   "language": "markdown",
+   "symbol_name": "Doc",
+   "symbol_type": "markdown_section",
+   "rel_path": "docs/x.md",
+   "source_text": "Given a markdown file\nThen no step",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": []
+  },
+  {
+   "language": "python",
+   "symbol_name": "cli",
+   "symbol_type": "function",
+   "rel_path": "cli.py",
+   "source_text": "@click.command('serve')\n@cli.group(name=\"db\")\nsub = p.add_subparsers(dest='c').add_parser('init')",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "cli",
+     "surface": "cli:serve",
+     "weight_hint": 0.6,
+     "metadata": {
+      "framework": "click"
+     }
+    },
+    {
+     "kind": "cli",
+     "surface": "cli:db",
+     "weight_hint": 0.6,
+     "metadata": {
+      "framework": "click"
+     }
+    },
+    {
+     "kind": "cli",
+     "surface": "cli:init",
+     "weight_hint": 0.6,
+     "metadata": {
+      "framework": "argparse"
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "cmd",
+   "symbol_type": "function",
+   "rel_path": "cmd/root.go",
+   "source_text": "var rootCmd = &cobra.Command{\n\tUse: \"serve [flags]\",\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "cli",
+     "surface": "cli:serve",
+     "weight_hint": 0.6,
+     "metadata": {
+      "framework": "cobra"
+     }
+    }
+   ]
+  },
+  {
+   "language": "go",
+   "symbol_name": "cmd",
+   "symbol_type": "function",
+   "rel_path": "cmd/blank.go",
+   "source_text": "var c = &cobra.Command{ Use: \"   \", }\nr.GET(\"/x\", h)",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": null
+  },
+  {
+   "language": "python",
+   "symbol_name": "API",
+   "symbol_type": "class",
+   "rel_path": "plugins/configurations/api/v1/configurations.py",
+   "source_text": "class API(api_tools.APIBase):\n    url_params = [\n        '<int:project_id>',\n        '',\n        \"<string:mode>/<int:project_id>\",\n    ]\n    def get(self, project_id): ...\n    def POST(self): ...\n    def helper(self): ...",
+   "plugin_name": "configurations",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /api/v1/configurations/{var}",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v1/configurations/{var}",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /configurations/{var}",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "GET",
+      "path": "/configurations/{var}",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /api/v1/configurations",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v1/configurations",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /configurations",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "GET",
+      "path": "/configurations",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /api/v1/configurations/{var}/{var}",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "GET",
+      "path": "/api/v1/configurations/{var}/{var}",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "GET /configurations/{var}/{var}",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "GET",
+      "path": "/configurations/{var}/{var}",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /api/v1/configurations/{var}",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "POST",
+      "path": "/api/v1/configurations/{var}",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /configurations/{var}",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "POST",
+      "path": "/configurations/{var}",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /api/v1/configurations",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "POST",
+      "path": "/api/v1/configurations",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /configurations",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "POST",
+      "path": "/configurations",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /api/v1/configurations/{var}/{var}",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "POST",
+      "path": "/api/v1/configurations/{var}/{var}",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "POST /configurations/{var}/{var}",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "POST",
+      "path": "/configurations/{var}/{var}",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "API",
+   "symbol_type": "class",
+   "rel_path": "api/v2/foo.py",
+   "source_text": "class API(MethodView):\n    def delete(self): ...",
+   "plugin_name": "configurations",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "DELETE /api/v2/foo",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/api/v2/foo",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /foo",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/foo",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /api/v2/configurations/foo",
+     "weight_hint": 0.65,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/api/v2/configurations/foo",
+      "role": "server"
+     }
+    },
+    {
+     "kind": "rest",
+     "surface": "DELETE /configurations/foo",
+     "weight_hint": 0.55,
+     "metadata": {
+      "method": "DELETE",
+      "path": "/configurations/foo",
+      "prefix_stripped": true,
+      "role": "server"
+     }
+    }
+   ]
+  },
+  {
+   "language": "python",
+   "symbol_name": "API",
+   "symbol_type": "function",
+   "rel_path": "api/v2/foo.py",
+   "source_text": "class API(MethodView):\n    def delete(self): ...",
+   "plugin_name": "configurations",
+   "bindings": null,
+   "expected": []
+  },
+  {
+   "language": "go",
+   "symbol_name": "u",
+   "symbol_type": "function",
+   "rel_path": "u.go",
+   "source_text": "r.GET(\"/ünï²\", h)\ntype Ünï struct {\n\tÄge int `json:\"âge\"`\n}",
+   "plugin_name": "",
+   "bindings": null,
+   "expected": [
+    {
+     "kind": "rest",
+     "surface": "GET /ünï²",
+     "weight_hint": 0.7,
+     "metadata": {
+      "method": "GET",
+      "path": "/ünï²",
+      "role": "server"
+     }
+    }
+   ]
+  }
+ ],
+ "to_snake": {
+  "OrderId": "order_id",
+  "computeHash": "compute_hash",
+  "HTTPRequest": "http_request",
+  "order_id": "order_id",
+  "ID": "id",
+  "aB1C": "a_b1_c",
+  "Ünï": "ünï"
+ },
+ "strip_prefix": {
+  "/api/v1/items": "/items",
+  "/api": "",
+  "/apis/x": "",
+  "/api/v1x/a": "/v1x/a",
+  "/API/V2/c/": "/c",
+  "/graphql/v1rc2": "",
+  "rest/v3alpha/e": "/e",
+  "/x": ""
+ },
+ "pylon_endpoints": [
+  "GET /api/v1/configurations/configurations/{project_id}",
+  "GET /api/v1/configurations/configurations",
+  "GET /api/v1/configurations/configurations/{mode}/{project_id}",
+  "POST /api/v1/configurations/configurations/{project_id}",
+  "POST /api/v1/configurations/configurations",
+  "POST /api/v1/configurations/configurations/{mode}/{project_id}"
+ ],
+ "plugin_names": {
+  "[File: metadata.json]\n{\"name\": \"configurations\"}": "configurations",
+  "{\"name\": \" x-y_1 \"}": "x-y_1",
+  "{\"name\": \"1bad\"}": "",
+  "{\"name\": 5}": "",
+  "[1]": "",
+  "nope": ""
+ }
+}

@@ -1,0 +1,28 @@
+import { Base, Other as O } from './base';
+import * as util from "./util";
+import Def from './def';
+
+@Injectable()
+export class UserService extends Base implements Repo<User>, Named {
+  @Input() private readonly repo?: UserRepo;
+  static count: number = 0;
+  constructor(private api: Api, name: string) { super(); }
+  async load(id: string, opts?: Options): Promise<User> {
+    const u = new User(id);
+    return this.api.fetch(id).then(helper);
+  }
+}
+
+export interface Named<T> extends Thing {
+  name: string;
+  child: { deep: Widget };
+  greet(who: Person): void;
+}
+
+export type Alias = Target;
+type Gen = Holder<Widget>;
+enum Color { Red, Green = 2 }
+export const LIMIT = 10, OTHER = 2;
+let counter: Counter;
+export function helper(x: Thing): Result { return compute(x); }
+export const arrow = async (a: Input): Promise<Output> => transform(a);

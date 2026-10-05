@@ -1,0 +1,931 @@
+[
+  {
+    "name": "github anonymous",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github public api token",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "base_url": "https://api.github.com",
+        "access_token": "ghp_tok1"
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic Z2hwX3RvazE6"
+    }
+  },
+  {
+    "name": "github token and username",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "base_url": "https://api.github.com",
+        "access_token": "ghp_tok1",
+        "username": "octo"
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic b2N0bzpnaHBfdG9rMQ=="
+    }
+  },
+  {
+    "name": "github username and password",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "username": "octo",
+        "password": "pw1"
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "password",
+      "authorization": "Basic b2N0bzpwdzE="
+    }
+  },
+  {
+    "name": "github enterprise api url",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "base_url": "https://ghe.example.com/api/v3",
+        "access_token": "ghp_tok1"
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "ghe.example.com",
+      "url": "https://ghe.example.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic Z2hwX3RvazE6"
+    }
+  },
+  {
+    "name": "github enterprise with port",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "base_url": "https://ghe.example.com:8443/api/v3"
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "ghe.example.com:8443",
+      "url": "https://ghe.example.com:8443/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github https repository url",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "https://github.com/owner/repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github ssh repository",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "git@github.com:owner/repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github ssh without suffix",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "git@github.com:owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github git suffix",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "owner/repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github slashes",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "/owner/repo/",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github tree url keeps its path",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "https://github.com/owner/repo/tree/dev",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo/tree/dev.git",
+      "repo_identifier": "owner/repo/tree/dev",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github whitespace",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "  owner/repo  ",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github token whitespace stripped",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "access_token": "  ghp_tok2  "
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic Z2hwX3RvazI6"
+    }
+  },
+  {
+    "name": "github empty token is anonymous",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {
+        "access_token": ""
+      },
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github branch with slash",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "owner/repo",
+      "branch": "feature/x",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "feature/x",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github dotted name",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "owner/my.git.repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/my.git.repo.git",
+      "repo_identifier": "owner/my.git.repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github repository url host is not the clone host",
+    "repo_config": {
+      "provider_type": "github",
+      "provider_config": {},
+      "repository": "https://gitlab.com/owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "github provider alias",
+    "repo_config": {
+      "provider_type": "GH",
+      "provider_config": {},
+      "repository": "owner/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "github",
+      "host": "github.com",
+      "url": "https://github.com/owner/repo.git",
+      "repo_identifier": "owner/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "gitlab token",
+    "repo_config": {
+      "provider_type": "gitlab",
+      "provider_config": {
+        "url": "https://gitlab.com",
+        "private_token": "glpat-1"
+      },
+      "repository": "group/sub/project",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "gitlab",
+      "host": "gitlab.com",
+      "url": "https://gitlab.com/group/sub/project.git",
+      "repo_identifier": "group/sub/project",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic b2F1dGgyOmdscGF0LTE="
+    }
+  },
+  {
+    "name": "gitlab self hosted trailing slash",
+    "repo_config": {
+      "provider_type": "gitlab",
+      "provider_config": {
+        "url": "https://gitlab.example.com/",
+        "private_token": "glpat-1"
+      },
+      "repository": "group/project",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "gitlab",
+      "host": "gitlab.example.com",
+      "url": "https://gitlab.example.com/group/project.git",
+      "repo_identifier": "group/project",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic b2F1dGgyOmdscGF0LTE="
+    }
+  },
+  {
+    "name": "gitlab tree url",
+    "repo_config": {
+      "provider_type": "gitlab",
+      "provider_config": {},
+      "repository": "https://gitlab.com/group/project/-/tree/main",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "gitlab",
+      "host": "gitlab.com",
+      "url": "https://gitlab.com/group/project.git",
+      "repo_identifier": "group/project",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "gitlab ssh",
+    "repo_config": {
+      "provider_type": "gitlab",
+      "provider_config": {
+        "url": "https://gitlab.example.com"
+      },
+      "repository": "git@gitlab.example.com:group/sub/project.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "gitlab",
+      "host": "gitlab.example.com",
+      "url": "https://gitlab.example.com/group/sub/project.git",
+      "repo_identifier": "group/sub/project",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "gitlab anonymous default host",
+    "repo_config": {
+      "provider_type": "gitlab",
+      "provider_config": {},
+      "repository": "group/project",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "gitlab",
+      "host": "gitlab.com",
+      "url": "https://gitlab.com/group/project.git",
+      "repo_identifier": "group/project",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "gitlab dotted",
+    "repo_config": {
+      "provider_type": "gitlab",
+      "provider_config": {},
+      "repository": "group/project.git.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "gitlab",
+      "host": "gitlab.com",
+      "url": "https://gitlab.com/group/project.git.git",
+      "repo_identifier": "group/project.git",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "bitbucket cloud workspace",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "url": "https://bitbucket.org",
+        "username": "u1",
+        "password": "app1"
+      },
+      "repository": "repo-name",
+      "branch": "main",
+      "project": "workspace",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.org",
+      "url": "https://bitbucket.org/workspace/repo-name.git",
+      "repo_identifier": "workspace/repo-name",
+      "branch": "main",
+      "auth_method": "password",
+      "authorization": "Basic dTE6YXBwMQ=="
+    }
+  },
+  {
+    "name": "bitbucket cloud full path",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "url": "https://bitbucket.org",
+        "username": "u1",
+        "password": "app1"
+      },
+      "repository": "ws/repo",
+      "branch": "main",
+      "project": "workspace",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.org",
+      "url": "https://bitbucket.org/ws/repo.git",
+      "repo_identifier": "ws/repo",
+      "branch": "main",
+      "auth_method": "password",
+      "authorization": "Basic dTE6YXBwMQ=="
+    }
+  },
+  {
+    "name": "bitbucket server project",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "url": "https://bitbucket.example.com",
+        "username": "u1",
+        "password": "pw1"
+      },
+      "repository": "repo",
+      "branch": "main",
+      "project": "PROJ",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.example.com",
+      "url": "https://bitbucket.example.com/scm/PROJ/repo.git",
+      "repo_identifier": "PROJ/repo",
+      "branch": "main",
+      "auth_method": "password",
+      "authorization": "Basic dTE6cHcx"
+    }
+  },
+  {
+    "name": "bitbucket server url repository",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "url": "https://bitbucket.example.com/"
+      },
+      "repository": "https://bitbucket.example.com/scm/PROJ/repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.example.com",
+      "url": "https://bitbucket.example.com/PROJ/repo.git",
+      "repo_identifier": "PROJ/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "bitbucket api host",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "url": "https://api.bitbucket.org/2.0"
+      },
+      "repository": "ws/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.org",
+      "url": "https://bitbucket.org/ws/repo.git",
+      "repo_identifier": "ws/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "bitbucket anonymous default",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {},
+      "repository": "ws/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.org",
+      "url": "https://bitbucket.org/ws/repo.git",
+      "repo_identifier": "ws/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "bitbucket ssh",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {},
+      "repository": "git@bitbucket.org:ws/repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.org",
+      "url": "https://bitbucket.org/ws/repo.git",
+      "repo_identifier": "ws/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "bitbucket server ssh scm",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "url": "https://bitbucket.example.com"
+      },
+      "repository": "git@bitbucket.example.com:scm/PROJ/repo.git",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.example.com",
+      "url": "https://bitbucket.example.com/PROJ/repo.git",
+      "repo_identifier": "PROJ/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "bitbucket username without password",
+    "repo_config": {
+      "provider_type": "bitbucket",
+      "provider_config": {
+        "username": "u1"
+      },
+      "repository": "ws/repo",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "bitbucket",
+      "host": "bitbucket.org",
+      "url": "https://bitbucket.org/ws/repo.git",
+      "repo_identifier": "ws/repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "ado token",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://dev.azure.com/myorg",
+        "project": "MyProject",
+        "token": "adopat1"
+      },
+      "repository": "my-repo",
+      "branch": "main",
+      "project": "MyProject",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "ado",
+      "host": "dev.azure.com",
+      "url": "https://dev.azure.com/myorg/MyProject/_git/my-repo",
+      "repo_identifier": "myorg/MyProject/my-repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic YWRvcGF0MTo="
+    }
+  },
+  {
+    "name": "ado encoded names",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://dev.azure.com/myorg/",
+        "project": "My Project",
+        "token": "adopat1"
+      },
+      "repository": "my repo",
+      "branch": "main",
+      "project": "My Project",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "ado",
+      "host": "dev.azure.com",
+      "url": "https://dev.azure.com/myorg/My%20Project/_git/my%20repo",
+      "repo_identifier": "myorg/My Project/my repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic YWRvcGF0MTo="
+    }
+  },
+  {
+    "name": "ado visualstudio",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://myorg.visualstudio.com",
+        "token": "adopat1"
+      },
+      "repository": "my-repo",
+      "branch": "main",
+      "project": "Proj",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "ado",
+      "host": "myorg.visualstudio.com",
+      "url": "https://myorg.visualstudio.com/Proj/_git/my-repo",
+      "repo_identifier": "myorg/Proj/my-repo",
+      "branch": "main",
+      "auth_method": "token",
+      "authorization": "Basic YWRvcGF0MTo="
+    }
+  },
+  {
+    "name": "ado full url repository",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://dev.azure.com/myorg"
+      },
+      "repository": "https://dev.azure.com/myorg/MyProject/_git/my-repo",
+      "branch": "main",
+      "project": "MyProject",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "ado",
+      "host": "dev.azure.com",
+      "url": "https://dev.azure.com/myorg/MyProject/_git/my-repo",
+      "repo_identifier": "myorg/MyProject/my-repo",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "ado project from configuration",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://dev.azure.com/myorg",
+        "project": "CfgProj"
+      },
+      "repository": "r",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "ado",
+      "host": "dev.azure.com",
+      "url": "https://dev.azure.com/myorg/CfgProj/_git/r",
+      "repo_identifier": "myorg/CfgProj/r",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "ado alias",
+    "repo_config": {
+      "provider_type": "azure",
+      "provider_config": {
+        "organization_url": "https://dev.azure.com/myorg"
+      },
+      "repository": "r",
+      "branch": "main",
+      "project": "P",
+      "is_cloud": null
+    },
+    "expected": {
+      "provider": "ado",
+      "host": "dev.azure.com",
+      "url": "https://dev.azure.com/myorg/P/_git/r",
+      "repo_identifier": "myorg/P/r",
+      "branch": "main",
+      "auth_method": "anonymous",
+      "authorization": null
+    }
+  },
+  {
+    "name": "ado missing organization",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {},
+      "repository": "r",
+      "branch": "main",
+      "project": "P",
+      "is_cloud": null
+    },
+    "error": {
+      "type": "ValueError",
+      "message": "Invalid Azure DevOps organization URL: "
+    }
+  },
+  {
+    "name": "ado bad organization",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://example.com/myorg"
+      },
+      "repository": "r",
+      "branch": "main",
+      "project": "P",
+      "is_cloud": null
+    },
+    "error": {
+      "type": "ValueError",
+      "message": "Invalid Azure DevOps organization URL: https://example.com/myorg"
+    }
+  },
+  {
+    "name": "ado missing project",
+    "repo_config": {
+      "provider_type": "ado_repos",
+      "provider_config": {
+        "organization_url": "https://dev.azure.com/myorg"
+      },
+      "repository": "r",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "error": {
+      "type": "ValueError",
+      "message": "Azure DevOps requires project name"
+    }
+  },
+  {
+    "name": "unknown provider",
+    "repo_config": {
+      "provider_type": "svn",
+      "provider_config": {},
+      "repository": "o/r",
+      "branch": "main",
+      "project": null,
+      "is_cloud": null
+    },
+    "error": {
+      "type": "ValueError",
+      "message": "Unknown provider type: svn"
+    }
+  }
+]

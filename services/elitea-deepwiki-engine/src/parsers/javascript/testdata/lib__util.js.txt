@@ -1,0 +1,22 @@
+/**
+ * Adds numbers.
+ * @param {number} a first
+ * @param {Point|Vector} b second
+ * @param {Array<Shape>} a again
+ * @returns {Promise<Result>}
+ */
+export function add(a, b = DEFAULT, ...rest) {
+  const local = a + b;
+  return helper(local, rest, Point, Shape);
+}
+
+export const DEFAULT = 1, OTHER = DEFAULT + 1;
+export let counter = 0;
+var legacy = function () { return add(1, 2); };
+
+function helper(x) { return x; }
+
+export default helper;
+export { helper as aid, legacy };
+export * from './shapes';
+export { Circle as Round } from './shapes';

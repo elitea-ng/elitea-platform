@@ -1,0 +1,20 @@
+namespace Geometry.Extensions;
+
+public static class ShapeExtensions
+{
+    public static double Double(this Shape shape) => shape.Area() * 2;
+    public static T Scale<T>(this T shape, double factor) where T : Shape, IShape => shape;
+    public static void Log([NotNull] this Shape shape, ILogger logger) => logger.Log(shape.ToString());
+    public static IEnumerable<TOut> MapAll<TIn, TOut>(this IEnumerable<TIn> items, Func<TIn, TOut> map)
+    {
+        foreach (var item in items) yield return map(item);
+    }
+    public static async ValueTask<int> CountAsync(this IShapeService service, params int[] ids)
+    {
+        await Task.Delay(1).ConfigureAwait(false);
+        Func<int, int> twice = x => x * 2;
+        Action<string> print = static s => Console.WriteLine(s);
+        return ids.Sum(i => twice(i));
+    }
+    unsafe static void Raw(int* p, ref int r, out int o, in Owner owner) { o = *p; }
+}

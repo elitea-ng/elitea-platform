@@ -1,0 +1,3 @@
+int ok() { return 1; }
+// bad byte ÿş here
+class Bad { int x; };

@@ -1,0 +1,19 @@
+namespace Geometry.Services;
+
+public partial class ShapeService : IShapeService
+{
+    private readonly IRepository<Circle> _repo;
+    private readonly ILogger<ShapeService> _logger;
+    public ShapeService(IRepository<Circle> repo, ILogger<ShapeService> logger) { _repo = repo; _logger = logger; }
+    partial void OnCreated();
+}
+
+public partial class ShapeService
+{
+    public async Task<Circle?> GetAsync(int id)
+    {
+        var c = await _repo.FindAsync(id);
+        _logger.LogInformation("got {Id}", id);
+        return c;
+    }
+}

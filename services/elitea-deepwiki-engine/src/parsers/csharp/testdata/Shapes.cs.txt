@@ -1,0 +1,52 @@
+using System;
+using System.Collections.Generic;
+using Dict = System.Collections.Generic.Dictionary<string, int>;
+using Alias = Geometry.Core;
+using static System.Math;
+global using Geometry.Core;
+
+namespace Geometry.Shapes
+{
+    /// <summary>A shape.</summary>
+    /// <remarks>XML doc comments are not read.</remarks>
+    [Serializable]
+    [Obsolete("use IShape2")]
+    public abstract class Shape : IShape, IComparable<Shape>
+    {
+        protected internal readonly string _name;
+        private static int _count = 0, _other;
+        public const double Tau = 2 * PI;
+        private Owner? _owner;
+        private List<Owner> _owners = new List<Owner>();
+        private Nullable<int> _maybe;
+        private (int, string) _pair;
+        private int[] _numbers;
+        private Owner[] _ownerArray;
+
+        protected Shape(string name) : this(name, 0) { }
+        protected Shape(string name, int id) { _name = name; Registry.Add(this); }
+
+        public abstract double Area();
+        public virtual double Perimeter() => 0;
+        public override string ToString() => $"{_name}: {Area()}";
+        public int CompareTo(Shape? other) => Area().CompareTo(other?.Area() ?? 0);
+        public void Attach(Owner owner) { _owner = owner; owner.Notify(this); _owner.Ping(); }
+        public void Attach(Owner owner, int priority) { _owners.Add(owner); }
+    }
+
+    public sealed class Circle : Shape
+    {
+        public double Radius { get; init; }
+        public Circle(double r) : base("circle") { Radius = r; }
+        public override double Area() => PI * Radius * Radius;
+        public override double Perimeter() { return Tau * Radius; }
+        ~Circle() { Console.WriteLine("bye"); }
+    }
+
+    public class Square : Shape, IDisposable
+    {
+        public Square() : base("square") { var c = new Circle(1); Helper.Run(c); }
+        public override double Area() => 1;
+        public void Dispose() { }
+    }
+}

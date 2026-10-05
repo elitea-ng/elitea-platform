@@ -1,0 +1,8 @@
+package com.acme.api;
+
+public class Errors {
+    void ok() { a.b(); }
+    void bad( { x.y(); }
+    int @@ broken;
+    class Nested { void deep() { new Errors().ok(); } }
+}

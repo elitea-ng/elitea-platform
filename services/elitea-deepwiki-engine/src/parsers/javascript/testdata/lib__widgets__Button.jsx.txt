@@ -1,0 +1,29 @@
+import React, { useState } from 'react';
+import * as W from '.';
+import { Shape } from '../shapes';
+import Theme, { Dark } from './Theme';
+
+export default function Button({ label, onClick = noop }, [x, y] = []) {
+  const [state, setState] = useState(0);
+  return (
+    <Theme.Provider value={Dark}>
+      <W.Panel title={format(label)} onClick={() => setState(state + 1)}>
+        <Icon name="x" />
+        <Icon name="y" />
+        <my-element />
+        <div className="c">{label} {render(Shape)}</div>
+        <>
+          <Shape.Fragment />
+        </>
+      </W.Panel>
+    </Theme.Provider>
+  );
+}
+
+const Label = ({ text }) => <span>{text}<Icon /></span>;
+
+export const Card = (props) => {
+  return <Button label={props.label} />;
+};
+
+function noop() {}

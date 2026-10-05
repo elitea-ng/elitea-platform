@@ -1,0 +1,11 @@
+package com.acme.model;
+
+public record Point(int x, int y) implements Comparable<Point> {
+    public Point {
+        if (x < 0) throw new IllegalArgumentException();
+    }
+    public Point move(int dx) { return new Point(x + dx, y); }
+    @Override
+    public int compareTo(Point o) { return Integer.compare(x, o.x); }
+    static Point origin() { return new Point(0, 0); }
+}

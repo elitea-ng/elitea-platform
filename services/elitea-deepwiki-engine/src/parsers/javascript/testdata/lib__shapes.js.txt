@@ -1,0 +1,50 @@
+'use strict';
+import EventEmitter from 'events';
+import * as util from './util';
+import { add, DEFAULT as D } from './util.js';
+import './side-effect';
+import data from '../src/data.json' with { type: 'json' };
+
+/** Base shape. */
+export class Shape extends EventEmitter {
+  /** @type {Point} */
+  origin = new Point(0, 0);
+  static count = 0;
+  #secret = 'hidden';
+  name;
+  [Symbol.iterator] = null;
+
+  /**
+   * @param {Point} origin
+   */
+  constructor(origin) {
+    super();
+    this.origin = origin;
+    this.store = new Map();
+    this.helper = new util.Helper();
+    Shape.count++;
+  }
+
+  get area() { return 0; }
+  set area(v) { this._a = v; }
+  static create(...args) { return new Shape(...args); }
+  async load() { await util.add(1, D); return this.describe(); }
+  *walk() { yield this.origin; }
+  #hidden() { return add(1, 2); }
+  [Symbol.toPrimitive]() { return 1; }
+  'quoted'() { return 2; }
+  describe() { return `${this.name}: ${this.area}`; }
+}
+
+export class Circle extends Shape {
+  constructor(r) {
+    super(new Point(0, 0));
+    this.r = r;
+  }
+  describe() { return super.describe() + this.radius(); }
+  radius() { return this.r; }
+}
+
+class Point { constructor(x, y) { this.x = x; this.y = y; } }
+
+export default class Square extends Shape {}

@@ -1,0 +1,4 @@
+import React from 'react';
+export const Card: React.FC<{ title: string; count: number }> = ({ title }) => <Panel title={title}><span/></Panel>;
+export function Page(props: PageProps) { return <Card title="x" />; }
+class Old extends React.Component<P> { render() { return <div/>; } }

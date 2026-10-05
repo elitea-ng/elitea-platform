@@ -1,0 +1,5 @@
+package com.acme.api;
+
+public interface Measurable {
+    double measure();
+}

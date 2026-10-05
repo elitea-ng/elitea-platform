@@ -5,6 +5,9 @@
 //! ones the Python sidecar reads, so a deployment swaps the image and keeps
 //! its environment.
 
+use crate::ingest::IngestSettings;
+use crate::ingest::egress::EgressPolicy;
+use crate::ingest::limits::IngestLimits;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,6 +16,9 @@ pub const ENV_PREFIX: &str = "ELITEA_DEEPWIKI_";
 
 /// The socket the Go host dials when nothing else is set.
 pub const DEFAULT_SOCKET: &str = "/run/deepwiki/engine.sock";
+
+/// Python's `scratch_path` default.
+pub const DEFAULT_SCRATCH_PATH: &str = "/tmp/deepwiki";
 
 /// A setting that cannot be used.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -32,6 +38,68 @@ pub struct Settings {
     pub runner: RunnerKind,
     pub fixture_step: Duration,
     pub engine_socket: PathBuf,
+    /// Repository ingest: the git-host allowlist, the per-job limits and
+    /// the scratch root (see `ingest::limits` for the defaults).
+    pub ingest: IngestSettings,
+}
+
+/// A whole number of at least 1, or the default when unset.
+fn positive_count(
+    raw: &impl Fn(&str) -> Option<String>,
+    name: &str,
+    default: u64,
+) -> Result<u64, ConfigError> {
+    match raw(name) {
+        None => Ok(default),
+        Some(text) => match text.trim().parse::<u64>() {
+            Ok(value) if value > 0 => Ok(value),
+            _ => Err(ConfigError(format!(
+                "{ENV_PREFIX}{name} must be a whole number of at least 1, got '{text}'"
+            ))),
+        },
+    }
+}
+
+/// A number of seconds above zero, or the default when unset.
+fn positive_seconds(
+    raw: &impl Fn(&str) -> Option<String>,
+    name: &str,
+    default: Duration,
+) -> Result<Duration, ConfigError> {
+    let Some(text) = raw(name) else {
+        return Ok(default);
+    };
+    let seconds: f64 = text.trim().parse().map_err(|_| {
+        ConfigError(format!(
+            "{ENV_PREFIX}{name} must be a number of seconds, got '{text}'"
+        ))
+    })?;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}{name} must be above zero, got '{text}'"
+        )));
+    }
+    Duration::try_from_secs_f64(seconds)
+        .map_err(|_| ConfigError(format!("{ENV_PREFIX}{name} is out of range, got '{text}'")))
+}
+
+fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
+    let defaults = IngestLimits::default();
+    Ok(IngestSettings {
+        // Fail-closed when unset: the policy is empty and refuses every
+        // clone (security/egress.py, spi.ParseEgressPolicy).
+        git_allowlist: EgressPolicy::parse(raw("GIT_ALLOWLIST").as_deref()),
+        limits: IngestLimits {
+            max_clone_bytes: positive_count(raw, "MAX_CLONE_BYTES", defaults.max_clone_bytes)?,
+            max_file_count: positive_count(raw, "MAX_FILE_COUNT", defaults.max_file_count)?,
+            max_file_bytes: positive_count(raw, "MAX_FILE_BYTES", defaults.max_file_bytes)?,
+            max_parsed_bytes: positive_count(raw, "MAX_PARSED_BYTES", defaults.max_parsed_bytes)?,
+            clone_timeout: positive_seconds(raw, "CLONE_TIMEOUT_SECONDS", defaults.clone_timeout)?,
+        },
+        scratch_path: PathBuf::from(
+            raw("SCRATCH_PATH").unwrap_or_else(|| DEFAULT_SCRATCH_PATH.to_owned()),
+        ),
+    })
 }
 
 impl Settings {
@@ -84,10 +152,12 @@ impl Settings {
         };
         let engine_socket =
             PathBuf::from(raw("ENGINE_SOCKET").unwrap_or_else(|| DEFAULT_SOCKET.to_owned()));
+        let ingest = ingest_settings(&raw)?;
         Ok(Self {
             runner,
             fixture_step,
             engine_socket,
+            ingest,
         })
     }
 
@@ -137,6 +207,60 @@ mod tests {
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "inf")]).is_err());
         // Finite but too large for a Duration: a config error, not a panic.
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "1e20")]).is_err());
+    }
+
+    #[test]
+    fn ingest_settings_default_and_fail_closed() {
+        let parsed = settings(&[]).map(|s| s.ingest);
+        assert_eq!(
+            parsed,
+            Ok(IngestSettings {
+                git_allowlist: EgressPolicy::parse(None),
+                limits: IngestLimits::default(),
+                scratch_path: PathBuf::from(DEFAULT_SCRATCH_PATH),
+            })
+        );
+        let parsed = settings(&[
+            ("ELITEA_DEEPWIKI_GIT_ALLOWLIST", "github.com,*.github.com"),
+            ("ELITEA_DEEPWIKI_MAX_CLONE_BYTES", "1048576"),
+            ("ELITEA_DEEPWIKI_MAX_FILE_COUNT", "10"),
+            ("ELITEA_DEEPWIKI_MAX_FILE_BYTES", "2048"),
+            ("ELITEA_DEEPWIKI_MAX_PARSED_BYTES", "4096"),
+            ("ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS", "2.5"),
+            ("ELITEA_DEEPWIKI_SCRATCH_PATH", "/scratch"),
+        ])
+        .map(|s| s.ingest);
+        assert_eq!(
+            parsed,
+            Ok(IngestSettings {
+                git_allowlist: EgressPolicy::parse(Some("github.com *.github.com")),
+                limits: IngestLimits {
+                    max_clone_bytes: 1_048_576,
+                    max_file_count: 10,
+                    max_file_bytes: 2048,
+                    max_parsed_bytes: 4096,
+                    clone_timeout: Duration::from_millis(2500),
+                },
+                scratch_path: PathBuf::from("/scratch"),
+            })
+        );
+    }
+
+    #[test]
+    fn unparsable_limits_fail_the_start() {
+        for name in [
+            "MAX_CLONE_BYTES",
+            "MAX_FILE_COUNT",
+            "MAX_FILE_BYTES",
+            "MAX_PARSED_BYTES",
+            "CLONE_TIMEOUT_SECONDS",
+        ] {
+            for bad in ["0", "-1", "x", "1e400"] {
+                let key = format!("ELITEA_DEEPWIKI_{name}");
+                assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
+            }
+        }
+        assert!(settings(&[("ELITEA_DEEPWIKI_MAX_FILE_COUNT", "1.5")]).is_err());
     }
 
     #[test]

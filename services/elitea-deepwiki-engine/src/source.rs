@@ -146,7 +146,8 @@ fn refuse_unsafe_key(key: &str, what: &str) -> Result<(), EngineError> {
 
 /// Python's `repr()` of a plain string, close enough for messages: single
 /// quotes unless the text holds one and no double quote.
-fn py_repr(text: &str) -> String {
+#[must_use]
+pub fn py_repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
     } else {

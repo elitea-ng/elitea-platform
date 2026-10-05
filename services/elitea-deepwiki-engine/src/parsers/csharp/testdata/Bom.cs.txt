@@ -1,0 +1,1 @@
+﻿using System;namespace Geometry.Bom{    public class WithBom : Shape    {        public WithBom() : base("bom") { }        public override double Area() => Calc.Run("é");    }}

@@ -1,0 +1,27 @@
+namespace Geometry.Events
+{
+    public class ShapeEventArgs : EventArgs
+    {
+        public Shape Source { get; }
+        public ShapeEventArgs(Shape source) => Source = source;
+    }
+
+    public class Publisher<TArgs> : IPublisher where TArgs : EventArgs, new()
+    {
+        public event EventHandler<TArgs> Raised;
+        public event EventHandler? Simple, Other;
+        public event ShapeHandler Custom;
+        private event Action Hidden = () => { };
+        public event EventHandler Explicit { add { } remove { } }
+        public delegate void Inner(TArgs args);
+
+        protected virtual void OnRaised(TArgs args) => Raised?.Invoke(this, args);
+        public void Fire() { OnRaised(new TArgs()); Custom(null, null); }
+    }
+
+    public class Sub : Publisher<ShapeEventArgs>
+    {
+        protected override void OnRaised(ShapeEventArgs args) { base.OnRaised(args); }
+        public new void Fire() { }
+    }
+}

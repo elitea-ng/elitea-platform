@@ -1,0 +1,10 @@
+const api = { fetch() { return 1; }, save: function () {} };
+class User {
+  /** @param {Account} a */
+  login(a) { return this.check(a); }
+  check(a) { return api.fetch(a); }
+}
+class User {
+  logout() { this.login(); }
+}
+export { User };

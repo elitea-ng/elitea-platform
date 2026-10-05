@@ -1,0 +1,27 @@
+namespace Geometry.Core;
+
+using System.Threading.Tasks;
+
+public interface IShape : IMeasurable, INamed
+{
+    double Area();
+    double Perimeter() => 0;
+    string Name { get; }
+    static IShape Empty => null!;
+    event EventHandler<ShapeEventArgs> Changed;
+}
+
+internal interface IMeasurable { }
+
+public interface INamed { string Name { get; } }
+
+public interface IRepository<T> where T : class, IShape, new()
+{
+    Task<T?> FindAsync(int id, CancellationToken ct = default);
+    IAsyncEnumerable<T> All();
+}
+
+public delegate void ShapeHandler(IShape shape, ShapeEventArgs args);
+public delegate TResult Mapper<TIn, TResult>(TIn input);
+public delegate Owner OwnerFactory();
+public delegate Owner? MaybeOwner(int id);
