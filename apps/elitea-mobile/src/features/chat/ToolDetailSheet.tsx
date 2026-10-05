@@ -56,7 +56,11 @@ function SheetBody({ step, projectId, onClose }: { step: ToolStep; projectId: nu
     tab === 'output' && step.partial ? 'Part of this output did not arrive.' : null,
     tab === 'output' && step.status === 'running' ? 'The tool is still running.' : null,
     tab === 'output' && step.status === 'needs_auth' ? 'The tool has not run: its toolkit needs a sign-in.' : null,
-    tab === 'output' && step.status === 'waiting' ? 'The tool has not run: it waits for your approval.' : null,
+    tab === 'output' && step.status === 'waiting'
+      ? step.waitingFor === 'answer'
+        ? 'The tool has not run: it waits for your answer.'
+        : 'The tool has not run: it waits for your approval.'
+      : null,
   ].filter((b): b is string => b !== null);
   const loading = isPersisted(step) && detail.isLoading;
   const empty = loading ? null : detail.error ? "Couldn't load this tool call." : remote === null && isPersisted(step) ? 'Not available on this workspace.' : 'Nothing to show.';

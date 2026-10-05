@@ -65,6 +65,21 @@ describe('ToolActivity', () => {
     expect(screen.getByText('researcher')).toBeTruthy();
   });
 
+  it('says what a paused call waits for: an approval or an answer', async () => {
+    await render(
+      <ToolActivity
+        steps={[
+          step('a', { status: 'waiting', waitingFor: 'approval', endedAt: null }),
+          step('b', { status: 'waiting', waitingFor: 'answer', endedAt: null, name: 'ask_user', displayName: null, toolkit: null }),
+        ]}
+        streaming
+        onOpen={jest.fn()}
+      />,
+    );
+    expect(screen.getByLabelText('GitHub · list_issues, waiting for approval')).toBeTruthy();
+    expect(screen.getByLabelText('ask_user, waiting for your answer')).toBeTruthy();
+  });
+
   it('renders nothing without calls', async () => {
     await render(<ToolActivity steps={[]} onOpen={jest.fn()} />);
     expect(screen.toJSON()).toBeNull();

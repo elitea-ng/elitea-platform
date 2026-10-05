@@ -8,6 +8,7 @@ import { parseConnectLink } from '@/linking/parseConnectLink';
 import { WipeIncompleteError, resumePendingWipe } from '@/security/endSession';
 import { checkFreshInstall } from '@/security/freshInstall';
 import { SECURE_KEYS, deleteSecureItem, getSecureItem } from '@/security/secureStorage';
+import { restoreSelfIdentity } from '@/state/selfIdentity';
 import { getSession, setCredential, setSession } from '@/state/session';
 import { restoreBrandTheme } from '@/theme/brandStore';
 
@@ -104,6 +105,8 @@ async function hydrateOnce(options: HydrateOptions): Promise<void> {
   // the next token response), and its last brand avoids an unbranded flash.
   await restorePolicy(parsed.origin);
   await restoreBrandTheme(parsed.origin);
+  // "Me" for shared conversations, so a launch offline still knows it.
+  await restoreSelfIdentity(parsed.origin);
   setSession({ serverOrigin: parsed.origin, projectId: Number.isSafeInteger(projectId) ? projectId : null });
 
   if (kind === 'oauth') {

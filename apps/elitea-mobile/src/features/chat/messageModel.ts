@@ -126,33 +126,8 @@ export function participantUserId(participant: Participant | undefined): number 
 
 /** Who "me" is, for deciding which user messages are mine. */
 export interface SelfContext {
-  /** The signed-in user's USER id, when known. */
+  /** The signed-in user's USER id ("who am I"), when known. */
   selfUserId: number | null;
-  /** True when this device sent the question with this uuid. */
-  isSentQuestion?: (uuid: string) => boolean;
-}
-
-/**
- * The signed-in user's id as this transcript proves it: the author of a user
- * message group this device sent. Null when nothing proves it.
- */
-export function inferSelfUserId(
-  detail: Pick<ConversationDetail, 'participants' | 'message_groups'> | undefined,
-  isSentQuestion: (uuid: string) => boolean,
-): number | null {
-  if (!detail) return null;
-  const byId = new Map<number, Participant>();
-  for (const p of Array.isArray(detail.participants) ? detail.participants : []) {
-    if (asInt(p?.id) !== null) byId.set(p.id, p);
-  }
-  for (const raw of Array.isArray(detail.message_groups) ? detail.message_groups : []) {
-    const group = asRecord(raw);
-    const uuid = asString(group?.uuid);
-    if (!group || !uuid || !isSentQuestion(uuid)) continue;
-    const id = participantUserId(byId.get(asInt(group.author_participant_id) ?? -1));
-    if (id !== null) return id;
-  }
-  return null;
 }
 
 export function roleOf(participant: Participant | undefined): ChatRole {
@@ -189,22 +164,17 @@ export function groupText(group: Record<string, unknown>): { text: string; unsup
 }
 
 /**
- * Is a user message mine? By user id when "me" is known; else when this
- * device sent it; else when the conversation has only one person (it can
- * only be me). In a shared conversation with "me" still unknown the message
- * is drawn on my side but named, so nobody else's words read as mine.
+ * Is a user message mine? By user id when "me" is known; else when the
+ * conversation has only one person (it can only be me). In a shared
+ * conversation with "me" still unknown (the "who am I" read has not answered
+ * yet) the message is drawn on my side but named, so nobody else's words
+ * read as mine.
  */
-function authorship(
-  author: Participant | undefined,
-  uuid: string | null,
-  people: number,
-  self: SelfContext,
-): { mine: boolean; named: boolean } {
+function authorship(author: Participant | undefined, people: number, self: SelfContext): { mine: boolean; named: boolean } {
   if (self.selfUserId !== null) {
     const mine = participantUserId(author) === self.selfUserId;
     return { mine, named: !mine };
   }
-  if (uuid !== null && self.isSentQuestion?.(uuid)) return { mine: true, named: false };
   if (people <= 1) return { mine: true, named: false };
   return { mine: true, named: true };
 }
@@ -239,7 +209,7 @@ export function toChatMessages(
     const author = participants.get(asInt(group.author_participant_id) ?? -1);
     const { text, unsupported, attachments } = groupText(group);
     const role = roleOf(author);
-    const who = role === 'user' ? authorship(author, uuid, people, self) : { mine: false, named: true };
+    const who = role === 'user' ? authorship(author, people, self) : { mine: false, named: true };
     messages.push({
       key: uuid ?? `g${groupId}`,
       groupId,

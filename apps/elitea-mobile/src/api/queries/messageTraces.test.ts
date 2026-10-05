@@ -58,6 +58,30 @@ describe('fetchMessageTraces', () => {
     expect(traces?.get(12)?.[0]).toMatchObject({ status: 'error', parentAgent: 'researcher', partial: true, inputs: null });
   });
 
+  it('reads a call stored as paused (contract 1.2) as waiting, not failed and not done', async () => {
+    const server = fakeServer();
+    server.on('GET', '/elitea_core/message_traces/prompt_lib/7/42', {
+      status: 200,
+      body: {
+        total: null,
+        rows: [
+          toolRow(1, 11, { finish_reason: 'awaiting_approval', attrs: { pause: { interrupt_id: 'i-1', guardrail_type: 'sensitive_tool' } } }),
+          toolRow(2, 11, { finish_reason: 'awaiting_input', started_at: '2026-10-05T10:00:02Z' }),
+          toolRow(3, 11, { finish_reason: 'some_future_reason', started_at: '2026-10-05T10:00:03Z' }),
+          // A failure stays a failure, whatever the reason says.
+          toolRow(4, 11, { finish_reason: 'awaiting_approval', is_error: true, started_at: '2026-10-05T10:00:04Z' }),
+        ],
+      },
+    });
+    const steps = (await fetchMessageTraces(7, 42, [11], server.client))?.get(11) ?? [];
+    expect(steps.map((s) => [s.traceId, s.status, s.waitingFor, s.pauseId])).toEqual([
+      [1, 'waiting', 'approval', 'i-1'],
+      [2, 'waiting', 'answer', null],
+      [3, 'done', undefined, undefined],
+      [4, 'error', undefined, undefined],
+    ]);
+  });
+
   it('reads every page: the newest answers (last in start order) keep their tool calls', async () => {
     const server = fakeServer();
     const full = Array.from({ length: TRACE_PAGE }, (_, i) => toolRow(i + 1, 11));

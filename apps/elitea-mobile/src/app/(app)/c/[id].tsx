@@ -29,7 +29,6 @@ import {
   chatTarget,
   agentOptions,
   agentsCanJoin,
-  inferSelfUserId,
   participantName,
   participantUserId,
   toChatMessages,
@@ -74,8 +73,7 @@ import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import type { LiveTurn } from '@/features/chat/turnController';
 import { useTurn } from '@/features/chat/useTurn';
 import { Markdown } from '@/features/markdown/Markdown';
-import { useLearnSelfUserId } from '@/api/queries/notifications';
-import { isSentQuestion, learnSelfUserId, useSelfUserId } from '@/state/selfIdentity';
+import { useSelfUserId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
 import { outboxDrainer, useOutboxItems } from '@/sync/appOutbox';
 import { isOfflineCopy } from '@/sync/offlineReads';
@@ -95,16 +93,9 @@ export default function ThreadScreen() {
   const projectId = useSession((s) => s.projectId);
   const conversation = useConversation(projectId, ref);
   const detail = conversation.data;
-  const selfUserId = useSelfUserId();
-  const personCount = (detail?.participants ?? []).filter((p) => p?.entity_name === 'user').length;
-  // In a shared conversation "me" must be known to tell my messages from others'.
-  useLearnSelfUserId(projectId, personCount > 1 && selfUserId === null);
-  const provenSelf = selfUserId === null ? inferSelfUserId(detail, isSentQuestion) : null;
-  useEffect(() => {
-    if (provenSelf !== null) learnSelfUserId(provenSelf);
-  }, [provenSelf]);
-  const me = selfUserId ?? provenSelf;
-  const messages = toChatMessages(detail, { selfUserId: me, isSentQuestion });
+  // "Me" (the "who am I" read, made once per session by the app shell).
+  const me = useSelfUserId();
+  const messages = toChatMessages(detail, { selfUserId: me });
   const workspace = useWorkspaceInfo();
   const contract11 = speaksContract(workspace?.discovery, 1, 1);
   // The people "@" offers: every other person in the conversation.

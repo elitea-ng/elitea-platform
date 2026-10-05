@@ -151,10 +151,9 @@ What the chat does beyond plain text, against servers that speak client contract
 
 - **Mentions.** "@" over the conversation's other people (and "Everyone"); the ids are
   derived from the final text on send (`src/features/chat/mentions/`) and sent as
-  `user_ids` / `is_mentioning_everyone`. "Me" is learned from notification rows and
-  from messages this device sent (`src/state/selfIdentity.ts`), so other people's
-  messages are drawn as theirs. A `chat_user_mentioned` notification opens the
-  conversation.
+  `user_ids` / `is_mentioning_everyone`. "Me" comes from the "who am I" read
+  (contract 1.2, see below), so other people's messages are drawn as theirs. A
+  `chat_user_mentioned` notification opens the conversation.
 - **Agents, skills, tools.** Several agents per conversation ("To:" chip, "#" to add
   one pinned to its version), a participants sheet (people and agents; toolkits and
   models stay web-only), "~" skills and "/" toolkit tools (text only).
@@ -169,4 +168,24 @@ What the chat does beyond plain text, against servers that speak client contract
   through the guarded fetch, and only then sent. Downloads go through the guarded fetch
   to a temporary file that is never kept (see open question 6); HTML and SVG are never
   rendered by the app, only handed to the system preview.
+
+## Client contract 1.2
+
+Additive; a 1.1 server keeps working.
+
+- **Who am I.** `getCurrentAuthor` (`GET /api/v2/social/author`) is read once per
+  signed-in session by the app shell (`src/state/selfIdentity.ts`). Only the user id
+  is kept: in memory, and in secure storage (`az.user.self`, bound to the workspace
+  origin) so a launch offline still knows it. Both go with the session (wipe hook
+  and the secure-key registry), and nothing is stored while a wipe is running. The
+  route is older than 1.2, so a 1.1 server answers it too. Until it answers, a
+  shared conversation draws every user message on my side but named, so nobody
+  else's words read as mine. Nothing is inferred from notifications or sent
+  messages any more.
+- **Paused tool calls.** `agent_tool_paused` (and a persisted trace step with
+  `finish_reason` `awaiting_approval`, `awaiting_input` or `interrupted`) shows the
+  call as waiting for approval or for an answer, never as failed. A persisted
+  paused call waits only while its answer is still paused, and reads as done once
+  the pause is answered. A server before 1.2 sends `agent_tool_error` with the
+  interrupt's repr instead; that is still recognised and shown as waiting.
 

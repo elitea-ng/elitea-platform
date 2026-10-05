@@ -32,6 +32,11 @@ const STATUS_WORD: Record<ToolStep['status'], string> = {
 
 const STATUS_MARK: Record<ToolStep['status'], string> = { running: '', done: '✓', error: '✗', needs_auth: '!', waiting: '⏸' };
 
+/** A step's status in words: a paused call says what it waits for. */
+export function statusWord(step: Pick<ToolStep, 'status' | 'waitingFor'>): string {
+  return step.status === 'waiting' && step.waitingFor === 'answer' ? 'waiting for your answer' : STATUS_WORD[step.status];
+}
+
 /** The wall time the calls covered (first start to last end), when known. */
 export function toolsDurationMs(steps: readonly ToolStep[]): number | null {
   const starts = steps.map((s) => s.startedAt).filter((t): t is number => t !== null);
@@ -105,7 +110,7 @@ export function ToolActivity({
                   <Pressable
                     key={step.id}
                     accessibilityRole="button"
-                    accessibilityLabel={`${toolLabel(step)}, ${STATUS_WORD[step.status]}`}
+                    accessibilityLabel={`${toolLabel(step)}, ${statusWord(step)}`}
                     accessibilityHint="Shows the input and output"
                     onPress={() => onOpen(step)}
                     style={[

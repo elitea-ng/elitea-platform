@@ -277,10 +277,10 @@ describe('buildContract (real inputs)', () => {
   });
 });
 
-describe('client contract 1.1 (pinned upstream)', () => {
-  it('pins a server that speaks client contract 1.1 and needs no overlay', () => {
+describe('client contract 1.2 (pinned upstream)', () => {
+  it('pins a server that speaks client contract 1.2 and needs no overlay', () => {
     const { doc } = buildContract();
-    assert.equal(doc.info['x-elitea-client-contract'], '1.1');
+    assert.equal(doc.info['x-elitea-client-contract'], '1.2');
     const overlay = YAML.parse(readFileSync(new URL('../contract/overlay/native-gap.yaml', import.meta.url), 'utf8'));
     assert.deepEqual(overlay.paths, {});
     assert.equal(overlay['x-zefir-extend'], undefined);
@@ -305,8 +305,21 @@ describe('client contract 1.1 (pinned upstream)', () => {
       'listToolkitAvailableTools',
       'listMessageTraces',
       'getMessageTrace',
+      'getCurrentAuthor',
     ]) {
       assert.ok(tags[id]?.includes('client'), id);
     }
+  });
+
+  it('keeps the 1.2 "who am I" read with its version gate, and the paused trace step', () => {
+    const { doc } = buildContract();
+    const get = doc.paths['/social/author'].get;
+    assert.equal(get.operationId, 'getCurrentAuthor');
+    assert.ok(get.responses['426'] && get.responses['400'], 'version-gate responses');
+    const author = doc.components.schemas.SocialAuthorProfile;
+    assert.ok(author.required.includes('id'));
+    assert.equal(author.properties.id.type, 'string');
+    const step = doc.components.schemas.MessageTraceStep.properties;
+    assert.match(step.finish_reason.description, /awaiting_approval/);
   });
 });

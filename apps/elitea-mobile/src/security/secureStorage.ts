@@ -29,6 +29,8 @@ export const SECURE_KEYS = {
   policy: 'az.policy',
   /** The connected workspace's mapped brand theme (non-secret; wiped with the workspace). */
   brandTheme: 'az.brand.theme',
+  /** The signed-in user's id for the workspace ("who am I", contract 1.2; non-secret, wiped with the session). */
+  selfUser: 'az.user.self',
   /** Key of the encrypted local database (B4). */
   dbKey: 'az.db.key',
   /** Crash-resume marker written first and removed last by `endSession`. */

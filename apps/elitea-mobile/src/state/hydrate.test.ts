@@ -82,6 +82,7 @@ describe('hydrateSession', () => {
       SECURE_KEYS.projectSelected,
       SECURE_KEYS.policy,
       SECURE_KEYS.brandTheme,
+      SECURE_KEYS.selfUser,
       SECURE_KEYS.pat,
     ]);
   });

@@ -5,9 +5,9 @@
  * Apache-2.0, see contract/LICENSE.elitea) merged with the Agent Zefir
  * native-gap overlay and pruned to contract/client-operations.json.
  *
- * upstream sha256:    85e88c9f89b6be7a123db63a53c11a2d1cde10165b6be0123eb6f2ce9c46971d
+ * upstream sha256:    a0c2a7009c5350f1d84b67a914add32dcd65ad683256088a981ab33701fa1f08
  * overlay sha256:     db6509ce6a3543256938693e0904d4e58538e491cf565c4a2cf05b7524102b72
- * operations sha256:  05048600a2fe1d0f410b623a02e5af92d8e756a45b6ab9df86719e4ebc44a5a5
+ * operations sha256:  f0ff688cb0d79ca18ad2948ddeb878bc123231e1377e930701873d155414ee39
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -858,6 +858,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/social/author": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the authenticated user's own social/author profile
+         * @description NOTE(W2): internal/api/v2/social/handler.go:51-123 (GetAuthor). Reads
+         *     centry.social_users joined to auth_core__user; on no matching row or
+         *     any query error, falls back to a defaulted response built from the
+         *     auth context (:98-107) — still 200, never surfaced as an error.
+         *
+         *     Client contract 1.2: this is the client's "who am I" read. `id` is
+         *     the caller's user id, `name` the display name, `email`, `avatar` (a
+         *     URL, absolute or relative to the deployment origin such as
+         *     `/avatars/{project_id}/{file}`; "" when none is set) and `personal_project_id` — the project
+         *     a client opens by default. `personal_project_id` is "" while the
+         *     account's personal project is still being provisioned (a fresh
+         *     account's first read starts it); a client polls until it is set.
+         */
+        get: operations["getCurrentAuthor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1569,6 +1600,32 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in pylon's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
+        MemoryContextManagement: {
+            /**
+             * @description Balanced caps the combined context window at 272000 tokens or the model window, whichever is smaller. Full uses the model window. Both reserve model output and a safety margin before calculating usable input. Absent legacy selections resolve to balanced.
+             * @enum {string}
+             */
+            budget_mode?: "balanced" | "full";
+            enable_context_editing?: boolean;
+            enabled?: boolean;
+            /**
+             * @deprecated
+             * @description Legacy preference. New execution budgets use budget_mode.
+             */
+            max_context_tokens?: number;
+            preserve_recent_messages?: number;
+        };
+        /** @description The user's default summarization settings, stored in centry.social_users.default_summarization (jsonb) and edited by Settings > Memory. pylon's SummarizationModel, field for field. Three of these flatten into a conversation's `context_strategy.summary_llm_settings` when one is resolved: summary_model_name -> model_name, summary_model_project_id -> model_project_id, target_summary_tokens -> max_tokens. */
+        MemorySummarization: {
+            enable_summarization?: boolean;
+            min_messages_for_summary?: number;
+            summary_instructions?: string;
+            summary_model_name?: string;
+            summary_model_project_id?: number;
+            summary_trigger_ratio?: number;
+            target_summary_tokens?: number;
+        };
         MessageTraceListing: {
             rows: components["schemas"]["MessageTraceStep"][];
             /** @description Null unless include_total=true was requested. */
@@ -1589,6 +1646,11 @@ export interface components {
                     toolkit_type?: string;
                 } & {
                     [key: string]: unknown;
+                };
+                /** @description Contract 1.2. Present on a tool call that paused for the user: the `interrupt_id` of the approval card it waited on and the `guardrail_type` (`sensitive_tool`, `clarifying_question`). */
+                pause?: {
+                    guardrail_type?: string;
+                    interrupt_id?: string;
                 };
                 response_metadata?: {
                     [key: string]: unknown;
@@ -1611,11 +1673,13 @@ export interface components {
             } & {
                 [key: string]: unknown;
             }) | null;
+            /** @description For a tool call: `stop`, `error`, or (contract 1.2) a pause reason — `awaiting_approval`, `awaiting_input`, `interrupted`. A client treats an unknown value by `is_error`. */
             finish_reason?: string | null;
             /** Format: date-time */
             finished_at?: string | null;
             /** Format: int64 */
             id: number;
+            /** @description True for a tool call that failed. A call that paused for the user (contract 1.2, `finish_reason` `awaiting_approval`, `awaiting_input` or `interrupted`) is not an error. */
             is_error: boolean;
             /** @description `tool_call` or `thinking_step`. */
             kind: string;
@@ -1864,6 +1928,22 @@ export interface components {
             /** @description "draft" or "published" (#249). A published version is frozen: updateSkillVersion and deleteSkillVersion both refuse it with 409, mirroring application_versions' own guard. */
             status?: string;
             tags: string[];
+        };
+        /** @description NOTE(W2): AuthorResponse struct (internal/api/v2/social/handler.go:41-49), served by GetAuthor (:51-123). All string fields except personalization are present with a `""` fallback on both the "row found" and "no row / query error" paths (:98-121) — the query error path is a swallowed fallback, always 200, never surfaced as an error. */
+        SocialAuthorProfile: {
+            avatar: string;
+            default_context_management?: components["schemas"]["MemoryContextManagement"];
+            default_summarization?: components["schemas"]["MemorySummarization"];
+            description: string;
+            email: string;
+            /** @description NOTE(W2): scanned from su.user_id (social/handler.go:88) but unconditionally overwritten with intToStr(0) at :114, then replaced with the auth-context user.ID at :118-120 whenever it reads "0" or "" — which it always does. Bug-for-bug: this field is ALWAYS auth.User.ID, never the DB row's su.user_id. */
+            id: string;
+            name: string;
+            personal_project_id: string;
+            /** @description Arbitrary user-defined personalization payload. */
+            personalization?: unknown;
+            /** @description The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id. */
+            provider_refs?: string[];
         };
         /** @description A refused `changes_since` request (ADR-0025 WP6). `error` is `invalid_sync_cursor` (400: the cursor does not decode, or was issued for another list, scope or filter), `invalid_limit` (400) or `sync_cursor_expired` (410: the cursor is older than the tombstone retention, 97 days; resync with `changes_since=0`). NOTE(W2): internal/application/changesync/changesync.go (`ErrorBody`). */
         SyncCursorError: {
@@ -3493,6 +3573,32 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    getCurrentAuthor: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Author profile */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SocialAuthorProfile"];
+                };
+            };
+            400: components["responses"]["400"];
             401: components["responses"]["401"];
             426: components["responses"]["ClientUpgradeRequired"];
         };

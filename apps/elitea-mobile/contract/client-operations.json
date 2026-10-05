@@ -28,6 +28,7 @@
     "listToolkitInstances",
     "listToolkitAvailableTools",
     "listMessageTraces",
-    "getMessageTrace"
+    "getMessageTrace",
+    "getCurrentAuthor"
   ]
 }

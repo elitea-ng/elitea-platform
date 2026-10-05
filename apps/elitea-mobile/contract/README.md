@@ -10,7 +10,7 @@ this repository.
 | `elitea-v2.yaml.sha256` | `shasum -a 256` of the copy; `npm run contract:verify` fails on any change. |
 | `LICENSE.elitea` | The upstream Apache-2.0 license text and NOTICE, required to redistribute the copy. |
 | `client-operations.json` | The app's declared API surface: the operationIds kept in the generated client. |
-| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). **Empty** since the pin moved to v4.2.0 (client contract 1.1): upstream now defines every operation the app uses. |
+| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). **Empty** since the pin moved to v4.2.0 (client contract 1.1; still empty at 1.2): upstream now defines every operation the app uses. |
 
 ## Generated client
 
@@ -34,13 +34,13 @@ regenerate. Server-sent-event endpoints are typed by hand in `src/api/sse/`.
 | | |
 |---|---|
 | Repository | `elitea-ng/elitea-platform` |
-| Commit | `06a4904277b8040fc718114386fbb555b01890db` (`origin/main`, tag `v4.2.0`, 2026-10-05) |
+| Commit | `a9cada5eff87b5b56ff5fae91ca092534d2ad0ae` (`origin/main`, tag `v4.3.2`, 2026-10-05; the file is byte-identical to its introduction in `e6be27894`, #1067) |
 | Path | `services/elitea-main/api/openapi/v2.yaml` |
-| Client contract | `1.1` (`info.x-elitea-client-contract`) |
-| SHA-256 | `85e88c9f89b6be7a123db63a53c11a2d1cde10165b6be0123eb6f2ce9c46971d` |
-| Size | 25,682 lines |
+| Client contract | `1.2` (`info.x-elitea-client-contract`) |
+| SHA-256 | `a0c2a7009c5350f1d84b67a914add32dcd65ad683256088a981ab33701fa1f08` |
+| Size | 25,752 lines |
 | License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged since `e7585fee2`) |
-| Copied | 2026-10-05 |
+| Copied | 2026-10-06 |
 
 ## Bumping the pinned contract
 
@@ -68,12 +68,20 @@ routes is `{conversation_id}` (it takes the conversation uuid).
 | Tool history | `listMessageTraces`, `getMessageTrace` |
 | Agents, skills, toolkits | `listApplications`, `getApplication`, `listApplicationSkills`, `listToolkitInstances`, `listToolkitAvailableTools` |
 | Native client | `getClientDiscovery`, `getBrandingPackJSON`, `exchangeNativeToken`, `revokeNativeToken` |
+| Who am I (1.2) | `getCurrentAuthor` (`GET /api/v2/social/author`; only the user id is kept) |
 
 Discovery's `attachments` block and the agent progress frames (the
 `x-elitea-client-frames` catalogue, typed by hand in
 `src/features/chat/frames.ts`) are 1.1 additions; the app gates them on
 `client_contract` >= 1.1 (`speaksContract` in `src/api/discovery.ts`) and
 treats a 404 or 501 from an older server as "not available".
+
+Contract 1.2 (additive) tags `getCurrentAuthor` `client` as the "who am I"
+read, adds the `agent_tool_paused` frame (a tool call that paused for the
+user, not a failure) and documents the pause `finish_reason`s on trace steps.
+The route and the trace fields exist on a 1.1 server too; a 1.1 server sends
+`agent_tool_error` with the interrupt's repr for a pause, which the app still
+recognises.
 
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).

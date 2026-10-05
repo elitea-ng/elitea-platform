@@ -274,7 +274,7 @@ describe('output limit', () => {
 describe('golden frames are complete', () => {
   it('has every catalogued frame kind the app reads', () => {
     expect(Object.keys(goldenData('python', 'tool_start'))).toEqual(expect.arrayContaining(['type', 'message_id', 'response_metadata']));
-    for (const name of ['tool_start', 'tool_end', 'tool_end_chunked', 'tool_error', 'tool_output_chunk', 'hitl_interrupt', 'mcp_authorization_progress', 'mcp_authorization_terminal']) {
+    for (const name of ['tool_start', 'tool_end', 'tool_end_chunked', 'tool_error', 'tool_paused', 'tool_output_chunk', 'hitl_interrupt', 'mcp_authorization_progress', 'mcp_authorization_terminal']) {
       expect(goldenData('python', name).type).toEqual(expect.any(String));
     }
     for (const name of ['tool_start', 'tool_end', 'hitl_interrupt', 'mcp_authorization', 'requires_confirmation']) {
@@ -283,7 +283,46 @@ describe('golden frames are complete', () => {
   });
 });
 
-describe('a tool paused for approval (captured, python worker)', () => {
+describe('a tool paused for the user (contract 1.2, python golden frame)', () => {
+  it('waits for approval instead of failing, and the turn pauses on the card that follows', () => {
+    const paused = golden('python', 'tool_paused');
+    expect(isTurnTerminal(paused)).toBe(false);
+    const { state } = play([paused]);
+    expect(state.phase).toBe('streaming');
+    expect(state.tools[0]).toMatchObject({ id: 'run-4', name: 'delete_branch', status: 'waiting', waitingFor: 'approval', pauseId: 'interrupt-1', error: null });
+    const withCard = play([paused, golden('python', 'hitl_interrupt')]).state;
+    expect(withCard.phase).toBe('paused');
+    expect(withCard.tools[0]).toMatchObject({ status: 'waiting', error: null });
+  });
+
+  it('settles a started call as waiting, keeping what the start told', () => {
+    const start = golden('python', 'tool_start', (d) => {
+      rmOf(d).tool_run_id = 'run-4';
+      rmOf(d).run_id = 'run-4';
+    });
+    const { state } = play([start, golden('python', 'tool_paused')]);
+    expect(state.tools).toHaveLength(1);
+    expect(state.tools[0]).toMatchObject({ status: 'waiting', partial: false, displayName: 'Delete branch' });
+  });
+
+  it('waits for an answer on a clarifying question', () => {
+    const question = golden('python', 'tool_paused', (d) => {
+      rmOf(d).finish_reason = 'awaiting_input';
+      rmOf(d).pause = { interrupt_id: 'interrupt-2', guardrail_type: 'clarifying_question' };
+    });
+    expect(play([question]).state.tools[0]).toMatchObject({ status: 'waiting', waitingFor: 'answer' });
+  });
+
+  it('is never an error, whatever the reason says', () => {
+    const odd = golden('python', 'tool_paused', (d) => {
+      rmOf(d).finish_reason = 'interrupted';
+      rmOf(d).pause = null;
+    });
+    expect(play([odd]).state.tools[0]).toMatchObject({ status: 'waiting', waitingFor: 'approval', error: null });
+  });
+});
+
+describe('a tool paused for approval (captured, python worker before contract 1.2)', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const captured = require('./__fixtures__/captured/python-sensitive-tool-pause.json') as { frames: Record<string, unknown>[] };
   const frames = captured.frames.map((f) => frameOf(f));
@@ -329,6 +368,21 @@ describe('persisted steps of a paused answer', () => {
     const twice = [persisted('a', 'mock_tool_status', 'error'), persisted('b', 'mock_tool_status', 'error')];
     expect(markPausedSteps(twice, pause).map((s) => s.status)).toEqual(['error', 'waiting']);
     expect(markPausedSteps(steps, null)).toBe(steps);
+  });
+
+  it('keeps a call stored as paused (contract 1.2) waiting while its answer is paused, and settles it as done after', () => {
+    const paused = { ...persisted('p', 'mock_tool_status', 'waiting'), waitingFor: 'approval' as const };
+    expect(markPausedSteps([paused], pause)[0]).toMatchObject({ status: 'waiting', waitingFor: 'approval' });
+    expect(markPausedSteps([paused], null)[0]).toMatchObject({ status: 'done', error: null });
+    expect(markPausedSteps([paused], null)[0].waitingFor).toBeUndefined();
+  });
+
+  it('settles a stored paused call whose own pause was answered, though the answer paused again', () => {
+    const pending = pause.kind === 'hitl' ? pause.interrupts[0].interruptId : null;
+    expect(pending).toEqual(expect.any(String));
+    const earlier = { ...persisted('p1', 'mock_tool_create_item', 'waiting'), waitingFor: 'approval' as const, pauseId: 'an-answered-pause' };
+    const current = { ...persisted('p2', 'mock_tool_status', 'waiting'), waitingFor: 'approval' as const, pauseId: pending };
+    expect(markPausedSteps([earlier, current], pause).map((s) => s.status)).toEqual(['done', 'waiting']);
     expect(markPausedSteps([persisted('c', 'mock_tool_status', 'done')], pause)[0].status).toBe('done');
   });
 });

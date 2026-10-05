@@ -14,7 +14,6 @@ import {
 } from '@/api/queries/sendMessage';
 import { log } from '@/lib/log';
 import { network } from '@/lib/network';
-import { noteSentQuestion } from '@/state/selfIdentity';
 import { handOffToOutbox, mustQueueBehindOutbox, queueSend, shouldQueue } from '@/sync/appOutbox';
 import {
   TurnController,
@@ -161,7 +160,6 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
           if (error instanceof TurnInputError) return inputErrorText(error);
           throw error;
         }
-        noteSentQuestion(prepared.request.questionId);
         try {
           await queueSend(prepared, conversationRef);
         } catch (error) {
@@ -191,7 +189,6 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
         if (error instanceof TurnInputError) return inputErrorText(error);
         throw error;
       }
-      noteSentQuestion(next.request.questionId);
       // The effect above starts it: a new turn is in phase 'sending'.
       setLiveTurn(key, next);
       return null;

@@ -4,9 +4,12 @@ import { StyleSheet, Text, View } from 'react-native';
 import { usePalette } from '@/constants/use-palette';
 import { NotificationBell } from '@/features/notifications/NotificationBell';
 import { ProjectChip } from '@/features/projects/ProjectChip';
+import { useSelfIdentityRefresh } from '@/state/selfIdentity';
 
 export default function AppLayout() {
   const palette = usePalette();
+  // "Who am I", once per session: tells my messages from other people's.
+  useSelfIdentityRefresh();
   return (
     <Stack>
       <Stack.Screen

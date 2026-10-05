@@ -1,4 +1,4 @@
-import { agentParticipant, agentsCanJoin, chatTarget, groupText, inferSelfUserId, participantName, participantUserId, toChatMessages } from '@/features/chat/messageModel';
+import { agentParticipant, agentsCanJoin, chatTarget, groupText, participantName, participantUserId, toChatMessages } from '@/features/chat/messageModel';
 
 const participants = [
   { id: 1, entity_name: 'user', entity_meta: { id: 9 } },
@@ -194,13 +194,10 @@ describe('authorship in a shared conversation (A2)', () => {
     ]);
   });
 
-  it('with "me" unknown: a question this device sent is mine, the rest are named', () => {
-    const messages = toChatMessages(
-      { participants: shared, message_groups: groups },
-      { selfUserId: null, isSentQuestion: (uuid) => uuid === 'q-alice' },
-    );
+  it('with "me" unknown (no "who am I" answer yet), every user message is drawn mine but named', () => {
+    const messages = toChatMessages({ participants: shared, message_groups: groups }, { selfUserId: null });
     expect(messages.filter((m) => m.role === 'user').map((m) => [m.mine, m.author])).toEqual([
-      [true, null],
+      [true, 'Alice Smith'],
       [true, 'Bob'],
     ]);
   });
@@ -208,13 +205,6 @@ describe('authorship in a shared conversation (A2)', () => {
   it('with one person in the conversation every user message is mine, unnamed', () => {
     const messages = toChatMessages({ participants: participants, message_groups: [groups[0]].map((g) => ({ ...g, author_participant_id: 1 })) });
     expect(messages[0]).toMatchObject({ mine: true, author: null });
-  });
-
-  it('proves "me" from a question this device sent', () => {
-    expect(inferSelfUserId({ participants: shared, message_groups: groups }, (uuid) => uuid === 'q-bob')).toBe(42);
-    expect(inferSelfUserId({ participants: shared, message_groups: groups }, () => false)).toBeNull();
-    // An assistant group never proves anything.
-    expect(inferSelfUserId({ participants: shared, message_groups: groups }, (uuid) => uuid === 'r-1')).toBeNull();
   });
 
   it('reads a user participant name from meta.user_name and its user id from entity_meta.id', () => {

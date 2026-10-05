@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { sessionApiClient, type ApiClient } from '@/api/client';
 import type { components } from '@/api/generated/elitea.gen';
 import { queryKeys } from '@/api/queries/keys';
-import { capText, displayValue, type ToolStep } from '@/features/chat/toolActivity';
+import { PAUSE_FINISH_REASONS, capText, displayValue, waitOf, type ToolStep } from '@/features/chat/toolActivity';
 
 /**
  * Tool history of a reloaded conversation (client contract 1.1):
@@ -44,6 +44,10 @@ export function traceToStep(row: TraceStep): PersistedToolStep | null {
   const toolMeta = asRecord(attrs.tool_meta) ?? {};
   const chunks = asRecord(attrs.tool_output_chunks);
   const endedAt = time(row.finished_at);
+  // Contract 1.2: a call that paused for the user is stored with a pause
+  // reason and is not an error. An unknown reason is read by `is_error`.
+  const pause = asRecord(attrs.pause);
+  const paused = !row.is_error && ((typeof row.finish_reason === 'string' && PAUSE_FINISH_REASONS.has(row.finish_reason)) || pause !== null);
   return {
     id: `trace-${row.id}`,
     traceId: row.id,
@@ -52,7 +56,13 @@ export function traceToStep(row: TraceStep): PersistedToolStep | null {
     displayName: asName(meta.display_name) ?? asName(toolMeta.display_name),
     toolkit: asName(meta.toolkit_name),
     parentAgent: asName(row.parent_agent_name) ?? asName(meta.parent_agent_name),
-    status: row.is_error ? 'error' : endedAt !== null ? 'done' : 'running',
+    status: row.is_error ? 'error' : paused ? 'waiting' : endedAt !== null ? 'done' : 'running',
+    ...(paused
+      ? {
+          waitingFor: waitOf(row.finish_reason, pause?.guardrail_type),
+          pauseId: typeof pause?.interrupt_id === 'string' && pause.interrupt_id !== '' ? pause.interrupt_id : null,
+        }
+      : {}),
     startedAt: time(row.started_at),
     endedAt,
     inputs: null,

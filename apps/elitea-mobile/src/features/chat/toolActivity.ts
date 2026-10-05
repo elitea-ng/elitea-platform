@@ -16,8 +16,23 @@ export const MAX_TOOL_CHUNKS = 4096;
 /** Longest tool, toolkit or agent name kept. */
 const MAX_NAME = 200;
 
-/** `waiting`: stopped by an approval pause (the tool has not run yet). */
+/** `waiting`: stopped by a pause for the user (an approval or a question; the tool has not run yet). */
 export type ToolStatus = 'running' | 'done' | 'error' | 'needs_auth' | 'waiting';
+
+/** What a `waiting` call waits for: an approval of the call, or the user's answer to a question. */
+export type ToolWait = 'approval' | 'answer';
+
+/**
+ * The `finish_reason` of a tool call that paused for the user (client
+ * contract 1.2: `agent_tool_paused`, and the persisted trace step). Not a
+ * failure.
+ */
+export const PAUSE_FINISH_REASONS: ReadonlySet<string> = new Set(['awaiting_approval', 'awaiting_input', 'interrupted']);
+
+/** What a paused call waits for, from its `finish_reason` and its `pause.guardrail_type`. */
+export function waitOf(finishReason: unknown, guardrailType: unknown): ToolWait {
+  return finishReason === 'awaiting_input' || guardrailType === 'clarifying_question' ? 'answer' : 'approval';
+}
 
 export interface ToolStep {
   /** `tool_run_id`: the call's key. */
@@ -29,6 +44,10 @@ export interface ToolStep {
   /** The sub-agent that ran it (`metadata.parent_agent_name`). */
   parentAgent: string | null;
   status: ToolStatus;
+  /** Set while `waiting`: what the call waits for. */
+  waitingFor?: ToolWait;
+  /** Contract 1.2: the `interrupt_id` of the pause the call waits on, when the server names it. */
+  pauseId?: string | null;
   startedAt: number | null;
   endedAt: number | null;
   /** The arguments as pretty JSON (may be sensitive: shown on demand). */
@@ -210,14 +229,24 @@ export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): To
         partial,
       });
     }
+    case 'agent_tool_paused':
+      // Contract 1.2: the call paused for the user (an approval or a
+      // question) just before the agent_hitl_interrupt frame. Not a failure,
+      // and not finished: the tool has not run.
+      return upsert(steps, {
+        ...step,
+        status: 'waiting',
+        waitingFor: waitOf(rm.finish_reason, asRecord(rm.pause)?.guardrail_type),
+        pauseId: asString(asRecord(rm.pause)?.interrupt_id),
+        error: null,
+      });
     case 'agent_tool_error': {
       const error = displayValue(rm.error) ?? (typeof node.content === 'string' ? node.content : null);
-      // The Python worker reports the approval pause of a sensitive tool as
-      // an error of that call (the LangGraph interrupt's repr) just before the
-      // agent_hitl_interrupt frame. The tool has not run, and the repr (which
-      // carries the call's arguments) is not an error to show.
+      // A server before contract 1.2 reports that pause as an error of the
+      // call (the LangGraph interrupt's repr) instead of agent_tool_paused.
+      // The repr (which carries the call's arguments) is not an error to show.
       if (error !== null && isInterruptRepr(error)) {
-        return upsert(steps, { ...step, status: 'waiting', error: null });
+        return upsert(steps, { ...step, status: 'waiting', waitingFor: 'approval', error: null });
       }
       const capped = error === null ? null : capText(error);
       return upsert(steps, {
@@ -253,6 +282,7 @@ export function isToolFrame(type: string): boolean {
     type === 'agent_tool_start' ||
     type === 'agent_tool_end' ||
     type === 'agent_tool_error' ||
+    type === 'agent_tool_paused' ||
     type === 'agent_tool_output_chunk'
   );
 }
@@ -419,21 +449,32 @@ export function mergeFanout(current: TurnPause | null, next: TurnPause): TurnPau
 }
 
 /**
- * The persisted calls of an answer that is paused for approval. The server
- * stores the paused call as an error (the Python worker reports the
- * interrupt as a tool error), so the call the pause waits on would read as
- * failed under the very card that asks to approve it. The latest failed
- * call of each tool a pending interrupt names is shown as waiting instead.
+ * The persisted calls of an answer, against the answer's pending pause.
+ *
+ * - A call stored as paused (contract 1.2) waits only while its answer is
+ *   still paused on it (the same `interrupt_id`, or any pending pause when
+ *   the server did not name one); once that pause is answered it is settled
+ *   as done (the same as the reference web client), never as failed.
+ * - A server before 1.2 stored the paused call as an error (the Python worker
+ *   reported the interrupt as a tool error), so the call the pause waits on
+ *   would read as failed under the very card that asks to approve it. The
+ *   latest failed call of each tool a pending interrupt names is shown as
+ *   waiting instead.
  */
 export function markPausedSteps<T extends ToolStep>(steps: readonly T[], pause: TurnPause | null): readonly T[] {
-  if (pause?.kind !== 'hitl') return steps;
+  const pendingIds = new Set(pause?.kind === 'hitl' ? pause.interrupts.map((i) => i.interruptId) : []);
+  const stillWaits = (step: T) => pause?.kind === 'hitl' && (!step.pauseId || pendingIds.has(step.pauseId));
+  const settled = steps.some((step) => step.status === 'waiting' && !stillWaits(step))
+    ? steps.map((step) => (step.status === 'waiting' && !stillWaits(step) ? { ...step, status: 'done' as const, waitingFor: undefined } : step))
+    : steps;
+  if (pause?.kind !== 'hitl') return settled;
+  const next = [...settled];
   const names = new Set(pause.interrupts.map((i) => i.toolName).filter((n): n is string => n !== null));
-  if (names.size === 0) return steps;
-  const next = [...steps];
+  if (names.size === 0) return next;
   for (const name of names) {
     for (let i = next.length - 1; i >= 0; i--) {
       if (next[i].name !== name) continue;
-      if (next[i].status === 'error') next[i] = { ...next[i], status: 'waiting', error: null };
+      if (next[i].status === 'error') next[i] = { ...next[i], status: 'waiting', waitingFor: 'approval', error: null };
       break;
     }
   }
