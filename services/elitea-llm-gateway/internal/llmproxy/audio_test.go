@@ -132,6 +132,51 @@ func TestSpeech_ContentTypeFollowsResponseFormat(t *testing.T) {
 	}
 }
 
+// capturingSpeechRouter records the speech request the handler dispatched.
+type capturingSpeechRouter struct {
+	fakeRouter
+	got *schemas.BifrostSpeechRequest
+}
+
+func (c *capturingSpeechRouter) SpeechRequest(ctx *schemas.BifrostContext, req *schemas.BifrostSpeechRequest) (*schemas.BifrostSpeechResponse, *schemas.BifrostError) {
+	c.got = req
+	return c.fakeRouter.SpeechRequest(ctx, req)
+}
+
+// TestSpeech_GeminiDefaultsToWAV covers the Gemini read-aloud failure. With no
+// response_format, bifrost returns Gemini's raw 24 kHz PCM, and the gateway
+// labelled it audio/mpeg; the browser's decodeAudioData refused it on every
+// request. The gateway now asks Gemini for "wav" and labels it audio/wav.
+func TestSpeech_GeminiDefaultsToWAV(t *testing.T) {
+	cases := []struct {
+		name, body, wantFormat, wantType string
+	}{
+		{"gemini, no format", `{"model":"gemini/gemini-2.5-flash-preview-tts","input":"hello"}`, "wav", "audio/wav"},
+		{"gemini, explicit wav", `{"model":"gemini/gemini-2.5-flash-preview-tts","input":"hello","response_format":"wav"}`, "wav", "audio/wav"},
+		// Every other provider keeps the OpenAI default: no format, mp3.
+		{"openai, no format", `{"model":"openai/tts-1","input":"hello"}`, "", "audio/mpeg"},
+		{"elevenlabs, no format", `{"model":"elevenlabs/eleven_v3","input":"hello"}`, "", "audio/mpeg"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := &capturingSpeechRouter{fakeRouter: fakeRouter{speechResp: &schemas.BifrostSpeechResponse{Audio: []byte("RIFF")}}}
+			rec := postAudioJSON(t, NewHandler(router, nil, nil).route(), "/llm/v1/audio/speech", tc.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if router.got == nil || router.got.Params == nil {
+				t.Fatalf("the speech request was not dispatched with parameters")
+			}
+			if got := router.got.Params.ResponseFormat; got != tc.wantFormat {
+				t.Fatalf("dispatched response_format = %q, want %q", got, tc.wantFormat)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != tc.wantType {
+				t.Fatalf("Content-Type = %q, want %q", ct, tc.wantType)
+			}
+		})
+	}
+}
+
 // TestSpeech_RefusesAStreamRequestByName covers a silent contract break.
 //
 // stream_format decodes into OpenAISpeechRequest and IsStreamingRequested()

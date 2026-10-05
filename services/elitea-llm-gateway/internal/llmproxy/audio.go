@@ -198,6 +198,7 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider, model := providerModelFromSpeechReq(bifReq)
+	format := applyDefaultSpeechFormat(bifReq, provider)
 	if !h.checkBudget(w, ctx, model) {
 		return
 	}
@@ -213,7 +214,7 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeAudio(w, resp.Audio, speechContentType(req.ResponseFormat, provider))
+	writeAudio(w, resp.Audio, speechContentType(format, provider))
 
 	units, basis := speechUnits(resp)
 	if basis == "" {
@@ -411,6 +412,34 @@ var speechAudioContentTypes = map[string]string{
 var pcmRate24kProviders = map[string]bool{
 	"openai": true,
 	"azure":  true,
+}
+
+// defaultSpeechFormats are the providers whose answer for an ABSENT
+// response_format is not mp3, mapped to the format the gateway asks for
+// instead.
+//
+// Gemini returns raw s16le 24 kHz PCM when the format is empty: bifrost core
+// (providers/gemini/speech.go) wraps it in a WAV header only when the format is
+// "wav", although its own validation message says an empty format "defaults to
+// wav". The gateway then labelled the headerless PCM audio/mpeg, and every
+// caller that decodes by container (the browser's decodeAudioData) failed on
+// every Gemini TTS model. Asking for "wav" gives a self-describing container
+// that the label states correctly. Gemini accepts only "wav" or "".
+var defaultSpeechFormats = map[string]string{
+	"gemini": "wav",
+}
+
+// applyDefaultSpeechFormat sets the provider's default response_format on a
+// request that names none, and returns the format the answer is in. An
+// explicit format is never changed.
+func applyDefaultSpeechFormat(req *schemas.BifrostSpeechRequest, provider string) string {
+	if req.Params == nil {
+		req.Params = &schemas.SpeechParameters{}
+	}
+	if req.Params.ResponseFormat == "" {
+		req.Params.ResponseFormat = defaultSpeechFormats[strings.ToLower(provider)]
+	}
+	return req.Params.ResponseFormat
 }
 
 // speechContentType resolves the response Content-Type for a speech request.
