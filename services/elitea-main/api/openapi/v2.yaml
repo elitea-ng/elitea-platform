@@ -2794,6 +2794,24 @@ components:
             json.RawMessage (internal/api/v2/notifications/api.go:159). Each
             `event_type` writes its own keys (the entity, its project, the
             actor), so the object is passed through.
+          description: >-
+            Per `event_type`. For `chat_user_mentioned` (client contract 1.1)
+            the server writes `conversation_id` (the conversation UUID),
+            `message_id` (the mentioning message's `question_id`),
+            `project_id`, `sender_user_id` and `sender`
+            (internal/infra/db/repos/chat_mention_notification.go). A row a
+            pre-Go deployment wrote carries the NUMERIC conversation id,
+            `initiator_name` and no `sender`; getConversation resolves either
+            id form, so open the conversation with whatever `conversation_id`
+            holds.
+          properties:
+            sender:
+              type: object
+              description: '`chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved.'
+              required: [id, name]
+              properties:
+                id: { type: integer, format: int64 }
+                name: { type: string }
         created_at: { type: string }
         updated_at: { type: string, nullable: true }
         event_type: { type: string }
