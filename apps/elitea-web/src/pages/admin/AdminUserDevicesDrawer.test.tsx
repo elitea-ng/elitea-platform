@@ -119,4 +119,24 @@ describe('Admin › Users → Devices', () => {
     await user.click(within(confirm).getByTestId('native-device-revoke-confirm'));
     await waitFor(() => expect(revoked).toEqual([DEVICES[0]!.id]));
   });
+  // Regression: a failed revoke showed the server's machine word.
+  it('reports a failed revoke in words, not the server code', async () => {
+    window.admin_ui_config = { permissions: ['admin.auth.users'], vite_server_url: '/api/v2' };
+    server.use(
+      http.delete('*/admin/native_devices/administration/:deviceId', () =>
+        HttpResponse.json({ error: 'store_unavailable' }, { status: 503 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminUsers />);
+    await screen.findByText('Cy Client');
+    await user.click(screen.getByTestId('admin-user-devices-12'));
+    const drawer = await screen.findByTestId('admin-user-devices-drawer');
+    await user.click(await within(drawer).findByRole('button', { name: 'Revoke Cy’s phone' }));
+    await user.click(within(await screen.findByTestId('native-device-revoke-dialog')).getByTestId('native-device-revoke-confirm'));
+
+    const alert = await within(drawer).findByTestId('admin-user-devices-revoke-error');
+    expect(alert).toHaveTextContent('Failed to revoke that device.');
+    expect(alert).not.toHaveTextContent('store_unavailable');
+  });
 });

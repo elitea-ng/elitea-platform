@@ -56,10 +56,20 @@ function clientName(client: NativeClient): string {
   return client.display_name !== '' ? client.display_name : client.client_id;
 }
 
-/** The sentence for a refusal that names no field, in the server's words when it gave some. */
+/**
+ * The sentence for a refusal that names no field: the server's own `message`
+ * when it wrote one (the 409's DEPLOYMENT_URL sentence), otherwise this app's
+ * words. Never the `error` field: that is a machine word
+ * (`store_unavailable`, `invalid_request_body`), or the middleware's
+ * untranslated "insufficient permissions".
+ */
 function refusalSentence(error: unknown, fallback: string): string {
   const failure = nativeClientFailure(error);
-  return failure.message ?? failure.code ?? fallback;
+  if (failure.message !== undefined) return failure.message;
+  if (failure.status === 403) {
+    return t('pages.admin.nativeClients.error.forbidden', 'You do not have permission to manage native clients.');
+  }
+  return fallback;
 }
 
 function outcomeSentence(outcome: NativeClientWriteOutcome): string {

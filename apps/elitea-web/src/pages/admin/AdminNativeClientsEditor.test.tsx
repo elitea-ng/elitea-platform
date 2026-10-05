@@ -307,4 +307,46 @@ describe('AdminNativeClientsEditor', () => {
     expect(await screen.findByText('Enter the client ID the app sends.')).toBeVisible();
     expect(recorded).toHaveLength(0);
   });
+  // Regression: refusals were shown as the server's machine word
+  // (`store_unavailable`, `invalid_request_body`) or its untranslated 403
+  // string, because the fallback came AFTER `error`.
+  it('never shows a machine error code: a 503 reads as the translated sentence', async () => {
+    server.use(
+      http.get('*/admin/native_clients/administration', () =>
+        HttpResponse.json({ error: 'store_unavailable' }, { status: 503 }),
+      ),
+    );
+    renderAdminRoute(<AdminNativeClientsEditor />);
+
+    const alert = await screen.findByTestId('admin-native-clients-error');
+    expect(alert).toHaveTextContent('Failed to load the native clients.');
+    expect(alert).not.toHaveTextContent('store_unavailable');
+  });
+
+  it('says a 403 is a missing permission, in this app\'s words', async () => {
+    server.use(
+      http.get('*/admin/native_clients/administration', () =>
+        HttpResponse.json({ error: 'insufficient permissions' }, { status: 403 }),
+      ),
+    );
+    renderAdminRoute(<AdminNativeClientsEditor />);
+
+    expect(await screen.findByTestId('admin-native-clients-error')).toHaveTextContent(
+      'You do not have permission to manage native clients.',
+    );
+  });
+
+  it('a refused toggle reports the translated sentence, not the code', async () => {
+    useHandlers({ saveStatus: 503, saveBody: { error: 'store_unavailable' } });
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    await user.click(within(rowOf('com.example.desktop')).getByRole('switch', { name: 'Enable Example Desktop' }));
+    await user.click(within(await screen.findByTestId('native-client-confirm-dialog')).getByTestId('native-client-confirm'));
+
+    const notice = await screen.findByTestId('admin-native-clients-notice');
+    expect(notice).toHaveTextContent('Failed to save that native client.');
+    expect(notice).not.toHaveTextContent('store_unavailable');
+  });
 });

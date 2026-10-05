@@ -189,8 +189,6 @@ export function useRevokeAdminNativeDevice(): UseMutationResult<void, Error, str
 /** What a refused write said, read from the server's body. */
 export interface NativeClientFailure {
   readonly status: number | undefined;
-  /** `error` — a machine word (`invalid_native_client`, `public_origin_required`, …). */
-  readonly code: string | undefined;
   /** `message` — the server's sentence, when it sent one (409). */
   readonly message: string | undefined;
   /** `reasons` — one per field: `client_id`, `display_name`, `redirect_uris[N]`, … (422). */
@@ -209,23 +207,21 @@ function stringRecord(value: unknown): Record<string, string> {
 /** Reads a failed write. Anything that is not an HTTP answer has no body to read. */
 export function nativeClientFailure(error: unknown): NativeClientFailure {
   if (!(error instanceof EliteaApiError)) {
-    return { status: undefined, code: undefined, message: undefined, reasons: {} };
+    return { status: undefined, message: undefined, reasons: {} };
   }
   const failure = error.failure;
   if (failure.kind === 'auth') {
-    return { status: failure.status, code: undefined, message: undefined, reasons: {} };
+    return { status: failure.status, message: undefined, reasons: {} };
   }
   if (failure.kind !== 'http') {
-    return { status: undefined, code: undefined, message: undefined, reasons: {} };
+    return { status: undefined, message: undefined, reasons: {} };
   }
   const body = (typeof failure.body === 'object' && failure.body !== null ? failure.body : {}) as {
-    error?: unknown;
     message?: unknown;
     reasons?: unknown;
   };
   return {
     status: failure.status,
-    code: typeof body.error === 'string' && body.error !== '' ? body.error : undefined,
     message: typeof body.message === 'string' && body.message !== '' ? body.message : undefined,
     reasons: stringRecord(body.reasons),
   };

@@ -59,8 +59,21 @@ function loadErrorSentence(error: unknown): string {
       'This deployment does not serve native sign-in, so no account has mobile or desktop devices.',
     );
   }
+  return refusalSentence(error, t('pages.admin.users.devices.loadError', 'Failed to load this user’s devices.'));
+}
+
+/**
+ * The server's own `message` when it wrote one, otherwise this app's words —
+ * never the `error` field, which is a machine word (`store_unavailable`) or
+ * the middleware's untranslated "insufficient permissions".
+ */
+function refusalSentence(error: unknown, fallback: string): string {
   const failure = nativeClientFailure(error);
-  return failure.message ?? failure.code ?? t('pages.admin.users.devices.loadError', 'Failed to load this user’s devices.');
+  if (failure.message !== undefined) return failure.message;
+  if (failure.status === 403) {
+    return t('pages.admin.users.devices.forbidden', 'You do not have permission to manage this user’s devices.');
+  }
+  return fallback;
 }
 
 function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readonly onClose: () => void }) {
@@ -77,10 +90,7 @@ function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readon
     revoke.mutate(device.id, {
       onSettled: () => setPending(undefined),
       onError: (error: unknown) => {
-        const failure = nativeClientFailure(error);
-        setRevokeError(
-          failure.message ?? failure.code ?? t('pages.admin.users.devices.revokeError', 'Failed to revoke that device.'),
-        );
+        setRevokeError(refusalSentence(error, t('pages.admin.users.devices.revokeError', 'Failed to revoke that device.')));
       },
     });
   };
@@ -114,7 +124,7 @@ function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readon
       {devicesQuery.isLoading ? <LinearProgress /> : null}
       {devicesQuery.error != null ? <Alert severity="warning">{loadErrorSentence(devicesQuery.error)}</Alert> : null}
       {revokeError !== undefined ? (
-        <Alert severity="error" onClose={() => setRevokeError(undefined)}>
+        <Alert severity="error" onClose={() => setRevokeError(undefined)} data-testid="admin-user-devices-revoke-error">
           {revokeError}
         </Alert>
       ) : null}
