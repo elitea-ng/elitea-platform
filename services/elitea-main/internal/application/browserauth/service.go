@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -520,6 +521,14 @@ func sanitizedError(ctx context.Context, sentinel error, operation string, err e
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
+	}
+	// The returned error names only the sentinel and the operation, so nothing
+	// sensitive reaches the response. A rejected credential is an expected
+	// outcome; any other sentinel is a server-side failure whose cause would
+	// otherwise be lost here, so log it.
+	if !errors.Is(sentinel, ErrUnauthenticated) {
+		slog.ErrorContext(ctx, "browser authentication failed",
+			"operation", operation, "outcome", sentinel.Error(), "error", err)
 	}
 	return fmt.Errorf("%w: %s", sentinel, operation)
 }

@@ -5,6 +5,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -157,7 +158,7 @@ func (s *ProvisionService) Provision(ctx context.Context, request ProvisionReque
 	command := deriveCommand(request.Assertion, s.policy)
 	result, err := s.repository.Provision(ctx, command)
 	if err != nil {
-		return ProvisionResult{}, sanitizedRepositoryError(err)
+		return ProvisionResult{}, sanitizedRepositoryError(ctx, err)
 	}
 	if result.Suspended {
 		return ProvisionResult{}, ErrIdentitySuspended
@@ -406,7 +407,11 @@ func deriveProjectEnrollment(email string, policy ProjectEnrollmentPolicy) Proje
 	return decision
 }
 
-func sanitizedRepositoryError(err error) error {
+// sanitizedRepositoryError maps a repository failure to a public sentinel
+// whose text carries no repository detail. The cause of an unexpected failure
+// is logged here, the only place that still holds it, so an operator sees the
+// database error behind a generic provisioning failure.
+func sanitizedRepositoryError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return context.Canceled
@@ -415,6 +420,7 @@ func sanitizedRepositoryError(err error) error {
 	case errors.Is(err, ErrIdentityConflict):
 		return ErrIdentityConflict
 	default:
+		slog.ErrorContext(ctx, "authenticated identity provisioning failed", "error", err)
 		return ErrProvisioningFailed
 	}
 }
