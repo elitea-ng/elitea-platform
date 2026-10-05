@@ -169,6 +169,33 @@ func (h *Handler) redirectWith(redirectURI string, values url.Values) string {
 	return redirectURI + "?" + values.Encode()
 }
 
+// decisionFromThisPage reports whether a consent POST came from this server's
+// own page. A missing Origin is allowed (a non-browser client), and an Origin
+// equal to the public origin is the ordinary browser case.
+//
+// An Origin of "null" is accepted ONLY together with `Sec-Fetch-Site:
+// same-origin`. WebKit serialises the Origin of this form POST as "null" even
+// under the consent page's `Referrer-Policy: same-origin` (measured in
+// Playwright WebKit by the settings.devices journey), so refusing "null"
+// outright made the consent page unusable in Safari. Sec-Fetch-Site is a
+// forbidden request header: a page cannot set it, and a browser sends
+// `same-origin` only for a request initiated by a document of this origin, so
+// a cross-site or sandboxed ("null"-origin) attacker page still cannot pass.
+func decisionFromThisPage(header http.Header, publicOrigin string) bool {
+	origin, present := header["Origin"]
+	if !present {
+		return true
+	}
+	if len(origin) != 1 {
+		return false
+	}
+	if origin[0] == publicOrigin {
+		return true
+	}
+	fetchSite := header.Values("Sec-Fetch-Site")
+	return origin[0] == "null" && len(fetchSite) == 1 && fetchSite[0] == "same-origin"
+}
+
 func validState(state string) bool {
 	if state == "" || len(state) > 512 {
 		return false
@@ -328,9 +355,8 @@ func (h *Handler) decision(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Defence in depth on top of the SameSite=Lax session cookie a cross-site
-	// POST does not carry. A missing Origin is allowed; "null" is not.
-	if origin, present := r.Header["Origin"]; present &&
-		(len(origin) != 1 || origin[0] != h.cfg.PublicOrigin) {
+	// POST does not carry. See decisionFromThisPage.
+	if !decisionFromThisPage(r.Header, h.cfg.PublicOrigin) {
 		h.errorPage(w, r, http.StatusForbidden, "The answer did not come from this server's page.")
 		return
 	}
