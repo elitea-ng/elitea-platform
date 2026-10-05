@@ -70,8 +70,6 @@ folder.delete
 folder.list
 folder.pinUpdate
 folder.update
-participant.addParticipantIntoConversation
-participant.deleteParticipantFromConversation
 pipelines.stopLlmTask
 toolkits.deleteIndexItem
 toolkits.getIndexesList

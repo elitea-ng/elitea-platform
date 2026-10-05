@@ -267,3 +267,58 @@ func TestSidebarSelectionPrefersTheNewestDuplicateRow(t *testing.T) {
 		t.Fatalf("selected_conversation_id = %s, want the newest row's %s", got, newer.ID)
 	}
 }
+
+// TestAddParticipantsSingleObjectRetryAnswersTheExistingRow pins the two
+// promises client contract 1.1 makes about addConversationParticipants: the
+// body may be ONE object rather than an array, and a retried add (a mobile
+// client that lost the first response) answers the row it already created
+// instead of adding the entity twice. Removing the participant then answers
+// 204, and removing it again 404.
+func TestAddParticipantsSingleObjectRetryAnswersTheExistingRow(t *testing.T) {
+	pool := newChatAuthorityPool(t)
+	router := chatAuthorityRouter(pool)
+	repo := repos.NewConversationsRepo(pool)
+	created, err := repo.Create(chatActor("7"), "1", conversations.Conversation{Name: "Participants retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/1/conversations/%s/participants", created.ID)
+	body := `{"entity_name":"application","entity_meta":{"id":41,"name":"Agent"},"entity_settings":{"version_id":3}}`
+
+	decode := func(raw []byte) []conversations.Participant {
+		t.Helper()
+		var participants []conversations.Participant
+		if err := json.Unmarshal(raw, &participants); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		return participants
+	}
+	first := decode(callChatAuthority(t, router, "7", http.MethodPost, path, body, http.StatusOK).Body.Bytes())
+	retry := decode(callChatAuthority(t, router, "7", http.MethodPost, path, body, http.StatusOK).Body.Bytes())
+	if len(first) != 1 || len(retry) != 1 {
+		t.Fatalf("a single-object body answered %d then %d rows, want one each", len(first), len(retry))
+	}
+	if retry[0].ID != first[0].ID {
+		t.Fatalf("the retried add answered participant %d, want the existing %d", retry[0].ID, first[0].ID)
+	}
+	// The path project is the default owner, and the version the client sent
+	// is what a later chat send reads.
+	if fmt.Sprint(first[0].EntityMeta["project_id"]) != "1" || fmt.Sprint(first[0].EntitySettings["version_id"]) != "3" {
+		t.Fatalf("added row %+v lost project_id 1 or version_id 3", first[0])
+	}
+	if name, _ := first[0].Meta["name"].(string); name != "Agent" {
+		t.Fatalf("added row meta %+v, want name Agent", first[0].Meta)
+	}
+
+	var applications int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM p_1.chat_participant_mapping m JOIN p_1.chat_participants p ON p.id=m.participant_id WHERE m.conversation_id=$1 AND p.entity_name='application'`, created.ID).Scan(&applications); err != nil {
+		t.Fatal(err)
+	}
+	if applications != 1 {
+		t.Fatalf("stored application participants = %d after a retried add, want 1", applications)
+	}
+
+	remove := fmt.Sprintf("%s/%d", path, first[0].ID)
+	callChatAuthority(t, router, "7", http.MethodDelete, remove, "", http.StatusNoContent)
+	callChatAuthority(t, router, "7", http.MethodDelete, remove, "", http.StatusNotFound)
+}

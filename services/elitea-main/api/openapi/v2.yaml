@@ -2097,6 +2097,21 @@ components:
             (internal/api/v2/conversations/handler.go:243). Its keys depend on
             `entity_name` (a user carries `id`, an application `id` and
             `project_id`), so one closed shape would describe one kind only.
+          description: >-
+            The stable keys are typed below; every other key is the kind's
+            own. For a `user` participant `id` is the USER id — the value a
+            chat send's `user_ids` mention list carries — never the
+            participant row id.
+          properties:
+            id:
+              type: integer
+              description: The entity id (user, application, pipeline or toolkit). Absent for `llm` and `dummy`.
+            project_id:
+              type: integer
+              description: The project that owns an application, pipeline or toolkit.
+            model_name:
+              type: string
+              description: An `llm` participant's model.
         entity_settings:
           type: object
           nullable: true
@@ -2106,6 +2121,12 @@ components:
             participant (internal/api/v2/conversations/handler.go:244), written
             by the entity-settings routes with whatever keys the participant
             kind uses (variables, llm_settings, version ids).
+          properties:
+            version_id:
+              type: integer
+              description: >-
+                The application or pipeline version a chat send to this
+                participant runs.
         meta:
           type: object
           nullable: true
@@ -2114,6 +2135,61 @@ components:
             NOTE(W2): the participant's display metadata
             (internal/api/v2/conversations/handler.go:245) — name, icon and
             kind-specific keys copied from the entity when it was added.
+          properties:
+            user_name:
+              type: string
+              description: A `user` participant's display name.
+            name:
+              type: string
+              description: Every other kind's display name.
+
+    ConversationParticipantCreate:
+      type: object
+      description: >-
+        One participant to add (see `addConversationParticipants` for the
+        keys each kind needs). NOTE(W2):
+        internal/api/v2/conversations/participant_settings.go:131
+        (`Participant.Validate`).
+      required: [entity_name, entity_meta]
+      properties:
+        entity_name:
+          type: string
+          description: '`user`, `application`, `pipeline`, `toolkit`, `llm` or `dummy`.'
+        entity_meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): stored as `chat_participants.entity_meta`
+            (internal/api/v2/conversations/handler.go:1297, `AddParticipant`);
+            the keys depend on `entity_name`, and the typed ones below are the
+            ones the server reads.
+          properties:
+            id:
+              type: integer
+              description: The user, application, pipeline or toolkit id.
+            project_id:
+              type: integer
+              description: The owning project of an application, pipeline or toolkit; defaults to the path project.
+            name:
+              type: string
+              description: The display name of an application, pipeline or toolkit.
+            user_name:
+              type: string
+              description: A user's display name.
+            model_name:
+              type: string
+              description: An `llm` participant's model.
+        entity_settings:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the per-conversation settings document, normalized by
+            internal/api/v2/conversations/participant_settings.go:131's
+            siblings; `version_id` is the key a chat send reads.
+          properties:
+            version_id:
+              type: integer
+              description: The application or pipeline version to run.
 
     ConversationCreateRequest:
       type: object
@@ -14746,6 +14822,122 @@ paths:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/participants/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+    post:
+      operationId: addConversationParticipants
+      summary: Add participants (people, agents, pipelines, toolkits, models) to a conversation
+      description: |
+        Needs `models.chat.participants.create` and access to the
+        conversation. The body is ONE participant object or an array of at
+        most 100. The batch is all-or-nothing.
+
+        Per kind (`entity_name`):
+        - `user`: `entity_meta.id` is the USER id (> 0). Send
+          `entity_meta.user_name` too; it becomes the participant's
+          `meta.user_name`, which is what transcripts show.
+        - `application` and `pipeline`: `entity_meta.id` (> 0) and
+          `entity_meta.project_id` (> 0; defaults to the path project), plus
+          `entity_meta.name` for display. Send `entity_settings.version_id`:
+          a chat send to an application participant runs that version, and a
+          participant without one cannot be targeted by a send.
+        - `toolkit`: `entity_meta.id` and `entity_meta.project_id`, as above.
+          A conversation that holds a toolkit AND an agent is refused at send
+          time with 422 (`agent_chat.sql`); a toolkit belongs in a model
+          (ad-hoc) conversation.
+        - `llm`: `entity_meta.model_name`.
+        - `dummy`: no keys.
+
+        The answer is the participant rows of THIS request, in request
+        order. An entity that is already a participant is not added twice:
+        its existing row (and id) is answered again, so a retried add is
+        safe. NOTE(W2): internal/api/v2/conversations/handler.go:1297
+        (`AddParticipant`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/ConversationParticipantCreate'
+                - type: array
+                  maxItems: 100
+                  items:
+                    $ref: '#/components/schemas/ConversationParticipantCreate'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The participant rows of this request, in request order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConversationParticipant'
+        '400':
+          description: >-
+            A malformed body, an unknown kind, a missing required key, more
+            than 100 participants, or an `X-Client-Version` that does not
+            parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/participant/prompt_lib/{project_id}/{conversation_id}/{participant_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+      - name: participant_id
+        in: path
+        required: true
+        schema: { type: integer }
+        description: The participant row id (`ConversationParticipant.id`), not the entity id.
+    delete:
+      operationId: deleteConversationParticipant
+      summary: Remove a participant from a conversation
+      description: |
+        Needs `models.chat.participant.delete` and access to the
+        conversation. The conversation's author cannot be removed (400). An
+        id that is not a participant of this conversation is 404.
+        NOTE(W2): internal/api/v2/conversations/handler.go:1399
+        (`RemoveParticipant`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204': { description: Removed. }
+        '400':
+          description: >-
+            The participant is the conversation's author, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
