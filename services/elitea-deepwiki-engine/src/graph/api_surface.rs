@@ -32,6 +32,7 @@ use indexmap::{IndexMap, IndexSet};
 use regex::{Captures, Regex};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 /// One API surface (`APISurface`).
@@ -579,24 +580,34 @@ fn match_grpc(text: &str, language: &str) -> Vec<ApiSurface> {
     }
 
     if matches!(language, "cpp" | "c++") && text.contains("::Service") {
+        // Every service gets every method of the file: found once.
+        let methods: Vec<&str> = CPP_GRPC_METHOD
+            .captures_iter(text)
+            .map(|dm| group(&dm, "rpc"))
+            .collect();
         for sm in CPP_GRPC_SERVICE.captures_iter(text) {
             let svc = group(&sm, "svc");
-            for dm in CPP_GRPC_METHOD.captures_iter(text) {
-                out.push(grpc(svc, group(&dm, "rpc"), 0.7));
+            for rpc in &methods {
+                out.push(grpc(svc, rpc, 0.7));
             }
         }
     }
 
     if language == "rust" && text.contains("impl ") && text.contains("async fn") {
-        for sm in RUST_GRPC_IMPL.captures_iter(text) {
-            let svc = group(&sm, "svc");
-            let lower_start = svc.chars().next().is_some_and(char::is_lowercase);
-            if lower_start || matches!(svc, "self" | "Self" | "impl") {
-                continue;
-            }
-            let start = sm.get(0).map_or(0, |m| m.end());
-            for dm in RUST_GRPC_METHOD.captures_iter(&text[start..]) {
-                let rpc = group(&dm, "rpc");
+        let impls: Vec<(&str, usize)> = RUST_GRPC_IMPL
+            .captures_iter(text)
+            .filter_map(|sm| {
+                let svc = group(&sm, "svc");
+                let lower_start = svc.chars().next().is_some_and(char::is_lowercase);
+                if lower_start || matches!(svc, "self" | "Self" | "impl") {
+                    return None;
+                }
+                Some((svc, sm.get(0).map_or(0, |m| m.end())))
+            })
+            .collect();
+        let methods = methods_after(&impls, text);
+        for ((svc, _), rpcs) in impls.iter().zip(methods) {
+            for rpc in rpcs {
                 if rpc.starts_with('_') {
                     continue;
                 }
@@ -605,6 +616,96 @@ fn match_grpc(text: &str, language: &str) -> Vec<ApiSurface> {
         }
     }
 
+    out
+}
+
+/// For each `(svc, start)` (in increasing `start` order), the `rpc` of
+/// every `RUST_GRPC_METHOD` match in `text[start..]`, as Python's
+/// `finditer` over the slice finds them.
+///
+/// Searching each slice to its end costs impls × file size. Here each
+/// search runs once: a leftmost-first search from a position `p` finds the
+/// same match as one from any earlier position whose match starts at or
+/// after `p`, and the matches after a match depend only on where it ends.
+/// Past the slice start, `\b` sees the same text in the slice as in the
+/// file, so `captures_at` over the file gives the slice's answer; at the
+/// slice start itself a match must begin with `async`, and only then is the
+/// slice searched as such.
+fn methods_after<'t>(impls: &[(&str, usize)], text: &'t str) -> Vec<Vec<&'t str>> {
+    /// The match after a match, once searched for.
+    #[derive(Clone, Copy)]
+    enum Next {
+        NotSearched,
+        Searched(Option<usize>),
+    }
+    /// One match: its end and its `rpc`; the match after it.
+    struct Found<'t> {
+        end: usize,
+        rpc: &'t str,
+        next: Next,
+    }
+    let mut found: Vec<Found<'t>> = Vec::new();
+    let mut by_start: HashMap<usize, usize> = HashMap::new();
+    // The last search from a slice start: (from, match index or `None`).
+    let mut last_search: Option<(usize, Option<usize>, usize)> = None;
+    let mut record = |found: &mut Vec<Found<'t>>, start: usize, end: usize, rpc: &'t str| {
+        *by_start.entry(start).or_insert_with(|| {
+            found.push(Found {
+                end,
+                rpc,
+                next: Next::NotSearched,
+            });
+            found.len() - 1
+        })
+    };
+    let search = |from: usize| {
+        RUST_GRPC_METHOD.captures_at(text, from).and_then(|c| {
+            let whole = c.get(0)?;
+            Some((whole.start(), whole.end(), group(&c, "rpc")))
+        })
+    };
+    let mut out = Vec::with_capacity(impls.len());
+    for &(_, start) in impls {
+        // The slice's first match.
+        let first = if text[start..].starts_with("async") {
+            RUST_GRPC_METHOD.captures(&text[start..]).and_then(|c| {
+                let whole = c.get(0)?;
+                Some((start + whole.start(), start + whole.end(), group(&c, "rpc")))
+            })
+        } else {
+            match last_search {
+                // No match from an earlier position, or the earlier match
+                // starts here or later: the same answer.
+                Some((from, None, _)) if from <= start => None,
+                Some((from, Some(index), at)) if from <= start && at >= start => {
+                    Some((at, found[index].end, found[index].rpc))
+                }
+                _ => search(start),
+            }
+        };
+        let mut current = first.map(|(at, end, rpc)| {
+            let index = record(&mut found, at, end, rpc);
+            last_search = Some((start, Some(index), at));
+            index
+        });
+        if current.is_none() {
+            last_search = Some((start, None, start));
+        }
+        let mut rpcs = Vec::new();
+        while let Some(index) = current {
+            rpcs.push(found[index].rpc);
+            let next = if let Next::Searched(next) = found[index].next {
+                next
+            } else {
+                let next =
+                    search(found[index].end).map(|(at, end, rpc)| record(&mut found, at, end, rpc));
+                found[index].next = Next::Searched(next);
+                next
+            };
+            current = next;
+        }
+        out.push(rpcs);
+    }
     out
 }
 
@@ -1422,7 +1523,9 @@ struct FileScans {
     /// fallback. One file only: nodes come file by file.
     lines: Option<(String, Vec<(usize, usize)>)>,
     router_prefix: HashMap<String, String>,
-    ctypes_libs: HashMap<String, BTreeSet<String>>,
+    /// Per file: each `ctypes` library variable (sorted) with its compiled
+    /// call pattern, built once per file rather than once per node.
+    ctypes_libs: HashMap<String, Rc<[(String, Regex)]>>,
     grpc_bindings: HashMap<String, IndexMap<String, String>>,
 }
 
@@ -1483,12 +1586,12 @@ impl FileScans {
         prefix
     }
 
-    fn ctypes_lib_vars(&mut self, rel_path: &str) -> BTreeSet<String> {
+    fn ctypes_lib_vars(&mut self, rel_path: &str) -> Rc<[(String, Regex)]> {
         if rel_path.is_empty() || !self.texts.has_root() {
-            return BTreeSet::new();
+            return Rc::from(Vec::new());
         }
         if let Some(vars) = self.ctypes_libs.get(rel_path) {
-            return vars.clone();
+            return Rc::clone(vars);
         }
         let vars: BTreeSet<String> = self
             .texts
@@ -1500,8 +1603,19 @@ impl FileScans {
                     .collect()
             })
             .unwrap_or_default();
-        self.ctypes_libs.insert(rel_path.to_owned(), vars.clone());
-        vars
+        let compiled: Rc<[(String, Regex)]> = vars
+            .into_iter()
+            .map(|lib| {
+                let call = compile(
+                    &format!(r"\b{}\.(?P<fn>[A-Za-z_]\w*)\s*\(", regex::escape(&lib)),
+                    "",
+                );
+                (lib, call)
+            })
+            .collect();
+        self.ctypes_libs
+            .insert(rel_path.to_owned(), Rc::clone(&compiled));
+        compiled
     }
 
     /// `_grpc_stub_bindings`: cached by path, whatever language asks first.
@@ -1578,11 +1692,7 @@ fn node_surfaces(data: &NodeData, scans: &mut FileScans, plugin_name: &str) -> V
             .filter(|s| s.kind == "ffi")
             .map(|s| s.surface.clone())
             .collect();
-        for lib in &lib_vars {
-            let call = compile(
-                &format!(r"\b{}\.(?P<fn>[A-Za-z_]\w*)\s*\(", regex::escape(lib)),
-                "",
-            );
+        for (lib, call) in lib_vars.iter() {
             for m in call.captures_iter(&source_text) {
                 let function = group(&m, "fn");
                 let key = format!("ffi:{function}");

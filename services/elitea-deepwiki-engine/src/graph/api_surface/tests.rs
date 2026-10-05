@@ -242,3 +242,107 @@ fn the_orchestrator_reads_files_and_materializes_contracts() {
     assert_eq!(ffi.language, "python");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// 8000 C++ service classes: the method scan ran over the whole file once
+/// per class.
+#[test]
+fn many_cpp_grpc_services_scan_the_file_once() {
+    use std::fmt::Write;
+    let mut text = String::new();
+    for i in 0..8000 {
+        let _ = writeln!(text, "class Impl{i} final : public Svc{i}::Service {{}};");
+    }
+    text.push_str("Status Ping(ServerContext* c);\nStatus Pong(grpc::ServerContext* c);\n");
+    let start = std::time::Instant::now();
+    let found = match_grpc(&text, "cpp");
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+    assert_eq!(found.len(), 16_000);
+    assert_eq!(found[0].surface, "grpc:Svc0/Ping");
+    assert_eq!(found[15_999].surface, "grpc:Svc7999/Pong");
+}
+
+/// 8000 Rust `impl … for …` blocks, each with an `async fn` that is not a
+/// method: the method scan ran from each one to the end of the file.
+#[test]
+fn many_rust_grpc_impls_scan_the_file_once() {
+    use std::fmt::Write;
+    let mut text = String::new();
+    for i in 0..8000 {
+        let _ = writeln!(text, "impl Svc{i} for Server {{ /* async fn later */ }}");
+    }
+    text.push_str("impl Last for Server {\n    async fn get_item(&self) {}\n    async fn _hidden(&self) {}\n}\n");
+    let start = std::time::Instant::now();
+    let found = match_grpc(&text, "rust");
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+    assert_eq!(found.len(), 8001);
+    assert_eq!(found[0].surface, "grpc:Svc0/GetItem");
+    assert_eq!(found[8000].surface, "grpc:Last/GetItem");
+}
+
+/// The shared searches find what a search of each slice finds.
+#[test]
+fn methods_after_is_a_search_of_each_slice() {
+    let texts = [
+        "impl A for S { async fn a(&self) {} }\nimpl B for S { async fn b() {} async fn c () {} }",
+        "impl A for async fn x() {}\nimpl B for S {}\nasync fn y(\nimpl C for T async fn z(",
+        "impl A for S async fn async fn q( impl B for S{async  fn  _r  (",
+        "async fn before() {} impl A for S {} no methods here",
+        "impl A for Sasync fn t( impl B for S\nasync\nfn\nu\n(",
+    ];
+    for text in texts {
+        let impls: Vec<(&str, usize)> = RUST_GRPC_IMPL
+            .captures_iter(text)
+            .map(|sm| (group(&sm, "svc"), sm.get(0).map_or(0, |m| m.end())))
+            .collect();
+        let naive: Vec<Vec<&str>> = impls
+            .iter()
+            .map(|&(_, start)| {
+                RUST_GRPC_METHOD
+                    .captures_iter(&text[start..])
+                    .map(|dm| group(&dm, "rpc"))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(methods_after(&impls, text), naive, "{text:?}");
+    }
+}
+
+/// 2000 nodes of a file that loads 40 `ctypes` libraries: the call pattern
+/// of each library was compiled again for every node.
+#[test]
+fn ctypes_call_patterns_are_compiled_once_per_file() {
+    use std::fmt::Write;
+    let dir = std::env::temp_dir().join(format!("dw-api-ctypes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut source = String::from("import ctypes\n");
+    for i in 0..40 {
+        let _ = writeln!(source, "lib{i} = ctypes.CDLL('x{i}')");
+    }
+    // Line 42 on: two lines per function.
+    for i in 0..2000 {
+        let _ = write!(source, "def f{i}():\n    return lib7.call_{i}(1)\n");
+    }
+    std::fs::write(dir.join("ffi.py"), source).unwrap();
+    let mut graph = CodeGraph::new();
+    for i in 0..2000 {
+        let line = 42 + 2 * i;
+        rich_node(
+            &mut graph,
+            &format!("python::ffi::f{i}"),
+            "python",
+            "ffi.py",
+            (line, line + 1),
+            "",
+        );
+    }
+    let start = std::time::Instant::now();
+    let surfaces = extract_api_surfaces_for_graph(&mut graph, dir.to_str());
+    let elapsed = start.elapsed();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+    assert_eq!(surfaces.len(), 2000);
+    assert_eq!(surfaces["python::ffi::f1999"][0].surface, "ffi:call_1999");
+}

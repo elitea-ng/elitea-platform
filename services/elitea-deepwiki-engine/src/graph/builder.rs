@@ -587,12 +587,37 @@ fn add_prepared_edge(
 
 /// Candidates for a dotted name: every suffix `parts[i..]` from the last
 /// part back to the whole name, then every single part from the last back.
-fn dotted_candidates(symbol: &str) -> impl Iterator<Item = String> + '_ {
-    let parts: Vec<&str> = symbol.split('.').collect();
-    let count = parts.len();
-    let partials: Vec<String> = (0..count).rev().map(|i| parts[i..].join(".")).collect();
-    let singles: Vec<String> = (0..count).rev().map(|i| parts[i].to_owned()).collect();
-    partials.into_iter().chain(singles)
+/// Each is a slice of `symbol`, made only when the caller asks for it: the
+/// caller stops at the first hit, and a name of `n` parts has `n` suffixes
+/// of up to its whole length.
+fn dotted_candidates(symbol: &str) -> impl Iterator<Item = &str> {
+    symbol
+        .rmatch_indices('.')
+        .map(move |(dot, _)| &symbol[dot + 1..])
+        .chain(std::iter::once(symbol))
+        .chain(symbol.rsplit('.'))
+}
+
+/// The first `{prefix}{name}` over `names` that is a node of `graph`.
+/// Names too long to be part of a node id are skipped without being copied.
+fn first_node_with_prefix<'n>(
+    graph: &CodeGraph,
+    prefix: &str,
+    names: impl Iterator<Item = &'n str>,
+) -> Option<String> {
+    let mut candidate = String::new();
+    for name in names {
+        if !graph.could_hold_id_of(prefix.len() + name.len()) {
+            continue;
+        }
+        candidate.clear();
+        candidate.push_str(prefix);
+        candidate.push_str(name);
+        if graph.has_node(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// `_resolve_source_node_sync`. Always returns an id; an unknown source
@@ -629,11 +654,11 @@ fn resolve_source(
         return file_node;
     }
     if source_symbol.contains('.') {
-        for name in dotted_candidates(source_symbol) {
-            let candidate = format!("{language}::{file_name}::{name}");
-            if graph.has_node(&candidate) {
-                return candidate;
-            }
+        let prefix = format!("{language}::{file_name}::");
+        if let Some(found) =
+            first_node_with_prefix(graph, &prefix, dotted_candidates(source_symbol))
+        {
+            return found;
         }
     }
     if let Some(candidates) = registry.by_name.get(source_symbol) {
@@ -704,10 +729,11 @@ fn resolve_target(
                 return Some(found);
             }
         }
-        for name in dotted_candidates(target_symbol) {
-            if let Some(found) = cached(format!("{language}::{file_name}::{name}")) {
-                return Some(found);
-            }
+        let prefix = format!("{language}::{file_name}::");
+        if let Some(found) =
+            first_node_with_prefix(graph, &prefix, dotted_candidates(target_symbol))
+        {
+            return Some(found);
         }
     }
     if let Some(candidates) = registry.by_name.get(target_symbol) {
@@ -1015,5 +1041,49 @@ mod tests {
         assert_eq!(node.analysis_level, "documentation");
         assert_eq!(node.return_type, "markdown");
         assert_eq!(node.rel_path, "README.md");
+    }
+
+    /// A dotted name of 30000 parts that resolves nowhere: every suffix of
+    /// it was built up front (about 1 GB per lookup) before the first one
+    /// was tried.
+    #[test]
+    fn a_long_dotted_name_resolves_without_building_every_suffix() {
+        let long = vec!["part"; 30_000].join(".");
+        let files = vec![result(
+            "/r/a.py",
+            vec![symbol("f", SymbolType::Function, Some("a.f"), "/r/a.py")],
+            vec![
+                relationship(&long, &long, RelationshipType::Calls, "/r/a.py"),
+                relationship(
+                    "f",
+                    &format!("{long}.f"),
+                    RelationshipType::Calls,
+                    "/r/a.py",
+                ),
+            ],
+        )];
+        let start = std::time::Instant::now();
+        let (graph, _, _) = build_language_graph("python", files, "/r");
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+        // The suffix `f` of the second target is a node of this file.
+        let targets: Vec<&str> = graph.edges().map(|e| e.target).collect();
+        assert!(targets.contains(&"python::a::f"), "{targets:?}");
+    }
+
+    /// The lazy candidates come in the order the eager list had.
+    #[test]
+    fn dotted_candidates_keep_their_order() {
+        let eager = |symbol: &str| -> Vec<String> {
+            let parts: Vec<&str> = symbol.split('.').collect();
+            let count = parts.len();
+            let partials = (0..count).rev().map(|i| parts[i..].join("."));
+            let singles = (0..count).rev().map(|i| parts[i].to_owned());
+            partials.chain(singles).collect()
+        };
+        for symbol in ["a.b.c", "", ".", "a..b", ".x", "x.", "self.a.b", "plain"] {
+            let lazy: Vec<String> = dotted_candidates(symbol).map(str::to_owned).collect();
+            assert_eq!(lazy, eager(symbol), "{symbol:?}");
+        }
     }
 }

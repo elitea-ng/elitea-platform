@@ -258,71 +258,141 @@ fn push_small<T>(items: &mut Vec<T>, item: T) {
     items.push(item);
 }
 
+/// Past this many neighbours, a node's neighbour list gets a position index:
+/// below it a linear search is cheaper than a hash table per node, above it
+/// adding `n` neighbours one by one would cost `n²` comparisons.
+const INDEX_FROM: usize = 16;
+
+/// Neighbour slot → its position in a neighbour list.
+type PositionIndex = Option<Box<HashMap<usize, usize>>>;
+
+/// The position of `slot` among `slots` (the list `index` indexes, if any).
+fn find_position(
+    index: &PositionIndex,
+    mut slots: impl Iterator<Item = usize>,
+    slot: usize,
+) -> Option<usize> {
+    match index {
+        Some(index) => index.get(&slot).copied(),
+        None => slots.position(|s| s == slot),
+    }
+}
+
+/// Record that `slot` was appended at `position`, building the index once
+/// the list is long enough.
+fn index_appended(
+    index: &mut PositionIndex,
+    slots: impl Iterator<Item = usize>,
+    slot: usize,
+    position: usize,
+) {
+    match index {
+        Some(index) => {
+            index.insert(slot, position);
+        }
+        None if position + 1 >= INDEX_FROM => {
+            *index = Some(Box::new(slots.enumerate().map(|(p, s)| (s, p)).collect()));
+        }
+        None => {}
+    }
+}
+
+/// Record that the entry at `position` (holding `slot`) was removed: the
+/// entries after it moved down by one.
+fn index_removed(index: &mut PositionIndex, slot: usize, position: usize) {
+    if let Some(index) = index {
+        index.remove(&slot);
+        for p in index.values_mut() {
+            if *p > position {
+                *p -= 1;
+            }
+        }
+    }
+}
+
 /// The successors of a node: target slot → parallel edges, in
-/// first-connection order (an `IndexMap` with a linear search; see
-/// [`KeyDict`] for why not a map).
+/// first-connection order (an `IndexMap` with a linear search while short,
+/// indexed when long; see [`KeyDict`] for why not a map).
 #[derive(Debug, Clone, Default)]
-struct Successors(Vec<(usize, KeyDict)>);
+struct Successors {
+    items: Vec<(usize, KeyDict)>,
+    index: PositionIndex,
+}
 
 impl Successors {
     fn position(&self, target: usize) -> Option<usize> {
-        self.0.iter().position(|(t, _)| *t == target)
+        find_position(&self.index, self.items.iter().map(|(t, _)| *t), target)
     }
 
     fn get(&self, target: usize) -> Option<&KeyDict> {
-        self.0
-            .iter()
-            .find(|(t, _)| *t == target)
-            .map(|(_, keys)| keys)
+        let position = self.position(target)?;
+        self.items.get(position).map(|(_, keys)| keys)
     }
 
     fn get_mut(&mut self, target: usize) -> Option<&mut KeyDict> {
-        self.0
-            .iter_mut()
-            .find(|(t, _)| *t == target)
-            .map(|(_, keys)| keys)
+        let position = self.position(target)?;
+        self.items.get_mut(position).map(|(_, keys)| keys)
     }
 
     /// The keydict of `target`, appended empty when missing.
     fn entry(&mut self, target: usize) -> &mut KeyDict {
-        let index = self.position(target).unwrap_or_else(|| {
-            push_small(&mut self.0, (target, KeyDict::default()));
-            self.0.len() - 1
+        let position = self.position(target).unwrap_or_else(|| {
+            push_small(&mut self.items, (target, KeyDict::default()));
+            let position = self.items.len() - 1;
+            index_appended(
+                &mut self.index,
+                self.items.iter().map(|(t, _)| *t),
+                target,
+                position,
+            );
+            position
         });
-        &mut self.0[index].1
+        &mut self.items[position].1
     }
 
     /// Remove keeping the order of the others.
     fn shift_remove(&mut self, target: usize) -> Option<KeyDict> {
-        let index = self.position(target)?;
-        Some(self.0.remove(index).1)
+        let position = self.position(target)?;
+        index_removed(&mut self.index, target, position);
+        Some(self.items.remove(position).1)
     }
 
     fn iter(&self) -> impl Iterator<Item = (usize, &KeyDict)> {
-        self.0.iter().map(|(target, keys)| (*target, keys))
+        self.items.iter().map(|(target, keys)| (*target, keys))
     }
 }
 
 /// The predecessors of a node: source slots in first-connection order (an
-/// `IndexSet` with a linear search).
+/// `IndexSet` with a linear search while short, indexed when long).
 #[derive(Debug, Clone, Default)]
-struct Predecessors(Vec<usize>);
+struct Predecessors {
+    items: Vec<usize>,
+    index: PositionIndex,
+}
 
 impl Predecessors {
     fn insert(&mut self, source: usize) {
-        if !self.0.contains(&source) {
-            push_small(&mut self.0, source);
+        if find_position(&self.index, self.items.iter().copied(), source).is_none() {
+            push_small(&mut self.items, source);
+            let position = self.items.len() - 1;
+            index_appended(
+                &mut self.index,
+                self.items.iter().copied(),
+                source,
+                position,
+            );
         }
     }
 
     fn shift_remove(&mut self, source: usize) {
-        if let Some(index) = self.0.iter().position(|s| *s == source) {
-            self.0.remove(index);
+        if let Some(position) = find_position(&self.index, self.items.iter().copied(), source) {
+            index_removed(&mut self.index, source, position);
+            self.items.remove(position);
         }
     }
 
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.0.iter().copied()
+        self.items.iter().copied()
     }
 }
 
@@ -344,6 +414,8 @@ pub struct CodeGraph {
     slots: Vec<Option<Box<Slot>>>,
     index: HashMap<String, usize>,
     edge_count: usize,
+    /// The length of the longest id ever added: no longer id is a node.
+    longest_id: usize,
 }
 
 /// A `repo_nodes` row.
@@ -422,6 +494,7 @@ impl CodeGraph {
             pred: Predecessors::default(),
         })));
         self.index.insert(id.to_owned(), index);
+        self.longest_id = self.longest_id.max(id.len());
         index
     }
 
@@ -517,6 +590,13 @@ impl CodeGraph {
     #[must_use]
     pub fn has_node(&self, id: &str) -> bool {
         self.index.contains_key(id)
+    }
+
+    /// Whether an id of `len` bytes could be a node: no id longer than the
+    /// longest ever added is. Lets a caller skip building such an id.
+    #[must_use]
+    pub fn could_hold_id_of(&self, len: usize) -> bool {
+        len <= self.longest_id
     }
 
     #[must_use]
@@ -670,7 +750,7 @@ impl CodeGraph {
             edges.push((id, succ));
         }
         for (source, succ) in edges {
-            for (target, keys) in succ.0 {
+            for (target, keys) in succ.items {
                 let Some(Some(target)) = ids.get(target) else {
                     continue;
                 };
@@ -910,5 +990,46 @@ mod tests {
         let order: Vec<&str> = left.nodes().map(|(id, _)| id).collect();
         assert_eq!(order, ["a", "b", "c"]);
         assert!(left.has_edge("c", "a", &EdgeKey::Named("sql::defines".into())));
+    }
+
+    /// A hub with 100000 neighbours each way: every new neighbour was a
+    /// linear search of the hub's successor (and the leaf's predecessor)
+    /// list. Order and counts are networkx's.
+    #[test]
+    fn a_hub_with_many_neighbours_is_built_fast() {
+        let leaves: Vec<String> = (0..100_000).map(|i| format!("leaf{i}")).collect();
+        let start = std::time::Instant::now();
+        let mut graph = CodeGraph::new();
+        for leaf in &leaves {
+            graph.add_edge("hub", leaf, rel("calls"));
+            graph.add_edge(leaf, "hub", rel("calls"));
+        }
+        // A second edge to every leaf joins the existing neighbour.
+        for leaf in &leaves {
+            graph.add_edge("hub", leaf, rel("reads"));
+        }
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+        assert_eq!(graph.edge_count(), 300_000);
+        assert_eq!(graph.predecessors("hub").count(), 100_000);
+        assert_eq!(graph.predecessors("hub").nth(99_999), Some("leaf99999"));
+        let first: Vec<(&str, String)> = graph
+            .edges()
+            .take(3)
+            .map(|e| (e.target, e.data.rel_type.to_string()))
+            .collect();
+        assert_eq!(
+            first,
+            [
+                ("leaf0", "calls".to_owned()),
+                ("leaf0", "reads".to_owned()),
+                ("leaf1", "calls".to_owned())
+            ]
+        );
+        // Removing a neighbour keeps the order of the others.
+        assert!(graph.remove_node("leaf1").is_some());
+        assert_eq!(graph.predecessors("hub").nth(1), Some("leaf2"));
+        assert!(graph.has_edge_of_type("hub", "leaf99999", "reads"));
+        assert_eq!(graph.edges_between("hub", "leaf2").count(), 2);
     }
 }

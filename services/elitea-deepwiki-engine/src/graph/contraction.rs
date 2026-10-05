@@ -246,6 +246,28 @@ fn rewire(
     to_add
 }
 
+/// A set of `via` items with `Value` equality: strings (nearly every item)
+/// by hash, anything else by a linear search.
+#[derive(Default)]
+struct ViaSet {
+    strings: HashSet<String>,
+    others: Vec<Value>,
+}
+
+impl ViaSet {
+    /// `true` when `item` was not in the set yet.
+    fn insert(&mut self, item: &Value) -> bool {
+        match item {
+            Value::String(text) => self.strings.insert(text.clone()),
+            other if self.others.contains(other) => false,
+            other => {
+                self.others.push(other.clone());
+                true
+            }
+        }
+    }
+}
+
 /// Add the rewired edges; one that duplicates a `(u, v, rel_type)` merges
 /// its `via` list into the existing edge instead.
 fn add_rewired(graph: &mut CodeGraph, to_add: Vec<(String, String, EdgeData)>) {
@@ -271,23 +293,32 @@ fn add_rewired(graph: &mut CodeGraph, to_add: Vec<(String, String, EdgeData)>) {
         );
     }
     drop(pairs);
+    // The items of each merged edge's `via` (all distinct after its first
+    // merge), so a later merge appends in place instead of rebuilding.
+    let mut merged: HashMap<(String, String, String), ViaSet> = HashMap::new();
     for (u, v, data) in to_add {
         let triple = (u, v, data.rel_type.to_string());
         if let Some(key) = existing.get(&triple) {
             if let Some(target) = graph.edge_mut(&triple.0, &triple.1, key) {
                 // `list(dict.fromkeys(existing_via + new_via))`.
-                let mut deduplicated: Vec<Value> = Vec::new();
-                let merged = via_list(&target.annotations, true)
-                    .into_iter()
-                    .chain(via_list(&data.annotations, true));
-                for item in merged {
-                    if !deduplicated.contains(&item) {
-                        deduplicated.push(item);
-                    }
+                let seen = merged.entry(triple.clone()).or_insert_with(|| {
+                    let mut seen = ViaSet::default();
+                    let deduplicated: Vec<Value> = via_list(&target.annotations, true)
+                        .into_iter()
+                        .filter(|item| seen.insert(item))
+                        .collect();
+                    target
+                        .annotations
+                        .insert("via".to_owned(), Value::Array(deduplicated));
+                    seen
+                });
+                if let Some(Value::Array(via)) = target.annotations.get_mut("via") {
+                    via.extend(
+                        via_list(&data.annotations, true)
+                            .into_iter()
+                            .filter(|item| seen.insert(item)),
+                    );
                 }
-                target
-                    .annotations
-                    .insert("via".to_owned(), Value::Array(deduplicated));
             }
             continue;
         }
@@ -447,5 +478,46 @@ mod tests {
         let edges: Vec<(&str, &str)> = graph.edges().map(|e| (e.source, e.target)).collect();
         assert_eq!(edges, [("ts::a::g", "ts::a::C")]);
         assert_eq!(graph.node_count(), 2);
+    }
+
+    /// 3000 fields of one class, each used by the same function: every
+    /// rewired edge merges into one, whose `via` list grows by one each
+    /// time. Rebuilding that list with a linear `contains` per item was
+    /// cubic.
+    #[test]
+    fn many_merges_into_one_edge_are_fast() {
+        let mut graph = CodeGraph::new();
+        node(&mut graph, "py::m::A", "class", Some("m"), 1);
+        node(&mut graph, "py::m::f", "function", None, 5);
+        let fields = 3000;
+        for i in 0..fields {
+            let id = format!("py::m::A.x{i}");
+            node(
+                &mut graph,
+                &id,
+                "field",
+                Some("m.A"),
+                i64::try_from(i).unwrap_or(0) + 10,
+            );
+            edge(&mut graph, "py::m::f", &id, "uses_type", &["shared"]);
+        }
+        let start = std::time::Instant::now();
+        contract_graph_inplace(&mut graph);
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+        let vias: Vec<Value> = graph
+            .edges()
+            .map(|e| e.data.annotations["via"].clone())
+            .collect();
+        assert_eq!(vias.len(), 1);
+        let via = vias[0].as_array().cloned().unwrap_or_default();
+        // "shared" once, then each field's label in edge order.
+        assert_eq!(via.len(), fields + 1);
+        assert_eq!(via[0], json!("shared"));
+        assert_eq!(via[1], json!("tgt=A.x0@L10"));
+        assert_eq!(
+            via[fields],
+            json!(format!("tgt=A.x{}@L{}", fields - 1, fields + 9))
+        );
     }
 }

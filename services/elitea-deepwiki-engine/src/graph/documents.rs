@@ -21,6 +21,7 @@
 //!   fallback is kept so the two cannot drift apart.
 
 use super::pystr;
+use std::collections::{BTreeMap, HashMap};
 
 /// The metadata of a markdown section: `Header 1` … `Header 4`.
 type Headers = [Option<String>; 4];
@@ -153,11 +154,22 @@ pub fn chunk_markdown_content(content: &str, file_path: &str) -> Vec<Chunk> {
     let Ok(sections) = split_markdown(content) else {
         return chunk_generic_text(content, file_path, 50);
     };
+    let texts: Vec<&str> = sections
+        .iter()
+        .map(|(section, _)| section.as_str())
+        .collect();
+    let found = first_occurrences(content, &texts);
+    let newlines: Vec<usize> = content
+        .bytes()
+        .enumerate()
+        .filter_map(|(at, byte)| (byte == b'\n').then_some(at))
+        .collect();
     let mut chunks: Vec<Chunk> = sections
         .iter()
+        .zip(found)
         .enumerate()
-        .map(|(index, (section, headers))| {
-            let start_line = estimate_line_number(content, section);
+        .map(|(index, ((section, headers), found))| {
+            let start_line = estimate_line_number(&newlines, found);
             Chunk {
                 content: section.clone(),
                 summary: extract_section_name(headers, section, index),
@@ -191,10 +203,105 @@ fn extract_section_name(headers: &Headers, content: &str, index: usize) -> Strin
 }
 
 /// `_estimate_line_number`: 1 + the newlines before the chunk's first
-/// occurrence, or 1 when the chunk text is not in the file.
-fn estimate_line_number(full: &str, chunk: &str) -> i64 {
-    full.find(chunk)
-        .map_or(1, |start| count_newlines(&full[..start]) + 1)
+/// occurrence (`found`, a byte offset), or 1 when the chunk text is not in
+/// the file. `newlines` holds the offset of every `\n` of the file.
+fn estimate_line_number(newlines: &[usize], found: Option<usize>) -> i64 {
+    found.map_or(1, |start| {
+        i64::try_from(newlines.partition_point(|&at| at < start)).map_or(i64::MAX, |n| n + 1)
+    })
+}
+
+/// `full.find(chunk)` for every chunk: the byte offset of its first
+/// occurrence, or `None`.
+///
+/// Searching from the start of the file once per section costs sections ×
+/// file size. Here the chunks are grouped by length and each group is
+/// found in one pass of a rolling hash over the file (a pass ends when all
+/// its chunks are found); a hash hit is compared byte for byte, so the
+/// answer is exactly `str::find`'s. Chunks of `d` distinct lengths cost `d`
+/// passes, and `d` is at most about the square root of twice the total
+/// chunk length. Byte matching is `str` matching: a UTF-8 needle can only
+/// match at a character boundary.
+fn first_occurrences(full: &str, chunks: &[&str]) -> Vec<Option<usize>> {
+    /// The Mersenne prime 2^61 − 1.
+    const MODULUS: u64 = (1 << 61) - 1;
+    let mul = |a: u64, b: u64| -> u64 {
+        let product = u128::from(a) * u128::from(b);
+        let folded = (product & u128::from(MODULUS)) + (product >> 61);
+        // `folded` < 2^62: one subtraction brings it under the modulus.
+        let folded = u64::try_from(folded).unwrap_or(u64::MAX);
+        if folded >= MODULUS {
+            folded - MODULUS
+        } else {
+            folded
+        }
+    };
+    let add = |a: u64, b: u64| -> u64 {
+        let sum = a + b;
+        if sum >= MODULUS { sum - MODULUS } else { sum }
+    };
+    // A base unknown to the file's author, so no file can force collisions
+    // (a collision would only cost a comparison).
+    let base = {
+        use std::hash::BuildHasher;
+        std::collections::hash_map::RandomState::new().hash_one(0x5eed_u64) % (MODULUS - 256) + 256
+    };
+    let hash = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .fold(0u64, |h, &b| add(mul(h, base), u64::from(b)))
+    };
+
+    let text = full.as_bytes();
+    let mut found = vec![None; chunks.len()];
+    // Length → content → the chunks with that content.
+    let mut by_length: BTreeMap<usize, HashMap<&[u8], Vec<usize>>> = BTreeMap::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        if chunk.is_empty() {
+            found[index] = Some(0);
+        } else if chunk.len() <= text.len() {
+            by_length
+                .entry(chunk.len())
+                .or_default()
+                .entry(chunk.as_bytes())
+                .or_default()
+                .push(index);
+        }
+    }
+    for (length, mut wanted) in by_length {
+        let mut by_hash: HashMap<u64, Vec<&[u8]>> = HashMap::new();
+        for content in wanted.keys() {
+            by_hash.entry(hash(content)).or_default().push(content);
+        }
+        // base^(length − 1), to drop the byte leaving the window.
+        let top = (1..length).fold(1u64, |power, _| mul(power, base));
+        let mut window = hash(&text[..length]);
+        let mut start = 0;
+        loop {
+            if let Some(contents) = by_hash.get_mut(&window) {
+                let here = &text[start..start + length];
+                if let Some(position) = contents.iter().position(|c| *c == here) {
+                    contents.swap_remove(position);
+                    for index in wanted.remove(here).unwrap_or_default() {
+                        found[index] = Some(start);
+                    }
+                    if wanted.is_empty() {
+                        break;
+                    }
+                }
+            }
+            let Some(&incoming) = text.get(start + length) else {
+                break;
+            };
+            let outgoing = mul(u64::from(text[start]), top);
+            window = add(
+                mul(add(window, MODULUS - outgoing), base),
+                u64::from(incoming),
+            );
+            start += 1;
+        }
+    }
+    found
 }
 
 /// `_chunk_generic_text`: `max_lines`-line chunks, skipping blank ones.
@@ -449,5 +556,50 @@ mod tests {
         assert_eq!(symbol.symbol_type, "build_config_document");
         assert_eq!(symbol.source_text, "[File: deploy/Makefile]\nall:\n\techo");
         assert_eq!(symbol.rel_path, "deploy/Makefile");
+    }
+
+    /// 60000 one-line sections: each was searched for from the start of
+    /// the file, so the line numbers cost sections × file size.
+    #[test]
+    fn many_markdown_sections_get_line_numbers_fast() {
+        use std::fmt::Write;
+        let mut text = String::new();
+        for i in 0..60_000 {
+            let _ = writeln!(text, "# h{i}");
+        }
+        let start = std::time::Instant::now();
+        let chunks = chunk_markdown_content(&text, "/r/many.md");
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+        assert_eq!(chunks.len(), 60_000);
+        assert_eq!(chunks[59_999].start_line, 60_000);
+        // `# h1` also starts `# h10`, but its first occurrence is line 2.
+        assert_eq!(chunks[1].start_line, 2);
+    }
+
+    /// Every chunk's offset is `str::find`'s: first occurrences (an
+    /// earlier duplicate wins), missing chunks, the empty chunk, chunks
+    /// longer than the file and multi-byte text.
+    #[test]
+    fn first_occurrences_are_str_find() {
+        let full = "# A\nbody é\n# B\nbody é\n## C\nx  \ny\n# A\n";
+        let chunks = [
+            "# A",
+            "# B",
+            "body é",
+            "é",
+            "## C\nx",
+            "x  \ny",
+            "x\ny",
+            "",
+            "# A\n",
+            "\n# A\n",
+            "missing",
+            "A\nbody é\n# B\nbody é\n## C\nx  \ny\n# A\n and more",
+            "# B",
+        ];
+        let expected: Vec<Option<usize>> = chunks.iter().map(|c| full.find(c)).collect();
+        assert_eq!(first_occurrences(full, &chunks), expected);
+        assert_eq!(first_occurrences("", &["", "a"]), [Some(0), None]);
     }
 }
