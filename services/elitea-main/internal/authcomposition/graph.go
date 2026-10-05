@@ -56,20 +56,17 @@ type FormGraphDependencies struct {
 // authorization edge. It owns only its dedicated Auth Redis client; the
 // injected PostgreSQL pool remains caller-owned.
 type FormGraph struct {
-	routes           http.Handler
-	browserRoutes    http.Handler
-	mainEdgeAuth     http.Handler
-	mainKernel       *forwardapp.Kernel
-	patIssuer        *authsvc.LocalIssuer
-	projectPATIssuer *authsvc.ProjectSystemIssuer
-	patValidator     *authsvc.LocalValidator
-	patSigningKey    []byte
-	proxyResolver    *browserapi.TrustedProxyResolver
-	redis            *redis.Client
-	formUsers        FormUserReport
-	// formProvider is the user list the Form handler verifies against: the
-	// configured one, or an empty one while Form sign-in is disabled.
-	formProvider      *browserapp.FormProvider
+	routes            http.Handler
+	browserRoutes     http.Handler
+	mainEdgeAuth      http.Handler
+	mainKernel        *forwardapp.Kernel
+	patIssuer         *authsvc.LocalIssuer
+	projectPATIssuer  *authsvc.ProjectSystemIssuer
+	patValidator      *authsvc.LocalValidator
+	patSigningKey     []byte
+	proxyResolver     *browserapi.TrustedProxyResolver
+	redis             *redis.Client
+	formUsers         FormUserReport
 	formSignInEnabled bool
 	closeOnce         sync.Once
 	closeErr          error
@@ -286,7 +283,6 @@ func newFormGraph(
 	graph := &FormGraph{
 		routes:            routes,
 		browserRoutes:     browserRoutes,
-		formProvider:      formProvider,
 		formSignInEnabled: dependencies.FormSignInEnabled,
 		mainEdgeAuth:      mainHandler,
 		mainKernel:        mainKernel,

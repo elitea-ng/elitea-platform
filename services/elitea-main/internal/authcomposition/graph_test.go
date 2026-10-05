@@ -382,9 +382,8 @@ func TestNewFormGraphWithFormSignInDisabledAcceptsNoPassword(t *testing.T) {
 	if report := graph.FormUsers(); report.Configured != 1 {
 		t.Fatalf("the report must still count the ignored users: %+v", report)
 	}
-	if graph.formProvider == nil || graph.formProvider.UserCount() != 0 {
-		t.Fatalf("the Form handler must hold no users while sign-in is disabled")
-	}
+	// That the composed Form handler refuses the configured password is proven
+	// end to end in TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled.
 }
 
 type sessionAuthorizerStub struct {

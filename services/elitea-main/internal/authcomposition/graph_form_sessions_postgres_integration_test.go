@@ -13,9 +13,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,4 +200,99 @@ func newFormSessionGraphPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	return pool
+}
+
+// With Form sign-in off, the Form handler the graph composes must refuse the
+// configured login and password. The graph still mounts the Form routes inside
+// Routes() (the edge composition needs the router), so this drives the real
+// sign-in exchange through them: begin, then POST the configured credentials.
+// Enabled, the user is provisioned; disabled, nothing is, and the browser is
+// sent back to the login page. A field holding a COPY of the handler's
+// provider could not tell these apart if the handler were handed the
+// configured list again.
+func TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pool := newFormSessionGraphPool(t)
+			config := writeMaterialFixture(t)
+			server := miniredis.RunT(t)
+			graph, err := newFormGraph(
+				context.Background(),
+				config,
+				FormGraphDependencies{
+					PostgreSQL:           pool,
+					FormSignInEnabled:    test.enabled,
+					MainRoutePublicRules: []forwardapp.PublicRule{},
+				},
+				func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
+					return redis.NewClient(&redis.Options{Addr: server.Addr()}), nil
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = graph.Close() })
+
+			begin := formExchangeRequest(http.MethodGet, browserapi.LoginPath, nil)
+			beginResponse := httptest.NewRecorder()
+			graph.Routes().ServeHTTP(beginResponse, begin)
+			location, err := url.Parse(beginResponse.Header().Get("Location"))
+			if beginResponse.Code != http.StatusFound || err != nil {
+				t.Fatalf("begin = %d location=%q", beginResponse.Code, beginResponse.Header().Get("Location"))
+			}
+			target := location.Query().Get("target_to")
+			var sessionCookie *http.Cookie
+			for _, cookie := range beginResponse.Result().Cookies() {
+				if cookie.Name == config.Cookie.Name && cookie.Value != "" {
+					sessionCookie = cookie
+				}
+			}
+			if target == "" || sessionCookie == nil {
+				t.Fatalf("begin set no transaction or session: location=%q cookies=%v",
+					location, beginResponse.Result().Cookies())
+			}
+
+			form := url.Values{
+				"target":   {target},
+				"login":    {"admin"},
+				"password": {"correct horse battery staple"},
+			}
+			submit := formExchangeRequest(http.MethodPost, browserapi.FormAuthorizePath,
+				strings.NewReader(form.Encode()))
+			submit.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			submit.AddCookie(&http.Cookie{Name: sessionCookie.Name, Value: sessionCookie.Value})
+			submitResponse := httptest.NewRecorder()
+			graph.Routes().ServeHTTP(submitResponse, submit)
+
+			var provisioned int
+			if err := pool.QueryRow(context.Background(),
+				`SELECT count(*) FROM auth_core__user WHERE email = 'admin@example.test'`,
+			).Scan(&provisioned); err != nil {
+				t.Fatal(err)
+			}
+			signedIn := provisioned == 1
+			if signedIn != test.enabled {
+				t.Fatalf("Form sign-in enabled=%v, yet the configured password signed in=%v (status %d, location %q)",
+					test.enabled, signedIn, submitResponse.Code, submitResponse.Header().Get("Location"))
+			}
+			if !test.enabled && submitResponse.Code != http.StatusFound {
+				t.Fatalf("a refused Form sign-in must send the browser back to login, got %d", submitResponse.Code)
+			}
+		})
+	}
+}
+
+func formExchangeRequest(method, path string, body io.Reader) *http.Request {
+	request := httptest.NewRequest(method, "http://auth-internal"+path, body)
+	request.RemoteAddr = "10.1.2.3:1234"
+	request.Header.Set("X-Forwarded-For", "203.0.113.7")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-Host", "elitea.example")
+	return request
 }
