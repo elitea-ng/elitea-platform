@@ -90,52 +90,114 @@ func TestFormAssertionPreservesCurrentIdentitySemantics(t *testing.T) {
 	}
 }
 
-func TestFormAssertionLeavesFallbackIdentityClaimsDownstream(t *testing.T) {
-	t.Parallel()
+// A Form user with no configured address used to sign in as
+// `<login>@centry.user`: the adapter left the email empty and identity
+// provisioning synthesized one in the system-identity domain, which hides the
+// account from the Users page and from analytics. Now the user is a
+// configuration error: the document still loads (one bad user must not lock
+// every other user out), the load reports the login, and a sign-in with the
+// RIGHT password is refused with the generic failure and a logged cause.
+func TestFormUserWithoutEmailIsRefusedNotSynthesized(t *testing.T) {
+	logs := captureDefaultLog(t)
 
-	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
-	provider, err := newFormProvider(
-		[]byte(`{"users":[{"login":"admin","password":"secret"}]}`),
-		func() time.Time { return now },
-	)
+	provider, err := NewFormProvider([]byte(`{"users":[
+		{"login":"admin","password":"secret"},
+		{"login":"system-ish","password":"secret","email":"someone@CENTRY.user"},
+		{"login":"attr-reserved","password":"secret","attributes":{"email":"x@centry.user"}},
+		{"login":"ok","password":"secret","email":"ok@example.test"}
+	]}`))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("one misconfigured user must not reject the whole document: %v", err)
 	}
-	assertion, err := provider.AssertionVerifier(FormSubmission{
-		Login: "admin", Password: "secret",
-	}).Verify(context.Background(), formVerification("origin-session"))
-	if err != nil {
-		t.Fatal(err)
+	if got, want := provider.MisconfiguredLogins(), []string{"admin", "system-ish", "attr-reserved"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("misconfigured logins = %q, want %q", got, want)
 	}
-	if assertion.Email != "" || assertion.GivenName != "" || assertion.FamilyName != "" || assertion.Name != "" {
-		t.Fatalf("fallback claims were invented by the Form adapter: %+v", assertion)
+	if provider.UserCount() != 4 {
+		t.Fatalf("user count = %d, want 4", provider.UserCount())
 	}
-	if string(assertion.ProviderAttributes) !=
-		`{"nameid":"admin","attributes":{},"sessionindex":"origin-session"}` {
-		t.Fatalf("provider attributes = %s", assertion.ProviderAttributes)
+
+	for _, login := range []string{"admin", "system-ish", "attr-reserved"} {
+		assertion, err := provider.NewVerifier(login, "secret").Verify(context.Background(), formVerification("origin-session"))
+		if !errors.Is(err, ErrUnauthenticated) || err.Error() != ErrUnauthenticated.Error() ||
+			!reflect.DeepEqual(assertion, browserflow.VerifiedAssertion{}) {
+			t.Fatalf("%s: assertion = %+v, error = %v; want the generic %v", login, assertion, err, ErrUnauthenticated)
+		}
+		if strings.Contains(err.Error(), "centry.user") {
+			t.Fatalf("%s: the user-facing error names the configuration problem: %v", login, err)
+		}
+	}
+	logged := logs.String()
+	if !strings.Contains(logged, "no email address configured") || !strings.Contains(logged, "login=admin") {
+		t.Fatalf("the configuration error was not logged with the login:\n%s", logged)
+	}
+
+	assertion, err := provider.NewVerifier("ok", "secret").Verify(context.Background(), formVerification("origin-session"))
+	if err != nil || assertion.Email != "ok@example.test" {
+		t.Fatalf("a configured user must still sign in: assertion = %+v, error = %v", assertion, err)
 	}
 }
 
-func TestFormProviderAcceptsButDoesNotPromoteCurrentAdminSchemaEmail(t *testing.T) {
+// The Admin schema writes the address at the TOP level, and that field used to
+// be accepted and then thrown away. It is now the primary source; the
+// attribute is the fallback.
+func TestFormProviderReadsTopLevelAdminSchemaEmail(t *testing.T) {
 	t.Parallel()
 
-	provider, err := NewFormProvider([]byte(`{"users":[{
-		"login":"admin",
-		"password":"secret",
-		"email":"configured-but-currently-ignored@example.test"
-	}]}`))
+	provider, err := NewFormProvider([]byte(`{"users":[
+		{"login":"top","password":"secret","email":"Top@Example.test"},
+		{"login":"both","password":"secret","email":"top@example.test","attributes":{"email":"attr@example.test"}},
+		{"login":"attr","password":"secret","attributes":{"email":"attr@example.test"}}
+	]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertion, err := provider.NewVerifier("admin", "secret").Verify(
-		context.Background(),
-		formVerification("origin-session"),
-	)
-	if err != nil {
-		t.Fatal(err)
+	if logins := provider.MisconfiguredLogins(); len(logins) != 0 {
+		t.Fatalf("misconfigured logins = %q, want none", logins)
 	}
-	if assertion.Email != "" {
-		t.Fatalf("top-level Admin-schema email changed current Form behavior: %q", assertion.Email)
+	for login, want := range map[string]string{
+		"top":  "Top@Example.test",
+		"both": "top@example.test",
+		"attr": "attr@example.test",
+	} {
+		assertion, err := provider.NewVerifier(login, "secret").Verify(context.Background(), formVerification("origin-session"))
+		if err != nil {
+			t.Fatalf("%s: %v", login, err)
+		}
+		if assertion.Email != want {
+			t.Fatalf("%s: email = %q, want %q", login, assertion.Email, want)
+		}
+	}
+}
+
+// An unusable TOP-LEVEL address marks that one user misconfigured; it does
+// not reject the whole users file. Before the top-level field was read it was
+// ignored outright, so a file carrying a malformed one loaded. Rejecting the
+// file now would stop elitea-main at boot on upgrade (the document is read
+// even while Form sign-in is disabled) and lock every other user out.
+func TestFormProviderTreatsAnUnusableTopLevelEmailAsOneMisconfiguredUser(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewFormProvider([]byte(`{"users":[
+		{"login":"spaced","password":"secret","email":"admin @example.test"},
+		{"login":"control","password":"secret","email":"admin\u0007@example.test"},
+		{"login":"blank","password":"secret","email":"   "},
+		{"login":"shadowed","password":"secret","email":"bad address","attributes":{"email":"attr@example.test"}},
+		{"login":"ok","password":"secret","email":" ok@example.test "}
+	]}`))
+	if err != nil {
+		t.Fatalf("one unusable top-level email must not reject the whole document: %v", err)
+	}
+	if got, want := provider.MisconfiguredLogins(), []string{"spaced", "control", "blank", "shadowed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("misconfigured logins = %q, want %q", got, want)
+	}
+	for _, login := range []string{"spaced", "control", "blank", "shadowed"} {
+		if _, err := provider.NewVerifier(login, "secret").Verify(context.Background(), formVerification("origin-session")); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatalf("%s: error = %v, want %v", login, err, ErrUnauthenticated)
+		}
+	}
+	assertion, err := provider.NewVerifier("ok", "secret").Verify(context.Background(), formVerification("origin-session"))
+	if err != nil || assertion.Email != "ok@example.test" {
+		t.Fatalf("surrounding whitespace must be trimmed: assertion = %+v, error = %v", assertion, err)
 	}
 }
 
@@ -317,8 +379,8 @@ func TestFormProviderSnapshotSupportsConcurrentVerification(t *testing.T) {
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	provider, err := newFormProvider([]byte(`{"users":[
-		{"login":"first","password":"first-secret"},
-		{"login":"second","password":"second-secret"}
+		{"login":"first","password":"first-secret","email":"first@example.test"},
+		{"login":"second","password":"second-secret","email":"second@example.test"}
 	]}`), func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)

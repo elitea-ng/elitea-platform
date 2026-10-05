@@ -225,7 +225,7 @@ func newFormLoginHandler(
 		t.Fatal(err)
 	}
 	provider, err := browserapp.NewFormProvider(
-		[]byte(`{"users":[{"login":"admin","password":"highly-sensitive-password"}]}`))
+		[]byte(`{"users":[{"login":"admin","password":"highly-sensitive-password","email":"admin@example.test"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

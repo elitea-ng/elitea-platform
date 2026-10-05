@@ -8,7 +8,7 @@
   "type": "module",
   "description": "Elitea web UI — drop-in replacement for apps/elitea-ui (spec: elitea-docs ui/spec-ui-reimplementation.md)",
   "engines": {
-    "node": ">=24",
+    "node": ">=26",
     "npm": ">=11"
   },
   "scripts": {

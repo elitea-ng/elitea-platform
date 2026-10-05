@@ -5,7 +5,7 @@
 # construction. Local builds: podman build -f apps/elitea-web/Containerfile .
 
 # ── Stage 1: build the SPA (three entries: app, admin, maintenance) ──────────
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /build
 

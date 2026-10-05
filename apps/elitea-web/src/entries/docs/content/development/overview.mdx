@@ -15,7 +15,7 @@ Install podman and its `podman compose` provider. Every compose command in this 
 Install the Go toolchain the workspace pins (`go.work` at the repository root). `services/elitea-llm-gateway` pins its own, newer Go release and is deliberately **outside** the workspace — its `Containerfile` builds it with `GOWORK=off`, and `task test`/`task vet`/`task lint` never open it. Run its own test suite from inside `services/elitea-llm-gateway/`.
 </Step>
 <Step title="Node">
-Install Node 24 or newer (and npm 11 or newer) for `apps/elitea-web` — the versions are enforced by the `engines` field in its `package.json`, so an older toolchain fails `npm install` before it fails anything else.
+Install Node 26 or newer (and npm 11 or newer) for `apps/elitea-web` — the versions are enforced by the `engines` field in its `package.json`, so an older toolchain fails `npm install` before it fails anything else.
 </Step>
 <Step title="Python">
 Install Python 3.12 for `services/elitea-worker-python` (its `pyproject.toml` pins `>=3.12,<3.13`). The worker installs with plain `pip`; there is no `uv` lockfile or workflow step in this repository.
