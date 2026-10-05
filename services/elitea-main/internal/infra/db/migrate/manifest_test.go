@@ -767,7 +767,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the provider events it admits (`event_filter`), and whether a caller
 	// may re-value the agent's variables (`allow_variable_overrides`).
 	// Columns and no permission, so no shared sibling.
-	require.EqualValues(t, 142, Head(tenant))
+	// 143: tenant/0143_strip_llm_settings_webhook_secret.sql, a data-only
+	// migration that removes the plaintext `webhook_secret` the agent
+	// editor's dead "Webhook secret" model setting wrote into
+	// `application_versions.llm_settings`. No table and no permission, so no
+	// shared sibling.
+	require.EqualValues(t, 143, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
