@@ -22,6 +22,11 @@ type Repository interface {
 	// repository's cap constants for why a silent cut is worse here than
 	// elsewhere: the client paginates over what it receives.
 	GetUserActivity(ctx context.Context, params analytics.QueryParams) ([]analytics.UserActivity, bool, error)
+	// GetExecutionAnalytics is one runtime execution's totals, and
+	// GetEvaluationRunAnalytics one evaluation run's. They read by id, with
+	// no date window: a run is a fixed set of calls.
+	GetExecutionAnalytics(ctx context.Context, projectID, executionID string) (analytics.ExecutionAnalytics, error)
+	GetEvaluationRunAnalytics(ctx context.Context, projectID, runID string) (analytics.EvaluationRunAnalytics, error)
 }
 
 type Handler struct {
@@ -83,6 +88,22 @@ func writeRepoFailure(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "project id must be a positive integer",
 			"code":  "bad_project_id",
+		})
+		return
+	}
+	if errors.Is(err, analytics.ErrBadID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "the run id is not valid",
+			"code":  "bad_run_id",
+		})
+		return
+	}
+	// One answer for "no such run" and "a run of another project", so the
+	// route does not confirm that another project's id exists.
+	if errors.Is(err, analytics.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": "run not found",
+			"code":  "run_not_found",
 		})
 		return
 	}
@@ -211,6 +232,13 @@ func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
 	if summary.Health != nil {
 		body["health"] = summary.Health
 	}
+	// The unattended calls the active-user figures above leave out (legacy
+	// issues 6802 and 6881), one row per trigger origin. Absent, not empty,
+	// when the database cannot tell the origins apart: an empty list would
+	// say "nothing here was automated".
+	if summary.Automated != nil {
+		body["automated_activity"] = summary.Automated
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -294,6 +322,41 @@ func (h *Handler) Agents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// Execution is one runtime execution's analytics (legacy issues 6667 and
+// 6816): the calls, tokens, estimated cost, models, callers, failures and
+// tools of the run and its child attributions.
+//
+// # `available: false` is not zero
+//
+// A run admitted before shared migration 0100, or one whose calls the
+// gateway has pruned, answers 200 with `available: false`, a reason, and NO
+// figure keys. A client renders "unavailable" for it. A run that made no
+// model call answers `available: true` with zero totals, which is a
+// measurement.
+func (h *Handler) Execution(w http.ResponseWriter, r *http.Request) {
+	result, err := h.repo.GetExecutionAnalytics(r.Context(),
+		chi.URLParam(r, "projectID"), chi.URLParam(r, "executionID"))
+	if err != nil {
+		writeRepoFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// EvaluationRun is one evaluation run's analytics (legacy issues 6677 and
+// 6817): the run's total, its agent and judge roles, and one row per case
+// with the two roles side by side. The roles are never added into each other.
+// The availability rule is Execution's.
+func (h *Handler) EvaluationRun(w http.ResponseWriter, r *http.Request) {
+	result, err := h.repo.GetEvaluationRunAnalytics(r.Context(),
+		chi.URLParam(r, "projectID"), chi.URLParam(r, "runID"))
+	if err != nil {
+		writeRepoFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // agentName resolves the requested agent's display name out of the breakdown

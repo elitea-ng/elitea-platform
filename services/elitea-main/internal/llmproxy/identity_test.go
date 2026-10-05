@@ -49,7 +49,7 @@ func TestIdentityFromContext_ZeroProjectIgnored(t *testing.T) {
 func TestInjectIdentity_SetsAndSigns(t *testing.T) {
 	secret := []byte("shared-secret")
 	h := http.Header{}
-	injectIdentity(fullCtx(), h, secret)
+	injectIdentity(fullCtx(), h, secret, nil)
 
 	if got := h.Get(HeaderProjectID); got != "42" {
 		t.Errorf("%s = %q, want 42", HeaderProjectID, got)
@@ -74,7 +74,7 @@ func TestInjectIdentity_StripsSpoofedHeaders(t *testing.T) {
 	h.Set(HeaderTenantID, "evil")
 	h.Set(HeaderSignature, "sha256=deadbeef")
 
-	injectIdentity(fullCtx(), h, secret)
+	injectIdentity(fullCtx(), h, secret, nil)
 
 	if got := h.Get(HeaderProjectID); got != "42" {
 		t.Errorf("spoofed project not overwritten: %s = %q", HeaderProjectID, got)
@@ -97,7 +97,7 @@ func TestInjectIdentity_StripsSpoofedHeaders(t *testing.T) {
 
 func TestInjectIdentity_NoSecretNoSignature(t *testing.T) {
 	h := http.Header{}
-	injectIdentity(fullCtx(), h, nil)
+	injectIdentity(fullCtx(), h, nil, nil)
 	if got := h.Get(HeaderSignature); got != "" {
 		t.Errorf("expected no signature without a secret, got %q", got)
 	}
@@ -111,7 +111,7 @@ func TestInjectIdentity_NoProjectNoSignature(t *testing.T) {
 	secret := []byte("s")
 	ctx := auth.ContextWithUser(context.Background(), auth.User{ID: "u"})
 	h := http.Header{}
-	injectIdentity(ctx, h, secret)
+	injectIdentity(ctx, h, secret, nil)
 	if h.Get(HeaderProjectID) != "" {
 		t.Errorf("unexpected project header")
 	}
@@ -135,7 +135,7 @@ func TestCanonical_NoFieldAmbiguity(t *testing.T) {
 func TestVerifyIdentitySignature_TamperedField(t *testing.T) {
 	secret := []byte("k")
 	h := http.Header{}
-	injectIdentity(fullCtx(), h, secret)
+	injectIdentity(fullCtx(), h, secret, nil)
 	// Tamper with the tenant after signing.
 	h.Set(HeaderTenantID, "other")
 	if verifyIdentitySignature(h, secret) {
@@ -145,7 +145,7 @@ func TestVerifyIdentitySignature_TamperedField(t *testing.T) {
 
 func TestVerifyIdentitySignature_WrongSecret(t *testing.T) {
 	h := http.Header{}
-	injectIdentity(fullCtx(), h, []byte("right"))
+	injectIdentity(fullCtx(), h, []byte("right"), nil)
 	if verifyIdentitySignature(h, []byte("wrong")) {
 		t.Errorf("verified under the wrong secret")
 	}

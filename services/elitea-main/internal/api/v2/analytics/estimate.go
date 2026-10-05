@@ -276,6 +276,13 @@ type costEstimate struct {
 	UnattributedToolCalls int64             `json:"unattributed_tool_calls"`
 	ByTool                []estimateToolRow `json:"by_tool,omitempty"`
 	ByToolTruncated       bool              `json:"by_tool_truncated"`
+
+	// Evaluation is the window's evaluation spend (legacy issues 6677 and
+	// 6678): the calls the evaluation orchestrator signs `eval:<run>:…`.
+	// Those calls name no execution, so the agent split above counts them as
+	// unattributed; this block is where they are attributed. Absent when the
+	// request log has no execution_id column. See estimate_evaluation.go.
+	Evaluation *estimateEvaluation `json:"evaluation,omitempty"`
 }
 
 // estimateAgentRows and estimateToolRows cap ByAgent and ByTool, in the same
@@ -395,6 +402,9 @@ func buildEstimate(ctx context.Context, tx pgx.Tx, projectID int64, from, to tim
 		return nil, err
 	}
 	if err := estimateByTool(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
+		return nil, err
+	}
+	if err := buildEstimateEvaluation(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
 		return nil, err
 	}
 	if !priced {

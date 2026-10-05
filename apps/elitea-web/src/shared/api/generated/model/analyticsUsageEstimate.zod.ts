@@ -42,6 +42,7 @@
 import * as zod from "zod";
 import { AnalyticsEstimateAgent } from "./analyticsEstimateAgent.zod";
 import { AnalyticsEstimateDay } from "./analyticsEstimateDay.zod";
+import { AnalyticsEstimateEvaluation } from "./analyticsEstimateEvaluation.zod";
 import { AnalyticsEstimateModel } from "./analyticsEstimateModel.zod";
 import { AnalyticsEstimateTool } from "./analyticsEstimateTool.zod";
 import { AnalyticsEstimateTotals } from "./analyticsEstimateTotals.zod";
@@ -123,6 +124,7 @@ export const AnalyticsUsageEstimate = zod
         "One entry per (toolkit, tool), capped at 100 rows, ABSENT when\ntool_dimension_available is false.\n\nThere is no producer that ties one LLM request to one tool: a\ncompletion decides whether to call a tool, but the token cost\nbelongs to the completion, not to any one tool it invoked. So each\nrow is an EXECUTION's total LLM cost attributed to every tool that\nexecution called — an execution that calls two tools counts its\ncost under both, deliberately, and by_tool is never expected to\nsum to totals.total_cost the way by_model already is not expected\nto (one call has one model but can touch several tools). A tool\ncalled more than once inside one execution is folded into ONE\nattribution (see AnalyticsEstimateTool.attributed_runs), so a\nrepeated call cannot multiply the same execution's cost.\n",
       ),
     by_tool_truncated: zod.boolean(),
+    evaluation: AnalyticsEstimateEvaluation.optional(),
   })
   .describe(
     "The dimensional half of the cost view, over gateway.llm_request_logs\n(shared migration 0099): one row per call, carrying the project, the\nuser, the provider, the model, the clock and the token counts.\n\nTokens here are RECORDED. Money here is DERIVED, by multiplying those\ntokens by the price catalogue in gateway.gateway_models, and it is\ntherefore an estimate. It is published under its own key so it cannot\nbe confused with kpis.total_cost, which is what the billing path\naccounted.\n",

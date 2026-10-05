@@ -485,7 +485,8 @@ INSERT INTO elitea_runtime.execution_jobs (
     execution_id, generation, command_id, tenant_id, resource_project_id,
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest,
-    idempotency_scope, idempotency_key, state, desired_state, admitted_at
+    idempotency_scope, idempotency_key, state, desired_state, admitted_at,
+    trigger_origin
 ) VALUES (
     $1::text,
     $2::bigint,
@@ -503,7 +504,10 @@ INSERT INTO elitea_runtime.execution_jobs (
     $14::text,
     $15::text,
     'RUNNING',
-    $16::timestamptz
+    $16::timestamptz,
+    -- shared/0140: how the run started. An empty value is a person at the
+    -- chat composer, which is the column default.
+    COALESCE(NULLIF($17::text, ''), 'manual')
 )
 ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
 RETURNING execution_id
@@ -526,6 +530,7 @@ type InsertAgentExecutionJobParams struct {
 	IdempotencyKey      string             `db:"idempotency_key" json:"idempotency_key"`
 	State               string             `db:"state" json:"state"`
 	AdmittedAt          pgtype.Timestamptz `db:"admitted_at" json:"admitted_at"`
+	TriggerOrigin       string             `db:"trigger_origin" json:"trigger_origin"`
 }
 
 func (q *Queries) InsertAgentExecutionJob(ctx context.Context, arg InsertAgentExecutionJobParams) (string, error) {
@@ -546,6 +551,7 @@ func (q *Queries) InsertAgentExecutionJob(ctx context.Context, arg InsertAgentEx
 		arg.IdempotencyKey,
 		arg.State,
 		arg.AdmittedAt,
+		arg.TriggerOrigin,
 	)
 	var execution_id string
 	err := row.Scan(&execution_id)

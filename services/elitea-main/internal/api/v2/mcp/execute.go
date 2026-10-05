@@ -85,6 +85,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // mcpConversationSource marks the conversations this file creates.
@@ -279,6 +280,9 @@ func (h *Handler) runAgentToolWithObserver(ctx context.Context, schema string, p
 		TargetParticipantID: participantID,
 		QuestionID:          questionID,
 		UserInput:           task,
+		// An MCP client is a programmatic caller. It is still a person's
+		// action, so the analytics active-user reads count it (shared 0140).
+		TriggerOrigin: executiondomain.TriggerOriginAPI,
 	})
 	if err != nil {
 		// The turn was never admitted, so the conversation created a moment ago

@@ -37,6 +37,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // TriggerConversationSource marks the conversations this package creates.
@@ -217,6 +218,10 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 		// no body and a schedule with no input are both ordinary, and both
 		// run the pipeline from its entry node (UI-PD-3).
 		AllowEmptyUserInput: true,
+		// Stamped on the execution row (shared 0140), so the analytics
+		// active-user reads do not count ActorUserID as active because this
+		// unattended run executed under their name (legacy issue 6802).
+		TriggerOrigin: executionTriggerOrigin(request.Origin),
 	})
 	if err != nil {
 		// NOT relabelled as ErrInvalidInput, even when the use case answers
@@ -452,4 +457,15 @@ func runConversationName(origin, pipelineName string) string {
 		return name
 	}
 	return string([]rune(name)[:maxRunConversationName])
+}
+
+// executionTriggerOrigin maps this package's display origin to the execution
+// row's trigger_origin. Every run this package admits is unattended, so an
+// unknown value maps to webhook rather than to manual: counting an unattended
+// run as a person's activity is the defect the column exists to stop.
+func executionTriggerOrigin(origin string) executiondomain.TriggerOrigin {
+	if origin == OriginSchedule {
+		return executiondomain.TriggerOriginSchedule
+	}
+	return executiondomain.TriggerOriginWebhook
 }

@@ -536,6 +536,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			IdempotencyKey:      admission.Record.IdempotencyKey,
 			State:               string(admission.Record.Job.State),
 			AdmittedAt:          timestamp(timing.AdmittedAt),
+			TriggerOrigin:       admission.Record.Job.TriggerOrigin.Stored(),
 		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

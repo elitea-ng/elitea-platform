@@ -690,7 +690,8 @@ INSERT INTO elitea_runtime.execution_jobs (
     execution_id, generation, command_id, tenant_id, resource_project_id,
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest,
-    idempotency_scope, idempotency_key, state, desired_state, admitted_at
+    idempotency_scope, idempotency_key, state, desired_state, admitted_at,
+    trigger_origin
 ) VALUES (
     $1::text,
     $2::bigint,
@@ -708,7 +709,11 @@ INSERT INTO elitea_runtime.execution_jobs (
     $13::text,
     $14::text,
     'RUNNING',
-    $15::timestamptz
+    $15::timestamptz,
+    -- shared/0140: every index ingest is an unattended run, whoever started
+    -- it, so the analytics active-user reads do not count it as a person's
+    -- activity.
+    'index'
 )
 ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
 RETURNING execution_id

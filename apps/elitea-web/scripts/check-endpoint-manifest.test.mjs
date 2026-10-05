@@ -667,7 +667,15 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 266 -> 269: exchangeMcpOAuthGrant, registerMcpOAuthClient, and
 // deleteProjectContext. Existing handwritten callers keep the manifest count unchanged.
 // Combined main and Rust branch contract surface after the September integration.
-const GENERATED_OPERATION_COUNT = 274;
+//
+// 274 -> 276 (legacy issues 6667, 6677, 6816 and 6817, per-run analytics). TWO
+// new operations: getExecutionAnalytics
+// (`GET /elitea_core/analytics_execution/prompt_lib/{project_id}/{execution_id}`)
+// and getEvaluationRunAnalytics
+// (`GET /elitea_core/eval_run_analytics/prompt_lib/{project_id}/{run_id}`). The
+// generated hooks have no caller yet: the Run History and evaluation analytics
+// screens that read them land in their own change.
+const GENERATED_OPERATION_COUNT = 276;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

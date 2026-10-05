@@ -597,7 +597,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// three columns on gateway.llm_request_logs: who owns the credential that
 	// served a request (project or platform, legacy issue 6709) and the
 	// provider's cache-read and cache-write token counts. No new permission.
-	require.EqualValues(t, 139, Head(shared))
+	//
+	// 140: shared/0140_execution_trigger_origin.sql, how a runtime execution
+	// started (manual, api, schedule, webhook, index), so the analytics
+	// active-user reads stop counting a person for an unattended run (legacy
+	// issues 6802 and 6881). No request-log index: the runner applies every
+	// pending file in one transaction, and a build there would hold the
+	// execution_jobs lock. No new permission.
+	require.EqualValues(t, 140, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

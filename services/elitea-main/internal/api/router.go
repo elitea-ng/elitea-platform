@@ -3547,6 +3547,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_tool_detail/prompt_lib/{projectID}", analyticsHandler.Tools)
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_users/prompt_lib/{projectID}", analyticsHandler.Users)
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_user_detail/prompt_lib/{projectID}", analyticsHandler.Users)
+					// One run's analytics, read by id rather than by window
+					// (legacy issues 6667, 6816 and 6817). The execution read
+					// is a project analytics read and takes the same gate.
+					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_execution/prompt_lib/{projectID}/{executionID}", analyticsHandler.Execution)
+					// The evaluation run read is spend, so it takes the
+					// analytics gate, AND it names one run, so it also takes
+					// the run READ permission the run's own routes take.
+					r.With(evaluationGate(v2evaluation.PermissionRunRead), requireAnalyticsView, requireAnalyticsEnabled).
+						Get("/eval_run_analytics/prompt_lib/{projectID}/{runID}", analyticsHandler.EvaluationRun)
 				}
 
 				// The eighth analytics endpoint (issue 253), and the only one
