@@ -310,8 +310,8 @@ func InlineAttachmentImageMaxBytes() int64 { return int64(maxInlineAttachmentIma
 
 // InlineAttachmentImageDownscale reports whether an inline-format image over
 // InlineAttachmentImageMaxBytes is downscaled to fit rather than announced
-// by name only.
-const InlineAttachmentImageDownscale = false
+// by name only (attachments_downscale.go).
+const InlineAttachmentImageDownscale = true
 
 // InlineAttachmentImageFormats lists the extensions handed to the model as
 // images, sorted.
@@ -352,7 +352,9 @@ type inlineAttachmentImage struct {
 	dataURL string
 	// refusal is appended to the header chunk's own text. A model that is told
 	// "a picture is attached" and shown nothing answers as though it had seen
-	// it; a model told the picture could not be embedded does not.
+	// it; a model told the picture could not be embedded does not. When the
+	// picture WAS embedded after a downscale, it is that note instead, so the
+	// model knows fine detail may be missing.
 	refusal string
 	// extract asks for the DOCUMENT extraction marker on the header chunk, so
 	// the worker reads the file the way it reads a PDF. For an image that
@@ -385,8 +387,21 @@ func inlineAttachmentImageFor(
 			extract: true,
 		}
 	}
+	// The raw size this image may embed at: the per-image cap, or what the
+	// turn's budget has left once base64 (4 bytes per 3) is paid for.
+	rawLimit := maxInlineAttachmentImageBytes
+	if budget != nil {
+		rawLimit = min(rawLimit, max(*budget, 0)/4*3)
+	}
+	if rawLimit < minInlineAttachmentImageBytes {
+		return inlineAttachmentImage{
+			refusal: "NOTE: this image was not embedded because the turn's other attachments " +
+				"already use the space available for images. It is not shown to you as an image.",
+			extract: true,
+		}
+	}
 	content, err := reader.ReadCurrentAttachmentImage(
-		ctx, projectID, ref.Bucket, ref.Name, int64(maxInlineAttachmentImageBytes),
+		ctx, projectID, ref.Bucket, ref.Name, int64(maxInlineAttachmentSourceBytes),
 	)
 	if err != nil || len(content) == 0 {
 		// Over the reader's own cap, absent, or a store that is having a bad
@@ -395,25 +410,41 @@ func inlineAttachmentImageFor(
 		// see my screenshot" is otherwise indistinguishable from a bug.
 		return inlineAttachmentImage{
 			refusal: "NOTE: this image could not be embedded for the model (it is larger than " +
-				strconv.Itoa(maxInlineAttachmentImageBytes/1024) +
-				" KiB, or its bytes could not be read). It is not shown to you as an image.",
+				strconv.Itoa(maxInlineAttachmentSourceBytes>>20) +
+				" MiB, or its bytes could not be read). It is not shown to you as an image.",
 			extract: true,
 		}
 	}
-	encoded := base64.StdEncoding.EncodeToString(content)
-	cost := len(encoded)
-	if budget != nil {
-		if cost > *budget {
+	note := ""
+	if len(content) > rawLimit {
+		// Too large as stored: fit it (client contract 1.1). A picture that
+		// cannot be decoded, has too many pixels, or does not fit even at the
+		// floor size is announced and read, as before.
+		downscaled, err := downscaleInlineImage(ctx, content, rawLimit)
+		if err != nil {
 			return inlineAttachmentImage{
-				refusal: "NOTE: this image was not embedded because the turn's other attachments " +
-					"already use the space available for images. It is not shown to you as an image.",
+				refusal: "NOTE: this image could not be embedded for the model (it is too large to " +
+					"downscale to the " + strconv.Itoa(rawLimit/1024) + " KiB available, or it could not " +
+					"be decoded). It is not shown to you as an image.",
 				extract: true,
 			}
 		}
-		*budget -= cost
+		content, mediaType = downscaled.jpeg, "image/jpeg"
+		note = "NOTE: this image was downscaled from " +
+			strconv.Itoa(downscaled.sourceWidth) + "x" + strconv.Itoa(downscaled.sourceHeight) + " to " +
+			strconv.Itoa(downscaled.downscaledWidth) + "x" + strconv.Itoa(downscaled.downscaledHeight) +
+			" pixels to fit the model's input; fine detail may be lost."
 	}
-	return inlineAttachmentImage{dataURL: "data:" + mediaType + ";base64," + encoded}
+	encoded := base64.StdEncoding.EncodeToString(content)
+	if budget != nil {
+		*budget -= len(encoded)
+	}
+	return inlineAttachmentImage{dataURL: "data:" + mediaType + ";base64," + encoded, refusal: note}
 }
+
+// minInlineAttachmentImageBytes is the smallest allowance worth trying to fit
+// an image into; a 256-pixel JPEG rarely encodes below it.
+const minInlineAttachmentImageBytes = 4 << 10
 
 // attachmentImageChunk is the `{"type":"image_url"}` chunk both workers already
 // admit (`_ADMITTED_CHUNK_TYPES` / the `image_url` arm of
