@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.0"
+  x-elitea-client-contract: "1.1"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2348,6 +2348,68 @@ components:
               passed through; typing it is tracked as follow-up of ADR-0025
               decision 14.
 
+    AttachmentMessageItem:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one entry per attachment, built by
+        internal/infra/db/repos/conversations.go:2438
+        (`attachmentItemsByGroup`). The typed keys below are the contract
+        (client contract 1.1); the object stays open for keys a later item
+        kind adds.
+      description: >-
+        One file sent with a message (`item_type` `attachment_message`).
+        `item_details.filepath` is `/{bucket}/{conversation_uuid}/{name}`;
+        download it with downloadConversationAttachment using the last
+        segment as the name.
+      required: [id, item_type, order_index, item_details]
+      properties:
+        id: { type: integer }
+        item_type:
+          type: string
+          description: '`attachment_message`.'
+        order_index: { type: integer }
+        item_details:
+          $ref: '#/components/schemas/AttachmentMessageItemDetails'
+
+    AttachmentMessageItemDetails:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): internal/infra/db/repos/conversations.go:2840
+        (`attachmentItemDetails`); open for keys a later item kind adds.
+      required: [id, item_type, name, bucket, filepath, attachment_type, content]
+      properties:
+        id: { type: integer }
+        item_type: { type: string }
+        name:
+          type: string
+          description: The stored object name, `{conversation_uuid}/{file name}`.
+        bucket: { type: string }
+        filepath:
+          type: string
+          description: '`/{bucket}/{name}` — the value a chat send''s `payload.attachments[].filepath` carried.'
+        attachment_type:
+          type: string
+          description: '`image` or `document`; read it, do not enumerate it.'
+        content:
+          type: array
+          description: >-
+            The content chunks the model was given: a `{type: text, text}`
+            header chunk and, for an image embedded for the model,
+            `{type: image_url, image_url: {url: data:...}}` — a client may
+            render that data URL as a thumbnail without a download. Empty
+            when nothing was recorded.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): the `chat_messages_attachment.content` json written
+              at admission by
+              internal/application/agentexecution/attachments.go:474
+              (`attachmentContentScaffold`); its chunk kinds follow the
+              runtime.
+
     ConversationMessage:
       type: object
       description: >
@@ -2384,13 +2446,7 @@ components:
           type: array
           description: Omitted, not empty, for a group with no attachments.
           items:
-            type: object
-            additionalProperties: true
-            x-elitea-passthrough: >-
-              NOTE(W2): one `{id, item_type, order_index, item_details}` entry
-              per attachment (internal/api/v2/conversations/handler.go:110);
-              `item_details` is built per item type, so the entry is passed
-              through.
+            $ref: '#/components/schemas/AttachmentMessageItem'
         is_streaming:
           type: boolean
           description: Present (true) only while the turn is in flight.
@@ -9899,6 +9955,7 @@ components:
         - native_auth
         - client_policy
         - min_client_version
+        - attachments
       properties:
         server_version:
           type: string
@@ -9941,6 +9998,72 @@ components:
             its own entry and falls back to `client_policy.min_client_version`.
             Always an object.
           additionalProperties: { type: string }
+        attachments:
+          $ref: '#/components/schemas/ClientAttachmentPolicy'
+    ClientAttachmentPolicy:
+      type: object
+      description: >-
+        The deployment's chat attachment limits (client contract 1.1), so a
+        client can refuse a file before uploading it; the server enforces
+        every one of them again. Byte values are bytes. A project's storage
+        policy may set a different per-file cap, which the upload's 400
+        names. NOTE(W2): internal/api/v2/discovery/document.go:60
+        (`AttachmentPolicy`), filled by
+        internal/api/v2/conversations/attachment_limits.go:47
+        (`CurrentAttachmentLimits`).
+      required:
+        - max_files
+        - max_total_bytes
+        - max_file_bytes
+        - max_image_bytes
+        - chunk_bytes
+        - accepted_extensions
+        - max_extract_bytes
+        - inline_image_max_bytes
+        - inline_image_formats
+        - inline_image_downscale
+      properties:
+        max_files:
+          type: integer
+          description: Files one message carries in the composer.
+        max_total_bytes:
+          type: integer
+          format: int64
+          description: One upload, all chunks of one file (ARTIFACT_ATTACHMENT_MAX_TOTAL_MB).
+        max_file_bytes:
+          type: integer
+          format: int64
+          description: One non-image file (ARTIFACT_ATTACHMENT_MAX_FILE_MB).
+        max_image_bytes:
+          type: integer
+          format: int64
+          description: One image (ARTIFACT_ATTACHMENT_MAX_IMAGE_MB).
+        chunk_bytes:
+          type: integer
+          format: int64
+          description: The largest single upload request; send a larger file in chunks of at most this size.
+        accepted_extensions:
+          type: array
+          items: { type: string }
+          description: Lower-case, leading-dot extensions the model can read.
+        max_extract_bytes:
+          type: integer
+          format: int64
+          description: The largest document whose text is extracted for the model; a larger one is stored but not read.
+        inline_image_max_bytes:
+          type: integer
+          format: int64
+          description: The largest image (raw bytes) handed to the model as an image.
+        inline_image_formats:
+          type: array
+          items: { type: string }
+          description: Extensions handed to the model as images.
+        inline_image_downscale:
+          type: boolean
+          description: >-
+            True when the server downscales a larger image in one of
+            `inline_image_formats` to fit `inline_image_max_bytes`, so a
+            client need not.
     NativeAuthEndpoints:
       type: object
       description: >-
@@ -16675,6 +16798,7 @@ paths:
           schema: { type: string }
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Paginated application list
           content:
@@ -16861,6 +16985,7 @@ paths:
         - $ref: '#/components/parameters/XClientVersion'
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Application details with version summaries
           content:
@@ -22813,6 +22938,7 @@ paths:
         - $ref: '#/components/parameters/Offset'
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Toolkit instances
           content:

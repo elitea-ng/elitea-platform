@@ -433,6 +433,7 @@ type RouterConfig struct {
 	ProductionRuntime             *ProductionRuntimeRoutes
 	CurrentProjectInfo            *v2projectinfo.CurrentProjectInfoRoute
 	CurrentIndexTypes             *v2indextypes.CurrentIndexTypesRoute
+	AttachmentExtensions          []string // discovery's accepted_extensions (client contract 1.1); empty = the web default list
 	CurrentApplicationSkills      *v2applicationskills.CurrentApplicationSkillsRoute
 	CurrentPromptContextReads     *v2promptcontextreads.CurrentRoutes
 	CurrentProjectList            *v2projects.CurrentProjectListRoute
@@ -1368,6 +1369,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		Brand:          brandingResolver,
 		NativeAuth:     nativeDiscovery,
 		ClientPolicy:   clientPolicySource,
+		Attachments:    discoveryAttachmentPolicy(v2convs.CurrentAttachmentLimits(cfg.AttachmentExtensions)),
 	})
 	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
 	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
@@ -4801,4 +4803,22 @@ func (p publishAICompleter) Complete(
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 	})
+}
+
+// discoveryAttachmentPolicy carries the conversations package's attachment
+// limits into the discovery document's shape. The two packages do not import
+// each other; this composition root imports both.
+func discoveryAttachmentPolicy(limits v2convs.AttachmentLimits) v2discovery.AttachmentPolicy {
+	return v2discovery.AttachmentPolicy{
+		MaxFiles:             limits.MaxFiles,
+		MaxTotalBytes:        limits.MaxTotalBytes,
+		MaxFileBytes:         limits.MaxFileBytes,
+		MaxImageBytes:        limits.MaxImageBytes,
+		ChunkBytes:           limits.ChunkBytes,
+		AcceptedExtensions:   limits.AcceptedExtensions,
+		MaxExtractBytes:      limits.MaxExtractBytes,
+		InlineImageMaxBytes:  limits.InlineImageMaxBytes,
+		InlineImageFormats:   limits.InlineImageFormats,
+		InlineImageDownscale: limits.InlineImageDownscale,
+	}
 }

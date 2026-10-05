@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -300,6 +301,27 @@ var inlineAttachmentImageMediaTypes = map[string]string{
 	".jpeg": "image/jpeg",
 	".gif":  "image/gif",
 	".webp": "image/webp",
+}
+
+// InlineAttachmentImageMaxBytes is the largest image (raw bytes) a turn hands
+// to the model as an image — what a client is told in the discovery
+// document's attachment policy (client contract 1.1).
+func InlineAttachmentImageMaxBytes() int64 { return int64(maxInlineAttachmentImageBytes) }
+
+// InlineAttachmentImageDownscale reports whether an inline-format image over
+// InlineAttachmentImageMaxBytes is downscaled to fit rather than announced
+// by name only.
+const InlineAttachmentImageDownscale = false
+
+// InlineAttachmentImageFormats lists the extensions handed to the model as
+// images, sorted.
+func InlineAttachmentImageFormats() []string {
+	formats := make([]string, 0, len(inlineAttachmentImageMediaTypes))
+	for extension := range inlineAttachmentImageMediaTypes {
+		formats = append(formats, extension)
+	}
+	sort.Strings(formats)
+	return formats
 }
 
 // CurrentAttachmentImageReader reads one stored chat attachment's bytes at

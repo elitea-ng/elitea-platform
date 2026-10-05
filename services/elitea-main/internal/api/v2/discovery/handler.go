@@ -36,6 +36,8 @@ type Config struct {
 	// INTERFACE, never a typed nil pointer.
 	NativeAuth   NativeAuthSource
 	ClientPolicy ClientPolicySource
+	// Attachments is served as is. Its slices are copied at construction.
+	Attachments AttachmentPolicy
 }
 
 // Handler serves GET and HEAD /.well-known/elitea-client.
@@ -46,6 +48,7 @@ type Handler struct {
 	brand          BrandSource
 	nativeAuth     NativeAuthSource
 	clientPolicy   ClientPolicySource
+	attachments    AttachmentPolicy
 }
 
 // NewHandler builds the handler.
@@ -61,7 +64,14 @@ func NewHandler(cfg Config) *Handler {
 		brand:          cfg.Brand,
 		nativeAuth:     cfg.NativeAuth,
 		clientPolicy:   cfg.ClientPolicy,
+		attachments:    cloneAttachmentPolicy(cfg.Attachments),
 	}
+}
+
+func cloneAttachmentPolicy(policy AttachmentPolicy) AttachmentPolicy {
+	policy.AcceptedExtensions = append([]string{}, policy.AcceptedExtensions...)
+	policy.InlineImageFormats = append([]string{}, policy.InlineImageFormats...)
+	return policy
 }
 
 // Build assembles the document for one origin.
@@ -75,6 +85,7 @@ func (h *Handler) Build(ctx context.Context, origin string) (Document, error) {
 		BrandPackURL:     origin + branding.PackJSONPath + "?v=" + snap.PackJSONVersion(origin),
 		ClientPolicy:     DefaultPublicPolicy(),
 		MinClientVersion: map[string]string{},
+		Attachments:      cloneAttachmentPolicy(h.attachments),
 	}
 	if h.nativeAuth != nil {
 		na, err := h.nativeAuth.NativeAuth(ctx, origin)
