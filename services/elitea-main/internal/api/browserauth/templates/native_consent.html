@@ -1,7 +1,8 @@
 <!doctype html>
 <html lang="en">
   <head>
-    {{template "head-same-origin" .}}
+    {{template "head-base" .}}
+    <meta name="referrer" content="same-origin">
     <title>Sign in to {{.Brand.ProductName}} on a device</title>
   </head>
   <body class="auth-login-page" data-auth-form="native-consent">

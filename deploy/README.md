@@ -519,7 +519,10 @@ Two things it does **not** change:
 It is also no longer the **only** way to reach the configuration write path.
 An OIDC-only install reaches it by naming `env.ELITEA_AI_PROJECT_ID`, with no
 Form document and no TLS Redis at all. This file stays the recipe for an
-install that wants the Form plane itself.
+install that wants the Form plane itself, and it says so with
+`ELITEA_FORM_LOGIN_ENABLED: "true"`: Form (local username/password) sign-in is
+OFF by default in `values.yaml`, and with it off the users file is read and
+ignored. See `docs/UPGRADING.md`.
 
 `deploy/scripts/standalone-stack.sh seed-llm` writes its rows through that
 route now (`deploy/scripts/seed-llm-api.py`), not with `INSERT`. Two database

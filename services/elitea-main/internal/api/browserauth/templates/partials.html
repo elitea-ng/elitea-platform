@@ -3,24 +3,19 @@
   Everything here is static markup or html/template-escaped data; the art and
   the icons are inline SVG, so the page loads nothing from anywhere.
 */}}
-{{define "head"}}<meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light dark">
-    <meta name="referrer" content="no-referrer">
-    {{template "head-assets" .}}{{end}}
 {{/*
-  head-same-origin is "head" for a page whose form posts to a route that checks
-  Origin (the native consent page). Under no-referrer a browser serializes the
-  Origin of every non-GET request as "null" (Fetch, "serializing a request
-  origin"), so the check could never pass; same-origin keeps the real Origin on
-  the same-origin POST and still sends no referrer to any other origin.
+  "head" is every page's head with `no-referrer`. The native consent page uses
+  "head-base" and declares `same-origin` itself: a document under
+  `no-referrer` sends `Origin: null` on its form POST, and the consent
+  decision handler refuses "null" (native_pages.go, consentReferrerPolicy).
+  The meta would override the response header, so both must say the same.
 */}}
-{{define "head-same-origin"}}<meta charset="utf-8">
+{{define "head"}}{{template "head-base" .}}
+    <meta name="referrer" content="no-referrer">{{end}}
+{{define "head-base"}}<meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <meta name="referrer" content="same-origin">
-    {{template "head-assets" .}}{{end}}
-{{define "head-assets"}}{{if .Brand.FaviconURL}}<link rel="icon" href="{{.Brand.FaviconURL}}">{{end}}
+    {{if .Brand.FaviconURL}}<link rel="icon" href="{{.Brand.FaviconURL}}">{{end}}
     <script>{{.Script}}</script>
     <style>{{.Style}}</style>
     {{if .Brand.Style}}<style>{{.Brand.Style}}</style>{{end}}{{end}}

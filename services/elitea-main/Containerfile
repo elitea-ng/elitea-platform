@@ -10,7 +10,7 @@
 # elitea-web, so the split has no reason left to exist: the submodule is gone
 # (#199) along with its orphaned pin that broke every release (#8), and every
 # target below builds from this one stage.
-FROM node:24-alpine AS admin-builder
+FROM node:26-alpine AS admin-builder
 
 WORKDIR /build
 

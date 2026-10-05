@@ -108,3 +108,39 @@ func assertNotStatus(t *testing.T, router http.Handler, method string, path stri
 		t.Fatalf("%s %s status = %d, want anything else", method, path, recorder.Code)
 	}
 }
+
+// Form sign-in is OFF by default (ELITEA_FORM_LOGIN_ENABLED). With it off,
+// production authentication still composes — the gateway edge, PAT
+// validation and the runtime's forwarded-identity check all depend on it — but
+// no Form browser route is mounted, so nothing accepts a password.
+func TestEdgeOnlyProductionAuthMountsNoFormSignIn(t *testing.T) {
+	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	})
+	routes, err := NewEdgeOnlyProductionAuthRoutes(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewEdgeOnlyProductionAuthRoutes(nil); err == nil {
+		t.Fatal("an edge-only composition without the edge handler was accepted")
+	}
+
+	t.Run("no single sign-on: every Form path is absent", func(t *testing.T) {
+		router := NewRouter(RouterConfig{ProductionAuth: routes})
+		for _, path := range []string{"/auth/login", "/auth/form/login", "/auth/logout", "/auth/form/logout"} {
+			assertStatus(t, router, http.MethodGet, path, http.StatusNotFound)
+		}
+		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
+	})
+
+	t.Run("single sign-on still owns the prefix", func(t *testing.T) {
+		router := NewRouter(RouterConfig{
+			ProductionAuth: routes,
+			Auth:           AuthDeps{SessionHandler: v2auth.NewSessionHandler(nil, "test-session-secret")},
+		})
+		assertStatus(t, router, http.MethodPost, "/auth/form/authorize", http.StatusNotFound)
+		assertNotStatus(t, router, http.MethodGet, "/auth/logout", http.StatusNotFound)
+		assertStatus(t, router, http.MethodGet, "/internal/auth/main", http.StatusNoContent)
+	})
+}

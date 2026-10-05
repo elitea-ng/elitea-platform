@@ -198,6 +198,12 @@ main:
     DATABASE_URL: ""
     REDIS_URL: ""
 
+    # This file is the recipe for the FORM sign-in plane — a login page this
+    # deployment owns, with no external identity provider — and Form sign-in
+    # is OFF by default (values.yaml). State it on, or the users file above is
+    # loaded and ignored and nobody can sign in through a browser.
+    ELITEA_FORM_LOGIN_ENABLED: "true"
+
     # --- The capability this whole file exists to enable ------------------------
     # Eight configuration and model-catalogue routes, and — the point here — the
     # write path that stores a provider credential and a model row, seals the

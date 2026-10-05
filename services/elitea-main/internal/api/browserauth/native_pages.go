@@ -105,14 +105,23 @@ func (p *NativePages) RenderConsent(w http.ResponseWriter, r *http.Request, cons
 	if consent.FormAction != "" {
 		formAction += " " + consent.FormAction
 	}
-	// same-origin, not the sign-in pages' no-referrer: the decision POST is
-	// checked against Origin, and under no-referrer a browser sends
-	// "Origin: null" on every POST (Fetch, "serializing a request origin"),
-	// so no real browser could ever answer the page. same-origin still sends
-	// no referrer to any other origin. The meta tag in the template says the
-	// same, because the last policy a browser sees wins.
-	writeNativePage(w, http.StatusOK, authPageCSP(formAction, brand.StyleSource), "same-origin", body.Bytes())
+	writeNativePage(w, http.StatusOK, authPageCSP(formAction, brand.StyleSource), consentReferrerPolicy, body.Bytes())
 }
+
+// consentReferrerPolicy is the consent page's Referrer-Policy, and it is NOT
+// the `no-referrer` every other auth page sends. Under `no-referrer` a browser
+// serialises the Origin of a POST as "null" (Fetch, "serializing a request
+// origin"), and the decision handler refuses "null" by design (defence in
+// depth against a cross-site POST). So with `no-referrer` every Continue from
+// a real browser was answered 403 "The answer did not come from this server's
+// page" -- Chromium and WebKit both, found by the settings.devices journey;
+// the Go conformance client sends no Origin, so it never saw it. The page's
+// `<meta name="referrer">` (templates/native_consent.html) says the same: a
+// meta overrides this header, and the shared auth-page head says no-referrer.
+// `same-origin` sends the real Origin on the same-origin decision POST and
+// still sends NO Referer on any cross-origin request, so the request handle
+// in this page's URL never reaches the app's redirect URI.
+const consentReferrerPolicy = "same-origin"
 
 // RenderError writes the error page with the given status.
 func (p *NativePages) RenderError(w http.ResponseWriter, r *http.Request, status int, message string) {

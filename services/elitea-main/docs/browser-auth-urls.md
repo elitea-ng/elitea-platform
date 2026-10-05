@@ -25,6 +25,11 @@ All browser authentication routes are under `/auth/`.
 | Edge auth check (single sign-on plane) | `/auth` |
 | Gateway auth target (internal, not browser-facing) | `/internal/auth/main` |
 
+The four Form rows exist only when `ELITEA_FORM_LOGIN_ENABLED=true` AND no
+single sign-on plane is configured. Form sign-in is off by default; with it
+off they answer 404, and `/auth/login` is the SSO chooser when OIDC or SAML is
+configured.
+
 `GET /auth` (no further segment) is the edge auth check. The browser routes
 are below it, and each is registered by its full path, so they do not collide.
 `/api/v2/auth/*` is the token and permission API, a different prefix.

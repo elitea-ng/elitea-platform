@@ -49,6 +49,7 @@ import { Route as ShellSettingsAiPersonalityRouteImport } from './routes/_shell/
 import { Route as ShellSettingsAnalyticsRouteImport } from './routes/_shell/settings/analytics'
 import { Route as ShellSettingsCreateConfigurationRouteImport } from './routes/_shell/settings/create-configuration'
 import { Route as ShellSettingsCreatePersonalTokenRouteImport } from './routes/_shell/settings/create-personal-token'
+import { Route as ShellSettingsDevicesRouteImport } from './routes/_shell/settings/devices'
 import { Route as ShellSettingsEnvironmentRouteImport } from './routes/_shell/settings/environment'
 import { Route as ShellSettingsMemoryRouteImport } from './routes/_shell/settings/memory'
 import { Route as ShellSettingsModelConfigurationRouteImport } from './routes/_shell/settings/model-configuration'
@@ -300,6 +301,11 @@ const ShellSettingsCreatePersonalTokenRoute =
     path: '/create-personal-token',
     getParentRoute: () => ShellSettingsRouteRoute,
   } as any)
+const ShellSettingsDevicesRoute = ShellSettingsDevicesRouteImport.update({
+  id: '/devices',
+  path: '/devices',
+  getParentRoute: () => ShellSettingsRouteRoute,
+} as any)
 const ShellSettingsEnvironmentRoute =
   ShellSettingsEnvironmentRouteImport.update({
     id: '/environment',
@@ -586,6 +592,7 @@ export interface FileRoutesByFullPath {
   '/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
   '/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
+  '/settings/devices': typeof ShellSettingsDevicesRoute
   '/settings/environment': typeof ShellSettingsEnvironmentRoute
   '/settings/memory': typeof ShellSettingsMemoryRoute
   '/settings/model-configuration': typeof ShellSettingsModelConfigurationRoute
@@ -672,6 +679,7 @@ export interface FileRoutesByTo {
   '/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
   '/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
+  '/settings/devices': typeof ShellSettingsDevicesRoute
   '/settings/environment': typeof ShellSettingsEnvironmentRoute
   '/settings/memory': typeof ShellSettingsMemoryRoute
   '/settings/model-configuration': typeof ShellSettingsModelConfigurationRoute
@@ -761,6 +769,7 @@ export interface FileRoutesById {
   '/_shell/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/_shell/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
   '/_shell/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
+  '/_shell/settings/devices': typeof ShellSettingsDevicesRoute
   '/_shell/settings/environment': typeof ShellSettingsEnvironmentRoute
   '/_shell/settings/memory': typeof ShellSettingsMemoryRoute
   '/_shell/settings/model-configuration': typeof ShellSettingsModelConfigurationRoute
@@ -850,6 +859,7 @@ export interface FileRouteTypes {
     | '/settings/analytics'
     | '/settings/create-configuration'
     | '/settings/create-personal-token'
+    | '/settings/devices'
     | '/settings/environment'
     | '/settings/memory'
     | '/settings/model-configuration'
@@ -936,6 +946,7 @@ export interface FileRouteTypes {
     | '/settings/analytics'
     | '/settings/create-configuration'
     | '/settings/create-personal-token'
+    | '/settings/devices'
     | '/settings/environment'
     | '/settings/memory'
     | '/settings/model-configuration'
@@ -1024,6 +1035,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/analytics'
     | '/_shell/settings/create-configuration'
     | '/_shell/settings/create-personal-token'
+    | '/_shell/settings/devices'
     | '/_shell/settings/environment'
     | '/_shell/settings/memory'
     | '/_shell/settings/model-configuration'
@@ -1368,6 +1380,13 @@ declare module '@tanstack/react-router' {
       path: '/create-personal-token'
       fullPath: '/settings/create-personal-token'
       preLoaderRoute: typeof ShellSettingsCreatePersonalTokenRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
+    '/_shell/settings/devices': {
+      id: '/_shell/settings/devices'
+      path: '/devices'
+      fullPath: '/settings/devices'
+      preLoaderRoute: typeof ShellSettingsDevicesRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
     '/_shell/settings/environment': {
@@ -1716,6 +1735,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsAnalyticsRoute: typeof ShellSettingsAnalyticsRoute
   ShellSettingsCreateConfigurationRoute: typeof ShellSettingsCreateConfigurationRouteWithChildren
   ShellSettingsCreatePersonalTokenRoute: typeof ShellSettingsCreatePersonalTokenRoute
+  ShellSettingsDevicesRoute: typeof ShellSettingsDevicesRoute
   ShellSettingsEnvironmentRoute: typeof ShellSettingsEnvironmentRoute
   ShellSettingsMemoryRoute: typeof ShellSettingsMemoryRoute
   ShellSettingsModelConfigurationRoute: typeof ShellSettingsModelConfigurationRoute
@@ -1742,6 +1762,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsCreateConfigurationRoute:
     ShellSettingsCreateConfigurationRouteWithChildren,
   ShellSettingsCreatePersonalTokenRoute: ShellSettingsCreatePersonalTokenRoute,
+  ShellSettingsDevicesRoute: ShellSettingsDevicesRoute,
   ShellSettingsEnvironmentRoute: ShellSettingsEnvironmentRoute,
   ShellSettingsMemoryRoute: ShellSettingsMemoryRoute,
   ShellSettingsModelConfigurationRoute: ShellSettingsModelConfigurationRoute,

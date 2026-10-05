@@ -28,6 +28,8 @@ type config struct {
 	// hop: the native continue route never reads the Form cookie directly.
 	// The standalone stack has no such edge (deploy/scripts/
 	// native-conformance.sh says why), so CI has no form leg.
+	// That deployment must also set ELITEA_FORM_LOGIN_ENABLED=true: Form
+	// sign-in is off by default, and with it off no Form password is accepted.
 	Leg         string
 	ClientID    string
 	RedirectURI string

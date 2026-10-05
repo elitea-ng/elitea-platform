@@ -48,15 +48,16 @@ func TestProvisionDerivesCurrentBaselineCommand(t *testing.T) {
 			wantInitialAdminRole: InitialAdministrationRole,
 		},
 		{
-			name: "fallback email and display name",
+			name: "display name when the component names are incomplete",
 			assertion: VerifiedAssertion{
 				Provider:          "saml",
 				ProviderReference: "Subject-42",
+				Email:             "subject@example.test",
 				GivenName:         "ignored without family",
 				Name:              "Display Name",
 			},
 			initialGlobalAdmins: []string{"subject-42"},
-			wantEmail:           "subject-42@centry.user",
+			wantEmail:           "subject@example.test",
 			wantName:            "Display Name",
 		},
 		{
@@ -64,10 +65,11 @@ func TestProvisionDerivesCurrentBaselineCommand(t *testing.T) {
 			assertion: VerifiedAssertion{
 				Provider:          "form",
 				ProviderReference: "LocalUser",
+				Email:             "LocalUser@Example.test",
 				FamilyName:        "ignored without given",
 			},
-			wantEmail: "localuser@centry.user",
-			wantName:  "localuser@centry.user",
+			wantEmail: "localuser@example.test",
+			wantName:  "localuser@example.test",
 		},
 		{
 			name: "non RFC asserted email is only lowercased",
@@ -209,6 +211,7 @@ func TestProvisionInitialGlobalAdminMatchIsExactAndCaseSensitive(t *testing.T) {
 			Assertion: VerifiedAssertion{
 				Provider:          "oidc",
 				ProviderReference: "ADMIN",
+				Email:             "admin@example.test",
 			},
 		})
 		if err != nil {
@@ -428,4 +431,24 @@ func validAssertion(mutate func(*VerifiedAssertion)) VerifiedAssertion {
 		mutate(&assertion)
 	}
 	return assertion
+}
+
+// No address is ever synthesized. The fallback that used to turn a missing
+// email into `<provider reference>@centry.user` put people into the
+// system-identity domain; an assertion with no address — or with an address in
+// that domain — is refused before the repository is called.
+func TestProvisionRefusesAnAssertionWithoutAUsableEmail(t *testing.T) {
+	for _, email := range []string{"", "localuser@centry.user", "LocalUser@CENTRY.USER"} {
+		repository := &repositoryStub{result: successfulResult(42)}
+		service := mustProvisionService(t, repository, ProvisioningPolicy{})
+		_, err := service.Provision(context.Background(), ProvisionRequest{
+			Assertion: VerifiedAssertion{Provider: "form", ProviderReference: "LocalUser", Email: email},
+		})
+		if !errors.Is(err, ErrMissingEmail) {
+			t.Fatalf("email %q: error = %v, want %v", email, err, ErrMissingEmail)
+		}
+		if repository.calls != 0 {
+			t.Fatalf("email %q: repository called %d times; nothing may be provisioned", email, repository.calls)
+		}
+	}
 }

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
@@ -135,6 +137,9 @@ type Service struct {
 	principalValidator ActivePrincipalValidator
 	transactionTTL     time.Duration
 	now                func() time.Time
+	// authorizeLog throttles the dependency-failure log on Authorize, which
+	// runs once per forwarded request: an outage must not write a line each.
+	authorizeLog failureLogThrottle
 }
 
 func NewService(
@@ -359,6 +364,15 @@ func (s *Service) Complete(
 			errors.Is(err, identity.ErrIdentityConflict) {
 			return CompleteResult{}, ErrUnauthenticated
 		}
+		// A configuration error, not an outage: the provider asserted no
+		// usable address. Refuse with the generic failure (never a 503) and
+		// say why in the server log.
+		if errors.Is(err, identity.ErrMissingEmail) {
+			slog.ErrorContext(ctx, "browser sign-in refused: the identity has no usable email address",
+				"provider", assertion.Provider, "provider_reference", assertion.ProviderReference,
+				"error", err)
+			return CompleteResult{}, ErrUnauthenticated
+		}
 		return CompleteResult{}, sanitizedError(
 			ctx,
 			ErrDependencyUnavailable,
@@ -409,12 +423,7 @@ func (s *Service) Authorize(ctx context.Context, sessionID string) (Authorizatio
 		if errors.Is(err, sessionstate.ErrNotFound) {
 			return Authorization{}, ErrUnauthenticated
 		}
-		return Authorization{}, sanitizedError(
-			ctx,
-			ErrDependencyUnavailable,
-			"read authenticated browser session",
-			err,
-		)
+		return Authorization{}, s.authorizeDependencyError(ctx, "read authenticated browser session", err)
 	}
 	if !isAuthenticatedSession(state) {
 		return Authorization{}, ErrUnauthenticated
@@ -435,12 +444,7 @@ func (s *Service) Authorize(ctx context.Context, sessionID string) (Authorizatio
 		if errors.Is(err, auth.ErrPrincipalInactive) {
 			return Authorization{}, ErrUnauthenticated
 		}
-		return Authorization{}, sanitizedError(
-			ctx,
-			ErrDependencyUnavailable,
-			"validate active browser principal",
-			err,
-		)
+		return Authorization{}, s.authorizeDependencyError(ctx, "validate active browser principal", err)
 	}
 	if principal.ID != userID || principal.UserID != userID || principal.TokenID != "" ||
 		principal.AuthType != "session" {
@@ -518,6 +522,39 @@ func cloneTime(value *time.Time) *time.Time {
 }
 
 func sanitizedError(ctx context.Context, sentinel error, operation string, err error) error {
+	if contextErr := cancellation(ctx, err); contextErr != nil {
+		return contextErr
+	}
+	// The returned error names only the sentinel and the operation, so nothing
+	// sensitive reaches the response. A rejected credential is an expected
+	// outcome; any other sentinel is a server-side failure whose cause would
+	// otherwise be lost here, so log it — unless identity already did:
+	// ErrProvisioningFailed is the bare sentinel identity returns after logging
+	// the repository cause itself, and a second line would carry no cause.
+	if !errors.Is(sentinel, ErrUnauthenticated) && !errors.Is(err, identity.ErrProvisioningFailed) {
+		slog.ErrorContext(ctx, "browser authentication failed",
+			"operation", operation, "outcome", sentinel.Error(), "error", err)
+	}
+	return fmt.Errorf("%w: %s", sentinel, operation)
+}
+
+// authorizeDependencyError is sanitizedError for Authorize, the per-request
+// path behind the gateway edge. The cause is logged once, then at most once
+// per authorizeFailureLogWindow with the count it held back, so an outage
+// does not write one ERROR line per forwarded request.
+func (s *Service) authorizeDependencyError(ctx context.Context, operation string, err error) error {
+	if contextErr := cancellation(ctx, err); contextErr != nil {
+		return contextErr
+	}
+	if suppressed, ok := s.authorizeLog.admit(s.now()); ok {
+		slog.ErrorContext(ctx, "browser authentication failed",
+			"operation", operation, "outcome", ErrDependencyUnavailable.Error(), "error", err,
+			"suppressed", suppressed)
+	}
+	return fmt.Errorf("%w: %s", ErrDependencyUnavailable, operation)
+}
+
+func cancellation(ctx context.Context, err error) error {
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
 	}
@@ -527,5 +564,32 @@ func sanitizedError(ctx context.Context, sentinel error, operation string, err e
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	return fmt.Errorf("%w: %s", sentinel, operation)
+	return nil
+}
+
+// authorizeFailureLogWindow is how long Authorize holds back further
+// dependency-failure lines after it logged one.
+const authorizeFailureLogWindow = 30 * time.Second
+
+// failureLogThrottle admits one log line per window and counts the rest. The
+// zero value is ready to use.
+type failureLogThrottle struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+// admit reports whether to log now and how many lines were held back since
+// the last one.
+func (t *failureLogThrottle) admit(now time.Time) (int, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.last.IsZero() && now.Sub(t.last) < authorizeFailureLogWindow {
+		t.suppressed++
+		return 0, false
+	}
+	suppressed := t.suppressed
+	t.last = now
+	t.suppressed = 0
+	return suppressed, true
 }

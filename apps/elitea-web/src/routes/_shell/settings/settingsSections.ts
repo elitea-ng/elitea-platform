@@ -83,6 +83,9 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
         { id: 'ai-personality', label: 'AI Personality' },
         { id: 'memory', label: 'Memory' },
         { id: 'tokens', label: 'Personal Tokens' },
+        // ADR-0025 WP3: the caller's own signed-in mobile and desktop apps.
+        // Ungated: the page itself says when the workspace enables none.
+        { id: 'devices', label: 'Devices' },
         { id: 'notifications', label: 'Notifications' },
       ],
     },
