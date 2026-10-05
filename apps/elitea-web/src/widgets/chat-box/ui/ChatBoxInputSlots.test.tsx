@@ -116,7 +116,9 @@ describe("buildChatBoxInputSlots — the composer's left-hand control", () => {
     const slots = buildSlots(false);
     const children = ((slots.voiceButton as ReactElement).props as { children: ReactElement[] }).children;
 
-    expect((children[0]?.props as { projectId?: string }).projectId).toBe('42');
+    const mic = children[0] as ReactElement;
+
+    expect((mic.props as { projectId?: string }).projectId).toBe('42');
   });
 });
 
