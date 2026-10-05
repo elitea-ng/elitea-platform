@@ -30,6 +30,10 @@
  *     fields address `toolkit_security.*` like a plugin's, but the test was
  *     never "the path looks like a plugin's": it is "does anything here read
  *     the values". Four things now do.
+ *   - **Native clients** (ADR-0025) — a dedicated surface too, the registry
+ *     editor in `./AdminNativeClientsEditor`. It keeps its `unavailable_reason`
+ *     for the shape reason: a typed list with per-URI validation and a save
+ *     that revokes devices is nothing a flat value form can express.
  *   - **MCP Servers** and **Authentication** — available through DEDICATED
  *     surfaces, declared by the server as a `managed_surface`. Both KEEP their
  *     `unavailable_reason`, and both keep it for the same reason: their data
@@ -135,11 +139,13 @@ import { AdminEmailEditor } from './AdminEmailEditor';
 import { AdminIdentityProvidersEditor } from './AdminIdentityProvidersEditor';
 import { AdminLlmProxyEditor } from './AdminLlmProxyEditor';
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
+import { AdminNativeClientsEditor } from './AdminNativeClientsEditor';
 import { BrandingSectionCard } from './BrandingSectionCard';
 import { EMAIL_MANAGED_SURFACE } from './api/adminEmailApi';
 import { IDENTITY_PROVIDERS_MANAGED_SURFACE } from './api/adminIdentityProvidersApi';
 import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
+import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
 import { useAdminConfigurationPage, type AdminConfigurationPageState } from './useAdminConfigurationPage';
 
@@ -162,6 +168,7 @@ const MANAGED_SECTION_EDITORS: Readonly<Record<string, ComponentType>> = {
   [IDENTITY_PROVIDERS_MANAGED_SURFACE]: AdminIdentityProvidersEditor,
   [LLM_PROXY_MANAGED_SURFACE]: AdminLlmProxyEditor,
   [EMAIL_MANAGED_SURFACE]: AdminEmailEditor,
+  [NATIVE_CLIENTS_MANAGED_SURFACE]: AdminNativeClientsEditor,
 };
 
 /** The dedicated editor for a section, when this build has one. */

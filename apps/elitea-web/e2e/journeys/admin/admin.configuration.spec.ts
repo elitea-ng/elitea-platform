@@ -88,11 +88,11 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   const sections = page.getByRole('navigation', { name: 'Configuration sections' });
   const marks = sections.getByText('Not available here');
   await expect(marks.first()).toBeVisible();
-  // `Native clients` (ADR-0025 WP2) is the third: it points at its managed
-  // surface (`/admin/native_clients/administration`), and this build has no
-  // editor for that surface yet, so it falls through to its reason.
-  await expect(marks).toHaveCount(3);
-  for (const section of ['LLM Governance', 'Service Descriptors', 'Native clients']) {
+  // `Native clients` (ADR-0025 WP2) used to be the third: it pointed at its
+  // managed surface and this build had no editor for it. It has one now
+  // (`AdminNativeClientsEditor`), so it moved to the live set below.
+  await expect(marks).toHaveCount(2);
+  for (const section of ['LLM Governance', 'Service Descriptors']) {
     await expect(
       sections.getByRole('button', { name: new RegExp(section) }).getByText('Not available here'),
       `${section} is still not configurable here`,
@@ -105,7 +105,15 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   // else had also changed.
   // `Native client policy` (ADR-0025 WP4) is live from the start: discovery,
   // the native token response and the 426 gate all read it.
-  const live = ['Banner', 'Maintenance', 'Guardrails', 'LLM Proxy', 'Authentication', 'Native client policy'];
+  const live = [
+    'Banner',
+    'Maintenance',
+    'Guardrails',
+    'LLM Proxy',
+    'Authentication',
+    'Native client policy',
+    'Native clients',
+  ];
   for (const section of live) {
     await expect(
       sections.getByRole('button', { name: new RegExp(section) }).getByText('Not available here'),
