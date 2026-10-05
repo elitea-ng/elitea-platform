@@ -132,9 +132,9 @@ func TestOrchestratorSweepFailsAbandonedRuns(t *testing.T) {
 		t.Fatalf("FailAbandonedRuns called %d times, want 1", len(repo.abandonCalls))
 	}
 	got := repo.abandonCalls[0]
-	if got[0] != int(StaleRunTTL.Seconds()) || got[1] != int(MaxOrphanAge.Seconds()) {
+	if got[0] != int(StaleRunTTL.Seconds()) || got[1] != MaxResumes {
 		t.Errorf("FailAbandonedRuns(%d, %d), want (%d, %d)", got[0], got[1],
-			int(StaleRunTTL.Seconds()), int(MaxOrphanAge.Seconds()))
+			int(StaleRunTTL.Seconds()), MaxResumes)
 	}
 	if repo.abandonReason != AbandonedRunReason {
 		t.Errorf("reason = %q", repo.abandonReason)
@@ -169,4 +169,91 @@ func (s *slowCompleter) Complete(ctx context.Context, _ predict.CompletionReques
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// onePageRepo serves stored results one row per page, so a resume must page
+// through all of them to see every scored case.
+type onePageRepo struct {
+	*fakeRunRepo
+	mu    sync.Mutex
+	pages int
+}
+
+func (r *onePageRepo) ListResults(ctx context.Context, projectID, runID string, page ResultPage) ([]RunResult, int, error) {
+	all, total, err := r.fakeRunRepo.ListResults(ctx, projectID, runID, ResultPage{})
+	if err != nil {
+		return nil, 0, err
+	}
+	r.mu.Lock()
+	r.pages++
+	r.mu.Unlock()
+	if page.Offset >= len(all) {
+		return []RunResult{}, total, nil
+	}
+	return all[page.Offset : page.Offset+1], total, nil
+}
+
+// A resume reads EVERY page of stored results. A single page skipped only the
+// cases on it and re-scored (and re-billed) the rest.
+func TestOrchestratorResumeReadsEveryResultPage(t *testing.T) {
+	t.Parallel()
+
+	base, _ := twoCaseRun()
+	native, normalized := 5.0, 100.0
+	for _, caseID := range []string{"11", "12"} {
+		_ = base.SaveResult(context.Background(), "1", RunResult{
+			RunID: "1", DatasetCaseID: caseID, DimensionID: "3", Status: ResultStatusOK,
+			NativeScore: &native, NormalizedScore: &normalized,
+		})
+	}
+	repo := &onePageRepo{fakeRunRepo: base}
+	completer := &stubCompleter{answer: "an answer"}
+
+	NewOrchestrator(repo, &scriptedJudge{}, completer, quietLogger()).
+		Execute(context.Background(), RunRef{ProjectID: "1", RunID: "1"})
+
+	if len(completer.requests) != 0 {
+		t.Fatalf("the agent was called %d times, want none: both cases were scored", len(completer.requests))
+	}
+	if repo.pages < 2 {
+		t.Fatalf("read %d result pages, want every page", repo.pages)
+	}
+	if run := base.run("1"); run.Status != RunStatusFinished || run.Progress.Done != 2 {
+		t.Fatalf("run = %q done %d, want finished 2/2", run.Status, run.Progress.Done)
+	}
+}
+
+// Stop cancels the workers and WAITS for them, so the shutdown release is
+// written before the composition root closes the database pool.
+func TestOrchestratorStopWaitsForTheShutdownRelease(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := twoCaseRun()
+	completer := &blockingCompleter{started: make(chan struct{})}
+	orchestrator := NewOrchestrator(repo, &scriptedJudge{}, completer, quietLogger())
+	orchestrator.Start(context.Background())
+	orchestrator.Enqueue(RunRef{ProjectID: "1", RunID: "1"})
+	select {
+	case <-completer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not start")
+	}
+
+	orchestrator.Stop(5 * time.Second)
+
+	if got := repo.run("1"); got.Status != RunStatusCreated {
+		t.Fatalf("status after Stop = %q, want created (released before Stop returned)", got.Status)
+	}
+}
+
+// blockingCompleter blocks the agent call until its context ends.
+type blockingCompleter struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *blockingCompleter) Complete(ctx context.Context, _ predict.CompletionRequest) (string, error) {
+	c.once.Do(func() { close(c.started) })
+	<-ctx.Done()
+	return "", ctx.Err()
 }

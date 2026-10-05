@@ -548,7 +548,7 @@ func (r *EvalRunsRepo) RequeueStaleRuns(ctx context.Context, olderThanSeconds in
 	for _, schema := range schemas {
 		rows, queryErr := r.pool.Query(ctx, fmt.Sprintf(`
 			UPDATE %s.eval_runs
-			SET status = $1, heartbeat_at = NULL
+			SET status = $1, heartbeat_at = NULL, resume_count = resume_count + 1
 			WHERE status = $2
 			  AND (heartbeat_at IS NULL OR heartbeat_at < now() - make_interval(secs => $3))
 			RETURNING id::text`, quoteSchema(schema)),
@@ -574,18 +574,18 @@ func (r *EvalRunsRepo) RequeueStaleRuns(ctx context.Context, olderThanSeconds in
 	return requeued, nil
 }
 
-// FailAbandonedRuns moves to `errored` every stale `running` row that started
-// more than maxAgeSeconds ago, across every tenant schema.
+// FailAbandonedRuns moves to `errored` every stale `running` row that the
+// sweep already re-queued maxResumes times, across every tenant schema.
 //
-// A resume re-pays for the cases that were not finished. An orphan that is
+// A resume re-pays for the case that was in flight. An orphan that is
 // interrupted again and again (a crash loop, a case that kills the process)
-// would be resumed for ever. The age bound stops that, and the reason on the
+// would be resumed for ever. The resume bound stops that, and the reason on the
 // row tells the operator why the run did not finish. Only STALE rows are
 // touched: a live run that is slow keeps its heartbeat fresh and is never
 // failed here.
 func (r *EvalRunsRepo) FailAbandonedRuns(
 	ctx context.Context,
-	staleSeconds, maxAgeSeconds int,
+	staleSeconds, maxResumes int,
 	reason string,
 ) ([]evaluation.RunRef, error) {
 	schemas, err := r.projectSchemas(ctx)
@@ -600,10 +600,10 @@ func (r *EvalRunsRepo) FailAbandonedRuns(
 			SET status = $1, error = $2, finished_at = now(), heartbeat_at = NULL
 			WHERE status = $3
 			  AND (heartbeat_at IS NULL OR heartbeat_at < now() - make_interval(secs => $4::double precision))
-			  AND COALESCE(started_at, created_at) < now() - make_interval(secs => $5::double precision)
+			  AND resume_count >= $5
 			RETURNING id::text`, quoteSchema(schema)),
 			evaluation.RunStatusErrored, reason, evaluation.RunStatusRunning,
-			float64(staleSeconds), float64(maxAgeSeconds))
+			float64(staleSeconds), maxResumes)
 		if queryErr != nil {
 			// The same per-project tolerance as RequeueStaleRuns.
 			continue

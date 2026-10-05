@@ -2086,6 +2086,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// that dies without that write is re-queued once its heartbeat goes
 		// stale — which is what makes a restart lose nothing.
 		orchestrator.Start(ctx)
+		// Deferred AFTER `defer pool.Close()`, so it runs BEFORE it: the
+		// workers write their shutdown release while the pool is still open.
+		defer orchestrator.Stop(evalShutdownTimeout)
 		evalOrchestrator = orchestrator
 	}
 
@@ -2597,6 +2600,10 @@ func analyticsRepository(pool *pgxpool.Pool) v2analytics.Repository {
 }
 
 const maxAuthConfigPathBytes = 4096
+
+// evalShutdownTimeout bounds how long shutdown waits for the evaluation
+// workers to write their release. Each release write has its own 5 s bound.
+const evalShutdownTimeout = 10 * time.Second
 
 func configuredAuthConfigPath(lookup func(string) (string, bool)) (string, bool, error) {
 	if lookup == nil {

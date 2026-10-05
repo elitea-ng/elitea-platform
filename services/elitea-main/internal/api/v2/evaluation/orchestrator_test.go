@@ -487,8 +487,8 @@ func (s *sweepRepo) RequeueStaleRuns(_ context.Context, olderThanSeconds int) ([
 
 func (s *sweepRepo) PendingRuns(context.Context, int) ([]RunRef, error) { return s.pending, nil }
 
-func (s *sweepRepo) FailAbandonedRuns(_ context.Context, staleSeconds, maxAgeSeconds int, reason string) ([]RunRef, error) {
-	s.abandonCalls = append(s.abandonCalls, [2]int{staleSeconds, maxAgeSeconds})
+func (s *sweepRepo) FailAbandonedRuns(_ context.Context, staleSeconds, maxResumes int, reason string) ([]RunRef, error) {
+	s.abandonCalls = append(s.abandonCalls, [2]int{staleSeconds, maxResumes})
 	s.abandonReason = reason
 	return nil, nil
 }

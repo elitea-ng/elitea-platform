@@ -370,15 +370,15 @@ func TestEvalRunReleaseMovesOnlyARunningRow(t *testing.T) {
 	}
 }
 
-// THE ABANDON BOUND. A stale orphan that started longer ago than the maximum
-// age is failed with the reason; a younger stale orphan and a live old run are
-// not touched.
+// THE ABANDON BOUND. A stale orphan the sweep already resumed MaxResumes
+// times is failed with the reason. A stale orphan with fewer resumes (even one
+// that started hours ago) and a live run with many resumes are not touched.
+// The re-queue sweep counts each resume.
 func TestEvalRunSweepFailsOnlyAbandonedOrphans(t *testing.T) {
 	fixture := newEvalRunFixture(t)
 	dimensionID := fixture.seedAIDimension(t)
 	ctx := context.Background()
 	staleSeconds := int(evaluation.StaleRunTTL.Seconds())
-	maxAgeSeconds := int(evaluation.MaxOrphanAge.Seconds())
 
 	abandoned := fixture.startRun(t, dimensionID)
 	young := fixture.startRun(t, dimensionID)
@@ -392,16 +392,16 @@ func TestEvalRunSweepFailsOnlyAbandonedOrphans(t *testing.T) {
 		sql string
 		id  string
 	}{
-		{`UPDATE p_1.eval_runs SET started_at = now() - interval '7 hours', heartbeat_at = now() - interval '1 hour' WHERE id = $1`, abandoned.ID},
-		{`UPDATE p_1.eval_runs SET started_at = now() - interval '1 hour', heartbeat_at = now() - interval '1 hour' WHERE id = $1`, young.ID},
-		{`UPDATE p_1.eval_runs SET started_at = now() - interval '7 hours', heartbeat_at = now() WHERE id = $1`, live.ID},
+		{`UPDATE p_1.eval_runs SET resume_count = 5, heartbeat_at = now() - interval '1 hour' WHERE id = $1`, abandoned.ID},
+		{`UPDATE p_1.eval_runs SET resume_count = 4, started_at = now() - interval '7 hours', heartbeat_at = now() - interval '1 hour' WHERE id = $1`, young.ID},
+		{`UPDATE p_1.eval_runs SET resume_count = 9, heartbeat_at = now() WHERE id = $1`, live.ID},
 	} {
 		if _, err := fixture.pool.Exec(ctx, statement.sql, statement.id); err != nil {
 			t.Fatalf("age run %s: %v", statement.id, err)
 		}
 	}
 
-	failed, err := fixture.repo.FailAbandonedRuns(ctx, staleSeconds, maxAgeSeconds, evaluation.AbandonedRunReason)
+	failed, err := fixture.repo.FailAbandonedRuns(ctx, staleSeconds, evaluation.MaxResumes, evaluation.AbandonedRunReason)
 	if err != nil {
 		t.Fatalf("fail abandoned: %v", err)
 	}
@@ -414,6 +414,14 @@ func TestEvalRunSweepFailsOnlyAbandonedOrphans(t *testing.T) {
 	}
 	if got := fixture.readRun(t, young.ID).Status; got != evaluation.RunStatusRunning {
 		t.Errorf("young orphan = %q, want running (the re-queue sweep resumes it)", got)
+	}
+	requeued, err := fixture.repo.RequeueStaleRuns(ctx, staleSeconds)
+	if err != nil || len(requeued) != 1 || requeued[0].RunID != young.ID {
+		t.Fatalf("requeue = %+v, %v; want only run %s", requeued, err, young.ID)
+	}
+	var resumes int
+	if err := fixture.pool.QueryRow(ctx, `SELECT resume_count FROM p_1.eval_runs WHERE id = $1`, young.ID).Scan(&resumes); err != nil || resumes != 5 {
+		t.Fatalf("resume_count after requeue = %d, %v; want 5", resumes, err)
 	}
 	if got := fixture.readRun(t, live.ID).Status; got != evaluation.RunStatusRunning {
 		t.Errorf("live old run = %q, want running", got)
