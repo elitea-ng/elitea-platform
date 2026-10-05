@@ -85,6 +85,12 @@ describe('resetBrandingPayload', () => {
     });
   });
 
+  it('leaves out a stored key whose shape cannot name its inherit value', () => {
+    const payload = resetBrandingPayload({ future_flag: true, future_null: null });
+    expect(payload).not.toHaveProperty('future_flag');
+    expect(payload).not.toHaveProperty('future_null');
+  });
+
   it('reads a non-object answer as nothing extra', () => {
     expect(resetBrandingPayload(['product_name'])).toEqual(resetBrandingPayload());
     expect(resetBrandingPayload(null)).toEqual(resetBrandingPayload());

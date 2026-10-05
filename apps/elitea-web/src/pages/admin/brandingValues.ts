@@ -141,23 +141,33 @@ const UNEDITED_KEYS_INHERIT: Readonly<Record<string, unknown>> = {
   support_email: '',
 };
 
-/** The inherit value of a stored value's own shape. */
+/**
+ * The inherit value of a stored value's own shape, or `undefined` when the
+ * shape cannot say (a boolean or null has no "inherit" a guess could trust —
+ * sending the wrong type would refuse the whole reset with a 400).
+ */
 function inheritLike(value: unknown): unknown {
   if (Array.isArray(value)) return [];
   if (typeof value === 'number') return 0;
+  if (typeof value === 'string') return '';
   if (typeof value === 'object' && value !== null) return {};
-  return '';
+  return undefined;
 }
 
 /**
  * What "Reset to defaults" writes: EVERY key the section stores at inherit —
  * the edited ones, the known unedited ones, and any other key the server
- * answered with (a key added server-side later must not survive a reset).
+ * answered with whose shape names its inherit value, so a text, number, list
+ * or object key added server-side later does not survive a reset. Every key
+ * this file knows is written from its own table, never from the guess.
  */
 export function resetBrandingPayload(stored?: unknown): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   if (typeof stored === 'object' && stored !== null && !Array.isArray(stored)) {
-    for (const [key, value] of Object.entries(stored)) payload[key] = inheritLike(value);
+    for (const [key, value] of Object.entries(stored)) {
+      const inherit = inheritLike(value);
+      if (inherit !== undefined) payload[key] = inherit;
+    }
   }
   return { ...payload, ...UNEDITED_KEYS_INHERIT, ...emptyBrandingValues() };
 }
