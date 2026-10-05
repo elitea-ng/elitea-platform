@@ -33,6 +33,8 @@ deploy/data/production/
 /services/elitea-main/index-v2-preflight
 /services/elitea-scheduler/elitea-scheduler
 bin/
+# Rust binary-target sources are code, not build outputs.
+!services/elitea-deepwiki-engine/src/bin/
 .claude/settings.json
 
 # Local test artifacts for the no-binaries CI gate (scripts/no-binaries-check.sh)

@@ -1,0 +1,98 @@
+package com.acme.model;
+
+import java.util.*;
+import java.util.function.Function;
+import static java.util.Collections.emptyList;
+import static com.acme.service.Registry.lookup;
+import com.acme.service.Registry;
+
+/**
+ * A shape. Javadoc is not extracted.
+ */
+public abstract sealed class Shape<T extends Comparable<T>> extends Base implements Comparable<Shape<T>>, Named, java.io.Serializable
+        permits Circle, Square {
+
+    private static final long serialVersionUID = 1L;
+    protected Map<String, List<Point>> points = new HashMap<>();
+    private Optional<Owner> owner;
+    @Nullable private Owner backup;
+    @Deprecated
+    public Settings settings;
+    private OwnerService ownerService;
+    int a, b;
+    private Point[] corners;
+    private Map.Entry<String, Point> entry;
+    String publicKey;
+    private List<? extends Point> wild;
+
+    public Shape() {
+        this(0);
+    }
+
+    public Shape(int sides, String... names) {
+        super(sides);
+        Point p = new Point(1, 2);
+        p.move(3);
+        var q = new Point(0, 0);
+        q.move(1);
+        List<Point> copies = new ArrayList<>();
+        copies.add(p);
+        ownerService.find(sides);
+        class Local {
+            void helper() { Registry.lookup("x"); }
+        }
+    }
+
+    @Override
+    public int compareTo(Shape<T> other) {
+        return Integer.compare(area(), other.area());
+    }
+
+    @Override
+    public String name() { return "shape"; }
+
+    public abstract double area();
+
+    public double area(int scale) { return area() * scale; }
+
+    public double area(double scale, Point origin) { return area() * scale; }
+
+    protected <R> List<R> map(Function<? super Shape<T>, ? extends R> f, Map<String, Owner> index) {
+        Runnable r = () -> lookup("lambda");
+        Function<String, Integer> len = String::length;
+        Comparator<Point> cmp = new Comparator<Point>() {
+            @Override
+            public int compare(Point x, Point y) { return x.compareTo(y); }
+        };
+        new Thread(new Runnable() {
+            public void run() { this.helper().done(); }
+        }).start();
+        return emptyList();
+    }
+
+    public static Shape<?> of(final String kind) {
+        switch (kind) {
+            case "c" -> { return new Circle(1.0); }
+            default -> throw new IllegalArgumentException("Ünknown kind: " + kind);
+        }
+    }
+
+    public Point[] cornerArray() { return corners; }
+    public int[] counts() { return null; }
+    public Map.Entry<String, Point> firstEntry() { return entry; }
+    public void name(String n) {}
+
+    static class Inner extends Shape<Integer> {
+        @Override
+        public double area() { return 0; }
+        class Deeper { Inner up() { return Inner.this; } }
+    }
+
+    public enum Kind implements Named {
+        CIRCLE { @Override public String name2() { return "c"; } },
+        SQUARE;
+        private final int code = 1;
+        Kind() {}
+        public String name2() { return name(); }
+    }
+}

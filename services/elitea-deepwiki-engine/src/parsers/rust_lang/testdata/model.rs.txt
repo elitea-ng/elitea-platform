@@ -1,0 +1,119 @@
+//! Crate docs reach the first item.
+extern crate serde_json as json;
+extern crate self as me;
+use std::io::*;
+use std::collections::{HashMap, self, btree_map::Entry, fmt as f, sync::{Arc, *}};
+pub use crate::store::Store as Backing;
+pub(crate) use super::{a as b};
+use {one, two::three};
+#[cfg(test)]
+use tests::helper;
+
+/// A shape. Ünïcödé is fine.
+/** Block doc. */
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shape<'a, T: Bound> {
+    pub name: &'a str,
+    pub(crate) inner: Box<Inner>,
+    owned: Config,
+    shared: Arc<dyn Store + Send>,
+    raw: *const Node,
+    map: HashMap<String, Item>,
+    list: Vec<Option<Item>>,
+    path: std::path::PathBuf,
+    cb: fn(u8) -> u8,
+    refcell: RefCell<Widget>,
+    generic: T,
+}
+
+pub struct Pair(pub u32, Left, Box<Right>);
+
+#[derive(Default)]
+// plain comment drops the derive
+enum Kind {
+    Unit,
+    Tuple(Payload, &'static str),
+    Record { a: Alpha, b: Vec<Beta> },
+}
+
+#[cfg_attr(feature = "serde", derive(Deserialize, Hash))]
+pub enum Wrapped<T> { A(T) }
+
+/// Trait docs.
+pub trait Sub: Base + io::Write + Clone + Iterator<Item = u8> {
+    type Output;
+    const LIMIT: usize = 3;
+    /// No docstring for signatures.
+    async fn fetch(&self, id: Id) -> Result<Thing, Error>;
+    fn make() -> Self where Self: Sized;
+    fn default_impl(&self, x: impl Into<String>) -> Box<dyn Render> {
+        helper(x);
+        Self::make()
+    }
+}
+
+impl<T: Bound> Shape<'_, T> {
+    pub const ZERO: u8 = 0;
+    type Alias = Vec<T>;
+    #[inline]
+    pub unsafe fn new<U: Display + Codec, V>(name: &str, selfish: u8, f: impl Fn(u8) -> u8) -> Self
+    where
+        V: Store + std::fmt::Debug + Into<U> + Mapper<Key = u8>,
+    {
+        let s = Self { name, inner: Box::new(Inner::default()), owned: make_config(load()), ..Default::default() };
+        let t = Shape::<u8> { generic: 1 };
+        let c = |x: u8| other(x);
+        let d = |x: u8| { nested(x) };
+        let v = vec![1, 2];
+        custom!(v);
+        tracing::info!("hi");
+        let n = x as Number;
+        let m = y as u32;
+        json::to_string(&s);
+        Self::helper(&s).await;
+        self.inner.run().await;
+        s.0();
+        parse::<Config>(input);
+        obj.method::<u8>();
+        s
+    }
+    fn by_ref(&self) -> &dyn Store { &self.inner }
+    fn by_value(self: Box<Self>) {}
+}
+
+impl<'a> Render for &'a Shape<'a, u8> {
+    fn render(&self) {}
+}
+
+impl Sub for Pair {
+    type Output = Thing;
+    async fn fetch(&self, id: Id) -> Result<Thing, Error> { todo!() }
+    fn make() -> Self { Pair(1, Left, Box::new(Right)) }
+}
+
+pub type Handle = Arc<Mutex<Registry>>;
+type Pairs<K> = HashMap<K, Value>;
+type Same = Same;
+type Callback = Box<dyn Fn(Event) + Send>;
+pub(super) static mut COUNTER: u32 = 0;
+pub(in crate::a) const NAME: &str = "x";
+
+mod outer {
+    #[derive(Copy)]
+    struct InMod;
+    mod nested { struct Hidden; }
+    fn in_mod() { call(); }
+    union NotSeen { a: u8 }
+}
+mod external;
+
+macro_rules! custom { ($e:expr) => {} }
+
+union Bits { int: u32, float: f32 }
+
+fn free<'a, T>(x: &'a T) -> impl Iterator<Item = &'a T> + 'a { std::iter::once(x) }
+#[test]
+fn trailing() {}
+impl Orphan { fn tail(&self) {} #[allow(dead_code)] }
+struct AfterImpl;

@@ -1,0 +1,15 @@
+﻿// BOM and CRLF
+#include <string>
+namespace u {
+// café €
+struct Café { int été; };
+class Widget {
+public:
+  Widget(const std::string& n) : name_(n) {}
+  std::string label() const { return "€" + name_; }
+  Point where() const;
+private:
+  std::string name_;
+};
+Point Widget::where() const { Point p; return p; }
+}

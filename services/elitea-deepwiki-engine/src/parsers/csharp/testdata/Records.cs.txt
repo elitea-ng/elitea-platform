@@ -1,0 +1,33 @@
+namespace Geometry.Core
+{
+    public record Point(int X, int Y);
+    public record class Owner(string Name, Address Home, Address? Work) : IEquatable<Owner>
+    {
+        public void Notify(Shape s) { Log.Write(s); }
+        public void Ping() { }
+    }
+    public readonly record struct Size(double Width, double Height) : IComparable<Size>
+    {
+        public double Area => Width * Height;
+        public int CompareTo(Size other) => Area.CompareTo(other.Area);
+    }
+    public record Address
+    {
+        public required string Street { get; init; }
+        public string? City { get; set; }
+    }
+    public readonly struct Vector : IEquatable<Vector>, IFormattable
+    {
+        public readonly double X, Y;
+        public Vector(double x, double y) { X = x; Y = y; }
+        public static Vector operator +(Vector a, Vector b) => new Vector(a.X + b.X, a.Y + b.Y);
+        public static bool operator ==(Vector a, Vector b) => a.Equals(b);
+        public static bool operator !=(Vector a, Vector b) => !(a == b);
+        public static implicit operator Point(Vector v) => new Point((int)v.X, (int)v.Y);
+        public static Vector operator checked -(Vector a) => a;
+        public double this[int i] => i == 0 ? X : Y;
+        public bool Equals(Vector other) => X == other.X;
+    }
+    public enum Color : byte { Red = 1, Green = Helper.Value(), [Description("b")] Blue }
+    [Flags] internal enum Mode { None = 0, A = 1 << 0 }
+}

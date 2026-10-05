@@ -1,0 +1,45 @@
+package com.acme.service;
+
+import com.acme.model.*;
+import com.acme.model.Point;
+import com.acme.model.Shape;
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface Tracked {
+    String value() default "";
+    int priority() default 1;
+}
+
+public class Registry implements OwnerService, Cache<String, Shape<?>> {
+    private final Map<String, Shape<?>> shapes = new java.util.HashMap<>();
+    private final ShapeRepository repo;
+    private final ShapeValidator validator;
+    private Owner owner;
+
+    @Tracked(value = "ctor", priority = 2)
+    public Registry(ShapeRepository repo, ShapeValidator validator) {
+        this.repo = repo;
+        this.validator = validator;
+    }
+
+    public static Shape<?> lookup(String key) {
+        return null;
+    }
+
+    @Override
+    public Owner find(int id) {
+        Shape<?> s = repo.load(id);
+        validator.check(s);
+        owner.rename("x");
+        Point p = Point.origin();
+        p.move(1);
+        area();
+        name();
+        compareTo(null);
+        return repo.owner(id).orElseThrow();
+    }
+
+    public List<Point> points(Set<Owner> owners, Owner[] arr, java.util.List<Point> qualified) {
+        return null;
+    }
+}

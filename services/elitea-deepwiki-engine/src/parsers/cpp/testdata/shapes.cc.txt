@@ -1,0 +1,70 @@
+#include "shapes.h"
+#include <cmath>
+#include <new>
+
+namespace geo {
+
+Shape::~Shape() {}
+
+void Shape::draw(int level) const {
+    Point p{1.0, 2.0};
+    Point q(3.0, 4.0);
+    Point r;
+    Point* heap = new Point();
+    Point* many = new Point[4];
+    alignas(Point) unsigned char buf[sizeof(Point)];
+    Point* placed = new (buf) Point{};
+    auto owned = std::make_unique<Circle>(2.0);
+    auto shared = std::make_shared<Array<int>>();
+    Array<int> arr;
+    Array<Point> arr2(5);
+    Array<int>* aptr = nullptr;
+    std::vector<Shape*> shapes;
+    shapes.push_back(heap == nullptr ? nullptr : this);
+    owned->draw(level - 1);
+    impl_->refresh();
+    int total = id_ + p.x + q.y + r.x;
+    auto lambda = [this, &total, level](int k) mutable { total += k * level; return area(); };
+    lambda(3);
+    Circle c = Circle::unit();
+    geo::detail::Impl::create();
+    delete heap;
+    delete[] many;
+    (void)placed; (void)aptr; (void)shared; (void)arr; (void)arr2;
+}
+
+Shape& Shape::operator=(const Shape& other) {
+    id_ = other.id_;
+    return *this;
+}
+
+bool Shape::operator==(const Shape& other) const { return id_ == other.id_; }
+
+Circle::Circle(double r) : Shape(), radius_(r), points_{}, child_(nullptr) {}
+
+double Circle::area() const { return M_PI * SQUARE(radius_); }
+
+void Circle::draw(int level) const { Shape::draw(level); }
+
+Circle Circle::unit() { return Circle(1.0); }
+
+template <typename T, int N>
+const T& Array<T, N>::get(int i) const { return data_[i]; }
+
+template class Array<double>;
+template struct Pair<int, Point>;
+
+void Walker::step() {}
+
+int v2::version() { return 2; }
+
+}  // namespace geo
+
+int main(int argc, char** argv) {
+    geo::Circle circle(2.0);
+    std::unique_ptr<geo::Shape> s(new geo::Circle(3.0));
+    s->draw(argc);
+    std::vector<std::pair<int, geo::Point>> pts;
+    Pair<int, geo::Point> pr;
+    return circle.area() > 0 ? 0 : 1;
+}

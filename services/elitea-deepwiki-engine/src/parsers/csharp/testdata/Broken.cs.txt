@@ -1,0 +1,12 @@
+namespace Geometry.Broken
+{
+    public class Half : Shape
+    {
+        public void Ok() { Helper.Run(); }
+        public void Bad( { Helper.Run(
+        public int Field = ;
+    }
+    public class After { public void M() { Calc.Run(1); } }
+    class
+    public interface
+}

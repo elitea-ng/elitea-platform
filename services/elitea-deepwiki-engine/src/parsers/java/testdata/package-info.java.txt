@@ -1,0 +1,4 @@
+@Deprecated
+package com.acme.model;
+
+import java.lang.Deprecated;

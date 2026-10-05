@@ -1,0 +1,15 @@
+#include <utility>
+struct Vec2 {
+  float x, y;
+  Vec2 operator+(const Vec2& o) const { return Vec2{x + o.x, y + o.y}; }
+  Vec2& operator+=(const Vec2& o);
+  explicit operator bool() const { return x != 0; }
+  friend Vec2 operator*(float s, const Vec2& v);
+};
+inline Vec2& Vec2::operator+=(const Vec2& o) { x += o.x; return *this; }
+Vec2 operator*(float s, const Vec2& v) { return Vec2{s * v.x, s * v.y}; }
+union Raw { int i; float f; };
+extern "C" {
+  int c_api(const char* p, int** out, Vec2&& v);
+}
+template <typename... Ts> void log(Ts&&... args);

@@ -1,0 +1,29 @@
+use crate::model::{Shape, Pair};
+
+pub struct Inner;
+pub struct Config;
+
+impl Shape {
+    pub fn extra(&self) -> u8 { 0 }
+}
+
+impl Inner {
+    pub fn run(&self) {}
+    fn default() -> Self { Inner }
+}
+
+pub fn make_config(x: u8) -> Config { Config }
+pub fn helper<T>(x: T) {}
+pub fn load() -> u8 { 1 }
+
+fn main() {
+    let s = Shape::new("a", 1, |x| x);
+    s.extra();
+    Inner::run(&Inner);
+    Pair::make();
+    Kind::Unit;
+    Config::missing();
+    helper(load());
+    obj.run();
+    a.b.extra();
+}

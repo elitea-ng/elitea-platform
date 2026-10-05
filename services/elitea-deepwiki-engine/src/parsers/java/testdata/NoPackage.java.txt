@@ -1,0 +1,11 @@
+import java.util.List;
+
+class NoPackage {
+    List<NoPackage> items;
+    NoPackage() { helper(); }
+    void helper() { new NoPackage(); }
+}
+
+interface Other { void go(); }
+
+enum Color { RED, GREEN; Color next() { return RED; } }

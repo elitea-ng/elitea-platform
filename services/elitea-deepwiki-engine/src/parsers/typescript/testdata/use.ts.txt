@@ -1,0 +1,3 @@
+import { UserService } from './svc';
+export function boot(): UserService { return new UserService(); }
+const 名前 = 1; export const after = 2;

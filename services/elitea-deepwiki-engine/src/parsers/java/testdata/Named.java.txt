@@ -1,0 +1,9 @@
+package com.acme.model;
+
+@FunctionalInterface
+public interface Named extends Comparable<Named>, java.io.Serializable {
+    String name();
+    default String upper() { return name().toUpperCase(); }
+    static Named of(String n) { return () -> n; }
+    int LIMIT = 10;
+}

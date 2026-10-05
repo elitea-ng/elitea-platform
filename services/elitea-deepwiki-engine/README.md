@@ -6,10 +6,14 @@ same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
 keeps the provider SPI, admission, the parameter merge, the egress check,
 composition and upload. This crate runs the tools.
 
-**Status: ADR-0026 phase 1.** The sidecar protocol, the `unavailable` and
-`fixture` runners, and the container probe. The analysis engine (`native`)
-arrives in phases 2–6. Until then `ELITEA_DEEPWIKI_RUNNER=native` refuses to
-start, so a deployment cannot ask for the engine and get a refusal at
+**Status: ADR-0026 phase 2.** Phase 1 delivered the sidecar protocol, the
+`unavailable` and `fixture` runners, and the container probe. Phase 2 adds
+the front half of the engine: repository ingest, the eight language parsers,
+and the code graph (Phase 1 build plus the Phase 1c passes), each proven equal
+to the Python engine (see [Parity](#parity-with-the-python-engine)). Nothing
+calls them from the socket yet: the `native` runner arrives with
+`generate_wiki` (phase 5). Until then `ELITEA_DEEPWIKI_RUNNER=native` refuses
+to start, so a deployment cannot ask for the engine and get a refusal at
 invocation time instead.
 
 ## The socket protocol
@@ -59,6 +63,160 @@ resolves them itself in phase 6.
 The fixture's JSON artifacts are written as Python's `json.dumps(…,
 indent=2)` writes them (insertion order, `ensure_ascii`), because the real
 engine's artifacts are bytes a reader downloads.
+
+## Repository ingest (`src/ingest/`)
+
+ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
+(the runtime image is distroless). Not wired to a runner yet; the native
+runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
+
+1. An artifact-folder source (`provider_type: artifact`, `artifact://…`)
+   is refused for now (`RuntimeError`); a later phase ports it.
+2. `providers::clone_target` ports `engine/repo_providers` (GitHub incl.
+   Enterprise, GitLab, Bitbucket Cloud/Server, Azure DevOps) over the
+   host's `repo_config`. It builds a credential-free `https://` URL and the
+   `Authorization` value git sends for the userinfo Python put in the URL
+   (`Basic base64("user:password")`, an absent password empty: GitHub
+   `token:`, GitLab `oauth2:token`, Bitbucket `user:password`, ADO `pat:`).
+   `tests/fixtures/ingest/providers.json` is the Python factory's output
+   for 44 configurations (`gen_providers.py` regenerates it).
+3. `egress` re-checks the URL's own host against
+   `ELITEA_DEEPWIKI_GIT_ALLOWLIST` (Python/Go rules: fail-closed, `*`,
+   `*.x` = direct subdomains, ports ignored) before the credential is
+   used. The engine checks the host it will CONNECT to; the Go host checks
+   its prediction (`api.github.com` for the public API URL), so list
+   `github.com,*.github.com`.
+4. `clone` resolves the branch (`ls-remote`; a missing branch is
+   `resource_not_found` before any download), clones depth 1, single
+   branch, no tags into `{scratch}/{owner_repo}_{branch}_{sha8}`, and
+   reports the identity `{repo}:{branch}:{sha8}` of the commit checked out.
+
+The credential is an in-memory extra header for one connection: never in a
+URL, `argv`, `.git/config` or an error message, and not sent after a
+redirect (gitoxide refuses to follow one once headers are set). The
+repository is opened isolated, so no host git configuration (credential
+helpers, `insteadOf`, `extraHeader`) applies. Paths are validated by
+gitoxide (no `..`, no `.git`), a file is never written below a symlink,
+and `verify_containment` re-checks every checked-out path from outside.
+Symlinks are checked out as links and never followed later. Submodules and
+Git LFS are not supported, on purpose.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `ELITEA_DEEPWIKI_GIT_ALLOWLIST` | unset = refuse all | hosts a clone may reach |
+| `ELITEA_DEEPWIKI_MAX_CLONE_BYTES` | 2 GiB | pack bytes received (watched during the fetch) + blobs to check out |
+| `ELITEA_DEEPWIKI_MAX_FILE_COUNT` | 100 000 | files in the tree, before checkout |
+| `ELITEA_DEEPWIKI_MAX_FILE_BYTES` | 100 MiB | one blob, before checkout |
+| `ELITEA_DEEPWIKI_MAX_PARSED_BYTES` | 512 MiB | blobs discovery would parse, before checkout |
+| `ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS` | 600 | ls-remote + fetch + checkout |
+| `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the per-job scratch directories |
+
+A limit is a `ValueError` (`invalid_input`) naming the setting; the
+timeout is `timeout_error`. `tests/ingest_clone.rs` runs every path against
+`git http-backend` on loopback (git is a TEST dependency only);
+`ELITEA_DEEPWIKI_LIVE_CLONE=1` adds a clone of this repository from GitHub.
+
+## Parsers and the code graph (`src/parsers/`, `src/graph/`)
+
+Eight parsers, one per language the Python engine parses richly: Python, Go,
+TypeScript/TSX, JavaScript/JSX, Java, C#, C++ and Rust. Each is a port of the
+Python visitor for that language, over `tree-sitter` 0.27. The Python parser
+used the standard-library `ast` module; its port builds the same tree from
+`tree-sitter-python` and ports `ast.unparse` for signatures.
+
+The grammars are the ones the Python engine's `tree_sitter_language_pack`
+1.16.1 builds. A test per language asserts the grammar's ABI, parse-state,
+field and node-kind counts. The C# and C++ crates on crates.io are older than
+those grammars, so both are pinned to a git revision.
+
+`src/graph/builder.rs` turns the parse results into the code graph exactly as
+`EnhancedUnifiedGraphBuilder.analyze_repository` does: file discovery,
+documentation chunking, node ids and collision suffixes, relationship
+resolution, contraction, the SQL subgraph and ORM linking. `src/graph/phase1c.rs`
+then runs the passes `filesystem_indexer` runs before writing the index: API
+surfaces and contract nodes, the cross-language linker, markdown structure,
+and the test linker (off by default, `DEEPWIKI_TEST_LINKER`). The graph
+iterates nodes and edges in networkx insertion order, because contraction and
+every later pass depend on that order.
+
+Output is deterministic. Files are parsed in parallel, but every cross-file
+registry is filled and read in sorted path order.
+
+### Deliberate differences from the Python engine
+
+- **Exclude patterns match the repository-relative path.** Python matched the
+  ABSOLUTE path, so a clone under a directory named `build`, `target` or
+  `dist` excluded every file.
+- **Symlinks are never followed** by discovery or by any pass that reads a
+  file. Python followed them, so a link to a secret file was read, sent to the
+  model and published.
+- **Deep nesting does not fail a file.** Python's recursive visitors fail a
+  file at its 1,000-frame recursion limit (about 450–600 nesting levels for
+  Java, C#, C++ and JavaScript). The exact depth depends on the caller's stack,
+  so it cannot be reproduced; the Rust parsers run on large worker stacks and
+  parse such a file. The Python parser port does reproduce `ast`'s own limits.
+- **Hash-seeded iteration order is sorted.** Where Python iterates a `set`
+  (some `imports` lists, some edge-insertion loops), the order changes with
+  the hash seed between runs; the Rust order is sorted. Rows do not change.
+
+Every other quirk of the Python parsers is reproduced and documented in the
+module that reproduces it: text sliced by code point at byte offsets, files
+dropped on one bad UTF-8 byte, doubled visits, and names that collide across
+packages with the last file winning.
+
+## Parity with the Python engine
+
+The parity tools are in `parity/`. They run the Python engine itself (the
+`engine` extra of `services/elitea-deepwiki`), made reproducible for the
+reference only: inline thread pools, submission-order `as_completed`, sorted
+discovery. Two Python runs on the same commit are byte-identical.
+
+```bash
+# Python reference: the graph as the index stores it (repo_nodes / repo_edges rows)
+PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_reference.py <repo> <ref-dir>
+# One parser's ParseResults, file by file
+PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_parse_dump.py <language> <repo> <ref.jsonl>
+
+# Rust side
+cargo run --release --bin deepwiki-parity -- graph-dump <repo> <out-dir>
+python3 parity/compare_parses.py files <ref.jsonl> files.txt
+cargo run --release --bin deepwiki-parity -- parse-dump <language> <repo> files.txt <out.jsonl>
+
+# The gates
+python3 parity/compare_graphs.py <ref-dir> <out-dir>        # node and edge Jaccard per language
+python3 parity/compare_parses.py compare <ref.jsonl> <out.jsonl>
+```
+
+The CI suite carries Python-generated golden fixtures for every parser and for
+Phase 1c, so a regression fails `cargo test` without the Python closure. The
+full-corpus runs below are local: their references are hundreds of MB.
+
+Measured 2026-10-05 (Apple M4 Pro; real parsers, builder and Phase 1c against
+the Python engine's own graph). Every language on every corpus has node and
+edge Jaccard 1.0:
+
+| Corpus | Files | Nodes / edges | Python | Rust |
+| --- | --- | --- | --- | --- |
+| elitea-platform | 11,401 | 150,942 / 373,281 | 83 s (Phase 1 only), 3.07 GB peak RSS | 7.6 s, 1.48 GB peak RSS |
+| spring-petclinic (Java) | 132 | 531 / 1,010 | | 0.31 s |
+| CleanArchitecture (C#) | 258 | 1,500 / 1,037 | | 0.09 s |
+| leveldb (C++) | 152 | 2,582 / 14,798 | | 0.28 s |
+| express (JavaScript) | 214 | 1,109 / 1,034 | | 0.08 s |
+
+Memory: the build parses one language at a time and drops its parse results
+before the next, keeps only the symbol fields later passes read, and writes
+rows one at a time. The live heap peaks near 0.7 GB on elitea-platform; the
+RSS figure also counts pages macOS malloc keeps after the parse results are
+freed. `DEEPWIKI_PARITY_RSS=1` makes `deepwiki-parity` print RSS at each phase.
+
+Per parser, on the parser gate (symbols and relationships, every field, in
+order): all eight are exact on their corpora — elitea-platform for Go,
+TypeScript, Python, Rust and JavaScript; plus gson (Java), Newtonsoft.Json and
+CleanArchitecture (C#), leveldb (C++), express (JavaScript), elitea-sdk and the
+legacy plugins (Python), and a tricky-construct fixture set per language. Two
+known single-file differences: one Newtonsoft.Json file where tree-sitter
+0.27's error recovery inside an `#if`-split `switch` differs, and eleven Go
+signatures where the language pack's grammar misreads unnamed parameters.
 
 ## Running
 

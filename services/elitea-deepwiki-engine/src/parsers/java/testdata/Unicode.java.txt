@@ -1,0 +1,8 @@
+package com.acme.api;
+
+/** café — naïve */
+public class Unicode {
+    String café = "😀";
+    void méthode(Point p) { p.move(1); }
+    private Owner owner;
+}

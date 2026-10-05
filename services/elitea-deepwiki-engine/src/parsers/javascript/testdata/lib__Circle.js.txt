@@ -1,0 +1,18 @@
+const { Shape, Circle: Base } = require('./shapes');
+const { add } = require("./util");
+const path = require('path');
+const [first, second] = list;
+const { a: { b } } = nested;
+
+class Circle extends Base {
+  constructor() { super(); this.items = new Array(3); }
+  draw() { this.describe(); this.radius(); return add(1, 2); }
+  radius() { return Shape.create(); }
+}
+
+Circle.prototype.extra = function extra() { return this.draw(); };
+Circle.prototype.other = () => path.join('a', 'b');
+
+module.exports = { Circle, make: () => new Circle(), util: require('./util') };
+module.exports.helper = function () { return first; };
+exports.thing = 1;
