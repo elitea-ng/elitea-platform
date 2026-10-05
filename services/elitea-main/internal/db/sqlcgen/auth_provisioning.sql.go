@@ -20,20 +20,6 @@ func (q *Queries) AcquireAuthProviderAdvisoryLock(ctx context.Context, providerR
 	return err
 }
 
-const addNewAuthUserToRootGroup = `-- name: AddNewAuthUserToRootGroup :execrows
-INSERT INTO public.auth_core__user_group (user_id, group_id)
-VALUES ($1::integer, 1)
-ON CONFLICT (user_id, group_id) DO NOTHING
-`
-
-func (q *Queries) AddNewAuthUserToRootGroup(ctx context.Context, userID int32) (int64, error) {
-	result, err := q.db.Exec(ctx, addNewAuthUserToRootGroup, userID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const assignAuthUserRoleByNameAndMode = `-- name: AssignAuthUserRoleByNameAndMode :execrows
 INSERT INTO public.auth_core__user_role (user_id, role_id)
 SELECT $1::integer, role.id

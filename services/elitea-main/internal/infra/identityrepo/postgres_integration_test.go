@@ -29,7 +29,6 @@ func TestPostgresIdentityProvisioningCurrentBaseline(t *testing.T) {
 	pool := newIdentityTestDatabase(t, ctx)
 
 	mustExec(t, ctx, pool, `
-INSERT INTO public.auth_core__group (id, name) VALUES (1, 'Root');
 INSERT INTO public.auth_core__role (name, mode) VALUES
     ('super_admin', 'administration'),
     ('admin', 'administration'),
@@ -68,7 +67,6 @@ INSERT INTO public.auth_core__project_role (project_id, name) VALUES
 		}
 		assertUser(t, ctx, pool, result.UserID, "initial-admin@centry.user", "Initial Admin", true, false)
 		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_provider WHERE user_id = $1 AND provider_ref = 'Initial-Admin'`, result.UserID)
-		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_group WHERE user_id = $1 AND group_id = 1`, result.UserID)
 		assertCount(t, ctx, pool, 1, `
 SELECT count(*)
 FROM public.auth_core__user_role AS ur
@@ -92,11 +90,10 @@ WHERE ur.user_id = $1 AND role.mode = 'administration' AND role.name = 'super_ad
 			t.Fatalf("repeated user = %d, want %d", repeated.UserID, result.UserID)
 		}
 		assertUser(t, ctx, pool, result.UserID, "initial-admin@centry.user", "Preserved", true, false)
-		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_group WHERE user_id = $1 AND group_id = 1`, result.UserID)
 		assertProjectRoles(t, ctx, pool, result.UserID, 7, []string{"public_admin", "viewer"})
 	})
 
-	t.Run("existing exact email is linked without root membership", func(t *testing.T) {
+	t.Run("existing exact email is linked", func(t *testing.T) {
 		var userID int64
 		if err := pool.QueryRow(ctx, `INSERT INTO public.auth_core__user (email, name) VALUES ('existing@example.com', NULL) RETURNING id`).Scan(&userID); err != nil {
 			t.Fatal(err)
@@ -121,7 +118,6 @@ SELECT $1, id FROM public.auth_core__role WHERE name = 'viewer' AND mode = 'defa
 			t.Fatalf("user = %d, want existing %d", result.UserID, userID)
 		}
 		assertUser(t, ctx, pool, userID, "existing@example.com", "Existing Name", true, false)
-		assertCount(t, ctx, pool, 0, `SELECT count(*) FROM public.auth_core__user_group WHERE user_id = $1`, userID)
 		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_provider WHERE user_id = $1 AND provider_ref = 'Existing-Ref'`, userID)
 		assertCount(t, ctx, pool, 1, `
 SELECT count(*)
@@ -321,7 +317,6 @@ WHERE ur.user_id = $1 AND role.mode = 'administration' AND role.name = 'super_ad
 		}
 		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user WHERE email = 'concurrent@example.com'`)
 		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_provider WHERE provider_ref = 'concurrent-provider'`)
-		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_group WHERE user_id = $1 AND group_id = 1`, userID)
 		assertProjectRoles(t, ctx, pool, userID, 7, []string{"viewer"})
 	})
 
@@ -381,7 +376,6 @@ WHERE ur.user_id = $1 AND role.mode = 'administration' AND role.name = 'super_ad
 		}
 		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user WHERE email = 'shared@example.com'`)
 		assertCount(t, ctx, pool, callers, `SELECT count(*) FROM public.auth_core__user_provider WHERE provider_ref LIKE 'shared-email-provider-%'`)
-		assertCount(t, ctx, pool, 1, `SELECT count(*) FROM public.auth_core__user_group WHERE user_id = $1 AND group_id = 1`, userID)
 		assertCount(t, ctx, pool, 1, `
 SELECT count(*)
 FROM public.auth_core__user_role AS ur
@@ -423,8 +417,9 @@ func TestPostgresIdentityProvisioningRollback(t *testing.T) {
 	defer cancel()
 	pool := newIdentityTestDatabase(t, ctx)
 
-	// A partially initialized database has no root group. The FK failure occurs
-	// after user and provider inserts and proves the repository owns one rollback.
+	// The injected failure occurs after the user and provider inserts and
+	// proves the repository owns one rollback.
+	failProvisioningAfterUserWrite(t, ctx, pool)
 	service := newProvisionService(t, pool, identity.ProvisioningPolicy{})
 	_, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
 		Provider:          "oidc",
@@ -503,6 +498,23 @@ func newIdentityTestDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	return pool
+}
+
+// failProvisioningAfterUserWrite makes every UPDATE of auth_core__user raise,
+// so a provisioning attempt fails at TouchProvisionedAuthUser: after the user
+// and provider rows are written and before any role or credential is.
+func failProvisioningAfterUserWrite(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	mustExec(t, ctx, pool, `
+CREATE FUNCTION public.identityrepo_test_fail_user_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'identityrepo test: injected provisioning failure';
+END
+$$;
+CREATE TRIGGER identityrepo_test_fail_user_update
+BEFORE UPDATE ON public.auth_core__user
+FOR EACH ROW EXECUTE FUNCTION public.identityrepo_test_fail_user_update();`)
 }
 
 func mustExec(t *testing.T, ctx context.Context, pool *pgxpool.Pool, statement string, args ...any) {

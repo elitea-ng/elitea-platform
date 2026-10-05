@@ -157,7 +157,8 @@ func TestFormProvisioningRollbackLeavesNoActorPAT(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	pool := newIdentityTestDatabase(t, ctx)
-	// No root group: the membership insert fails after the user row is written.
+	// The injected failure fires after the user row is written.
+	failProvisioningAfterUserWrite(t, ctx, pool)
 	service := newProvisionService(t, pool, identity.ProvisioningPolicy{})
 
 	_, err := service.Provision(ctx, identity.ProvisionRequest{Assertion: identity.VerifiedAssertion{
@@ -220,12 +221,10 @@ FROM public.auth_core__token WHERE user_id = $1 ORDER BY id`, userID)
 	return tokens
 }
 
-// newActorPATTestDatabase is the provisioning fixture plus the root group a
-// newly created account is added to. No role rows: this file is about the
-// credential, and the grant has its own coverage in the HTTP-level test.
+// newActorPATTestDatabase is the provisioning fixture. No role rows: this file
+// is about the credential, and the grant has its own coverage in the
+// HTTP-level test.
 func newActorPATTestDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	pool := newIdentityTestDatabase(t, ctx)
-	mustExec(t, ctx, pool, `INSERT INTO public.auth_core__group (id, name) VALUES (1, 'Root')`)
-	return pool
+	return newIdentityTestDatabase(t, ctx)
 }

@@ -17,7 +17,6 @@ func TestFormPlaneFirstLoginAppliesTheSharedAdoptionRule(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	pool := newIdentityTestDatabase(t, ctx)
-	mustExec(t, ctx, pool, `INSERT INTO public.auth_core__group (id, name) VALUES (1, 'Root')`)
 
 	var scimRow, federatedRow, bareRow int64
 	if err := pool.QueryRow(ctx, `INSERT INTO public.auth_core__user (email, name)
