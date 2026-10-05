@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.0"
+  x-elitea-client-contract: "1.1"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2097,6 +2097,21 @@ components:
             (internal/api/v2/conversations/handler.go:243). Its keys depend on
             `entity_name` (a user carries `id`, an application `id` and
             `project_id`), so one closed shape would describe one kind only.
+          description: >-
+            The stable keys are typed below; every other key is the kind's
+            own. For a `user` participant `id` is the USER id — the value a
+            chat send's `user_ids` mention list carries — never the
+            participant row id.
+          properties:
+            id:
+              type: integer
+              description: The entity id (user, application, pipeline or toolkit). Absent for `llm` and `dummy`.
+            project_id:
+              type: integer
+              description: The project that owns an application, pipeline or toolkit.
+            model_name:
+              type: string
+              description: An `llm` participant's model.
         entity_settings:
           type: object
           nullable: true
@@ -2106,6 +2121,12 @@ components:
             participant (internal/api/v2/conversations/handler.go:244), written
             by the entity-settings routes with whatever keys the participant
             kind uses (variables, llm_settings, version ids).
+          properties:
+            version_id:
+              type: integer
+              description: >-
+                The application or pipeline version a chat send to this
+                participant runs.
         meta:
           type: object
           nullable: true
@@ -2114,6 +2135,408 @@ components:
             NOTE(W2): the participant's display metadata
             (internal/api/v2/conversations/handler.go:245) — name, icon and
             kind-specific keys copied from the entity when it was added.
+          properties:
+            user_name:
+              type: string
+              description: A `user` participant's display name.
+            name:
+              type: string
+              description: Every other kind's display name.
+
+    # --- Client frame catalogue (client contract 1.1). The `data` of an
+    # `execution.node_event` SSE event, per `data.type`; see
+    # x-elitea-client-frames at the document root and API_CONTRACT.md
+    # "Agent progress frames". Every schema is open: a client ignores keys it
+    # does not know, and the workers add keys over time.
+
+    ClientFrameEnvelope:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the node event JSON both workers build
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:1096,
+        `_event_json`) and elitea-main replays verbatim as the SSE `data`;
+        the per-type keys live in `response_metadata`.
+      required: [type, response_metadata]
+      properties:
+        type:
+          type: string
+          description: The frame type; the key of x-elitea-client-frames.
+        stream_id:
+          type: string
+          nullable: true
+          description: The conversation UUID the turn streams into.
+        message_id:
+          type: string
+          nullable: true
+          description: The answer's message group UUID (`response_message_id`).
+        content:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): text for most frames (a pause's message, an output
+            chunk's slice), null for tool frames
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:1109).
+        created_at: { type: string, nullable: true }
+
+    ClientFrameToolMetadata:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the tool's display and hierarchy metadata
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:612,
+        `_tool_start`); the typed keys are what a client renders.
+      properties:
+        toolkit_name: { type: string, nullable: true }
+        toolkit_type: { type: string, nullable: true }
+        display_name: { type: string, nullable: true }
+        original_name: { type: string, nullable: true }
+        parent_agent_name:
+          type: string
+          nullable: true
+          description: Set when a sub-agent ran the tool; group the tool under it.
+        parent_agent_call_id: { type: string, nullable: true }
+
+    ClientFrameToolCall:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one tool call entry
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:618,
+        `entry`), identical in `agent_tool_start`, `agent_tool_end` and
+        `agent_tool_error`; keyed by `tool_run_id`.
+      required: [tool_name, tool_run_id]
+      properties:
+        tool_name: { type: string }
+        tool_run_id:
+          type: string
+          description: The key of one call across its start, chunks and end.
+        tool_meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the tool descriptor
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:611).
+          properties:
+            name: { type: string, nullable: true }
+        tool_inputs:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the tool's own argument object, whatever the tool takes
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:622).
+          description: The arguments the model called the tool with. May be sensitive; show on demand.
+        metadata:
+          $ref: '#/components/schemas/ClientFrameToolMetadata'
+        timestamp_start: { type: string, nullable: true }
+        timestamp_finish: { type: string, nullable: true }
+        finish_reason:
+          type: string
+          nullable: true
+          description: '`stop` on success, `error` on failure; absent or null while running.'
+        tool_output:
+          type: string
+          nullable: true
+          description: >-
+            The result as text. Empty when it was chunked (see
+            `tool_output_chunks`); null on failure.
+        error:
+          type: string
+          nullable: true
+          description: The failure text of an `agent_tool_error`.
+        tool_output_chunks:
+          type: object
+          nullable: true
+          description: >-
+            Present when the output was too large for one frame: it arrived
+            as `total` `agent_tool_output_chunk` frames before this one, and
+            their concatenation hashes to `tool_output_sha256`.
+          required: [total, tool_output_sha256]
+          properties:
+            total: { type: integer }
+            tool_output_sha256: { type: string }
+
+    ClientFrameAgentToolStart:
+      description: >-
+        A tool call started. `response_metadata` is the call entry; a later
+        `agent_tool_end` or `agent_tool_error` with the same `tool_run_id`
+        completes it. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              $ref: '#/components/schemas/ClientFrameToolCall'
+
+    ClientFrameAgentToolEnd:
+      description: >-
+        A tool call finished (`agent_tool_end`) or failed
+        (`agent_tool_error`; `content` repeats the error). A client that
+        missed the start builds the call from this frame alone. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              $ref: '#/components/schemas/ClientFrameToolCall'
+
+    ClientFrameAgentToolOutputChunk:
+      description: >-
+        One slice of a tool result too large for one frame. `content` is the
+        slice; the slices of one call arrive in `index` order before its
+        `agent_tool_end`. Not terminal. NOTE(W2):
+        internal/transport/runtimegrpc/nodeevent/tool_output_chunk.go:52.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            content: { type: string }
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the chunk position
+                (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:788).
+              required: [tool_output_chunk]
+              properties:
+                tool_output_chunk:
+                  type: object
+                  required: [tool_call_id, index, total, tool_output_sha256]
+                  properties:
+                    tool_call_id:
+                      type: string
+                      description: The `tool_run_id` of the call the slice belongs to.
+                    index: { type: integer }
+                    total: { type: integer }
+                    tool_output_sha256: { type: string }
+
+    ClientFrameHitlInterruptDetail:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one pending interrupt as the runtime raised it
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:430,
+        `_normalize_hitl_pause`); guardrail kinds add their own keys.
+      properties:
+        interrupt_id:
+          type: string
+          nullable: true
+          description: Echo it in `hitl_decisions[].interrupt_id`.
+        tool_call_id: { type: string, nullable: true }
+        message: { type: string, nullable: true }
+        available_actions:
+          type: array
+          nullable: true
+          items: { type: string }
+          description: Some of approve, reject, edit, block_with_comment, answer, authorize, skip.
+        guardrail_type: { type: string, nullable: true }
+        action_label: { type: string, nullable: true }
+        policy_message: { type: string, nullable: true }
+        tool_name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        tool_args:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the paused tool's own arguments
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:430).
+          description: The arguments awaiting approval; `edit` sends a replacement object.
+        questions:
+          type: array
+          nullable: true
+          description: An `ask_user` pause's questions; `answer` sends an object keyed by question id.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one ask_user question
+              (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:430);
+              its option keys follow the tool.
+        parent_agent_name: { type: string, nullable: true }
+
+    ClientFrameHitlInterrupt:
+      description: >-
+        The turn paused for a human decision. Terminal, unless it is a
+        fan-out child pause (`response_metadata.metadata` carries both
+        `parent_agent_name` and `child_thread_id`): then siblings keep
+        streaming and only the parent's terminal frame ends the turn. Answer
+        it with continueChatExecution and `agent.continue.hitl.v1`.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the pause projection
+                (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:441).
+              properties:
+                thread_id: { type: string, nullable: true }
+                message: { type: string, nullable: true }
+                available_actions:
+                  type: array
+                  nullable: true
+                  items: { type: string }
+                hitl_interrupt:
+                  $ref: '#/components/schemas/ClientFrameHitlInterruptDetail'
+                hitl_interrupts:
+                  type: array
+                  nullable: true
+                  description: Every pending interrupt; a parallel pause carries several, one decision each.
+                  items:
+                    $ref: '#/components/schemas/ClientFrameHitlInterruptDetail'
+                metadata:
+                  $ref: '#/components/schemas/ClientFrameToolMetadata'
+
+    ClientFrameMcpAuthorizationRequest:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one toolkit's authorization request
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:707);
+        `resource_metadata` follows the server's OAuth metadata.
+      properties:
+        server_url: { type: string, nullable: true }
+        resource_metadata_url: { type: string, nullable: true }
+        www_authenticate: { type: string, nullable: true }
+        resource_metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the protected resource's OAuth metadata, minus provided
+            settings (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:707).
+        tool_run_id: { type: string, nullable: true }
+        tool_name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        toolkit_type: { type: string, nullable: true }
+
+    ClientFrameMcpAuthorizationRequired:
+      description: >-
+        A toolkit needs the user to sign in; the tool has not run. Sent as
+        progress first; the frame that carries
+        `response_metadata.authorization_requests` is terminal. Continue with
+        `agent.continue.authorization.v1` (authorize or skip).
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              allOf:
+                - $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+                - type: object
+                  properties:
+                    thread_id: { type: string, nullable: true }
+                    authorization_requests:
+                      type: array
+                      nullable: true
+                      items:
+                        $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+
+    ClientFrameRequiresConfirmation:
+      description: >-
+        The answer stopped at the model's output limit. Not terminal by
+        itself; offer Continue, which is continueChatExecution with
+        `agent.continue.output-limit.v1`.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the output-limit pause
+                (services/elitea-worker-rust/src/agents/events.rs:2148).
+              properties:
+                finish_reason: { type: string, nullable: true }
+
+    ParticipantCandidatesPage:
+      type: object
+      description: >-
+        One page of participant candidates. NOTE(W2):
+        internal/api/v2/conversations/candidates.go:75
+        (`participantCandidatesPage`).
+      required: [rows, next_cursor, has_more]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantCandidate'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Pass as `cursor` for the next page; null on the last page.
+        has_more: { type: boolean }
+
+    ParticipantCandidate:
+      type: object
+      description: >-
+        A project member. NOTE(W2):
+        internal/api/v2/conversations/candidates.go:40
+        (`ParticipantCandidate`).
+      required: [user_id, name, already_participant]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: The USER id — `entity_meta.id` of a user participant and a `user_ids` mention entry.
+        name: { type: string }
+        email: { type: string }
+        already_participant: { type: boolean }
+
+    ConversationParticipantCreate:
+      type: object
+      description: >-
+        One participant to add (see `addConversationParticipants` for the
+        keys each kind needs). NOTE(W2):
+        internal/api/v2/conversations/participant_settings.go:131
+        (`Participant.Validate`).
+      required: [entity_name, entity_meta]
+      properties:
+        entity_name:
+          type: string
+          description: '`user`, `application`, `pipeline`, `toolkit`, `llm` or `dummy`.'
+        entity_meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): stored as `chat_participants.entity_meta`
+            (internal/api/v2/conversations/handler.go:1297, `AddParticipant`);
+            the keys depend on `entity_name`, and the typed ones below are the
+            ones the server reads.
+          properties:
+            id:
+              type: integer
+              description: The user, application, pipeline or toolkit id.
+            project_id:
+              type: integer
+              description: The owning project of an application, pipeline or toolkit; defaults to the path project.
+            name:
+              type: string
+              description: The display name of an application, pipeline or toolkit.
+            user_name:
+              type: string
+              description: A user's display name.
+            model_name:
+              type: string
+              description: An `llm` participant's model.
+        entity_settings:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the per-conversation settings document, normalized by
+            internal/api/v2/conversations/participant_settings.go:131's
+            siblings; `version_id` is the key a chat send reads.
+          properties:
+            version_id:
+              type: integer
+              description: The application or pipeline version to run.
 
     ConversationCreateRequest:
       type: object
@@ -2238,6 +2661,68 @@ components:
               passed through; typing it is tracked as follow-up of ADR-0025
               decision 14.
 
+    AttachmentMessageItem:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one entry per attachment, built by
+        internal/infra/db/repos/conversations.go:2438
+        (`attachmentItemsByGroup`). The typed keys below are the contract
+        (client contract 1.1); the object stays open for keys a later item
+        kind adds.
+      description: >-
+        One file sent with a message (`item_type` `attachment_message`).
+        `item_details.filepath` is `/{bucket}/{conversation_uuid}/{name}`;
+        download it with downloadConversationAttachment using the last
+        segment as the name.
+      required: [id, item_type, order_index, item_details]
+      properties:
+        id: { type: integer }
+        item_type:
+          type: string
+          description: '`attachment_message`.'
+        order_index: { type: integer }
+        item_details:
+          $ref: '#/components/schemas/AttachmentMessageItemDetails'
+
+    AttachmentMessageItemDetails:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): internal/infra/db/repos/conversations.go:2840
+        (`attachmentItemDetails`); open for keys a later item kind adds.
+      required: [id, item_type, name, bucket, filepath, attachment_type, content]
+      properties:
+        id: { type: integer }
+        item_type: { type: string }
+        name:
+          type: string
+          description: The stored object name, `{conversation_uuid}/{file name}`.
+        bucket: { type: string }
+        filepath:
+          type: string
+          description: '`/{bucket}/{name}` — the value a chat send''s `payload.attachments[].filepath` carried.'
+        attachment_type:
+          type: string
+          description: '`image` or `document`; read it, do not enumerate it.'
+        content:
+          type: array
+          description: >-
+            The content chunks the model was given: a `{type: text, text}`
+            header chunk and, for an image embedded for the model,
+            `{type: image_url, image_url: {url: data:...}}` — a client may
+            render that data URL as a thumbnail without a download. Empty
+            when nothing was recorded.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): the `chat_messages_attachment.content` json written
+              at admission by
+              internal/application/agentexecution/attachments.go:474
+              (`attachmentContentScaffold`); its chunk kinds follow the
+              runtime.
+
     ConversationMessage:
       type: object
       description: >
@@ -2274,13 +2759,7 @@ components:
           type: array
           description: Omitted, not empty, for a group with no attachments.
           items:
-            type: object
-            additionalProperties: true
-            x-elitea-passthrough: >-
-              NOTE(W2): one `{id, item_type, order_index, item_details}` entry
-              per attachment (internal/api/v2/conversations/handler.go:110);
-              `item_details` is built per item type, so the entry is passed
-              through.
+            $ref: '#/components/schemas/AttachmentMessageItem'
         is_streaming:
           type: boolean
           description: Present (true) only while the turn is in flight.
@@ -2431,9 +2910,19 @@ components:
             produced.
         user_ids:
           type: array
-          description: Users this message mentions (at most 64). `userIds` is accepted as an alias.
+          description: >-
+            USER ids this message mentions (at most 64; `entity_meta.id` of a
+            user participant, never a participant row id). `userIds` is
+            accepted as an alias. Each project member named, except the
+            sender, gets one `chat_user_mentioned` notification once the turn
+            is admitted — on both execution contracts (an ad-hoc model chat
+            notifies since client contract 1.1). An id that is not a project
+            member is dropped silently; a replay of the same `question_id`
+            notifies nobody again.
           items: { type: integer, format: int64 }
-        is_mentioning_everyone: { type: boolean }
+        is_mentioning_everyone:
+          type: boolean
+          description: '`@everyone`: every project member except the sender is notified.'
 
     ChatRegenerateRequest:
       type: object
@@ -2520,14 +3009,25 @@ components:
           description: True for `agent.continue.hitl.v1` and for a batched authorization answer.
         hitl_action:
           type: string
-          description: The single-pause decision (`approve`, `reject`, `edit`, `respond` and similar, as the pause frame offered).
+          description: >-
+            The single-pause decision, one the pause frame's
+            `available_actions` offered: `approve`, `reject`, `edit`,
+            `block_with_comment` or `answer`.
         hitl_value:
-          description: The decision's value (an edited value, a free-text answer); its type follows the action.
+          description: >-
+            The decision's value; its type follows the action. `approve`,
+            `reject`: absent. `edit`: a non-empty STRING — the edited value
+            (for a tool-call pause, the edited arguments as JSON text).
+            `block_with_comment`: a non-empty string, the comment. `answer`
+            (an ask_user pause): an OBJECT keyed by question id (each value
+            the chosen option(s) or free text), or a plain string. The same
+            rule applies to each `hitl_decisions[].value`.
           x-elitea-passthrough: >-
             NOTE(W2): read as json.RawMessage
-            (internal/api/v2/agentexecution/route.go:208) and validated per
-            action by `currentHITLValue`; a string for `respond`, an object
-            for `edit`, absent otherwise.
+            (internal/api/v2/agentexecution/route.go:753, `currentHITLValue`):
+            a JSON string for every action but `answer`, which also admits an
+            object and is canonicalised; edit, block_with_comment and answer
+            refuse an empty value (internal/application/agentexecution/continue.go:313).
         hitl_decisions:
           type: array
           description: Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.
@@ -2628,6 +3128,24 @@ components:
             json.RawMessage (internal/api/v2/notifications/api.go:159). Each
             `event_type` writes its own keys (the entity, its project, the
             actor), so the object is passed through.
+          description: >-
+            Per `event_type`. For `chat_user_mentioned` (client contract 1.1)
+            the server writes `conversation_id` (the conversation UUID),
+            `message_id` (the mentioning message's `question_id`),
+            `project_id`, `sender_user_id` and `sender`
+            (internal/infra/db/repos/chat_mention_notification.go). A row a
+            pre-Go deployment wrote carries the NUMERIC conversation id,
+            `initiator_name` and no `sender`; getConversation resolves either
+            id form, so open the conversation with whatever `conversation_id`
+            holds.
+          properties:
+            sender:
+              type: object
+              description: '`chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved.'
+              required: [id, name]
+              properties:
+                id: { type: integer, format: int64 }
+                name: { type: string }
         created_at: { type: string }
         updated_at: { type: string, nullable: true }
         event_type: { type: string }
@@ -2726,6 +3244,57 @@ components:
             display name, toolkit type — and has no fixed key set across step
             kinds; the writer is
             internal/infra/db/repos/agent_trace.go:1108-1116.
+          description: >-
+            For a `tool_call` step the keys a client renders are typed below
+            (client contract 1.1); every other key is display-only and may
+            change.
+          properties:
+            metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the allowlisted tool metadata
+                (internal/infra/db/repos/agent_trace.go:983,
+                `currentAgentToolCallAttrs`; keys from
+                `currentAgentToolMetadataKeys`). Only the keys typed here are
+                promised.
+              properties:
+                toolkit_name: { type: string, description: The toolkit the tool belongs to. }
+                toolkit_type: { type: string }
+                display_name: { type: string }
+                original_name: { type: string, description: The tool's own name when `tool_name` is a prefixed one. }
+                parent_agent_name: { type: string, description: The sub-agent that ran the tool. }
+            tool_meta:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the bounded tool descriptor
+                (internal/infra/db/repos/agent_trace.go:983,
+                `currentAgentToolCallAttrs`): name, display name and an icon.
+              properties:
+                name: { type: string }
+                display_name: { type: string }
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): a thinking or model step's display metadata
+                (internal/infra/db/repos/agent_trace.go:775); its keys follow
+                the step type.
+            tool_output_chunks:
+              type: object
+              description: >-
+                Present on a tool call whose output was chunked: how many of
+                its `total` chunks were `received`, and whether the
+                reassembly is `complete` (its SHA-256 matched).
+              properties:
+                received: { type: integer }
+                total: { type: integer }
+                complete: { type: boolean }
+                tool_output_sha256: { type: string }
+                sanitized:
+                  type: boolean
+                  description: A NUL byte was stripped from at least one chunk.
 
     MessageTraceStepDetail:
       allOf:
@@ -9759,6 +10328,7 @@ components:
         - native_auth
         - client_policy
         - min_client_version
+        - attachments
       properties:
         server_version:
           type: string
@@ -9801,6 +10371,72 @@ components:
             its own entry and falls back to `client_policy.min_client_version`.
             Always an object.
           additionalProperties: { type: string }
+        attachments:
+          $ref: '#/components/schemas/ClientAttachmentPolicy'
+    ClientAttachmentPolicy:
+      type: object
+      description: >-
+        The deployment's chat attachment limits (client contract 1.1), so a
+        client can refuse a file before uploading it; the server enforces
+        every one of them again. Byte values are bytes. A project's storage
+        policy may set a different per-file cap, which the upload's 400
+        names. NOTE(W2): internal/api/v2/discovery/document.go:60
+        (`AttachmentPolicy`), filled by
+        internal/api/v2/conversations/attachment_limits.go:47
+        (`CurrentAttachmentLimits`).
+      required:
+        - max_files
+        - max_total_bytes
+        - max_file_bytes
+        - max_image_bytes
+        - chunk_bytes
+        - accepted_extensions
+        - max_extract_bytes
+        - inline_image_max_bytes
+        - inline_image_formats
+        - inline_image_downscale
+      properties:
+        max_files:
+          type: integer
+          description: Files one message carries in the composer.
+        max_total_bytes:
+          type: integer
+          format: int64
+          description: One upload, all chunks of one file (ARTIFACT_ATTACHMENT_MAX_TOTAL_MB).
+        max_file_bytes:
+          type: integer
+          format: int64
+          description: One non-image file (ARTIFACT_ATTACHMENT_MAX_FILE_MB).
+        max_image_bytes:
+          type: integer
+          format: int64
+          description: One image (ARTIFACT_ATTACHMENT_MAX_IMAGE_MB).
+        chunk_bytes:
+          type: integer
+          format: int64
+          description: The largest single upload request; send a larger file in chunks of at most this size.
+        accepted_extensions:
+          type: array
+          items: { type: string }
+          description: Lower-case, leading-dot extensions the model can read.
+        max_extract_bytes:
+          type: integer
+          format: int64
+          description: The largest document whose text is extracted for the model; a larger one is stored but not read.
+        inline_image_max_bytes:
+          type: integer
+          format: int64
+          description: The largest image (raw bytes) handed to the model as an image.
+        inline_image_formats:
+          type: array
+          items: { type: string }
+          description: Extensions handed to the model as images.
+        inline_image_downscale:
+          type: boolean
+          description: >-
+            True when the server downscales a larger image in one of
+            `inline_image_formats` to fit `inline_image_max_bytes`, so a
+            client need not.
     NativeAuthEndpoints:
       type: object
       description: >-
@@ -11592,6 +12228,21 @@ components:
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+# The client frame catalogue (client contract 1.1): the `data.type` values of
+# an `execution.node_event` a client renders tool activity and pauses from,
+# each mapped to the schema of its `data`. internal/api/clientcontract locks
+# these schemas like an operation's response (additive only), and
+# TestClientFrameCatalogueAcceptsWorkerFrames validates frames captured from
+# BOTH workers against them (testdata/client-frames/).
+x-elitea-client-frames:
+  agent_tool_start: '#/components/schemas/ClientFrameAgentToolStart'
+  agent_tool_end: '#/components/schemas/ClientFrameAgentToolEnd'
+  agent_tool_error: '#/components/schemas/ClientFrameAgentToolEnd'
+  agent_tool_output_chunk: '#/components/schemas/ClientFrameAgentToolOutputChunk'
+  agent_hitl_interrupt: '#/components/schemas/ClientFrameHitlInterrupt'
+  mcp_authorization_required: '#/components/schemas/ClientFrameMcpAuthorizationRequired'
+  agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
+
 paths:
   /.well-known/elitea-client:
     # Root-mounted (RFC 8615), outside /api/v2 and outside the auth group
@@ -14751,6 +15402,195 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/participants/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+    post:
+      operationId: addConversationParticipants
+      summary: Add participants (people, agents, pipelines, toolkits, models) to a conversation
+      description: |
+        Needs `models.chat.participants.create` and access to the
+        conversation. The body is ONE participant object or an array of at
+        most 100. The batch is all-or-nothing.
+
+        Per kind (`entity_name`):
+        - `user`: `entity_meta.id` is the USER id (> 0). Send
+          `entity_meta.user_name` too; it becomes the participant's
+          `meta.user_name`, which is what transcripts show.
+        - `application` and `pipeline`: `entity_meta.id` (> 0) and
+          `entity_meta.project_id` (> 0; defaults to the path project), plus
+          `entity_meta.name` for display. Send `entity_settings.version_id`:
+          a chat send to an application participant runs that version, and a
+          participant without one cannot be targeted by a send.
+        - `toolkit`: `entity_meta.id` and `entity_meta.project_id`, as above.
+          A conversation that holds a toolkit AND an agent is refused at send
+          time with 422 (`agent_chat.sql`); a toolkit belongs in a model
+          (ad-hoc) conversation.
+        - `llm`: `entity_meta.model_name`.
+        - `dummy`: no keys.
+
+        The answer is the participant rows of THIS request, in request
+        order. An entity that is already a participant is not added twice:
+        its existing row (and id) is answered again, so a retried add is
+        safe. NOTE(W2): internal/api/v2/conversations/handler.go:1297
+        (`AddParticipant`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/ConversationParticipantCreate'
+                - type: array
+                  maxItems: 100
+                  items:
+                    $ref: '#/components/schemas/ConversationParticipantCreate'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The participant rows of this request, in request order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConversationParticipant'
+        '400':
+          description: >-
+            A malformed body, an unknown kind, a missing required key, more
+            than 100 participants, or an `X-Client-Version` that does not
+            parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/participant/prompt_lib/{project_id}/{conversation_id}/{participant_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+      - name: participant_id
+        in: path
+        required: true
+        schema: { type: integer }
+        description: The participant row id (`ConversationParticipant.id`), not the entity id.
+    delete:
+      operationId: deleteConversationParticipant
+      summary: Remove a participant from a conversation
+      description: |
+        Needs `models.chat.participant.delete` and access to the
+        conversation. The conversation's author cannot be removed (400). An
+        id that is not a participant of this conversation is 404.
+        NOTE(W2): internal/api/v2/conversations/handler.go:1399
+        (`RemoveParticipant`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204': { description: Removed. }
+        '400':
+          description: >-
+            The participant is the conversation's author, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/participant_candidates/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+    get:
+      operationId: listParticipantCandidates
+      summary: The people who may be added to a conversation
+      description: |
+        Members of the project (platform system accounts and suspended users
+        excluded), filtered by `q` and paged by `cursor`. Needs
+        `models.chat.participants.create` — the permission of the add this
+        list feeds — and access to the conversation. `already_participant`
+        marks members who are participants of THIS conversation already
+        (the caller is usually one). Ordered by display name, then user id;
+        the order is stable, so a cursor never repeats or skips a member.
+        Add a candidate with `addConversationParticipants` and
+        `{entity_name: user, entity_meta: {id: user_id, user_name: name}}`.
+        NOTE(W2): internal/api/v2/conversations/candidates.go:83
+        (`ListParticipantCandidates`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: type
+          in: query
+          required: false
+          schema: { type: string }
+          description: The candidate kind. Only `user` is served; it is the default.
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, maxLength: 100 }
+          description: Case-insensitive substring of the name or the e-mail.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: The previous page's `next_cursor`.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: One page of candidates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParticipantCandidatesPage'
+        '400':
+          description: >-
+            A `type` other than `user`, a `q` over 100 characters, a `limit`
+            out of range, a cursor this list did not issue, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition without a database; there are no members to list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /elitea_core/messages/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -15182,6 +16022,99 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The conversation UUID (a numeric id is a 400), as in the attachment's `filepath`.
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+        description: >-
+          The file name: the last segment of the attachment's `filepath`
+          (`/{bucket}/{conversation_uuid}/{name}`), percent-encoded. A name
+          with a slash, a backslash, `..` or a control character is a 400.
+    get:
+      operationId: downloadConversationAttachment
+      summary: Download one file that was attached in a conversation
+      description: |
+        Needs `models.chat.conversation.details` and access to the
+        conversation — the same as getConversation. A caller who cannot see
+        the conversation gets 404, as for a file that does not exist. The
+        bucket is the project's chat attachment bucket; the client never
+        names it. HEAD answers the same headers without the body.
+
+        The answer is always a download: `Content-Disposition: attachment`
+        (with an RFC 5987 `filename*`), `X-Content-Type-Options: nosniff`,
+        `Content-Security-Policy: sandbox` and
+        `Cache-Control: private, no-store`. `Content-Type` is the recorded
+        type only when the file's first bytes agree with it; an active type
+        (HTML, SVG, XML, script) or a disagreement is
+        `application/octet-stream`. One `Range` (`bytes=a-b`, `bytes=a-` or
+        `bytes=-n`) answers 206; `If-None-Match` with the `ETag` answers 304.
+        NOTE(W2): internal/api/v2/conversations/attachment_download.go:59
+        (`DownloadAttachment`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Range
+          in: header
+          required: false
+          schema: { type: string }
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The whole file.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            ETag:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: The requested range.
+          headers:
+            Content-Range:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304': { description: Not modified (the `If-None-Match` ETag matches). }
+        '400':
+          description: >-
+            A numeric conversation id, an invalid file name, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '416':
+          description: The range starts past the end of the file; `Content-Range` states its length.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition with no object store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /executions/{project_id}/{execution_id}/events:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -15586,8 +16519,9 @@ paths:
 
         `total` is null unless include_total=true, so "not counted" stays
         distinguishable from "counted zero".
-      tags: [chat]
+      tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: message_group_id
           in: query
           required: false
@@ -15624,6 +16558,7 @@ paths:
           required: false
           schema: { type: boolean, default: false }
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Trace steps for the conversation.
           content:
@@ -15658,14 +16593,16 @@ paths:
         `message_group_id` is REQUIRED and is matched together with the step
         id: it is what confines a numeric step id to the message the caller is
         reading, so a step from elsewhere is a 404 rather than a body.
-      tags: [chat]
+      tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: message_group_id
           in: query
           required: true
           schema: { type: integer }
           description: The owning message group, from the trace-list row.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The full trace step.
           content:
@@ -16224,8 +17161,9 @@ paths:
         NOTE(W2): internal/api/v2/applications/handler.go:83-119 — the
         response is the domain ListResponse (types.go:105-111). The handler
         also reads query/search, tags, folder_id, agents_type.
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
         - name: query
@@ -16247,6 +17185,8 @@ paths:
           in: query
           schema: { type: string }
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Paginated application list
           content:
@@ -16428,8 +17368,12 @@ paths:
       summary: Retrieve full application details
       description: |
         NOTE(W2): internal/api/v2/applications/handler.go:110-139.
-      tags: [applications]
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Application details with version summaries
           content:
@@ -20248,8 +21192,11 @@ paths:
         the reviewed handler also emits (issue 395). SkillsList itself stays
         as it is, because the project-skills List operation shares it and
         emits neither key.
-      tags: [skills]
+      tags: [skills, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Skills list
           content:
@@ -22372,11 +23319,14 @@ paths:
         documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
         The caller must be a member of {project_id} (or a super-admin), and a
         repository failure is returned as a safe 500 error.
-      tags: [toolkits]
+      tags: [toolkits, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '400': { $ref: '#/components/responses/InvalidClientVersion' }
         '200':
           description: Toolkit instances
           content:
@@ -22458,8 +23408,11 @@ paths:
         The worker discovers tools from those immutable inputs.
         The response contains the accepted immutable result artifact.
         Discovery is unavailable until the runtime activation flag is enabled.
-      tags: [toolkits]
+      tags: [toolkits, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Available tool descriptions and argument schemas.
           content:

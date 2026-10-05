@@ -83,11 +83,13 @@ func TestAttachedImageIsEmbeddedAsAnImageChunk(t *testing.T) {
 	if decodeErr != nil || string(decoded) != string(reader.content) {
 		t.Fatalf("the data URL must carry the object's bytes unchanged: err=%v", decodeErr)
 	}
-	// The read is scoped to the object the ref names, under the per-image cap.
+	// The read is scoped to the object the ref names, under the SOURCE cap:
+	// an image over the inline cap is read so it can be downscaled
+	// (attachments_downscale.go), but never past what is safe to decode.
 	if len(reader.calls) != 1 || reader.calls[0] != "chat-attachments/"+testConversationUUID+"/shot.png" {
 		t.Fatalf("calls=%v", reader.calls)
 	}
-	if reader.maxSeen != int64(maxInlineAttachmentImageBytes) {
+	if reader.maxSeen != int64(maxInlineAttachmentSourceBytes) {
 		t.Fatalf("maxBytes=%d", reader.maxSeen)
 	}
 }

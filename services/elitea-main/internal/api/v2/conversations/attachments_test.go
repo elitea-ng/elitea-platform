@@ -124,6 +124,21 @@ func (f *fakeAttachmentStore) DeleteAttachmentChunks(_ context.Context, projectI
 	return nil
 }
 
+func (f *fakeAttachmentStore) AttachmentObject(_ context.Context, projectID int64, bucketName, key string) (conversations.AttachmentObjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	bucketID, ok := f.buckets[fmt.Sprintf("%d/%s", projectID, bucketName)]
+	if !ok {
+		return conversations.AttachmentObjectInfo{}, storage.ErrNotFound
+	}
+	for index := len(f.recorded) - 1; index >= 0; index-- {
+		if row := f.recorded[index]; row.BucketID == bucketID && row.Key == key {
+			return conversations.AttachmentObjectInfo{MediaType: row.MediaType, ByteLength: row.ByteLength}, nil
+		}
+	}
+	return conversations.AttachmentObjectInfo{}, storage.ErrNotFound
+}
+
 var _ conversations.AttachmentStore = (*fakeAttachmentStore)(nil)
 
 // fakeAttachmentObjectStore implements storage.ObjectStore — only Put is

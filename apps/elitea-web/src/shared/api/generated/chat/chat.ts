@@ -70,6 +70,8 @@ import type {
   ConversationExport,
   ConversationListing,
   ConversationMessageListing,
+  ConversationParticipant,
+  ConversationParticipantCreate,
   CreateSupportConversationBody,
   CreatedConversation,
   ErrorResponse,
@@ -82,6 +84,7 @@ import type {
   ListConversationsParams,
   ListMemoriesParams,
   ListMessageTracesParams,
+  ListParticipantCandidatesParams,
   ListSupportConversationsParams,
   MemoryEntry,
   MemoryEntryList,
@@ -95,6 +98,7 @@ import type {
   N403Response,
   N404Response,
   N500Response,
+  ParticipantCandidatesPage,
   RegenerateChatMessageParams,
   SendChatMessageParams,
   StreamExecutionEventsParams,
@@ -3114,6 +3118,1013 @@ export function useDeleteConversation<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type addConversationParticipantsResponse200 = {
+  data: ConversationParticipant[];
+  status: 200;
+};
+
+export type addConversationParticipantsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type addConversationParticipantsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type addConversationParticipantsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type addConversationParticipantsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type addConversationParticipantsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type addConversationParticipantsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type addConversationParticipantsResponseSuccess =
+  addConversationParticipantsResponse200 & {
+    headers: Headers;
+  };
+export type addConversationParticipantsResponseError = (
+  | addConversationParticipantsResponse400
+  | addConversationParticipantsResponse401
+  | addConversationParticipantsResponse403
+  | addConversationParticipantsResponse404
+  | addConversationParticipantsResponse426
+  | addConversationParticipantsResponse500
+) & {
+  headers: Headers;
+};
+
+export type addConversationParticipantsResponse =
+  | addConversationParticipantsResponseSuccess
+  | addConversationParticipantsResponseError;
+
+export const getAddConversationParticipantsUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Needs `models.chat.participants.create` and access to the
+ * conversation. The body is ONE participant object or an array of at
+ * most 100. The batch is all-or-nothing.
+ *
+ * Per kind (`entity_name`):
+ * - `user`: `entity_meta.id` is the USER id (> 0). Send
+ *   `entity_meta.user_name` too; it becomes the participant's
+ *   `meta.user_name`, which is what transcripts show.
+ * - `application` and `pipeline`: `entity_meta.id` (> 0) and
+ *   `entity_meta.project_id` (> 0; defaults to the path project), plus
+ *   `entity_meta.name` for display. Send `entity_settings.version_id`:
+ *   a chat send to an application participant runs that version, and a
+ *   participant without one cannot be targeted by a send.
+ * - `toolkit`: `entity_meta.id` and `entity_meta.project_id`, as above.
+ *   A conversation that holds a toolkit AND an agent is refused at send
+ *   time with 422 (`agent_chat.sql`); a toolkit belongs in a model
+ *   (ad-hoc) conversation.
+ * - `llm`: `entity_meta.model_name`.
+ * - `dummy`: no keys.
+ *
+ * The answer is the participant rows of THIS request, in request
+ * order. An entity that is already a participant is not added twice:
+ * its existing row (and id) is answered again, so a retried add is
+ * safe. NOTE(W2): internal/api/v2/conversations/handler.go:1297
+ * (`AddParticipant`).
+ * @summary Add participants (people, agents, pipelines, toolkits, models) to a conversation
+ */
+export const addConversationParticipants = async (
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<addConversationParticipantsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<addConversationParticipantsResponse>(
+    getAddConversationParticipantsUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(
+        conversationParticipantCreateConversationParticipantCreate,
+      ),
+    },
+  );
+};
+
+export const getAddConversationParticipantsQueryKey = (
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate?:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+) => {
+  return [
+    "POST",
+    `/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`,
+    conversationParticipantCreateConversationParticipantCreate,
+  ] as const;
+};
+
+export const getAddConversationParticipantsQueryOptions = <
+  TData = Awaited<ReturnType<typeof addConversationParticipants>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addConversationParticipants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAddConversationParticipantsQueryKey(
+      projectId,
+      conversationId,
+      conversationParticipantCreateConversationParticipantCreate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof addConversationParticipants>>
+  > = ({ signal }) =>
+    addConversationParticipants(
+      projectId,
+      conversationId,
+      conversationParticipantCreateConversationParticipantCreate,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof addConversationParticipants>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AddConversationParticipantsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof addConversationParticipants>>
+>;
+export type AddConversationParticipantsQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useAddConversationParticipants<
+  TData = Awaited<ReturnType<typeof addConversationParticipants>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addConversationParticipants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof addConversationParticipants>>,
+          TError,
+          Awaited<ReturnType<typeof addConversationParticipants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAddConversationParticipants<
+  TData = Awaited<ReturnType<typeof addConversationParticipants>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addConversationParticipants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof addConversationParticipants>>,
+          TError,
+          Awaited<ReturnType<typeof addConversationParticipants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAddConversationParticipants<
+  TData = Awaited<ReturnType<typeof addConversationParticipants>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addConversationParticipants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Add participants (people, agents, pipelines, toolkits, models) to a conversation
+ */
+
+export function useAddConversationParticipants<
+  TData = Awaited<ReturnType<typeof addConversationParticipants>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  conversationParticipantCreateConversationParticipantCreate:
+    ConversationParticipantCreate | ConversationParticipantCreate[],
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof addConversationParticipants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAddConversationParticipantsQueryOptions(
+    projectId,
+    conversationId,
+    conversationParticipantCreateConversationParticipantCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteConversationParticipantResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteConversationParticipantResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type deleteConversationParticipantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteConversationParticipantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteConversationParticipantResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteConversationParticipantResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type deleteConversationParticipantResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteConversationParticipantResponseSuccess =
+  deleteConversationParticipantResponse204 & {
+    headers: Headers;
+  };
+export type deleteConversationParticipantResponseError = (
+  | deleteConversationParticipantResponse400
+  | deleteConversationParticipantResponse401
+  | deleteConversationParticipantResponse403
+  | deleteConversationParticipantResponse404
+  | deleteConversationParticipantResponse426
+  | deleteConversationParticipantResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteConversationParticipantResponse =
+  | deleteConversationParticipantResponseSuccess
+  | deleteConversationParticipantResponseError;
+
+export const getDeleteConversationParticipantUrl = (
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+) => {
+  return `/elitea_core/participant/prompt_lib/${projectId}/${conversationId}/${participantId}`;
+};
+
+/**
+ * Needs `models.chat.participant.delete` and access to the
+ * conversation. The conversation's author cannot be removed (400). An
+ * id that is not a participant of this conversation is 404.
+ * NOTE(W2): internal/api/v2/conversations/handler.go:1399
+ * (`RemoveParticipant`).
+ * @summary Remove a participant from a conversation
+ */
+export const deleteConversationParticipant = async (
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteConversationParticipantResponse> => {
+  return eliteaFetch<deleteConversationParticipantResponse>(
+    getDeleteConversationParticipantUrl(
+      projectId,
+      conversationId,
+      participantId,
+    ),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteConversationParticipantQueryKey = (
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/participant/prompt_lib/${projectId}/${conversationId}/${participantId}`,
+  ] as const;
+};
+
+export const getDeleteConversationParticipantQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteConversationParticipant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationParticipant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteConversationParticipantQueryKey(
+      projectId,
+      conversationId,
+      participantId,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteConversationParticipant>>
+  > = ({ signal }) =>
+    deleteConversationParticipant(projectId, conversationId, participantId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined &&
+      participantId !== null &&
+      participantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteConversationParticipant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteConversationParticipantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteConversationParticipant>>
+>;
+export type DeleteConversationParticipantQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useDeleteConversationParticipant<
+  TData = Awaited<ReturnType<typeof deleteConversationParticipant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationParticipant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversationParticipant>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversationParticipant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversationParticipant<
+  TData = Awaited<ReturnType<typeof deleteConversationParticipant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationParticipant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversationParticipant>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversationParticipant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversationParticipant<
+  TData = Awaited<ReturnType<typeof deleteConversationParticipant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationParticipant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a participant from a conversation
+ */
+
+export function useDeleteConversationParticipant<
+  TData = Awaited<ReturnType<typeof deleteConversationParticipant>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  participantId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationParticipant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteConversationParticipantQueryOptions(
+    projectId,
+    conversationId,
+    participantId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listParticipantCandidatesResponse200 = {
+  data: ParticipantCandidatesPage;
+  status: 200;
+};
+
+export type listParticipantCandidatesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listParticipantCandidatesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listParticipantCandidatesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listParticipantCandidatesResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listParticipantCandidatesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type listParticipantCandidatesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listParticipantCandidatesResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type listParticipantCandidatesResponseSuccess =
+  listParticipantCandidatesResponse200 & {
+    headers: Headers;
+  };
+export type listParticipantCandidatesResponseError = (
+  | listParticipantCandidatesResponse400
+  | listParticipantCandidatesResponse401
+  | listParticipantCandidatesResponse403
+  | listParticipantCandidatesResponse404
+  | listParticipantCandidatesResponse426
+  | listParticipantCandidatesResponse500
+  | listParticipantCandidatesResponse501
+) & {
+  headers: Headers;
+};
+
+export type listParticipantCandidatesResponse =
+  | listParticipantCandidatesResponseSuccess
+  | listParticipantCandidatesResponseError;
+
+export const getListParticipantCandidatesUrl = (
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/participant_candidates/prompt_lib/${projectId}/${conversationId}?${stringifiedParams}`
+    : `/elitea_core/participant_candidates/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Members of the project (platform system accounts and suspended users
+ * excluded), filtered by `q` and paged by `cursor`. Needs
+ * `models.chat.participants.create` — the permission of the add this
+ * list feeds — and access to the conversation. `already_participant`
+ * marks members who are participants of THIS conversation already
+ * (the caller is usually one). Ordered by display name, then user id;
+ * the order is stable, so a cursor never repeats or skips a member.
+ * Add a candidate with `addConversationParticipants` and
+ * `{entity_name: user, entity_meta: {id: user_id, user_name: name}}`.
+ * NOTE(W2): internal/api/v2/conversations/candidates.go:83
+ * (`ListParticipantCandidates`).
+ * @summary The people who may be added to a conversation
+ */
+export const listParticipantCandidates = async (
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listParticipantCandidatesResponse> => {
+  return eliteaFetch<listParticipantCandidatesResponse>(
+    getListParticipantCandidatesUrl(projectId, conversationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListParticipantCandidatesQueryKey = (
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+) => {
+  return [
+    `/elitea_core/participant_candidates/prompt_lib/${projectId}/${conversationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListParticipantCandidatesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listParticipantCandidates>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listParticipantCandidates>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListParticipantCandidatesQueryKey(projectId, conversationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listParticipantCandidates>>
+  > = ({ signal }) =>
+    listParticipantCandidates(projectId, conversationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listParticipantCandidates>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListParticipantCandidatesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listParticipantCandidates>>
+>;
+export type ListParticipantCandidatesQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useListParticipantCandidates<
+  TData = Awaited<ReturnType<typeof listParticipantCandidates>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params: undefined | ListParticipantCandidatesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listParticipantCandidates>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listParticipantCandidates>>,
+          TError,
+          Awaited<ReturnType<typeof listParticipantCandidates>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListParticipantCandidates<
+  TData = Awaited<ReturnType<typeof listParticipantCandidates>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listParticipantCandidates>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listParticipantCandidates>>,
+          TError,
+          Awaited<ReturnType<typeof listParticipantCandidates>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListParticipantCandidates<
+  TData = Awaited<ReturnType<typeof listParticipantCandidates>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listParticipantCandidates>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The people who may be added to a conversation
+ */
+
+export function useListParticipantCandidates<
+  TData = Awaited<ReturnType<typeof listParticipantCandidates>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  params?: ListParticipantCandidatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listParticipantCandidates>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListParticipantCandidatesQueryOptions(
+    projectId,
+    conversationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type listConversationMessagesResponse200 = {
   data: ConversationMessageListing;
   status: 200;
@@ -4932,6 +5943,353 @@ export function useUploadConversationAttachment<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type downloadConversationAttachmentResponse200 = {
+  data: Blob;
+  status: 200;
+};
+
+export type downloadConversationAttachmentResponse206 = {
+  data: Blob;
+  status: 206;
+};
+
+export type downloadConversationAttachmentResponse304 = {
+  data: void;
+  status: 304;
+};
+
+export type downloadConversationAttachmentResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type downloadConversationAttachmentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type downloadConversationAttachmentResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type downloadConversationAttachmentResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type downloadConversationAttachmentResponse416 = {
+  data: ErrorResponse;
+  status: 416;
+};
+
+export type downloadConversationAttachmentResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type downloadConversationAttachmentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type downloadConversationAttachmentResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type downloadConversationAttachmentResponseSuccess = (
+  | downloadConversationAttachmentResponse200
+  | downloadConversationAttachmentResponse206
+) & {
+  headers: Headers;
+};
+export type downloadConversationAttachmentResponseError = (
+  | downloadConversationAttachmentResponse304
+  | downloadConversationAttachmentResponse400
+  | downloadConversationAttachmentResponse401
+  | downloadConversationAttachmentResponse403
+  | downloadConversationAttachmentResponse404
+  | downloadConversationAttachmentResponse416
+  | downloadConversationAttachmentResponse426
+  | downloadConversationAttachmentResponse500
+  | downloadConversationAttachmentResponse501
+) & {
+  headers: Headers;
+};
+
+export type downloadConversationAttachmentResponse =
+  | downloadConversationAttachmentResponseSuccess
+  | downloadConversationAttachmentResponseError;
+
+export const getDownloadConversationAttachmentUrl = (
+  projectId: string,
+  conversationId: string,
+  name: string,
+) => {
+  return `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}/${name}`;
+};
+
+/**
+ * Needs `models.chat.conversation.details` and access to the
+ * conversation — the same as getConversation. A caller who cannot see
+ * the conversation gets 404, as for a file that does not exist. The
+ * bucket is the project's chat attachment bucket; the client never
+ * names it. HEAD answers the same headers without the body.
+ *
+ * The answer is always a download: `Content-Disposition: attachment`
+ * (with an RFC 5987 `filename*`), `X-Content-Type-Options: nosniff`,
+ * `Content-Security-Policy: sandbox` and
+ * `Cache-Control: private, no-store`. `Content-Type` is the recorded
+ * type only when the file's first bytes agree with it; an active type
+ * (HTML, SVG, XML, script) or a disagreement is
+ * `application/octet-stream`. One `Range` (`bytes=a-b`, `bytes=a-` or
+ * `bytes=-n`) answers 206; `If-None-Match` with the `ETag` answers 304.
+ * NOTE(W2): internal/api/v2/conversations/attachment_download.go:59
+ * (`DownloadAttachment`).
+ * @summary Download one file that was attached in a conversation
+ */
+export const downloadConversationAttachment = async (
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<downloadConversationAttachmentResponse> => {
+  return eliteaFetch<downloadConversationAttachmentResponse>(
+    getDownloadConversationAttachmentUrl(projectId, conversationId, name),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getDownloadConversationAttachmentQueryKey = (
+  projectId: string,
+  conversationId: string,
+  name: string,
+) => {
+  return [
+    `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}/${name}`,
+  ] as const;
+};
+
+export const getDownloadConversationAttachmentQueryOptions = <
+  TData = Awaited<ReturnType<typeof downloadConversationAttachment>>,
+  TError =
+    | void
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDownloadConversationAttachmentQueryKey(projectId, conversationId, name);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof downloadConversationAttachment>>
+  > = ({ signal }) =>
+    downloadConversationAttachment(projectId, conversationId, name, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined &&
+      name !== null &&
+      name !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof downloadConversationAttachment>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DownloadConversationAttachmentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof downloadConversationAttachment>>
+>;
+export type DownloadConversationAttachmentQueryError =
+  | void
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useDownloadConversationAttachment<
+  TData = Awaited<ReturnType<typeof downloadConversationAttachment>>,
+  TError =
+    | void
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof downloadConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof downloadConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDownloadConversationAttachment<
+  TData = Awaited<ReturnType<typeof downloadConversationAttachment>>,
+  TError =
+    | void
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof downloadConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof downloadConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDownloadConversationAttachment<
+  TData = Awaited<ReturnType<typeof downloadConversationAttachment>>,
+  TError =
+    | void
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Download one file that was attached in a conversation
+ */
+
+export function useDownloadConversationAttachment<
+  TData = Awaited<ReturnType<typeof downloadConversationAttachment>>,
+  TError =
+    | void
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof downloadConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDownloadConversationAttachmentQueryOptions(
+    projectId,
+    conversationId,
+    name,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type streamExecutionEventsResponse200 = {
   data: string;
   status: 200;
@@ -5258,6 +6616,11 @@ export type listMessageTracesResponse403 = {
   status: 403;
 };
 
+export type listMessageTracesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listMessageTracesResponse500 = {
   data: N500Response;
   status: 500;
@@ -5270,6 +6633,7 @@ export type listMessageTracesResponseError = (
   | listMessageTracesResponse400
   | listMessageTracesResponse401
   | listMessageTracesResponse403
+  | listMessageTracesResponse426
   | listMessageTracesResponse500
 ) & {
   headers: Headers;
@@ -5342,7 +6706,12 @@ export const getListMessageTracesQueryKey = (
 
 export const getListMessageTracesQueryOptions = <
   TData = Awaited<ReturnType<typeof listMessageTraces>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: number,
@@ -5392,11 +6761,20 @@ export type ListMessageTracesQueryResult = NonNullable<
   Awaited<ReturnType<typeof listMessageTraces>>
 >;
 export type ListMessageTracesQueryError =
-  ErrorResponse | N401Response | N403Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useListMessageTraces<
   TData = Awaited<ReturnType<typeof listMessageTraces>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: number,
@@ -5425,7 +6803,12 @@ export function useListMessageTraces<
 };
 export function useListMessageTraces<
   TData = Awaited<ReturnType<typeof listMessageTraces>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: number,
@@ -5454,7 +6837,12 @@ export function useListMessageTraces<
 };
 export function useListMessageTraces<
   TData = Awaited<ReturnType<typeof listMessageTraces>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: number,
@@ -5479,7 +6867,12 @@ export function useListMessageTraces<
 
 export function useListMessageTraces<
   TData = Awaited<ReturnType<typeof listMessageTraces>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: number,
@@ -5538,6 +6931,11 @@ export type getMessageTraceResponse404 = {
   status: 404;
 };
 
+export type getMessageTraceResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getMessageTraceResponse500 = {
   data: N500Response;
   status: 500;
@@ -5551,6 +6949,7 @@ export type getMessageTraceResponseError = (
   | getMessageTraceResponse401
   | getMessageTraceResponse403
   | getMessageTraceResponse404
+  | getMessageTraceResponse426
   | getMessageTraceResponse500
 ) & {
   headers: Headers;
@@ -5615,7 +7014,12 @@ export const getGetMessageTraceQueryKey = (
 
 export const getGetMessageTraceQueryOptions = <
   TData = Awaited<ReturnType<typeof getMessageTrace>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   stepId: number,
@@ -5662,11 +7066,20 @@ export type GetMessageTraceQueryResult = NonNullable<
   Awaited<ReturnType<typeof getMessageTrace>>
 >;
 export type GetMessageTraceQueryError =
-  ErrorResponse | N401Response | N403Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetMessageTrace<
   TData = Awaited<ReturnType<typeof getMessageTrace>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   stepId: number,
@@ -5695,7 +7108,12 @@ export function useGetMessageTrace<
 };
 export function useGetMessageTrace<
   TData = Awaited<ReturnType<typeof getMessageTrace>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   stepId: number,
@@ -5724,7 +7142,12 @@ export function useGetMessageTrace<
 };
 export function useGetMessageTrace<
   TData = Awaited<ReturnType<typeof getMessageTrace>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   stepId: number,
@@ -5749,7 +7172,12 @@ export function useGetMessageTrace<
 
 export function useGetMessageTrace<
   TData = Awaited<ReturnType<typeof getMessageTrace>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   stepId: number,

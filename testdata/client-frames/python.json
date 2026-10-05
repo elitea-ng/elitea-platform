@@ -1,0 +1,343 @@
+{
+  "hitl_interrupt": {
+    "agent_name": null,
+    "content": "Approve?",
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "available_actions": [
+        "approve",
+        "reject",
+        "edit"
+      ],
+      "chat_project_id": 7,
+      "edit_state_key": null,
+      "hitl_interrupt": {
+        "available_actions": [
+          "approve",
+          "reject",
+          "edit"
+        ],
+        "guardrail_type": "sensitive_tool",
+        "interrupt_id": "interrupt-1",
+        "message": "Approve?",
+        "node_name": "sensitive_tool",
+        "routes": [
+          {
+            "tool_call_id": "call-1"
+          }
+        ],
+        "tool_args": {
+          "branch": "old"
+        },
+        "tool_call_id": "call-1",
+        "tool_name": "delete_branch",
+        "toolkit_name": "github"
+      },
+      "hitl_interrupts": [
+        {
+          "available_actions": [
+            "approve",
+            "reject",
+            "edit"
+          ],
+          "guardrail_type": "sensitive_tool",
+          "interrupt_id": "interrupt-1",
+          "message": "Approve?",
+          "node_name": "sensitive_tool",
+          "routes": [
+            {
+              "tool_call_id": "call-1"
+            }
+          ],
+          "tool_args": {
+            "branch": "old"
+          },
+          "tool_call_id": "call-1",
+          "tool_name": "delete_branch",
+          "toolkit_name": "github"
+        }
+      ],
+      "message": "Approve?",
+      "node_name": "sensitive_tool",
+      "routes": [
+        {
+          "tool_call_id": "call-1"
+        }
+      ],
+      "thread_id": "thread-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_hitl_interrupt"
+  },
+  "mcp_authorization_progress": {
+    "agent_name": null,
+    "content": "Example needs sign-in.",
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "authorization_servers": [
+        "https://login.example.test"
+      ],
+      "resource_metadata": {
+        "resource_name": "Example"
+      },
+      "resource_metadata_url": "https://mcp.example.test/.well-known/oauth-protected-resource",
+      "server_url": "https://mcp.example.test/mcp",
+      "tool_name": "search",
+      "tool_run_id": "auth-1",
+      "toolkit_name": "example",
+      "toolkit_type": "mcp"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "mcp_authorization_required"
+  },
+  "mcp_authorization_terminal": {
+    "agent_name": null,
+    "content": "Example needs sign-in.",
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "authorization_requests": [
+        {
+          "authorization_servers": [
+            "https://login.example.test"
+          ],
+          "resource_metadata": {
+            "resource_name": "Example"
+          },
+          "resource_metadata_url": "https://mcp.example.test/.well-known/oauth-protected-resource",
+          "server_url": "https://mcp.example.test/mcp",
+          "tool_name": "search",
+          "tool_run_id": "auth-1",
+          "toolkit_name": "example",
+          "toolkit_type": "mcp"
+        }
+      ],
+      "authorization_servers": [
+        "https://login.example.test"
+      ],
+      "chat_project_id": 7,
+      "resource_metadata": {
+        "resource_name": "Example"
+      },
+      "resource_metadata_url": "https://mcp.example.test/.well-known/oauth-protected-resource",
+      "server_url": "https://mcp.example.test/mcp",
+      "thread_id": "thread-1",
+      "tool_name": "search",
+      "tool_run_id": "auth-1",
+      "toolkit_name": "example",
+      "toolkit_type": "mcp"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "mcp_authorization_required"
+  },
+  "tool_end": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": null,
+      "finish_reason": "stop",
+      "metadata": {
+        "display_name": "List issues",
+        "parent_agent_call_id": "call-parent",
+        "parent_agent_name": "researcher",
+        "toolkit_name": "github",
+        "toolkit_type": "github"
+      },
+      "run_id": "run-1",
+      "timestamp_finish": "<timestamp>",
+      "timestamp_start": "<timestamp>",
+      "tool_inputs": {
+        "state": "open"
+      },
+      "tool_meta": {
+        "metadata": {
+          "display_name": "List issues",
+          "parent_agent_call_id": "call-parent",
+          "parent_agent_name": "researcher",
+          "toolkit_name": "github",
+          "toolkit_type": "github"
+        },
+        "name": "list_issues"
+      },
+      "tool_name": "list_issues",
+      "tool_output": "{\"items\":2}",
+      "tool_run_id": "run-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_end"
+  },
+  "tool_end_chunked": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": null,
+      "finish_reason": "stop",
+      "metadata": {
+        "display_name": "Read file",
+        "toolkit_name": "artifact"
+      },
+      "run_id": "run-3",
+      "timestamp_finish": "<timestamp>",
+      "timestamp_start": "<timestamp>",
+      "tool_inputs": {
+        "filename": "big.txt"
+      },
+      "tool_meta": {
+        "metadata": {
+          "display_name": "Read file",
+          "toolkit_name": "artifact"
+        },
+        "name": "read_file"
+      },
+      "tool_name": "read_file",
+      "tool_output": "",
+      "tool_output_chunks": {
+        "tool_output_sha256": "7e2e89a76fce2c4472245aea7049d519da332080362b6b72b29ea86f69043b0a",
+        "total": 4
+      },
+      "tool_run_id": "run-3"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_end"
+  },
+  "tool_error": {
+    "agent_name": null,
+    "content": "\"file not found\"",
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": "\"file not found\"",
+      "finish_reason": "error",
+      "metadata": {
+        "display_name": "Read file",
+        "toolkit_name": "artifact"
+      },
+      "run_id": "run-2",
+      "timestamp_finish": "<timestamp>",
+      "timestamp_start": "<timestamp>",
+      "tool_inputs": {
+        "filename": "missing.txt"
+      },
+      "tool_meta": {
+        "metadata": {
+          "display_name": "Read file",
+          "toolkit_name": "artifact"
+        },
+        "name": "read_file"
+      },
+      "tool_name": "read_file",
+      "tool_output": null,
+      "tool_run_id": "run-2"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_error"
+  },
+  "tool_output_chunk": {
+    "agent_name": null,
+    "content": "<slice>",
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "tool_output_chunk": {
+        "index": 0,
+        "tool_call_id": "run-3",
+        "tool_output_sha256": "7e2e89a76fce2c4472245aea7049d519da332080362b6b72b29ea86f69043b0a",
+        "total": 4
+      }
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_output_chunk"
+  },
+  "tool_start": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "<timestamp>",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+        "display_name": "List issues",
+        "parent_agent_call_id": "call-parent",
+        "parent_agent_name": "researcher",
+        "toolkit_name": "github",
+        "toolkit_type": "github"
+      },
+      "run_id": "run-1",
+      "timestamp_finish": null,
+      "timestamp_start": "<timestamp>",
+      "tool_inputs": {
+        "state": "open"
+      },
+      "tool_meta": {
+        "metadata": {
+          "display_name": "List issues",
+          "parent_agent_call_id": "call-parent",
+          "parent_agent_name": "researcher",
+          "toolkit_name": "github",
+          "toolkit_type": "github"
+        },
+        "name": "list_issues"
+      },
+      "tool_name": "list_issues",
+      "tool_output": null,
+      "tool_run_id": "run-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_start"
+  }
+}

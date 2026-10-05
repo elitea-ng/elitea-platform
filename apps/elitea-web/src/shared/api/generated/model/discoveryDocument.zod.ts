@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ClientAttachmentPolicy } from "./clientAttachmentPolicy.zod";
 import { ClientPublicPolicy } from "./clientPublicPolicy.zod";
 import { NativeAuthEndpoints } from "./nativeAuthEndpoints.zod";
 
@@ -77,6 +78,7 @@ export const DiscoveryDocument = zod
       .describe(
         "Registered, enabled client id → the effective minimum version this deployment serves that client: the higher of `client_policy.min_client_version` and the client's own minimum. A client with no effective minimum is absent, so a client reads its own entry and falls back to `client_policy.min_client_version`. Always an object.",
       ),
+    attachments: ClientAttachmentPolicy,
   })
   .describe(
     "The public discovery document served at `/.well-known/elitea-client` (ADR-0025 decision 1). The key set is a contract: adding a key is additive, renaming or removing one bumps `client_contract`. NOTE(W2): marshalled from internal/api/v2/discovery/document.go:36 (`Document`).",

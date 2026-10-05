@@ -55,7 +55,55 @@ export const MessageTraceStep = zod
     step_type: zod.string().nullish(),
     model_name: zod.string().nullish(),
     finish_reason: zod.string().nullish(),
-    attrs: zod.record(zod.string(), zod.unknown()).nullish(),
+    attrs: zod
+      .object({
+        metadata: zod
+          .object({
+            toolkit_name: zod
+              .string()
+              .optional()
+              .describe("The toolkit the tool belongs to."),
+            toolkit_type: zod.string().optional(),
+            display_name: zod.string().optional(),
+            original_name: zod
+              .string()
+              .optional()
+              .describe(
+                "The tool's own name when `tool_name` is a prefixed one.",
+              ),
+            parent_agent_name: zod
+              .string()
+              .optional()
+              .describe("The sub-agent that ran the tool."),
+          })
+          .optional(),
+        tool_meta: zod
+          .object({
+            name: zod.string().optional(),
+            display_name: zod.string().optional(),
+          })
+          .optional(),
+        response_metadata: zod.record(zod.string(), zod.unknown()).optional(),
+        tool_output_chunks: zod
+          .object({
+            received: zod.int().optional(),
+            total: zod.int().optional(),
+            complete: zod.boolean().optional(),
+            tool_output_sha256: zod.string().optional(),
+            sanitized: zod
+              .boolean()
+              .optional()
+              .describe("A NUL byte was stripped from at least one chunk."),
+          })
+          .optional()
+          .describe(
+            "Present on a tool call whose output was chunked: how many of its `total` chunks were `received`, and whether the reassembly is `complete` (its SHA-256 matched).",
+          ),
+      })
+      .nullish()
+      .describe(
+        "For a `tool_call` step the keys a client renders are typed below (client contract 1.1); every other key is display-only and may change.",
+      ),
   })
   .describe(
     "The light projection of a chat_message_trace_step row: what a resting chip draws, plus what orders it.\n",

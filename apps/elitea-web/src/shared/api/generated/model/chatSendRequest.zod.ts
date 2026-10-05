@@ -75,9 +75,14 @@ export const ChatSendRequest = zod
       .array(zod.int())
       .optional()
       .describe(
-        "Users this message mentions (at most 64). `userIds` is accepted as an alias.",
+        "USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again.",
       ),
-    is_mentioning_everyone: zod.boolean().optional(),
+    is_mentioning_everyone: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`@everyone`: every project member except the sender is notified.",
+      ),
   })
   .describe(
     "The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB.\n",

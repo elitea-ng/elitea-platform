@@ -433,6 +433,7 @@ type RouterConfig struct {
 	ProductionRuntime             *ProductionRuntimeRoutes
 	CurrentProjectInfo            *v2projectinfo.CurrentProjectInfoRoute
 	CurrentIndexTypes             *v2indextypes.CurrentIndexTypesRoute
+	AttachmentExtensions          []string // discovery's accepted_extensions (client contract 1.1); empty = the web default list
 	CurrentApplicationSkills      *v2applicationskills.CurrentApplicationSkillsRoute
 	CurrentPromptContextReads     *v2promptcontextreads.CurrentRoutes
 	CurrentProjectList            *v2projects.CurrentProjectListRoute
@@ -1368,6 +1369,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		Brand:          brandingResolver,
 		NativeAuth:     nativeDiscovery,
 		ClientPolicy:   clientPolicySource,
+		Attachments:    discoveryAttachmentPolicy(v2convs.CurrentAttachmentLimits(cfg.AttachmentExtensions)),
 	})
 	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
 	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
@@ -1637,6 +1639,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithContextManagementGate(defaults).
 			WithReasoningModels(defaults).
 			WithEvents(cfg.DomainEvents)
+		if cfg.Pool != nil {
+			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
+		}
 	}
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
@@ -3426,6 +3431,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/participants/prompt_lib/{projectID}/{conversationID}", convHandler.AddParticipant)
 					r.With(projectPermission("models.chat.participant.delete")).
 						Delete("/participant/prompt_lib/{projectID}/{conversationID}/{participantID}", convHandler.RemoveParticipant)
+					// Client contract 1.1: who may be added. It answers project
+					// members, so it declares the permission that governs the ADD
+					// it feeds (no new permission, so no RBAC seed migration).
+					r.With(projectPermission("models.chat.participants.create")).
+						Get("/participant_candidates/prompt_lib/{projectID}/{conversationID}", convHandler.ListParticipantCandidates)
 					r.With(requireEntitySettings).
 						Put("/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}", convHandler.UpdateEntitySettings)
 					r.With(requireEntitySettings).
@@ -3476,6 +3486,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.AddAttachments)
 					r.With(projectPermission("models.chat.attachments.delete")).
 						Delete("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteAttachments)
+					// Client contract 1.1: one attachment's bytes, scoped by the
+					// conversation (attachment_download.go). It takes the
+					// conversation READ, like getConversation — reading a file
+					// that was sent in a conversation is not a wider claim than
+					// reading the conversation — and NOT the artifacts bucket
+					// permission, which would reach every conversation's files.
+					r.With(requireConversationRead).
+						Get("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
+					r.With(requireConversationRead).
+						Head("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
 					r.With(requireConversationRead).
 						Get("/context_analytics/prompt_lib/{projectID}/{conversationID}", convHandler.GetContextStatus)
 					// The strategy READ is new here (pylon exposed only the
@@ -4783,4 +4803,22 @@ func (p publishAICompleter) Complete(
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 	})
+}
+
+// discoveryAttachmentPolicy carries the conversations package's attachment
+// limits into the discovery document's shape. The two packages do not import
+// each other; this composition root imports both.
+func discoveryAttachmentPolicy(limits v2convs.AttachmentLimits) v2discovery.AttachmentPolicy {
+	return v2discovery.AttachmentPolicy{
+		MaxFiles:             limits.MaxFiles,
+		MaxTotalBytes:        limits.MaxTotalBytes,
+		MaxFileBytes:         limits.MaxFileBytes,
+		MaxImageBytes:        limits.MaxImageBytes,
+		ChunkBytes:           limits.ChunkBytes,
+		AcceptedExtensions:   limits.AcceptedExtensions,
+		MaxExtractBytes:      limits.MaxExtractBytes,
+		InlineImageMaxBytes:  limits.InlineImageMaxBytes,
+		InlineImageFormats:   limits.InlineImageFormats,
+		InlineImageDownscale: limits.InlineImageDownscale,
+	}
 }

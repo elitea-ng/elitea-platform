@@ -126,7 +126,11 @@ const (
 	// toolkits.getIndexHistoryConversationDetails (the conversation detail
 	// read) and the six notifications.* ids. The cap is now pinned to the
 	// file's size again.
-	maxAllowlistEntries = 51
+	//
+	// 51 -> 49, when the client contract 1.1 described participant add and
+	// remove (participant.addParticipantIntoConversation and
+	// participant.deleteParticipantFromConversation).
+	maxAllowlistEntries = 49
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production

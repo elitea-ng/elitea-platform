@@ -891,12 +891,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return errors.New("ELITEA_INDEX_TYPES_ENABLED requires an authenticated deployment")
 	}
 	var currentIndexTypes *indextypesapi.CurrentIndexTypesRoute
+	var attachmentExtensions []string
 	if currentIndexTypesSettings.Enabled {
 		currentIndexTypesSnapshot, snapshotErr :=
 			runtimecomposition.LoadPinnedCurrentIndexTypesSnapshot()
 		if snapshotErr != nil {
 			return fmt.Errorf("load pinned current index-types snapshot: %w", snapshotErr)
 		}
+		attachmentExtensions = currentIndexTypesSnapshot.AttachmentExtensions()
 		currentIndexTypes, err = indextypesapi.NewCurrentIndexTypesRoute(
 			currentIndexTypesSnapshot,
 			apiGroupAuth,
@@ -2291,6 +2293,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ProductionRuntime:             productionRuntime,
 		CurrentProjectInfo:            currentProjectInfo,
 		CurrentIndexTypes:             currentIndexTypes,
+		AttachmentExtensions:          attachmentExtensions,
 		CurrentApplicationSkills:      currentApplicationSkills,
 		CurrentPromptContextReads:     currentPromptContextReads,
 		CurrentProjectList:            currentProjectList,

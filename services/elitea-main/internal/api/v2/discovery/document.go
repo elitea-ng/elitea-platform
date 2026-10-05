@@ -20,7 +20,7 @@ const Path = "/.well-known/elitea-client"
 
 // ClientContract is the client contract version this server speaks
 // (ADR-0025 decision 6). WP5 adds the contract lock that pins it.
-const ClientContract = "1.0"
+const ClientContract = "1.1"
 
 // Deployment kinds (ADR-0025 decision 1). The value is process configuration
 // (ELITEA_DEPLOYMENT_KIND), not an admin setting: it states who operates the
@@ -48,6 +48,39 @@ type Document struct {
 	// the client's own minimum; absent when neither sets one). Always an
 	// object, never null.
 	MinClientVersion map[string]string `json:"min_client_version"`
+	// Attachments states the chat attachment limits (client contract 1.1),
+	// so a client can refuse a file before it uploads it. The server still
+	// enforces every one of them.
+	Attachments AttachmentPolicy `json:"attachments"`
+}
+
+// AttachmentPolicy is the deployment's chat attachment limits (client
+// contract 1.1). Every byte value is in bytes. A project's storage policy may
+// set a different per-file cap; the upload then answers 400 naming it.
+type AttachmentPolicy struct {
+	// MaxFiles is the number of files one message carries in the composer.
+	MaxFiles int `json:"max_files"`
+	// MaxTotalBytes bounds one upload (all chunks of one file).
+	MaxTotalBytes int64 `json:"max_total_bytes"`
+	// MaxFileBytes bounds one non-image file; MaxImageBytes one image.
+	MaxFileBytes  int64 `json:"max_file_bytes"`
+	MaxImageBytes int64 `json:"max_image_bytes"`
+	// ChunkBytes is the largest single upload request; a larger file is sent
+	// in chunks of at most this size.
+	ChunkBytes int64 `json:"chunk_bytes"`
+	// AcceptedExtensions are lower-case, leading-dot extensions the model
+	// can read.
+	AcceptedExtensions []string `json:"accepted_extensions"`
+	// MaxExtractBytes is the largest document whose text is extracted for
+	// the model; a larger one is stored but not read.
+	MaxExtractBytes int64 `json:"max_extract_bytes"`
+	// InlineImageMaxBytes is the largest image handed to the model as an
+	// image, in InlineImageFormats (lower-case extensions).
+	InlineImageMaxBytes int64    `json:"inline_image_max_bytes"`
+	InlineImageFormats  []string `json:"inline_image_formats"`
+	// InlineImageDownscale: a larger image in one of InlineImageFormats is
+	// downscaled by the server to fit, so a client need not.
+	InlineImageDownscale bool `json:"inline_image_downscale"`
 }
 
 // NativeAuth lists the native authorization server's endpoints (ADR-0025

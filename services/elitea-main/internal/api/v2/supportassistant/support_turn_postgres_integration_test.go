@@ -557,6 +557,23 @@ func (a *testAttachmentStore) DeleteAttachmentChunks(ctx context.Context, projec
 	return a.chunks.DeleteChunks(ctx, projectID, conversationID, fileID)
 }
 
+func (a *testAttachmentStore) AttachmentObject(ctx context.Context, projectID int64, bucketName, key string) (conversations.AttachmentObjectInfo, error) {
+	bucket, err := a.buckets.GetBucket(ctx, projectID, bucketName)
+	if err != nil {
+		return conversations.AttachmentObjectInfo{}, err
+	}
+	rows, err := a.objects.ListObjects(ctx, bucket.ID, key)
+	if err != nil {
+		return conversations.AttachmentObjectInfo{}, err
+	}
+	for _, row := range rows {
+		if row.Key == key {
+			return conversations.AttachmentObjectInfo{MediaType: row.MediaType, ByteLength: row.ByteLength}, nil
+		}
+	}
+	return conversations.AttachmentObjectInfo{}, storage.ErrNotFound
+}
+
 var _ conversations.AttachmentStore = (*testAttachmentStore)(nil)
 
 // testArtifactRepo bridges v2artifacts.Repository the same way

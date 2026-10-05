@@ -37,6 +37,8 @@ mod application_pipeline_tests;
 #[cfg(test)]
 mod assembly_tests;
 #[cfg(test)]
+mod client_frames_tests;
+#[cfg(test)]
 mod context_management_tests;
 #[cfg(test)]
 mod direct_hitl_tests;

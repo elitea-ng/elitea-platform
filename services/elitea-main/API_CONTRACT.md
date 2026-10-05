@@ -219,6 +219,12 @@ Every operation tagged `client` in `api/openapi/v2.yaml`. `client` is always the
 | Chat | `sendChatMessage`, `regenerateChatMessage`, `continueChatExecution`, `uploadConversationAttachment` |
 | Streaming | `streamExecutionEvents` (`GET /api/v2/executions/{project_id}/{execution_id}/events`) |
 | Notifications | `listNotifications`, `markNotificationsSeen`, `markNotificationSeen`, `streamNotificationEvents` |
+| Participants (1.1) | `addConversationParticipants`, `deleteConversationParticipant`, `listParticipantCandidates` |
+| Agents, skills, toolkits (1.1) | `listApplications`, `getApplication`, `listApplicationSkills`, `listToolkitInstances`, `listToolkitAvailableTools` |
+| Tool history (1.1) | `listMessageTraces`, `getMessageTrace` |
+| Attachments (1.1) | `downloadConversationAttachment` |
+
+Contract 1.1 also adds the discovery document's `attachments` policy, typed attachment items on messages (`AttachmentMessageItem`), the `sender` of a `chat_user_mentioned` notification, and the agent progress frame catalogue below. A client gates each on `client_contract` ≥ 1.1 and treats a 404 or 501 from an older server as "not available".
 
 The client policy has no operation of its own. Its public part is in the discovery document, and the full policy is `client_policy` in every token response.
 
@@ -291,6 +297,41 @@ The lock diff is how a reviewer sees the new promise. `-update` refuses to recor
 - `agent_requires_confirmation` (output limit reached) is not itself terminal. Answer it with `continueChatExecution` and `agent.continue.output-limit.v1`.
 - These rules describe the current reference client (`apps/elitea-web/src/features/chat-messages/lib/chatStreamTurnEnd.ts`). A dedicated terminal event is not part of contract 1.x.
 - **Robust settle check:** after the stream closes or breaks, read the message list. An answer is settled when its group has no `is_streaming` and `metadata.is_error` is **present**. An absent `is_error` means the turn is still running.
+
+### Agent progress frames (contract 1.1)
+
+The `data` of an `execution.node_event` names its frame in `data.type`. The frames a client renders tool activity and pauses from are a catalogue: `x-elitea-client-frames` at the root of `v2.yaml` maps each type to the schema of its `data`, and `internal/api/clientcontract` locks those schemas like a response (additive only). Both workers' unit tests capture these frames into `testdata/client-frames/{python,rust}.json`, and `TestClientFrameCatalogueAcceptsWorkerFrames` validates the captures against the catalogue, so a worker cannot change a catalogued frame silently.
+
+Every frame is `{type, stream_id, message_id, content, response_metadata, created_at, …}`. Ignore keys you do not know.
+
+| `data.type` | `response_metadata` | Terminal? |
+|---|---|---|
+| `agent_tool_start` | One tool call: `tool_name`, `tool_run_id` (the call's key), `tool_inputs` (the arguments; may be sensitive — show on demand), `tool_meta.name`, `metadata.toolkit_name`/`toolkit_type`/`display_name`/`parent_agent_name`, `timestamp_start`. | No |
+| `agent_tool_end` | The same call completed: `finish_reason: stop`, `tool_output` (text), `timestamp_finish`. A client that missed the start builds the call from this frame. When the output was too large for one frame, `tool_output` is `""` and `tool_output_chunks: {total, tool_output_sha256}` names the chunks that came before. | No |
+| `agent_tool_error` | The same call failed: `finish_reason: error`, `error`; `content` repeats the error. | No |
+| `agent_tool_output_chunk` | `tool_output_chunk: {tool_call_id, index, total, tool_output_sha256}`; `content` is the slice. Concatenate the slices of one `tool_call_id` in `index` order; the SHA-256 of the result is `tool_output_sha256`. | No |
+| `agent_hitl_interrupt` | `hitl_interrupt` (the pending interrupt: `interrupt_id`, `tool_call_id`, `message`, `available_actions`, `guardrail_type`, `action_label`, `policy_message`, `tool_name`, `toolkit_name`, `tool_args`, `questions`), `hitl_interrupts` (every pending one; a parallel pause has several), `thread_id`. | Yes, except a fan-out child pause (see "Execution event stream") |
+| `mcp_authorization_required` | `server_url`, `resource_metadata_url`, `resource_metadata`, `www_authenticate`, `tool_run_id`, `tool_name`, `toolkit_name`, `toolkit_type`. Sent twice: first as progress, then as the terminal frame, which also carries `authorization_requests[]` (one entry per toolkit that needs sign-in) and `thread_id`. The tool has not run. | Only with `authorization_requests` |
+| `agent_requires_confirmation` | `finish_reason: length`; `content` is the offered action. The answer stopped at the model's output limit. | No (the answer still settles) |
+
+Group tool calls under `metadata.parent_agent_name` when it is set: a sub-agent ran them.
+
+**Answering a pause** is `continueChatExecution` with the pause's `message_id` (the paused answer) and `thread_id`:
+
+| Pause | `execution_contract` | Body |
+|---|---|---|
+| One HITL interrupt | `agent.continue.hitl.v1` | `hitl_resume: true`, `hitl_action`, and `hitl_value` per action (below). |
+| Several (parallel), or a fan-out child | `agent.continue.hitl.v1` | `hitl_resume: true`, `hitl_decisions: [{interrupt_id, tool_call_id?, action, value?}]`, one per interrupt. |
+| Toolkit sign-in | `agent.continue.authorization.v1` | `authorization_request_id` + `authorization_action` (`authorize` or `skip`). `skip` continues without the tool. |
+| Output limit | `agent.continue.output-limit.v1` | The paused answer's `message_id`. |
+
+`hitl_value` (and each decision's `value`) by action:
+- `approve`, `reject`: absent.
+- `edit`: a non-empty **string** — the edited value. For a tool-call pause that is the edited arguments as JSON text.
+- `block_with_comment`: a non-empty string, the comment.
+- `answer` (an `ask_user` pause): an **object** keyed by question id, each value the chosen option(s) or free text. A plain string is also accepted.
+
+A pause answered elsewhere (another device, the web) answers 409 with an `*_already_resolved` error and `retryable: false`: reload the transcript instead of retrying. After a reload, a pending pause is in the paused answer's `metadata` (`hitl_interrupt`, `hitl_interrupts`, `authorization_requests`, `output_limit_reached`).
 
 ### Incremental sync (`changes_since`)
 

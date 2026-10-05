@@ -699,7 +699,13 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // streamNotificationEvents. Their manifest entries stay `handwritten` (the
 // web callers are not migrated in this change), so the manifest count is
 // unchanged; thirteen ids came off the reverse-check allowlist.
-const GENERATED_OPERATION_COUNT = 303;
+// 303 -> 307 (client contract 1.1, native chat enrichment):
+// addConversationParticipants and deleteConversationParticipant (the web
+// already calls both through hand-written clients, so their manifest entries
+// stay `handwritten` and two ids came off the reverse-check allowlist),
+// listParticipantCandidates and downloadConversationAttachment (native client
+// reads; no browser caller yet). The manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 307;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

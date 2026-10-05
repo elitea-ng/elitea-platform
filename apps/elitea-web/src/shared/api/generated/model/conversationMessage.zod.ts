@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AttachmentMessageItem } from "./attachmentMessageItem.zod";
 
 export const ConversationMessage = zod
   .object({
@@ -62,7 +63,7 @@ export const ConversationMessage = zod
     reply_to_id: zod.int().optional(),
     metadata: zod.record(zod.string(), zod.unknown()).optional(),
     message_items: zod
-      .array(zod.record(zod.string(), zod.unknown()))
+      .array(AttachmentMessageItem)
       .optional()
       .describe("Omitted, not empty, for a group with no attachments."),
     is_streaming: zod

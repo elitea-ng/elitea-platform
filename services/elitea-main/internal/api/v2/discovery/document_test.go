@@ -34,6 +34,7 @@ func TestDocumentKeySetIsPinned(t *testing.T) {
 	want := []string{
 		"server_version", "client_contract", "deployment_kind", "display_name",
 		"brand_pack_url", "native_auth", "client_policy", "min_client_version",
+		"attachments",
 	}
 	if !reflect.DeepEqual(keys, want) {
 		t.Fatalf("discovery keys = %v, want %v", keys, want)
@@ -45,6 +46,20 @@ func TestDocumentKeySetIsPinned(t *testing.T) {
 	for _, k := range []string{"require_device_lock", "offline_enabled", "min_client_version"} {
 		if _, ok := pm[k]; !ok || len(pm) != 3 {
 			t.Fatalf("client_policy keys = %v", pm)
+		}
+	}
+
+	attachments, _ := json.Marshal(AttachmentPolicy{})
+	var am map[string]any
+	_ = json.Unmarshal(attachments, &am)
+	attachmentKeys := []string{
+		"max_files", "max_total_bytes", "max_file_bytes", "max_image_bytes", "chunk_bytes",
+		"accepted_extensions", "max_extract_bytes", "inline_image_max_bytes", "inline_image_formats",
+		"inline_image_downscale",
+	}
+	for _, k := range attachmentKeys {
+		if _, ok := am[k]; !ok || len(am) != len(attachmentKeys) {
+			t.Fatalf("attachments keys = %v", am)
 		}
 	}
 

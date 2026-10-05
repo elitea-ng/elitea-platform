@@ -354,7 +354,14 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// sent and stored by the time this runs, so a failure here leaves a
 	// conversation that is correct and a colleague who was not told — which is
 	// the pre-#977 behaviour, not a new failure mode.
-	service.notifyMentionedUsers(ctx, request)
+	//
+	// Only a NEW admission notifies. A replay of the same question_id is a
+	// client retrying a response it lost (a mobile outbox does exactly this),
+	// and it is the same message: notifying again would ring the same bell
+	// once per retry.
+	if outcome.Created {
+		service.notifyMentionedUsers(ctx, request)
+	}
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,

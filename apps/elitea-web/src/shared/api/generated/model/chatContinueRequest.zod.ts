@@ -57,13 +57,13 @@ export const ChatContinueRequest = zod
       .string()
       .optional()
       .describe(
-        "The single-pause decision (`approve`, `reject`, `edit`, `respond` and similar, as the pause frame offered).",
+        "The single-pause decision, one the pause frame's `available_actions` offered: `approve`, `reject`, `edit`, `block_with_comment` or `answer`.",
       ),
     hitl_value: zod
       .unknown()
       .optional()
       .describe(
-        "The decision's value (an edited value, a free-text answer); its type follows the action.",
+        "The decision's value; its type follows the action. `approve`, `reject`: absent. `edit`: a non-empty STRING — the edited value (for a tool-call pause, the edited arguments as JSON text). `block_with_comment`: a non-empty string, the comment. `answer` (an ask_user pause): an OBJECT keyed by question id (each value the chosen option(s) or free text), or a plain string. The same rule applies to each `hitl_decisions[].value`.",
       ),
     hitl_decisions: zod
       .array(zod.record(zod.string(), zod.unknown()))

@@ -79,6 +79,24 @@ export const getGetClientDiscoveryResponseMock = (
       length: { min: 10, max: 20 },
     }),
   },
+  attachments: {
+    max_files: faker.number.int(),
+    max_total_bytes: faker.number.int(),
+    max_file_bytes: faker.number.int(),
+    max_image_bytes: faker.number.int(),
+    chunk_bytes: faker.number.int(),
+    accepted_extensions: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    max_extract_bytes: faker.number.int(),
+    inline_image_max_bytes: faker.number.int(),
+    inline_image_formats: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    inline_image_downscale: faker.datatype.boolean(),
+  },
   ...overrideResponse,
 });
 
