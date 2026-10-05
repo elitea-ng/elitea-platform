@@ -125,7 +125,7 @@
     "knip": "6.39.0",
     "mdast": "3.0.0",
     "mdast-util-mdx-jsx": "3.2.0",
-    "msw": "3.0.1",
+    "msw": "2.15.0",
     "orval": "8.33.0",
     "oxlint": "1.86.0",
     "oxlint-tsgolint": "7.0.2003",
