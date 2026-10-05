@@ -29,7 +29,7 @@ import { useEffect, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -137,7 +137,7 @@ function OidcFields({
       />
       <FormControlLabel
         control={
-          <Checkbox
+          <BaseCheckbox
             checked={form.requireEmailVerified}
             onChange={(event) => {
               update('requireEmailVerified', event.target.checked);
@@ -197,7 +197,7 @@ function SecretFields({
       {isEdit && hasSealedSecret ? (
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.clearSecret}
               onChange={(event) => {
                 update('clearSecret', event.target.checked);
@@ -323,7 +323,7 @@ export function AdminIdentityProviderDialog({
 
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.adoptScimUsers}
               onChange={(event) => {
                 update('adoptScimUsers', event.target.checked);
@@ -358,7 +358,7 @@ export function AdminIdentityProviderDialog({
 
         <FormControlLabel
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={form.enabled}
               onChange={(event) => {
                 update('enabled', event.target.checked);

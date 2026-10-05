@@ -99,6 +99,16 @@ export const BaseCheckbox = forwardRef<HTMLButtonElement, BaseCheckboxProps>(fun
     );
   }
 
+  // A caller's own `slotProps.input` (an `aria-label`, an `aria-describedby`)
+  // is MERGED into the slot, not spread over it: spread last, it replaced the
+  // whole slot and silently dropped the native-indeterminate ref above.
+  const { slotProps: callerSlotProps, ...checkboxRest } = rest;
+  const callerInput = callerSlotProps?.input;
+  const inputSlot =
+    typeof callerInput === 'function'
+      ? callerInput
+      : { ...inputSlotProps, ...callerInput, ref: attachInput };
+
   return (
     <MuiCheckbox
       ref={ref}
@@ -121,8 +131,8 @@ export const BaseCheckbox = forwardRef<HTMLButtonElement, BaseCheckboxProps>(fun
           inheritViewBox
         />
       }
-      slotProps={{ input: { ...inputSlotProps, ref: attachInput } }}
-      {...rest}
+      {...checkboxRest}
+      slotProps={{ ...callerSlotProps, input: inputSlot }}
     />
   );
 });

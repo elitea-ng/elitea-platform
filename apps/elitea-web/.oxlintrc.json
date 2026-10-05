@@ -172,7 +172,9 @@
           { "name": "@mui/material", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
           { "name": "@mui/system", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
           { "name": "@mui/styles", "message": "R-T4: legacy @mui/styles is banned" },
-          { "name": "@mui/icons-material", "message": "R-I1: no barrel import — import per icon: @mui/icons-material/Close" }
+          { "name": "@mui/icons-material", "message": "R-I1: no barrel import — import per icon: @mui/icons-material/Close" },
+          { "name": "@mui/material/Checkbox", "message": "R-T12: use BaseCheckbox from @/shared/ui/BaseCheckbox — the theme's MuiCheckbox skin paints only the app's outline icons (fill: none), so MUI's stock filled icons render INVISIBLE when unchecked" },
+          { "name": "@mui/material", "importNames": ["Checkbox"], "message": "R-T12: use BaseCheckbox from @/shared/ui/BaseCheckbox (the stock icons render invisible under the theme)" }
         ]
       }
     ],
@@ -388,6 +390,26 @@
     {
       // R-A3 sanctioned path: the typed socket client wrapper.
       "files": ["src/shared/api/socket/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              { "name": "axios", "message": "R-A2: axios is banned" },
+              { "name": "@emotion/react", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
+              { "name": "@mui/material", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
+              { "name": "@mui/system", "importNames": ["useTheme"], "message": "R-T4: useTheme comes from @mui/material/styles only" },
+              { "name": "@mui/styles", "message": "R-T4: legacy @mui/styles is banned" },
+              { "name": "@mui/icons-material", "message": "R-I1: no barrel import" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // R-T12 scope: BaseCheckbox is the one wrapper around MUI's Checkbox, and
+      // the theme-surface fixture renders the bare component the override skins.
+      "files": ["src/shared/ui/BaseCheckbox/BaseCheckbox.tsx", "src/shared/brand/__tests__/**"],
       "rules": {
         "no-restricted-imports": [
           "error",
