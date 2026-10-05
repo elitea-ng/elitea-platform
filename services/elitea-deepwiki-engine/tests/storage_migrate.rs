@@ -71,7 +71,16 @@ fn rust_and_python_compute_the_same_checksums() {
         .into_iter()
         .map(|m| (format!("{}_{}", m.version, m.name), m.checksum()))
         .collect();
-    assert_eq!(rust.len(), 3);
+    // 0001-0004, 0004 being the additive `builds.boot_id`.
+    assert_eq!(
+        rust.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "0001_wiki_index_storage",
+            "0002_invocations",
+            "0003_build_space",
+            "0004_build_boot_id"
+        ]
+    );
     assert_eq!(rust, python);
 }
 
@@ -116,6 +125,16 @@ async fn the_ledger_is_written_once_and_guarded() {
             "wiki_nodes"
         ]
     );
+
+    // 0004 added the nullable boot id to the builds.
+    let boot_id: Option<(String, String)> = sqlx::query_as(
+        "SELECT data_type::text, is_nullable::text FROM information_schema.columns \
+         WHERE table_schema = 'deepwiki_build' AND table_name = 'builds' AND column_name = 'boot_id'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("catalog");
+    assert_eq!(boot_id, Some(("text".to_owned(), "YES".to_owned())));
 
     // An applied migration whose text changed is refused, before anything
     // new is applied.

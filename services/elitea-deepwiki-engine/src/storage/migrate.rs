@@ -56,6 +56,12 @@ const EMBEDDED: &[(&str, &str)] = &[
             "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0003_build_space.sql"
         ),
     ),
+    (
+        "0004_build_boot_id.sql",
+        include_str!(
+            "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0004_build_boot_id.sql"
+        ),
+    ),
 ];
 
 /// `migrate._BOOTSTRAP`, verbatim.
@@ -266,7 +272,7 @@ mod tests {
     fn the_embedded_set_is_valid_and_ordered() {
         let migrations = embedded().unwrap_or_default();
         let versions: Vec<&str> = migrations.iter().map(|m| m.version.as_str()).collect();
-        assert_eq!(versions, ["0001", "0002", "0003"]);
+        assert_eq!(versions, ["0001", "0002", "0003", "0004"]);
     }
 
     #[test]
