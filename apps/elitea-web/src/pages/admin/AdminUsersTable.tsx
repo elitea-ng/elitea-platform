@@ -23,6 +23,7 @@ import { memo, useMemo } from 'react';
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import DeleteIcon from '@mui/icons-material/Delete';
+import DevicesOutlinedIcon from '@mui/icons-material/DevicesOutlined';
 import TimelineOutlinedIcon from '@mui/icons-material/TimelineOutlined';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -56,6 +57,11 @@ export interface AdminUserRowActions {
   readonly onDelete: ((userIds: number[]) => void) | undefined;
   /** Always present: activity is a READ, so it exists on every tab. */
   readonly onOpenActivity: (user: AdminUserRow) => void;
+  /**
+   * Opens the native device drawer (ADR-0025 WP3). Optional: the page offers it
+   * only to an operator holding the permission the device routes require.
+   */
+  readonly onOpenDevices?: ((user: AdminUserRow) => void) | undefined;
 }
 
 export interface AdminUsersTableProps {
@@ -179,7 +185,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
       },
     ];
 
-    const { onSetAdminRole, onToggleSuspended, onDelete, onOpenActivity } = rowActions;
+    const { onSetAdminRole, onToggleSuspended, onDelete, onOpenActivity, onOpenDevices } = rowActions;
 
     if (onSetAdminRole) {
       definitions.push({
@@ -282,6 +288,21 @@ export const AdminUsersTable = memo(function AdminUsersTable({
                 </IconButton>
               </span>
             </Tooltip>
+
+            {onOpenDevices ? (
+              <Tooltip title={t('pages.admin.users.action.devices', 'Devices')}>
+                <span>
+                  <IconButton
+                    size="small"
+                    aria-label={t('pages.admin.users.action.devices', 'Devices')}
+                    onClick={() => onOpenDevices(row)}
+                    data-testid={`admin-user-devices-${row.id}`}
+                  >
+                    <DevicesOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            ) : null}
 
             {onDelete ? (
               <Tooltip title={t('pages.admin.users.action.delete', 'Delete user')}>

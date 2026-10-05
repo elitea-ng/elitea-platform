@@ -2,6 +2,8 @@ import { memo, useCallback, useMemo } from 'react';
 
 import { useLocation } from '@tanstack/react-router';
 
+import DevicesOutlinedIcon from '@mui/icons-material/DevicesOutlined';
+
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import SvgIcon from '@mui/material/SvgIcon';
@@ -84,6 +86,7 @@ const ICON_COMPONENTS: Record<string, React.ComponentType> = {
   'ai-personality': ReasonIcon,
   memory: MemoryIcon,
   notifications: BellIcon,
+  devices: DevicesOutlinedIcon,
   logout: LogoutIcon,
 };
 
