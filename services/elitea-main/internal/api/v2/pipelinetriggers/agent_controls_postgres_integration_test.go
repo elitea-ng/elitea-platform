@@ -147,7 +147,7 @@ func TestTheTriggerReadReportsItsControls(t *testing.T) {
 	}
 
 	created := decode(t, h.do(t, http.MethodPost, path, `{"type":"github"}`, nil))
-	if created["target_kind"] != "agent" || created["allow_variable_overrides"] != false {
+	if created["target_kind"] != "agent" || created["allow_variable_overrides"] != nil {
 		t.Fatalf("created = %v, want an agent trigger with overrides off", created)
 	}
 	events, _ := json.Marshal(created["events"])

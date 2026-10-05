@@ -66,10 +66,11 @@ type triggerView struct {
 	Provider        string `json:"provider,omitempty"`
 	// TargetKind, Events and AllowVariableOverrides are 0142's (controls.go).
 	// None is a secret. `events` is omitted when the trigger admits every
-	// event.
+	// event, and `allow_variable_overrides` when it is off, so the answer
+	// for a version with no trigger stays `{"configured": false}` alone.
 	TargetKind             string     `json:"target_kind,omitempty"`
 	Events                 []string   `json:"events,omitempty"`
-	AllowVariableOverrides bool       `json:"allow_variable_overrides"`
+	AllowVariableOverrides bool       `json:"allow_variable_overrides,omitempty"`
 	CreatedBy              int64      `json:"created_by,omitempty"`
 	CreatedAt              *time.Time `json:"created_at,omitempty"`
 	RotatedAt              *time.Time `json:"rotated_at,omitempty"`
