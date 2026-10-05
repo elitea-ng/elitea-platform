@@ -76,11 +76,12 @@ func (h *Handler) ProjectUserActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.listProjectUserActivity(
-		r.Context(), projectID,
-		optionalTime(query.Get("date_from")),
-		optionalTime(query.Get("date_to")),
-	)
+	dateFrom, dateTo := optionalTime(query.Get("date_from")), optionalTime(query.Get("date_to"))
+	if reversedDateRange(dateFrom, dateTo) {
+		writeInvalidDateRange(w)
+		return
+	}
+	rows, err := h.listProjectUserActivity(r.Context(), projectID, dateFrom, dateTo)
 	if err != nil {
 		// Reported as a failure rather than degraded to an empty list: "nobody
 		// was active in this window" and "the query blew up" render identically

@@ -83,7 +83,33 @@ type Record struct {
 	// agent id here would import execution_jobs' two disagreeing project columns
 	// into a table whose whole point is having exactly one.
 	ExecutionID string
+	// CredentialOwner classifies who owns the provider credential that served
+	// the request: CredentialOwnerProject (a client-owned credential of the
+	// calling project), CredentialOwnerPlatform (a shared credential of the
+	// public project), or "" when no credential served it. Legacy issue 6709.
+	//
+	// A classification the gateway assigns, never a credential id or name, so
+	// this field keeps the struct's rule that no caller content reaches it.
+	CredentialOwner string
+	// CacheReadToks and CacheWriteToks are the prompt tokens the provider
+	// reported as read from, and written to, its prompt cache. They are
+	// SUBSETS of PromptToks, not additions to it.
+	CacheReadToks  int64
+	CacheWriteToks int64
 }
+
+// The values CredentialOwner can carry. Shared migration 0139 documents them on
+// the column.
+//
+// The gateway RECORDS them, and nothing reads them yet. No elitea-main
+// analytics statement reads credential_owner, cache_read_tokens or
+// cache_write_tokens; the read that groups on them is the follow-up of legacy
+// issue 6709. Rows written before 0139 hold "" and 0 there, so that read must
+// report the dimension only for a window after the migration.
+const (
+	CredentialOwnerProject  = "project"
+	CredentialOwnerPlatform = "platform"
+)
 
 // Sink writes a batch of records. Implemented by the Postgres store; taken as
 // an interface so the recorder's batching, dropping and shutdown behaviour is
@@ -112,16 +138,21 @@ const (
 
 	// RetentionWindow is how long a row is kept. SHORTER than the billing
 	// ledger's 400 days, deliberately: this table also holds every unbilled
-	// request, so it grows faster, and its value decays much sooner — nobody
-	// debugs last quarter's latency from a request log.
+	// request, so it grows faster.
+	//
+	// It is 92 days and not 30 because the analytics pages read this table,
+	// and their widest preset is "Last 90d" (legacy issue 6879). With 30 days
+	// that preset silently showed one month of data under a three-month
+	// label. 92 days covers 90 calendar days plus the partial first and last
+	// day a date-aligned window adds.
 	//
 	// A compiled constant rather than configuration, for the reason the
 	// scheduler's own retention is one: no deployment should be able to turn a
 	// log into an unbounded table by setting a variable.
-	RetentionWindow = 30 * 24 * time.Hour
+	RetentionWindow = 92 * 24 * time.Hour
 
 	// pruneInterval is how often the writer deletes expired rows. Hourly is far
-	// more often than a 30-day window needs; it keeps each DELETE small, which
+	// more often than a 92-day window needs; it keeps each DELETE small, which
 	// matters more than promptness here.
 	pruneInterval = time.Hour
 )

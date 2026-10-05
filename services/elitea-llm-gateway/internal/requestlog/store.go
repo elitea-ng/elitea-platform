@@ -9,9 +9,11 @@ package requestlog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,7 +26,14 @@ type execer interface {
 }
 
 // Store writes records into gateway.llm_request_logs.
-type Store struct{ db execer }
+type Store struct {
+	db execer
+	// now is the clock the schema latch reads. Tests replace it.
+	now func() time.Time
+	// legacyUntil is the unix-nano time before which WriteBatch uses the
+	// pre-0139 column list. Zero means "use the full list". See WriteBatch.
+	legacyUntil atomic.Int64
+}
 
 // NewStore returns a sink over the pool. A nil pool returns nil, which New()
 // turns into a no-op recorder.
@@ -32,31 +41,82 @@ func NewStore(db execer) *Store {
 	if db == nil {
 		return nil
 	}
-	return &Store{db: db}
+	return &Store{db: db, now: time.Now}
 }
 
 // insertColumns is the column list, declared once so the placeholder count and
 // the argument order cannot drift from it.
+//
+// The last three columns come from shared migration 0139. legacyInsertColumns
+// is the same list without them, for a database that has not run 0139 yet.
 const insertColumns = `(occurred_at, project_id, user_id, route, method, status,
+	duration_ms, provider, model, streaming, error_code, prompt_tokens, completion_tokens,
+	execution_id, credential_owner, cache_read_tokens, cache_write_tokens)`
+
+const legacyInsertColumns = `(occurred_at, project_id, user_id, route, method, status,
 	duration_ms, provider, model, streaming, error_code, prompt_tokens, completion_tokens,
 	execution_id)`
 
-// columnsPerRow MUST equal the number of columns above. A mismatch would bind
+// columnsPerRow MUST equal the number of columns in insertColumns, and
+// legacyColumnsPerRow the number in legacyInsertColumns. A mismatch would bind
 // each row's values into the wrong columns — which for this table means a
 // status landing in duration_ms and every latency reading as nonsense.
-const columnsPerRow = 14
+const (
+	columnsPerRow       = 17
+	legacyColumnsPerRow = 14
+)
+
+// legacyColumnsRetry is how long WriteBatch keeps the pre-0139 column list
+// after the database refused the full one. It expires, so the gateway heals by
+// itself when elitea-migrate lands, at the cost of one refused statement per
+// interval.
+const legacyColumnsRetry = 5 * time.Minute
 
 // WriteBatch inserts every record in one statement.
+//
+// A gateway pod can roll out before elitea-migrate applies 0139. Postgres then
+// refuses the full column list with 42703 (undefined_column). Without a
+// fallback EVERY batch fails, and the log loses all traffic rather than three
+// columns. So a 42703 latches the pre-0139 list for legacyColumnsRetry, and the
+// same batch is written again without the three new columns. This is the rule
+// internal/cost/schema_probe.go applies to the price catalog.
 func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 	if s == nil || len(records) == 0 {
 		return nil
 	}
+	if !s.legacyColumns() {
+		err := s.writeBatch(ctx, records, false)
+		if err == nil || !isUndefinedColumn(err) {
+			return err
+		}
+		s.legacyUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
+	}
+	return s.writeBatch(ctx, records, true)
+}
+
+// legacyColumns reports whether the pre-0139 column list is latched.
+func (s *Store) legacyColumns() bool {
+	until := s.legacyUntil.Load()
+	return until != 0 && s.now().UnixNano() < until
+}
+
+// isUndefinedColumn reports Postgres 42703, the code a missing column raises.
+func isUndefinedColumn(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42703"
+}
+
+func (s *Store) writeBatch(ctx context.Context, records []Record, legacy bool) error {
+	columns, perRow := insertColumns, columnsPerRow
+	if legacy {
+		columns, perRow = legacyInsertColumns, legacyColumnsPerRow
+	}
 
 	placeholders := make([]string, 0, len(records))
-	args := make([]any, 0, len(records)*columnsPerRow)
+	args := make([]any, 0, len(records)*perRow)
 	for index, record := range records {
-		base := index * columnsPerRow
-		slots := make([]string, columnsPerRow)
+		base := index * perRow
+		slots := make([]string, perRow)
 		for column := range slots {
 			slots[column] = "$" + strconv.Itoa(base+column+1)
 		}
@@ -82,11 +142,18 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 			// carrying every un-attributed request in the project.
 			nullableExecutionID(record.ExecutionID),
 		)
+		if !legacy {
+			args = append(args,
+				truncate(record.CredentialOwner, 16),
+				nonNegative(record.CacheReadToks),
+				nonNegative(record.CacheWriteToks),
+			)
+		}
 	}
 
 	statement := fmt.Sprintf(
 		`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
-		insertColumns, strings.Join(placeholders, ","))
+		columns, strings.Join(placeholders, ","))
 	if _, err := s.db.Exec(ctx, statement, args...); err != nil {
 		return fmt.Errorf("write request log batch: %w", err)
 	}
@@ -155,4 +222,13 @@ func nullableExecutionID(value string) any {
 		return nil
 	}
 	return truncate(value, 128)
+}
+
+// nonNegative clamps a token count to zero. A negative count is a provider or
+// decode fault, and it must not subtract from a sum on the analytics page.
+func nonNegative(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/maximhq/bifrost/core/schemas"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // credential is a single provider credential row read from the project's
@@ -58,6 +61,34 @@ type credential struct {
 // two scopes are read; the prefix also tells an operator reading a log line
 // that a platform-shared credential served the request.
 const sharedKeyIDPrefix = "shared:"
+
+// SelectedCredentialOwner classifies the credential that served the request on
+// ctx: requestlog.CredentialOwnerPlatform for a shared credential of the public
+// project, requestlog.CredentialOwnerProject for one the calling project owns,
+// and "" when no credential served it (legacy issue 6709).
+//
+// It reads the key bifrost/core SELECTED, not the set GetKeysForProvider
+// offered. Without a model link the offered set can mix both scopes, and only
+// the selected key says which one paid. bifrost writes that id onto the
+// request's BifrostContext after it picks a key, and clears it when the request
+// fails, so a failed request classifies as "".
+//
+// The id is this package's own Key ID, so the shared prefix is a fact this
+// package wrote and not a value a caller can supply.
+func SelectedCredentialOwner(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	keyID, _ := ctx.Value(schemas.BifrostContextKeySelectedKeyID).(string)
+	switch {
+	case keyID == "":
+		return ""
+	case strings.HasPrefix(keyID, sharedKeyIDPrefix):
+		return requestlog.CredentialOwnerPlatform
+	default:
+		return requestlog.CredentialOwnerProject
+	}
+}
 
 // providerConfigTypes maps a bifrost provider to the p_{projectID}.configuration
 // `type` values that represent a credential for it. Derived from the legacy

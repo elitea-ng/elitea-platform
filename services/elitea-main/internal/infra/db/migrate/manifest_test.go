@@ -592,7 +592,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// of the bytes an extraction was made from, so a byte-identical
 	// re-upload (the chat client uploads the file again with every message)
 	// finds the filed extraction. No new permission.
-	require.EqualValues(t, 138, Head(shared))
+	//
+	// 139: shared/0139_gateway_request_log_credential_owner_and_cache_tokens.sql,
+	// three columns on gateway.llm_request_logs: who owns the credential that
+	// served a request (project or platform, legacy issue 6709) and the
+	// provider's cache-read and cache-write token counts. No new permission.
+	require.EqualValues(t, 139, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

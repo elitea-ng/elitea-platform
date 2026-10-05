@@ -103,8 +103,26 @@ func (d *bifrostRealtimeDialer) DialRealtime(
 		// refusal itself for that reason, and can only reach the earlier road.
 		return nil, fmt.Errorf("%w: %s", ErrRealtimeNoCredential, provider)
 	}
+	recordRealtimeSelectedKey(ctx, key)
 
 	return openRealtimeSocket(ctx, provider, rt, usage, key, model, params)
+}
+
+// recordRealtimeSelectedKey writes the id of the key that serves the session
+// onto the session's BifrostContext (legacy issue 6709).
+//
+// bifrost/core writes BifrostContextKeySelectedKeyID only in its own request
+// executor. SelectKeyForProviderRequestType does not write it, and realtime
+// never goes through that executor. Without this line every billed realtime
+// turn logged an empty credential_owner, although a project or platform
+// credential served it. The session keeps this ctx for its whole life, so each
+// turn's updateUsageUnits reads the id back through
+// account.SelectedCredentialOwner.
+func recordRealtimeSelectedKey(ctx *schemas.BifrostContext, key schemas.Key) {
+	if ctx == nil || key.ID == "" {
+		return
+	}
+	ctx.SetValue(schemas.BifrostContextKeySelectedKeyID, key.ID)
 }
 
 // openRealtimeSocket is the half of the handshake that needs NO bifrost core

@@ -145,8 +145,8 @@ func TestEstimateReportsRecordedTokensWithoutAnyPrice(t *testing.T) {
 	wantCostNumber(t, estimate, "priced_calls", "0")
 }
 
-// 0099 records no cache tokens and there is no second source for them. The flag
-// says so; a zero would be a fabricated figure.
+// This read does not sum cache tokens (0139 records them; nothing here reads
+// them yet). The flag says so; a zero would be a fabricated figure.
 func TestEstimateDeclaresTheCacheDimensionUnavailable(t *testing.T) {
 	pool, router := newCostsEnvironment(t)
 	from, to := estimateWindow()
