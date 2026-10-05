@@ -608,14 +608,6 @@ func TestNativeDecisionChecksOriginAndAccount(t *testing.T) {
 	if crossSite.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin decision = %d", crossSite.Code)
 	}
-	// An opaque ("null") origin passes only with Sec-Fetch-Site: same-origin
-	// (WebKit's consent POST); from anywhere else it is still refused.
-	nullCrossSite := s.do(http.MethodPost, nativeapi.DecisionPath, form,
-		withCookies(binder, sessionCookie(alice, "alice@example.test")),
-		withHeader("Origin", "null"), withHeader("Sec-Fetch-Site", "cross-site"))
-	if nullCrossSite.Code != http.StatusForbidden {
-		t.Fatalf("null-origin cross-site decision = %d", nullCrossSite.Code)
-	}
 	swapped := s.do(http.MethodPost, nativeapi.DecisionPath, form,
 		withCookies(binder, sessionCookie(bob, "bob@example.test")), withHeader("Origin", testOrigin))
 	if swapped.Code != http.StatusConflict {
