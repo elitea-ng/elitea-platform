@@ -832,8 +832,9 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 	}
 
 	r.Group(func(r chi.Router) {
-		// An object download that is genuinely cacheable sets its own
-		// Cache-Control; NoStore never replaces a value a handler chose.
+		// NoStore never replaces a value a handler chose. Object downloads
+		// state their own ("private, no-store", artifacts streamObject);
+		// every other artifact answer gets the group's no-store from here.
 		r.Use(apimw.NoStore)
 		r.Use(deps.Authenticate)
 		for _, gate := range deps.Gates {
