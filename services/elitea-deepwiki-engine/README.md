@@ -272,7 +272,21 @@ heartbeat_at)` and UNLOGGED copies of `wiki_nodes` (with the folded
 `deepwiki_porter` tsvector and its GIN index), `wiki_edges` and
 `wiki_node_embeddings` keyed by `build_id`, plus `bm25_docs` /
 `bm25_postings` (see below). Every staging row cascades from its `builds`
-row.
+row. Migration 0004 (additive) adds the nullable `builds.boot_id`; 0003 is
+never edited, because both runners checksum it.
+
+**Database privileges.** The role in `ELITEA_DEEPWIKI_DATABASE_URL` that
+runs the migrations needs `CREATE` on the database itself, not only on
+schema `public`: 0003 runs `CREATE SCHEMA deepwiki_build` (ADR-0026 keeps
+the build space in its own schema). A role that owns the database has it; a
+role that was only granted rights on `public` fails 0003 with `permission
+denied for database`. Grant it once (`GRANT CREATE ON DATABASE deepwiki TO
+<role>`), or pre-create the schema as an administrator
+(`CREATE SCHEMA deepwiki_build AUTHORIZATION <role>`; the migration's
+`IF NOT EXISTS` then needs no database privilege). The serving role needs
+`USAGE` on the schema and read/write on its tables, and must own the live
+and staging tables to `ANALYZE` them (a skipped `ANALYZE` is logged, not
+an error).
 
 **Build and publish** (`storage::build`). A build stages the code graph with
 `COPY` in the text format, in rounds of 2,000 nodes. Rows map as
@@ -283,12 +297,29 @@ weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are written as the
 shortest decimal text of each `f64`, the text Python's `repr` gave, so
 pgvector rounds them to the same `float4`.
 
-`Build::publish` is one transaction: lock the build row, upsert the `wikis`
-row (`registry_from_result`'s fields; an absent field keeps the stored
-value), refuse an empty build, delete the wiki's live rows, `INSERT … SELECT`
-nodes, edges and vectors, write both `wiki_bm25_*` branches, delete the
-build, `ANALYZE` the live tables, commit. A reader sees the old index or the
-new one. The BM25 statistics are `publish.py`'s: the `'bm25'` branch from
+`Build::publish` is one transaction: lock the build row; queue without a
+timeout behind a publish of the same wiki, then for one of
+`ELITEA_DEEPWIKI_PUBLISH_SLOTS` (default 2) publish slots per database
+(transaction-scoped advisory locks: a publish waits, it does not fail; every
+replica must use the same number); set `statement_timeout`
+(`ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS`, default 1800),
+`lock_timeout` (`…_PUBLISH_LOCK_TIMEOUT_SECONDS`, default 30) and `work_mem`
+(`…_PUBLISH_WORK_MEM_MB`, default 64, so the slots bound the memory the
+publishes take together); upsert the `wikis` row (`registry_from_result`'s
+fields; an absent field keeps the stored value), refuse an empty build,
+delete the wiki's live rows, `INSERT … SELECT` nodes, edges and vectors,
+write both `wiki_bm25_*` branches, delete the build, commit. A reader sees
+the old index or the new one. After the commit the live tables are
+`ANALYZE`d one by one, best effort, each with a short `lock_timeout`
+(`…_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS`, default 5): a table that another
+`ANALYZE` or a vacuum holds is skipped and logged
+(`PublishCounts::statistics_refreshed` is then false). All five settings are
+strict-parsed.
+
+`publish` takes `&mut self`: on an error the transaction rolled back, the
+build keeps its rows and its heartbeat, and the caller retries the publish
+(a timeout, a lost connection), stages more and retries, or calls
+`abandon`. After a success the build is gone. The BM25 statistics are `publish.py`'s: the `'bm25'` branch from
 Python `str.split()` tokens of the document text (tokenised in Rust while
 staging, because a PostgreSQL regular expression is not Python's
 whitespace), k1 1.5, b 0.75; the `'fts'` branch from the lexemes and
@@ -296,13 +327,23 @@ position counts of the published tsvectors, k1 1.2, b 0.75; a document
 without tokens takes no `doc_idx`.
 
 **Reconciliation.** `ELITEA_DEEPWIKI_BUILD_OWNER` (default `HOSTNAME`, the
-pod name) is the owner a build is recorded under. With
-`ELITEA_DEEPWIKI_DATABASE_URL` set, `serve` deletes this owner's builds at
-start (a predecessor's, never another replica's) and sweeps builds whose
-heartbeat is older than `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default
-7200) every quarter of that (10 s to 10 min). A database that is not up
-yet is retried; it never stops the sidecar. A swept build cannot heartbeat,
-stage or publish.
+pod name) is the owner a build is recorded under, together with the boot id
+of the process run (random, drawn at start). With
+`ELITEA_DEEPWIKI_DATABASE_URL` set, one of the two must be set: the
+fallback owner `elitea-deepwiki-engine` would be shared by every engine
+without them, and the start is refused with an error that says so. `serve`
+deletes this owner's builds of EARLIER runs (`owner = $1 AND boot_id IS
+DISTINCT FROM $run`; a build from before 0004 has no boot id and goes too),
+never this run's and never another replica's, so a reconciliation that
+succeeds late (the database was down at start) cannot remove builds this run
+already opened. It sweeps builds whose heartbeat is older than
+`ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default 7200, at least 300) every
+quarter of that (10 s to 10 min), skipping a build a publish holds locked.
+An open `Build` beats its heartbeat from a background task every tenth of
+the limit (100 ms to 1 min), so a long model call after staging does not get
+it swept; the task stops when the build is dropped, published or abandoned.
+A database that is not up yet is retried; it never stops the sidecar. A
+swept build cannot heartbeat, stage or publish.
 
 **Read path** (`storage::search`, `storage::adapter`). Ports of
 `PostgresBackend`'s searches with the same SQL — dense exact `<->` (no HNSW
@@ -323,10 +364,12 @@ READ ONLY` transaction.
 - **A multi-statement search reads one snapshot** (above). Python ran each
   statement in its own transaction.
 - **Planner statistics.** The publish `ANALYZE`s the staged tables before
-  it and the live tables inside it, and turns nested loops off for its bulk
-  statements. Without that, freshly replaced rows were planned with the old
-  row counts: one `INSERT … SELECT` took 23 s and a BM25 search did not
-  finish in 10 minutes on a 5,000-node wiki.
+  it and the live tables right after its commit (best effort, see above),
+  and turns nested loops off for its bulk statements. Without that, freshly
+  replaced rows were planned with the old row counts: one `INSERT … SELECT`
+  took 23 s and a BM25 search did not finish in 10 minutes on a 5,000-node
+  wiki. The live `ANALYZE` is not inside the transaction: there it held its
+  lock on the shared tables until the commit and cancelled autovacuum.
 - **The `path_prefix` filter escapes `_` and `\`** as well as `%`.
 - **A NUL in text** is stored as U+FFFD. Python's publish failed on it in
   psycopg; the elitea-platform corpus has such a node (a PDF fixture).
@@ -350,6 +393,12 @@ than direct inserts:
 | fts | match set 11/11, no recorded ordering crossed, 0 inversions over the 4 discriminating queries |
 | fused | equals the frozen RRF over the components for 11/11; equals the recording for the 8 queries without a dense tie in the top 10 |
 
+`tests/storage_reconcile.rs` covers the owner and boot-id reconciliation,
+the sweep and the background heartbeat; `tests/storage_publish_control.rs`
+the retry and abandon after a failed publish, the statement and lock
+timeouts, the slot queue, the `ANALYZE` after the commit and two concurrent
+publishes (of one wiki, of two wikis).
+
 The tests need PostgreSQL with pgvector: they skip, with a message, when
 `DEEPWIKI_TEST_DSN` is unset, and fail when `DEEPWIKI_REQUIRE_POSTGRES=1`
 is set as well (CI sets both). Each test creates its own database.
@@ -372,8 +421,9 @@ the postings were inserted in key order):
 Peak RSS 1.30 GB (the graph; staging holds one round of 2,000 nodes).
 Searches on the published index: FTS 64–488 ms, BM25 21–419 ms, exact
 dense scan 880 ms. Most of the publish was the two postings inserts (137 s
-and 58 s, random B-tree inserts); they now insert in key order with more
-`work_mem`, not yet re-measured. The run needs about 10 GB of database disk
+and 58 s, random B-tree inserts); they now insert in key order with
+`work_mem` (64 MB by default, `ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB`), not
+yet re-measured. The run needs about 10 GB of database disk
 (WAL included); a full host disk stopped the second run. Run `index-dump`
 on a small corpus (spring-petclinic, CleanArchitecture, leveldb) on a
 shared machine.

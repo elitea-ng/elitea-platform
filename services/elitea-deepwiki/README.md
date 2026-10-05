@@ -750,6 +750,34 @@ A Job, never a startup step. Two replicas starting together would both
 migrate, and the second would either race the first or have to decide whether
 finding the work done is an error.
 
+### The migration role needs CREATE on the database
+
+Migration 0003 creates schema `deepwiki_build` (the Rust engine's build space,
+ADR-0026 decision 5; 0004 adds a column to it). `CREATE SCHEMA` needs the
+`CREATE` privilege on the DATABASE, which is more than rights on schema
+`public`: a role that owns the database has it, a role that was only granted
+`public` fails 0003 with `permission denied for database`, and the migration
+Job stops there. Before the first upgrade that carries 0003, either
+
+```sql
+GRANT CREATE ON DATABASE deepwiki TO <migration role>;
+```
+
+or let an administrator create the schema for that role, after which the
+migration's `IF NOT EXISTS` needs no database privilege:
+
+```sql
+CREATE SCHEMA deepwiki_build AUTHORIZATION <migration role>;
+```
+
+The Helm chart does not create database roles: the Job and the Deployment use
+whatever role `ELITEA_DEEPWIKI_DATABASE_URL` names (the chart-wide
+`postgresql.existingSecret`, or `deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL`),
+so this grant is the operator's (see the `deepwiki.migrate` block of
+`deploy/helm/elitea/values.yaml`). The same role serves the engine: it needs
+`USAGE` on the schema and read/write on its tables, and ownership of the live
+and staging tables for the engine's `ANALYZE` after a publish.
+
 ### Two images, and the default one refuses every tool
 
 `docker buildx bake elitea-deepwiki` builds the shipping image: the whole SPI,
