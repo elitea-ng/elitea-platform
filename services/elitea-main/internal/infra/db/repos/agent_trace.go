@@ -1005,7 +1005,13 @@ var currentAgentToolCallPauseReasons = map[string]bool{
 // truncated, losing the closing one). Recognising it keeps a mixed-version
 // rollout from storing a pause as a failure. The text itself is never stored
 // (it carries the call's arguments).
-const currentAgentLegacyInterruptErrorPrefix = "(Interrupt(value="
+//
+// The text is a tool's exception message, which a tool or remote server
+// controls, so only the full head of the SDK's HITL payload counts (both the
+// sensitive-tool guard and ask_user open with `type: hitl` and a `hitl_`
+// interrupt id), and only on a call the worker ended as an error. Any other
+// interrupt from a pre-1066 worker stays a failure, as it was before.
+const currentAgentLegacyInterruptErrorPrefix = "(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_"
 
 // currentAgentLegacyClarifyingQuestionMarker is the ask_user guardrail inside
 // that repr: a question to the user, which the current worker reports as
@@ -1014,7 +1020,10 @@ const currentAgentLegacyClarifyingQuestionMarker = "'guardrail_type': 'clarifyin
 
 // currentAgentLegacyInterruptReason is the pause finish reason of a pre-1066
 // worker's interrupt-repr error, or "" when the text is not one.
-func currentAgentLegacyInterruptReason(text string) string {
+func currentAgentLegacyInterruptReason(finishReason, text string) string {
+	if finishReason != "error" {
+		return ""
+	}
 	text = strings.TrimPrefix(text, `"`)
 	if !strings.HasPrefix(text, currentAgentLegacyInterruptErrorPrefix) {
 		return ""
@@ -1033,7 +1042,7 @@ func currentAgentToolCallOutcome(entry map[string]any) (bool, string) {
 		return false, finishReason
 	}
 	if text, ok := entry["error"].(string); ok {
-		if reason := currentAgentLegacyInterruptReason(text); reason != "" {
+		if reason := currentAgentLegacyInterruptReason(finishReason, text); reason != "" {
 			return false, reason
 		}
 	}

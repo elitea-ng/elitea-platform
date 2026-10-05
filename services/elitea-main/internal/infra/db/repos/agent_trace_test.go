@@ -670,3 +670,42 @@ func TestCurrentAgentPausedToolCallIsNotStoredAsAnError(t *testing.T) {
 		t.Fatalf("a failed call lost its error: %#v", row)
 	}
 }
+
+// The pre-1066 interrupt recognition reads a string a tool controls: an MCP
+// server or a tool wrapper can put any text in its exception. Only the exact
+// shape of the old worker's HITL interrupt repr on a call the worker ended as
+// an error is a pause; anything else that merely starts like one is a failure.
+func TestCurrentAgentLegacyInterruptLookalikeIsStillAnError(t *testing.T) {
+	for name, entry := range map[string]map[string]any{
+		"tool text echoing the prefix": {
+			"finish_reason": "error",
+			"error":         "(Interrupt(value=boom) raised by remote server",
+		},
+		"quoted tool text echoing the prefix": {
+			"finish_reason": "error",
+			"error":         "\"(Interrupt(value={'reason': 'quota'}, id='x'),)\"",
+		},
+		"non-hitl interrupt value": {
+			"finish_reason": "error",
+			"error":         "\"(Interrupt(value={'type': 'other', 'interrupt_id': 'hitl_abc'}, id='x'),)\"",
+		},
+		"hitl shape on a call not ended as an error": {
+			"finish_reason": "stop",
+			"error":         "\"(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_abc'}, id='x'),)\"",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			full := map[string]any{"tool_name": "remote", "tool_run_id": "run-l", "run_id": "run-l"}
+			for key, value := range entry {
+				full[key] = value
+			}
+			row, err := currentAgentToolCallToRow(9, currentAgentToolCall{key: "run-l", entry: full})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !row.isError || currentAgentToolCallPauseReasons[row.finishReason] {
+				t.Fatalf("a failure was stored as a pause: is_error=%v finish_reason=%q", row.isError, row.finishReason)
+			}
+		})
+	}
+}
