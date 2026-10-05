@@ -126,6 +126,7 @@ from elitea_worker.protocol.codec import (
     validation_request_from,
 )
 from elitea_worker.protocol.indexing import (
+    CLASSIFIED_INDEX_FAILURE_MESSAGES,
     bind_result_summary,
     request_from,
     resolve_embedding_binding,
@@ -2052,6 +2053,12 @@ class IndexIngestDeliveryProcessor(ConfigurationValidationDeliveryProcessor):
                     callback,
                     progress,
                     "failed",
+                    error_message=(
+                        projected.result_summary.message
+                        if projected.result_summary.message
+                        in CLASSIFIED_INDEX_FAILURE_MESSAGES
+                        else None
+                    ),
                 )
             elif (
                 projected.result_summary.status
@@ -2797,10 +2804,13 @@ async def _publish_index_summary_correction(
     callback: CurrentIndexNodeEventCallback,
     progress: _IndexProgressOutput,
     state: str,
+    *,
+    error_message: str | None = None,
 ) -> None:
     event = callback.finish_index_status_for_summary(
         state,
         correct_inconsistent=True,
+        error_message=error_message,
     )
     if event is not None:
         await progress.publish_from_delivery(event)

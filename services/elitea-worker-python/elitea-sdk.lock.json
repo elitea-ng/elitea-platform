@@ -26,7 +26,7 @@
   },
   "indexing_capability_profile": {
     "schema_revision": "elitea.indexing-runtime-capability-profile.v1",
-    "profile_sha256": "7f705a08444ec992f1ee58b10a60b443b720114bd4a8e05791e2362ae13b356a",
+    "profile_sha256": "84c7dafb9fe281474fb3dbaf83f09cb87aace78a65a40d00dd845ae5b7484202",
     "python_requirements": [
       "anthropic==0.76.0",
       "aiofiles==25.1.0",
@@ -57,7 +57,7 @@
       "langgraph-prebuilt==1.0.7",
       "langdetect==1.0.9",
       "lxml==6.1.0",
-      "mammoth==1.9.0",
+      "mammoth==1.11.0",
       "markdownify==1.1.0",
       "msrest==0.7.1",
       "numpy==1.26.4",
@@ -139,7 +139,7 @@
       "langgraph-prebuilt": "1.0.7",
       "langdetect": "1.0.9",
       "lxml": "6.1.0",
-      "mammoth": "1.9.0",
+      "mammoth": "1.11.0",
       "markdownify": "1.1.0",
       "msrest": "0.7.1",
       "nest-asyncio": "1.6.0",
