@@ -4691,6 +4691,7 @@
   "pages.admin.nativeClients.dialog.clientIdRequired": "Enter the client ID the app sends.",
   "pages.admin.nativeClients.dialog.clientIdTaken": "A client with this ID is already registered. Edit it instead.",
   "pages.admin.nativeClients.error.forbidden": "You do not have permission to manage native clients.",
+  "pages.admin.nativeClients.error.gone": "That native client was removed by someone else. The list has been refreshed.",
   "pages.admin.users.devices.forbidden": "You do not have permission to manage this user’s devices.",
   "pages.admin.nativeClients.result.removed": "Removed.",
   "pages.admin.nativeClients.result.removedRevoked": "Removed. {{count}} signed-in devices were signed out."

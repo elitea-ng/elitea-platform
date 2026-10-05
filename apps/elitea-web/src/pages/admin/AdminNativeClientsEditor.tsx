@@ -41,10 +41,12 @@ import {
 } from './adminNativeClientForm';
 import {
   isNativeServerAbsent,
+  NativeClientGoneError,
   nativeClientFailure,
   useAdminNativeClients,
   useDeleteNativeClient,
   useSaveNativeClient,
+  useSetNativeClientEnabled,
   type NativeClientDraft,
   type NativeClientWriteOutcome,
 } from './api/adminNativeClientsApi';
@@ -64,6 +66,12 @@ function clientName(client: NativeClient): string {
  * untranslated "insufficient permissions".
  */
 function refusalSentence(error: unknown, fallback: string): string {
+  if (error instanceof NativeClientGoneError) {
+    return t(
+      'pages.admin.nativeClients.error.gone',
+      'That native client was removed by someone else. The list has been refreshed.',
+    );
+  }
   const failure = nativeClientFailure(error);
   if (failure.message !== undefined) return failure.message;
   if (failure.status === 403) {
@@ -181,6 +189,7 @@ const CLOSED_DIALOG: DialogState = { open: false, editing: undefined, serverErro
 export function AdminNativeClientsEditor() {
   const listQuery = useAdminNativeClients();
   const saveMutation = useSaveNativeClient();
+  const enabledMutation = useSetNativeClientEnabled();
   const deleteMutation = useDeleteNativeClient();
 
   const [dialog, setDialog] = useState<DialogState>(CLOSED_DIALOG);
@@ -192,9 +201,17 @@ export function AdminNativeClientsEditor() {
   const busyIds = useMemo(() => {
     const ids = new Set<string>();
     if (saveMutation.isPending && saveMutation.variables) ids.add(saveMutation.variables.clientId);
+    if (enabledMutation.isPending && enabledMutation.variables) ids.add(enabledMutation.variables.clientId);
     if (deleteMutation.isPending && deleteMutation.variables) ids.add(deleteMutation.variables);
     return ids;
-  }, [saveMutation.isPending, saveMutation.variables, deleteMutation.isPending, deleteMutation.variables]);
+  }, [
+    saveMutation.isPending,
+    saveMutation.variables,
+    enabledMutation.isPending,
+    enabledMutation.variables,
+    deleteMutation.isPending,
+    deleteMutation.variables,
+  ]);
 
   const handleSubmit = (draft: NativeClientDraft): void => {
     const refusal = dialog.editing === undefined ? registerRefusal(draft, clients) : undefined;
@@ -227,14 +244,10 @@ export function AdminNativeClientsEditor() {
 
   const writeEnabled = (client: NativeClient, enabled: boolean): void => {
     setNotice(undefined);
-    saveMutation.mutate(
-      {
-        clientId: client.client_id,
-        displayName: client.display_name,
-        redirectUris: client.redirect_uris,
-        enabled,
-        minClientVersion: client.min_client_version,
-      },
+    // Only the id and the new state: the other fields are read fresh from the
+    // server by the mutation, never taken from this (possibly stale) row.
+    enabledMutation.mutate(
+      { clientId: client.client_id, enabled },
       {
         onSuccess: (outcome) => {
           setPending(undefined);
@@ -345,7 +358,7 @@ export function AdminNativeClientsEditor() {
 
       <ConfirmDialog
         action={pending}
-        busy={saveMutation.isPending || deleteMutation.isPending}
+        busy={enabledMutation.isPending || deleteMutation.isPending}
         onCancel={() => setPending(undefined)}
         onConfirm={handleConfirm}
       />

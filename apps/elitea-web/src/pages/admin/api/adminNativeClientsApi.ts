@@ -140,6 +140,58 @@ export function useSaveNativeClient(): UseMutationResult<
   });
 }
 
+/** The client a switch was flipped on is gone from the server's registry. */
+export class NativeClientGoneError extends Error {
+  readonly clientId: string;
+
+  constructor(clientId: string) {
+    super(`native client ${clientId} no longer exists`);
+    this.name = 'NativeClientGoneError';
+    this.clientId = clientId;
+  }
+}
+
+/** What the row switch asks for: one client, one new `enabled`. */
+export interface NativeClientEnabledChange {
+  readonly clientId: string;
+  readonly enabled: boolean;
+}
+
+/**
+ * The row switch: `PUT …/{client_id}` with ONLY `enabled` changed.
+ *
+ * The PUT is a full-row upsert (`admin.go` AdminSave builds the row from the
+ * body alone; an absent field is a default, not "keep"), so the other fields
+ * must be sent — and sending them from the CACHED list wrote back whatever the
+ * page loaded with, undoing another admin's newer redirect URIs or minimum
+ * version without a word (PR #1051 review F2). So the switch reads the row
+ * fresh from the server immediately before writing it. The window left is
+ * the round trip between that read and the PUT, not the page's lifetime.
+ */
+export function useSetNativeClientEnabled(): UseMutationResult<
+  NativeClientWriteOutcome,
+  Error,
+  NativeClientEnabledChange
+> {
+  const invalidate = useInvalidateNativeAdmin();
+  return useMutation({
+    mutationFn: async ({ clientId, enabled }: NativeClientEnabledChange) => {
+      const listed = unwrapBody(await listNativeClients()) as { rows?: NativeClient[] } | undefined;
+      const current = (listed?.rows ?? []).find((row) => row.client_id === clientId);
+      if (current === undefined) throw new NativeClientGoneError(clientId);
+      const body: NativeClientSaveRequest = {
+        display_name: current.display_name,
+        redirect_uris: [...current.redirect_uris],
+        enabled,
+        min_client_version: current.min_client_version,
+      };
+      return writeOutcome(await saveNativeClient(encodeURIComponent(clientId), body));
+    },
+    // Settled, not success: a client found gone must leave the list too.
+    onSettled: invalidate,
+  });
+}
+
 /** `DELETE /admin/native_clients/administration/{client_id}`. */
 export function useDeleteNativeClient(): UseMutationResult<NativeClientWriteOutcome, Error, string> {
   const invalidate = useInvalidateNativeAdmin();

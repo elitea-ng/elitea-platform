@@ -374,4 +374,53 @@ describe('AdminNativeClientsEditor', () => {
       'Removed. 3 signed-in devices were signed out.',
     );
   });
+  // Regression (PR #1051 review F2): the row switch PUT the whole row from the
+  // CACHED list. The PUT is a full-row upsert, so if another admin changed the
+  // redirect URIs after this page loaded, flipping the switch wrote the stale
+  // URIs back — and "Saved." said nothing of the lost edit.
+  it('the switch writes the server-current row, not the cached snapshot', async () => {
+    useHandlers();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    // Another admin saves new redirect URIs and a minimum version meanwhile.
+    const edited = {
+      ...CLIENTS[0]!,
+      display_name: 'Example Desktop 2',
+      redirect_uris: ['http://127.0.0.1/v2/callback'],
+      min_client_version: '2.0.0',
+    };
+    server.use(
+      http.get('*/admin/native_clients/administration', () => HttpResponse.json({ rows: [edited, CLIENTS[1]] })),
+    );
+
+    await user.click(within(rowOf('com.example.desktop')).getByRole('switch', { name: 'Enable Example Desktop' }));
+    await user.click(within(await screen.findByTestId('native-client-confirm-dialog')).getByTestId('native-client-confirm'));
+
+    await waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]!.body).toEqual({
+      display_name: 'Example Desktop 2',
+      redirect_uris: ['http://127.0.0.1/v2/callback'],
+      enabled: false,
+      min_client_version: '2.0.0',
+    });
+  });
+
+  it('the switch refuses, without a PUT, when the client was removed meanwhile', async () => {
+    useHandlers();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    server.use(http.get('*/admin/native_clients/administration', () => HttpResponse.json({ rows: [CLIENTS[1]] })));
+
+    await user.click(within(rowOf('com.example.desktop')).getByRole('switch', { name: 'Enable Example Desktop' }));
+    await user.click(within(await screen.findByTestId('native-client-confirm-dialog')).getByTestId('native-client-confirm'));
+
+    expect(await screen.findByTestId('admin-native-clients-notice')).toHaveTextContent(
+      'That native client was removed by someone else. The list has been refreshed.',
+    );
+    expect(recorded).toHaveLength(0);
+  });
 });
