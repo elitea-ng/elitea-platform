@@ -318,7 +318,8 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrInputTooLarge):
 		record(http.StatusBadRequest, projectID, trigger.CreatedBy, trigger.VersionID, "input too large")
-		writeError(w, http.StatusBadRequest, "the run input is too large")
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("`input` is too large: it may hold at most %d KiB of text", maxRunInput/1024))
 		return
 	case errors.Is(err, ErrInvalidInput):
 		// 422 and the field's name. The credential was accepted, so this is
@@ -505,15 +506,20 @@ func senderShapesBody(trigger triggerRow) bool {
 // this service's contract — refusing it would break integrations over a field
 // the pipeline never reads. A GitHub push payload is exactly that case: it is
 // valid JSON with no `input` key at all.
+//
+// `input` is NOT CUT here. It used to be cut at maxRunInput BYTES, which split
+// a multi-byte character: a valid 18000-byte `input` of '€' became 16384 bytes
+// that were not UTF-8, and the sender was told 422 "`input` is not valid" for
+// a body that was fine. It also made admit's ErrInputTooLarge unreachable, so
+// an agent's explicit `input` was silently shortened. An `input` over the
+// limit now reaches admit whole and is refused there with 400, which names the
+// limit. Nothing is run on a text the caller did not send.
 func decodeInboundBody(raw []byte) inboundBody {
 	var body inboundBody
 	if len(raw) == 0 {
 		return body
 	}
 	_ = json.Unmarshal(raw, &body)
-	if len(body.Input) > maxRunInput {
-		body.Input = body.Input[:maxRunInput]
-	}
 	return body
 }
 
