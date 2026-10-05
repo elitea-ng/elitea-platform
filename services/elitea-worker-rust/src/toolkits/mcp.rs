@@ -25,7 +25,7 @@ use adk_rust::tool::mcp::rmcp::transport::streamable_http_client::{
 };
 use adk_rust::tool::{McpToolset, SimpleToolContext};
 use adk_rust::{
-    AdkError, ErrorCategory, ErrorComponent, ReadonlyContext, RetryHint, Tool, ToolContext, Toolset,
+    AdkError, ErrorCategory, ErrorComponent, ReadonlyContext, Tool, ToolContext, Toolset,
 };
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
@@ -35,6 +35,7 @@ use super::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
 };
 use super::invocation::admit_materialized_toolset;
+use super::mcp_error::{McpErrorRedaction, model_visible_mcp_error};
 use super::mcp_tool_cache::{
     CachedMcpTool, LiveMcpTools, McpToolDescriptor, McpToolListCache, McpToolListKey,
 };
@@ -319,6 +320,16 @@ impl RemoteMcpConfig {
 
     fn access_token(&self) -> Option<&str> {
         self.access_token.as_deref().map(String::as_str)
+    }
+
+    /// The values a failed call must not echo to the model: every static
+    /// header value, the delegated token, and the endpoint (demo issue 3).
+    fn error_redaction(&self) -> McpErrorRedaction {
+        let headers = self
+            .static_headers
+            .values()
+            .filter_map(|value| value.to_str().ok());
+        McpErrorRedaction::new(headers.chain(self.access_token()), &self.endpoint)
     }
 
     #[cfg(test)]
@@ -632,6 +643,7 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
         };
         let (tools, listing) = discover_tools(&config, &session).await?;
         let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
+        let redaction = Arc::new(config.error_redaction());
         let wrapped = tools
             .into_iter()
             .map(|tool| {
@@ -639,6 +651,7 @@ pub(crate) async fn materialize_mcp_toolsets_with_tokens_and_authorization(
                     tool,
                     reference.toolkit_name(),
                     config.timeout(),
+                    Arc::clone(&redaction),
                 )?) as Arc<dyn Tool>)
             })
             .collect::<Result<Vec<_>, McpMaterializationError>>()?;
@@ -858,6 +871,7 @@ struct BoundedMcpTool {
     read_only: bool,
     concurrency_safe: bool,
     timeout: Duration,
+    redaction: Arc<McpErrorRedaction>,
 }
 
 impl BoundedMcpTool {
@@ -865,6 +879,7 @@ impl BoundedMcpTool {
         inner: Arc<dyn Tool>,
         toolkit_name: &str,
         timeout: Duration,
+        redaction: Arc<McpErrorRedaction>,
     ) -> Result<Self, McpMaterializationError> {
         let description = selection_description(inner.as_ref(), toolkit_name)?;
         Ok(Self {
@@ -877,6 +892,7 @@ impl BoundedMcpTool {
             inner,
             description: description.into_boxed_str(),
             timeout,
+            redaction,
         })
     }
 }
@@ -927,7 +943,7 @@ impl Tool for BoundedMcpTool {
         let value = tokio::time::timeout(self.timeout, self.inner.execute(context, arguments))
             .await
             .map_err(|_| mcp_timeout())?
-            .map_err(|error| sanitize_mcp_error(&error))?;
+            .map_err(|error| model_visible_mcp_error(&error, &self.name, &self.redaction))?;
         validate_result(&value).map_err(|_| invalid_mcp_result())?;
         Ok(value)
     }
@@ -1491,19 +1507,6 @@ impl Write for BoundedWriter {
     }
 }
 
-fn sanitize_mcp_error(error: &AdkError) -> AdkError {
-    AdkError::new(
-        ErrorComponent::Tool,
-        error.category,
-        "mcp.tool.failed",
-        "the remote MCP tool failed",
-    )
-    .with_retry(RetryHint {
-        should_retry: false,
-        retry_after_ms: None,
-        max_attempts: Some(1),
-    })
-}
 
 fn mcp_timeout() -> AdkError {
     AdkError::new(

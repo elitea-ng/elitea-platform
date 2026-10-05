@@ -798,6 +798,71 @@ async fn oversized_mcp_results_are_redacted_and_never_retried() {
     assert!(!format!("{error:?} {error}").contains(secret));
 }
 
+/// An MCP tool whose call ends in the ADK error for `isError: true`.
+struct ErrorResultTool {
+    message: String,
+}
+
+#[async_trait]
+impl Tool for ErrorResultTool {
+    fn name(&self) -> &'static str {
+        "lookup_release"
+    }
+
+    fn description(&self) -> &'static str {
+        "Look up release evidence for a concrete query."
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, _context: Arc<dyn ToolContext>, _args: Value) -> adk_rust::Result<Value> {
+        Err(adk_rust::AdkError::tool(self.message.clone()))
+    }
+}
+
+/// Demo issue 3: the server's `isError` explanation reaches the model through
+/// the admitted toolset (MCP wrapper and invocation sanitizer), with the
+/// toolkit's own PAT and endpoint redacted.
+#[tokio::test]
+async fn an_mcp_error_result_reaches_the_model_redacted_through_the_admitted_toolset() {
+    let tool: Arc<dyn Tool> = Arc::new(ErrorResultTool {
+        message: "MCP tool 'lookup_release' execution failed: Repository not found for \
+                  token pat-secret-value-123 via https://mcp.example.invalid/v1/mcp"
+            .to_owned(),
+    });
+    let connector = FixtureConnector::new(vec![tool]);
+    let version = frozen(
+        "mcp",
+        &direct_settings_with_headers(json!({"Authorization": "Bearer pat-secret-value-123"})),
+    );
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let toolsets = materialize_mcp_toolsets(&snapshot, &connector, &policy(&[]))
+        .await
+        .expect("MCP toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tool = toolsets[0]
+        .tools(readonly)
+        .await
+        .expect("MCP tools")
+        .pop()
+        .expect("MCP fixture tool");
+    let error = tool
+        .execute(context(), json!({"query": "risk"}))
+        .await
+        .expect_err("MCP error result");
+
+    assert_eq!(error.code, "mcp.tool.error_result");
+    assert!(!error.is_retryable());
+    let shown = error.to_string();
+    assert!(shown.contains("Repository not found"), "{shown}");
+    assert!(!shown.contains("pat-secret-value-123"), "{shown}");
+    assert!(!shown.contains("mcp.example.invalid"), "{shown}");
+}
+
 // ---- #6691: tool-list cache honours enable_caching / cache_ttl ----
 
 struct CountingToolset {
