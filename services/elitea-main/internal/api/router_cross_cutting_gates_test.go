@@ -388,9 +388,6 @@ func TestEveryAPIRouteIsSubjectToTheClientVersionGate(t *testing.T) {
 
 	var failures []string
 	for _, route := range gated {
-		if route.pattern == "/api/v2/auth/native/revoke" {
-			continue
-		}
 		request := httptest.NewRequest(route.method, concretePath(route.pattern), strings.NewReader("{}"))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Authorization", "Bearer native-gates")
