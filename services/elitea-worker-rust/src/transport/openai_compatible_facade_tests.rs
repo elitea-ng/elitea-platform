@@ -1040,7 +1040,10 @@ async fn provider_rejection_detail_is_bounded_and_stays_out_of_the_error() {
         Some("plain refusal")
     );
     let long = format!(r#"{{"error":{{"message":"{}"}}}}"#, "x".repeat(4_000));
-    assert_eq!(rejection_detail(long.as_bytes()).map(|d| d.len()), Some(240));
+    assert_eq!(
+        rejection_detail(long.as_bytes()).map(|d| d.len()),
+        Some(240)
+    );
     assert_eq!(rejection_detail(b"not json"), None);
     assert_eq!(rejection_detail(br#"{"error":{"message":"  "}}"#), None);
 

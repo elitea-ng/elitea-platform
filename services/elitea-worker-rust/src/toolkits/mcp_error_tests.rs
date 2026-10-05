@@ -10,7 +10,12 @@ fn redaction() -> McpErrorRedaction {
 }
 
 fn visible(message: &str) -> String {
-    model_visible_mcp_error(&AdkError::tool(message.to_owned()), "read_wiki", &redaction()).message
+    model_visible_mcp_error(
+        &AdkError::tool(message.to_owned()),
+        "read_wiki",
+        &redaction(),
+    )
+    .message
 }
 
 #[test]
@@ -33,6 +38,11 @@ fn an_error_result_keeps_the_server_explanation() {
         visible("MCP tool 'read_wiki' execution failed"),
         "the remote MCP tool returned an error without a description"
     );
+}
+
+#[test]
+fn every_static_redaction_pattern_compiles() {
+    assert_eq!(super::PATTERNS.len(), 4);
 }
 
 #[test]

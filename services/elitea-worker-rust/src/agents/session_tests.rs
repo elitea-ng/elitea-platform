@@ -2146,7 +2146,7 @@ fn visible_texts(request: &LlmRequest) -> Vec<String> {
 }
 
 /// Demo issue 2: the second and third questions in a chat that already holds
-/// a file failed with INVALID_INPUT, because main's history projection keeps
+/// a file failed with `INVALID_INPUT`, because main's history projection keeps
 /// the stored header chunk's `elitea_attachment` marker and history admission
 /// refused the third key. Each turn here gets the history main would send,
 /// with and without a new attachment, over one durable session.
@@ -2162,15 +2162,16 @@ async fn follow_up_turns_in_a_chat_with_attachments_are_admitted_and_answered() 
         }
         json!({"role": "user", "content": content, "additional_kwargs": {}})
     };
-    let answer = |text: &str| {
-        json!({"role": "assistant", "content": [{"type": "text", "text": text}], "additional_kwargs": {}})
-    };
+    let answer = |text: &str| json!({"role": "assistant", "content": [{"type": "text", "text": text}], "additional_kwargs": {}});
     let turns = [
         ("What is the notice period?", Vec::new(), first_file.clone()),
         (
             "And the early termination fee?",
             vec![
-                user_message("What is the notice period?", &[first_file.clone()]),
+                user_message(
+                    "What is the notice period?",
+                    std::slice::from_ref(&first_file),
+                ),
                 answer("The resumed answer is 42."),
             ],
             Vec::new(),
@@ -2178,7 +2179,10 @@ async fn follow_up_turns_in_a_chat_with_attachments_are_admitted_and_answered() 
         (
             "Compare it with the SLA credit.",
             vec![
-                user_message("What is the notice period?", &[first_file.clone()]),
+                user_message(
+                    "What is the notice period?",
+                    std::slice::from_ref(&first_file),
+                ),
                 answer("The resumed answer is 42."),
                 user_message("And the early termination fee?", &[]),
                 answer("The resumed answer is 42."),
@@ -2230,7 +2234,11 @@ async fn follow_up_turns_in_a_chat_with_attachments_are_admitted_and_answered() 
         let all = texts.join("\n");
         assert!(texts.last().is_some_and(|last| last.starts_with(question)));
         // The first file's text stays in front of the model on every turn.
-        assert!(all.contains("Notice period: 90 days."), "turn {}: {all}", turn + 1);
+        assert!(
+            all.contains("Notice period: 90 days."),
+            "turn {}: {all}",
+            turn + 1
+        );
         assert_eq!(turn == 2, all.contains("Service credit: 10%."));
         assert!(!all.contains("elitea_attachment"));
         assert!(!all.contains("needs_content_extraction"));
@@ -2244,7 +2252,10 @@ async fn follow_up_turns_in_a_chat_with_attachments_are_admitted_and_answered() 
 fn history_attachment_markers_are_admitted_stripped_and_still_validated() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     let mut content = vec![json!({"type": "text", "text": "earlier question"})];
-    content.extend(stored_attachment_chunks("msa.pdf", "Notice period: 90 days."));
+    content.extend(stored_attachment_chunks(
+        "msa.pdf",
+        "Notice period: 90 days.",
+    ));
     request.payload.chat_history = vec![
         json!({"role": "user", "content": content, "additional_kwargs": {}}),
         json!({"role": "assistant", "content": [{"type": "text", "text": "90 days"}], "additional_kwargs": {}}),

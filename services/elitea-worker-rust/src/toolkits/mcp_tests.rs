@@ -817,7 +817,11 @@ impl Tool for ErrorResultTool {
         true
     }
 
-    async fn execute(&self, _context: Arc<dyn ToolContext>, _args: Value) -> adk_rust::Result<Value> {
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _args: Value,
+    ) -> adk_rust::Result<Value> {
         Err(adk_rust::AdkError::tool(self.message.clone()))
     }
 }

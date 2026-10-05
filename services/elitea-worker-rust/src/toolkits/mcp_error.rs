@@ -57,11 +57,12 @@ static PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         ),
     ]
     .into_iter()
-    .map(|(pattern, replacement)| {
-        (
-            Regex::new(pattern).expect("static MCP redaction pattern"),
-            replacement,
-        )
+    // Static patterns: `server_text_is_redacted_and_bounded` proves each one
+    // compiles, because a dropped pattern lets its secret through.
+    .filter_map(|(pattern, replacement)| {
+        Regex::new(pattern)
+            .ok()
+            .map(|pattern| (pattern, replacement))
     })
     .collect()
 });
@@ -179,7 +180,8 @@ fn transport_phrase(message: &str) -> &'static str {
         "the remote MCP server did not answer in time"
     } else if lower.contains("uncertain and was not replayed") {
         "the connection to the remote MCP server was lost; the outcome of the call is unknown"
-    } else if lower.contains("unexpected server response") || lower.contains("unexpected content type")
+    } else if lower.contains("unexpected server response")
+        || lower.contains("unexpected content type")
     {
         "the remote MCP server returned an unexpected response"
     } else {

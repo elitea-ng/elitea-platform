@@ -1507,7 +1507,6 @@ impl Write for BoundedWriter {
     }
 }
 
-
 fn mcp_timeout() -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
