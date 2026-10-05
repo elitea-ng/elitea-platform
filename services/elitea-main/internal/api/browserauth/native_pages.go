@@ -105,8 +105,21 @@ func (p *NativePages) RenderConsent(w http.ResponseWriter, r *http.Request, cons
 	if consent.FormAction != "" {
 		formAction += " " + consent.FormAction
 	}
-	writeNativePage(w, http.StatusOK, authPageCSP(formAction, brand.StyleSource), body.Bytes())
+	writeNativePage(w, http.StatusOK, authPageCSP(formAction, brand.StyleSource), consentReferrerPolicy, body.Bytes())
 }
+
+// consentReferrerPolicy is the consent page's Referrer-Policy, and it is NOT
+// the `no-referrer` every other auth page sends. Under `no-referrer` a browser
+// serialises the Origin of a POST as "null" (Fetch, "serializing a request
+// origin"), and the decision handler refuses "null" by design (defence in
+// depth against a cross-site POST). So with `no-referrer` every Continue from
+// a real browser was answered 403 "The answer did not come from this server's
+// page" -- Chromium and WebKit both, found by the settings.devices journey;
+// the Go conformance client sends no Origin, so it never saw it.
+// `same-origin` sends the real Origin on the same-origin decision POST and
+// still sends NO Referer on any cross-origin request, so the request handle
+// in this page's URL never reaches the app's redirect URI.
+const consentReferrerPolicy = "same-origin"
 
 // RenderError writes the error page with the given status.
 func (p *NativePages) RenderError(w http.ResponseWriter, r *http.Request, status int, message string) {
@@ -121,11 +134,12 @@ func (p *NativePages) RenderError(w http.ResponseWriter, r *http.Request, status
 		writeProblem(w, http.StatusServiceUnavailable)
 		return
 	}
-	writeNativePage(w, status, authPageCSP("'none'", brand.StyleSource), body.Bytes())
+	writeNativePage(w, status, authPageCSP("'none'", brand.StyleSource), "no-referrer", body.Bytes())
 }
 
-func writeNativePage(w http.ResponseWriter, status int, csp string, body []byte) {
+func writeNativePage(w http.ResponseWriter, status int, csp, referrerPolicy string, body []byte) {
 	chooserHeaders(w)
+	w.Header().Set("Referrer-Policy", referrerPolicy)
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
