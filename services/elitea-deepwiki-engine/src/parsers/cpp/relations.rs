@@ -21,6 +21,7 @@ use super::symbols::{include_path, template_param_name};
 use crate::parsers::model::{Relationship, RelationshipType, Symbol, SymbolType};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -63,8 +64,10 @@ pub(super) fn extract(
         current: None,
         current_function: None,
         template_params: Vec::new(),
+        in_base_clause: false,
+        local_types: RefCell::new(None),
     };
-    extractor.visit(root);
+    extractor.visit(root, None);
     extractor.relationships
 }
 
@@ -84,6 +87,12 @@ struct Extractor<'a, 't> {
     /// `current_function_node`.
     current_function: Option<Node<'t>>,
     template_params: Vec<String>,
+    /// Whether the nearest `class_specifier`, `struct_specifier`,
+    /// `function_definition` or `translation_unit` above the visited node is
+    /// reached through a `base_class_clause` (Python climbs the parents).
+    in_base_clause: bool,
+    /// The local declarations of one function (by node id): name → type.
+    local_types: RefCell<Option<(usize, HashMap<String, String>)>>,
 }
 
 impl<'t> Extractor<'_, 't> {
@@ -144,7 +153,32 @@ impl<'t> Extractor<'_, 't> {
             .and_then(|c| c.first().copied())
     }
 
-    fn visit(&mut self, node: Node<'t>) {
+    /// Visit each child of `node`.
+    fn visit_children(&mut self, node: Node<'t>) {
+        let kind = node.kind();
+        for child in children(node) {
+            self.visit(child, Some(kind));
+        }
+    }
+
+    /// `visit`; `parent` is the kind of `node`'s parent (`node.parent()`
+    /// is a walk from the root, so it is passed down instead).
+    fn visit(&mut self, node: Node<'t>, parent: Option<&'t str>) {
+        // Whether the nearest enclosing class, function or file is reached
+        // through a base-class clause (`template_type` reads it).
+        let saved_base_clause = self.in_base_clause;
+        match node.kind() {
+            "base_class_clause" => self.in_base_clause = true,
+            "class_specifier" | "struct_specifier" | "function_definition" | "translation_unit" => {
+                self.in_base_clause = false;
+            }
+            _ => {}
+        }
+        self.visit_node(node, parent);
+        self.in_base_clause = saved_base_clause;
+    }
+
+    fn visit_node(&mut self, node: Node<'t>, parent: Option<&'t str>) {
         let kind = node.kind();
         let custom = match kind {
             "translation_unit" => {
@@ -206,32 +240,24 @@ impl<'t> Extractor<'_, 't> {
             "preproc_def" | "preproc_function_def" => true,
             _ => false,
         };
-        if kind == "field_expression"
-            && node.parent().is_some_and(|p| p.kind() != "call_expression")
-        {
+        if kind == "field_expression" && parent.is_some_and(|p| p != "call_expression") {
             self.field_access(node);
         }
         if !custom || !NO_RECURSE.contains(&kind) {
-            for child in children(node) {
-                self.visit(child);
-            }
+            self.visit_children(node);
         }
     }
 
     fn translation_unit(&mut self, node: Node<'t>) {
         self.scope_stack.push(self.stem.to_owned());
-        for child in children(node) {
-            self.visit(child);
-        }
+        self.visit_children(node);
         self.scope_stack.pop();
     }
 
     fn namespace(&mut self, node: Node<'t>) {
         if let Some(name) = find(node, "namespace_identifier") {
             self.scope_stack.push(self.text(name));
-            for child in children(node) {
-                self.visit(child);
-            }
+            self.visit_children(node);
             self.scope_stack.pop();
         }
     }
@@ -245,9 +271,7 @@ impl<'t> Extractor<'_, 't> {
         };
         self.scope_stack.push(name);
         self.inheritance(node);
-        for child in children(node) {
-            self.visit(child);
-        }
+        self.visit_children(node);
         self.defines();
         self.scope_stack.pop();
     }
@@ -376,9 +400,7 @@ impl<'t> Extractor<'_, 't> {
             }
         }
         // Python quirk: visited here AND by the dispatcher.
-        for child in children(node) {
-            self.visit(child);
-        }
+        self.visit_children(node);
     }
 
     /// The `ns::tmpl` name of a qualified template type: its direct
@@ -441,12 +463,10 @@ impl<'t> Extractor<'_, 't> {
             self.return_type_references(node, index);
         }
         if let Some(list) = find(node, "field_initializer_list") {
-            self.visit(list);
+            self.visit(list, Some(node.kind()));
         }
         if let Some(body) = find(node, "compound_statement") {
-            for child in children(body) {
-                self.visit(child);
-            }
+            self.visit_children(body);
         }
         self.current = old_symbol;
         self.current_function = old_function;
@@ -985,61 +1005,113 @@ impl<'t> Extractor<'_, 't> {
     }
 
     /// `_find_local_variable_type`'s `search_declarations`: depth first,
-    /// the first declaration that declares `name` with a type.
-    fn local_variable_type(&self, node: Node<'_>, name: &str) -> Option<String> {
-        if node.kind() == "declaration" {
-            let mut var_type: Option<String> = None;
-            let mut has_var = false;
-            for child in children(node) {
-                match child.kind() {
-                    "type_identifier"
-                    | "qualified_identifier"
-                    | "primitive_type"
-                    | "template_type"
-                    | "sized_type_specifier"
-                    | "placeholder_type_specifier" => {
-                        var_type = Some(self.text(child));
-                    }
-                    "init_declarator" => {
-                        let Some(declarator) = children(child).into_iter().next() else {
-                            continue;
-                        };
-                        match declarator.kind() {
-                            "pointer_declarator" => {
-                                if find(declarator, "identifier")
-                                    .is_some_and(|id| self.source.text(id) == name)
-                                {
-                                    has_var = true;
-                                    let stars = self.source.text(declarator).matches('*').count();
-                                    var_type = var_type
-                                        .filter(|t| !t.is_empty())
-                                        .map(|t| format!("{t}{}", "*".repeat(stars)));
-                                }
-                            }
-                            "reference_declarator" => {
-                                if find(declarator, "identifier")
-                                    .is_some_and(|id| self.source.text(id) == name)
-                                {
-                                    has_var = true;
-                                    var_type =
-                                        var_type.filter(|t| !t.is_empty()).map(|t| format!("{t}&"));
-                                }
-                            }
-                            "identifier" => has_var |= self.source.text(declarator) == name,
-                            _ => {}
-                        }
-                    }
-                    "identifier" => has_var |= self.source.text(child) == name,
-                    _ => {}
+    /// the first declaration that declares `name` with a type. Python
+    /// searched the body again for every call; the body's declarations are
+    /// indexed once here (the first declaration of each name wins, in the
+    /// same depth-first order), so the answer is the same.
+    fn local_variable_type(&self, body: Node<'_>, name: &str) -> Option<String> {
+        let mut cache = self.local_types.borrow_mut();
+        if cache.as_ref().is_none_or(|(id, _)| *id != body.id()) {
+            *cache = Some((body.id(), self.local_declarations(body)));
+        }
+        cache
+            .as_ref()
+            .and_then(|(_, types)| types.get(name).cloned())
+    }
+
+    /// Every name a declaration under `body` declares with a type → that
+    /// type, from the first such declaration in depth-first order.
+    fn local_declarations(&self, body: Node<'_>) -> HashMap<String, String> {
+        let mut types: HashMap<String, String> = HashMap::new();
+        let mut stack = vec![body];
+        while let Some(node) = stack.pop() {
+            if node.kind() == "declaration" {
+                for (name, var_type) in self.declared_types(node) {
+                    types.entry(name).or_insert(var_type);
                 }
             }
-            if has_var && let Some(found) = var_type.filter(|t| !t.is_empty()) {
-                return Some(found);
+            stack.extend(children(node).into_iter().rev());
+        }
+        types
+    }
+
+    /// What `search_declarations` finds in one `declaration` for each name
+    /// it declares, in one pass. Python ran the pass once per name: a type
+    /// child sets the type for every name, a pointer or reference
+    /// declarator then decorates it for its own name only.
+    fn declared_types(&self, node: Node<'_>) -> Vec<(String, String)> {
+        /// Per name: declared at all, and its own decorated type with the
+        /// type child it decorates (by count).
+        type Own = (bool, Option<(Option<String>, usize)>);
+        let mut base: Option<String> = None;
+        let mut epoch = 0usize;
+        let mut names: IndexMap<&str, Own> = IndexMap::new();
+        let decorate = |own: &mut Own, base: &Option<String>, epoch: usize, suffix: &str| {
+            own.0 = true;
+            let current = match &own.1 {
+                Some((own_type, at)) if *at == epoch => own_type.clone(),
+                _ => base.clone(),
+            };
+            let decorated = current
+                .filter(|t| !t.is_empty())
+                .map(|t| format!("{t}{suffix}"));
+            own.1 = Some((decorated, epoch));
+        };
+        for child in children(node) {
+            match child.kind() {
+                "type_identifier"
+                | "qualified_identifier"
+                | "primitive_type"
+                | "template_type"
+                | "sized_type_specifier"
+                | "placeholder_type_specifier" => {
+                    base = Some(self.text(child));
+                    epoch += 1;
+                }
+                "init_declarator" => {
+                    let Some(declarator) = children(child).into_iter().next() else {
+                        continue;
+                    };
+                    match declarator.kind() {
+                        "pointer_declarator" => {
+                            if let Some(id) = find(declarator, "identifier") {
+                                let stars =
+                                    "*".repeat(self.source.text(declarator).matches('*').count());
+                                let own = names.entry(self.source.text(id)).or_default();
+                                decorate(own, &base, epoch, &stars);
+                            }
+                        }
+                        "reference_declarator" => {
+                            if let Some(id) = find(declarator, "identifier") {
+                                let own = names.entry(self.source.text(id)).or_default();
+                                decorate(own, &base, epoch, "&");
+                            }
+                        }
+                        "identifier" => {
+                            names.entry(self.source.text(declarator)).or_default().0 = true;
+                        }
+                        _ => {}
+                    }
+                }
+                "identifier" => {
+                    names.entry(self.source.text(child)).or_default().0 = true;
+                }
+                _ => {}
             }
         }
-        children(node)
+        names
             .into_iter()
-            .find_map(|child| self.local_variable_type(child, name))
+            .filter(|(_, (declared, _))| *declared)
+            .filter_map(|(name, (_, own))| {
+                let var_type = match own {
+                    Some((own_type, at)) if at == epoch => own_type,
+                    _ => base.clone(),
+                };
+                var_type
+                    .filter(|t| !t.is_empty())
+                    .map(|t| (name.to_owned(), t))
+            })
+            .collect()
     }
 
     fn field_access(&mut self, node: Node<'_>) {
@@ -1160,7 +1232,7 @@ impl<'t> Extractor<'_, 't> {
             self.declared_creations(&node_children, &creation);
         }
         for child in node_children {
-            self.visit(child);
+            self.visit(child, Some(node.kind()));
         }
     }
 
@@ -1342,7 +1414,7 @@ impl<'t> Extractor<'_, 't> {
         let old = std::mem::replace(&mut self.template_params, params);
         for child in children(node) {
             if !matches!(child.kind(), "template" | "template_parameter_list") {
-                self.visit(child);
+                self.visit(child, Some(node.kind()));
             }
         }
         self.template_params = old;
@@ -1359,23 +1431,9 @@ impl<'t> Extractor<'_, 't> {
         let Some(arguments) = find(node, "template_argument_list") else {
             return;
         };
-        let mut in_base_clause = false;
-        let mut parent = node.parent();
-        while let Some(p) = parent {
-            match p.kind() {
-                "base_class_clause" => {
-                    in_base_clause = true;
-                    break;
-                }
-                "class_specifier"
-                | "struct_specifier"
-                | "function_definition"
-                | "translation_unit" => break,
-                _ => {}
-            }
-            parent = p.parent();
-        }
-        if in_base_clause && let Some(class) = self.scope_stack.last().cloned() {
+        if self.in_base_clause
+            && let Some(class) = self.scope_stack.last().cloned()
+        {
             self.push(
                 &class,
                 &template_name,
