@@ -5,13 +5,15 @@ package api
 //
 // THE DEFECT. mountReviewedProductionRoutes registered its ~50 routes on the
 // ROOT router, beside — not inside — the r.Group that applies NoStore,
-// Maintenance and the ADR-0025 minimum client version. The routes carry their
+// Maintenance, the ADR-0025 minimum client version and Audit. The routes carry their
 // own Auth, so nothing looked wrong: they authenticated, they authorized, they
 // answered. They also answered GET /api/v2/projects/project/default/1 and the
 // notification list without `Cache-Control: no-store`, served a native client
 // below min_client_version instead of answering 426, and stayed open to every
-// caller during a maintenance window. The artifact routes, mounted the same
-// way, had the same three gaps. Found by an E2E run, not by any suite: each
+// caller during a maintenance window; the configuration writes among them
+// changed project credentials with no audit event. The artifact routes,
+// mounted the same way, had the first three gaps (/api/v2/artifacts is not
+// an audited surface). Found by an E2E run, not by any suite: each
 // gate's own test sends its request to a route INSIDE the group.
 //
 // WHY BEHAVIOURAL. chi.Walk hands over a route's middleware as anonymous
@@ -56,6 +58,7 @@ import (
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	inventoryapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	notificationsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/notifications"
@@ -349,7 +352,7 @@ func failRoutes(t *testing.T, what, remedy string, failures []string) {
 
 const gateRemedy = "Mount the route inside the /api/v2 group in router.go, or — for a handler that carries " +
 	"its own apimw.Auth — in the gated group mountReviewedProductionRoutes builds (NoStore + " +
-	"apimw.AfterAuthentication(apiGates...)). A surface that is outside the group on purpose goes in " +
+	"apimw.AfterAuthentication(apiGates..., Audit)). A surface that is outside the group on purpose goes in " +
 	"outsideTheGroupByDesign / ownCredentialPlane in this file WITH the reason."
 
 // TestEveryAPIRouteAnswersNoStore: the directive is on every answer, including
@@ -410,4 +413,61 @@ func TestEveryAPIRouteIsSubjectToTheClientVersionGate(t *testing.T) {
 	if response.Code == http.StatusUpgradeRequired {
 		t.Fatal("a personal access token was answered 426: the gate no longer tells native principals apart")
 	}
+}
+
+// TestEveryAuditedMutatingAPIRouteIsAudited: the group's last cross-cutting
+// gate is apimw.Audit, below Auth and the two principal gates. A write to an
+// audited surface (apimw.AuditedSurfaces — admin, credentials, configurations,
+// projects, ...) leaves an audit event whichever way it ends, so every
+// mutating route on those surfaces must produce one for an authenticated
+// caller. A root-mounted route outside the group writes nothing: before this
+// test, POST /api/v2/configurations/configurations/{projectID} — where a
+// project's ai_credentials are written — created, overwrote and deleted
+// credentials with no centry.audit_events row.
+func TestEveryAuditedMutatingAPIRouteIsAudited(t *testing.T) {
+	recorder := &routerAuditRecorder{}
+	cfg := gatesRouterConfig(t)
+	cfg.AuditRecorder = recorder
+	router := NewRouter(cfg)
+	all, gated := apiRoutesUnderTest(t, router)
+	requireRootMountedRoutesWalked(t, all)
+
+	audited := func(path string) bool {
+		for _, prefix := range apimw.AuditedSurfaces() {
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var failures []string
+	checked, reviewed := 0, 0
+	for _, route := range gated {
+		path := concretePath(route.pattern)
+		if route.method == http.MethodGet || route.method == http.MethodHead || route.method == http.MethodOptions || !audited(path) {
+			continue
+		}
+		checked++
+		if route.method == http.MethodPost && route.pattern == configurationapi.CurrentConfigurationListPath {
+			reviewed++
+		}
+		before := len(recorder.all())
+		request := httptest.NewRequest(route.method, path, strings.NewReader("{}"))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer pat-gates")
+		response := httptest.NewRecorder()
+		func() {
+			defer func() { _ = recover() }()
+			router.ServeHTTP(response, request)
+		}()
+		if len(recorder.all()) == before {
+			failures = append(failures, fmt.Sprintf("%s %s -> %d", route.method, route.pattern, response.Code))
+		}
+	}
+	if reviewed == 0 {
+		t.Fatalf("the walk did not reach POST %s: the guard config no longer composes the reviewed configurations route", configurationapi.CurrentConfigurationListPath)
+	}
+	failRoutes(t, "wrote to an audited surface without an audit event", gateRemedy, failures)
+	t.Logf("%d mutating routes on audited surfaces each left an audit event", checked)
 }

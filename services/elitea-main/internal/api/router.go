@@ -4640,7 +4640,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// The broad prototype compatibility handler above already owns the current
 	// project-context GET/PUT/DELETE. Keep that single live registration while adding the
 	// reviewed routes it does not provide, including chat config and agent SSE.
-	mountReviewedProductionRoutes(r, cfg, apiGates)
+	//
+	// They get the group's whole post-authentication chain, in the group's
+	// order: apiGates, then Audit last. The reviewed set includes the
+	// configuration writes (POST/PUT/DELETE /api/v2/configurations/...),
+	// where a project's ai_credentials are created, overwritten and deleted;
+	// without Audit here they left no centry.audit_events row. A fresh slice,
+	// so the append can never write into apiGates' backing array.
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+1)
+	reviewedGates = append(reviewedGates, apiGates...)
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder))
+	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
 	return r
 }
