@@ -283,3 +283,44 @@ func TestTheScheduleStaysPipelineOnly(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body = %s", response.Code, response.Body.String())
 	}
 }
+
+// seedAgentVariableRows declares variables the way a legacy-migrated,
+// imported or forked agent declares them: `application_variables` rows and
+// NO `meta.variables` mirror.
+func seedAgentVariableRows(t *testing.T, pool *pgxpool.Pool, schema string, versionID int64, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, err := pool.Exec(context.Background(), fmt.Sprintf(
+			`INSERT INTO %s.application_variables (application_version_id, name, value) VALUES ($1, $2, 'default')`,
+			schema), versionID, name); err != nil {
+			t.Fatalf("seed application variable: %v", err)
+		}
+	}
+}
+
+// TestAnAgentTriggerReadsVariablesDeclaredOnlyAsRows is the review finding
+// on the declared-name read. The names came from the `meta.variables`
+// mirror alone, so an agent whose variables live only in
+// `application_variables` declared nothing, and every value was dropped.
+func TestAnAgentTriggerReadsVariablesDeclaredOnlyAsRows(t *testing.T) {
+	h := newHarness(t)
+	// No names through the mirror: seedAgent writes `"variables": []`.
+	versionID, secret, url := h.mintAgentTrigger(t, "Imported agent", "")
+	seedAgentVariableRows(t, h.pool, homeSchema, versionID, "topic", "tone")
+
+	response := h.do(t, http.MethodPost, url,
+		`{"input":"hello","variables":{"tone":"brief","topic":"billing","undeclared":"x"}}`,
+		map[string]string{"Authorization": "Bearer " + secret})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", response.Code, response.Body.String())
+	}
+	request, ok := h.start.last()
+	if !ok {
+		t.Fatal("nothing was dispatched")
+	}
+	settings := h.mappingSettings(t, request.ConversationUUID, request.TargetParticipantID)
+	encoded, _ := json.Marshal(settings["variables"])
+	if string(encoded) != `[{"name":"topic","value":"billing"},{"name":"tone","value":"brief"}]` {
+		t.Fatalf("mapped variables = %s — the rows declare topic and tone, in row order", encoded)
+	}
+}

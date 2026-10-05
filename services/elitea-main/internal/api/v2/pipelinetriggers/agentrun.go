@@ -16,7 +16,8 @@ package pipelinetriggers
 //     exactly what an agent wired to a repository is meant to read. A call
 //     with neither is refused with 422 naming `input`.
 //   - THE AGENT'S VARIABLES. The body's `variables` object re-values the
-//     variables the version DECLARES (`meta.variables`), the way a chat
+//     variables the version DECLARES (its `application_variables` rows, or
+//     the `meta.variables` mirror for a version with none), the way a chat
 //     participant's settings do. A name the version does not declare is
 //     ignored: the request may re-value a variable, never declare one. That
 //     is the SDK's own rule (`elitea_sdk/runtime/clients/client.py`, quoted
@@ -103,9 +104,9 @@ func isOwnBodyFormat(payload []byte) bool {
 	return true
 }
 
-// declaredVariableNames reads the names out of the version's `meta.variables`.
-// The stored value is a list of `{name, value}` rows; anything else declares
-// nothing.
+// declaredVariableNames reads the names out of the declared-variable list
+// resolveRunTarget projects: a list of `{name, ...}` rows. Anything else
+// declares nothing.
 func declaredVariableNames(raw []byte) []string {
 	var rows []map[string]any
 	if err := json.Unmarshal(raw, &rows); err != nil {

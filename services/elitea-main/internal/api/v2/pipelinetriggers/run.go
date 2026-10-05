@@ -98,9 +98,10 @@ type runTarget struct {
 	// ordinary AGENT (legacy issue 6656), which only the inbound trigger may
 	// start: see targetKinds.
 	IsPipeline bool
-	// DeclaredVariables are the names in the version's own
-	// `meta.variables`. An agent run may re-value these and nothing else
-	// (agentrun.go).
+	// DeclaredVariables are the names the version declares, read the way
+	// agent_chat.sql reads them: the `application_variables` rows, and the
+	// `meta.variables` mirror only for a version with no rows. An agent run
+	// may re-value these and nothing else (agentrun.go).
 	DeclaredVariables []string
 }
 
@@ -128,10 +129,29 @@ func (h *Handler) resolveRunTarget(
 ) (runTarget, error) {
 	var target runTarget
 	var variables string
+	// THE DECLARED NAMES COME FROM THE AUTHORITATIVE STORE.
+	// `application_variables` is where a version's variables live; the
+	// `meta.variables` array is a MIRROR that only some write paths keep
+	// (agent_chat.sql states the whole argument). A legacy-migrated,
+	// imported or forked agent has the rows and no mirror, so reading the
+	// mirror alone declared nothing for it, and every `variables` value a
+	// sender wrote was dropped without a word. The mirror is the fallback,
+	// type-gated to an array, exactly as that projection reads it.
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 SELECT version.application_id, version.id, COALESCE(application.name, version.name),
        version.agent_type = 'pipeline',
-       COALESCE(version.meta -> 'variables', '[]'::jsonb)::text
+       COALESCE(
+           (
+               SELECT jsonb_agg(jsonb_build_object('name', declared.name) ORDER BY declared.id)
+                 FROM %[1]s.application_variables AS declared
+                WHERE declared.application_version_id = version.id
+           ),
+           CASE
+               WHEN jsonb_typeof(version.meta::jsonb -> 'variables') = 'array'
+               THEN version.meta::jsonb -> 'variables'
+               ELSE '[]'::jsonb
+           END
+       )::text
   FROM %[1]s.application_versions AS version
   JOIN %[1]s.applications AS application ON application.id = version.application_id
  WHERE version.id = $1`, schema), versionID,
