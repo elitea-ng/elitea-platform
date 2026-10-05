@@ -401,3 +401,103 @@ func TestChatSyncMessageDeltaCarriesCanvasAndAttachmentEdits(t *testing.T) {
 	}
 	delivers("attachment write", cursor)
 }
+
+// DEF-R7 (Agent Zefir E2E): a conversation someone just chatted in kept the
+// `updated_at` of its last rename, so the list neither moved it to the top
+// nor aged it right. tenant/0145 stamps it on every new message group,
+// throttled, and leaves rewrites and deletes alone.
+func TestChatNewMessageMovesTheConversationsUpdatedAt(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	olderID, _, groups := seedConversationWithParticipant(t, repo, "old question")
+	newerID, _, _ := seedConversationWithParticipant(t, repo, "newer question")
+	older, _ := strconv.ParseInt(olderID, 10, 64)
+	newer, _ := strconv.ParseInt(newerID, 10, 64)
+
+	setUpdatedAt := func(id int64, ago string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET updated_at = now() - $2::interval WHERE id = $1`, id, ago); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recent := func(id int64) bool {
+		t.Helper()
+		var fresh bool
+		if err := pool.QueryRow(ctx, `SELECT updated_at > now() - interval '10 seconds' FROM p_1.chat_conversations WHERE id = $1`, id).Scan(&fresh); err != nil {
+			t.Fatal(err)
+		}
+		return fresh
+	}
+	firstListed := func() string {
+		t.Helper()
+		listed, err := repo.List(ctx, "1", 1, 10)
+		if err != nil || len(listed.Items) < 2 {
+			t.Fatalf("List = %+v (%v)", listed, err)
+		}
+		return listed.Items[0].ID
+	}
+	setUpdatedAt(older, "2 days")
+	setUpdatedAt(newer, "1 day")
+	if got := firstListed(); got != newerID {
+		t.Fatalf("before any message the list leads with %s, want the more recently renamed %s", got, newerID)
+	}
+	backdate(t, pool, "p_1.chat_conversations", older, time.Minute)
+	syncBefore := syncAt(t, pool, "p_1.chat_conversations", older)
+	tombstonesBefore := tombstoneCounts(t, pool)
+
+	var participantID int64
+	if err := pool.QueryRow(ctx, `SELECT author_participant_id FROM p_1.chat_message_group WHERE id = $1`,
+		groupIDByUUID(t, pool, groups[0])).Scan(&participantID); err != nil {
+		t.Fatal(err)
+	}
+	insertGroup := func() int64 {
+		t.Helper()
+		var id int64
+		if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
+			VALUES (gen_random_uuid(), $1, $2) RETURNING id`, participantID, older).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	added := insertGroup()
+	if !recent(older) {
+		t.Fatal("a new message did not stamp its conversation's updated_at")
+	}
+	if got := firstListed(); got != olderID {
+		t.Fatalf("after a new message the list leads with %s, want the conversation just chatted in (%s)", got, olderID)
+	}
+	// Sync still sees the conversation move, and no access marker is written.
+	if after := syncAt(t, pool, "p_1.chat_conversations", older); !after.After(syncBefore.Add(50 * time.Second)) {
+		t.Fatalf("sync_at did not move with updated_at: %v then %v", syncBefore, after)
+	}
+	if after := tombstoneCounts(t, pool); len(after) != len(tombstonesBefore) || after["access_filter"] != tombstonesBefore["access_filter"] {
+		t.Fatalf("tombstones changed on a message insert: %v then %v", tombstonesBefore, after)
+	}
+
+	// Throttle: a second message within the second leaves the stamp alone.
+	var stamped time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM p_1.chat_conversations WHERE id = $1`, older).Scan(&stamped); err != nil {
+		t.Fatal(err)
+	}
+	insertGroup()
+	var again time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM p_1.chat_conversations WHERE id = $1`, older).Scan(&again); err != nil {
+		t.Fatal(err)
+	}
+	if !again.Equal(stamped) && again.Sub(stamped) < time.Second {
+		t.Fatalf("the activity throttle did not hold: %v then %v", stamped, again)
+	}
+
+	// A rewrite and a delete are not new activity.
+	setUpdatedAt(older, "1 hour")
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET updated_at = now() WHERE id = $1`, added); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM p_1.chat_message_group WHERE id = $1`, added); err != nil {
+		t.Fatal(err)
+	}
+	if recent(older) {
+		t.Fatal("a message rewrite or delete stamped the conversation's updated_at")
+	}
+}

@@ -801,7 +801,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// and lost access. No permission, so no shared sibling (shared 0144 is the
 	// notification half, not a grant). Authored as tenant 0142 and renumbered
 	// at merge: main landed 0141-0143 while this branch was open.
-	require.EqualValues(t, 144, Head(tenant))
+	// 145: tenant/0145_chat_conversation_activity.sql, a new message group
+	// stamps its conversation's `updated_at` (throttled to one per second),
+	// so the list's "last modified" order and age follow chat activity
+	// (Agent Zefir E2E DEF-R7). A trigger and no permission, so no shared
+	// sibling.
+	require.EqualValues(t, 145, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
