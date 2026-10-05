@@ -41,21 +41,20 @@
  */
 import * as zod from "zod";
 
-export const EvalDatasetCaseWriteRequest = zod.object({
-  input: zod.string(),
-  variables: zod.record(zod.string(), zod.unknown()).optional(),
-  expected_output: zod.string().nullish(),
-  excluded: zod
-    .boolean()
-    .optional()
-    .describe(
-      "Absent keeps the stored flag, so a text edit does not include an excluded case again. A new case is active unless this is `true`.\n",
-    ),
-});
+export const EvalDatasetCaseUpdateRequest = zod
+  .object({
+    input: zod.string().optional(),
+    variables: zod.record(zod.string(), zod.unknown()).optional(),
+    expected_output: zod.string().nullish(),
+    excluded: zod.boolean().optional(),
+  })
+  .describe(
+    "Two forms. A body whose ONLY key is `excluded` writes the exclusion flag and nothing else; the include/exclude toggle sends this, so it cannot write a stale copy of the case text back over a newer edit. Any other body is a full rewrite of the case and must carry `input`; in that form an absent `excluded` keeps the stored flag.\n",
+  );
 
-export type EvalDatasetCaseWriteRequest = zod.input<
-  typeof EvalDatasetCaseWriteRequest
+export type EvalDatasetCaseUpdateRequest = zod.input<
+  typeof EvalDatasetCaseUpdateRequest
 >;
-export type EvalDatasetCaseWriteRequestOutput = zod.output<
-  typeof EvalDatasetCaseWriteRequest
+export type EvalDatasetCaseUpdateRequestOutput = zod.output<
+  typeof EvalDatasetCaseUpdateRequest
 >;

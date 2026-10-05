@@ -3030,7 +3030,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						coreResolver, platformauth.PermissionModeDefault, permission)
 				}
 				if cfg.EvalDimensionsRepo != nil {
-					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo)
+					// A PUT that promotes an agent dimension to the project
+					// library is a create as well as an update; the handler
+					// asks this check, resolved like the gates above.
+					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo,
+						v2evaluation.WithCreatePermissionCheck(apimw.HoldsResolvedPermission(
+							coreResolver, platformauth.PermissionModeDefault, v2evaluation.PermissionDimensionCreate)))
 					r.With(evaluationGate(v2evaluation.PermissionDimensionRead)).
 						Get("/eval_dimensions/prompt_lib/{projectID}", evaluationHandler.List)
 					r.With(evaluationGate(v2evaluation.PermissionDimensionCreate)).

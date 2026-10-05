@@ -82,6 +82,14 @@ function runStartBlockedReason(props: {
       'This dataset has no cases. Add at least one before starting a run.',
     );
   }
+  // Every case excluded: the dataset has cases and nothing to run. The server
+  // refuses this start with a 422, so the form says so before the request.
+  if (dataset !== undefined && dataset.active_case_count === 0) {
+    return t(
+      'features.agentEvaluation.runs.allCasesExcluded',
+      'Every case in this dataset is excluded. Include at least one before starting a run.',
+    );
+  }
   if (props.dimensionIds.length === 0) {
     return t('features.agentEvaluation.runs.needDimension', 'Choose at least one dimension to score against.');
   }

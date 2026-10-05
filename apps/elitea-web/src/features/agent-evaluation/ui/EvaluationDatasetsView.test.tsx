@@ -36,6 +36,7 @@ function datasetRow(overrides: Record<string, unknown> = {}) {
     application_id: null,
     is_shared: false,
     case_count: 0,
+    active_case_count: 0,
     ...overrides,
   };
 }

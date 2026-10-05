@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,10 +14,34 @@ import (
 // Handler serves the four dimension-library routes.
 type Handler struct {
 	repo Repository
+	// mayCreate answers whether the caller holds PermissionDimensionCreate in
+	// the route's project. Update asks it before a PROMOTION, which adds a
+	// dimension to the project library and is therefore a create. Nil refuses
+	// every promotion: a composition root that forgot to wire it must not
+	// fall back to the update permission alone.
+	mayCreate PermissionCheck
 }
 
-func NewHandler(repo Repository) *Handler {
-	return &Handler{repo: repo}
+// PermissionCheck answers, inside a handler, whether the caller of r holds
+// one permission in the route's project. An error is a failed resolution,
+// not a "no".
+type PermissionCheck func(r *http.Request) (bool, error)
+
+// HandlerOption configures a Handler.
+type HandlerOption func(*Handler)
+
+// WithCreatePermissionCheck wires the check Update runs before it promotes an
+// `agent_adhoc` dimension to the project library.
+func WithCreatePermissionCheck(check PermissionCheck) HandlerOption {
+	return func(h *Handler) { h.mayCreate = check }
+}
+
+func NewHandler(repo Repository, options ...HandlerOption) *Handler {
+	h := &Handler{repo: repo}
+	for _, option := range options {
+		option(h)
+	}
+	return h
 }
 
 // listResponse is `{rows, total}`.
@@ -54,8 +79,18 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	// An absent `agent_id` means "the project library alone". It does NOT mean
 	// "every ad-hoc dimension in the project": an ad-hoc dimension authored on
-	// another agent is that agent's private rubric, and listing it here would
-	// leak every agent's evaluation criteria into every other agent's editor.
+	// another agent is SCOPED to that agent, and listing it here would fill
+	// every agent's editor with every other agent's criteria.
+	//
+	// The scope is a filter, NOT an authorization boundary. Every evaluation
+	// route is gated on a project permission only, and so is the agent itself
+	// (`models.applications.application.details` / `.update`): any project
+	// editor may open and change any agent in the project, so they may read,
+	// edit, delete or promote that agent's dimensions too. Nothing here checks
+	// the caller against the agent's author, because nothing else in the
+	// project does either. If agent-level ownership is ever introduced, these
+	// routes must check it on List with `agent_id`, Update (including the
+	// agent_adhoc -> project promotion) and Delete.
 	if raw := r.URL.Query().Get("agent_id"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
@@ -105,17 +140,45 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The editor does not send `tier` on an edit — it renders the scope as a
-	// disabled field — so an update body has no tier at all and Normalize
-	// would default it to `project`, silently promoting an agent-scoped
-	// dimension into the whole project's library. The repository therefore
-	// never writes `tier` or `application_id` on an update; the value here is
-	// only what Validate compares against, and is reset to whatever the caller
-	// sent for the write to be validatable at all.
+	// TIER ON AN UPDATE. The body's `tier` is the scope the caller asks for,
+	// and an ABSENT tier keeps the stored scope: Normalize would otherwise
+	// default it to `project` and promote an agent-scoped dimension without
+	// the caller asking. The tier is therefore taken out before Normalize and
+	// Validate, checked on its own here, and decided against the STORED tier
+	// by ResolveTierUpdate inside the repository's write. `application_id` is
+	// never taken from an update body: a promotion clears it, and nothing
+	// else changes it.
+	requestedTier := strings.TrimSpace(dimension.Tier)
+	dimension.Tier = ""
+	dimension.ApplicationID = nil
 	dimension.Normalize()
 	if err := dimension.Validate(false); err != nil {
 		apierr.Write(w, err)
 		return
+	}
+	if requestedTier != "" && !knownTiers[requestedTier] {
+		apierr.Write(w, apierr.BadRequest("tier must be one of project, agent_adhoc, platform"))
+		return
+	}
+	if requestedTier == TierPlatform {
+		apierr.Write(w, apierr.BadRequest("the platform tier is not authorable: platform dimensions are materialised from the platform catalogue, which this release does not serve"))
+		return
+	}
+	dimension.Tier = requestedTier
+	// PROMOTION IS A CREATE. The route is gated on dimension.update, but
+	// `agent_adhoc` -> `project` adds a dimension to the library every agent's
+	// editor lists. A role holding update without create must not be able to
+	// do that, so the caller's create permission rides to the repository,
+	// which compares it against the STORED tier inside its transaction. Only
+	// a body asking for `project` can promote, so only that body pays for the
+	// second resolution.
+	if requestedTier == TierProject && h.mayCreate != nil {
+		allowed, err := h.mayCreate(r)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		dimension.PromotionPermitted = allowed
 	}
 
 	updated, err := h.repo.Update(r.Context(), projectID, dimensionID, dimension)
@@ -139,16 +202,13 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func decodeDimension(w http.ResponseWriter, r *http.Request) (Dimension, bool) {
 	var dimension Dimension
-	decoder := json.NewDecoder(r.Body)
 	// An unknown field is refused rather than dropped. The baseline's editor
 	// posts `evidence_scope` alongside the dimension body in one place, and
 	// that field belongs to a BINDING — a concept this slice does not have.
 	// Accepting and discarding it would report success for a setting that was
 	// never stored, which is the failure this whole slice is trying not to
-	// repeat.
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&dimension); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body: "+err.Error()))
+	// repeat. decodeStrict does that, and bounds the body (413) first.
+	if !decodeStrict(w, r, &dimension) {
 		return Dimension{}, false
 	}
 	return dimension, true

@@ -54,7 +54,16 @@ export const EvalDataset = zod
         "The agent this dataset was authored for. `null` is a project-wide dataset. It is `application_id` and not the reference's `agent_id` because every agent reference in this schema is an `applications` row; the QUERY PARAMETER stays `agent_id`.\n",
       ),
     is_shared: zod.boolean(),
-    case_count: zod.int(),
+    case_count: zod
+      .int()
+      .describe(
+        "Every stored case, excluded ones included. This is the number the per-dataset case cap counts.\n",
+      ),
+    active_case_count: zod
+      .int()
+      .describe(
+        "The stored cases that are NOT excluded, i.e. the cases a run would execute. Zero with a non-zero `case_count` means every case is excluded, and a run start is refused.\n",
+      ),
     created_at: zod.string().optional(),
     updated_at: zod.string().optional(),
   })

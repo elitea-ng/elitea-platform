@@ -120,13 +120,18 @@ export async function addCase(
   return body<EvalDatasetCase>(envelope);
 }
 
-export async function editCase(
+/**
+ * Include or exclude ONE case. The body is `{excluded}` and nothing else, which
+ * the server writes as the flag alone. Sending the case text with it would
+ * write this client's cached copy back over any edit made since it was read.
+ */
+export async function setCaseExcluded(
   projectId: string,
   datasetId: string,
   caseId: string,
-  input: EvalDatasetCaseWriteRequest,
+  excluded: boolean,
 ): Promise<EvalDatasetCase> {
-  const envelope = await updateEvalDatasetCase(projectId, datasetId, caseId, input);
+  const envelope = await updateEvalDatasetCase(projectId, datasetId, caseId, { excluded });
   return body<EvalDatasetCase>(envelope);
 }
 

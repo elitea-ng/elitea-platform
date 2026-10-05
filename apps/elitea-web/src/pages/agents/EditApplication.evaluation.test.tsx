@@ -97,6 +97,7 @@ beforeEach(() => {
             application_id: 42,
             is_shared: false,
             case_count: 1,
+            active_case_count: 1,
           },
         ],
         total: 1,
