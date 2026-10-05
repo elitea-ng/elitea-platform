@@ -2836,6 +2836,36 @@ components:
             display name, toolkit type — and has no fixed key set across step
             kinds; the writer is
             internal/infra/db/repos/agent_trace.go:1108-1116.
+          description: >-
+            For a `tool_call` step the keys a client renders are typed below
+            (client contract 1.1); every other key is display-only and may
+            change.
+          properties:
+            metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the allowlisted tool metadata
+                (internal/infra/db/repos/agent_trace.go:983,
+                `currentAgentToolCallAttrs`; keys from
+                `currentAgentToolMetadataKeys`). Only the keys typed here are
+                promised.
+              properties:
+                toolkit_name: { type: string, description: The toolkit the tool belongs to. }
+                toolkit_type: { type: string }
+                display_name: { type: string }
+                original_name: { type: string, description: The tool's own name when `tool_name` is a prefixed one. }
+                parent_agent_name: { type: string, description: The sub-agent that ran the tool. }
+            tool_meta:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the bounded tool descriptor
+                (internal/infra/db/repos/agent_trace.go:983,
+                `currentAgentToolCallAttrs`): name, display name and an icon.
+              properties:
+                name: { type: string }
+                display_name: { type: string }
 
     MessageTraceStepDetail:
       allOf:
@@ -15885,8 +15915,9 @@ paths:
 
         `total` is null unless include_total=true, so "not counted" stays
         distinguishable from "counted zero".
-      tags: [chat]
+      tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: message_group_id
           in: query
           required: false
@@ -15923,6 +15954,7 @@ paths:
           required: false
           schema: { type: boolean, default: false }
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: Trace steps for the conversation.
           content:
@@ -15957,14 +15989,16 @@ paths:
         `message_group_id` is REQUIRED and is matched together with the step
         id: it is what confines a numeric step id to the message the caller is
         reading, so a step from elsewhere is a 404 rather than a body.
-      tags: [chat]
+      tags: [chat, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: message_group_id
           in: query
           required: true
           schema: { type: integer }
           description: The owning message group, from the trace-list row.
       responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
           description: The full trace step.
           content:

@@ -549,3 +549,38 @@ func TestCurrentAgentToolCallAttrsCarryTheWorkersToolkitID(t *testing.T) {
 		})
 	}
 }
+
+// TestToolCallAttrsCarryTheClientContractKeys pins the writer to what client
+// contract 1.1 types on MessageTraceStep.attrs: a reloaded transcript draws a
+// tool chip from `metadata.toolkit_name`, `metadata.parent_agent_name` and
+// `tool_meta.name`/`display_name` without a detail fetch, so the writer must
+// keep producing exactly those keys.
+func TestToolCallAttrsCarryTheClientContractKeys(t *testing.T) {
+	attrs := currentAgentToolCallAttrs(map[string]any{
+		"metadata": map[string]any{
+			"toolkit_name":      "github",
+			"toolkit_type":      "github",
+			"display_name":      "List issues",
+			"original_name":     "list_issues",
+			"parent_agent_name": "Researcher",
+			"unlisted_key":      "dropped",
+		},
+		"tool_meta": map[string]any{"name": "github___list_issues", "display_name": "List issues"},
+	})
+	metadata, _ := attrs["metadata"].(map[string]any)
+	for key, want := range map[string]string{
+		"toolkit_name": "github", "toolkit_type": "github", "display_name": "List issues",
+		"original_name": "list_issues", "parent_agent_name": "Researcher",
+	} {
+		if metadata[key] != want {
+			t.Errorf("attrs.metadata.%s = %#v, want %q", key, metadata[key], want)
+		}
+	}
+	if _, present := metadata["unlisted_key"]; present {
+		t.Errorf("attrs.metadata kept a key outside the allowlist: %#v", metadata)
+	}
+	toolMeta, _ := attrs["tool_meta"].(map[string]any)
+	if toolMeta["name"] != "github___list_issues" || toolMeta["display_name"] != "List issues" {
+		t.Errorf("attrs.tool_meta = %#v, want name and display_name", toolMeta)
+	}
+}
