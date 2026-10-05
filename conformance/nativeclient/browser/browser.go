@@ -27,9 +27,11 @@ type Browser struct {
 	http *http.Client
 	// Trail records every request URL, for failure messages.
 	Trail []string
-	// origin is the Origin of the next POST: the origin of the document whose
-	// form is being submitted, as a browser sends it.
-	origin string
+	// origin and referrerPolicy describe the document whose form is being
+	// submitted: the next POST's Origin is that origin, serialized under that
+	// policy as a browser does it (referrer.go).
+	origin         string
+	referrerPolicy string
 }
 
 // New returns a browser with an empty cookie jar. Every `*.localhost` host
@@ -123,7 +125,7 @@ func (b *Browser) Navigate(ctx context.Context, method, rawURL string, form url.
 			// POST; the native decision route compares it with the public
 			// origin.
 			if b.origin != "" {
-				request.Header.Set("Origin", b.origin)
+				request.Header.Set("Origin", serializeRequestOrigin(b.referrerPolicy, b.origin, target))
 			}
 		}
 		b.Trail = append(b.Trail, method+" "+rawURL)
@@ -192,7 +194,8 @@ func (b *Browser) Submit(ctx context.Context, page *Page, form Form, values url.
 	}
 	method := strings.ToUpper(form.Method)
 	b.origin = page.URL.Scheme + "://" + page.URL.Host
-	defer func() { b.origin = "" }()
+	b.referrerPolicy = documentReferrerPolicy(page.Header, page.Body)
+	defer func() { b.origin, b.referrerPolicy = "", "" }()
 	if method != http.MethodPost {
 		target, err := url.Parse(action)
 		if err != nil {
