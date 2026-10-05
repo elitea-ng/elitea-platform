@@ -1637,6 +1637,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithContextManagementGate(defaults).
 			WithReasoningModels(defaults).
 			WithEvents(cfg.DomainEvents)
+		if cfg.Pool != nil {
+			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
+		}
 	}
 	mountMCPServerRoutes(
 		r, cfg.Pool, authenticate, cfg.MCPAgentStart, cfg.MCPToolkitExecute,
@@ -3426,6 +3429,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/participants/prompt_lib/{projectID}/{conversationID}", convHandler.AddParticipant)
 					r.With(projectPermission("models.chat.participant.delete")).
 						Delete("/participant/prompt_lib/{projectID}/{conversationID}/{participantID}", convHandler.RemoveParticipant)
+					// Client contract 1.1: who may be added. It answers project
+					// members, so it declares the permission that governs the ADD
+					// it feeds (no new permission, so no RBAC seed migration).
+					r.With(projectPermission("models.chat.participants.create")).
+						Get("/participant_candidates/prompt_lib/{projectID}/{conversationID}", convHandler.ListParticipantCandidates)
 					r.With(requireEntitySettings).
 						Put("/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}", convHandler.UpdateEntitySettings)
 					r.With(requireEntitySettings).

@@ -311,6 +311,7 @@ type Handler struct {
 	attachments     AttachmentStore
 	userDefaults    UserContextDefaults
 	events          EventEmitter
+	candidates      ParticipantCandidateStore
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,

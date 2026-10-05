@@ -2143,6 +2143,40 @@ components:
               type: string
               description: Every other kind's display name.
 
+    ParticipantCandidatesPage:
+      type: object
+      description: >-
+        One page of participant candidates. NOTE(W2):
+        internal/api/v2/conversations/candidates.go:75
+        (`participantCandidatesPage`).
+      required: [rows, next_cursor, has_more]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantCandidate'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Pass as `cursor` for the next page; null on the last page.
+        has_more: { type: boolean }
+
+    ParticipantCandidate:
+      type: object
+      description: >-
+        A project member. NOTE(W2):
+        internal/api/v2/conversations/candidates.go:40
+        (`ParticipantCandidate`).
+      required: [user_id, name, already_participant]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: The USER id — `entity_meta.id` of a user participant and a `user_ids` mention entry.
+        name: { type: string }
+        email: { type: string }
+        already_participant: { type: boolean }
+
     ConversationParticipantCreate:
       type: object
       description: >-
@@ -14942,6 +14976,79 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/participant_candidates/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or its UUID; both resolve.
+    get:
+      operationId: listParticipantCandidates
+      summary: The people who may be added to a conversation
+      description: |
+        Members of the project (platform system accounts and suspended users
+        excluded), filtered by `q` and paged by `cursor`. Needs
+        `models.chat.participants.create` — the permission of the add this
+        list feeds — and access to the conversation. `already_participant`
+        marks members who are participants of THIS conversation already
+        (the caller is usually one). Ordered by display name, then user id;
+        the order is stable, so a cursor never repeats or skips a member.
+        Add a candidate with `addConversationParticipants` and
+        `{entity_name: user, entity_meta: {id: user_id, user_name: name}}`.
+        NOTE(W2): internal/api/v2/conversations/candidates.go:83
+        (`ListParticipantCandidates`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: type
+          in: query
+          required: false
+          schema: { type: string }
+          description: The candidate kind. Only `user` is served; it is the default.
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, maxLength: 100 }
+          description: Case-insensitive substring of the name or the e-mail.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: The previous page's `next_cursor`.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: One page of candidates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParticipantCandidatesPage'
+        '400':
+          description: >-
+            A `type` other than `user`, a `q` over 100 characters, a `limit`
+            out of range, a cursor this list did not issue, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition without a database; there are no members to list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /elitea_core/messages/prompt_lib/{project_id}/{conversation_id}:
     parameters:
