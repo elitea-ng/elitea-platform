@@ -797,6 +797,60 @@ def test_transition_state_too_large_after_projection_is_dropped_not_fatal() -> N
     assert len(encode_current_node_event_json(events[0])) <= 60 * 1024
 
 
+def test_inline_image_echoed_in_a_node_tool_result_is_scrubbed_not_fatal() -> None:
+    # Review F3 on #1067: graph events echo more than `state`. A pipeline
+    # function node whose tool_result repeats the multimodal input carries
+    # the same base64 image, and must neither fail the turn nor leak it.
+    callback, events = _callback()
+    url, content = _inline_image_content()
+
+    callback.on_custom_event(
+        "on_function_tool_node",
+        {
+            "state": {"step": 1},
+            "input_variables": ["input"],
+            "input_mapping": {"input": {"type": "variable", "value": "input"}},
+            "tool_result": {"echo": content},
+        },
+        run_id="function-node-image",
+    )
+
+    callback.raise_if_failed()
+    metadata = _json(events[0])["response_metadata"]
+    raw = encode_current_node_event_json(events[0]).decode("utf-8")
+    assert url.split(",", 1)[1][:64] not in raw
+    assert metadata["tool_result"]["echo"][0] == {"type": "text", "text": "what is on this photo?"}
+    assert metadata["tool_result"]["echo"][1]["image_url"]["url"].startswith("[inline image/jpeg omitted")
+    assert metadata["state"] == {"step": 1}
+    assert metadata["state_projection"]["omitted_inline_data"] == 1
+    assert len(raw.encode("utf-8")) <= 60 * 1024
+
+
+def test_oversized_echo_outside_state_is_dropped_not_fatal() -> None:
+    # A loop node's accumulated_response has no bound in the SDK, and a tool
+    # node's tool_result is capped far above one frame: progress, not outcome.
+    callback, events = _callback()
+
+    callback.on_custom_event(
+        "on_loop_node",
+        {
+            "state": {"small": 1},
+            "input_variables": ["input"],
+            "accumulated_response": "x" * 90_000,
+        },
+        run_id="loop-oversized",
+        metadata={"langgraph_node": "loop"},
+    )
+
+    callback.raise_if_failed()
+    metadata = _json(events[0])["response_metadata"]
+    assert metadata["metadata"] == {"langgraph_node": "loop"}
+    assert metadata["input_variables"] == ["input"]
+    assert metadata["accumulated_response"] is None
+    assert metadata["state_projection"]["fields_omitted"] == ["accumulated_response"]
+    assert len(encode_current_node_event_json(events[0])) <= 60 * 1024
+
+
 def test_small_inline_text_that_only_looks_like_base64_is_untouched() -> None:
     callback, events = _callback()
 

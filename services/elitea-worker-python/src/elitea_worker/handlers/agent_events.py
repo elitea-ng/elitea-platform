@@ -93,6 +93,28 @@ _LOAD_SKILL_ALREADY_ACTIVE_RE = re.compile(
     r'^Skill "([^"]+)" is already (?:loaded|active)'
 )
 _CUSTOM_STATE_TRANSCRIPT_FIELDS = ("messages", "chat_history")
+# The SDK graph events and the fields they echo besides `state` (review F3
+# on #1067): scrubbed of inline binary like state, and dropped when the event
+# would not fit one frame. Routing fields (next_step, condition) are not here.
+_GRAPH_EVENT_TYPES = frozenset(
+    {
+        "agent_on_tool_node",
+        "agent_on_function_tool_node",
+        "agent_on_loop_tool_node",
+        "agent_on_loop_node",
+        "agent_on_conditional_edge",
+        "agent_on_decision_edge",
+        "agent_on_transitional_edge",
+    }
+)
+_GRAPH_EVENT_ECHO_FIELDS = (
+    "tool_result",
+    "accumulated_response",
+    "input_variables",
+    "input_mapping",
+    "decisional_inputs",
+)
+_GRAPH_EVENT_SCRUBBED_FIELDS = (*_GRAPH_EVENT_ECHO_FIELDS, "condition")
 # INLINE BINARY IN ECHOED GRAPH STATE (issue 1065).
 #
 # elitea-main hands an image attachment to the model inline, as a base64 data
@@ -1030,41 +1052,76 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
         fields so consumers can distinguish a bounded projection.
         """
 
+        graph_event = event_type in _GRAPH_EVENT_TYPES
         state = payload.get("state")
-        if not isinstance(state, dict):
+        if not isinstance(state, dict) and not graph_event:
             return payload
-        projected_state = dict(state)
-        omitted = [
-            field
-            for field in _CUSTOM_STATE_TRANSCRIPT_FIELDS
-            if field in projected_state
-        ]
-        for field in omitted:
-            projected_state.pop(field, None)
-        counter = [0]
-        projected_state = _without_inline_data(projected_state, counter)
+        projected = dict(payload)
         projection: dict[str, Any] = {}
-        if omitted:
-            projection["omitted_duplicate_fields"] = omitted
+        counter = [0]
+        if isinstance(state, dict):
+            projected_state = dict(state)
+            omitted = [
+                field
+                for field in _CUSTOM_STATE_TRANSCRIPT_FIELDS
+                if field in projected_state
+            ]
+            for field in omitted:
+                projected_state.pop(field, None)
+            projected["state"] = _without_inline_data(projected_state, counter)
+            if omitted:
+                projection["omitted_duplicate_fields"] = omitted
+        if graph_event:
+            # Every other field a graph event echoes from the SDK (a node's
+            # tool_result, a loop's accumulated_response, its inputs) can
+            # repeat the multimodal input just as `state` does.
+            for field in _GRAPH_EVENT_SCRUBBED_FIELDS:
+                if field in projected:
+                    projected[field] = _without_inline_data(projected[field], counter)
         if counter[0]:
             projection["omitted_inline_data"] = counter[0]
-        projected = dict(payload)
-        projected["state"] = projected_state
         if projection:
             projected["state_projection"] = projection
         # A graph event is progress, not the turn's outcome. A state still too
         # large for one frame (a pipeline variable holding a whole document)
         # loses its state snapshot, keeps its routing fields, and says so:
         # failing the whole turn over a progress echo is what issue 1065 was.
-        rendered = self._event_json(event_type, response_metadata=projected)
-        if len(rendered) > MAX_CURRENT_NODE_EVENT_JSON_BYTES:
+        if self._event_exceeds_frame(event_type, projected) and isinstance(state, dict):
             projected["state"] = {}
             projection = dict(projection)
             projection["state_omitted"] = "exceeds_frame"
             projected["state_projection"] = projection
+        # The same holds for the other echoes: a pipeline node's tool_result
+        # is capped by the SDK far above one frame and a loop node's
+        # accumulated_response not at all. The largest go first, until the
+        # event fits; the routing fields (next_step, condition) stay.
+        if graph_event and self._event_exceeds_frame(event_type, projected):
+            echoes = sorted(
+                (
+                    field
+                    for field in _GRAPH_EVENT_ECHO_FIELDS
+                    if projected.get(field) is not None
+                ),
+                key=lambda field: len(_event_value_json(projected[field])),
+                reverse=True,
+            )
+            dropped: list[str] = []
+            for field in echoes:
+                projected[field] = None
+                dropped.append(field)
+                if not self._event_exceeds_frame(event_type, projected):
+                    break
+            if dropped:
+                projection = dict(projection)
+                projection["fields_omitted"] = sorted(dropped)
+                projected["state_projection"] = projection
         if not projection:
             return payload
         return projected
+
+    def _event_exceeds_frame(self, event_type: str, payload: dict[str, Any]) -> bool:
+        rendered = self._event_json(event_type, response_metadata=payload)
+        return len(rendered) > MAX_CURRENT_NODE_EVENT_JSON_BYTES
 
     def _chunk_tool_output(self, selected: str, entry: dict[str, Any]) -> list[str] | None:
         """Split one tool result when, and only when, it will not fit a frame.
@@ -1239,6 +1296,12 @@ def _inline_data_reference(match: re.Match[str]) -> str:
     media_type = match.group(1)
     encoded = len(match.group(3))
     return f"[inline {media_type} omitted from event: {encoded} base64 characters]"
+
+
+def _event_value_json(value: Any) -> str:
+    """The rendered size proxy of one (already JSON-safe) event field."""
+
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def _without_inline_data(value: Any, counter: list[int]) -> Any:
