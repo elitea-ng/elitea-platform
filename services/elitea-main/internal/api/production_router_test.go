@@ -1708,6 +1708,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	got := routeSet.Patterns()
 
 	want := []string{
+		"DELETE /api/v2/admin/gateway/default_model/",
 		"DELETE /api/v2/admin/gateway/governance/{id}",
 		"DELETE /api/v2/admin/gateway/models/{id}",
 		"DELETE /api/v2/admin/gateway/platform_models/{configID}",
@@ -1778,10 +1779,12 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/branding/package/administration/versions",
 		"GET /api/v2/admin/email/administration",
 		"GET /api/v2/admin/gateway/*/budget-alerts",
+		"GET /api/v2/admin/gateway/default_model/",
 		"GET /api/v2/admin/gateway/governance",
 		"GET /api/v2/admin/gateway/logs",
 		"GET /api/v2/admin/gateway/models",
 		"GET /api/v2/admin/gateway/platform_models/",
+		"GET /api/v2/admin/gateway/platform_models/{configID}/default_usage",
 		"GET /api/v2/admin/gateway/providers/",
 		"GET /api/v2/admin/gateway/status",
 		"GET /api/v2/admin/gateway/usage",
@@ -2149,6 +2152,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/admin/branding/administration",
 		"PUT /api/v2/admin/email/administration",
 		"PUT /api/v2/admin/gateway/*/budget-alerts",
+		"PUT /api/v2/admin/gateway/default_model/",
 		"PUT /api/v2/admin/gateway/governance/{id}",
 		"PUT /api/v2/admin/gateway/models",
 		"PUT /api/v2/admin/gateway/platform_models/{configID}",

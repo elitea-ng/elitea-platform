@@ -94,6 +94,17 @@ function useGatewayScope(sharedProjectID: string | undefined): void {
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: 'https://elitea.example' });
+  // The platform default model card (#6826) renders above the models, and a
+  // delete confirmation reads who uses the model as a default. Neither is the
+  // subject here, so both answer "nothing stored, nobody affected".
+  server.use(
+    http.get('*/admin/gateway/default_model', () =>
+      HttpResponse.json({ model_name: '', model_project_id: null, available: true, candidates: [] }),
+    ),
+    http.get('*/admin/gateway/platform_models/:id/default_usage', () =>
+      HttpResponse.json({ model_name: '', platform_default: false, projects: 0 }),
+    ),
+  );
 });
 
 afterEach(() => {

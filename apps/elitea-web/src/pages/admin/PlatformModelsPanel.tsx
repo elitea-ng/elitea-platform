@@ -40,6 +40,7 @@ import {
   shareScopeOf,
   sharedWithOf,
 } from './platformModelGrant';
+import { PlatformDefaultModelCard, PlatformModelDeleteImpact } from './PlatformDefaultModelCard';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   platformModelTypeLabel,
@@ -290,6 +291,7 @@ function ConfirmModelDelete({
         'Deleting “{{name}}” withdraws it from every project at once. Calls addressing it then fail with model_not_found.',
         { name: model.elitea_title },
       )}
+      <PlatformModelDeleteImpact modelId={model.id} />
     </Alert>
   );
 }
@@ -328,6 +330,7 @@ export function PlatformModelsPanel(): ReactNode {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <PlatformDefaultModelCard />
       <Typography variant="headingSmall">
         {t('pages.admin.platformModels.title', 'Platform models')}
       </Typography>

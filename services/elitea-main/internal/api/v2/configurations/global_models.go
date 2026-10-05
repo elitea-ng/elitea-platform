@@ -196,6 +196,9 @@ func (h *Handler) GlobalModelRoutes() chi.Router {
 	r.Post("/", h.CreateGlobalModel)
 	r.Put("/{configID}", h.UpdateGlobalModel)
 	r.Delete("/{configID}", h.DeleteGlobalModel)
+	// What the delete confirmation reads first (#6826): how many projects
+	// name this model as their default. platform_default_model.go.
+	r.Get("/{configID}/default_usage", h.GlobalModelDefaultUsage)
 	return r
 }
 
@@ -443,7 +446,9 @@ func (h *Handler) DeleteGlobalModel(w http.ResponseWriter, r *http.Request) {
 	if !h.requireGlobalRowSection(w, request, globalModelSectionNames()...) {
 		return
 	}
-	h.Delete(w, request)
+	// Only this governance-gated route releases platform-wide defaults
+	// (#6826, releaseDeletedModelDefault).
+	h.Delete(w, request.WithContext(withPlatformModelDelete(request.Context())))
 }
 
 // globalModelSectionNames are the sections a platform model can live in.

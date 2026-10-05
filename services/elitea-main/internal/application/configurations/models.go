@@ -77,6 +77,13 @@ type CurrentModelCatalogDefaults struct {
 	Model    CurrentModelDefaultSources
 	LowTier  CurrentModelDefaultSources
 	HighTier CurrentModelDefaultSources
+	// Platform is the platform default model (#6826). It is the second step
+	// of the precedence in platform_default_model.go: it applies when the
+	// project's own stored default does not resolve in the caller's
+	// catalogue. Model.Public already carries the same value for a project
+	// that stored no default of its own; this field covers a project whose
+	// own default names a model that was deleted, disabled or withdrawn.
+	Platform CurrentModelDefault
 }
 
 type CurrentModelCatalogRequest struct {
@@ -151,8 +158,7 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 		items = deduplicateCurrentModelItems(request.Section, granted, items, true)
 	}
 
-	configuredDefault := resolveCurrentModelDefault(request.Defaults.Model)
-	defaultName, defaultProjectID := selectCurrentModelDefault(items, configuredDefault, true, nil)
+	defaultName, defaultProjectID := selectCurrentModelCatalogDefault(items, request.Defaults)
 	for index := range items {
 		items[index].Default = defaultName != nil && defaultProjectID != nil &&
 			items[index].Name == *defaultName && items[index].ProjectID == *defaultProjectID
@@ -163,9 +169,8 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 	response.Items = items
 	response.DefaultModelName = defaultName
 	response.DefaultModelProjectID = defaultProjectID
-	response.DefaultModelConfigured = defaultName != nil && defaultProjectID != nil &&
-		configuredDefault.Name != "" && *defaultName == configuredDefault.Name &&
-		strconv.FormatInt(int64(*defaultProjectID), 10) == configuredDefault.ProjectID
+	response.DefaultModelConfigured = currentModelDefaultMatches(defaultName, defaultProjectID, resolveCurrentModelDefault(request.Defaults.Model)) ||
+		currentModelDefaultMatches(defaultName, defaultProjectID, request.Defaults.Platform)
 	if request.Section == CurrentModelSectionLLM {
 		populateCurrentLLMTierDefaults(&response, items, request.Defaults)
 	}
@@ -262,6 +267,46 @@ func currentModelBoolDefault(value *bool, fallback bool) *bool {
 		return &copied
 	}
 	return &fallback
+}
+
+// selectCurrentModelCatalogDefault applies the default-model precedence that
+// platform_default_model.go documents: the project's stored default, then the
+// platform default, then the first catalogue model. Each step must name a
+// model in THIS catalogue, so a dangling id is never returned.
+func selectCurrentModelCatalogDefault(
+	items []CurrentModelCatalogItem,
+	defaults CurrentModelCatalogDefaults,
+) (*string, *int32) {
+	name, projectID := selectCurrentModelDefault(items, resolveCurrentModelDefault(defaults.Model), false, nil)
+	if name != nil {
+		return name, projectID
+	}
+	return selectCurrentModelDefault(items, defaults.Platform, true, nil)
+}
+
+// currentModelDefaultMatches reports whether the selected default is the
+// configured default named by want. An empty want never matches, so the
+// first-item fallback is never reported as configured.
+func currentModelDefaultMatches(name *string, projectID *int32, want CurrentModelDefault) bool {
+	return name != nil && projectID != nil && want.Name != "" &&
+		*name == want.Name && strconv.FormatInt(int64(*projectID), 10) == want.ProjectID
+}
+
+// currentProjectModelDefaultUnresolved reports a project whose OWN stored
+// default names a model the response did not select. Only that case needs the
+// platform default: a project with no stored default already fell back to it
+// through Model.Public.
+func currentProjectModelDefaultUnresolved(
+	defaults CurrentModelCatalogDefaults,
+	response CurrentModelCatalogResponse,
+) bool {
+	own := defaults.Model.Project
+	if own.Name == "" || own.ProjectID == "" {
+		return false
+	}
+	return response.DefaultModelName == nil || response.DefaultModelProjectID == nil ||
+		*response.DefaultModelName != own.Name ||
+		strconv.FormatInt(int64(*response.DefaultModelProjectID), 10) != own.ProjectID
 }
 
 func resolveCurrentModelDefault(sources CurrentModelDefaultSources) CurrentModelDefault {
