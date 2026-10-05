@@ -97,8 +97,9 @@ describe('BaseCheckbox', () => {
         slotProps={{ input: { 'aria-label': 'select all', 'aria-describedby': 'help' } }}
       />,
     );
-    const input = getByRole<HTMLInputElement>('checkbox', { name: 'select all' });
+    const input = getByRole('checkbox', { name: 'select all' });
     expect(input).toHaveAttribute('aria-describedby', 'help');
+    if (!(input instanceof HTMLInputElement)) throw new Error('expected a native checkbox input');
     // The native property BaseCheckbox's own input ref sets — lost when a
     // caller's slotProps used to be spread over the whole slot.
     expect(input.indeterminate).toBe(true);
