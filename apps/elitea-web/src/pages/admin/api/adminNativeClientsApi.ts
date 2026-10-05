@@ -150,27 +150,62 @@ export function useDeleteNativeClient(): UseMutationResult<NativeClientWriteOutc
   });
 }
 
+/** One account's devices as the drawer shows them. */
+export interface AdminUserNativeDevices {
+  /** Every live device first, then the most recent revoked history. */
+  readonly devices: readonly NativeAdminDevice[];
+  /** How many revoked devices the account has in all. */
+  readonly revokedTotal: number;
+  /** How many of them `devices` holds (fewer than `revokedTotal` when cut). */
+  readonly revokedShown: number;
+}
+
+/** A guard against a server whose `total` never stops growing. */
+const MAX_ACTIVE_PAGES = 50;
+
 /**
- * `GET /admin/native_devices/administration?user_id=…&state=all`.
+ * `GET /admin/native_devices/administration?user_id=…` — twice.
  *
- * `state=all` because the drawer's status column is the point: an operator
- * looking at a compromised account needs to see the device that was already
- * revoked, and why, not only the ones still live.
+ * The drawer's status column is the point: an operator looking at a
+ * compromised account needs the device that was already revoked, and why, not
+ * only the ones still live. But it must never MISS a live one. The server
+ * orders by `last_seen_at DESC` and caps a page at 200, and revoked rows are
+ * never purged, so one page of `state=all` let 200 newer revoked sessions push
+ * an idle-but-live device out of the drawer with nothing saying so (PR #1051
+ * review F1). So: every page of `state=active` (offset paging up to `total`),
+ * then the first page of `state=revoked`, with its `total` so the drawer can
+ * say the history was cut.
  */
 export function useAdminUserNativeDevices(
   userId: number | undefined,
-): UseQueryResult<readonly NativeAdminDevice[], Error> {
+): UseQueryResult<AdminUserNativeDevices, Error> {
   return useQuery({
     queryKey: nativeAdminKeys.devices(userId ?? 0),
     enabled: userId !== undefined,
-    queryFn: async ({ signal }): Promise<readonly NativeAdminDevice[]> => {
-      const body = unwrapBody(
-        await listNativeDevicesAdministration(
-          { user_id: userId, state: 'all', limit: ADMIN_DEVICE_LIMIT },
-          { signal },
-        ),
-      ) as { rows?: NativeAdminDevice[] } | undefined;
-      return body?.rows ?? [];
+    queryFn: async ({ signal }): Promise<AdminUserNativeDevices> => {
+      const page = async (state: 'active' | 'revoked', offset: number) =>
+        (unwrapBody(
+          await listNativeDevicesAdministration(
+            { user_id: userId, state, limit: ADMIN_DEVICE_LIMIT, offset },
+            { signal },
+          ),
+        ) as { rows?: NativeAdminDevice[]; total?: number } | undefined) ?? {};
+
+      const active: NativeAdminDevice[] = [];
+      for (let pageIndex = 0; pageIndex < MAX_ACTIVE_PAGES; pageIndex += 1) {
+        const body = await page('active', active.length);
+        const rows = body.rows ?? [];
+        active.push(...rows);
+        if (rows.length === 0 || active.length >= (body.total ?? 0)) break;
+      }
+
+      const revokedBody = await page('revoked', 0);
+      const revoked = revokedBody.rows ?? [];
+      return {
+        devices: [...active, ...revoked],
+        revokedTotal: Math.max(revokedBody.total ?? 0, revoked.length),
+        revokedShown: revoked.length,
+      };
     },
   });
 }

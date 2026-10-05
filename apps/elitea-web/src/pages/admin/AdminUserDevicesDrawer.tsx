@@ -30,6 +30,7 @@ import {
   nativeClientFailure,
   useAdminUserNativeDevices,
   useRevokeAdminNativeDevice,
+  type AdminUserNativeDevices,
 } from './api/adminNativeClientsApi';
 
 export interface AdminUserDevicesDrawerProps {
@@ -76,13 +77,30 @@ function refusalSentence(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Says the revoked history was cut. Live devices are always listed in full
+ * (`useAdminUserNativeDevices` pages them), so only history can be missing.
+ */
+function TruncatedHistoryNotice({ list }: { readonly list: AdminUserNativeDevices | undefined }) {
+  if (list === undefined || list.revokedTotal <= list.revokedShown) return null;
+  return (
+    <Alert severity="info" data-testid="admin-user-devices-truncated">
+      {t(
+        'pages.admin.users.devices.truncated',
+        'Showing the {{shown}} most recent of {{total}} revoked devices. Every live device is listed.',
+        { shown: list.revokedShown, total: list.revokedTotal },
+      )}
+    </Alert>
+  );
+}
+
 function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readonly onClose: () => void }) {
   const devicesQuery = useAdminUserNativeDevices(user.id);
   const revoke = useRevokeAdminNativeDevice();
   const [pending, setPending] = useState<NativeDevice | undefined>(undefined);
   const [revokeError, setRevokeError] = useState<string | undefined>(undefined);
 
-  const devices = devicesQuery.data ?? [];
+  const devices = devicesQuery.data?.devices ?? [];
   const showEmpty = !devicesQuery.isLoading && devicesQuery.error == null && devices.length === 0;
 
   const handleConfirm = (device: NativeDevice): void => {
@@ -128,6 +146,8 @@ function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readon
           {revokeError}
         </Alert>
       ) : null}
+
+      <TruncatedHistoryNotice list={devicesQuery.data} />
 
       {showEmpty ? (
         <Typography variant="bodyMedium" color="text.secondary" data-testid="admin-user-devices-empty">

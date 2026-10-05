@@ -4647,6 +4647,7 @@
   "pages.admin.users.devices.loadError": "Failed to load this user’s devices.",
   "pages.admin.users.devices.revokeError": "Failed to revoke that device.",
   "pages.admin.users.devices.tableLabel": "Devices of this account",
+  "pages.admin.users.devices.truncated": "Showing the {{shown}} most recent of {{total}} revoked devices. Every live device is listed.",
   "pages.settings.devices.description": "The mobile and desktop apps signed in to your account. Revoke a device you no longer use or do not recognise: it is signed out at once, and the app wipes its local data the next time it contacts the server.",
   "pages.settings.devices.empty.body": "To add one, open the Elitea app on your phone or computer and sign in with your workspace login. You approve the new device in a signed-in browser, and it then appears here.",
   "pages.settings.devices.empty.title": "You are not signed in on any mobile or desktop app.",
