@@ -89,6 +89,16 @@ var registry = []App{
 				}
 				return deepwikirun.NewEngineRunner(settings), nil
 			},
+			// The Rust-native engine (ADR-0026): the same sidecar protocol
+			// on the same socket, so the only difference to this host is the
+			// runner name GET /health reports. The same refusal applies.
+			"native": func(settings spi.Settings, _ time.Duration) (spi.Runner, error) {
+				if settings.EngineSocket == "" {
+					return nil, fmt.Errorf("%w: %sRUNNER=native needs %sENGINE_SOCKET, the engine sidecar's Unix socket",
+						spi.ErrConfig, settings.Prefix, settings.Prefix)
+				}
+				return deepwikirun.NewNamedEngineRunner(settings, "native"), nil
+			},
 		},
 	},
 	{

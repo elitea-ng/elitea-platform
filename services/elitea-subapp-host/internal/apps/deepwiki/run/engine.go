@@ -43,9 +43,17 @@ func NewEngineClient(socket string) *EngineClient {
 	return engine.NewClient(socket, EngineLabel)
 }
 
-// NewEngineRunner is the shared runner over the sidecar's tools, with the
-// host's egress policy and callback CA.
+// NewEngineRunner is the shared runner over the Python sidecar's tools, with
+// the host's egress policy and callback CA. It reports itself as "legacy".
 func NewEngineRunner(settings spi.Settings) *Runner {
+	return NewNamedEngineRunner(settings, "legacy")
+}
+
+// NewNamedEngineRunner is NewEngineRunner reporting itself as name. The
+// Rust engine (ADR-0026) serves the same sidecar protocol on the same
+// socket, so the two engines differ to this host only in the runner name
+// GET /health reports: "native" for the Rust sidecar, "legacy" for Python.
+func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	client := NewEngineClient(settings.EngineSocket)
 	sidecar := map[string]Tool{}
 	for _, name := range SidecarTools {
@@ -73,7 +81,7 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 		tools[name] = tool
 	}
 	return &Runner{
-		RunnerName: "legacy",
+		RunnerName: name,
 		Tools:      tools,
 		Egress:     spi.ParseEgressPolicy(settings.GitAllowlist),
 		Artifacts:  transport,

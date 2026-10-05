@@ -1,0 +1,40 @@
+[package]
+name = "elitea-deepwiki-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "The Rust-native DeepWiki engine behind the sub-application host's engine sidecar socket (ADR-0026)."
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+http-body-util = "=0.1.5"
+hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
+regex = "=1.13.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order"] }
+thiserror = "=2.0.20"
+tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "=0.1.19", features = ["sync"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.1", features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"
+strip = "none"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+incremental = false
