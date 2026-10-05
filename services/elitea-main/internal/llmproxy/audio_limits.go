@@ -5,8 +5,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // audio_limits.go — the edge bounds for the /llm/v1/audio routes.
@@ -27,11 +32,79 @@ import (
 //   - A DEADLINE. A provider that never answers no longer holds an edge
 //     goroutine and a gateway connection for ever. The caller gets a 504 with
 //     a named code, not a hang and not a generic 502.
+//   - A PER-PRINCIPAL IN-FLIGHT CAP. The two bounds above limit ONE request.
+//     The gateway parses a whole 25 MiB transcription upload, spilling it to
+//     temporary files, before its budget and rate checks run. Without a cap
+//     here, one member could open hundreds of parallel uploads and fill the
+//     gateway pod's ephemeral storage, whatever their budget or rate limit.
+//     The cap refuses the extra request with 429 before any body byte leaves
+//     the edge.
 //
 // Authentication, the project selector, project membership, the model
 // resolution, the budget gate and the authored rate limits all stay where they
 // are: the /llm middleware chain (internal/api/router.go, mountLLM) and the
 // gateway's admission sequence. This file adds no second policy.
+
+// maxAudioInFlightPerPrincipal is the number of audio requests one principal
+// may have in flight at the edge at once. The browser voice client sends one
+// transcription at a time and at most two speech requests (the sentence that
+// plays and the next one); 4 leaves room for a second tab or the settings
+// preview. It is per elitea-main process, so the cluster bound is this number
+// times the replica count, which still bounds the load.
+const maxAudioInFlightPerPrincipal = 4
+
+// audioInFlight counts the audio requests in flight per principal.
+type audioInFlight struct {
+	mu    sync.Mutex
+	limit int
+	count map[string]int
+}
+
+func newAudioInFlight(limit int) *audioInFlight {
+	return &audioInFlight{limit: limit, count: make(map[string]int)}
+}
+
+// acquire takes one slot for key. It returns false when key already holds
+// the limit.
+func (a *audioInFlight) acquire(key string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.count[key] >= a.limit {
+		return false
+	}
+	a.count[key]++
+	return true
+}
+
+func (a *audioInFlight) release(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.count[key] <= 1 {
+		delete(a.count, key)
+		return
+	}
+	a.count[key]--
+}
+
+// audioPrincipal is the key the in-flight cap counts on: the authenticated
+// user, or the project for a caller with no user. A request with neither
+// cannot reach this proxy (the /llm chain refuses it), and is not capped.
+func audioPrincipal(ctx context.Context) string {
+	if u, ok := auth.UserFromContext(ctx); ok {
+		// UserID is the owning user at a security boundary; a token principal
+		// of the same user shares that user's cap.
+		if u.UserID != "" {
+			return "user:" + u.UserID
+		}
+		if u.ID != "" {
+			return "user:" + u.ID
+		}
+	}
+	if pc, ok := middleware.ProjectFromContext(ctx); ok && pc.ProjectID > 0 {
+		return "project:" + strconv.Itoa(pc.ProjectID)
+	}
+	return ""
+}
 
 // audioRouteLimit is the bound for one audio route.
 type audioRouteLimit struct {
@@ -120,8 +193,9 @@ func (b *countingBody) Close() error { return b.body.Close() }
 
 // limitAudioRequest applies the audio bounds to r. It returns the request to
 // forward and a release function, or ok=false when it already wrote the
-// refusal. A request on any other path is returned unchanged.
-func limitAudioRequest(w http.ResponseWriter, r *http.Request) (*http.Request, func(), bool) {
+// refusal. A request on any other path is returned unchanged. inFlight may be
+// nil, which disables the per-principal cap.
+func limitAudioRequest(w http.ResponseWriter, r *http.Request, inFlight *audioInFlight) (*http.Request, func(), bool) {
 	limit, isAudio := audioRouteLimits[r.URL.Path]
 	if !isAudio {
 		return r, func() {}, true
@@ -130,6 +204,14 @@ func limitAudioRequest(w http.ResponseWriter, r *http.Request) (*http.Request, f
 		writeAudioBodyTooLarge(w)
 		return nil, func() {}, false
 	}
+	releaseSlot := func() {}
+	if key := audioPrincipal(r.Context()); inFlight != nil && key != "" {
+		if !inFlight.acquire(key) {
+			writeAudioTooManyInFlight(w)
+			return nil, func() {}, false
+		}
+		releaseSlot = func() { inFlight.release(key) }
+	}
 	refusal := &audioRefusal{}
 	ctx, cancel := context.WithTimeout(r.Context(), limit.timeout)
 	ctx = context.WithValue(ctx, audioRefusalKey{}, refusal)
@@ -137,7 +219,10 @@ func limitAudioRequest(w http.ResponseWriter, r *http.Request) (*http.Request, f
 	if r.Body != nil && r.Body != http.NoBody {
 		limited.Body = &countingBody{body: r.Body, left: limit.maxBody, refusal: refusal}
 	}
-	return limited, cancel, true
+	return limited, func() {
+		cancel()
+		releaseSlot()
+	}, true
 }
 
 // writeAudioRefusal writes the refusal for an audio request the edge stopped,
@@ -158,6 +243,13 @@ func writeAudioRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 		return true
 	}
 	return false
+}
+
+func writeAudioTooManyInFlight(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", "1")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write([]byte(`{"error":{"message":"too many audio requests are in flight for this caller","type":"rate_limit_error","code":"too_many_concurrent_requests"}}`))
 }
 
 func writeAudioBodyTooLarge(w http.ResponseWriter) {
