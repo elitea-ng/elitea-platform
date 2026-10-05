@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import Stack from '@mui/material/Stack';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
@@ -64,7 +64,7 @@ function GroupHeader(props: { readonly section: ToolGroupSection; readonly onTog
         * a keyboard user has to be able to reach it. `indeterminate` is what
         * makes a partial group readable at a glance.
         */}
-      <Checkbox
+      <BaseCheckbox
         size="small"
         checked={section.allSelected}
         indeterminate={section.selectedCount > 0 && !section.allSelected}

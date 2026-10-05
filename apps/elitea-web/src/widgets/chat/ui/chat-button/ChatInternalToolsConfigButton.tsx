@@ -4,7 +4,7 @@ import { t } from '@/shared/i18n';
 
 import ClickAwayListener from '@mui/material/ClickAwayListener';
 import SettingsIcon from '@mui/icons-material/Settings';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import IconButton from '@mui/material/IconButton';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
@@ -144,7 +144,7 @@ export const ChatInternalToolsConfigButton = memo(
                       },
                     }}
                   >
-                    <Checkbox
+                    <BaseCheckbox
                       size="small"
                       checked={tool.enabled}
                       onChange={() => handleToolToggle(tool.key, !tool.enabled)}

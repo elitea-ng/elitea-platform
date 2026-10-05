@@ -18,7 +18,7 @@
  */
 import type { ReactNode } from 'react';
 
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
@@ -46,7 +46,7 @@ function Flag({
   return (
     <FormControlLabel
       control={
-        <Checkbox
+        <BaseCheckbox
           data-testid={testId}
           checked={checked}
           onChange={(event) => {

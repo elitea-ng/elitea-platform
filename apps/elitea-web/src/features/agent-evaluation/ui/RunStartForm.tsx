@@ -14,7 +14,7 @@
 import { useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Checkbox from '@mui/material/Checkbox';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
@@ -144,7 +144,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
         <FormControlLabel
           key={dimension.id}
           control={
-            <Checkbox
+            <BaseCheckbox
               checked={dimensionIds.includes(dimension.id)}
               data-testid={`run-dimension-${dimension.id}`}
               onChange={() => toggle(dimension.id)}
