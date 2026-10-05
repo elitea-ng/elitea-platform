@@ -937,6 +937,10 @@ services:
       # routes deliberately do NOT accept cookies
       # (internal/api/production_runtime.go:31-37).
       ELITEA_AUTH_CONFIG_FILE: /etc/elitea/auth.form.yml
+      # The document above is structural (runtime, edge, PATs); nobody signs in
+      # through its Form users — the browser uses oidc-mock. Stated off rather
+      # than left to the default so the intent survives a default change.
+      ELITEA_FORM_LOGIN_ENABLED: "false"
 
       # ── Current Configurations (issue #281) ────────────────────────────────
       # Agent dispatch composes through dependencies.CurrentConfigurations, nil

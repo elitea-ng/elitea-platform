@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
+	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
 	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
@@ -29,7 +30,8 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 		context.Background(),
 		config,
 		FormGraphDependencies{
-			PostgreSQL: pool,
+			PostgreSQL:        pool,
+			FormSignInEnabled: true,
 			MainRoutePublicRules: []forwardapp.PublicRule{{
 				Name: "route.health",
 				Conditions: []forwardapp.RuleCondition{{
@@ -339,9 +341,78 @@ func TestNewFormGraphReportsFormUsersWithoutEmail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer graph.Close()
+	defer func() { _ = graph.Close() }()
 	report := graph.FormUsers()
 	if report.Configured != 2 || !reflect.DeepEqual(report.MisconfiguredLogins, []string{"no-address"}) {
 		t.Fatalf("Form user report = %+v", report)
+	}
+}
+
+// Form sign-in is OFF unless the composition root says otherwise: the zero
+// value of FormGraphDependencies is the safe one. With it off the graph still composes everything the edge and
+// the runtime need, exposes NO browser routes, and its Form handler holds an
+// empty user list, so even a caller that mounted Routes() could not sign in
+// with a configured password.
+func TestNewFormGraphWithFormSignInDisabledAcceptsNoPassword(t *testing.T) {
+	config := writeMaterialFixture(t)
+	graph, err := newFormGraph(
+		context.Background(),
+		config,
+		FormGraphDependencies{
+			PostgreSQL:           newUnconnectedPool(t),
+			MainRoutePublicRules: []forwardapp.PublicRule{},
+		},
+		func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
+			return redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1}), nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = graph.Close() }()
+	if graph.BrowserRoutes() != nil {
+		t.Fatal("Form sign-in is disabled, yet the graph exposes browser routes")
+	}
+	if graph.MainEdgeAuth() == nil || graph.ForwardedIdentityVerifier() == nil || graph.Routes() == nil {
+		t.Fatal("disabling Form sign-in removed the edge composition the runtime depends on")
+	}
+	if graph.FormSignInEnabled() {
+		t.Fatal("the graph does not report that Form sign-in is disabled")
+	}
+	if report := graph.FormUsers(); report.Configured != 1 {
+		t.Fatalf("the report must still count the ignored users: %+v", report)
+	}
+	if graph.formProvider == nil || graph.formProvider.UserCount() != 0 {
+		t.Fatalf("the Form handler must hold no users while sign-in is disabled")
+	}
+}
+
+type sessionAuthorizerStub struct {
+	authorization browserapp.Authorization
+	err           error
+}
+
+func (s sessionAuthorizerStub) Authorize(context.Context, string) (browserapp.Authorization, error) {
+	return s.authorization, s.err
+}
+
+// A Form session minted before Form sign-in was switched off must not keep
+// authorizing for the rest of its cookie lifetime.
+func TestFormSessionsRefusedWhileFormSignInIsDisabled(t *testing.T) {
+	refused := formSessionsRefused{next: sessionAuthorizerStub{authorization: browserapp.Authorization{
+		Provider: browserapp.FormProviderName,
+	}}}
+	if _, err := refused.Authorize(context.Background(), "session"); !errors.Is(err, browserapp.ErrUnauthenticated) {
+		t.Fatalf("a Form session was authorized while Form sign-in is disabled: %v", err)
+	}
+
+	other := formSessionsRefused{next: sessionAuthorizerStub{authorization: browserapp.Authorization{Provider: "oidc"}}}
+	if authorization, err := other.Authorize(context.Background(), "session"); err != nil || authorization.Provider != "oidc" {
+		t.Fatalf("a non-Form session must pass through: %+v, %v", authorization, err)
+	}
+
+	failing := formSessionsRefused{next: sessionAuthorizerStub{err: browserapp.ErrDependencyUnavailable}}
+	if _, err := failing.Authorize(context.Background(), "session"); !errors.Is(err, browserapp.ErrDependencyUnavailable) {
+		t.Fatalf("a dependency failure must not be rewritten: %v", err)
 	}
 }

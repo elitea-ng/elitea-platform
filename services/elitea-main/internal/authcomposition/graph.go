@@ -37,6 +37,13 @@ type FormGraphDependencies struct {
 	// Brand is the resolved brand pack the login page renders (ADR-0024
 	// WP5); nil renders the default presentation.
 	Brand browserapi.BrandSource
+	// FormSignInEnabled turns on the local username/password sign-in
+	// (ELITEA_FORM_LOGIN_ENABLED, off by default). Off, the graph still
+	// composes everything the gateway edge, PAT validation and the runtime's
+	// forwarded-identity check depend on, but BrowserRoutes is nil and the
+	// Form handler holds NO users: no configured password is accepted
+	// anywhere. The zero value is the safe one on purpose.
+	FormSignInEnabled bool
 }
 
 // FormGraph owns the Form browser routes and the separate current-Main gateway
@@ -54,8 +61,12 @@ type FormGraph struct {
 	proxyResolver    *browserapi.TrustedProxyResolver
 	redis            *redis.Client
 	formUsers        FormUserReport
-	closeOnce        sync.Once
-	closeErr         error
+	// formProvider is the user list the Form handler verifies against: the
+	// configured one, or an empty one while Form sign-in is disabled.
+	formProvider      *browserapp.FormProvider
+	formSignInEnabled bool
+	closeOnce         sync.Once
+	closeErr          error
 }
 
 type redisOpener func(context.Context, Config, *materializedFiles) (*redis.Client, error)
@@ -171,11 +182,18 @@ func newFormGraph(
 	if err != nil {
 		return nil, composeError("Main public policy", err)
 	}
-	directKernel, err := forwardapp.NewKernel(credentials, flow, directPolicy)
+	// With Form sign-in off, a Form session that predates the switch (the
+	// cookie lives up to cookie.lifetime_seconds) must stop authorizing too;
+	// otherwise "disabled" would mean "disabled for new sign-ins only".
+	var sessionAuthorizer forwardapp.SessionAuthorizer = flow
+	if !dependencies.FormSignInEnabled {
+		sessionAuthorizer = formSessionsRefused{next: flow}
+	}
+	directKernel, err := forwardapp.NewKernel(credentials, sessionAuthorizer, directPolicy)
 	if err != nil {
 		return nil, composeError("Direct authorization kernel", err)
 	}
-	mainKernel, err := forwardapp.NewKernel(credentials, flow, mainPolicy)
+	mainKernel, err := forwardapp.NewKernel(credentials, sessionAuthorizer, mainPolicy)
 	if err != nil {
 		return nil, composeError("Main authorization kernel", err)
 	}
@@ -224,9 +242,18 @@ func newFormGraph(
 	if err != nil {
 		return nil, composeError("Main EdgeAuth handler", err)
 	}
+	formProvider := material.formProvider
+	if !dependencies.FormSignInEnabled {
+		// The configured users are ignored, not merely unmounted: an empty
+		// list cannot match any submission, whichever route reaches it.
+		formProvider, err = browserapp.NewFormProvider([]byte(`{"users":[]}`))
+		if err != nil {
+			return nil, composeError("disabled Form provider", err)
+		}
+	}
 	formHandler, err := browserapi.NewHandler(
 		flow,
-		material.formProvider,
+		formProvider,
 		attempts,
 		proxyResolver,
 		cookies,
@@ -244,14 +271,20 @@ func newFormGraph(
 		return nil, composeError("Form routes", err)
 	}
 
+	var browserRoutes http.Handler
+	if dependencies.FormSignInEnabled {
+		browserRoutes = formHandler.Routes()
+	}
 	graph := &FormGraph{
-		routes:           routes,
-		browserRoutes:    formHandler.Routes(),
-		mainEdgeAuth:     mainHandler,
-		mainKernel:       mainKernel,
-		patIssuer:        patIssuer,
-		projectPATIssuer: projectPATIssuer,
-		patValidator:     patValidator,
+		routes:            routes,
+		browserRoutes:     browserRoutes,
+		formProvider:      formProvider,
+		formSignInEnabled: dependencies.FormSignInEnabled,
+		mainEdgeAuth:      mainHandler,
+		mainKernel:        mainKernel,
+		patIssuer:         patIssuer,
+		projectPATIssuer:  projectPATIssuer,
+		patValidator:      patValidator,
 		// Copy the key: materialize destroys the snapshot when this function
 		// returns. The graph must sign a new personal access token with the
 		// SAME key patValidator reads it back with. See SignPAT.
@@ -304,7 +337,13 @@ func (graph *FormGraph) Routes() http.Handler {
 	return graph.routes
 }
 
-// BrowserRoutes returns only the browser-facing Form login/logout surface.
+// FormSignInEnabled reports whether this graph accepts Form passwords.
+func (graph *FormGraph) FormSignInEnabled() bool {
+	return graph != nil && graph.formSignInEnabled
+}
+
+// BrowserRoutes returns only the browser-facing Form login/logout surface,
+// or nil while Form sign-in is disabled.
 // The compatibility Auth Core /auth handler requires EdgeAuth-generated
 // source metadata and must not be exposed through an ordinary reverse proxy.
 func (graph *FormGraph) BrowserRoutes() http.Handler {
@@ -407,6 +446,24 @@ func (graph *FormGraph) Close() error {
 		}
 	})
 	return graph.closeErr
+}
+
+// formSessionsRefused answers a Form-provider session as unauthenticated.
+// It decorates the session authorizer both edge kernels use while Form
+// sign-in is disabled; every other provider's session passes through.
+type formSessionsRefused struct {
+	next forwardapp.SessionAuthorizer
+}
+
+func (r formSessionsRefused) Authorize(ctx context.Context, sessionID string) (browserapp.Authorization, error) {
+	authorization, err := r.next.Authorize(ctx, sessionID)
+	if err != nil {
+		return browserapp.Authorization{}, err
+	}
+	if authorization.Provider == browserapp.FormProviderName {
+		return browserapp.Authorization{}, browserapp.ErrUnauthenticated
+	}
+	return authorization, nil
 }
 
 func compiledAttemptConfig(prefix string, key []byte) authattempt.Config {

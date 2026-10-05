@@ -38,6 +38,19 @@ func NewProductionAuthRoutes(browser, main http.Handler) (*ProductionAuthRoutes,
 	return &ProductionAuthRoutes{browser: browser, main: main}, nil
 }
 
+// NewEdgeOnlyProductionAuthRoutes composes production authentication with
+// Form sign-in DISABLED (ELITEA_FORM_LOGIN_ENABLED, off by default): the
+// gateway edge is mounted, and no Form browser route is — so /auth belongs
+// to the single sign-on plane when one is configured, and is absent (404)
+// when none is. It is a separate constructor, not a nil argument, so a
+// missing browser handler can never be mistaken for a deliberate choice.
+func NewEdgeOnlyProductionAuthRoutes(main http.Handler) (*ProductionAuthRoutes, error) {
+	if main == nil {
+		return nil, ErrInvalidProductionAuthRoutes
+	}
+	return &ProductionAuthRoutes{main: main}, nil
+}
+
 // NewRouter builds the single production route composition. It used to
 // branch on prototypeCompatibilityRequested(cfg) between this function's own
 // inline "reviewed production router" build (mountReviewedProductionRoutes +
@@ -102,7 +115,10 @@ func mountReviewedProductionRoutes(r chi.Router, cfg RouterConfig) {
 		// latter into the former before reaching here, and the OIDC mount at
 		// router.go:408 tests exactly this field. Testing the other one would
 		// miss a caller that sets the top-level field directly and panic again.
-		if cfg.SessionHandler == nil {
+		//
+		// A nil browser handler is NewEdgeOnlyProductionAuthRoutes: Form
+		// sign-in is disabled, and no Form route is mounted at all.
+		if cfg.SessionHandler == nil && cfg.ProductionAuth.browser != nil {
 			mountFormBrowserRoutes(r, cfg.ProductionAuth.browser)
 		}
 		// This address is reached only by the gateway's EdgeAuth middleware;

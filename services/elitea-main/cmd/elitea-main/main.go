@@ -403,6 +403,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// The local username/password sign-in. OFF unless explicitly enabled:
+	// a deployment signs people in through OIDC or SAML (and provisions them
+	// through SCIM). The authentication document is still read either way —
+	// the gateway edge, PAT validation and the runtime depend on it.
+	formSignInEnabled, err := formSignInEnabledFromEnv(os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	if formSignInEnabled && !authEnabled {
+		logger.Warn("ELITEA_FORM_LOGIN_ENABLED=true has no effect without ELITEA_AUTH_CONFIG_FILE: " +
+			"Form sign-in needs the authentication document that names its users file")
+	}
 	// The brand pack resolver is built ONCE, here, because two composition
 	// roots consume it: the login page inside the Form graph and the
 	// bootstrap/admin routes inside the router (ADR-0024).
@@ -480,6 +492,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			PostgreSQL:           pool,
 			MainRoutePublicRules: api.CurrentMainRoutePublicRules(),
 			Brand:                brandingResolver,
+			FormSignInEnabled:    formSignInEnabled,
 		})
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
@@ -489,15 +502,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				runErr = fmt.Errorf("close production Form authentication: %w", err)
 			}
 		}()
-		logFormUserConfiguration(logger, formGraph.FormUsers())
-		productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
+		if formGraph.FormSignInEnabled() {
+			logFormUserConfiguration(logger, formGraph.FormUsers())
+			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
+		} else {
+			logFormSignInDisabled(logger, formGraph.FormUsers())
+			productionAuth, err = api.NewEdgeOnlyProductionAuthRoutes(formGraph.MainEdgeAuth())
+		}
 		if err != nil {
 			return fmt.Errorf("mount production Form authentication: %w", err)
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
 		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
 		authReadiness = formGraph
-		logger.Info("production Form authentication enabled")
+		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
 	// Wire OIDC browser-session authentication when OIDC_ISSUER_URL is set.
@@ -562,9 +580,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// document at all, and it is exactly the shape that cannot make an
 		// administrator any other way. Fall back to the environment there, and
 		// only there, so the document stays the single source when it exists.
-		if len(firstLoginPolicy.InitialGlobalAdmins) == 0 {
-			firstLoginPolicy.InitialGlobalAdmins = v2auth.InitialGlobalAdminsFromEnv()
-		}
+		firstLoginPolicy = singleSignOnFirstLoginPolicy(firstLoginPolicy, v2auth.InitialGlobalAdminsFromEnv)
 		// The server-side browser session (migrations/shared/0117).
 		//
 		// ONE manager for every plane. The session handler, the OIDC plane, the
@@ -627,6 +643,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if storedSAMLProvider {
 			logger.Info("SAML authentication enabled from an authored identity provider")
 		}
+	}
+
+	// A deployment where nobody can sign in through a browser is legal (an
+	// API-only install), but it is never what a first install meant.
+	if oidcSessionHandler == nil && (formGraph == nil || !formGraph.FormSignInEnabled()) {
+		logger.Warn("no browser sign-in is enabled: configure OIDC (OIDC_ISSUER_URL) or an identity provider, " +
+			"or set ELITEA_FORM_LOGIN_ENABLED=true to use the Form users file")
 	}
 
 	// People whom an earlier release signed in as `<login>@centry.user`. A

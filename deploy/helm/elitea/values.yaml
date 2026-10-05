@@ -1043,6 +1043,23 @@ main:
     # throttles, and the boot logs a WARN.
     ELITEA_TRUSTED_PROXY_CIDRS: ""
 
+    # --- Local username/password (Form) sign-in --------------------------------
+    # OFF unless "true". A deployment signs people in through OIDC or SAML and
+    # provisions them through SCIM; the Form users file
+    # (fileConfig.authConfig, `provider.form.users_json_file`) is NOT a sign-in
+    # path while this is off. The authentication document is still read — the
+    # gateway edge, PAT validation and the runtime depend on it — but no
+    # /auth/form route is mounted and no configured password is accepted, and
+    # the pod logs that the configured Form users are ignored.
+    #
+    # "true" mounts the Form login page when no single sign-on plane is
+    # configured (OIDC wins /auth when both are). Any value other than
+    # true/false/1/0 stops the boot. Empty means false.
+    #
+    # BREAKING in this release: Form sign-in used to be on whenever an
+    # authentication document was configured. See docs/UPGRADING.md.
+    ELITEA_FORM_LOGIN_ENABLED: ""
+
     # --- The first administrator, on a single-sign-on-only deployment -----------
     # Comma-separated provider references that are granted the administration
     # super_admin role the first time they sign in

@@ -111,6 +111,35 @@ data() {
 }
 
 # ---------------------------------------------------------------------------
+# 2b. Form (local username/password) sign-in is OFF by default.
+#
+# cmd/elitea-main reads ELITEA_FORM_LOGIN_ENABLED and treats empty as false.
+# The chart must ship it empty, and the one values file that IS the Form
+# sign-in recipe must state it on — otherwise that recipe loads its users file
+# and nobody can sign in.
+# ---------------------------------------------------------------------------
+form_default="$(data ELITEA_FORM_LOGIN_ENABLED "$WORK/default.yaml")"
+if [ "$form_default" = "" ] && grep -q 'ELITEA_FORM_LOGIN_ENABLED' "$WORK/default.yaml"; then
+  pass "the default render carries ELITEA_FORM_LOGIN_ENABLED empty (Form sign-in off)"
+else
+  fail "the default render must carry ELITEA_FORM_LOGIN_ENABLED empty; got '$form_default'"
+fi
+form_standalone="$(data ELITEA_FORM_LOGIN_ENABLED "$WORK/standalone.yaml")"
+if [ "$form_standalone" = "" ]; then
+  pass "values-standalone.yaml leaves Form sign-in off (it signs in through OIDC)"
+else
+  fail "values-standalone.yaml renders ELITEA_FORM_LOGIN_ENABLED='$form_standalone'; it signs in through OIDC"
+fi
+helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
+  -f "$CHART/values-auth-minimal.yaml" >"$WORK/auth-minimal.yaml"
+form_minimal="$(data ELITEA_FORM_LOGIN_ENABLED "$WORK/auth-minimal.yaml")"
+if [ "$form_minimal" = "true" ]; then
+  pass "values-auth-minimal.yaml (the Form sign-in recipe) turns Form sign-in on"
+else
+  fail "values-auth-minimal.yaml renders ELITEA_FORM_LOGIN_ENABLED='$form_minimal', expected \"true\""
+fi
+
+# ---------------------------------------------------------------------------
 # 3. The current-compatibility plane.
 # ---------------------------------------------------------------------------
 while read -r key expected; do
