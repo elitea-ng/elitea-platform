@@ -328,7 +328,10 @@ func (h *Handler) decision(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Defence in depth on top of the SameSite=Lax session cookie a cross-site
-	// POST does not carry. A missing Origin is allowed; "null" is not.
+	// POST does not carry. A missing Origin is allowed; "null" is not. The
+	// consent page is served with Referrer-Policy: same-origin precisely so a
+	// browser sends its real Origin here: under no-referrer every browser
+	// sends "null" and this check refused all of them (Agent Zefir E2E DEF-1).
 	if origin, present := r.Header["Origin"]; present &&
 		(len(origin) != 1 || origin[0] != h.cfg.PublicOrigin) {
 		h.errorPage(w, r, http.StatusForbidden, "The answer did not come from this server's page.")

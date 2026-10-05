@@ -154,9 +154,20 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 // registered answers 404 while no client exists in either layer.
-func (h *Handler) registered(next http.HandlerFunc, _ bool) http.HandlerFunc {
+//
+// oauthEndpoint marks the token and revocation endpoints. RFC 6749 §5.1
+// requires both `Cache-Control: no-store` and `Pragma: no-cache` on every
+// answer that carries tokens or credentials, and they are written here,
+// before any branch runs, because some answers are not written by this
+// package (the shared 401 device_revoked and 426 upgrade-required writers set
+// Cache-Control only). An iOS URLCache keeps a token response that does not
+// forbid it in a plaintext on-disk database.
+func (h *Handler) registered(next http.HandlerFunc, oauthEndpoint bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		if oauthEndpoint {
+			w.Header().Set("Pragma", "no-cache")
+		}
 		ok, err := h.cfg.Registry.Registered(r.Context())
 		if err != nil {
 			slog.ErrorContext(r.Context(), "native authorization: client registry unavailable", "err", err)

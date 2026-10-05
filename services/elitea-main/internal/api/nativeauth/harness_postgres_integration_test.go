@@ -432,6 +432,12 @@ type tokenResponse struct {
 func (s *stack) token(form url.Values) (*httptest.ResponseRecorder, tokenResponse) {
 	s.t.Helper()
 	recorder := s.do(http.MethodPost, nativeapi.TokenPath, form)
+	// RFC 6749 §5.1 / §5.2: every token answer, a grant or a refusal, is
+	// uncacheable. An iOS client's URLCache keeps a response that does not
+	// say so, tokens included, in a plaintext on-disk database.
+	if cc, pragma := recorder.Header().Get("Cache-Control"), recorder.Header().Get("Pragma"); cc != "no-store" || pragma != "no-cache" {
+		s.t.Fatalf("token answer %d: Cache-Control %q, Pragma %q; want no-store and no-cache", recorder.Code, cc, pragma)
+	}
 	var body tokenResponse
 	_ = json.Unmarshal(recorder.Body.Bytes(), &body)
 	return recorder, body
