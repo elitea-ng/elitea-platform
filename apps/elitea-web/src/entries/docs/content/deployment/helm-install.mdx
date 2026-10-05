@@ -32,7 +32,7 @@ Agent-execution signing keys and listener certificates (from `deploy/scripts/gen
 </Accordion>
 
 <Accordion title="fileConfig.authConfig.material.secretName (production auth)">
-Auth Redis password, CA, browser-attempt key, PAT signing key, Form users JSON. Required if using Form or mixed authentication.
+Auth Redis password, CA, browser-attempt key, PAT signing key, Form users JSON. Required if using Form or mixed authentication. The Form users JSON is a sign-in path only when `main.env.ELITEA_FORM_LOGIN_ENABLED` is `"true"`; Form sign-in is off by default.
 </Accordion>
 
 <Accordion title="Gateway identity secret (GATEWAY_IDENTITY_SECRET)">
@@ -116,7 +116,7 @@ helm template deploy/helm/elitea -f deploy/helm/elitea/values-standalone.yaml \
 
 ## First-admin bootstrap
 
-A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no password on a single-sign-on deployment — name your own account instead through `identity.initial_global_admins` (a YAML list, wins when the authentication document has one) or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` (comma-separated, the usual path for a single-sign-on-only install with no document).
+A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no password on a single-sign-on deployment — name your own account instead through `identity.initial_global_admins` (a YAML list, wins when the authentication document has one) or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` (comma-separated, the usual path for a single-sign-on-only install with no document). With Form sign-in off (the default), the first OIDC or SAML sign-in that matches an entry — `oidc:<sub>`, `saml:<nameid>`, or `email:<address>` for an OIDC login with a verified address — is your first administrator. Write Form logins there only if you enable Form sign-in.
 
 An entry is `oidc:<sub>`, `saml:<nameid>`, or `email:<verified address>` (matches only when the id_token asserts `email_verified: true`). The grant is one-shot: an account that already holds any administration role is left as is; one with none receives the grant on its next sign-in.
 

@@ -133,3 +133,24 @@ func canonicalTempDir(t *testing.T) string {
 	}
 	return root
 }
+
+// A user with no usable address is a configuration error that the service
+// refuses at sign-in. The validator keeps the file VALID (exit 0) but warns,
+// with a count and never a login.
+func TestRunWarnsAboutFormUsersWithoutEmail(t *testing.T) {
+	path := writePrivateFormSnapshot(t, `{"users":[
+		{"login":"TEST_ONLY_LOGIN_A","password":"TEST_ONLY_PASSWORD"},
+		{"login":"TEST_ONLY_LOGIN_B","password":"TEST_ONLY_PASSWORD","email":"b@centry.user"},
+		{"login":"ok","password":"TEST_ONLY_PASSWORD","email":"ok@example.test"}
+	]}`)
+	var stderr bytes.Buffer
+	if code := run([]string{"-form-users-file", path}, &stderr); code != exitValid {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: 2 Form user(s) have no usable email address") {
+		t.Fatalf("stderr=%q, want the missing-email warning", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "TEST_ONLY_LOGIN") || strings.Contains(stderr.String(), "TEST_ONLY_PASSWORD") {
+		t.Fatalf("the warning leaked a configured value: %q", stderr.String())
+	}
+}

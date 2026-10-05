@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -17,6 +18,11 @@ const (
 	formUsersFlag     = "form-users-file"
 	invalidUsageText  = "invalid arguments\n"
 	invalidConfigText = "Form configuration validation failed\n"
+	// missingEmailWarningFormat is a warning, not a failure: the exit status
+	// stays valid.
+	missingEmailWarningFormat = "warning: %d Form user(s) have no usable email address " +
+		"(top-level \"email\" or attributes.email, outside the reserved @centry.user domain); " +
+		"their sign-in will be refused\n"
 )
 
 func main() {
@@ -40,9 +46,17 @@ func run(arguments []string, stderr io.Writer) int {
 		return exitInvalidUsage
 	}
 
-	if !validResolvedFormFile(*input) {
+	provider, valid := resolvedFormProvider(*input)
+	if !valid {
 		_, _ = io.WriteString(stderr, invalidConfigText)
 		return exitInvalid
+	}
+	// A user with no usable address loads (one bad entry must not lock every
+	// other user out) but is refused at sign-in. Say so here, where the
+	// operator is looking, without naming a login: this tool's output never
+	// carries any configured value.
+	if missing := len(provider.MisconfiguredLogins()); missing > 0 {
+		_, _ = fmt.Fprintf(stderr, missingEmailWarningFormat, missing)
 	}
 	return exitValid
 }
@@ -60,17 +74,17 @@ func countFlag(arguments []string, name string) int {
 	return count
 }
 
-func validResolvedFormFile(path string) bool {
+func resolvedFormProvider(path string) (*browserapp.FormProvider, bool) {
 	raw, err := securefile.Read(
 		path,
 		browserapp.MaxFormConfigurationBytes,
 		securefile.PrivateMaterial,
 	)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	defer clear(raw)
 
-	_, err = browserapp.NewFormProvider(raw)
-	return err == nil
+	provider, err := browserapp.NewFormProvider(raw)
+	return provider, err == nil
 }

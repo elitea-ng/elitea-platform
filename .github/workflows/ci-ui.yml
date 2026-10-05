@@ -42,7 +42,7 @@ jobs:
       # no committed lockfile to key the npm cache on or to run `npm ci` against.
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
 
       - name: Install dependencies
         working-directory: ${{ matrix.app.path }}

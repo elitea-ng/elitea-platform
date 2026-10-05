@@ -5,6 +5,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -14,7 +15,11 @@ import (
 )
 
 const (
-	fallbackEmailDomain = "centry.user"
+	// reservedEmailDomain is the system-identity domain (system@,
+	// system_user_<n>@). It is never synthesized for, and never accepted from,
+	// a person's sign-in; see scimdirectory.reservedAddressDomain for the SCIM
+	// side of the same rule.
+	reservedEmailDomain = "@centry.user"
 	projectViewerRole   = "viewer"
 
 	// InitialAdministrationMode / InitialAdministrationRole name the single
@@ -35,13 +40,19 @@ const (
 )
 
 var (
-	ErrInvalidAssertion          = errors.New("invalid verified identity assertion")
-	ErrIdentitySuspended         = errors.New("authenticated identity is suspended")
+	ErrInvalidAssertion = errors.New("invalid verified identity assertion")
+	// ErrMissingEmail reports an assertion with no usable address. There used
+	// to be a fallback here that invented `<provider reference>@centry.user`,
+	// which put a person's account in the system-identity domain: hidden from
+	// the Users page, excluded from analytics and refused by SCIM. A sign-in
+	// with no address is now refused instead.
+	ErrMissingEmail      = errors.New("verified identity assertion carries no usable email address")
+	ErrIdentitySuspended = errors.New("authenticated identity is suspended")
 	// ErrIdentityConflict reports that the asserted address names an account
 	// this provider may not adopt: another federated subject holds it, or a
 	// SCIM client provisioned it and the provider is not configured to adopt
 	// such accounts (identityrepo.AdoptionGuard).
-	ErrIdentityConflict = errors.New("authenticated identity names an account this provider may not adopt")
+	ErrIdentityConflict          = errors.New("authenticated identity names an account this provider may not adopt")
 	ErrProvisioningFailed        = errors.New("authenticated identity provisioning failed")
 	ErrInvalidProvisioningResult = errors.New("identity repository returned an invalid provisioning result")
 )
@@ -157,7 +168,7 @@ func (s *ProvisionService) Provision(ctx context.Context, request ProvisionReque
 	command := deriveCommand(request.Assertion, s.policy)
 	result, err := s.repository.Provision(ctx, command)
 	if err != nil {
-		return ProvisionResult{}, sanitizedRepositoryError(err)
+		return ProvisionResult{}, sanitizedRepositoryError(ctx, err)
 	}
 	if result.Suspended {
 		return ProvisionResult{}, ErrIdentitySuspended
@@ -178,6 +189,9 @@ func (a VerifiedAssertion) validate() error {
 	// claim correction at the new typed boundary.
 	if !validOptionalText(a.Email, MaxEmailBytes) || strings.ContainsFunc(a.Email, unicode.IsSpace) {
 		return ErrInvalidAssertion
+	}
+	if a.Email == "" || strings.HasSuffix(lowerLikePython(a.Email), reservedEmailDomain) {
+		return ErrMissingEmail
 	}
 	if !validOptionalText(a.GivenName, MaxNameClaimBytes) ||
 		!validOptionalText(a.FamilyName, MaxNameClaimBytes) ||
@@ -200,11 +214,8 @@ func validText(value string) bool {
 }
 
 func deriveCommand(assertion VerifiedAssertion, policy ProvisioningPolicy) ProvisionCommand {
-	email := assertion.Email
-	if email == "" {
-		email = assertion.ProviderReference + "@" + fallbackEmailDomain
-	}
-	email = lowerLikePython(email)
+	// validate() refused an empty or reserved address; nothing is synthesized.
+	email := lowerLikePython(assertion.Email)
 
 	name := email
 	if assertion.GivenName != "" && assertion.FamilyName != "" {
@@ -406,7 +417,11 @@ func deriveProjectEnrollment(email string, policy ProjectEnrollmentPolicy) Proje
 	return decision
 }
 
-func sanitizedRepositoryError(err error) error {
+// sanitizedRepositoryError maps a repository failure to a public sentinel
+// whose text carries no repository detail. The cause of an unexpected failure
+// is logged here, the only place that still holds it, so an operator sees the
+// database error behind a generic provisioning failure.
+func sanitizedRepositoryError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return context.Canceled
@@ -415,6 +430,7 @@ func sanitizedRepositoryError(err error) error {
 	case errors.Is(err, ErrIdentityConflict):
 		return ErrIdentityConflict
 	default:
+		slog.ErrorContext(ctx, "authenticated identity provisioning failed", "error", err)
 		return ErrProvisioningFailed
 	}
 }
