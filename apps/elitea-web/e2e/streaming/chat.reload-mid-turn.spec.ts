@@ -28,7 +28,7 @@ const SLOW_SENTINEL = 'MOCKSTREAMEND';
 
 async function pickMockModel(page: Page): Promise<void> {
   await page.getByTestId('model-selector-button').click();
-  const option = page.getByRole('menuitem').filter({ hasText: MOCK_MODEL }).first();
+  const option = page.getByRole('option').filter({ hasText: MOCK_MODEL }).first();
   await expect(option, `the mock model ${MOCK_MODEL} must be offered`).toBeVisible({ timeout: 20_000 });
   await option.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MOCK_MODEL, { timeout: 10_000 });

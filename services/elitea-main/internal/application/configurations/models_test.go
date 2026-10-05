@@ -38,6 +38,9 @@ func TestBuildCurrentModelCatalogDeduplicatesIncludesSharedAndResolvesDefaults(t
 		response.DefaultModelProjectID == nil || *response.DefaultModelProjectID != 1 {
 		t.Fatalf("component-wise project/public default=%#v", response)
 	}
+	if !response.DefaultModelConfigured {
+		t.Fatal("a configured default must read as configured")
+	}
 	if response.Items[0].Name != "public-model" || !response.Items[0].Shared || !response.Items[0].Default {
 		t.Fatalf("shared default was not sorted first: %#v", response.Items)
 	}
@@ -69,6 +72,11 @@ func TestBuildCurrentModelCatalogFallbackUsesFirstAvailableBeforeResponseSort(t 
 	if response.DefaultModelName == nil || *response.DefaultModelName != "first-project-model" ||
 		response.DefaultModelProjectID == nil || *response.DefaultModelProjectID != 7 {
 		t.Fatalf("fallback default=%#v", response)
+	}
+	// The configured default is not in the catalogue, so the answer is the
+	// first-item fallback, and it says so.
+	if response.DefaultModelConfigured {
+		t.Fatal("a first-item fallback must not read as configured")
 	}
 	if response.Items[0].Name != "sorted-first-shared" || response.Items[0].Default ||
 		response.Items[1].Name != "first-project-model" || !response.Items[1].Default {

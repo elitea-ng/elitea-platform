@@ -380,6 +380,8 @@ export function useCredentialFormController(props: CredentialFormControllerProps
     fieldErrors,
     testResult: connectionTest.testResult,
     testMessage: connectionTest.testMessage,
+    testDurationMs: connectionTest.testDurationMs,
+    missingForTest: connectionTest.missingForTest,
     isSaving,
     isTesting: connectionTest.isTesting,
     isDeleting: deleteConfiguration.isPending,

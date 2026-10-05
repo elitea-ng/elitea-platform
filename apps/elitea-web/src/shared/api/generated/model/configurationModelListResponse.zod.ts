@@ -53,6 +53,12 @@ export const ConfigurationModelListResponse = zod
         "`reviewed` only. `compat` emits neither this key nor the one below, and its `is_default` is always false, so a client reading a default model from a compat deployment gets nothing rather than a wrong answer.\n",
       ),
     default_model_project_id: zod.int().nullish().describe("`reviewed` only."),
+    default_model_configured: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`reviewed` only. True when `default_model_name` is the default an admin configured for the project or the platform. False when no configured default is in the catalogue and `default_model_name` is only the first item. Omitted when false.\n",
+      ),
     low_tier_default_model_name: zod
       .string()
       .nullish()

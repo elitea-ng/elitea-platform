@@ -108,7 +108,7 @@ test("a real PDF attached in chat reaches the model as its text", async ({
 
     await page.getByTestId("model-selector-button").click();
     const modelOption = page
-      .getByRole("menuitem")
+      .getByRole("option")
       .filter({ hasText: MODEL_NAME })
       .first();
     await expect(

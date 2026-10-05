@@ -26,8 +26,11 @@ const (
 // shapes. Pointer fields distinguish a present false/zero value from a field
 // that is absent for another section.
 type CurrentModelCatalogItem struct {
-	Name            string  `json:"name"`
-	DisplayName     *string `json:"display_name,omitempty"`
+	Name        string  `json:"name"`
+	DisplayName *string `json:"display_name,omitempty"`
+	// Description is the llm_model's optional one-line description
+	// (model_description.go). It is display text for the pickers only.
+	Description     *string `json:"description,omitempty"`
 	ProjectID       int32   `json:"project_id"`
 	Shared          bool    `json:"shared"`
 	ContextWindow   *int    `json:"context_window,omitempty"`
@@ -91,6 +94,14 @@ type CurrentModelCatalogResponse struct {
 	Items                 []CurrentModelCatalogItem `json:"items"`
 	DefaultModelName      *string                   `json:"default_model_name"`
 	DefaultModelProjectID *int32                    `json:"default_model_project_id"`
+	// DefaultModelConfigured is true when DefaultModelName is the default an
+	// admin configured (for the project, or for the platform). It is false
+	// when no configured default is in the catalogue and DefaultModelName is
+	// only the first item. A caller that has a better fallback than "the
+	// first model" (Edit with AI has the agent's own model) reads it. It is
+	// omitted when false, so the legacy response shape stays byte-identical
+	// for a project with no configured default.
+	DefaultModelConfigured bool `json:"default_model_configured,omitempty"`
 
 	LowTierDefaultModelName      *string `json:"low_tier_default_model_name,omitempty"`
 	LowTierDefaultModelProjectID any     `json:"low_tier_default_model_project_id,omitempty"`
@@ -140,7 +151,8 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 		items = deduplicateCurrentModelItems(request.Section, granted, items, true)
 	}
 
-	defaultName, defaultProjectID := selectCurrentModelDefault(items, resolveCurrentModelDefault(request.Defaults.Model), true, nil)
+	configuredDefault := resolveCurrentModelDefault(request.Defaults.Model)
+	defaultName, defaultProjectID := selectCurrentModelDefault(items, configuredDefault, true, nil)
 	for index := range items {
 		items[index].Default = defaultName != nil && defaultProjectID != nil &&
 			items[index].Name == *defaultName && items[index].ProjectID == *defaultProjectID
@@ -151,6 +163,9 @@ func BuildCurrentModelCatalog(request CurrentModelCatalogRequest) CurrentModelCa
 	response.Items = items
 	response.DefaultModelName = defaultName
 	response.DefaultModelProjectID = defaultProjectID
+	response.DefaultModelConfigured = defaultName != nil && defaultProjectID != nil &&
+		configuredDefault.Name != "" && *defaultName == configuredDefault.Name &&
+		strconv.FormatInt(int64(*defaultProjectID), 10) == configuredDefault.ProjectID
 	if request.Section == CurrentModelSectionLLM {
 		populateCurrentLLMTierDefaults(&response, items, request.Defaults)
 	}
@@ -218,6 +233,7 @@ func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCat
 		return item
 	}
 
+	item.Description = nil
 	item.ContextWindow = nil
 	item.MaxOutputTokens = nil
 	item.MaxInputTokens = nil

@@ -508,7 +508,16 @@ func (s *CurrentConfigurationMutationService) normalizeData(
 	if !result.Complete || result.Data == nil {
 		return nil, currentMutationFieldError(CurrentConfigurationMutationNormalizationRequired, "data")
 	}
-	return cloneCurrentJSONObject(result.Data), nil
+	normalized := cloneCurrentJSONObject(result.Data)
+	// The description rule holds for a create AND an update. An update
+	// stores the submitted object, so without this a PUT could store a
+	// description the create refuses.
+	if typeName == "llm_model" {
+		if err := NormalizeLLMModelDescription(normalized); err != nil {
+			return nil, currentMutationFieldError(CurrentConfigurationMutationInvalid, "data."+LLMModelDescriptionField)
+		}
+	}
+	return normalized, nil
 }
 
 func (s *CurrentConfigurationMutationService) extractSecrets(

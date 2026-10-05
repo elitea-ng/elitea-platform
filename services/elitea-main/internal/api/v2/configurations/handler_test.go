@@ -385,6 +385,73 @@ func TestAConfigurationRouteRefusesTheWrongPermission(t *testing.T) {
 	}
 }
 
+// The llm_model test redeems a STORED credential, so it needs the update
+// string as well as the create one. Every other type keeps the create gate
+// alone: a toolkit or credential form must not lose its button.
+func TestTheLLMModelConnectionTestNeedsCreateAndUpdate(t *testing.T) {
+	paths := []string{
+		"/api/v2/configurations/check_connection/7/llm_model",
+		"/api/v2/configurations/check_connection/administration/7/llm_model",
+	}
+	cases := []struct {
+		name        string
+		permissions []string
+		path        string
+		refused     bool
+	}{
+		{"create only", []string{handler.CurrentConfigurationCreatePermission}, "", true},
+		{"update only", []string{handler.CurrentConfigurationUpdatePermission}, "", true},
+		{"viewer", []string{handler.CurrentConfigurationListPermission, handler.CurrentConfigurationGetPermission}, "", true},
+		{"create and update", []string{handler.CurrentConfigurationCreatePermission, handler.CurrentConfigurationUpdatePermission}, "", false},
+	}
+	for _, tc := range cases {
+		for _, path := range paths {
+			t.Run(tc.name+" "+path, func(t *testing.T) {
+				resolver := permissionResolverFunc(func(
+					_ context.Context, _ auth.User, _ string, _ string,
+				) (auth.PermissionResolution, error) {
+					return auth.PermissionResolution{UserID: 1, Permissions: tc.permissions}, nil
+				})
+				rec := httptest.NewRecorder()
+				gatedConfigurationRouter(t, resolver).ServeHTTP(rec,
+					httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{}`)))
+				if (rec.Code == http.StatusForbidden) != tc.refused {
+					t.Fatalf("status = %d, refused want %v", rec.Code, tc.refused)
+				}
+			})
+		}
+	}
+
+	// A member of ANOTHER project holds nothing in project 7.
+	resolver := permissionResolverFunc(func(
+		_ context.Context, _ auth.User, _ string, projectID string,
+	) (auth.PermissionResolution, error) {
+		if projectID != "8" {
+			return auth.PermissionResolution{UserID: 1, Permissions: []string{}}, nil
+		}
+		return auth.PermissionResolution{UserID: 1, Permissions: allConfigurationPermissions}, nil
+	})
+	rec := httptest.NewRecorder()
+	gatedConfigurationRouter(t, resolver).ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, paths[0], bytes.NewBufferString(`{}`)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d for a member of another project, want 403", rec.Code)
+	}
+
+	// The credential types keep the create gate alone.
+	createOnly := permissionResolverFunc(func(
+		_ context.Context, _ auth.User, _ string, _ string,
+	) (auth.PermissionResolution, error) {
+		return auth.PermissionResolution{UserID: 1, Permissions: []string{handler.CurrentConfigurationCreatePermission}}, nil
+	})
+	rec = httptest.NewRecorder()
+	gatedConfigurationRouter(t, createOnly).ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v2/configurations/check_connection/7/open_ai", bytes.NewBufferString(`{}`)))
+	if rec.Code == http.StatusForbidden {
+		t.Fatal("the open_ai test lost its create-only gate")
+	}
+}
+
 // A caller with no identity at all is refused before the resolver is asked.
 //
 // The mount sits inside router.go's authenticated /api/v2 group, so this is

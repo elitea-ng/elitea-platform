@@ -39,7 +39,7 @@ function serveCatalogue(): void {
 /** Opens the model menu and picks a row by its catalogue display name. */
 async function chooseModel(user: ReturnType<typeof userEvent.setup>, displayName: string): Promise<void> {
   await user.click(await screen.findByTestId('model-selector-name'));
-  await user.click(await screen.findByRole('menuitem', { name: new RegExp(displayName) }));
+  await user.click(await screen.findByRole('option', { name: new RegExp(displayName) }));
 }
 
 /** Fills the required Name/Description fields so Save becomes enabled, then clicks it. */

@@ -84,6 +84,15 @@ type Handler struct {
 	// this build carries a probe for is never refused for want of composition;
 	// WithToolkitConnectionChecker replaces it in a test.
 	toolkitChecker ToolkitConnectionChecker
+	// modelProbes bounds the rate and the concurrency of the llm_model test
+	// per project and user (model_probe_limiter.go). NewHandler always
+	// supplies one.
+	modelProbes *modelProbeLimiter
+	// llmModelRow and platformModelExposed are the two database reads of the
+	// llm_model test (model_connection_check.go). nil uses the pool; a test
+	// replaces them.
+	llmModelRow          func(ctx context.Context, projectID, configID string) (storedConfigurationRow, bool, error)
+	platformModelExposed func(ctx context.Context, model, credentialTitle string) (bool, error)
 }
 
 type Option func(*Handler)
@@ -138,7 +147,7 @@ func WithPublicProjectID(projectID int) Option {
 }
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
-	handler := &Handler{pool: pool}
+	handler := &Handler{pool: pool, modelProbes: newModelProbeLimiter()}
 	if pool != nil {
 		handler.tracingAccess = postgresTracingAccessChecker{queries: sqlcgen.New(pool)}
 	}
@@ -260,8 +269,17 @@ func (h *Handler) Routes() chi.Router {
 	// `configurations.configuration.create` to the SAME default-mode roles —
 	// admin and editor — so the two sets are identical and no role loses a
 	// control here.
-	r.With(create).Post("/check_connection/{projectID}/{configType}", h.CheckConnection)
-	r.With(create).Post("/check_connection/{mode}/{projectID}/{configType}", h.CheckConnection)
+	//
+	// THE llm_model TEST ALSO TAKES THE UPDATE STRING. It does not dial a
+	// payload the caller holds: it resolves a STORED credential on the server
+	// and redeems its vault secret, which is what the stored checks below do
+	// and why they take UPDATE. requireForConfigType adds that gate for the
+	// llm_model type only, on the same two paths, so the route ledger does not
+	// change and every other type keeps the CREATE gate alone. A caller who
+	// holds create and not update gets 403 for an llm_model test.
+	modelTest := h.requireForConfigType(llmModelConfigurationType, update)
+	r.With(create, modelTest).Post("/check_connection/{projectID}/{configType}", h.CheckConnection)
+	r.With(create, modelTest).Post("/check_connection/{mode}/{projectID}/{configType}", h.CheckConnection)
 	r.With(create).Post("/check_connections/{projectID}", h.BatchCheckConnections)
 	r.With(create).Post("/check_connections/{mode}/{projectID}", h.BatchCheckConnections)
 	// The STORED checks and the revalidation take the UPDATE string, not the
@@ -324,6 +342,23 @@ func (h *Handler) Routes() chi.Router {
 // writes an embedded quote as \" where PostgreSQL wants it doubled, so a
 // crafted id left the identifier. It failed only because the backslash landed
 // inside the name. That was an accident, not a defence (issue #543).
+// requireForConfigType applies gate only to a request whose {configType}
+// path segment is configType. Every other request passes through unchanged.
+func (h *Handler) requireForConfigType(
+	configType string, gate func(http.Handler) http.Handler,
+) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if chi.URLParam(r, "configType") == configType {
+				gated.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func (h *Handler) require(permission string) func(http.Handler) http.Handler {
 	return middleware.RequireResolvedPermissions(
 		h.permissionResolver,
@@ -1117,6 +1152,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !applyLLMModelDescriptionRule(w, strVal(body, "type"), dataMap) {
+		return
+	}
 
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
@@ -1335,6 +1373,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
 		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		return
+	}
+	effectiveType := storedType
+	if requestedType != "" {
+		effectiveType = requestedType
+	}
+	if data, isObject := body["data"].(map[string]any); isObject &&
+		!applyLLMModelDescriptionRule(w, effectiveType, data) {
 		return
 	}
 

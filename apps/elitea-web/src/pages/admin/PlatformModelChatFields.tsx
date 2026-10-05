@@ -1,6 +1,6 @@
 /**
- * The `data` fields only a CHAT model has: its two tiers, its context window and
- * its three capability flags.
+ * The `data` fields only a CHAT model has: its description, its two tiers, its
+ * context window and its three capability flags.
  *
  * They live here rather than in the dialog for two reasons. They are offered for
  * one model type — the other four decode their `data` with unknown fields
@@ -24,8 +24,12 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 
 import type { ModelForm } from './platformModelForm';
+
+/** The longest model description, in characters (the server's limit too). */
+const MODEL_DESCRIPTION_MAX_LENGTH = 40;
 
 /** One labelled checkbox over one boolean field of the form. */
 function Flag({
@@ -66,6 +70,28 @@ export function PlatformModelChatFields({
 }: PlatformModelChatFieldsProps): ReactNode {
   return (
     <>
+      <div>
+        <TextField
+          label={t('pages.admin.platformModels.field.description', 'Description')}
+          value={form.description}
+          onChange={(event) => {
+            onChange('description', event.target.value);
+          }}
+          size="small"
+          fullWidth
+          slotProps={{ htmlInput: { 'data-testid': 'platform-model-description', maxLength: MODEL_DESCRIPTION_MAX_LENGTH } }}
+          helperText={t(
+            'pages.admin.platformModels.field.descriptionHelp',
+            'A few words on what the model is best for, shown under its name when people pick a model, for example Fast for everyday tasks.',
+          )}
+        />
+        <CharacterCounter
+          value={form.description}
+          maxLength={MODEL_DESCRIPTION_MAX_LENGTH}
+          data-testid="platform-model-description-counter"
+        />
+      </div>
+
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           'pages.admin.platformModels.field.tiersHelp',

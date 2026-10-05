@@ -425,7 +425,7 @@ test('an image attached in the composer is analysed by the model', async ({ page
   await page.goto(`${BASE_URL}/app/chat`);
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('model-selector-button').click();
-  const modelOption = page.getByRole('menuitem').filter({ hasText: 'E2E-MOCK-MODEL' }).first();
+  const modelOption = page.getByRole('option').filter({ hasText: 'E2E-MOCK-MODEL' }).first();
   await expect(modelOption, 'the seeded model must be offered').toBeVisible({ timeout: 20_000 });
   await modelOption.click();
 

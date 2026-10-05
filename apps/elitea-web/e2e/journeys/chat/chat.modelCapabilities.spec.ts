@@ -51,7 +51,12 @@ interface MockModel {
   readonly default?: boolean;
   readonly supports_vision?: boolean;
   readonly supports_reasoning?: boolean;
+  /** The admin's one-line text (legacy issue 6766), at most 40 characters. */
+  readonly description?: string;
 }
+
+/** Exactly 40 characters: the longest description the form accepts. */
+const FORTY_CHARACTER_DESCRIPTION = 'Best for images and screenshots, fast ok';
 
 const PLAIN_MODEL: MockModel = {
   id: 'e2e-cap-plain',
@@ -66,6 +71,7 @@ const VISION_MODEL: MockModel = {
   name: 'e2e-cap-vision',
   display_name: 'E2E Vision Model',
   supports_vision: true,
+  description: FORTY_CHARACTER_DESCRIPTION,
 };
 const REASONING_MODEL: MockModel = {
   id: 'e2e-cap-reasoning',
@@ -105,7 +111,7 @@ async function openConversation(
 }
 
 const menuLocator = (page: import('@playwright/test').Page) =>
-  page.locator('[role="menu"][aria-labelledby="model-selector-button"]');
+  page.getByTestId('model-selector-listbox');
 
 test.describe('the model picker’s Capabilities surfaces', () => {
   /*
@@ -113,6 +119,40 @@ test.describe('the model picker’s Capabilities surfaces', () => {
    * carries a chip per capability, next to each model's name, and a model
    * with neither capability renders no chip and no broken layout.
    */
+  /*
+   * Legacy issues 6766 and 6727 — a model's description is a second line
+   * under its name in the menu, whole at 40 characters; a model without one
+   * keeps a single line; the trigger keeps showing the name only.
+   */
+  test('the model menu shows a description under the name, and the trigger does not', async ({ page }) => {
+    await mockCatalogue(page);
+    const conversationId = await createConversation(page.request, `${AUTOTEST_PREFIX}cap_desc_${Date.now()}`);
+    try {
+      await openConversation(page, conversationId);
+      const trigger = page.getByTestId('model-selector-name');
+      await expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+      await trigger.click();
+      const menu = menuLocator(page);
+      await expect(menu).toBeVisible({ timeout: 10_000 });
+
+      const visionRow = menu.getByRole('option', { name: VISION_MODEL.display_name, exact: false });
+      const description = visionRow.getByTestId('model-option-description');
+      await expect(description).toHaveText(FORTY_CHARACTER_DESCRIPTION);
+      // Not cut off: no part of the text overflows its box.
+      const fits = await description.evaluate((element) => element.scrollWidth <= element.clientWidth);
+      expect(fits, 'a 40-character description must not be cut off').toBe(true);
+
+      const plainRow = menu.getByRole('option', { name: PLAIN_MODEL.display_name, exact: false });
+      await expect(plainRow.getByTestId('model-option-description')).toHaveCount(0);
+
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+      await expect(trigger).not.toContainText(FORTY_CHARACTER_DESCRIPTION);
+    } finally {
+      await deleteConversation(page.request, conversationId);
+    }
+  });
+
   test('the model menu shows a capability chip per model, and nothing for a model with none', async ({
     page,
   }) => {
@@ -129,23 +169,23 @@ test.describe('the model picker’s Capabilities surfaces', () => {
       // Model") contains the word "Vision" too, and a substring match would
       // hit both the chip and the model name in the same row (strict-mode
       // violation).
-      const plainRow = menu.getByRole('menuitem', { name: PLAIN_MODEL.display_name, exact: false });
+      const plainRow = menu.getByRole('option', { name: PLAIN_MODEL.display_name, exact: false });
       await expect(plainRow).toBeVisible();
       await expect(plainRow.getByText('Vision', { exact: true })).toHaveCount(0);
       await expect(plainRow.getByText('Reasoning', { exact: true })).toHaveCount(0);
 
       // Vision-only: exactly the Vision chip.
-      const visionRow = menu.getByRole('menuitem', { name: VISION_MODEL.display_name, exact: false });
+      const visionRow = menu.getByRole('option', { name: VISION_MODEL.display_name, exact: false });
       await expect(visionRow.getByText('Vision', { exact: true })).toBeVisible();
       await expect(visionRow.getByText('Reasoning', { exact: true })).toHaveCount(0);
 
       // Reasoning-only: exactly the Reasoning chip.
-      const reasoningRow = menu.getByRole('menuitem', { name: REASONING_MODEL.display_name, exact: false });
+      const reasoningRow = menu.getByRole('option', { name: REASONING_MODEL.display_name, exact: false });
       await expect(reasoningRow.getByText('Reasoning', { exact: true })).toBeVisible();
       await expect(reasoningRow.getByText('Vision', { exact: true })).toHaveCount(0);
 
       // Both: both chips, together, on the one row.
-      const bothRow = menu.getByRole('menuitem', { name: BOTH_MODEL.display_name, exact: false });
+      const bothRow = menu.getByRole('option', { name: BOTH_MODEL.display_name, exact: false });
       await expect(bothRow.getByText('Vision', { exact: true })).toBeVisible();
       await expect(bothRow.getByText('Reasoning', { exact: true })).toBeVisible();
 
@@ -177,7 +217,7 @@ test.describe('the model picker’s Capabilities surfaces', () => {
       // scoped to it.
       await page.getByTestId('model-selector-name').click();
       await menuLocator(page)
-        .getByRole('menuitem', { name: VISION_MODEL.display_name, exact: false })
+        .getByRole('option', { name: VISION_MODEL.display_name, exact: false })
         .click();
       await expect(menuLocator(page)).toHaveCount(0);
       await expect(page.getByTestId('model-selector-name')).toHaveText(VISION_MODEL.display_name);
@@ -209,7 +249,7 @@ test.describe('the model picker’s Capabilities surfaces', () => {
       await expect(page.getByRole('heading', { name: 'Model settings' })).toHaveCount(0);
       await page.getByTestId('model-selector-name').click();
       await menuLocator(page)
-        .getByRole('menuitem', { name: REASONING_MODEL.display_name, exact: false })
+        .getByRole('option', { name: REASONING_MODEL.display_name, exact: false })
         .click();
       await page.getByRole('button', { name: 'model settings menu' }).click();
       await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible({ timeout: 15_000 });

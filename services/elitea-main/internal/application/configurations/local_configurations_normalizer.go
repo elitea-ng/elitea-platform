@@ -112,6 +112,18 @@ func normalizeCurrentLocalAIModel(typeName string, data map[string]any) (map[str
 			}
 			normalized[field.name] = value
 		}
+
+		// The create keeps only declared fields, so the description must be
+		// declared here or a create drops it while an edit keeps it.
+		if raw, present := data[LLMModelDescriptionField]; present {
+			described := map[string]any{LLMModelDescriptionField: raw}
+			if err := NormalizeLLMModelDescription(described); err != nil {
+				return nil, currentLocalConfigurationFieldError("data." + LLMModelDescriptionField)
+			}
+			if text, kept := described[LLMModelDescriptionField]; kept {
+				normalized[LLMModelDescriptionField] = text
+			}
+		}
 	}
 
 	credentials, err := normalizeCurrentLocalAICredentials(data)

@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useId, useRef, useState } from 'react';
 
 import { Box, Button, ButtonGroup, Divider, Tooltip, Typography } from '@mui/material';
 import { useTheme, type Theme } from '@mui/material/styles';
@@ -84,6 +84,9 @@ const LLMModelSelector = memo(
     const anchorRef = useRef<HTMLDivElement>(null);
     const [showLLMSettings, setShowLLMSettings] = useState(false);
     const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+    // One id per selector: a page can hold several (chat, agent, index chat),
+    // and the listbox names its own trigger by this id.
+    const triggerId = useId();
 
     const handleModelMenuClick = () => setAnchorEl(anchorRef.current);
     const handleClose = () => setAnchorEl(null);
@@ -129,9 +132,12 @@ const LLMModelSelector = memo(
               sx={styles.modelButtonWrapper}
             >
               <Button
+                id={triggerId}
                 variant="outlined"
                 disabled={disabled}
                 onClick={handleModelMenuClick}
+                aria-haspopup="listbox"
+                aria-expanded={anchorEl !== null}
                 sx={styles.modelButton}
                 data-testid="model-selector-name"
               >
@@ -187,6 +193,7 @@ const LLMModelSelector = memo(
         <LLMModelsMenu
           anchorEl={anchorEl}
           onClose={handleClose}
+          labelledBy={triggerId}
           models={models}
           selectedModel={selectedModel ?? null}
           onSelectModel={onSelectModel ?? (() => {})}

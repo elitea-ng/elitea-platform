@@ -4558,5 +4558,12 @@
   "analytics.dateRange.invalid": "Enter a valid date and time.",
   "settings.usage.refresh": "Refresh data",
   "settings.usage.refreshFailed": "Unable to refresh usage data. Please try again.",
-  "settings.usage.stale": "Showing the last loaded figures; they could not be updated."
+  "settings.usage.stale": "Showing the last loaded figures; they could not be updated.",
+  "credentials.form.test.aiCredentials": "AI credentials",
+  "credentials.form.test.and": " and ",
+  "credentials.form.test.connectedIn": "Connected in {{seconds}} s",
+  "credentials.form.test.missingFields": "Set {{fields}} to test the connection",
+  "credentials.form.test.modelName": "Model name",
+  "pages.admin.platformModels.field.description": "Description",
+  "pages.admin.platformModels.field.descriptionHelp": "A few words on what the model is best for, shown under its name when people pick a model, for example Fast for everyday tasks."
 }
