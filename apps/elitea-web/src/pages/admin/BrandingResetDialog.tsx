@@ -26,7 +26,7 @@ export function BrandingResetDialog({ open, onCancel, onConfirm }: BrandingReset
         <DialogContentText>
           {t(
             'pages.admin.branding.reset.body',
-            'Every field saved here is cleared and inherits from the mounted file pack or the product default. Uploaded assets nothing references any more are removed. Users see the change on their next page load.',
+            'Every branding field is cleared and inherits from the mounted file pack or the product default — including what a package import set beyond this page: the per-scheme colours and the e-mail sender name and support address. Uploaded assets nothing references any more are removed; kept package versions stay and can be imported again. Users see the change on their next page load.',
           )}
         </DialogContentText>
       </DialogContent>

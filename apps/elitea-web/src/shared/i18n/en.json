@@ -3337,7 +3337,7 @@
   "pages.admin.branding.preview.primaryAction": "Primary action",
   "pages.admin.branding.preview.secondaryAction": "Secondary",
   "pages.admin.branding.preview.title": "Preview",
-  "pages.admin.branding.reset.body": "Every field saved here is cleared and inherits from the mounted file pack or the product default. Uploaded assets nothing references any more are removed. Users see the change on their next page load.",
+  "pages.admin.branding.reset.body": "Every branding field is cleared and inherits from the mounted file pack or the product default — including what a package import set beyond this page: the per-scheme colours and the e-mail sender name and support address. Uploaded assets nothing references any more are removed; kept package versions stay and can be imported again. Users see the change on their next page load.",
   "pages.admin.branding.reset.cancel": "Cancel",
   "pages.admin.branding.reset.confirm": "Reset to defaults",
   "pages.admin.branding.reset.title": "Reset branding to defaults?",
