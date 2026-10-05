@@ -28,8 +28,10 @@
 // The inbound trigger also starts an ordinary AGENT version. The credential,
 // the signature modes, the replay dedupe, the run identity and every refusal
 // are the pipeline's. What differs — the agent's input and its variables — is
-// in agentrun.go. The schedule half stays pipeline-only. The package keeps its
-// name and its routes, because a sender's URL must not change.
+// in agentrun.go. What an agent trigger admits — the kind it was issued for,
+// the provider events, the variable opt-in and the run limit — is in
+// controls.go and run.go. The schedule half stays pipeline-only. The package
+// keeps its name and its routes, because a sender's URL must not change.
 //
 // # THE AUTH STORY, WHICH IS THE WHOLE RISK
 //

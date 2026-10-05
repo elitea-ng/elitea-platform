@@ -78,6 +78,13 @@ var (
 	// no `input` and no payload. A pipeline runs from its entry node on an
 	// empty input; an agent has nothing to answer.
 	ErrAgentInputRequired = errors.New("pipelinetriggers: an agent run needs input")
+	// ErrTriggerKindChanged is a trigger whose version is no longer the kind
+	// the credential was issued for (0142 `target_kind`). The inbound route
+	// answers it with the one 401 refusal; a rotation re-issues the trigger.
+	ErrTriggerKindChanged = errors.New("pipelinetriggers: the version changed kind since the trigger was issued")
+	// ErrRunLimited is an AGENT trigger that already has too many runs in
+	// flight, or started too many in the recent window (agentTriggerAdmissible).
+	ErrRunLimited = errors.New("pipelinetriggers: the trigger has reached its run limit")
 	// ErrInputTooLarge is a body this package refuses before touching storage.
 	ErrInputTooLarge = errors.New("pipelinetriggers: run input is too large")
 	// ErrInvalidInput is an `input` the run cannot carry: text that is not
@@ -124,6 +131,14 @@ const (
 // The kind check is not decoration. A schedule row that outlived a version
 // edited from a pipeline into an ordinary agent would otherwise become an
 // unattended way to run something its author never scheduled as one.
+//
+// `agent_type` is NOT immutable: a version update may change it
+// (applications/handler.go). So the inbound trigger, which admits both
+// kinds, checks one more thing in admit: that the version is still the kind
+// the trigger row was ISSUED for (`target_kind`, 0142). Without it a trigger
+// minted for a pipeline would start an agent once an editor converted the
+// version, with the sender's payload as the prompt and no credential ever
+// issued for an agent.
 func (h *Handler) resolveRunTarget(
 	ctx context.Context, schema string, versionID int64, kinds targetKinds,
 ) (runTarget, error) {
@@ -211,6 +226,9 @@ type runOutcome struct {
 	ResponseMessageID string
 	ApplicationID     int64
 	VersionID         int64
+	// InputSource is `input` or `payload` for an agent run, and empty for a
+	// pipeline run. The inbound audit row records it.
+	InputSource string
 }
 
 // runRequest is one unattended start.
@@ -234,9 +252,19 @@ type runRequest struct {
 	// Payload is the raw request body of an inbound call. It is read only
 	// for an AGENT version whose body carries no `input` (agentrun.go).
 	Payload []byte
+	// PayloadSource labels the payload's envelope (agentrun.go).
+	PayloadSource payloadSource
 	// Variables are the caller's values for the agent's declared variables.
-	// Only names the version declares are used.
+	// Only names the version declares are used. The inbound route passes
+	// them only for a trigger that opts in (controls.go).
 	Variables map[string]json.RawMessage
+	// TriggerID is the inbound trigger row that admitted this run, and is
+	// zero for a schedule. It is stamped on the conversation, and it is what
+	// the agent run limit counts (agentTriggerAdmissible).
+	TriggerID int64
+	// TriggerKind is the kind the inbound trigger was issued for. When it is
+	// set, a version of another kind is refused with ErrTriggerKindChanged.
+	TriggerKind string
 	// ScheduleID stamps the conversation with the schedule that started it, and
 	// is zero for an inbound trigger. It is what the OVERLAP check reads: "is
 	// this schedule's previous run still streaming" is answerable from the
@@ -264,19 +292,33 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	if err != nil {
 		return runOutcome{}, err
 	}
+	if request.TriggerKind != "" && request.TriggerKind != targetKindOf(target) {
+		return runOutcome{}, ErrTriggerKindChanged
+	}
 	var variables []agentVariable
+	inputSource := ""
 	if !target.IsPipeline {
 		// An AGENT runs on the text it is given (legacy issue 6656). It has
 		// no entry node to start from, so an empty input is refused here,
 		// before any row is written.
-		request.Input, err = agentRunInput(request.Input, request.Payload)
+		var fromPayload bool
+		request.Input, fromPayload, err = agentRunInput(request.Input, request.Payload, request.PayloadSource)
 		if err != nil {
 			return runOutcome{}, err
 		}
+		inputSource = inputSourceInput
+		if fromPayload {
+			inputSource = inputSourcePayload
+		}
 		variables = agentVariables(target.DeclaredVariables, request.Variables)
+		if request.TriggerID != 0 {
+			if err := h.agentTriggerAdmissible(ctx, schema, request.TriggerID); err != nil {
+				return runOutcome{}, err
+			}
+		}
 	}
 
-	conversationUUID, participantID, err := h.prepareRunConversation(ctx, schema, request, target, variables)
+	conversationUUID, participantID, err := h.prepareRunConversation(ctx, schema, request, target, variables, inputSource)
 	if err != nil {
 		return runOutcome{}, err
 	}
@@ -386,11 +428,13 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 		ResponseMessageID: outcome.ResponseMessageID,
 		ApplicationID:     target.ApplicationID,
 		VersionID:         target.VersionID,
+		InputSource:       inputSource,
 	}, nil
 }
 
 func (h *Handler) prepareRunConversation(
 	ctx context.Context, schema string, request runRequest, target runTarget, variables []agentVariable,
+	inputSource string,
 ) (string, int64, error) {
 	transaction, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -408,6 +452,16 @@ func (h *Handler) prepareRunConversation(
 		// yields text. A number here would compare `"7"` against `7` and never
 		// match, so every scheduled run would look like the first one.
 		metaFields["schedule_id"] = strconv.FormatInt(request.ScheduleID, 10)
+	}
+	if request.TriggerID > 0 {
+		// A STRING, for the same reason as `schedule_id`: the agent run
+		// limit compares it with `->>`.
+		metaFields["trigger_id"] = strconv.FormatInt(request.TriggerID, 10)
+	}
+	if inputSource != "" {
+		// A person opening the transcript can tell a sender's payload (data
+		// from outside) from text the trigger holder wrote.
+		metaFields["input_source"] = inputSource
 	}
 	meta, err := json.Marshal(metaFields)
 	if err != nil {
@@ -474,6 +528,59 @@ RETURNING id, uuid::text`, schema),
 		return "", 0, fmt.Errorf("pipelinetriggers: commit run conversation: %w", err)
 	}
 	return conversationUUID, agentParticipantID, nil
+}
+
+// The agent run limit (review finding on unattended spend). Every signed
+// provider event is a distinct delivery, so replay dedupe does not bound how
+// many runs a busy or abused repository starts, and each agent run is a model
+// call billed to the project. Two bounds apply to an AGENT trigger:
+//
+//   - at most agentTriggerMaxInFlight runs still streaming, the inbound
+//     twin of the schedule overlap rule; a run stuck streaming for longer
+//     than agentTriggerInFlightHorizon no longer counts, so one wedged run
+//     cannot close the trigger for good;
+//   - at most agentTriggerMaxPerWindow runs started in agentTriggerWindow.
+//
+// Both are read from the transcript, as the overlap check is, so no counter
+// has to be kept in step with the runtime. They are not a lock: deliveries
+// that arrive in the same instant can each pass the check. The bound that
+// holds is "about the limit plus the senders' own concurrency", not
+// "unbounded". The gateway budget still applies to every run admitted: the
+// run goes through the chat composer's own start use case.
+const (
+	agentTriggerMaxInFlight     = 4
+	agentTriggerInFlightHorizon = "1 hour"
+	agentTriggerMaxPerWindow    = 30
+	agentTriggerWindow          = "10 minutes"
+	// agentTriggerRetryAfterSeconds is the Retry-After a limited call gets.
+	agentTriggerRetryAfterSeconds = "60"
+)
+
+// agentTriggerAdmissible applies the agent run limit to one trigger.
+func (h *Handler) agentTriggerAdmissible(ctx context.Context, schema string, triggerID int64) error {
+	var recent, inFlight int
+	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT
+    count(*) FILTER (WHERE conversation.created_at > now() - $3::interval),
+    count(*) FILTER (WHERE EXISTS (
+        SELECT 1 FROM %[1]s.chat_message_group AS response
+         WHERE response.conversation_id = conversation.id
+           AND response.is_streaming
+    ))
+  FROM %[1]s.chat_conversations AS conversation
+ WHERE conversation.source = $1
+   AND conversation.meta ->> 'trigger_id' = $2
+   AND conversation.created_at > now() - GREATEST($3::interval, $4::interval)`, schema),
+		TriggerConversationSource, strconv.FormatInt(triggerID, 10),
+		agentTriggerWindow, agentTriggerInFlightHorizon,
+	).Scan(&recent, &inFlight)
+	if err != nil {
+		return fmt.Errorf("pipelinetriggers: read the agent run limit: %w", err)
+	}
+	if recent >= agentTriggerMaxPerWindow || inFlight >= agentTriggerMaxInFlight {
+		return ErrRunLimited
+	}
+	return nil
 }
 
 // discardRunConversation removes a conversation whose turn was never admitted.

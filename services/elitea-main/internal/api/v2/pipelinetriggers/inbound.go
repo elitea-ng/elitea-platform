@@ -131,13 +131,16 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 	projectIDText := chi.URLParam(r, "projectID")
 	tokenID := chi.URLParam(r, "tokenID")
 
+	// The audit row's entity type is the trigger's KIND once the row is
+	// read, so an agent's webhook calls are not listed as pipeline calls.
+	entityType := TargetKindPipeline
 	record := func(status int, projectID, userID, versionID int64, reason string) {
-		h.recordInbound(r, started, status, projectID, userID, versionID, reason)
+		h.recordInbound(r, started, status, entityType, projectID, userID, versionID, reason)
 	}
 
 	if h.pool == nil {
 		record(http.StatusServiceUnavailable, 0, 0, 0, "no database on this deployment")
-		writeError(w, http.StatusServiceUnavailable, "pipeline triggers are not available on this deployment")
+		writeError(w, http.StatusServiceUnavailable, "triggers are not available on this deployment")
 		return
 	}
 	schema, err := tenantschema.Quote(projectIDText)
@@ -192,6 +195,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "this trigger could not be checked")
 		return
 	}
+	entityType = auditEntityType(trigger.TargetKind)
 
 	// The URL SUFFIX, checked against the stored provider (#970). A suffix the
 	// row does not carry is refused rather than ignored: the sender was given
@@ -244,6 +248,31 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// WHICH DELIVERIES ARE A RUN AT ALL (controls.go). A GitHub `ping` never
+	// is, and a trigger with an event filter admits only the events it
+	// lists. Checked after the credential, so an unauthenticated caller
+	// learns nothing from it, and before the delivery claim, so an ignored
+	// delivery writes no row. The answer is 204: the delivery was accepted
+	// and there is no run to follow. The event header is not signed by
+	// either provider, so this is a cost and noise control, not a security
+	// boundary; the credential above is the boundary.
+	event := deliveryEvent(trigger, r.Header)
+	if reason := ignoredEventReason(trigger, event); reason != "" {
+		record(http.StatusNoContent, projectID, trigger.CreatedBy, trigger.VersionID, reason)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// `variables` re-value the agent's instructions, so they are read only
+	// for a trigger that opts in (controls.go). Ignored otherwise, and the
+	// audit row says so.
+	variables := bodyVariables(body)
+	variablesNote := ""
+	if len(variables) > 0 && !trigger.AllowVariableOverrides {
+		variables = nil
+		variablesNote = "`variables` ignored: this trigger does not allow variable overrides"
+	}
+
 	// ONE RUN PER SIGNED DELIVERY (deliveries.go). Claimed only now, after
 	// the signature and the revocation check: an unauthenticated request
 	// must not be able to write a row, and a refused one must not occupy a
@@ -293,10 +322,14 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		Input:       body.Input,
 		Origin:      OriginWebhook,
 		// Legacy issue 6656: a trigger may start an ordinary agent too. The
-		// raw payload and the variables are read only on that branch.
-		Kinds:     pipelinesAndAgents,
-		Payload:   raw,
-		Variables: bodyVariables(body),
+		// payload and the variables are read only on that branch. The
+		// trigger's issued kind must still match the version (run.go).
+		Kinds:         pipelinesAndAgents,
+		Payload:       providerPayload(trigger, r.Header, raw),
+		PayloadSource: payloadSource{Provider: trigger.Provider, Event: event},
+		Variables:     variables,
+		TriggerID:     trigger.ID,
+		TriggerKind:   storedTargetKind(trigger),
 	})
 	if deliveryKey != "" {
 		if err != nil {
@@ -315,6 +348,21 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
 			"the version is gone")
 		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	case errors.Is(err, ErrTriggerKindChanged):
+		// The one refusal: the credential is not usable for what the
+		// version is now. The audit row names the cause and the repair.
+		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the version is no longer the kind this trigger was issued for; rotate the trigger to re-issue it")
+		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	case errors.Is(err, ErrRunLimited):
+		// The credential was accepted, so naming the limit is no oracle.
+		record(http.StatusTooManyRequests, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the agent run limit for this trigger is reached")
+		w.Header().Set("Retry-After", agentTriggerRetryAfterSeconds)
+		writeError(w, http.StatusTooManyRequests,
+			"this trigger has started too many agent runs recently, or too many are still running; retry later")
 		return
 	case errors.Is(err, ErrInputTooLarge):
 		record(http.StatusBadRequest, projectID, trigger.CreatedBy, trigger.VersionID, "input too large")
@@ -340,25 +388,49 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrRuntimeUnavailable):
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
 			"no agent runtime on this deployment")
-		writeError(w, http.StatusServiceUnavailable, "this deployment cannot run pipelines")
+		writeError(w, http.StatusServiceUnavailable, "this deployment cannot run pipelines or agents")
 		return
 	case err != nil:
 		h.log().Error("pipelinetriggers: inbound run failed",
 			"project_id", projectID, "version_id", trigger.VersionID, "err", err)
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
 			"the run could not be started")
-		writeError(w, http.StatusServiceUnavailable, "the pipeline run could not be started")
+		writeError(w, http.StatusServiceUnavailable, "the run could not be started")
 		return
 	}
 
 	h.stampTriggerUse(r.Context(), schema, trigger.ID)
-	record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID, "")
+	record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID,
+		admittedNote(outcome.InputSource, variablesNote))
 
 	// 202, not 200: the answer is that the run was ADMITTED. It has not
 	// finished, and it will not finish inside this request. The events URL is
 	// how the caller follows it, which is what issue 192 asks the response to
 	// return.
 	writeAccepted(w, projectID, outcome)
+}
+
+// storedTargetKind is the kind a trigger row was issued for. A row with no
+// kind predates 0142's DEFAULT and was minted for a pipeline.
+func storedTargetKind(trigger triggerRow) string {
+	if trigger.TargetKind == "" {
+		return TargetKindPipeline
+	}
+	return trigger.TargetKind
+}
+
+// admittedNote is the audit reason of an admitted call: empty for an
+// ordinary pipeline run, and a statement of where an agent's input came from
+// and what was ignored otherwise.
+func admittedNote(inputSource, variablesNote string) string {
+	notes := make([]string, 0, 2)
+	if inputSource == inputSourcePayload {
+		notes = append(notes, "the agent input is the sender's payload, given as untrusted data")
+	}
+	if variablesNote != "" {
+		notes = append(notes, variablesNote)
+	}
+	return strings.Join(notes, "; ")
 }
 
 // writeAccepted is the 202 body, for an admitted run and for a repeated
@@ -547,7 +619,7 @@ func bodyVariables(body inboundBody) map[string]json.RawMessage {
 // string, and a credential written into a table the admin page renders would
 // outlive every rotation.
 func (h *Handler) recordInbound(
-	r *http.Request, started time.Time, status int,
+	r *http.Request, started time.Time, status int, entityType string,
 	projectID, userID, versionID int64, reason string,
 ) {
 	if h == nil || h.recorder == nil {
@@ -568,7 +640,7 @@ func (h *Handler) recordInbound(
 		StatusCode: &statusCode,
 		DurationMS: &elapsed,
 		IsError:    status >= http.StatusBadRequest,
-		EntityType: "pipeline",
+		EntityType: entityType,
 	}
 	if projectID > 0 {
 		event.ProjectID = audit.ID(projectID)

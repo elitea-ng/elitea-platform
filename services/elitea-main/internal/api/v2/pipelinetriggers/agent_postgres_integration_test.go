@@ -111,7 +111,7 @@ func TestAnAgentTriggerStartsAnAgentRunWithItsInputAndVariables(t *testing.T) {
 	)
 	h.router = mountRoutes(h.handler)
 
-	versionID, secret, url := h.mintAgentTrigger(t, "Triage agent", "", "topic", "tone")
+	versionID, secret, url := h.mintAgentTrigger(t, "Triage agent", `{"allow_variable_overrides":true}`, "topic", "tone")
 	// The SAME inbound route a pipeline uses: a sender's URL has one shape.
 	if !strings.HasPrefix(url, "/api/v2/pipeline_trigger/"+homeProject+"/") {
 		t.Fatalf("url = %q, want the inbound trigger route", url)
@@ -166,8 +166,12 @@ func TestAnAgentTriggerReadsTheProviderPayloadWhenThereIsNoInput(t *testing.T) {
 	}
 
 	body := `{"action":"opened","pull_request":{"number":7,"title":"Fix the build"}}`
-	response := h.do(t, http.MethodPost, url, body,
-		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)})
+	headers := map[string]string{
+		pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body),
+		pipelinetriggers.GitHubEventHeader:     "pull_request",
+		"X-GitHub-Delivery":                    "11111111-2222-3333-4444-555555555555",
+	}
+	response := h.do(t, http.MethodPost, url, body, headers)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body = %s", response.Code, response.Body.String())
 	}
@@ -175,14 +179,18 @@ func TestAnAgentTriggerReadsTheProviderPayloadWhenThereIsNoInput(t *testing.T) {
 	if !ok {
 		t.Fatal("nothing was dispatched")
 	}
-	if request.UserInput != body {
-		t.Fatalf("UserInput = %q, want the signed payload", request.UserInput)
+	// The payload is the input, inside its untrusted-data envelope.
+	if !strings.Contains(request.UserInput, "untrusted data") ||
+		!strings.Contains(request.UserInput, `<webhook_payload source="github" event="pull_request">`+"\n"+body+"\n</webhook_payload>") {
+		t.Fatalf("UserInput = %q, want the signed payload inside its envelope", request.UserInput)
+	}
+	if source := h.conversationMeta(t, request.ConversationUUID)["input_source"]; source != "payload" {
+		t.Fatalf("conversation meta input_source = %v, want payload", source)
 	}
 
-	// REPLAY: the same signed delivery starts no second agent run, and is
-	// answered with the first run.
-	replay := h.do(t, http.MethodPost, url, body,
-		map[string]string{pipelinetriggers.GitHubSignatureHeader: githubSignature(secret, body)})
+	// REPLAY: the same signed delivery, same X-GitHub-Delivery, starts no
+	// second agent run, and is answered with the first run.
+	replay := h.do(t, http.MethodPost, url, body, headers)
 	if replay.Code != http.StatusAccepted {
 		t.Fatalf("replay: status = %d, want 202; body = %s", replay.Code, replay.Body.String())
 	}
@@ -305,7 +313,7 @@ func seedAgentVariableRows(t *testing.T, pool *pgxpool.Pool, schema string, vers
 func TestAnAgentTriggerReadsVariablesDeclaredOnlyAsRows(t *testing.T) {
 	h := newHarness(t)
 	// No names through the mirror: seedAgent writes `"variables": []`.
-	versionID, secret, url := h.mintAgentTrigger(t, "Imported agent", "")
+	versionID, secret, url := h.mintAgentTrigger(t, "Imported agent", `{"allow_variable_overrides":true}`)
 	seedAgentVariableRows(t, h.pool, homeSchema, versionID, "topic", "tone")
 
 	response := h.do(t, http.MethodPost, url,
