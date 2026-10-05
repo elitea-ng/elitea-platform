@@ -1665,6 +1665,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// group writes plain JSON and only the outermost layer encodes it.
 	r.Group(func(r chi.Router) {
 		r.Use(compressJSONResponses())
+		// A browser must not keep a copy of an API answer. Nothing here said
+		// so, and WebKit reads "nothing" as "decide for yourself" — it served
+		// a reloaded page the previous answer for seconds. The middleware's
+		// own doc carries the measurement. Handlers that serve something
+		// genuinely cacheable still set their own value.
+		//
+		// It sits ABOVE Auth, not inside the /api/v2 route: the 401, the
+		// maintenance 503 and the 426 are per-caller answers too, and the
+		// root-mounted reviewed routes (production_router.go) apply it at the
+		// same position — in front of their own Auth — so every /api/v2
+		// answer carries the directive whichever composition served it.
+		r.Use(apimw.NoStore)
 		r.Use(apimw.Auth(apimw.AuthConfig{
 			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
@@ -1716,13 +1728,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 
 		r.Route("/api/v2", func(r chi.Router) {
-			// A browser must not keep a copy of an API answer. Nothing here
-			// said so, and WebKit reads "nothing" as "decide for yourself" —
-			// it served a reloaded page the previous answer for seconds. The
-			// middleware's own doc carries the measurement. Handlers that
-			// serve something genuinely cacheable still set their own value.
-			r.Use(apimw.NoStore)
-
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
 			//
 			// Auth runs ABOVE this subrouter, so a path nobody registered is
