@@ -285,6 +285,28 @@ impl PrinterContinuation {
         Ok(Self)
     }
 
+    /// The continuation for an ORDINARY new message (no `should_continue`).
+    ///
+    /// The Printer tells the user "To resume the pipeline - type anything...",
+    /// and Main sends what they type as an ordinary start: Main has no Printer
+    /// continuation kind. The SDK resumes a thread paused at a static
+    /// interrupt on any ordinary input (`langraph_agent.py`, the
+    /// `_is_at_static_interrupt` branch). The caller uses this constructor only
+    /// to probe [`Self::resolve`]: an ordinary message resumes the run only when
+    /// the session's LAST event is the exact latest Printer checkpoint of this
+    /// thread. Any other state keeps the fresh run.
+    pub(crate) const fn ordinary_message() -> Self {
+        Self
+    }
+
+    /// True when a failed probe means "no Printer pause to resume", so the
+    /// ordinary message starts a fresh run. Only a dependency failure is an
+    /// error: the run must not restart from the entry point because a read
+    /// failed.
+    pub(crate) const fn probe_means_fresh_run(error: &PipelineResumeError) -> bool {
+        !matches!(error.code, PipelineResumeErrorCode::DependencyUnavailable)
+    }
+
     pub(crate) async fn resolve(
         self,
         context: PrinterResumeContext<'_>,
