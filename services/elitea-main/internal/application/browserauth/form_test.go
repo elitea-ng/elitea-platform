@@ -169,6 +169,38 @@ func TestFormProviderReadsTopLevelAdminSchemaEmail(t *testing.T) {
 	}
 }
 
+// An unusable TOP-LEVEL address marks that one user misconfigured; it does
+// not reject the whole users file. Before the top-level field was read it was
+// ignored outright, so a file carrying a malformed one loaded. Rejecting the
+// file now would stop elitea-main at boot on upgrade (the document is read
+// even while Form sign-in is disabled) and lock every other user out.
+func TestFormProviderTreatsAnUnusableTopLevelEmailAsOneMisconfiguredUser(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewFormProvider([]byte(`{"users":[
+		{"login":"spaced","password":"secret","email":"admin @example.test"},
+		{"login":"control","password":"secret","email":"admin\u0007@example.test"},
+		{"login":"blank","password":"secret","email":"   "},
+		{"login":"shadowed","password":"secret","email":"bad address","attributes":{"email":"attr@example.test"}},
+		{"login":"ok","password":"secret","email":" ok@example.test "}
+	]}`))
+	if err != nil {
+		t.Fatalf("one unusable top-level email must not reject the whole document: %v", err)
+	}
+	if got, want := provider.MisconfiguredLogins(), []string{"spaced", "control", "blank", "shadowed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("misconfigured logins = %q, want %q", got, want)
+	}
+	for _, login := range []string{"spaced", "control", "blank", "shadowed"} {
+		if _, err := provider.NewVerifier(login, "secret").Verify(context.Background(), formVerification("origin-session")); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatalf("%s: error = %v, want %v", login, err, ErrUnauthenticated)
+		}
+	}
+	assertion, err := provider.NewVerifier("ok", "secret").Verify(context.Background(), formVerification("origin-session"))
+	if err != nil || assertion.Email != "ok@example.test" {
+		t.Fatalf("surrounding whitespace must be trimmed: assertion = %+v, error = %v", assertion, err)
+	}
+}
+
 func TestFormProviderRejectsInvalidOrUnboundedConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -215,8 +247,6 @@ func TestFormProviderRejectsInvalidOrUnboundedConfiguration(t *testing.T) {
 		{name: "null attributes", configuration: []byte(`{"users":[{"login":"admin","password":"secret","attributes":null}]}`)},
 		{name: "array attributes", configuration: []byte(`{"users":[{"login":"admin","password":"secret","attributes":[]}]}`)},
 		{name: "non-string email", configuration: []byte(`{"users":[{"login":"admin","password":"secret","attributes":{"email":["admin@example.test"]}}]}`)},
-		{name: "top-level email whitespace", configuration: []byte(`{"users":[{"login":"admin","password":"secret","email":"admin @example.test"}]}`)},
-		{name: "top-level email control", configuration: []byte(`{"users":[{"login":"admin","password":"secret","email":"admin\u0007@example.test"}]}`)},
 		{name: "email whitespace", configuration: []byte(`{"users":[{"login":"admin","password":"secret","attributes":{"email":"admin @example.test"}}]}`)},
 		{name: "name control", configuration: []byte(`{"users":[{"login":"admin","password":"secret","attributes":{"name":"Admin\nUser"}}]}`)},
 		{name: "excessive nesting", configuration: []byte(`{"users":[{"login":"admin","password":"secret","attributes":` + deepAttributes + `}]}`)},

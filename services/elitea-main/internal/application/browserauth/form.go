@@ -282,14 +282,24 @@ func formUserFromConfiguration(configured formUserConfiguration, digestKey [sha2
 		return formUser{}, ErrInvalidConfiguration
 	}
 	// The top-level field wins: it is what the Admin schema writes. Validate
-	// it with the same rule as an attribute-supplied address.
+	// it with the same rule as an attribute-supplied address. An unusable one
+	// marks THIS user misconfigured (refused at sign-in, reported at load)
+	// rather than rejecting the whole file: the field used to be ignored, so
+	// a file carrying a malformed one loaded, and rejecting it now would stop
+	// elitea-main at boot — the document is read even while Form sign-in is
+	// disabled — and lock every other user out. It never falls back to
+	// attributes.email: an explicit primary address that is wrong is an error
+	// to fix, not one to route around.
+	unusableTopLevelEmail := false
 	if configured.Email != "" {
-		if !validFormEmail(configured.Email) {
-			return formUser{}, ErrInvalidConfiguration
+		if email := strings.TrimSpace(configured.Email); email != "" && validFormEmail(email) {
+			claims.Email = email
+		} else {
+			unusableTopLevelEmail = true
 		}
-		claims.Email = configured.Email
 	}
-	misconfigured := strings.TrimSpace(claims.Email) == "" ||
+	misconfigured := unusableTopLevelEmail ||
+		strings.TrimSpace(claims.Email) == "" ||
 		strings.HasSuffix(strings.ToLower(claims.Email), ReservedEmailDomain)
 	worstCaseAttributes, err := json.Marshal(struct {
 		NameID       string          `json:"nameid"`

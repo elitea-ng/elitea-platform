@@ -77,7 +77,9 @@ analytics, budgets and SCIM all treat an address in it as a platform account,
 so the person disappeared from those surfaces.
 
 No address is synthesized any more, on any sign-in plane. A Form user with no
-address — or with an address in `@centry.user` — is a configuration error:
+address, with a top-level `email` that is not a usable address (it contains
+whitespace or control characters), or with an address in `@centry.user` is a
+configuration error:
 
 - the users file still loads, so one bad entry does not lock the others out;
 - elitea-main logs a warning at start-up naming the affected logins
