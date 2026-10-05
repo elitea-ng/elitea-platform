@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -72,8 +71,11 @@ func logReservedDomainSignInAccounts(logger *slog.Logger, found identityrepo.Res
 
 // formSignInEnabledFromEnv reads ELITEA_FORM_LOGIN_ENABLED. Unset or empty is
 // false: the local username/password sign-in is OFF unless an operator turns
-// it on. Any other value must parse as a boolean, and a value that does not
-// stops the boot — a typo must not silently decide whether passwords work.
+// it on. Otherwise the value must be exactly true, false, 1 or 0 (any letter
+// case), and anything else stops the boot — a typo must not silently decide
+// whether passwords work. strconv.ParseBool is deliberately not used: it also
+// takes t/T/f/F, which the documented contract (values.yaml, UPGRADING.md)
+// says stop the boot.
 //
 // Keep "ELITEA_FORM_LOGIN_ENABLED" a literal inside the lookup call: the
 // env-drift gate (services/elitea-llm-gateway/scripts/env-drift-check.sh)
@@ -87,11 +89,13 @@ func formSignInEnabledFromEnv(lookup func(string) (string, bool)) (bool, error) 
 	if raw == "" {
 		return false, nil
 	}
-	enabled, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("ELITEA_FORM_LOGIN_ENABLED must be true or false, got %q", raw)
+	switch strings.ToLower(raw) {
+	case "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
 	}
-	return enabled, nil
+	return false, fmt.Errorf("ELITEA_FORM_LOGIN_ENABLED must be true, false, 1 or 0, got %q", raw)
 }
 
 // logFormSignInDisabled says, once, that the configured Form users are not a

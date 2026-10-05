@@ -1086,7 +1086,7 @@ main:
     #
     # "true" mounts the Form login page when no single sign-on plane is
     # configured (OIDC wins /auth when both are). Any value other than
-    # true/false/1/0 stops the boot. Empty means false.
+    # true/false/1/0 (any letter case) stops the boot. Empty means false.
     #
     # BREAKING in this release: Form sign-in used to be on whenever an
     # authentication document was configured. See docs/UPGRADING.md.

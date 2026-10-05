@@ -31,7 +31,8 @@ with SCIM provisioning. With the switch off:
 - configured Form users are ignored, and elitea-main logs that at start-up
   (`Form sign-in is disabled …; the configured Form users are ignored`).
 
-Any value other than `true`/`false`/`1`/`0` (or empty) stops the boot.
+Any value other than `true`/`false`/`1`/`0` (any letter case) or empty stops
+the boot.
 OIDC, SAML and SCIM behave exactly as before.
 
 **What to do.**

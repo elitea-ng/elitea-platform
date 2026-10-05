@@ -71,9 +71,12 @@ func TestFormSignInEnabledFromEnvDefaultsOff(t *testing.T) {
 		{"", true, false},
 		{"  ", true, false},
 		{"false", true, false},
+		{"FALSE", true, false},
 		{"0", true, false},
 		{"true", true, true},
 		{"TRUE", true, true},
+		{"True", true, true},
+		{" true ", true, true},
 		{"1", true, true},
 	} {
 		got, err := formSignInEnabledFromEnv(lookup(test.value, test.present))
@@ -81,7 +84,9 @@ func TestFormSignInEnabledFromEnvDefaultsOff(t *testing.T) {
 			t.Fatalf("value %q present %v: got %v, %v; want %v", test.value, test.present, got, err, test.want)
 		}
 	}
-	for _, bad := range []string{"yes", "on", "enabled"} {
+	// Exactly the documented spellings (true/false/1/0, any letter case):
+	// strconv.ParseBool's extra t/T/f/F must stop the boot like any typo.
+	for _, bad := range []string{"yes", "on", "enabled", "t", "T", "f", "F", "tru", "01"} {
 		if _, err := formSignInEnabledFromEnv(lookup(bad, true)); err == nil ||
 			!strings.Contains(err.Error(), "ELITEA_FORM_LOGIN_ENABLED") {
 			t.Fatalf("value %q: error = %v, want a boot error naming the variable", bad, err)
