@@ -310,6 +310,78 @@ func TestLLMModelCheck_ForwardsTheAnthropicEndpointFlag(t *testing.T) {
 	}
 }
 
+// TestLLMModelCheck_ForwardsTheDialProtocol: the gateway probes the route
+// the runtime uses for the model's DIAL protocol, so the form's protocol must
+// reach it. It is a field of an ai_dial model only.
+func TestLLMModelCheck_ForwardsTheDialProtocol(t *testing.T) {
+	dialCredential := func(configType string) map[string]any {
+		resolved := resolvedOpenAICredential()
+		credential := resolved["ai_credentials"].(map[string]any)
+		credential["configuration_type"] = configType
+		credential["api_base"] = "https://dial.example"
+		return resolved
+	}
+	form := func(protocol string) string {
+		return `{"name":"gemini-2.5-pro","dial_protocol":"` + protocol + `",` +
+			`"ai_credentials":{"elitea_title":"openai_creds","private":false}}`
+	}
+	for _, tc := range []struct {
+		name, configType, protocol, want string
+	}{
+		{name: "openai on ai_dial", configType: "ai_dial", protocol: "openai", want: "openai"},
+		{name: "anthropic on ai_dial", configType: "ai_dial", protocol: "anthropic", want: "anthropic"},
+		{name: "azure on ai_dial", configType: "ai_dial", protocol: "azure", want: "azure"},
+		{name: "another credential type", configType: "azure_open_ai", protocol: "openai", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := okGateway(t)
+			handler := modelCheckHandler(stub, &recordingStoredResolver{resolved: dialCredential(tc.configType)})
+			if recorder, body := postModelCheck(t, handler, form(tc.protocol)); recorder.Code != http.StatusOK {
+				t.Fatalf("status %d body %v", recorder.Code, body)
+			}
+			if got := stub.requests[0].DialProtocol; got != tc.want {
+				t.Fatalf("dial_protocol on the wire = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("absent", func(t *testing.T) {
+		stub := okGateway(t)
+		handler := modelCheckHandler(stub, &recordingStoredResolver{resolved: dialCredential("ai_dial")})
+		body := `{"name":"gpt-4o","ai_credentials":{"elitea_title":"openai_creds","private":false}}`
+		if recorder, decoded := postModelCheck(t, handler, body); recorder.Code != http.StatusOK {
+			t.Fatalf("status %d body %v", recorder.Code, decoded)
+		}
+		if got := stub.requests[0].DialProtocol; got != "" {
+			t.Fatalf("dial_protocol on the wire = %q, want none for the default", got)
+		}
+	})
+}
+
+// TestLLMModelCheck_RefusesAnInvalidDialProtocol: a protocol the save refuses
+// is refused before the gateway, with the save's message.
+func TestLLMModelCheck_RefusesAnInvalidDialProtocol(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown":          `{"name":"gpt-4o","dial_protocol":"bogus","ai_credentials":{"elitea_title":"openai_creds","private":false}}`,
+		"openai on claude": `{"name":"claude-sonnet-4-5","dial_protocol":"openai","ai_credentials":{"elitea_title":"openai_creds","private":false}}`,
+		"anthropic on gpt": `{"name":"gpt-4o","dial_protocol":"anthropic","ai_credentials":{"elitea_title":"openai_creds","private":false}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := okGateway(t)
+			handler := modelCheckHandler(stub, &recordingStoredResolver{resolved: resolvedOpenAICredential()})
+			recorder, decoded := postModelCheck(t, handler, body)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status %d body %v, want 400", recorder.Code, decoded)
+			}
+			if message, _ := decoded["message"].(string); !strings.Contains(message, "dial_protocol") {
+				t.Errorf("message = %q, want it to name dial_protocol", message)
+			}
+			if stub.hits.Load() != 0 {
+				t.Fatalf("the gateway was called %d times; want none", stub.hits.Load())
+			}
+		})
+	}
+}
+
 func TestLLMModelCheck_SignsTheCallerIntoTheGatewayIdentity(t *testing.T) {
 	var userHeader string
 	stub := newGatewayStub(t, http.StatusOK, `{"success":true,"probe":"completion"}`)

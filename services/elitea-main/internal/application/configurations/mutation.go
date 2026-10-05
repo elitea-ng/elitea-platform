@@ -161,6 +161,15 @@ func (CurrentPoVDataNormalizer) Normalize(
 		}, nil
 	default:
 		if request.Operation == CurrentConfigurationNormalizationUpdate {
+			// Legacy issue #6707. The shallow update stores `data` as sent, so
+			// the DIAL protocol rule of the create normalizer is applied here
+			// too; otherwise an edit could store a value the create refuses.
+			if request.Type == "llm_model" {
+				if _, _, err := ValidateLLMModelDialProtocol(request.Data); err != nil {
+					return CurrentConfigurationNormalizationResult{},
+						currentLocalConfigurationFieldError("data." + DialProtocolField)
+				}
+			}
 			return CurrentConfigurationNormalizationResult{
 				Data:     normalizeCurrentShallowUpdateData(request.Data),
 				Complete: true,

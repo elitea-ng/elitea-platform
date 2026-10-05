@@ -306,10 +306,10 @@ func gatewayCredentialTitles(
 	defer rows.Close()
 	titles := make([]string, 0)
 	for rows.Next() {
-		var id, title string
+		var id, title, configType string
 		var data []byte
 		var shared bool
-		if err := rows.Scan(&id, &title, &data, &shared); err != nil {
+		if err := rows.Scan(&id, &title, &data, &shared, &configType); err != nil {
 			t.Fatalf("scan the gateway credential read: %v", err)
 		}
 		titles = append(titles, title)

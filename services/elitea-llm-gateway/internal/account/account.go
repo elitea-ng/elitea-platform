@@ -91,6 +91,14 @@ const UnsupportedAPIBaseReason = "UNSUPPORTED_CREDENTIAL_API_BASE"
 // the OpenAI provider cannot be pointed at. It carries UnsupportedAPIBaseReason.
 var ErrUnsupportedAPIBase = errors.New(UnsupportedAPIBaseReason)
 
+// DialProtocolUnroutableReason is the rejection reason emitted when a model's
+// AI DIAL protocol cannot be applied to the key (legacy issue #6707).
+const DialProtocolUnroutableReason = "DIAL_PROTOCOL_UNROUTABLE"
+
+// ErrDialProtocolUnroutable is returned when a model chose a DIAL protocol and
+// the key cannot carry it. It carries DialProtocolUnroutableReason.
+var ErrDialProtocolUnroutable = errors.New(DialProtocolUnroutableReason)
+
 // ContextKeyRequestModel carries the model name the /llm handler dispatches,
 // written after the caller's model id is mapped onto the provider's own name
 // and read here by GetKeysForProvider.
@@ -462,6 +470,20 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 	if err != nil {
 		return nil, err
 	}
+	// Legacy issue #6707: the model row may choose an AI DIAL protocol. It is
+	// a statement about an AI DIAL endpoint, so it reaches a credential whose
+	// OWN row is an ai_dial row, and no other. The model row writer controls
+	// what the link says about the credential type; the credential row does
+	// not lie about itself. The pin selected exactly one credential above, so
+	// the protocol is applied to the credential the model named and to no
+	// other.
+	if link, linked := linkedCredentialFromContext(ctx); linked && provider == schemas.Azure {
+		for i := range creds {
+			if creds[i].configType == DialCredentialType {
+				creds[i].dialProtocol = link.DialProtocol
+			}
+		}
+	}
 
 	keys := make([]schemas.Key, 0, len(creds))
 	for _, c := range creds {
@@ -524,7 +546,7 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 			return nil, err
 		}
 
-		key, err := buildKey(provider, c, apiKey, requestModelFromContext(ctx))
+		key, err := buildKey(provider, c, apiKey, requestModelFromContext(ctx), dispatchKindFromContext(ctx))
 		if err != nil {
 			a.logger.WarnContext(ctx, "rejected provider credential",
 				"reason", credentialRejectionReason(err),
@@ -576,6 +598,8 @@ func credentialRejectionReason(err error) string {
 		return IncompleteCredentialReason
 	case errors.Is(err, ErrUnsupportedAPIBase):
 		return UnsupportedAPIBaseReason
+	case errors.Is(err, ErrDialProtocolUnroutable):
+		return DialProtocolUnroutableReason
 	default:
 		return "INVALID_PROVIDER_CREDENTIAL"
 	}
@@ -592,7 +616,9 @@ func credentialRejectionReason(err error) string {
 // the pod's own identity. Every one of those is worse than a refusal here.
 //
 // requestModel is the model the /llm handler dispatches, or "" when it is not
-// known. It is used only to build the Azure api-version alias.
+// known. It keys the Azure alias (api-version, DIAL route). kind is the
+// operation the handler dispatches, or "" when it is not known; only the AI
+// DIAL deployment route reads it.
 //
 // Every SecretVar is built as plain text rather than through
 // schemas.NewSecretVar. NewSecretVar treats a leading "env." or "vault." as a
@@ -600,7 +626,9 @@ func credentialRejectionReason(err error) string {
 // TENANT-AUTHORED, so passing it through that constructor would let a tenant
 // name an environment variable of the gateway pod and have its content sent
 // upstream as a Bearer token or an endpoint.
-func buildKey(provider schemas.ModelProvider, c credential, apiKey, requestModel string) (schemas.Key, error) {
+func buildKey(
+	provider schemas.ModelProvider, c credential, apiKey, requestModel string, kind DispatchKind,
+) (schemas.Key, error) {
 	key := schemas.Key{
 		ID:     c.keyID,
 		Name:   c.name,
@@ -625,7 +653,47 @@ func buildKey(provider schemas.ModelProvider, c credential, apiKey, requestModel
 		if c.apiBase == "" {
 			return schemas.Key{}, missingCredentialFields("api_base")
 		}
+		// An empty api_key is NOT "no authentication". bifrost's Azure provider
+		// then falls back to azidentity.DefaultAzureCredential and sends the
+		// gateway's OWN ambient Azure token (managed identity, workload
+		// identity, environment) as a Bearer token to the endpoint the tenant
+		// named. The gateway configures no service-principal or managed-identity
+		// mode for a tenant credential, so an Azure-class credential must carry
+		// its own key. This is the Bedrock rule below, for the same reason.
+		if strings.TrimSpace(apiKey) == "" {
+			return schemas.Key{}, missingCredentialFields("api_key")
+		}
 		key.AzureKeyConfig = &schemas.AzureKeyConfig{Endpoint: plainSecret(c.apiBase)}
+		// Legacy issue #6707. A DIAL protocol other than the default forces
+		// the model family, which selects bifrost's route and auth header
+		// (see dial_protocol.go). It replaces the api-version alias: both
+		// routes it selects are versionless.
+		if family, forced := c.dialProtocol.modelFamily(); forced {
+			if requestModel == "" {
+				// The alias is keyed by the dispatched model name. Without one
+				// the request would silently take the default route, which is
+				// the route this model was configured away from.
+				return schemas.Key{}, fmt.Errorf(
+					"%w: the %s DIAL protocol needs the dispatched model name", ErrDialProtocolUnroutable, c.dialProtocol)
+			}
+			key.Aliases = schemas.KeyAliases{
+				requestModel: schemas.AliasConfig{
+					ModelID:     requestModel,
+					ModelFamily: schemas.Ptr(family),
+				},
+			}
+			return key, nil
+		}
+		// Legacy issue #6707, the default protocol. DIAL does not serve the
+		// /openai/v1/chat/completions route bifrost builds for a non-Claude
+		// model; it serves the deployment route (dial_protocol.go).
+		if c.configType == DialCredentialType && requestModel != "" &&
+			DialRouteFor(c.dialProtocol, requestModel) == DialRouteDeployment {
+			if alias, ok := dialDeploymentAlias(c, requestModel, kind); ok {
+				key.Aliases = schemas.KeyAliases{requestModel: alias}
+				return key, nil
+			}
+		}
 		// ISSUE #455. Attach the credential's api-version to the model this
 		// request dispatches. bifrost reads AzureAliasCfg.APIVersion from the
 		// alias it resolves for that model name; with no alias it substitutes
@@ -749,6 +817,16 @@ func requestModelFromContext(ctx context.Context) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+// dispatchKindFromContext returns the operation the /llm handler stashed under
+// ContextKeyDispatchKind, or "" when it is absent.
+func dispatchKindFromContext(ctx context.Context) DispatchKind {
+	if ctx == nil {
+		return ""
+	}
+	kind, _ := ctx.Value(ContextKeyDispatchKind).(DispatchKind)
+	return kind
 }
 
 // isSelfReferential reports whether apiBase points at the platform's own /llm

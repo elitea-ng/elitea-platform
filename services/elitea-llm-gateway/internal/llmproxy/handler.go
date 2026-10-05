@@ -16,6 +16,7 @@ import (
 	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/hopmarker"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
@@ -617,6 +618,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// from inside the router call.
 	meter := overhead.Attach(ctx, t0)
 	bifReq := req.ToBifrostChatRequest(ctx)
+	markDispatchKind(ctx, account.DispatchChat)
 
 	// Map the caller's model id onto the provider's own model name (issue #317)
 	// BEFORE the budget gate, so the gate and the provider see the same name.
@@ -714,6 +716,7 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bifReq := req.ToBifrostEmbeddingRequest(ctx)
+	markDispatchKind(ctx, account.DispatchEmbedding)
 
 	// Issue #317: map the caller's model id before the gate and the provider.
 	if !h.mapModel(w, ctx, &bifReq.Provider, &bifReq.Model) {

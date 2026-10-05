@@ -14,16 +14,16 @@
  *     when the saved model runs, not for whoever clicks Test.
  *  2. It needs AI credentials and a model name before it can run. The button
  *     says which is missing.
- *  3. A result describes one combination of credentials and model name.
- *     Changing either clears it. (The llm_model form has no API protocol
- *     field yet; the per-model DIAL protocol adds it to this set.)
+ *  3. A result describes one combination of credentials, model name and
+ *     DIAL protocol. Changing any of them clears it: the protocol selects the
+ *     route the gateway tests the model on (legacy issue 6707).
  */
 import { t } from '@/shared/i18n';
 
 export const LLM_MODEL_TYPE = 'llm_model';
 
 /** The form fields whose change makes a shown result stale. */
-const RESULT_FIELDS: ReadonlySet<string> = new Set(['name', 'ai_credentials']);
+const RESULT_FIELDS: ReadonlySet<string> = new Set(['name', 'ai_credentials', 'dial_protocol']);
 
 /** The body key that names the saved row the edit screen tests. The server reads it; it is not a form field. */
 const CONFIGURATION_ID_KEY = 'configuration_id';

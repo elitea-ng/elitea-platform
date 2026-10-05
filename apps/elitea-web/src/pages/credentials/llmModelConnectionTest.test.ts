@@ -17,9 +17,11 @@ describe('modelTestBody', () => {
 });
 
 describe('clearsTestResult', () => {
-  it('clears on the model name and the credentials only', () => {
+  it('clears on the model name, the credentials and the DIAL protocol only', () => {
     expect(clearsTestResult('llm_model', 'name')).toBe(true);
     expect(clearsTestResult('llm_model', 'ai_credentials')).toBe(true);
+    // The protocol selects the route the gateway tests the model on.
+    expect(clearsTestResult('llm_model', 'dial_protocol')).toBe(true);
     expect(clearsTestResult('llm_model', 'description')).toBe(false);
     // No such field exists on the llm_model form yet.
     expect(clearsTestResult('llm_model', 'api_protocol')).toBe(false);

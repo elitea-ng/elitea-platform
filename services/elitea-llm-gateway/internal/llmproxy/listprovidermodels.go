@@ -115,9 +115,12 @@ type providerModelLister func(ctx context.Context, client *http.Client, req chec
 // so a lister without one would be a dial with no gate, and a checker without
 // a lister is a type this route honestly reports as unsupported.
 var providerModelListers = map[string]providerModelLister{
-	"open_ai":        listOpenAICompatibleModels,
-	"azure_open_ai":  listAzureDeployments,
-	"open_ai_azure":  listAzureDeployments,
+	"open_ai":       listOpenAICompatibleModels,
+	"azure_open_ai": listAzureDeployments,
+	"open_ai_azure": listAzureDeployments,
+	// ai_dial lists every deployment the key reaches, gpt and Claude alike.
+	// The per-model DIAL protocol (legacy issue #6707) is chosen on the model
+	// row after import; the listing has no model row and stays protocol-blind.
 	"ai_dial":        listAzureDeployments,
 	"ollama":         listOllamaTags,
 	"vllm":           listOpenAICompatibleModels,

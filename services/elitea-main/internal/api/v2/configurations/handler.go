@@ -1162,6 +1162,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Legacy issue #6707. Keyed by type alone, like the description rule and
+	// like the update path (applyConfigurationUpdate): a row filed under
+	// another section still stores data.dial_protocol as sent, and the gateway
+	// still reads it.
+	if failure := refuseInvalidDialProtocol(strVal(body, "type"), body); failure != nil {
+		failure.write(w)
+		return
+	}
 	if !applyLLMModelDescriptionRule(w, strVal(body, "type"), dataMap) {
 		return
 	}
@@ -1447,6 +1455,9 @@ func (h *Handler) applyConfigurationUpdate(
 	// entry. See refuseIncompleteUpdatedModelData for why it is the model rows
 	// that are held to it.
 	if failure := h.refuseIncompleteUpdatedModelData(body, configType); failure != nil {
+		return c, failure, nil
+	}
+	if failure := refuseInvalidDialProtocol(configType, body); failure != nil {
 		return c, failure, nil
 	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)

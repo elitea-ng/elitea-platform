@@ -148,7 +148,7 @@ func (r *fakeRows) Scan(dest ...any) error {
 	}
 	row := r.rows[r.i]
 	r.i++
-	// row layout: id string, title string, data []byte, [shared bool]
+	// row layout: id string, title string, data []byte, [shared bool], [type string]
 	if p, ok := dest[0].(*string); ok {
 		*p = row[0].(string)
 	}
@@ -163,6 +163,16 @@ func (r *fakeRows) Scan(dest ...any) error {
 	if len(dest) > 3 && len(row) > 3 {
 		if p, ok := dest[3].(*bool); ok {
 			*p = row[3].(bool)
+		}
+	}
+	// An optional 5th element is the row's `type`. A row without it scans an
+	// empty type, which no type-specific rule (the AI DIAL routes) matches.
+	if len(dest) > 4 {
+		if p, ok := dest[4].(*string); ok {
+			*p = ""
+			if len(row) > 4 {
+				*p = row[4].(string)
+			}
 		}
 	}
 	return nil
@@ -570,7 +580,7 @@ func TestProjectIDFromContext(t *testing.T) {
 func TestBuildKey_VLLM(t *testing.T) {
 	k, err := buildKey(schemas.VLLM, credential{
 		configID: "c1", name: "local-vllm", apiBase: "http://192.168.0.1:8000/v1",
-	}, "sk-anything", "")
+	}, "sk-anything", "", "")
 	if err != nil {
 		t.Fatalf("buildKey: %v", err)
 	}
@@ -627,14 +637,14 @@ func TestProviderConfigTypes_VLLM(t *testing.T) {
 // request to the upstream's Anthropic-compatible /v1/messages surface
 // (BFF.9a: an OpenAI-compatible gateway that also serves the Anthropic dialect).
 func TestBuildKey_VLLM_UseAnthropicEndpoints(t *testing.T) {
-	off, err := buildKey(schemas.VLLM, credential{configID: "c1", apiBase: "https://up.example"}, "sk", "")
+	off, err := buildKey(schemas.VLLM, credential{configID: "c1", apiBase: "https://up.example"}, "sk", "", "")
 	if err != nil {
 		t.Fatalf("buildKey: %v", err)
 	}
 	if off.UseAnthropicEndpoints != nil {
 		t.Errorf("UseAnthropicEndpoints = %v, want nil when the flag is unset", *off.UseAnthropicEndpoints)
 	}
-	on, err := buildKey(schemas.VLLM, credential{configID: "c2", apiBase: "https://up.example", useAnthropicEndpoints: true}, "sk", "")
+	on, err := buildKey(schemas.VLLM, credential{configID: "c2", apiBase: "https://up.example", useAnthropicEndpoints: true}, "sk", "", "")
 	if err != nil {
 		t.Fatalf("buildKey: %v", err)
 	}
