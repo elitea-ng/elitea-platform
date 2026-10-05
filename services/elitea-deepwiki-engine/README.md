@@ -220,7 +220,10 @@ ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
   and averaged, as LangChain did. The dimension comes from the first
   response and is enforced for the rest of the run.
 - `ChatClient`: blocking and SSE-streamed completions with tool calls
-  (streamed deltas assembled by `index`), usage, `max_completion_tokens`,
+  (streamed deltas assembled by `index`; a new id, or a new name once a
+  call's arguments began, on a used index starts another call; a skipped
+  index leaves no slot; a slot with arguments and no name is refused),
+  usage, `max_completion_tokens`,
   temperature 0.1 / 0.0 (`Sampling::Deterministic`) / 1.0 for `o*`
   models. System messages take only `'static` prompts; repository text
   goes in user messages.
@@ -229,7 +232,8 @@ ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
   aborts a request or a wait at once.
 - Timeouts: connect 10 s, blocking call 600 s, stream silence 300 s,
   stream total 30 min. SSE caps: 1 MiB per line and per event, 64 MiB
-  per stream.
+  per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
+  BOM is skipped.
 - `ELITEA_DEEPWIKI_TLS_CA_FILE` is trusted in addition to the platform
   roots. Redirects are refused (the bearer key must not follow one).
 - Errors: timeouts → `timeout_error`; 429/503 after the retries →
