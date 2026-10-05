@@ -82,11 +82,17 @@ type fakeRouter struct {
 	// assert the wire body (e.g. response_format) survived decode +
 	// ToBifrostResponsesRequest into the core request struct.
 	lastResponsesReq *schemas.BifrostResponsesRequest
+	// selectedKeyID, when set, is written onto the request context the way
+	// bifrost/core writes the id of the key it selected.
+	selectedKeyID string
 }
 
 func (f *fakeRouter) captureVK(ctx *schemas.BifrostContext) {
 	if v, ok := ctx.Value(schemas.BifrostContextKeyVirtualKey).(string); ok {
 		f.lastVK = v
+	}
+	if f.selectedKeyID != "" {
+		ctx.SetValue(schemas.BifrostContextKeySelectedKeyID, f.selectedKeyID)
 	}
 }
 

@@ -46,6 +46,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -67,6 +68,7 @@ var tenantMigrations = []string{
 	"tenant/0138_pipeline_trigger_auth_mode.sql",
 	"tenant/0139_pipeline_trigger_gitlab_modes.sql",
 	"tenant/0140_pipeline_trigger_deliveries.sql",
+	"tenant/0142_pipeline_trigger_agent_controls.sql",
 }
 
 /* ── doubles ───────────────────────────────────────────────────────────── */
@@ -441,6 +443,11 @@ func TestAWebhookWithNoBodyStartsARun(t *testing.T) {
 				t.Fatalf("UserInput = %q, AllowEmptyUserInput = %v; want an empty, unattended start",
 					request.UserInput, request.AllowEmptyUserInput)
 			}
+			// Legacy issue 6802: the run is stamped as a webhook run, so the
+			// analytics active-user reads do not count the trigger's creator.
+			if request.TriggerOrigin != executiondomain.TriggerOriginWebhook {
+				t.Fatalf("TriggerOrigin = %q, want webhook", request.TriggerOrigin)
+			}
 		})
 	}
 }
@@ -470,6 +477,40 @@ func TestAnInputTheRunCannotCarryIsA422NamingInput(t *testing.T) {
 	}
 	if conversations != 0 {
 		t.Fatalf("a refused input left %d trigger conversations behind", conversations)
+	}
+}
+
+// TestAnInputOverTheLimitIsRefusedWholeNotCut is the review finding on the
+// byte cut. `input` was cut at 16384 BYTES, so a valid multi-byte `input` over
+// the limit became invalid UTF-8 and was answered 422 "`input` is not valid".
+// It is now refused as too large, with the limit named, and a multi-byte
+// `input` under the limit runs whole.
+func TestAnInputOverTheLimitIsRefusedWholeNotCut(t *testing.T) {
+	h := newHarness(t)
+	_, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "On push", ownerUserID)
+	headers := map[string]string{"Authorization": "Bearer " + secret}
+
+	tooLarge, _ := json.Marshal(map[string]string{"input": strings.Repeat("€", 6000)}) // 18000 bytes
+	response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), string(tooLarge), headers)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "16 KiB") {
+		t.Fatalf("body = %s, want it to name the 16 KiB limit", response.Body.String())
+	}
+	if h.start.count() != 0 {
+		t.Fatalf("dispatches = %d, want 0", h.start.count())
+	}
+
+	underLimit := strings.Repeat("€", 5000) // 15000 bytes
+	body, _ := json.Marshal(map[string]string{"input": underLimit})
+	response = h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), string(body), headers)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", response.Code, response.Body.String())
+	}
+	request, ok := h.start.last()
+	if !ok || request.UserInput != underLimit {
+		t.Fatal("a multi-byte input under the limit must reach the run whole")
 	}
 }
 
@@ -941,6 +982,11 @@ func TestAScheduleWithNoInputDispatches(t *testing.T) {
 	request, ok := h.start.last()
 	if !ok || request.UserInput != "" || !request.AllowEmptyUserInput {
 		t.Fatalf("dispatch = %+v (present=%v), want an empty, unattended start", request, ok)
+	}
+	// Legacy issue 6802: a scheduled run is stamped as one, so the analytics
+	// active-user reads do not count the schedule's author.
+	if request.TriggerOrigin != executiondomain.TriggerOriginSchedule {
+		t.Fatalf("TriggerOrigin = %q, want schedule", request.TriggerOrigin)
 	}
 	if after := h.readSchedule(t, versionID); after["last_result"] != "dispatched" {
 		t.Fatalf("last_result = %v, want dispatched", after["last_result"])

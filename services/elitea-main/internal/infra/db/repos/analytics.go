@@ -119,7 +119,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -203,15 +205,52 @@ func NewAnalyticsRepo(pool *pgxpool.Pool) *AnalyticsRepo {
 	return &AnalyticsRepo{pool: pool}
 }
 
-// requestLogWindow is the row set every query below reads, written once so no
-// two of them can describe different rows.
+// requestLogWindow is the row set of every model-call ATTEMPT, written once so
+// no two reads can describe different rows.
 //
 // Half-open at the top: a window ending at midnight must not also claim the
 // first instant of the next day, or two adjacent windows both count it.
-const requestLogWindow = `
+//
+// INFERENCE ROUTES ONLY (legacy issue 6879). The log also records the model
+// listing, the token counter, the connection check and unmatched paths, and
+// counting those as LLM calls made this page disagree with the Usage page.
+// analytics.InferenceRouteSQLList is the one definition of a model call, and
+// inferenceRouteOnLog below applies the same one to the aliased reads.
+//
+// This file uses three row sets. Each read names the one it uses:
+//
+//   - completedCallWindow: completed model calls. The call, token, user and
+//     model figures of the Overview and Users tabs use it. They sit beside the
+//     Usage page, which reads the billing ledger, and the ledger has no
+//     refused or failed call. See analytics.CompletedStatusSQL.
+//   - requestLogWindow: every model-call attempt. The Agents tab uses it,
+//     because it shows requests AND errors and must see the failures.
+//   - healthWindow: every request on every route. The Health tab uses it. The
+//     tab exists to show what failed, and a failure on /llm/v1/models, on
+//     count_tokens or on an unmatched path is a failure an operator must see.
+const requestLogWindow = healthWindow + `
+  AND route IN (` + analytics.InferenceRouteSQLList + `)`
+
+// completedCallWindow is requestLogWindow limited to completed calls.
+const completedCallWindow = requestLogWindow + `
+  AND ` + analytics.CompletedStatusSQL
+
+// healthWindow is the project and time predicate with NO route or status
+// filter. Only the Health reads use it.
+const healthWindow = `
 WHERE project_id = $1
   AND occurred_at >= $2
   AND occurred_at < $3`
+
+// inferenceRouteOnLog is the route predicate for a statement that reads the
+// log under the alias `l`.
+const inferenceRouteOnLog = `
+  AND l.route IN (` + analytics.InferenceRouteSQLList + `)`
+
+// completedCallOnLog is completedCallWindow's predicate for a statement that
+// reads the log under the alias `l`.
+const completedCallOnLog = inferenceRouteOnLog + `
+  AND l.` + analytics.CompletedStatusSQL
 
 // missingRelation reports whether err is PostgreSQL's undefined_table (42P01)
 // or undefined_schema (3F000).
@@ -272,11 +311,22 @@ func (r *AnalyticsRepo) GetUsageSummary(ctx context.Context, params analytics.Qu
 
 	summary := analytics.UsageSummary{ProjectID: params.ProjectID, Period: params.Period}
 
-	const totalsQuery = `
+	// Asked FIRST, for the reason agentExecutionColumn is: a statement that
+	// names an absent column fails at parse time and aborts this snapshot.
+	origins, err := triggerOriginReadable(ctx, tx)
+	if err != nil {
+		return analytics.UsageSummary{}, err
+	}
+	human := humanCallFilter(origins)
+
+	// The CALL and TOKEN totals count every row, unattended runs included:
+	// they are what the project used. Only the CALLER count is a statement
+	// about people, so only it drops the unattended rows (legacy issue 6802).
+	totalsQuery := `
 SELECT count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
-       count(DISTINCT user_id)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow
+       count(DISTINCT user_id) FILTER (WHERE TRUE` + human + `)::bigint
+FROM gateway.llm_request_logs AS l` + completedCallWindow
 
 	if err := tx.QueryRow(ctx, totalsQuery, id, params.From, params.To).
 		Scan(&summary.TotalRuns, &summary.TotalTokens, &summary.ActiveUsers); err != nil {
@@ -290,11 +340,16 @@ FROM gateway.llm_request_logs` + requestLogWindow
 	if summary.ByModel, summary.ModelsTruncated, err = modelUsage(ctx, tx, id, params); err != nil {
 		return analytics.UsageSummary{}, err
 	}
-	if summary.DailyActivity, err = dailyActivity(ctx, tx, id, params); err != nil {
+	if summary.DailyActivity, err = dailyActivity(ctx, tx, id, params, human); err != nil {
 		return analytics.UsageSummary{}, err
 	}
-	if summary.TopUsers, err = userActivity(ctx, tx, id, params, topUsersLimit); err != nil {
+	if summary.TopUsers, err = userActivity(ctx, tx, id, params, topUsersLimit, human); err != nil {
 		return analytics.UsageSummary{}, err
+	}
+	if origins {
+		if summary.Automated, err = automatedActivity(ctx, tx, id, params); err != nil {
+			return analytics.UsageSummary{}, err
+		}
 	}
 	health, err := projectHealth(ctx, tx, id, params)
 	if err != nil {
@@ -302,7 +357,7 @@ FROM gateway.llm_request_logs` + requestLogWindow
 	}
 	summary.Health = health
 
-	members, activeMembers, ok, err := projectAdoption(ctx, tx, id, params)
+	members, activeMembers, ok, err := projectAdoption(ctx, tx, id, params, human)
 	if err != nil {
 		return analytics.UsageSummary{}, err
 	}
@@ -331,10 +386,15 @@ func (r *AnalyticsRepo) GetUserActivity(ctx context.Context, params analytics.Qu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	origins, err := triggerOriginReadable(ctx, tx)
+	if err != nil {
+		return nil, false, err
+	}
+
 	// One row OVER the cap is requested, so "there is more" is a fact about the
 	// result set rather than a guess from `len(rows) == limit` — which cannot
 	// tell a project with exactly 500 callers from one with 5,000.
-	users, err := userActivity(ctx, tx, id, params, userRowsLimit+1)
+	users, err := userActivity(ctx, tx, id, params, userRowsLimit+1, humanCallFilter(origins))
 	if err != nil {
 		return nil, false, err
 	}
@@ -503,7 +563,7 @@ SELECT count(*) FILTER (WHERE l.execution_id IS NOT NULL AND EXISTS (
 FROM gateway.llm_request_logs AS l
 WHERE l.project_id = $1
   AND l.occurred_at >= $2
-  AND l.occurred_at < $3`
+  AND l.occurred_at < $3` + inferenceRouteOnLog
 
 	var total int64
 	if err := q.QueryRow(ctx, query, id, params.From, params.To).Scan(&attributed, &total); err != nil {
@@ -612,7 +672,7 @@ WITH attributed AS (
       ON m.provider = l.provider AND m.model_name = l.model
     WHERE l.project_id = $1
       AND l.occurred_at >= $2
-      AND l.occurred_at < $3
+      AND l.occurred_at < $3` + inferenceRouteOnLog + `
       AND l.execution_id IS NOT NULL
       AND EXISTS (
           SELECT 1 FROM elitea_runtime.execution_jobs AS j
@@ -868,12 +928,12 @@ type analyticsQuerier interface {
 
 // modelUsage splits the window by (provider, model).
 //
-// Rows with an empty model are EXCLUDED. An empty model means the request never
-// got far enough to resolve one — a 404, an auth refusal, a malformed body —
-// and those are real traffic but they are not a model's usage; folding them
-// into a nameless row would put a blank bar on the chart that no operator can
-// act on. They are still in the totals, which is where "we served N requests"
-// belongs.
+// Rows with an empty model are EXCLUDED. A completed call with no model is rare
+// (the gateway answered below 400 and resolved nothing), but a nameless bar on
+// the chart is not something an operator can act on, so it stays in the
+// totals only. The usual empty-model row is a refusal (a 404, an auth refusal,
+// a malformed body). completedCallWindow already drops those, and the Health
+// tab reports them.
 //
 // The cap is REPORTED. The client sums this array to normalise its share
 // column, so a silent cut makes every share a percentage of the busiest N
@@ -887,7 +947,7 @@ SELECT model,
        coalesce(sum(prompt_tokens), 0)::bigint,
        coalesce(sum(completion_tokens), 0)::bigint,
        count(*)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + completedCallWindow + `
   AND model <> ''
 GROUP BY model, provider
 ORDER BY count(*) DESC, model ASC
@@ -922,13 +982,16 @@ LIMIT $4`
 // is whatever the connection happened to inherit. Without the cast, the same
 // window bucketed on a server set to a different zone yields a different first
 // and last day, and the chart shifts by one column with nothing to show for it.
-func dailyActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) ([]analytics.DailyPoint, error) {
-	const query = `
+//
+// The day's active users drop the calls of unattended runs (human); its
+// calls and tokens keep them, like the window totals.
+func dailyActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, human string) ([]analytics.DailyPoint, error) {
+	query := `
 SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
        count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
-       count(DISTINCT user_id)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+       count(DISTINCT user_id) FILTER (WHERE TRUE` + human + `)::bigint
+FROM gateway.llm_request_logs AS l` + completedCallWindow + `
 GROUP BY 1
 ORDER BY 1`
 
@@ -953,16 +1016,22 @@ ORDER BY 1`
 //
 // Rows whose user_id is NULL are excluded: 0099 stores NULL for a request that
 // resolved no member, and "no member" is not a user to put on a leaderboard.
-func userActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, limit int) ([]analytics.UserActivity, error) {
-	const query = `
+//
+// The calls of unattended runs are excluded too (human, legacy issue 6802). A
+// pipeline schedule runs as its author, so without the filter the author
+// appears here — and on the Overview leaderboard — for calls a cron job made.
+// Their figures here are the calls they made themselves; the unattended calls
+// are reported under UsageSummary.Automated.
+func userActivity(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, limit int, human string) ([]analytics.UserActivity, error) {
+	query := `
 SELECT user_id,
        count(*)::bigint,
        coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
        max(occurred_at)
-FROM gateway.llm_request_logs` + requestLogWindow + `
-  AND user_id IS NOT NULL
+FROM gateway.llm_request_logs AS l` + completedCallWindow + `
+  AND user_id IS NOT NULL` + human + `
 GROUP BY user_id
-ORDER BY count(*) DESC, user_id ASC
+ORDER BY count(*) DESC, coalesce(sum(prompt_tokens + completion_tokens), 0) DESC, user_id ASC
 LIMIT $4`
 
 	rows, err := q.Query(ctx, query, id, params.From, params.To, limit)
@@ -1006,7 +1075,62 @@ LIMIT $4`
 			users[i].Name = identity.name
 		}
 	}
+	sortUserActivity(users)
 	return users, nil
+}
+
+// sortUserActivity puts the rows in the documented order (legacy issue 6764):
+// calls descending, then tokens descending, then display name ascending, then
+// user id ascending.
+//
+// Before this, two users with the same call count came back in user-id order.
+// The id is on no column of the Users table, so the order looked random. Every
+// key here is a visible column, and the id is last only so that the order is
+// TOTAL: two rows can never compare equal, so the order is the same on every
+// request.
+//
+// The SQL already orders by calls, tokens and id, so the LIMIT keeps the right
+// rows. The name is known only after userIdentities, so this second pass
+// applies it within the rows the statement returned.
+//
+// The display name is the name, else the email. A row with neither sorts after
+// every row that has one, so an unresolved identity does not jump to the top
+// of a tie.
+func sortUserActivity(users []analytics.UserActivity) {
+	sort.SliceStable(users, func(i, j int) bool {
+		a, b := users[i], users[j]
+		if a.RunCount != b.RunCount {
+			return a.RunCount > b.RunCount
+		}
+		if a.TotalTokens != b.TotalTokens {
+			return a.TotalTokens > b.TotalTokens
+		}
+		an, bn := userDisplayName(a), userDisplayName(b)
+		if an != bn {
+			if an == "" || bn == "" {
+				return bn == ""
+			}
+			return an < bn
+		}
+		return userIDOrder(a.UserID) < userIDOrder(b.UserID)
+	})
+}
+
+func userDisplayName(user analytics.UserActivity) string {
+	if user.Name != "" {
+		return strings.ToLower(user.Name)
+	}
+	return strings.ToLower(user.Email)
+}
+
+// userIDOrder compares ids numerically. The ids are decimal strings of int64
+// values, so a lexical comparison would put "10" before "9".
+func userIDOrder(id string) int64 {
+	value, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return math.MaxInt64
+	}
+	return value
 }
 
 type userIdentity struct {
@@ -1139,7 +1263,7 @@ WHERE u.id = ANY($1)`
 // a different corpus. When it is absent the caller omits total_project_users
 // and adoption_rate entirely rather than reporting a rate over a denominator it
 // invented.
-func projectAdoption(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) (members, active int64, ok bool, err error) {
+func projectAdoption(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams, human string) (members, active int64, ok bool, err error) {
 	// The two variants differ only in the SYSTEM-USER filter.
 	//
 	// Every project provisions a system account of its own and grants it a
@@ -1167,14 +1291,16 @@ WITH project_members AS (
     FROM public.auth_core__project_user_role AS pur
     WHERE pur.project_id = $1
 )`
-	const tail = `
+	// The active side drops the calls of unattended runs (human): a member
+	// whose only calls came from their pipeline schedule did not use AI.
+	tail := `
 SELECT (SELECT count(*)::bigint FROM project_members),
        (SELECT count(DISTINCT l.user_id)::bigint
         FROM gateway.llm_request_logs AS l
         WHERE l.project_id = $1
           AND l.occurred_at >= $2
-          AND l.occurred_at < $3
-          AND l.user_id IN (SELECT user_id FROM project_members))`
+          AND l.occurred_at < $3` + completedCallOnLog + `
+          AND l.user_id IN (SELECT user_id FROM project_members)` + human + `)`
 
 	// Asked BEFORE the statement below, for the reason userIdentities gives at
 	// length: the query names the table in its FROM clause, so a missing one
@@ -1248,6 +1374,11 @@ func checkRelations(ctx context.Context, q analyticsQuerier, names ...string) (b
 // It runs on the caller's snapshot, so the totals, the breakdown and the trend
 // are three views of one row set rather than three reads of a table the gateway
 // is committing into continuously.
+//
+// ALL ROUTES, ALL STATUSES (healthWindow). The inference-route filter of issue
+// 6879 is for the call figures, and this tab is not a call figure. A client
+// that sends every request to a wrong path, or whose /llm/v1/models or
+// count_tokens calls fail, has a real fault, and this is the only view of it.
 func projectHealth(ctx context.Context, q analyticsQuerier, id int64, params analytics.QueryParams) (*analytics.Health, error) {
 	health := &analytics.Health{
 		ByErrorCode: []analytics.ErrorCodeCount{},
@@ -1258,7 +1389,7 @@ func projectHealth(ctx context.Context, q analyticsQuerier, id int64, params ana
 	const totalsQuery = `
 SELECT count(*)::bigint,
        count(*) FILTER (WHERE ` + errorPredicate + `)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow
+FROM gateway.llm_request_logs` + healthWindow
 
 	if err := q.QueryRow(ctx, totalsQuery, id, params.From, params.To).
 		Scan(&health.Requests, &health.Errors); err != nil {
@@ -1316,7 +1447,7 @@ func healthByErrorCode(ctx context.Context, q analyticsQuerier, id int64, params
 	const query = `
 SELECT CASE WHEN error_code = '' THEN 'unclassified' ELSE error_code END,
        count(*)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + healthWindow + `
   AND ` + errorPredicate + `
 GROUP BY 1
 ORDER BY count(*) DESC, 1 ASC
@@ -1371,7 +1502,7 @@ SELECT provider,
        count(*) FILTER (WHERE ` + errorPredicate + `)::bigint,
        coalesce(avg(duration_ms), 0)::float8,
        coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::float8
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + healthWindow + `
   AND model <> ''
 GROUP BY provider, model, streaming
 ORDER BY count(*) DESC, model ASC, streaming ASC
@@ -1412,7 +1543,7 @@ func healthDaily(ctx context.Context, q analyticsQuerier, id int64, params analy
 SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
        count(*)::bigint,
        count(*) FILTER (WHERE ` + errorPredicate + `)::bigint
-FROM gateway.llm_request_logs` + requestLogWindow + `
+FROM gateway.llm_request_logs` + healthWindow + `
 GROUP BY 1
 ORDER BY 1`
 

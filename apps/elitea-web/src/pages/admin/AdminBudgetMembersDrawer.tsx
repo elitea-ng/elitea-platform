@@ -33,6 +33,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { formatSmallUsd } from '@/shared/lib/money';
 
 import type { MemberBudgetRow } from './api/adminBudgetsApi';
 
@@ -51,7 +52,9 @@ const DASH = '—';
 
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return DASH;
-  return `$${value.toFixed(2)}`;
+  // Not `toFixed(2)`: a sub-cent spend is real spend, and `$0.00` would claim
+  // none (#6682).
+  return formatSmallUsd(value);
 }
 
 function hasCap(row: MemberBudgetRow): boolean {

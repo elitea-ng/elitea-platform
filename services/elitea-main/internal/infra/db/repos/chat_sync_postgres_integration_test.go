@@ -1,7 +1,7 @@
 package repos
 
 // Incremental sync (ADR-0025 WP6) against the ledgered corpus: the triggers
-// tenant/0142 and shared/0144 install, and the delta reads built on them.
+// tenant/0144 and shared/0144 install, and the delta reads built on them.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 

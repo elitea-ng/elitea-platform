@@ -54,8 +54,10 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 	}
 
 	assertCurrentAvailableEntry(t, entries, "llm_model", func(t *testing.T, entry CurrentAvailableConfigurationType) {
-		if entry.Section != "llm" || entry.HasTestConnection || entry.ValidationFunc != nil || entry.CheckConnectionFunc != nil {
-			t.Fatalf("llm_model contract = %+v", entry)
+		// has_test_connection is the replatform's: the llm_model test sends
+		// one real completion (addLLMModelFormContract).
+		if entry.Section != "llm" || !entry.HasTestConnection || entry.ValidationFunc != nil || entry.CheckConnectionFunc != nil {
+			t.Fatalf("llm_model contract: section=%q has_test_connection=%v", entry.Section, entry.HasTestConnection)
 		}
 		if entry.UsesSDKValidation() {
 			t.Fatal("llm_model was classified as an SDK-owned configuration")

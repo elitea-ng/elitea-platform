@@ -13,7 +13,6 @@ interface LLMSettingsDialogProps {
   onCancel: () => void;
   selectedModel?: { max_output_tokens?: number; supports_reasoning?: boolean } | null;
   llmSettings?: Record<string, unknown>;
-  showWebhookSecret?: boolean;
   showStepsLimit?: boolean;
   onResetToDefaults?: (() => void) | undefined;
 }
@@ -49,7 +48,6 @@ export const LLMSettingsDialog = memo(
     onCancel,
     selectedModel,
     llmSettings = {},
-    showWebhookSecret = false,
     showStepsLimit = false,
     onResetToDefaults,
   }: LLMSettingsDialogProps) => {
@@ -90,7 +88,6 @@ export const LLMSettingsDialog = memo(
             llmSettings={localSettings}
             model={selectedModel ?? undefined}
             onChangeLLMSettings={onChangeLLMSettings}
-            showWebhookSecret={showWebhookSecret}
             showStepsLimit={showStepsLimit}
           />
           <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>

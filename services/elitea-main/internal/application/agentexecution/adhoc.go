@@ -87,10 +87,15 @@ type CurrentAdhocStartRequest struct {
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
 	Attachments []CurrentTurnAttachmentRef
+	// TriggerOrigin is how this run started (shared 0140), as on
+	// CurrentApplicationStartRequest: empty for the chat composer, `api` for
+	// a programmatic client.
+	TriggerOrigin executiondomain.TriggerOrigin
 }
 
 func (request CurrentAdhocStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID < 0 ||
+		!request.TriggerOrigin.Valid() ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
@@ -191,6 +196,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		IdempotencyKey: request.QuestionID, CapabilityID: executiondomain.AgentAdhocCapability,
 		ClientStreamID: request.ConversationUUID, ClientMessageID: responseMessageID,
 		SIOEvent: "chat_predict", Input: input,
+		TriggerOrigin: request.TriggerOrigin,
 		CurrentAdhocTurn: &CurrentAdhocTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID: request.ConversationUUID, TargetParticipantID: target.TargetParticipantID,

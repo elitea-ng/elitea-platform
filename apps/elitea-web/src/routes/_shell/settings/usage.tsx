@@ -19,6 +19,7 @@ import { pickParams } from '@/routes/-search/params';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import Usage from '@/pages/settings/Usage';
+import { UsageRefreshButton } from '@/pages/settings/UsageRefreshButton';
 
 export const Route = createFileRoute('/_shell/settings/usage')({
   validateSearch: pickParams('scope'),
@@ -32,7 +33,11 @@ function SettingsUsagePage() {
   const { scope } = Route.useSearch();
   return (
     <Paper elevation={0} sx={styles.root}>
-      <DrawerPageHeader title={t('routes.settings.usage.title', 'Usage')} showBorder />
+      <DrawerPageHeader
+        title={t('routes.settings.usage.title', 'Usage')}
+        showBorder
+        extraContent={<UsageRefreshButton projectId={projectId} scope={scope} />}
+      />
       <Box sx={styles.content}>
         <Usage projectId={projectId} scope={scope} />
       </Box>

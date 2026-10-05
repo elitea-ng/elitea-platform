@@ -140,10 +140,18 @@ type CurrentApplicationStartRequest struct {
 	// re-resolved server-side, so a stale or tampered client cannot notify
 	// somebody who is not in the project.
 	MentionsEveryone bool
+	// TriggerOrigin is how this run started (shared 0140): empty for the chat
+	// composer, `api` for an MCP client, `schedule` or `webhook` for the
+	// unattended pipeline entry points. The analytics active-user reads use
+	// it to stop counting a person as active because a cron job ran under
+	// their name (legacy issues 6802 and 6881). It never changes what the
+	// run does, who it runs as, or who pays for it.
+	TriggerOrigin executiondomain.TriggerOrigin
 }
 
 func (request CurrentApplicationStartRequest) Validate() error {
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 || request.TargetParticipantID <= 0 ||
+		!request.TriggerOrigin.Valid() ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentInput(request.UserInput, request.AllowEmptyUserInput) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
@@ -322,6 +330,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ClientMessageID: responseMessageID,
 		SIOEvent:        "chat_predict",
 		Input:           input,
+		TriggerOrigin:   request.TriggerOrigin,
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:     request.ConversationUUID,

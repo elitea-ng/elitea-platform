@@ -66,6 +66,8 @@ Reads the per-request billing ledger, deployment-wide, broken down by provider a
 
 <Accordion title="Logs">
 Reads every request the gateway served, including ones a billing-based Usage report would miss entirely — refused by a budget, rejected by policy, sent to an unresolvable model, or failed upstream. The log has no column for a prompt, completion, or upstream error text; the panel states that rather than showing an expandable row with nothing in it.
+
+The gateway keeps each row for 92 days and then deletes it. The period covers the widest Analytics preset (Last 90d). A row identifies the user and the project that made the request, the model, the route, the status and the time. So the log is a 92-day record of each user's LLM activity. Anyone with read access to the database, or to a project's Analytics Users tab, can see that record. The period is fixed in the gateway and no setting changes it.
 </Accordion>
 
 <Accordion title="Alerts">

@@ -965,6 +965,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// assigned inside the branch that composes it, and the variable is a nil
 	// INTERFACE everywhere else.
 	var projectVectorStore projectprovisioning.ProjectVectorStore
+	// The platform default model (#6826). Declared as the interface the router
+	// takes and assigned only from a non-nil service, so no typed nil reaches
+	// the router's nil checks.
+	var platformModelDefaults api.PlatformModelDefaults
 	// The save-time credential gate for the toolkit write path (#613). It is
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
@@ -1127,6 +1131,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 		if err != nil {
 			return fmt.Errorf("compose current Configurations model-default route: %w", err)
+		}
+		// The secrets handler is the one vault creator (#399). It creates the
+		// public project's vault on a fresh install, where migrations made
+		// the project without the provisioner.
+		modelDefaults, modelDefaultsErr := currentConfigurationsRoot.NewPlatformModelDefaults(
+			pool,
+			v2secrets.NewHandler(pool),
+		)
+		if modelDefaultsErr != nil {
+			return fmt.Errorf("compose the platform default model: %w", modelDefaultsErr)
+		}
+		if modelDefaults != nil {
+			platformModelDefaults = modelDefaults
 		}
 		// The status_ok decision for the compatibility write routes (#457).
 		//
@@ -1945,6 +1962,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
 			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
 			Logger:         logger,
+			// The analytics reads decide active users and run spend from
+			// the inbound execution id, so the edge keeps it only for a live
+			// execution of the caller.
+			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool),
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)
@@ -2289,6 +2310,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ConfigStoredResolver:       configStoredResolver,
 		ObjectStore:                objectStore,
 		ProjectVectorStore:         projectVectorStore,
+		PlatformModelDefaults:      platformModelDefaults,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*
 		// route, and creating an agent from the UI 404s (#115).

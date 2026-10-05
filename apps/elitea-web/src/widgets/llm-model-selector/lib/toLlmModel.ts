@@ -29,6 +29,11 @@ export function toLlmModel(raw: ConfigModel): LLMModel {
     id: raw.id !== undefined ? String(raw.id) : raw.name,
     name: raw.name,
     ...(raw.display_name !== undefined ? { display_name: raw.display_name } : {}),
+    // A blank description is no description: the menu must not leave an
+    // empty second line under the name.
+    ...(typeof raw['description'] === 'string' && raw['description'].trim() !== ''
+      ? { description: raw['description'].trim() }
+      : {}),
     ...(typeof raw['shared'] === 'boolean' ? { shared: raw['shared'] } : {}),
     ...(typeof raw['supports_vision'] === 'boolean' ? { supports_vision: raw['supports_vision'] } : {}),
     ...(typeof raw['supports_reasoning'] === 'boolean' ? { supports_reasoning: raw['supports_reasoning'] } : {}),

@@ -24,9 +24,14 @@ package analytics
 // # What is absent, and why it is absent rather than zero
 //
 //   - CACHE tokens. 0099 has prompt_tokens and completion_tokens and no third
-//     pair. `cache_dimension_available` is a constant false, in the shape of
-//     `tool_dimension_available` next door: the caller learns the deployment
-//     cannot answer, instead of reading a fabricated 0.
+//     pair. Shared migration 0139 adds cache_read_tokens and cache_write_tokens,
+//     and the gateway fills them from that migration on, but THIS READ DOES
+//     NOT SUM THEM YET: the response has no cache keys and the spec has no
+//     schema for them. So `cache_dimension_available` stays a constant false,
+//     in the shape of `tool_dimension_available` next door: the caller learns
+//     the endpoint cannot answer, instead of reading a fabricated 0. Rows
+//     written before 0139 hold 0 there, so a future read must report the
+//     dimension as available only for a window after the migration.
 //   - COST, when nothing in the window has a catalogue price. An operator who
 //     has not populated gateway.gateway_models gets `cost_dimension_available:
 //     false` and no money keys at all. A price of zero for every call would
@@ -53,6 +58,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // agentExecutionCapabilities is internal/infra/db/repos/analytics.go's
@@ -79,7 +86,22 @@ const (
 // has to be: the Overview tab and the Costs tab paint the same window side by
 // side, and two predicates that disagree at a boundary put two counts of one
 // day on one screen.
-const requestLogWindow = ` WHERE l.project_id = $1 AND l.occurred_at >= $2 AND l.occurred_at < $3`
+//
+// That includes the route predicate (legacy issue 6879): only the inference
+// routes in analytics.InferenceRouteSQLList are model calls. Without it the
+// Costs tab counts the model listing and the token counter as calls while the
+// Overview tab does not.
+//
+// It also includes the status predicate: the estimate counts COMPLETED calls
+// (analytics.CompletedStatusSQL), like the Overview tab's call figures. A
+// refused or failed call is not billed, so it has no place in a cost view. The
+// agent attribution below is the exception, for the reason it gives.
+const requestLogWindow = ` WHERE l.project_id = $1 AND l.occurred_at >= $2 AND l.occurred_at < $3` +
+	inferenceRouteOnLog + ` AND l.` + analytics.CompletedStatusSQL
+
+// inferenceRouteOnLog limits a read of the log under the alias `l` to the
+// inference routes.
+const inferenceRouteOnLog = ` AND l.route IN (` + analytics.InferenceRouteSQLList + `)`
 
 // pricedSource is the FROM clause when the price catalogue is present.
 //
@@ -199,8 +221,9 @@ type costEstimate struct {
 	// reads a flag rather than inferring from a missing key.
 	TokenDimensionAvailable bool `json:"token_dimension_available"`
 	CostDimensionAvailable  bool `json:"cost_dimension_available"`
-	// CacheDimensionAvailable is a constant false. 0099 records no cache token
-	// counts, and there is no second source to take them from.
+	// CacheDimensionAvailable is a constant false. The request log records
+	// cache token counts from shared migration 0139 on, but this read does not
+	// sum them yet; see the file header.
 	CacheDimensionAvailable bool   `json:"cache_dimension_available"`
 	Currency                string `json:"currency"`
 	// PricedCalls and UnpricedCalls partition the window. Their sum is
@@ -253,6 +276,13 @@ type costEstimate struct {
 	UnattributedToolCalls int64             `json:"unattributed_tool_calls"`
 	ByTool                []estimateToolRow `json:"by_tool,omitempty"`
 	ByToolTruncated       bool              `json:"by_tool_truncated"`
+
+	// Evaluation is the window's evaluation spend (legacy issues 6677 and
+	// 6678): the calls the evaluation orchestrator signs `eval:<run>:…`.
+	// Those calls name no execution, so the agent split above counts them as
+	// unattributed; this block is where they are attributed. Absent when the
+	// request log has no execution_id column. See estimate_evaluation.go.
+	Evaluation *estimateEvaluation `json:"evaluation,omitempty"`
 }
 
 // estimateAgentRows and estimateToolRows cap ByAgent and ByTool, in the same
@@ -372,6 +402,9 @@ func buildEstimate(ctx context.Context, tx pgx.Tx, projectID int64, from, to tim
 		return nil, err
 	}
 	if err := estimateByTool(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
+		return nil, err
+	}
+	if err := buildEstimateEvaluation(ctx, tx, estimate, pricesPresent, priced, projectID, from, to); err != nil {
 		return nil, err
 	}
 	if !priced {
@@ -672,7 +705,9 @@ SELECT EXISTS (
 // that carry a usable execution id and those that do not — the same split
 // GetAgentAnalytics' agentAttribution reports as AttributedCalls /
 // UnattributedCalls, so the two numbers can be compared across the Overview
-// and Agents tabs without reading two different predicates.
+// and Agents tabs without reading two different predicates. For that reason it
+// counts every inference-route ATTEMPT, as the Agents tab does, and not only
+// the completed calls the rest of the estimate counts.
 func estimateAgentAttribution(
 	ctx context.Context, tx pgx.Tx, projectID int64, from, to time.Time,
 ) (attributed, unattributed int64, err error) {
@@ -687,7 +722,7 @@ SELECT count(*) FILTER (WHERE l.execution_id IS NOT NULL AND EXISTS (
 FROM gateway.llm_request_logs AS l
 WHERE l.project_id = $1
   AND l.occurred_at >= $2
-  AND l.occurred_at < $3`
+  AND l.occurred_at < $3` + inferenceRouteOnLog
 
 	var total int64
 	if err := tx.QueryRow(ctx, query, projectID, from, to).Scan(&attributed, &total); err != nil {

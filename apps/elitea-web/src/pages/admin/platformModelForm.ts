@@ -73,6 +73,11 @@ export interface ModelForm {
   readonly type: string;
   readonly modelName: string;
   readonly credential: string;
+  /**
+   * The chat model's one-line description (max 40 characters). The pickers
+   * show it under the model name. A blank value clears it.
+   */
+  readonly description: string;
   readonly lowTier: boolean;
   readonly highTier: boolean;
   /** Held as typed, not as a number: an empty box is a state a number has no value for. */
@@ -99,6 +104,11 @@ function storedFlag(
 }
 
 /** One stored number as the text the box shows. */
+function storedText(data: Readonly<Record<string, unknown>>, field: string): string {
+  const value = data[field];
+  return typeof value === 'string' ? value : '';
+}
+
 function storedNumber(
   data: Readonly<Record<string, unknown>>, field: string, fallback: string,
 ): string {
@@ -125,6 +135,7 @@ export function formOf(
       type: defaultModelType(modelTypes),
       modelName: '',
       credential: NO_CREDENTIAL_CHOSEN,
+      description: '',
       lowTier: false,
       highTier: false,
       contextWindow: DEFAULT_CONTEXT_WINDOW,
@@ -150,6 +161,7 @@ export function formOf(
     type: editing.type,
     modelName: editing.model_name,
     credential: editing.credential_name,
+    description: storedText(stored, 'description'),
     lowTier: editing.low_tier ?? false,
     highTier: editing.high_tier ?? false,
     contextWindow: storedNumber(stored, 'context_window', DEFAULT_CONTEXT_WINDOW),
@@ -196,6 +208,10 @@ function chatFields(form: ModelForm): Partial<PlatformModelData> {
   if (form.type !== TIERED_MODEL_TYPE) return {};
   const contextWindow = Number.parseInt(form.contextWindow, 10);
   return {
+    // Sent even when blank: the stored object is the merge base, so leaving
+    // the key out would keep a description the operator cleared. The server
+    // drops a blank value.
+    description: form.description.trim(),
     low_tier: form.lowTier,
     high_tier: form.highTier,
     openai_compatible: form.openaiCompatible,

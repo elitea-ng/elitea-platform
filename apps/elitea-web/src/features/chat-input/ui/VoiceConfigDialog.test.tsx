@@ -2,8 +2,6 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
-import { SocketClientContext } from '@/shared/api/socket/client';
-import { createTestSocketClient } from '@/shared/api/socket/testing';
 
 import { installWebStorageShim } from '../../../test/webstorage';
 
@@ -119,22 +117,35 @@ describe('VoiceConfigDialog', () => {
     expect(sliders[0]).toHaveAttribute('aria-valuenow', '1.8');
   });
 
-  it('passes hasModelTTS/ttsModel/socket through to the voice select when a socket is in context', () => {
-    const client = createTestSocketClient();
-    const { getByTestId } = renderWithTheme(
-      <SocketClientContext.Provider value={client}>
-        <VoiceConfigDialog
-          config={CONFIG}
-          voices={[{ id: 'v-1', name: 'Server Voice' }]}
-          open
-          onApply={() => {}}
-          onCancel={() => {}}
-          ttsModel={TTS_MODEL}
-          hasModelTTS
-        />
-      </SocketClientContext.Provider>,
+  it('with a model configured, shows the model voices and no "no speech model" notice', () => {
+    const { getByTestId, queryByTestId } = renderWithTheme(
+      <VoiceConfigDialog
+        config={CONFIG}
+        voices={[{ id: 'v-1', name: 'Server Voice' }]}
+        open
+        onApply={() => {}}
+        onCancel={() => {}}
+        ttsModel={TTS_MODEL}
+        hasModelTTS
+        projectId="p1"
+      />,
     );
-    // The dialog itself rendered without crashing while reading a real socket from context.
     expect(getByTestId('voice-preview-button')).toBeInTheDocument();
+    expect(queryByTestId('voice-no-model-notice')).not.toBeInTheDocument();
+  });
+
+  it('with no speech model configured, says so above the controls', () => {
+    const { getByTestId } = renderWithTheme(
+      <VoiceConfigDialog
+        config={CONFIG}
+        voices={[]}
+        open
+        onApply={() => {}}
+        onCancel={() => {}}
+        ttsModel={null}
+        hasModelTTS={false}
+      />,
+    );
+    expect(getByTestId('voice-no-model-notice')).toHaveTextContent('No speech model is configured for this project.');
   });
 });

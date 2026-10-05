@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
@@ -8,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { DateRangeField } from './DateRangeField';
+import { DateRangeField, dateRangeFieldErrorMessage } from './DateRangeField';
 
 /**
  * `DateRangeField` requires a `LocalizationProvider` ancestor (it does not
@@ -128,5 +129,157 @@ describe('DateRangeField', () => {
     // The rest of the action bar (Apply/"OK") is still there — only the
     // dead Clear affordance is removed.
     expect(queryByRole('button', { name: /apply/i })).not.toBeNull();
+  });
+
+  /**
+   * #6738: the bounds used to constrain only the popup. A value typed into the
+   * field past `maxDateTime` reached `onChange`, so From could be set later
+   * than To. The field now keeps its last valid value and says why.
+   */
+  it('shows the From-after-To error and does not propagate a value past maxDateTime', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    // Stateful like the real caller, so the section keeps both typed digits.
+    function Controlled() {
+      const [value, setValue] = useState(new Date(2026, 6, 27, 10, 30));
+      return (
+        <>
+          <DateRangeField
+            label="From:"
+            value={value}
+            onChange={(next) => {
+              onChange(next);
+              setValue(next);
+            }}
+            open={false}
+            onOpen={() => {}}
+            onClose={() => {}}
+            maxDateTime={new Date(2026, 6, 27, 12, 0)}
+          />
+          {/* Stands in for a preset button replacing the value from outside. */}
+          <button type="button" onClick={() => setValue(new Date(2026, 6, 27, 0, 0))}>
+            preset
+          </button>
+        </>
+      );
+    }
+    const { getByRole, findByRole, queryByRole } = renderField(<Controlled />);
+
+    // 23:30 is past the 12:00 bound on the same day.
+    await user.click(getByRole('spinbutton', { name: 'Hours' }));
+    await user.keyboard('23');
+
+    expect(await findByRole('alert')).toHaveTextContent('From must not be later than To.');
+    // "2" (02:30) was a valid intermediate value; 23:30 never got through.
+    const hours = onChange.mock.calls.map((call) => (call[0] as Date).getHours());
+    expect(hours).not.toContain(23);
+    // …and the intermediate is not what is left behind: the value the edit
+    // started from comes back, and the field shows it.
+    const last = onChange.mock.lastCall?.[0] as Date;
+    expect([last.getHours(), last.getMinutes()]).toEqual([10, 30]);
+    expect(getByRole('spinbutton', { name: 'Hours' })).toHaveTextContent('10');
+
+    // A new value from outside (a preset) drops the stale message.
+    await user.click(getByRole('button', { name: 'preset' }));
+    expect(queryByRole('alert')).toBeNull();
+  });
+
+  it('propagates a typed value inside the bounds and shows no error', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { getByRole, queryByRole } = renderField(
+      <DateRangeField
+        label="From:"
+        value={new Date(2026, 6, 20, 10, 30)}
+        onChange={onChange}
+        open={false}
+        onOpen={() => {}}
+        onClose={() => {}}
+        maxDateTime={new Date(2026, 6, 27, 0, 0)}
+      />,
+    );
+
+    await user.click(getByRole('spinbutton', { name: 'Day' }));
+    await user.keyboard('22');
+
+    expect(onChange).toHaveBeenCalled();
+    const last = onChange.mock.lastCall?.[0] as Date;
+    expect(last.getDate()).toBe(22);
+    expect(queryByRole('alert')).toBeNull();
+  });
+
+  it('reports an already-backwards pair on render (From later than To)', async () => {
+    const { findByTestId } = renderField(
+      <DateRangeField
+        label="From:"
+        value={new Date(2026, 6, 28, 0, 0)}
+        onChange={vi.fn()}
+        open={false}
+        onOpen={() => {}}
+        onClose={() => {}}
+        maxDateTime={new Date(2026, 6, 27, 23, 59)}
+      />,
+    );
+    expect(await findByTestId('analytics-date-range-error')).toHaveTextContent('From must not be later than To.');
+  });
+
+  /**
+   * The rejected-edit message is about the bound the edit broke. When the
+   * OTHER field moves that bound so the range is valid again, the message must
+   * not linger next to a valid From.
+   */
+  it('drops the rejected-edit message when the bound it broke changes', async () => {
+    const user = userEvent.setup();
+    function Pair() {
+      const [from, setFrom] = useState(new Date(2026, 6, 27, 2, 30));
+      const [to, setTo] = useState(new Date(2026, 6, 27, 12, 0));
+      return (
+        <>
+          <DateRangeField
+            label="From:"
+            value={from}
+            onChange={setFrom}
+            open={false}
+            onOpen={() => {}}
+            onClose={() => {}}
+            maxDateTime={to}
+          />
+          <button type="button" onClick={() => setTo(new Date(2026, 6, 27, 23, 59))}>
+            widen
+          </button>
+        </>
+      );
+    }
+    const { getByRole, findByRole, queryByRole } = renderField(<Pair />);
+
+    await user.click(getByRole('spinbutton', { name: 'Hours' }));
+    await user.keyboard('23');
+    expect(await findByRole('alert')).toHaveTextContent('From must not be later than To.');
+    expect(getByRole('spinbutton', { name: 'Hours' })).toHaveTextContent('02');
+
+    await user.click(getByRole('button', { name: 'widen' }));
+    expect(queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('dateRangeFieldErrorMessage', () => {
+  const fromAfterTo = 'From must not be later than To.';
+  const invalid = 'Enter a valid date and time.';
+
+  it('names the From/To conflict only for a bound the field was given', () => {
+    // From carries maxDateTime (= To); To carries minDateTime (= From).
+    expect(dateRangeFieldErrorMessage('maxDate', { hasMin: false, hasMax: true })).toBe(fromAfterTo);
+    expect(dateRangeFieldErrorMessage('maxTime', { hasMin: false, hasMax: true })).toBe(fromAfterTo);
+    expect(dateRangeFieldErrorMessage('minDate', { hasMin: true, hasMax: false })).toBe(fromAfterTo);
+    expect(dateRangeFieldErrorMessage('minTime', { hasMin: true, hasMax: false })).toBe(fromAfterTo);
+  });
+
+  it("reports the picker's own 1900/2099 limits as an invalid date", () => {
+    // From typed as 1899: only the default minDate can produce this.
+    expect(dateRangeFieldErrorMessage('minDate', { hasMin: false, hasMax: true })).toBe(invalid);
+    // To typed as 2100: only the default maxDate can produce this.
+    expect(dateRangeFieldErrorMessage('maxDate', { hasMin: true, hasMax: false })).toBe(invalid);
+    expect(dateRangeFieldErrorMessage('invalidDate', { hasMin: true, hasMax: true })).toBe(invalid);
+    expect(dateRangeFieldErrorMessage(null, { hasMin: true, hasMax: true })).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ import (
 
 	agentapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 type chatStartProbe struct {
@@ -76,6 +77,32 @@ func TestInternalChatSendUsesOneSharedAdmissionAndBoundResponse(t *testing.T) {
 		}
 	}
 }
+
+// An MCP tools/call send is a programmatic client, so both admissions stamp
+// the api trigger origin (shared 0140).
+func TestInternalChatSendStampsTheAPITriggerOrigin(t *testing.T) {
+	for _, ordinary := range []bool{false, true} {
+		p := &chatStartProbe{}
+		runtime := chatSendFixture(p)
+		args := chatSendArguments()
+		args["await_task_timeout"] = 0
+		if ordinary {
+			delete(args, "participant_id")
+			args["llm_settings"] = map[string]any{"model_name": "chosen"}
+		}
+		if _, err := runtime.execute(chatSendContext(), 2, 3, args); err != nil {
+			t.Fatal(err)
+		}
+		if ordinary {
+			if p.adhoc == nil || p.adhoc.TriggerOrigin != executiondomain.TriggerOriginAPI {
+				t.Fatalf("ad-hoc admission origin = %+v, want api", p.adhoc)
+			}
+		} else if p.app == nil || p.app.TriggerOrigin != executiondomain.TriggerOriginAPI {
+			t.Fatalf("application admission origin = %+v, want api", p.app)
+		}
+	}
+}
+
 func TestInternalChatSendPauseIsNotSuccessAndAsyncDoesNotObserve(t *testing.T) {
 	for _, wait := range []int{0, 30} {
 		p := &chatStartProbe{}

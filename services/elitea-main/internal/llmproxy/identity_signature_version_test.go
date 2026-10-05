@@ -126,6 +126,11 @@ func TestExecutionIDFromHeader_DropsWhatItCannotVouchFor(t *testing.T) {
 		"a slash":               "exec/9",
 		"a percent escape":      "exec%0d9",
 		"over the length bound": strings.Repeat("e", maxExecutionIDLen+1),
+		// A `:` is reserved for the attributions elitea-main signs in
+		// process. An inbound one names an evaluation run or a derived id.
+		"an evaluation attribution": "eval:12:judge:case-1",
+		"a derived attribution":     "exec-9:child",
+		"any colon":                 "01JQ_A.B:C",
 	} {
 		h := http.Header{}
 		h.Set(HeaderExecutionID, value)
@@ -134,7 +139,7 @@ func TestExecutionIDFromHeader_DropsWhatItCannotVouchFor(t *testing.T) {
 		}
 	}
 
-	for _, value := range []string{"exec-9", "01JQ_A.B:C", strings.Repeat("e", maxExecutionIDLen)} {
+	for _, value := range []string{"exec-9", "01JQ_A.B-C", "3f2a9c1e-7b4d-4e8a-9f00-1c2d3e4f5a6b", strings.Repeat("e", maxExecutionIDLen)} {
 		h := http.Header{}
 		h.Set(HeaderExecutionID, value)
 		if got := executionIDFromHeader(h); got != value {
@@ -157,7 +162,7 @@ func TestInjectIdentity_ReadsTheExecutionIDBeforeStrippingIt(t *testing.T) {
 	// one (here: absent), which is what the strip is for.
 	out.Set(HeaderProjectID, "999")
 
-	injectIdentity(t.Context(), out, []byte(frozenSecret))
+	injectIdentity(t.Context(), out, []byte(frozenSecret), nil)
 
 	if got := out.Get(HeaderExecutionID); got != "exec-9" {
 		t.Fatalf("execution id header = %q, want it read before the strip and re-emitted", got)
@@ -174,7 +179,7 @@ func TestInjectIdentity_AnInvalidExecutionIDLeavesNoHeader(t *testing.T) {
 	out := http.Header{}
 	out.Set(HeaderExecutionID, "exec 9")
 
-	injectIdentity(t.Context(), out, []byte(frozenSecret))
+	injectIdentity(t.Context(), out, []byte(frozenSecret), nil)
 
 	if got := out.Get(HeaderExecutionID); got != "" {
 		t.Fatalf("an invalid execution id was forwarded as %q", got)

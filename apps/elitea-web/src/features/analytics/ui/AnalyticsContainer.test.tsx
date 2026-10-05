@@ -2,9 +2,10 @@ import type { ReactElement } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { RenderResult } from '@testing-library/react';
+import { waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
@@ -76,7 +77,11 @@ function expectedUsd(amount: number): string {
  * nothing — and publishes `spend_available` so that "no spend yet" stays
  * distinguishable from "no data".
  */
-function costsResponse(totalCost: number, spendAvailable: boolean): Record<string, unknown> {
+function costsResponse(
+  totalCost: number,
+  spendAvailable: boolean,
+  periods: readonly Record<string, unknown>[] = [],
+): Record<string, unknown> {
   return {
     kpis: {
       total_cost: totalCost,
@@ -85,7 +90,7 @@ function costsResponse(totalCost: number, spendAvailable: boolean): Record<strin
       spend_available: spendAvailable,
       window_days: 1,
     },
-    periods: [],
+    periods,
     by_scope: [],
     periods_truncated: false,
     date_from: '2026-08-01T00:00:00Z',
@@ -111,6 +116,60 @@ describe('AnalyticsContainer', () => {
       const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
       expect(await findByText('COST')).toBeInTheDocument();
       expect(await findByText(expectedUsd(12.5))).toBeInTheDocument();
+    });
+
+    /**
+     * The figure is a whole billing period's accumulator, matched by overlap,
+     * so under `Today` it is the month to date. The tile says which dates it
+     * covers instead of reading as the window's spend.
+     */
+    it('names the billing period the figure covers, not the selected window', async () => {
+      const october = {
+        scope: 'project',
+        scope_id: '7',
+        period_start: '2026-10-01T00:00:00Z',
+        period_end: '2026-11-01T00:00:00Z',
+        total_cost: 12.5,
+        last_updated: '2026-10-04T10:00:00Z',
+        pending_reconciliation: false,
+      };
+      server.use(
+        http.get(USAGE_URL, () => HttpResponse.json(usageResponse())),
+        http.get(COSTS_URL, () => HttpResponse.json(costsResponse(12.5, true, [october]))),
+      );
+      const { findByText, queryByText } = renderScreen(<AnalyticsContainer projectId="7" />);
+      const period = new Intl.DateTimeFormat(undefined, {
+        timeZone: 'UTC',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      }).formatRange(new Date('2026-10-01T00:00:00Z'), new Date('2026-10-31T23:59:59.999Z'));
+      // en-US formatRange puts thin spaces (U+2009) around the dash. Testing
+      // Library collapses whitespace in the DOM text but not in a string
+      // matcher, so the expected label is collapsed the same way.
+      const label = `billed ${period}, USD`.replace(/\s+/gu, ' ');
+      expect(await findByText(label)).toBeInTheDocument();
+      expect(queryByText('billed spend, USD')).not.toBeInTheDocument();
+    });
+
+    it('says "billing period to date" when no row names the period', async () => {
+      server.use(
+        http.get(USAGE_URL, () => HttpResponse.json(usageResponse())),
+        http.get(COSTS_URL, () => HttpResponse.json(costsResponse(12.5, true))),
+      );
+      const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
+      expect(await findByText('billing period to date, USD')).toBeInTheDocument();
+    });
+
+    // #6682: two fraction digits printed a sub-cent spend as $0.00.
+    it('does not print a sub-cent spend as zero', async () => {
+      server.use(
+        http.get(USAGE_URL, () => HttpResponse.json(usageResponse())),
+        http.get(COSTS_URL, () => HttpResponse.json(costsResponse(0.004, true))),
+      );
+      const { findByText } = renderScreen(<AnalyticsContainer projectId="7" />);
+      expect(await findByText('COST')).toBeInTheDocument();
+      expect(await findByText(/^\D*0\.004$/)).toBeInTheDocument();
     });
 
     /**
@@ -247,6 +306,83 @@ describe('AnalyticsContainer', () => {
     // and the clicked user is preselected via `pendingUserId`).
     expect(getByRole('tab', { name: 'Users', selected: true })).toBeInTheDocument();
     expect(await findByText('alice@example.com')).toBeInTheDocument();
+  });
+
+  // #6791: calendar-day presets; Today replaced Last 24h and is the default.
+  it('opens on Today and sends today 00:00 .. next midnight', async () => {
+    const seen: URL[] = [];
+    server.use(
+      http.get(USAGE_URL, ({ request }) => {
+        seen.push(new URL(request.url));
+        return HttpResponse.json(usageResponse());
+      }),
+    );
+    const { getByRole, queryByRole } = renderScreen(<AnalyticsContainer projectId="7" />);
+    expect(getByRole('button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'true');
+    expect(queryByRole('button', { name: 'Last 24h' })).toBeNull();
+    expect(queryByRole('button', { name: 'Custom' })).toBeNull();
+
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    const params = seen[0]?.searchParams;
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const next = new Date(midnight);
+    next.setDate(next.getDate() + 1);
+    expect(params?.get('date_from')).toBe(midnight.toISOString());
+    expect(params?.get('date_to')).toBe(next.toISOString());
+  });
+
+  it('marks a hand-edited range Custom, and a preset click clears it', async () => {
+    server.use(http.get(USAGE_URL, () => HttpResponse.json(usageResponse())));
+    const user = userEvent.setup();
+    const { getAllByRole, getByRole, findByRole, queryByRole } = renderScreen(<AnalyticsContainer projectId="7" />);
+
+    // From's hour: 00 → 01, still before To (23:59).
+    const fromHours = getAllByRole('spinbutton', { name: 'Hours' })[0];
+    if (fromHours === undefined) throw new Error('From hours section missing');
+    await user.click(fromHours);
+    await user.keyboard('{ArrowUp}');
+
+    const custom = await findByRole('button', { name: 'Custom' });
+    expect(custom).toHaveAttribute('aria-pressed', 'true');
+    expect(getByRole('button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(getByRole('button', { name: 'Last 7d' }));
+    expect(getByRole('button', { name: 'Last 7d' })).toHaveAttribute('aria-pressed', 'true');
+    expect(queryByRole('button', { name: 'Custom' })).toBeNull();
+  });
+
+  /**
+   * A preset is computed from `now` once, on click. A page left open past
+   * midnight kept `Today` highlighted over yesterday, and clicking it did
+   * nothing because the group swallowed a click on the selected button.
+   */
+  it('re-applies the selected preset when it is clicked again (page open past midnight)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 9, 3, 23, 30));
+      const seen: string[] = [];
+      server.use(
+        http.get(USAGE_URL, ({ request }) => {
+          seen.push(new URL(request.url).searchParams.get('date_from') ?? '');
+          return HttpResponse.json(usageResponse());
+        }),
+      );
+      const user = userEvent.setup();
+      const { getByRole } = renderScreen(<AnalyticsContainer projectId="7" />);
+      const yesterday = new Date(2026, 9, 3, 0, 0).toISOString();
+      await waitFor(() => expect(seen).toContain(yesterday));
+
+      vi.setSystemTime(new Date(2026, 9, 4, 0, 30));
+      const today = getByRole('button', { name: 'Today' });
+      await user.click(today);
+
+      const midnight = new Date(2026, 9, 4, 0, 0).toISOString();
+      await waitFor(() => expect(seen).toContain(midnight));
+      expect(today).toHaveAttribute('aria-pressed', 'true');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('changes the date-range preset selection', async () => {

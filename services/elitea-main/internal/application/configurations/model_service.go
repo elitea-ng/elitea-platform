@@ -30,6 +30,15 @@ type CurrentModelDefaultsLoader interface {
 	Load(context.Context, int32, int32, CurrentModelSection) (CurrentModelCatalogDefaults, error)
 }
 
+// CurrentPlatformModelDefaultLoader reads the platform default model: the
+// public project's stored default, then the admin vault's. It is optional on
+// the defaults loader. Without it a project whose own default no longer
+// resolves falls back to the first catalogue model, which was the behaviour
+// before #6826.
+type CurrentPlatformModelDefaultLoader interface {
+	LoadPlatformModelDefault(context.Context, int32, CurrentModelSection) (CurrentModelDefault, error)
+}
+
 // CurrentModelCatalogService orchestrates the current configuration rows and
 // vault defaults, then delegates response parity to BuildCurrentModelCatalog.
 type CurrentModelCatalogService struct {
@@ -82,7 +91,7 @@ func (s *CurrentModelCatalogService) Get(
 		return CurrentModelCatalogResponse{}, err
 	}
 
-	return BuildCurrentModelCatalog(CurrentModelCatalogRequest{
+	request := CurrentModelCatalogRequest{
 		Section:           query.Section,
 		ProjectID:         query.ProjectID,
 		PublicProjectID:   query.PublicProjectID,
@@ -90,7 +99,23 @@ func (s *CurrentModelCatalogService) Get(
 		ProjectItems:      projectItems,
 		PublicSharedItems: publicSharedItems,
 		Defaults:          defaults,
-	}), nil
+	}
+	response := BuildCurrentModelCatalog(request)
+	platform, ok := s.defaults.(CurrentPlatformModelDefaultLoader)
+	if !ok || !currentProjectModelDefaultUnresolved(defaults, response) {
+		return response, nil
+	}
+	// The project's own default names a model that is gone from its
+	// catalogue. The platform default is read only now, so a project whose
+	// default resolves pays no second vault read.
+	request.Defaults.Platform, err = platform.LoadPlatformModelDefault(ctx, query.PublicProjectID, query.Section)
+	if err != nil {
+		return CurrentModelCatalogResponse{}, currentModelCatalogDependencyError(ctx, "load platform model default", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return CurrentModelCatalogResponse{}, err
+	}
+	return BuildCurrentModelCatalog(request), nil
 }
 
 func validateCurrentModelCatalogQuery(ctx context.Context, query CurrentModelCatalogQuery) error {

@@ -65,7 +65,7 @@ const (
 const (
 	// SettleWindow is how far behind the database clock a returned cursor
 	// stays (see the package doc). The child -> parent bump throttle in tenant
-	// migration 0142 (1 s) must stay shorter than this.
+	// migration 0144 (1 s) must stay shorter than this.
 	SettleWindow = 5 * time.Second
 
 	// TombstoneRetention is how long tombstones are kept and therefore the

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/maximhq/bifrost/core/schemas"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // credential is a single provider credential row read from the project's
@@ -14,6 +17,11 @@ import (
 // is never logged.
 type credential struct {
 	configID string // configuration row id
+	// configType is the row's `type` (ai_dial, azure_open_ai, ...). Three types
+	// share the Azure provider; only ai_dial takes the AI DIAL protocol and
+	// routes (dial_protocol.go). It comes from the credential row itself, never
+	// from the model row that names it.
+	configType string
 	// keyID is the bifrost Key ID. It equals configID for a credential the
 	// caller's own project owns. A credential read from the public project is
 	// prefixed (sharedKeyIDPrefix) so two rows that carry the same numeric id in
@@ -50,6 +58,10 @@ type credential struct {
 	// useAnthropicEndpoints routes vllm-class credentials through the
 	// upstream's Anthropic-compatible /v1/messages surface (see credentialData).
 	useAnthropicEndpoints bool
+	// dialProtocol is the per-model AI DIAL protocol (dial_protocol.go). It is
+	// not stored on the credential row: GetKeysForProvider copies it from the
+	// linked-credential pin onto the one credential the pin selected.
+	dialProtocol DialProtocol
 }
 
 // sharedKeyIDPrefix marks a bifrost Key ID that came from the public project
@@ -58,6 +70,34 @@ type credential struct {
 // two scopes are read; the prefix also tells an operator reading a log line
 // that a platform-shared credential served the request.
 const sharedKeyIDPrefix = "shared:"
+
+// SelectedCredentialOwner classifies the credential that served the request on
+// ctx: requestlog.CredentialOwnerPlatform for a shared credential of the public
+// project, requestlog.CredentialOwnerProject for one the calling project owns,
+// and "" when no credential served it (legacy issue 6709).
+//
+// It reads the key bifrost/core SELECTED, not the set GetKeysForProvider
+// offered. Without a model link the offered set can mix both scopes, and only
+// the selected key says which one paid. bifrost writes that id onto the
+// request's BifrostContext after it picks a key, and clears it when the request
+// fails, so a failed request classifies as "".
+//
+// The id is this package's own Key ID, so the shared prefix is a fact this
+// package wrote and not a value a caller can supply.
+func SelectedCredentialOwner(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	keyID, _ := ctx.Value(schemas.BifrostContextKeySelectedKeyID).(string)
+	switch {
+	case keyID == "":
+		return ""
+	case strings.HasPrefix(keyID, sharedKeyIDPrefix):
+		return requestlog.CredentialOwnerPlatform
+	default:
+		return requestlog.CredentialOwnerProject
+	}
+}
 
 // providerConfigTypes maps a bifrost provider to the p_{projectID}.configuration
 // `type` values that represent a credential for it. Derived from the legacy
@@ -162,9 +202,11 @@ func (d credentialData) credentialKeyRef() string {
 // schema name and %s is the scope predicate: empty for the caller's own project
 // (a project sees all of its own credentials) and sharedPredicate for the public
 // project (a caller may see ONLY the rows the platform published). `shared` is
-// selected so the result can be re-verified in Go.
+// selected so the result can be re-verified in Go. `type` is selected because
+// three credential types share the Azure provider and only ai_dial speaks the
+// AI DIAL routes (dial_protocol.go).
 const credentialsSQL = `
-		SELECT COALESCE(uuid::text, id::text), COALESCE(elitea_title, ''), data, shared
+		SELECT COALESCE(uuid::text, id::text), COALESCE(elitea_title, ''), data, shared, type
 		FROM %q.configuration
 		WHERE section = 'ai_credentials' AND type = ANY($1) AND status_ok = true%s
 		ORDER BY id`
@@ -272,11 +314,11 @@ func (a *EliteaAccount) loadCredentialScope(
 	var creds []credential
 	for rows.Next() {
 		var (
-			id, title string
-			dataBytes []byte
-			shared    bool
+			id, title, configType string
+			dataBytes             []byte
+			shared                bool
 		)
-		if err := rows.Scan(&id, &title, &dataBytes, &shared); err != nil {
+		if err := rows.Scan(&id, &title, &dataBytes, &shared, &configType); err != nil {
 			return nil, fmt.Errorf("scan configuration row: %w", err)
 		}
 		// Defence in depth: a cross-project read must never yield an unpublished
@@ -304,6 +346,7 @@ func (a *EliteaAccount) loadCredentialScope(
 		}
 		creds = append(creds, credential{
 			configID:              id,
+			configType:            configType,
 			keyID:                 keyID,
 			ownerProjectID:        scopeProjectID,
 			shared:                shared,

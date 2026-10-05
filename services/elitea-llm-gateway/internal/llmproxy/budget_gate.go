@@ -25,6 +25,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/cost"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
@@ -234,6 +235,9 @@ type budgetVerdict struct {
 	// "member". See budgetScopeFieldProject.
 	scope      string
 	retryAfter time.Duration
+	// budgeted is set only on an ALLOWED verdict: the project has a hard
+	// ceiling (failmode.Decision.Budgeted). The audio routes read it.
+	budgeted bool
 }
 
 // budgetAllowed is the verdict every admitted request gets.
@@ -369,7 +373,9 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		}
 		// The project has room. The member cap is a SECOND ceiling inside it,
 		// so it is asked only after the project admits (issue #321).
-		return h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v.budgeted = v.allow && dec.Budgeted
+		return v
 	case failmode.Block402:
 		return budgetVerdict{
 			status:  http.StatusPaymentRequired,
@@ -392,7 +398,9 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		// independent limit.
 		h.logger.Warn("budget gate: unknown verdict; allowing request",
 			"verdict", fmt.Sprintf("%v", dec.Verdict))
-		return h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v.budgeted = v.allow && dec.Budgeted
+		return v
 	}
 }
 
@@ -626,7 +634,55 @@ const (
 // enrichment and not the record itself: a request that failed before the
 // provider answered has none, and zero is the honest value there.
 func recordLoggedUsage(ctx context.Context, units cost.Units) {
-	requestlog.FromContext(ctx).SetTokens(units.InputTokens, units.OutputTokens)
+	enrichment := requestlog.FromContext(ctx)
+	enrichment.SetTokens(units.InputTokens, units.OutputTokens)
+	recordLoggedCredentialOwner(ctx, enrichment)
+}
+
+// recordLoggedCredentialOwner attaches who owns the credential that served the
+// request (legacy issue 6709). It runs where the usage is recorded, because a
+// request that reaches the billing path is one a credential served, and ctx
+// there is the request's BifrostContext, where bifrost/core left the selected
+// key. A ctx without a selected key leaves the field empty.
+func recordLoggedCredentialOwner(ctx context.Context, enrichment *requestlog.Enrichment) {
+	enrichment.SetCredentialOwner(account.SelectedCredentialOwner(ctx))
+}
+
+// recordLoggedCacheTokens attaches the prompt-cache counts of a chat or text
+// completion usage block. Nil usage records nothing.
+func recordLoggedCacheTokens(ctx context.Context, usage *schemas.BifrostLLMUsage) {
+	if read, write, ok := cacheTokensFromLLMUsage(usage); ok {
+		requestlog.FromContext(ctx).SetCacheTokens(read, write)
+	}
+}
+
+// recordLoggedResponsesCacheTokens is recordLoggedCacheTokens for the
+// Responses-API usage block, which /llm/v1/responses and /llm/v1/messages use.
+func recordLoggedResponsesCacheTokens(ctx context.Context, usage *schemas.ResponsesResponseUsage) {
+	if read, write, ok := cacheTokensFromResponsesUsage(usage); ok {
+		requestlog.FromContext(ctx).SetCacheTokens(read, write)
+	}
+}
+
+// cacheTokensFromLLMUsage reads the cache-read and cache-write counts from a
+// chat usage block. ok is false when the block carries no prompt details.
+func cacheTokensFromLLMUsage(usage *schemas.BifrostLLMUsage) (read, write int64, ok bool) {
+	if usage == nil || usage.PromptTokensDetails == nil {
+		return 0, 0, false
+	}
+	details := usage.PromptTokensDetails
+	return int64(details.CachedReadTokens), int64(details.CachedWriteTokens), true
+}
+
+// cacheTokensFromResponsesUsage reads the same two counts from a Responses-API
+// usage block. bifrost maps OpenAI's cached_tokens into CachedReadTokens and
+// Anthropic's cache_creation_input_tokens into CachedWriteTokens.
+func cacheTokensFromResponsesUsage(usage *schemas.ResponsesResponseUsage) (read, write int64, ok bool) {
+	if usage == nil || usage.InputTokensDetails == nil {
+		return 0, 0, false
+	}
+	details := usage.InputTokensDetails
+	return int64(details.CachedReadTokens), int64(details.CachedWriteTokens), true
 }
 
 func (h *Handler) updateUsageUnits(
@@ -712,6 +768,17 @@ func (h *Handler) updateUsageUnits(
 			"provider", provider, "model", model,
 			"source", actualCost.Source, "cost_nano", actualCost.TotalNanoUSD,
 			"metric", MetricAudioDefaultPriced)
+	}
+
+	// The catalog row has an input price and no output price, so the output
+	// tokens were billed at the pylon input x 3 estimate. That is the shape
+	// issue #6719 hid: gpt-image-2 billed its image output at half its real
+	// rate, and every log line looked like a catalog price. The bill does not
+	// change here; the estimate becomes visible.
+	if actualCost.OutputDerived {
+		h.logger.WarnContext(ctx, "cost: the catalog has no output price for this model; output tokens billed at the input x 3 estimate",
+			"provider", provider, "model", model,
+			"output_tokens", u.OutputTokens, "output_nano", actualCost.OutputNanoUSD)
 	}
 
 	// The authored credential rate policy decides whether this cost reaches the
@@ -802,6 +869,11 @@ func (h *Handler) updateUsageDirect(
 	model string,
 	costNano int64,
 ) billOutcome {
+	// A credential served this response too, though it reported no usage.
+	// Before the gate check, for the reason updateUsageUnits records first:
+	// the log is about what happened, not about what was charged.
+	recordLoggedCredentialOwner(ctx, requestlog.FromContext(ctx))
+
 	bp := h.budget()
 	if bp.gate == nil || costNano <= 0 {
 		return billNotBillable

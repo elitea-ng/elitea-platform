@@ -51,8 +51,10 @@ import (
 
 // checkConnectionAWSSigningService is the SigV4 service name for the Bedrock
 // CONTROL plane (bedrock.*), which serves foundation-model listing. It is not
-// the runtime service (bedrock-runtime.*), which serves inference — the probe
-// deliberately never touches that one.
+// the runtime service (bedrock-runtime.*), which serves inference — the
+// credential probe deliberately never touches that one. Only the MODEL probe
+// (checkconnection_model.go) does, with its own dial target. SigV4 signs both
+// hosts with the same service name.
 const checkConnectionAWSSigningService = "bedrock"
 
 // vertexCheckScope is the OAuth scope Vertex AI requires, identical to the

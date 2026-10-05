@@ -1,4 +1,4 @@
--- 0142_chat_sync.sql — incremental sync for conversations and messages
+-- 0144_chat_sync.sql — incremental sync for conversations and messages
 -- (ADR-0025 WP6).
 --
 -- A native client keeps conversations and their messages offline and asks

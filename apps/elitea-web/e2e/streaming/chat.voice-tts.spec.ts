@@ -216,7 +216,7 @@ async function answerOneTurn(page: Page, prompt: string): Promise<string> {
   await page.goto(BASE_URL + '/app/chat');
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('model-selector-button').click();
-  const modelOption = page.getByRole('menuitem').filter({ hasText: MODEL_NAME }).first();
+  const modelOption = page.getByRole('option').filter({ hasText: MODEL_NAME }).first();
   await expect(modelOption, `the seeded model ${MODEL_NAME} must be offered`).toBeVisible({ timeout: 20_000 });
   await modelOption.click();
 

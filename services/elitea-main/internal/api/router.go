@@ -392,7 +392,15 @@ type RouterConfig struct {
 	// which imports this layer. Unassigned, a created project has no vector
 	// store and cannot index — see createProjectVectorStore.
 	ProjectVectorStore projectprovisioning.ProjectVectorStore
-	AdminUI            *adminui.Config
+	// PlatformModelDefaults is the platform default model service (#6826). It
+	// backs /api/v2/admin/gateway/default_model, the default_usage count a
+	// platform-model delete reads, the release of stored defaults after a
+	// model delete, and the seed that gives a new project the platform
+	// default. It is built from the Configurations runtime in main.go.
+	// Unassigned, the admin routes answer 503 and nothing is seeded; every
+	// project still reads the platform default through the catalogue.
+	PlatformModelDefaults PlatformModelDefaults
+	AdminUI               *adminui.Config
 	// ObjectStore is the new S3/Azure/GCS-compatible backend (see
 	// docs/plans/storage-migration-plan.md). S8 reads it for the bucket-plane
 	// DELETE cascade, but only inside newProductionRouter — it is
@@ -659,6 +667,13 @@ func (p supportProjectProvisioner) Provision(
 	return result.ProjectID, nil
 }
 
+// PlatformModelDefaults is what the router needs from the platform default
+// model service: the admin and delete surface, and the provisioning seed.
+type PlatformModelDefaults interface {
+	v2configs.ModelDefaultsManager
+	projectprovisioning.ProjectDefaultModelSeeder
+}
+
 // newProjectProvisioner builds the project-create pipeline (#333).
 //
 // ok is false without a pool, in which case the create route answers 503 rather
@@ -688,6 +703,11 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 	// The vector store (#371) IS conditional — see this function's doc comment.
 	if cfg.ProjectVectorStore != nil {
 		options = append(options, projectprovisioning.WithVectorStore(cfg.ProjectVectorStore))
+	}
+	// The platform default model seed (#6826) is optional too: a project
+	// created without it reads the platform default at request time.
+	if cfg.PlatformModelDefaults != nil {
+		options = append(options, projectprovisioning.WithDefaultModelSeeder(cfg.PlatformModelDefaults))
 	}
 	if cfg.ObjectStore != nil {
 		bucketsRepo, bucketsErr := dbrepos.NewArtifactBucketsRepository(cfg.Pool)
@@ -1492,6 +1512,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
 		v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
 		v2configs.WithPublicProjectID(apimw.PublicProjectID()),
+		v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 	)
 	artifactHandler := cfg.ArtifactHandler
 	if artifactHandler == nil {
@@ -2624,6 +2645,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						// credentials ONLY, so the two surfaces are mounted
 						// together and global_models.go enforces that pairing.
 						r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes())
+						// The PLATFORM DEFAULT model (#6826): which platform
+						// model a new project starts with, and what a project
+						// with no usable default of its own falls back to.
+						// platform_default_model.go has the precedence.
+						r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes())
 					})
 				})
 			})
@@ -3204,7 +3230,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						coreResolver, platformauth.PermissionModeDefault, permission)
 				}
 				if cfg.EvalDimensionsRepo != nil {
-					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo)
+					// A PUT that promotes an agent dimension to the project
+					// library is a create as well as an update; the handler
+					// asks this check, resolved like the gates above.
+					evaluationHandler := v2evaluation.NewHandler(cfg.EvalDimensionsRepo,
+						v2evaluation.WithCreatePermissionCheck(apimw.HoldsResolvedPermission(
+							coreResolver, platformauth.PermissionModeDefault, v2evaluation.PermissionDimensionCreate)))
 					r.With(evaluationGate(v2evaluation.PermissionDimensionRead)).
 						Get("/eval_dimensions/prompt_lib/{projectID}", evaluationHandler.List)
 					r.With(evaluationGate(v2evaluation.PermissionDimensionCreate)).
@@ -3721,6 +3752,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_tool_detail/prompt_lib/{projectID}", analyticsHandler.Tools)
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_users/prompt_lib/{projectID}", analyticsHandler.Users)
 					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_user_detail/prompt_lib/{projectID}", analyticsHandler.Users)
+					// One run's analytics, read by id rather than by window
+					// (legacy issues 6667, 6816 and 6817). The execution read
+					// is a project analytics read and takes the same gate.
+					r.With(requireAnalyticsView, requireAnalyticsEnabled).Get("/analytics_execution/prompt_lib/{projectID}/{executionID}", analyticsHandler.Execution)
+					// The evaluation run read is spend, so it takes the
+					// analytics gate, AND it names one run, so it also takes
+					// the run READ permission the run's own routes take.
+					r.With(evaluationGate(v2evaluation.PermissionRunRead), requireAnalyticsView, requireAnalyticsEnabled).
+						Get("/eval_run_analytics/prompt_lib/{projectID}/{runID}", analyticsHandler.EvaluationRun)
 				}
 
 				// The eighth analytics endpoint (issue 253), and the only one
@@ -4494,6 +4534,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 			}))
+			// The session cookie authenticates /llm, and the browser voice
+			// client POSTs audio here with it. A cookie-authenticated write
+			// must prove it came from this origin (CSRF from a same-site
+			// sibling). Bearer, API-key and forwarded-token callers pass.
+			r.Use(apimw.BrowserWriteOrigin)
 			// Membership admits the caller-supplied project selector header
 			// (issue #318). Without it the edge admits no selector that names
 			// another project, so /llm keeps billing the caller's own project

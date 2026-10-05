@@ -31,6 +31,9 @@ import (
 	"github.com/coder/websocket"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // ── the stub provider ───────────────────────────────────────────────────────
@@ -516,6 +519,8 @@ func TestBifrostRealtimeCodec_DelegatesToBothProviderInterfaces(t *testing.T) {
 type realtimeCoreAccount struct {
 	baseURL  string
 	keyValue string
+	// keyID is the Key ID the account offers. Empty means "realtime-key".
+	keyID string
 }
 
 func (realtimeCoreAccount) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
@@ -523,8 +528,12 @@ func (realtimeCoreAccount) GetConfiguredProviders() ([]schemas.ModelProvider, er
 }
 
 func (a realtimeCoreAccount) GetKeysForProvider(context.Context, schemas.ModelProvider) ([]schemas.Key, error) {
+	id := a.keyID
+	if id == "" {
+		id = "realtime-key"
+	}
 	return []schemas.Key{{
-		ID:     "realtime-key",
+		ID:     id,
 		Value:  schemas.SecretVar{Val: a.keyValue},
 		Models: []string{"*"},
 		Weight: 1,
@@ -692,5 +701,57 @@ func TestDialRealtime_RefusalsAreDistinguishable(t *testing.T) {
 				t.Fatalf("error = %v, want it to name %q", derr, tc.wantText)
 			}
 		})
+	}
+}
+
+// TestDialRealtime_RecordsTheCredentialOwner pins legacy issue 6709 for the
+// realtime route. bifrost/core writes the selected key id only in its own
+// request executor, and realtime never runs that executor. So the dialer must
+// write the id itself, or every billed realtime turn logs no credential owner.
+func TestDialRealtime_RecordsTheCredentialOwner(t *testing.T) {
+	for _, tc := range []struct {
+		keyID string
+		want  string
+	}{
+		{keyID: "shared:9:openai", want: requestlog.CredentialOwnerPlatform},
+		{keyID: "project-credential-1", want: requestlog.CredentialOwnerProject},
+	} {
+		t.Run(tc.keyID, func(t *testing.T) {
+			srv := newStubProviderServer(t, []string{realtimeSubprotocol})
+			core, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
+				Account: realtimeCoreAccount{
+					baseURL:  "http" + strings.TrimPrefix(srv.wsURL(), "ws"),
+					keyValue: "sk-realtime-owner",
+					keyID:    tc.keyID,
+				},
+				InitialPoolSize: 1,
+			})
+			if err != nil {
+				t.Fatalf("bifrost.Init: %v", err)
+			}
+			defer core.Shutdown()
+
+			ctx := dialTestContext()
+			up, derr := NewBifrostRealtimeDialer(core, nil).DialRealtime(ctx, schemas.OpenAI, "gpt-4o-realtime-preview", nil)
+			if derr != nil {
+				t.Fatalf("DialRealtime: %v", derr)
+			}
+			defer up.Socket.Close(RealtimeCloseNormal, "done")
+			srv.accepted(t)
+
+			if got := account.SelectedCredentialOwner(ctx); got != tc.want {
+				t.Errorf("credential owner after the dial = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A key with no id records nothing, and a nil context does not panic.
+func TestRecordRealtimeSelectedKey_IgnoresAnEmptyIDAndANilContext(t *testing.T) {
+	recordRealtimeSelectedKey(nil, schemas.Key{ID: "k"})
+	ctx := dialTestContext()
+	recordRealtimeSelectedKey(ctx, schemas.Key{})
+	if got := account.SelectedCredentialOwner(ctx); got != "" {
+		t.Errorf("credential owner = %q, want empty for a key with no id", got)
 	}
 }

@@ -4,6 +4,8 @@ export interface LLMModel {
   id: string;
   name: string;
   display_name?: string;
+  /** The admin's one-line text on the model (max 40 characters). The menu shows it under the name. */
+  description?: string;
   shared?: boolean;
   supports_vision?: boolean;
   supports_reasoning?: boolean;
@@ -15,7 +17,6 @@ export interface LLMSettingsValues {
   max_tokens?: number | string;
   reasoning_effort?: string;
   steps_limit?: number;
-  webhook_secret?: string;
 }
 
 export interface LLMModelSelectorProps {
@@ -26,7 +27,6 @@ export interface LLMModelSelectorProps {
   onClickSettings?: () => void;
   llmSettings?: LLMSettingsValues;
   onSetLLMSettings?: (settings: LLMSettingsValues) => void;
-  showWebhookSecret?: boolean;
   showStepsLimit?: boolean;
   showSettingsEntry?: boolean;
   modelTooltip?: string;

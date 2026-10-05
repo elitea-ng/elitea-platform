@@ -95,6 +95,15 @@ const (
 	ReturnContractNumber = "number"
 )
 
+// MaxDimensionDescriptionBytes bounds the rubric. The description is the AI
+// judge's prompt, so it is sent to a model for every case of every run that
+// scores this dimension: an unbounded rubric is a per-run cost, not only a
+// storage question.
+const MaxDimensionDescriptionBytes = 32 << 10 // 32 KiB
+
+// MaxDimensionCodeBytes bounds a code-engine dimension's validation script.
+const MaxDimensionCodeBytes = 64 << 10 // 64 KiB
+
 // MaxNameLength matches the editor's own `inputProps={{ maxLength: 128 }}` and
 // the column width. Enforced here so a non-browser caller gets the same answer.
 const MaxNameLength = 128
@@ -145,6 +154,11 @@ type Dimension struct {
 	ReturnContract string `json:"return_contract"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
+	// PromotionPermitted is WRITE INTENT, never data: the update handler sets
+	// it when the caller also holds PermissionDimensionCreate, and
+	// ResolveTierUpdate refuses an `agent_adhoc` -> `project` promotion
+	// without it. `json:"-"`, so no body can set it and no answer carries it.
+	PromotionPermitted bool `json:"-"`
 }
 
 // IsCodeEngine reports the code-only shape: `allowed_engines == ['code']`.
@@ -170,7 +184,8 @@ type Repository interface {
 // (evaluationApi.js:29-39). The listing is "this project's own dimensions,
 // plus the ad-hoc ones belonging to the agent being edited" — an ad-hoc
 // dimension authored on ANOTHER agent must not appear, or every agent's editor
-// grows every other agent's private rubrics.
+// grows every other agent's rubrics. This is a scope filter, not an access
+// boundary (see Handler.List): any project editor may edit any agent.
 type ListFilter struct {
 	IncludePlatform bool
 	ApplicationID   *int
@@ -234,6 +249,42 @@ func (d *Dimension) Normalize() {
 	}
 }
 
+// ResolveTierUpdate decides the tier an UPDATE writes, from the stored tier
+// and the tier the caller sent.
+//
+// An empty `requested` means the body carried no tier, and the stored tier is
+// kept. A client that does not send the scope must not move the dimension.
+//
+// PROMOTION is allowed: an `agent_adhoc` dimension may become a `project`
+// dimension, and its `application_id` is then cleared (legacy issue 6669: a
+// private-project owner could not change the tier). A promotion ADDS a
+// dimension to the project library, so it needs PermissionDimensionCreate as
+// well as the route's PermissionDimensionUpdate: `promotionPermitted` says the
+// caller holds it, and without it a promotion is a 403. Shared migration 0104
+// grants both to the same default roles, so this changes nothing for them; it
+// stops a custom role holding update alone from creating library entries.
+// The agent scope itself is not an access boundary (see Handler.List).
+//
+// DEMOTION is refused with a 409. A project dimension can already be in use by
+// other agents' runs and editors; moving it to one agent would remove it from
+// them without a trace.
+func ResolveTierUpdate(stored, requested string, promotionPermitted bool) (string, error) {
+	if requested == "" || requested == stored {
+		return stored, nil
+	}
+	if stored == TierAgentAdhoc && requested == TierProject {
+		if !promotionPermitted {
+			return "", apierr.Forbidden("moving an agent dimension to the project library adds it to the library: it needs " +
+				PermissionDimensionCreate + " as well as " + PermissionDimensionUpdate)
+		}
+		return TierProject, nil
+	}
+	if stored == TierProject && requested == TierAgentAdhoc {
+		return "", apierr.Conflict("a project dimension cannot be moved back to one agent: other agents can already use it")
+	}
+	return "", apierr.BadRequest(fmt.Sprintf("the tier of a %s dimension cannot change to %s", stored, requested))
+}
+
 // Validate reproduces, on the server, every rule the baseline's editor enforces
 // before it will save (DimensionEditorDialog.jsx:106-131).
 //
@@ -252,6 +303,12 @@ func (d Dimension) Validate(isCreate bool) error {
 	}
 	if len(d.Name) > MaxNameLength {
 		return apierr.BadRequest(fmt.Sprintf("name must be at most %d characters", MaxNameLength))
+	}
+	if len(d.Description) > MaxDimensionDescriptionBytes {
+		return apierr.BadRequest(fmt.Sprintf("description must be at most %d bytes", MaxDimensionDescriptionBytes))
+	}
+	if len(d.Code) > MaxDimensionCodeBytes {
+		return apierr.BadRequest(fmt.Sprintf("code must be at most %d bytes", MaxDimensionCodeBytes))
 	}
 	if !knownTiers[d.Tier] {
 		return apierr.BadRequest("tier must be one of project, agent_adhoc, platform")

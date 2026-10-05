@@ -876,7 +876,7 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	// Sync cascade (ADR-0025 WP6, tenant 0142): the conversation's own
+	// Sync cascade (ADR-0025 WP6, tenant 0144): the conversation's own
 	// tombstone means "drop every message", so the per-message tombstones and
 	// parent bumps the triggers would write for the deletes below are
 	// suppressed for this transaction. Participant removals are still

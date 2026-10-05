@@ -356,3 +356,35 @@ func decodeFernetMasterKey(encoded []byte) ([]byte, bool) {
 	}
 	return decoded[:n], true
 }
+
+// NewPlatformModelDefaults composes the platform default model service
+// (#6826) over this runtime's vault reader and writer, so the admin console,
+// the catalogue and the provisioning seed read and write one value with one
+// key source (#399).
+//
+// vaults creates the public project's vault when a fresh install has none.
+// main.go passes the secrets handler, which is the one vault creator. The
+// lifecycle reconciler passes nil: it only releases defaults.
+func (runtime *CurrentConfigurationsRuntime) NewPlatformModelDefaults(
+	pool *pgxpool.Pool,
+	vaults configurationapp.PlatformModelDefaultVaultCreator,
+) (*configurationapp.PlatformModelDefaultService, error) {
+	if runtime == nil || pool == nil || runtime.vaultLoader == nil || runtime.vaultWriter == nil {
+		return nil, errors.New("platform default model composition is incomplete")
+	}
+	candidates, err := repos.NewCurrentModelsRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("construct platform default model candidates: %w", err)
+	}
+	store, err := storage.NewCurrentModelDefaultsReader(runtime.vaultLoader)
+	if err != nil {
+		return nil, fmt.Errorf("construct platform default model reader: %w", err)
+	}
+	rows, err := repos.NewPlatformModelDefaultRowsRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("construct platform default model rows: %w", err)
+	}
+	return configurationapp.NewPlatformModelDefaultService(
+		candidates, store, runtime.vaultWriter, rows, rows, vaults, runtime.publicProjectID,
+	)
+}

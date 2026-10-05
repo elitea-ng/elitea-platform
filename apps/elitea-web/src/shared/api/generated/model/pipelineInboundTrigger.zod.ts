@@ -107,6 +107,24 @@ export const PipelineInboundTrigger = zod
       .describe(
         "The preset a create named, and the URL SUFFIX that follows from it (`github` gives a url ending in `/github`, which is the shape a GitHub webhook form expects, and `gitlab` one ending in `/gitlab`). It selects nothing at call time: the inbound path checks a suffix it is given AGAINST this value and refuses a mismatch rather than reading a mode out of the URL.\n",
       ),
+    target_kind: zod
+      .string()
+      .optional()
+      .describe(
+        "`pipeline` or `agent`: the kind of version the credential was issued for. An inbound call is refused with the one 401 when the version is now of the other kind, because a version update can change `agent_type`. A create or a rotation records the current kind.\n",
+      ),
+    events: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "The provider events this trigger admits, read from `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event. A new GitHub or GitLab trigger on an AGENT version admits only push and pull or merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no run. The event header is not signed, so this is a cost control, not an authentication step.\n",
+      ),
+    allow_variable_overrides: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Whether the inbound body's `variables` may give new values to the agent's declared variables. Absent means false. A variable is substituted into the agent's instructions, so a caller can change instruction text only when the trigger opts in.\n",
+      ),
   })
   .describe(
     'One pipeline version\'s inbound trigger. `configured: false` with no other field is the answer for a pipeline that has none, and is a 200 rather than a 404 because "no trigger yet" is the normal state of almost every pipeline (triggers.go GetTrigger, :96-115).\n',

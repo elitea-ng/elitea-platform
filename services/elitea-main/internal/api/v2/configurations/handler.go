@@ -84,6 +84,25 @@ type Handler struct {
 	// this build carries a probe for is never refused for want of composition;
 	// WithToolkitConnectionChecker replaces it in a test.
 	toolkitChecker ToolkitConnectionChecker
+	// modelProbes bounds the rate and the concurrency of the llm_model test
+	// per project and user (model_probe_limiter.go). NewHandler always
+	// supplies one.
+	modelProbes *modelProbeLimiter
+	// llmModelRow and platformModelExposed are the two database reads of the
+	// llm_model test (model_connection_check.go). nil uses the pool; a test
+	// replaces them.
+	llmModelRow          func(ctx context.Context, projectID, configID string) (storedConfigurationRow, bool, error)
+	platformModelExposed func(ctx context.Context, model, credentialTitle string) (bool, error)
+	// modelDefaults is the platform default model service (#6826,
+	// platform_default_model.go). nil makes its admin routes answer 503 and
+	// makes a delete release no stored default.
+	modelDefaults ModelDefaultsManager
+	// modelRowLookup replaces the database read of one row's identity in a
+	// test. nil reads the pool.
+	modelRowLookup func(context.Context, int, string) (deletedModelRow, bool, error)
+	// modelDefaultRelease runs the background default fan-out of a delete in
+	// a test. nil runs it on a goroutine.
+	modelDefaultRelease func(func())
 }
 
 type Option func(*Handler)
@@ -138,7 +157,7 @@ func WithPublicProjectID(projectID int) Option {
 }
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
-	handler := &Handler{pool: pool}
+	handler := &Handler{pool: pool, modelProbes: newModelProbeLimiter()}
 	if pool != nil {
 		handler.tracingAccess = postgresTracingAccessChecker{queries: sqlcgen.New(pool)}
 	}
@@ -260,8 +279,17 @@ func (h *Handler) Routes() chi.Router {
 	// `configurations.configuration.create` to the SAME default-mode roles —
 	// admin and editor — so the two sets are identical and no role loses a
 	// control here.
-	r.With(create).Post("/check_connection/{projectID}/{configType}", h.CheckConnection)
-	r.With(create).Post("/check_connection/{mode}/{projectID}/{configType}", h.CheckConnection)
+	//
+	// THE llm_model TEST ALSO TAKES THE UPDATE STRING. It does not dial a
+	// payload the caller holds: it resolves a STORED credential on the server
+	// and redeems its vault secret, which is what the stored checks below do
+	// and why they take UPDATE. requireForConfigType adds that gate for the
+	// llm_model type only, on the same two paths, so the route ledger does not
+	// change and every other type keeps the CREATE gate alone. A caller who
+	// holds create and not update gets 403 for an llm_model test.
+	modelTest := h.requireForConfigType(llmModelConfigurationType, update)
+	r.With(create, modelTest).Post("/check_connection/{projectID}/{configType}", h.CheckConnection)
+	r.With(create, modelTest).Post("/check_connection/{mode}/{projectID}/{configType}", h.CheckConnection)
 	r.With(create).Post("/check_connections/{projectID}", h.BatchCheckConnections)
 	r.With(create).Post("/check_connections/{mode}/{projectID}", h.BatchCheckConnections)
 	// The STORED checks and the revalidation take the UPDATE string, not the
@@ -324,6 +352,23 @@ func (h *Handler) Routes() chi.Router {
 // writes an embedded quote as \" where PostgreSQL wants it doubled, so a
 // crafted id left the identifier. It failed only because the backslash landed
 // inside the name. That was an accident, not a defence (issue #543).
+// requireForConfigType applies gate only to a request whose {configType}
+// path segment is configType. Every other request passes through unchanged.
+func (h *Handler) requireForConfigType(
+	configType string, gate func(http.Handler) http.Handler,
+) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if chi.URLParam(r, "configType") == configType {
+				gated.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func (h *Handler) require(permission string) func(http.Handler) http.Handler {
 	return middleware.RequireResolvedPermissions(
 		h.permissionResolver,
@@ -1117,6 +1162,17 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Legacy issue #6707. Keyed by type alone, like the description rule and
+	// like the update path (applyConfigurationUpdate): a row filed under
+	// another section still stores data.dial_protocol as sent, and the gateway
+	// still reads it.
+	if failure := refuseInvalidDialProtocol(strVal(body, "type"), body); failure != nil {
+		failure.write(w)
+		return
+	}
+	if !applyLLMModelDescriptionRule(w, strVal(body, "type"), dataMap) {
+		return
+	}
 
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the configuration store is not available")
@@ -1337,6 +1393,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
 		return
 	}
+	effectiveType := storedType
+	if requestedType != "" {
+		effectiveType = requestedType
+	}
+	if data, isObject := body["data"].(map[string]any); isObject &&
+		!applyLLMModelDescriptionRule(w, effectiveType, data) {
+		return
+	}
 
 	c, failure, err := h.applyConfigurationUpdate(ctx, body, pID, schema, configID)
 	if failure != nil {
@@ -1391,6 +1455,9 @@ func (h *Handler) applyConfigurationUpdate(
 	// entry. See refuseIncompleteUpdatedModelData for why it is the model rows
 	// that are held to it.
 	if failure := h.refuseIncompleteUpdatedModelData(body, configType); failure != nil {
+		return c, failure, nil
+	}
+	if failure := refuseInvalidDialProtocol(configType, body); failure != nil {
 		return c, failure, nil
 	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)
@@ -1597,8 +1664,20 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1`, schema, configurationIDColumn(configID))
-	ct, err := h.pool.Exec(ctx, q, configID)
+	// RETURNING names the deleted row, so a model that some project stored as
+	// its default can be released below (#6826). The id column is unique, so
+	// the statement deletes one row or none.
+	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1
+		RETURNING id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)`,
+		schema, configurationIDColumn(configID))
+	var id int32
+	var section, title, dataName string
+	var shared bool
+	err := h.pool.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared)
+	if errors.Is(err, pgx.ErrNoRows) {
+		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+		return
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.ErrorContext(ctx, "configuration delete failed",
@@ -1607,10 +1686,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if ct.RowsAffected() == 0 {
-		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
-		return
-	}
+	h.releaseDeletedModelDefault(ctx, projectID, deletedModelRowFrom(id, section, title, dataName, shared))
 	w.WriteHeader(http.StatusNoContent)
 }
 

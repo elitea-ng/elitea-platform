@@ -2,7 +2,7 @@
 // (ADR-0025 WP6) with batched deletes:
 //
 //   - `chat_sync_tombstones` in every tenant schema `p_<id>` that has one
-//     (elitea-main tenant migration 0142: conversation and message deletions
+//     (elitea-main tenant migration 0144: conversation and message deletions
 //     and lost-access markers), and
 //   - `centry.notification_tombstones` (elitea-main shared migration 0144).
 //
@@ -49,7 +49,7 @@ const (
 
 // tenantTablesSQL lists the tenant schemas that carry the tombstone table. The
 // `^p_[0-9]+$` match is the tenant naming every other scan in the platform
-// uses; a schema that never ran tenant 0142 simply is not listed.
+// uses; a schema that never ran tenant 0144 simply is not listed.
 const tenantTablesSQL = `
 	SELECT namespace.nspname
 	  FROM pg_class AS relation

@@ -28,8 +28,9 @@ export const analyticsTourSteps: TourStep[] = [
     title: 'Date Range Controls',
     content: `All tabs share a single date filter that controls the data shown across the entire page.
 
-- **Quick presets** — **Last 24h**, **Last 7d**, **Last 30d**, **Last 90d**; the page loads with **Last 7d** pre-selected
-- **Custom range** — set a precise **From / To** window for targeted analysis
+- **Quick presets** — **Today**, **Last 7d**, **Last 30d**, **Last 90d**; each covers whole calendar days, from 00:00 on its first day to 23:59 today, and the page loads with **Today** pre-selected
+- **Custom range** — set a precise **From / To** window (for example the last 24 hours); the **Custom** selector appears while one is active
+- **Daily charts** group activity by UTC day, so outside UTC one local day can span two chart columns
 
 Data is cached for up to 5 minutes.`,
   },
@@ -76,7 +77,7 @@ The **Tool Details** table lists all tools with call count, distinct users, aver
     target: ANALYTICS_TOUR_TARGETS.tabSection,
     placement: 'right',
     title: 'Users Tab',
-    content: `The **Users** tab provides a per-person activity breakdown across the selected period. The **User Activity** table lists all active users with event counts by type (LLM, Tool, Agent, Chat), active days, and error count.
+    content: `The **Users** tab provides a per-person activity breakdown across the selected period. The **User Activity** table lists all active users with event counts by type (LLM, Tool, Agent, Chat) and error count.
 
 Click any user row to open a drill-down showing a daily activity chart broken down by event type, and lists of the models, tools, and agents that user worked with.`,
   },

@@ -153,7 +153,7 @@ func main() {
 	}
 
 	// Incremental-sync tombstone retention (ADR-0025 WP6, elitea-main tenant
-	// 0142 and shared 0144): bounded batched deletes of tombstones older than
+	// 0144 and shared 0144): bounded batched deletes of tombstones older than
 	// the window elitea-main still serves a `changes_since` cursor for. The
 	// window can only be raised above that floor. Gated on maintenance like
 	// the audit sweep, since it writes to every tenant schema.

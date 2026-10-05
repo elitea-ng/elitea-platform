@@ -57,6 +57,14 @@ func (s stubRepo) GetUserActivity(_ context.Context, _ domain.QueryParams) ([]do
 	return nil, false, s.err
 }
 
+func (s stubRepo) GetExecutionAnalytics(_ context.Context, _, executionID string) (domain.ExecutionAnalytics, error) {
+	return domain.ExecutionAnalytics{ExecutionID: executionID}, s.err
+}
+
+func (s stubRepo) GetEvaluationRunAnalytics(_ context.Context, _, runID string) (domain.EvaluationRunAnalytics, error) {
+	return domain.EvaluationRunAnalytics{RunID: runID}, s.err
+}
+
 func do(t *testing.T, repo Repository, target string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -428,4 +436,12 @@ func (r recordingRepo) GetToolAnalytics(_ context.Context, params domain.QueryPa
 func (r recordingRepo) GetUserActivity(_ context.Context, params domain.QueryParams) ([]domain.UserActivity, bool, error) {
 	*r.seen = append(*r.seen, params)
 	return nil, false, nil
+}
+
+func (r recordingRepo) GetExecutionAnalytics(context.Context, string, string) (domain.ExecutionAnalytics, error) {
+	return domain.ExecutionAnalytics{}, nil
+}
+
+func (r recordingRepo) GetEvaluationRunAnalytics(context.Context, string, string) (domain.EvaluationRunAnalytics, error) {
+	return domain.EvaluationRunAnalytics{}, nil
 }

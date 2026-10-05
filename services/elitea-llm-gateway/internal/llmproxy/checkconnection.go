@@ -106,6 +106,21 @@ type checkConnectionRequest struct {
 	VertexProject     string        `json:"vertex_project"`
 	VertexLocation    string        `json:"vertex_location"`
 	VertexCredentials jsonTextField `json:"vertex_credentials"`
+
+	// Model, when set, turns the request into a MODEL probe
+	// (checkconnection_model.go): one real completion with a one-token
+	// budget, instead of the read-only credential listing.
+	Model string `json:"model,omitempty"`
+	// UseAnthropicEndpoints is the credential's use_anthropic_endpoints flag
+	// (account/credentials.go). For a vLLM-class credential the runtime then
+	// speaks the Anthropic dialect to /v1/messages, so the model probe does
+	// too. The credential probe and every other type ignore it.
+	UseAnthropicEndpoints bool `json:"use_anthropic_endpoints,omitempty"`
+	// DialProtocol is the llm_model's data.dial_protocol (legacy issue #6707,
+	// account/dial_protocol.go). The ai_dial MODEL probe sends the request to
+	// the route this protocol selects, which is the route the runtime uses.
+	// The credential probe and every other type ignore it.
+	DialProtocol string `json:"dial_protocol,omitempty"`
 }
 
 // jsonTextField decodes a field that arrives either as a JSON string or as a
@@ -142,6 +157,12 @@ type checkConnectionResponse struct {
 	Success bool   `json:"success"`
 	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+	// Probe is "completion" when the model probe ran. It is empty for the
+	// credential probe, so elitea-main can tell a gateway that ignored
+	// `model` from a model that really answered.
+	Probe string `json:"probe,omitempty"`
+	// LatencyMS is the model probe's round trip, from send to answer.
+	LatencyMS int64 `json:"latency_ms,omitempty"`
 }
 
 // Reason vocabulary for checkConnectionResponse. elitea-main maps each of
@@ -295,6 +316,12 @@ var checkConnectionProviders = map[string]checkConnectionProvider{
 	// account/credentials.go's providerConfigTypes — AI DIAL is explicitly an
 	// Azure-OpenAI-API-compatible proxy, so both list deployments the same
 	// way.
+	//
+	// The per-model DIAL protocol (legacy issue #6707, account/dial_protocol.go)
+	// does NOT change this probe. The protocol is a field of the MODEL, and a
+	// credential test has no model. GET /openai/deployments validates the key
+	// itself, so it stays the ai_dial probe for every protocol. The MODEL
+	// probe (probeDialCompletion) does follow the protocol.
 	"azure_open_ai": {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	"ai_dial":       {dialTargets: checkConnectionAPIBaseTargets, probe: probeAzureDeployments},
 	// open_ai_azure is the third name providerConfigTypes maps to schemas.Azure
@@ -334,6 +361,11 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, checkConnectionMaxBody)
 	var req checkConnectionRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if strings.TrimSpace(req.Model) != "" {
+		h.checkModelConnection(w, r, req)
 		return
 	}
 
@@ -550,6 +582,13 @@ func checkConnectionProbeDo(client *http.Client, httpReq *http.Request) error {
 // names a private host or CIDR — mirroring GetConfigForProvider's
 // NetworkConfig.AllowPrivateNetwork exactly.
 func newCheckConnectionProbeClient(allowPrivate bool) *http.Client {
+	return newCheckConnectionProbeClientWithTimeout(allowPrivate, checkConnectionProbeTimeout)
+}
+
+// newCheckConnectionProbeClientWithTimeout is newCheckConnectionProbeClient
+// with the overall client timeout chosen by the caller. The model probe needs
+// a longer bound than a listing. Every other property of the client is shared.
+func newCheckConnectionProbeClientWithTimeout(allowPrivate bool, timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -580,7 +619,7 @@ func newCheckConnectionProbeClient(allowPrivate bool) *http.Client {
 	}
 	return &http.Client{
 		Transport: transport,
-		Timeout:   checkConnectionProbeTimeout,
+		Timeout:   timeout,
 		// Never follow a redirect: doing so would dial a second, unvalidated
 		// host through net/http's own connection logic, bypassing the
 		// DialContext guard above for that hop. Treating the redirect itself

@@ -8,7 +8,6 @@ import {
   addCase,
   cancelRun,
   createDataset,
-  editCase,
   fetchEvalDataset,
   fetchEvalDatasets,
   fetchEvalRun,
@@ -17,6 +16,7 @@ import {
   removeCase,
   removeDataset,
   renameDataset,
+  setCaseExcluded,
   startRun,
 } from './evaluationRunsApi';
 
@@ -30,6 +30,7 @@ const dataset = {
   application_id: null,
   is_shared: false,
   case_count: 2,
+  active_case_count: 2,
 };
 
 const run = {
@@ -172,24 +173,28 @@ describe('evaluation dataset and run API', () => {
     expect(added.expected_output).toBeNull();
   });
 
-  it('edits and removes a case through its own dataset path', async () => {
+  it('toggles and removes a case through its own dataset path', async () => {
     let editPath = '';
+    let editBody: unknown;
     let deletePath = '';
     server.use(
-      http.put(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId`, ({ request }) => {
+      http.put(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId`, async ({ request }) => {
         editPath = new URL(request.url).pathname;
-        return HttpResponse.json({ id: '11', dataset_id: '5', input: 'edited', variables: {}, expected_output: null, source_type: 'manual', order_index: 0 });
+        editBody = await request.json();
+        return HttpResponse.json({ id: '11', dataset_id: '5', input: 'stored', variables: {}, expected_output: null, source_type: 'manual', order_index: 0, excluded: true });
       }),
       http.delete(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/:projectId/:datasetId/:caseId`, ({ request }) => {
         deletePath = new URL(request.url).pathname;
         return new HttpResponse(null, { status: 204 });
       }),
     );
-    const edited = await editCase('1', '5', '11', { input: 'edited', variables: {} });
+    const toggled = await setCaseExcluded('1', '5', '11', true);
     await removeCase('1', '5', '11');
     expect(editPath).toBe(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/1/5/11`);
+    // The flag ALONE. Case text in this body would overwrite a newer edit.
+    expect(editBody).toEqual({ excluded: true });
     expect(deletePath).toBe(`${BASE}/elitea_core/eval_dataset_case/prompt_lib/1/5/11`);
-    expect(edited.input).toBe('edited');
+    expect(toggled.excluded).toBe(true);
   });
 
   it('lists runs and reads the `rows` envelope', async () => {

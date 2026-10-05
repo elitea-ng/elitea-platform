@@ -41,6 +41,8 @@
  */
 import * as zod from "zod";
 
+export const configurationModelItemDescriptionMax = 40;
+
 export const ConfigurationModelItem = zod
   .object({
     id: zod
@@ -51,6 +53,13 @@ export const ConfigurationModelItem = zod
       ),
     name: zod.string().describe("BOTH. The model name a caller selects."),
     display_name: zod.string().nullish().describe("`reviewed` only."),
+    description: zod
+      .string()
+      .max(configurationModelItemDescriptionMax)
+      .nullish()
+      .describe(
+        "`reviewed` only, and llm_model only. The optional one-line text an admin writes on the model (at most 40 characters). Pickers show it under the model name. It is display text and never reaches the provider. Absent when the model has none. `compat` carries the same value inside `data`.\n",
+      ),
     type: zod
       .string()
       .optional()

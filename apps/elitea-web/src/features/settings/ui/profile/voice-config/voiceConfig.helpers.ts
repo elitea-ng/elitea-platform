@@ -7,6 +7,7 @@
  * else imports these.
  */
 import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { synthesizeSpeech } from '@/shared/api/voiceTransport';
 import { createStorage } from '@/shared/lib/storage';
 
 export interface VoiceConfig {
@@ -102,6 +103,47 @@ export function speakBrowserPreview(
   utterance.onend = () => setIsPlaying(false);
   utterance.onerror = () => setIsPlaying(false);
   window.speechSynthesis.speak(utterance);
+}
+
+interface ModelPreviewRequest {
+  /** The project the user works in. The `/llm` edge bills it. */
+  readonly projectId: string;
+  readonly model: string;
+  readonly voice: string | null;
+  readonly rate: number;
+  readonly volume: number;
+}
+
+/**
+ * Plays the model-voice preview: one `POST /llm/v1/audio/speech` over HTTPS
+ * (`shared/api/voiceTransport.ts`), decoded and played through Web Audio.
+ * Resolves when the audio ends. Rejects with the `VoiceTransportError` of a
+ * refused request, or the decode failure.
+ */
+export async function playModelPreview(request: ModelPreviewRequest): Promise<void> {
+  const audio = await synthesizeSpeech({
+    projectId: request.projectId,
+    model: request.model,
+    input: VOICE_PREVIEW_TEXT,
+    voice: request.voice ?? undefined,
+    speed: request.rate,
+  });
+  const ctx = new AudioContext();
+  try {
+    const buffer = await ctx.decodeAudioData(audio);
+    const gain = ctx.createGain();
+    gain.gain.value = request.volume;
+    gain.connect(ctx.destination);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(gain);
+    await new Promise<void>((resolve) => {
+      source.onended = () => resolve();
+      source.start();
+    });
+  } finally {
+    void ctx.close();
+  }
 }
 
 /** Maps either voice shape to `SingleSelect` options; extracted for the same complexity reason. */

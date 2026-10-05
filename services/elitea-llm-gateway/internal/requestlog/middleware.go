@@ -83,6 +83,9 @@ type Enrichment struct {
 	errorCode  string
 	promptToks int64
 	outputToks int64
+	cacheRead  int64
+	cacheWrite int64
+	owner      string
 }
 
 // FromContext returns the enrichment handle for this request, or nil when the
@@ -148,6 +151,36 @@ func (e *Enrichment) SetTokens(prompt, completion int64) {
 	e.promptToks, e.outputToks = prompt, completion
 }
 
+// SetCacheTokens records the prompt-cache counts the response reported: the
+// tokens read from the provider's cache and the tokens written to it. Both are
+// subsets of the prompt count, never additions to it.
+func (e *Enrichment) SetCacheTokens(read, write int64) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
+	e.cacheRead, e.cacheWrite = read, write
+}
+
+// SetCredentialOwner records who owns the credential that served the request:
+// CredentialOwnerProject or CredentialOwnerPlatform. An empty owner is ignored,
+// so a later call that knows nothing cannot erase an earlier one that did.
+func (e *Enrichment) SetCredentialOwner(owner string) {
+	if e == nil || owner == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
+	e.owner = owner
+}
+
 // snapshot is the sealed value of an Enrichment. It is a separate type because
 // Enrichment holds a mutex, and a mutex must not be copied.
 type snapshot struct {
@@ -157,6 +190,9 @@ type snapshot struct {
 	errorCode  string
 	promptToks int64
 	outputToks int64
+	cacheRead  int64
+	cacheWrite int64
+	owner      string
 }
 
 // seal takes the final values and closes the handle to further writes.
@@ -174,6 +210,9 @@ func (e *Enrichment) seal() snapshot {
 		errorCode:  e.errorCode,
 		promptToks: e.promptToks,
 		outputToks: e.outputToks,
+		cacheRead:  e.cacheRead,
+		cacheWrite: e.cacheWrite,
+		owner:      e.owner,
 	}
 }
 
@@ -305,6 +344,12 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 					PromptToks:  final.promptToks,
 					OutputToks:  final.outputToks,
 					ExecutionID: r.Header.Get(headerExecutionID),
+					// Enriched: only the billing path knows which
+					// credential served the request and what the
+					// usage block said about the cache.
+					CredentialOwner: final.owner,
+					CacheReadToks:   final.cacheRead,
+					CacheWriteToks:  final.cacheWrite,
 				})
 			}()
 

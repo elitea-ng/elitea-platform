@@ -14,7 +14,7 @@ var _ conversations.MessageChangesLister = (*ConversationsRepo)(nil)
 // ListMessageChanges is the transcript delta (`changes_since`, ADR-0025 WP6):
 // the message groups of one conversation that changed after the cursor, in
 // the legacy item shape, and tombstones for the groups deleted since. The
-// stamps and tombstones are written by tenant migration 0142's triggers, so
+// stamps and tombstones are written by tenant migration 0144's triggers, so
 // every writer of the chat tables is covered. The caller has already been
 // authorised on the conversation (Handler.authorizeConversation).
 func (r *ConversationsRepo) ListMessageChanges(ctx context.Context, projectID, conversationID, changesSince string, limit int) (conversations.MessageChanges, error) {

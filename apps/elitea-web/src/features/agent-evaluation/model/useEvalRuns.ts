@@ -37,6 +37,7 @@ import {
   fetchScorecard,
   removeCase,
   removeDataset,
+  setCaseExcluded,
   startRun,
 } from '../api/evaluationRunsApi';
 
@@ -143,6 +144,12 @@ interface AddCaseArgs {
   readonly input: EvalDatasetCaseWriteRequest;
 }
 
+interface SetCaseExcludedArgs {
+  readonly datasetId: string;
+  readonly caseId: string;
+  readonly excluded: boolean;
+}
+
 interface RemoveCaseArgs {
   readonly datasetId: string;
   readonly caseId: string;
@@ -169,6 +176,17 @@ export function useEvalDatasetMutations(projectId: string | undefined) {
       // The DETAIL and the LIST both change: the detail gains a row and the
       // list's `case_count` badge moves. Invalidating the whole dataset
       // namespace covers both, which is why the keys are nested under one root.
+      onSuccess: invalidateDatasets,
+    }),
+    /*
+     * Include or exclude ONE case (legacy issue 6700). Only the flag is sent:
+     * the server writes `{excluded}` alone and leaves the case text as stored,
+     * so a toggle from a stale view cannot revert an edit made elsewhere.
+     * An excluded case stays in the dataset; a run start leaves it out.
+     */
+    setCaseExcluded: useMutation({
+      mutationFn: (args: SetCaseExcludedArgs) =>
+        setCaseExcluded(projectId ?? '', args.datasetId, args.caseId, args.excluded),
       onSuccess: invalidateDatasets,
     }),
     removeCase: useMutation({

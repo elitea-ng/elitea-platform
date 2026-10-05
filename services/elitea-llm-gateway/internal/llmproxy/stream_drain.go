@@ -53,6 +53,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
@@ -351,16 +352,20 @@ type streamSettler struct {
 	// so an execution id read at settle time would always be empty and every
 	// streamed agent turn would be missing from the ledger's agent breakdown —
 	// silently, as an absence rather than an error.
-	executionID      string
-	ctx              *schemas.BifrostContext
-	sc               *streamCancel
-	ch               chan *schemas.BifrostStreamChunk
-	usageFrom        usageExtractor
-	deltaFrom        func(*schemas.BifrostStreamChunk) int64
-	in, out          int64
-	gotUsage         bool
-	observedOutBytes int64
-	settled          bool
+	executionID string
+	ctx         *schemas.BifrostContext
+	sc          *streamCancel
+	ch          chan *schemas.BifrostStreamChunk
+	usageFrom   usageExtractor
+	deltaFrom   func(*schemas.BifrostStreamChunk) int64
+	in, out     int64
+	gotUsage    bool
+	// cacheRead and cacheWrite are the prompt-cache counts of the usage block
+	// that set in/out. They feed the request log only, never the bill.
+	cacheRead, cacheWrite int64
+	gotCache              bool
+	observedOutBytes      int64
+	settled               bool
 	// logUsage is the request log's enrichment handle, captured while the
 	// request context still carries it.
 	//
@@ -429,6 +434,10 @@ func (s *streamSettler) observe(c *schemas.BifrostStreamChunk) {
 	}
 	if in, out, ok := s.usageFrom(c); ok {
 		s.in, s.out, s.gotUsage = in, out, true
+		// The cache split rides the same usage block, so it is taken from the
+		// same chunk the extractor accepted — for the Responses dialect that is
+		// the terminal event, never message_start.
+		s.cacheRead, s.cacheWrite, s.gotCache = cacheTokensFromChunk(c)
 	}
 	if s.deltaFrom != nil {
 		s.observedOutBytes += s.deltaFrom(c)
@@ -488,12 +497,50 @@ func (s *streamSettler) accumulatedUsage() (int64, int64, bool) {
 // `budget.unbilled_stream`.
 func (s *streamSettler) recordLogTokens() {
 	in, out, ok := s.in, s.out, s.gotUsage
+	cacheRead, cacheWrite, gotCache := s.cacheRead, s.cacheWrite, s.gotCache
 	if !ok {
 		in, out, ok = s.accumulatedUsage()
+		if ok {
+			cacheRead, cacheWrite, gotCache = s.accumulatedCacheTokens()
+		}
 	}
 	if ok {
 		s.logUsage.SetTokens(in, out)
+		if gotCache {
+			s.logUsage.SetCacheTokens(cacheRead, cacheWrite)
+		}
 	}
+	// The key bifrost selected is on the request's own BifrostContext, which
+	// this settler holds; billingContext() is detached and carries none.
+	if s.ctx != nil {
+		s.logUsage.SetCredentialOwner(account.SelectedCredentialOwner(s.ctx))
+	}
+}
+
+// accumulatedCacheTokens reads the cache split from the same provider handle
+// accumulatedUsage reads, under the same rule: only after the channel closed.
+// The caller calls it only when accumulatedUsage accepted the handle.
+func (s *streamSettler) accumulatedCacheTokens() (read, write int64, ok bool) {
+	if !s.chanClosed || s.ctx == nil {
+		return 0, 0, false
+	}
+	u, _ := s.ctx.Value(schemas.BifrostContextKeyStreamAccumulatedUsage).(*schemas.BifrostLLMUsage)
+	return cacheTokensFromLLMUsage(u)
+}
+
+// cacheTokensFromChunk reads the prompt-cache counts from a usage-carrying
+// stream chunk of either dialect.
+func cacheTokensFromChunk(c *schemas.BifrostStreamChunk) (read, write int64, ok bool) {
+	if c == nil {
+		return 0, 0, false
+	}
+	if chat := c.BifrostChatResponse; chat != nil {
+		return cacheTokensFromLLMUsage(chat.Usage)
+	}
+	if sr := c.BifrostResponsesStreamResponse; sr != nil && sr.Response != nil {
+		return cacheTokensFromResponsesUsage(sr.Response.Usage)
+	}
+	return 0, 0, false
 }
 
 // settleClean settles a stream whose channel the SSE loop consumed to closure.

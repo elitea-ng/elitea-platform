@@ -98,6 +98,11 @@ func TestConfigurationIDColumnMatchesNumericIDsAndUUIDs(t *testing.T) {
 		{configID: "4df27bfc-d74f-4b29-a334-ae8341aaf895", want: "uuid::text"},
 		{configID: "", want: "uuid::text"},
 		{configID: "22abc", want: "uuid::text"},
+		// Outside the 32-bit id column: no row has it, so the route answers
+		// 404 instead of a PostgreSQL range error (500).
+		{configID: "2147483647", want: "id"},
+		{configID: "2147483648", want: "uuid::text"},
+		{configID: "99999999999", want: "uuid::text"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.configID, func(t *testing.T) {

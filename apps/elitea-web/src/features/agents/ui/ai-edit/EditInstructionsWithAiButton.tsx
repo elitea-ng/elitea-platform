@@ -43,10 +43,11 @@ export function EditInstructionsWithAiButton(props: EditInstructionsWithAiButton
 
   const availability = useAiEditAvailability({ projectId, modelSettings: llmSettings });
 
-  // `projectId`/`llmSettings` are re-checked here rather than trusted from
-  // `isAvailable` alone so the non-optional modal props below are narrowed by
-  // the compiler, not by a comment.
-  if (!availability.isAvailable || projectId === undefined || llmSettings == null) return null;
+  // `projectId` is re-checked here rather than trusted from `isAvailable`
+  // alone so the non-optional modal prop below is narrowed by the compiler,
+  // not by a comment. A version without its own `llm_settings` still edits:
+  // the model is the project default (`availability.modelName`).
+  if (!availability.isAvailable || projectId === undefined) return null;
 
   return (
     <>
@@ -68,9 +69,11 @@ export function EditInstructionsWithAiButton(props: EditInstructionsWithAiButton
           instructions={instructions}
           basePrompt={availability.basePrompt}
           llmSettings={{
-            model_name: llmSettings.model_name,
-            temperature: llmSettings.temperature ?? 0.7,
-            max_tokens: llmSettings.max_tokens ?? 1024,
+            // The project's CURRENT default model, not the one the version
+            // was created with (legacy issue 6872).
+            model_name: availability.modelName,
+            temperature: llmSettings?.temperature ?? 0.7,
+            max_tokens: llmSettings?.max_tokens ?? 1024,
           }}
           onApply={onApply}
         />

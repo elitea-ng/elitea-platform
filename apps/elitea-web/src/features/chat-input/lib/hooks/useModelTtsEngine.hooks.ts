@@ -1,9 +1,10 @@
 /**
- * The server-side model TTS backend (Socket.IO + Web Audio) — ported from
+ * The server-side model TTS backend (HTTPS + Web Audio) — ported from
  * `useTextToSpeech.hooks.js`'s `hasModelTTS` branch (lines 98-644). Split
  * across `.types.ts` (the shared refs bag), `.scheduler.ts` (AudioContext +
- * buffered PCM queue), `.socket.ts` (`tts_audio_chunk`/`tts_done`/
- * `tts_error` handlers), and `.raf.ts` (highlight-loop math) — this file
+ * buffered PCM queue), `.stream.ts` (one `POST /llm/v1/audio/speech` per
+ * sentence — it replaced the socket.io `tts_*` events, see
+ * `shared/api/voiceTransport.ts`), and `.raf.ts` (highlight-loop math) — this file
  * wires those pieces into React effects/callbacks and stays a thin
  * dispatcher, per those files' own module docs (§3.5 budgets).
  *
@@ -18,14 +19,14 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 
-import type { SocketClient } from '@/shared/api/socket/client';
-import type { EmitPayloadOf } from '@/shared/api/socket/events';
-
+import { isVoiceAbort, VoiceTransportError } from '@/shared/api/voiceTransport';
+import type { SpeechRequest, VoiceErrorCode } from '@/shared/api/voiceTransport';
 import { buildCharTimeline } from '../helpers/ttsTimeline.helpers';
+import { speechInstructionsFor } from '../helpers/voiceAudio.helpers';
 
 import { cancelScheduledFrame, computeModelTickOutcome } from './useModelTtsEngine.raf';
 import { ensureAudioContext, scheduleFromQueue, stopModelAudio } from './useModelTtsEngine.scheduler';
-import { buildChunkHandler, buildDoneHandler, buildErrorHandler } from './useModelTtsEngine.socket';
+import { streamSpeech } from './useModelTtsEngine.stream';
 import type { ModelTtsRefs } from './useModelTtsEngine.types';
 import type { TtsEngineHandle, TtsModel, TtsSpokenRange, TtsStatus, TtsVoiceConfig } from './useTextToSpeech.types';
 
@@ -50,8 +51,6 @@ function useModelTtsRefs(): ModelTtsRefs {
   const calibratedRate = useRef(15.4);
   const charTimeline: ModelTtsRefs['charTimeline'] = useRef(null);
   const sentenceWaypoints: ModelTtsRefs['sentenceWaypoints'] = useRef([]);
-  const pendingChunk: ModelTtsRefs['pendingChunk'] = useRef(null);
-  const newSentence = useRef(true);
   const pcmQueue: ModelTtsRefs['pcmQueue'] = useRef([]);
   const schedulerTimer: ModelTtsRefs['schedulerTimer'] = useRef(null);
   const finalTtsDone = useRef(false);
@@ -73,8 +72,6 @@ function useModelTtsRefs(): ModelTtsRefs {
     calibratedRate,
     charTimeline,
     sentenceWaypoints,
-    pendingChunk,
-    newSentence,
     pcmQueue,
     schedulerTimer,
     finalTtsDone,
@@ -92,17 +89,36 @@ export interface UseModelTtsEngineParams {
   /** The outer hook's current status — this engine only ever transitions it away from `playing`/`paused` states it itself set. */
   readonly status: TtsStatus;
   readonly ttsModel: TtsModel | null | undefined;
-  readonly socket: SocketClient | null | undefined;
+  /** The project the user works in: the `/llm` edge bills it (`X-Project-Id`). */
+  readonly projectId: string | number | undefined;
   readonly voiceConfig: TtsVoiceConfig | undefined;
   readonly setStatus: (status: TtsStatus) => void;
   readonly setSpokenRange: (range: TtsSpokenRange | null) => void;
-  /** Called when playback reaches `done` (RAF loop), `error` (`tts_error`), or is explicitly `stop()`-ed (`'idle'`) — the outer hook resets `showPlayer`/`speakableText` here in every case, matching baseline's unconditional `resetStatus(newStatus)`. */
+  /** Called when playback reaches `done` (RAF loop), `error` (a failed speech request), or is explicitly `stop()`-ed (`'idle'`) — the outer hook resets `showPlayer`/`speakableText` here in every case, matching baseline's unconditional `resetStatus(newStatus)`. */
   readonly onFinished: (status: 'done' | 'error' | 'idle') => void;
+  /** Why a speech request failed, for the caller to show. A stop is not a failure. */
+  readonly onError?: ((code: VoiceErrorCode) => void) | undefined;
+}
+
+/** The voice the request names: the user's pick, else `alloy` (the old server's default, `sio/tts.py`). */
+const DEFAULT_SPEECH_VOICE = 'alloy';
+
+/** Everything one speech request carries except the sentence itself. */
+function speechRequestFor(model: TtsModel, projectId: string | number, voiceConfig: TtsVoiceConfig | undefined): Omit<SpeechRequest, 'input'> {
+  return {
+    projectId,
+    model: model.name,
+    voice: voiceConfig?.voiceId || DEFAULT_SPEECH_VOICE,
+    speed: voiceConfig?.rate ?? 1.0,
+    instructions: speechInstructionsFor(model.name),
+  };
 }
 
 export function useModelTtsEngine(params: UseModelTtsEngineParams): TtsEngineHandle {
-  const { enabled, status, ttsModel, socket, voiceConfig, setStatus, setSpokenRange, onFinished } = params;
+  const { enabled, status, ttsModel, projectId, voiceConfig, setStatus, setSpokenRange, onFinished, onError } = params;
   const refs = useModelTtsRefs();
+  // One run at a time: a new speak() or a stop() aborts the run in flight.
+  const runRef = useRef<AbortController | null>(null);
 
   // Live volume change — ramp to avoid a click artifact when the volume slider moves mid-playback.
   useEffect(() => {
@@ -112,28 +128,6 @@ export function useModelTtsEngine(params: UseModelTtsEngineParams): TtsEngineHan
     // Re-runs only when volume itself changes — `refs`/`ctx` are read fresh each time, not tracked as deps (mirrors the baseline's own `[voiceConfig?.volume]`-only effect).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceConfig?.volume]);
-
-  useEffect(() => {
-    if (!enabled || !socket) return undefined;
-    const handleChunk = buildChunkHandler(refs);
-    const handleDone = buildDoneHandler(refs);
-    const handleError = buildErrorHandler(() => {
-      stopModelAudio(refs);
-      setStatus('error');
-      setSpokenRange(null);
-      onFinished('error');
-    });
-
-    socket.on('tts_audio_chunk', handleChunk);
-    socket.on('tts_done', handleDone);
-    socket.on('tts_error', handleError);
-    return () => {
-      socket.off('tts_audio_chunk', handleChunk);
-      socket.off('tts_done', handleDone);
-      socket.off('tts_error', handleError);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, socket]);
 
   useEffect(() => {
     if (!enabled || status !== 'playing') return undefined;
@@ -164,12 +158,26 @@ export function useModelTtsEngine(params: UseModelTtsEngineParams): TtsEngineHan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, status]);
 
+  /** A run failed: stop the audio, report why, and reset the player — the old `tts_error` handler's job. */
+  const fail = useCallback(
+    (err: unknown) => {
+      stopModelAudio(refs);
+      setStatus('error');
+      setSpokenRange(null);
+      onFinished('error');
+      onError?.(err instanceof VoiceTransportError ? err.code : 'failed');
+    },
+    [refs, setStatus, setSpokenRange, onFinished, onError],
+  );
+
   const speak = useCallback(
     (text: string) => {
-      if (!enabled || !text || !ttsModel || !socket) return;
+      if (!enabled || !text || !ttsModel || projectId === undefined) return;
 
+      runRef.current?.abort();
+      const run = new AbortController();
+      runRef.current = run;
       refs.userPaused.current = false;
-      socket.emit('tts_stop', {});
       stopModelAudio(refs);
       refs.sentenceWaypoints.current = [];
       refs.fullText.current = text;
@@ -182,20 +190,16 @@ export function useModelTtsEngine(params: UseModelTtsEngineParams): TtsEngineHan
       if (refs.schedulerTimer.current !== null) clearInterval(refs.schedulerTimer.current);
       refs.schedulerTimer.current = setInterval(() => scheduleFromQueue(refs), 25);
 
-      const payload = {
-        project_id: ttsModel.project_id,
-        model_name: ttsModel.name,
-        model_project_id: ttsModel.project_id,
-        text,
-        voice: voiceConfig?.voiceId || undefined,
-        speed: voiceConfig?.rate ?? 1.0,
-      } satisfies EmitPayloadOf<'tts_start'>;
-      socket.emit('tts_start', payload);
+      const request = speechRequestFor(ttsModel, projectId, voiceConfig);
+      void streamSpeech({ refs, text, request, signal: run.signal }).catch((err: unknown) => {
+        if (run.signal.aborted || isVoiceAbort(err) || runRef.current !== run) return;
+        fail(err);
+      });
 
       setStatus('playing');
       setSpokenRange(null);
     },
-    [enabled, ttsModel, socket, voiceConfig, setStatus, setSpokenRange, refs],
+    [enabled, ttsModel, projectId, voiceConfig, setStatus, setSpokenRange, refs, fail],
   );
 
   const pause = useCallback(() => {
@@ -214,19 +218,22 @@ export function useModelTtsEngine(params: UseModelTtsEngineParams): TtsEngineHan
 
   const stop = useCallback(() => {
     if (!enabled) return;
+    runRef.current?.abort();
+    runRef.current = null;
     refs.userPaused.current = false;
-    socket?.emit('tts_stop', {});
     stopModelAudio(refs);
     refs.fullText.current = '';
     setStatus('idle');
     setSpokenRange(null);
     onFinished('idle');
-  }, [enabled, socket, setStatus, setSpokenRange, refs, onFinished]);
+  }, [enabled, setStatus, setSpokenRange, refs, onFinished]);
 
   // Cleanup on unmount (or `enabled` flipping off mid-playback).
   useEffect(() => {
     return () => {
-      if (enabled) stopModelAudio(refs);
+      if (!enabled) return;
+      runRef.current?.abort();
+      stopModelAudio(refs);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);

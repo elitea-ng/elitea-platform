@@ -36,8 +36,16 @@ import (
 // the handler refuses is a rule with a hole in it for every other writer.
 func newEvalDimensionsRouter(t *testing.T) http.Handler {
 	t.Helper()
+	return newEvalDimensionsRouterWith(t, true)
+}
+
+// newEvalDimensionsRouterWith wires the create-permission check a promotion
+// asks, answering `mayCreate` for every request.
+func newEvalDimensionsRouterWith(t *testing.T, mayCreate bool) http.Handler {
+	t.Helper()
 	pool := newMigratedPostgresIntegrationPool(t)
-	handler := evaluation.NewHandler(NewEvalDimensionsRepo(pool))
+	handler := evaluation.NewHandler(NewEvalDimensionsRepo(pool),
+		evaluation.WithCreatePermissionCheck(func(*http.Request) (bool, error) { return mayCreate, nil }))
 
 	r := chi.NewRouter()
 	r.Get("/eval_dimensions/prompt_lib/{projectID}", handler.List)
@@ -192,7 +200,7 @@ func TestEvalDimensionUpdateIsReadBackAndDoesNotChangeScope(t *testing.T) {
 		t.Fatalf("the rename was not persisted: got %q", rows[0].Name)
 	}
 	if rows[0].Tier != evaluation.TierAgentAdhoc {
-		t.Fatalf("the update changed the tier to %q; scope is set once, at authoring", rows[0].Tier)
+		t.Fatalf("an update without a tier changed the tier to %q; an absent tier keeps the stored scope", rows[0].Tier)
 	}
 	if rows[0].ApplicationID == nil || *rows[0].ApplicationID != 77 {
 		t.Fatalf("the update dropped the agent scope: %v", rows[0].ApplicationID)
@@ -206,7 +214,8 @@ func TestEvalDimensionUpdateIsReadBackAndDoesNotChangeScope(t *testing.T) {
 }
 
 // An ad-hoc dimension belongs to ONE agent. Listing for another agent must not
-// return it, or every agent's editor grows every other agent's private rubrics.
+// return it, or every agent's editor grows every other agent's rubrics. (A
+// listing scope, not an access boundary: any project editor may edit any agent.)
 func TestEvalDimensionAdhocScopeIsPerAgent(t *testing.T) {
 	router := newEvalDimensionsRouter(t)
 

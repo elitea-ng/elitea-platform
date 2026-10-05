@@ -45,6 +45,8 @@ import { CredentialConnectionChecks, SchemaField } from '@/features/credentials'
 import { t } from '@/shared/i18n';
 import type { ConfigSchemaNode } from '@/features/credentials';
 
+import { clearsTestResult, missingForConnectionTest, modelTestBody, testsFormValues } from './llmModelConnectionTest';
+
 /**
  * `unsupported` is its own outcome, not a failure. A credential type this
  * build has no checker for has not failed anything — reporting it in the
@@ -70,6 +72,10 @@ export interface CredentialConnectionTestParams {
 export interface CredentialConnectionTestResult {
   readonly testResult: CredentialTestResult;
   readonly testMessage: string;
+  /** Click-to-answer time of the last finished test; `undefined` while none is shown. */
+  readonly testDurationMs: number | undefined;
+  /** Labels of the fields the test still needs; empty when it can run. */
+  readonly missingForTest: readonly string[];
   readonly isTesting: boolean;
   readonly testConnection: () => void;
   readonly noteFieldChanged: (fieldKey: string) => void;
@@ -171,11 +177,14 @@ function startConnectionTest(
   // A saved row whose secret the user has NOT re-typed is the only case the
   // stored route applies to — and it is the common one, since the sealed
   // value the form loaded is not a secret the browser could send anyway.
-  if (request.configId !== undefined && !request.secretTouched) {
+  // An llm_model is the exception: it holds no secret, and its test is of
+  // the values in the form (`./llmModelConnectionTest.ts`).
+  if (request.configId !== undefined && !request.secretTouched && !testsFormValues(request.configType)) {
     return performStoredTest(checks.stored, request.projectId, request.configId);
   }
   if (request.configType === undefined) return undefined;
-  return performUnsavedTest(checks.unsaved, request.projectId, request.configType, request.data);
+  const body = testsFormValues(request.configType) ? modelTestBody(request.data, request.configId) : request.data;
+  return performUnsavedTest(checks.unsaved, request.projectId, request.configType, body);
 }
 
 export function useCredentialConnectionTest(params: CredentialConnectionTestParams): CredentialConnectionTestResult {
@@ -183,7 +192,12 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
 
   const [testResult, setTestResult] = useState<CredentialTestResult>('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [testDurationMs, setTestDurationMs] = useState<number | undefined>(undefined);
   const [secretTouched, setSecretTouched] = useState(false);
+  const configTypeRef = useRef(configType);
+  configTypeRef.current = configType;
+  // A run that a field edit made stale must not paint its late answer.
+  const runRef = useRef(0);
 
   const secretFieldKeys = useMemo(
     () => new Set(Object.entries(schemaProperties).filter(([key, property]) => SchemaField.classify(key, property) === 'secret').map(([key]) => key)),
@@ -197,6 +211,12 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
 
   const noteFieldChanged = useCallback((fieldKey: string): void => {
     if (secretFieldKeysRef.current.has(fieldKey)) setSecretTouched(true);
+    if (clearsTestResult(configTypeRef.current, fieldKey)) {
+      runRef.current += 1;
+      setTestResult('idle');
+      setTestMessage('');
+      setTestDurationMs(undefined);
+    }
   }, []);
 
   const unsavedCheck = CredentialConnectionChecks.useUnsaved();
@@ -212,17 +232,26 @@ export function useCredentialConnectionTest(params: CredentialConnectionTestPara
 
   const testConnection = useCallback(() => {
     setTestResult('idle');
+    setTestDurationMs(undefined);
+    const runId = runRef.current + 1;
+    runRef.current = runId;
+    // Measured from the click to the answer, which is what the user waited.
+    const startedAt = performance.now();
     const run = startConnectionTest({ stored: storedCheck, unsaved: unsavedCheck }, request);
     if (run === undefined) return;
     void run.then((outcome) => {
+      if (runRef.current !== runId) return;
       setTestResult(outcome.status);
       setTestMessage(outcome.status === 'success' ? '' : outcome.message);
+      setTestDurationMs(performance.now() - startedAt);
     });
   }, [storedCheck, unsavedCheck, request]);
 
   return {
     testResult,
     testMessage,
+    testDurationMs,
+    missingForTest: missingForConnectionTest(configType, data),
     isTesting: unsavedCheck.isPending || storedCheck.isPending,
     testConnection,
     noteFieldChanged,

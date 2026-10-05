@@ -21,6 +21,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 
 import { t } from '@/shared/i18n';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { CommonBooleanField } from '@/shared/ui/CommonBooleanField';
 import { CommonNumberField } from '@/shared/ui/CommonNumberField';
 import { CommonStringField } from '@/shared/ui/CommonStringField';
@@ -230,16 +231,47 @@ function enumOptionsOf(property: ConfigSchemaNode | undefined): readonly string[
   return undefined;
 }
 
+/**
+ * The schema's `maxLength` for a string field, read off the node itself or
+ * off its string branch of an `anyOf`/`oneOf` (an optional field is
+ * `anyOf: [{type: string, maxLength}, {type: null}]`).
+ */
+function schemaMaxLengthOf(property: ConfigSchemaNode | undefined): number | undefined {
+  const candidates = [property, ...schemaNodesOf(property?.['anyOf']), ...schemaNodesOf(property?.['oneOf'])];
+  for (const candidate of candidates) {
+    const value = candidate?.['maxLength'];
+    if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
 function renderStringField({ fieldKey, property, value, error, onChange }: CredentialSchemaFieldProps, meta: CommonMeta): ReactNode {
   const enumValues = enumOptionsOf(property);
-  return (
+  const text = typeof value === 'string' ? value : '';
+  // A bounded text field (the llm_model `description`, 40 characters) gets
+  // the input limit, which also stops a paste at the limit, and a
+  // "N characters left" counter under it.
+  const maxLength = enumValues === undefined ? schemaMaxLengthOf(property) : undefined;
+  const field = (
     <CommonStringField
       key={fieldKey}
       fieldKey={fieldKey}
-      value={typeof value === 'string' ? value : ''}
+      value={text}
       meta={{ ...meta, ...(error !== undefined ? { error } : {}), ...(enumValues !== undefined ? { enumValues } : {}) }}
+      {...(maxLength !== undefined ? { property: { maxLength } } : {})}
       onChange={onChange}
     />
+  );
+  if (maxLength === undefined) return field;
+  return (
+    <div key={fieldKey}>
+      {field}
+      <CharacterCounter
+        value={text}
+        maxLength={maxLength}
+        data-testid={`credential-field-counter-${fieldKey}`}
+      />
+    </div>
   );
 }
 

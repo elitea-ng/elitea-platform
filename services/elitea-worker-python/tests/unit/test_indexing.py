@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 import pytest
@@ -41,7 +41,12 @@ from elitea_worker.protocol.codec import (
     build_node_event_output_frame,
 )
 from elitea_worker.protocol.indexing import (
+    CLASSIFIED_INDEX_FAILURE_MESSAGES,
+    INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE,
     INDEX_INGEST_FAILURE_SAFE_MESSAGE,
+    INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE,
+    INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+    INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE,
     bind_result_artifact,
     bind_result_summary,
     request_from,
@@ -1206,6 +1211,231 @@ def test_outer_sdk_failure_becomes_fixed_safe_error_summary() -> None:
     assert bound.result_summary.status == indexing_pb2.INDEX_INGEST_STATUS_V1_ERROR
     assert bound.result_summary.message == INDEX_INGEST_FAILURE_SAFE_MESSAGE
     assert canary.encode() not in bound.SerializeToString(deterministic=True)
+
+
+def _index_callback(
+    publish: Callable[[Any], None] = lambda event: None,
+) -> CurrentIndexNodeEventCallback:
+    return CurrentIndexNodeEventCallback(
+        CurrentIndexNodeEventContext(
+            stream_id="conversation-1",
+            task_id="execution-1",
+            initiator="user",
+            project_id=42,
+            user_id=7,
+            toolkit_id=9,
+            index_name="knowledge",
+        ),
+        publish,
+    )
+
+
+@pytest.mark.parametrize(
+    ("error_class", "exception_type", "retriable", "expected"),
+    [
+        # #6876: a spent GitHub quota. The SDK's indexer re-raises the
+        # PyGithub exception, so its name is the top-level exception_type.
+        (
+            "infrastructure",
+            "RateLimitExceededException",
+            True,
+            INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+        ),
+        ("infrastructure", "TooManyRequests", True, INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE),
+        ("infrastructure", "RateLimitError", None, INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE),
+        # The SDK's unresumable-quota path raises ToolException(msg) from the
+        # quota error: classified infrastructure/retriable=True through the
+        # cause. It must not be told to run again later.
+        ("infrastructure", "ToolException", True, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        # retriable selects nothing: False never invents a quota remedy.
+        ("infrastructure", "ToolException", False, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        # Embedding model behind the gateway returned 503 / pgvector timed out.
+        ("infrastructure", "InternalServerError", True, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        ("infrastructure", "APIConnectionError", True, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        ("infrastructure", "TimeoutError", True, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        ("infrastructure", None, True, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        ("infrastructure", 7, True, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE),
+        # A source credential refusal, and a vector-store privilege error that
+        # the SDK's "permission denied" phrase fallback also classes policy.
+        ("policy", "BadCredentialsException", False, INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE),
+        ("policy", "InsufficientPrivilege", False, INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE),
+        # A quota name under another class does not override that class.
+        ("policy", "RateLimitExceededException", False, INDEX_INGEST_ACCESS_REFUSED_SAFE_MESSAGE),
+        ("input", "ValidationError", False, INDEX_INGEST_INPUT_REJECTED_SAFE_MESSAGE),
+        ("tool_internal", "KeyError", False, INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+        # Unknown or malformed classifications never pick a specific remedy.
+        ("brand_new_class", "RateLimitExceededException", True, INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+        (7, "RateLimitExceededException", True, INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+        ("infrastructure", "RateLimitExceededException", "yes", INDEX_INGEST_FAILURE_SAFE_MESSAGE),
+    ],
+)
+def test_sdk_error_class_and_exception_type_select_the_terminal_error(
+    error_class: object,
+    exception_type: object,
+    retriable: object,
+    expected: str,
+) -> None:
+    canary = (
+        "Tool execution failed: 403 {'message': 'API rate limit exceeded for "
+        "203.0.113.7', 'documentation_url': 'https://docs.github.com/rest'}"
+    )
+    sdk_result: dict[str, Any] = {
+        "success": False,
+        "error": canary,
+        "error_class": error_class,
+        "toolkit_config": {"access_token": "secret"},
+    }
+    if exception_type is not None:
+        sdk_result["exception_type"] = exception_type
+    if retriable is not None:
+        sdk_result["retriable"] = retriable
+
+    bound = bind_result_summary(_index_result(sdk_result))
+
+    summary = bound.result_summary
+    assert summary.status == indexing_pb2.INDEX_INGEST_STATUS_V1_ERROR
+    assert (
+        summary.terminal_state
+        == indexing_pb2.INDEX_INGEST_TERMINAL_STATE_V1_FAILED
+    )
+    assert summary.message == expected
+    serialized = bound.SerializeToString(deterministic=True)
+    assert canary.encode() not in serialized
+    assert b"203.0.113.7" not in serialized
+    if isinstance(exception_type, str):
+        assert exception_type.encode() not in serialized
+
+
+def test_only_the_quota_sentence_promises_a_later_run() -> None:
+    """Sentences reached by non-quota failures promise no retry and blame no
+    single party: the SDK gives these classes to the embedding model and the
+    vector store too, and to an unresumable quota run."""
+
+    for message in CLASSIFIED_INDEX_FAILURE_MESSAGES - {
+        INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+    }:
+        assert "again later" not in message
+        assert "quota" not in message
+        assert "the source refused" not in message
+        assert "the source rejected" not in message
+
+
+def test_failed_summary_correction_carries_the_classified_error() -> None:
+    callback = _index_callback()
+
+    event = callback.finish_index_status_for_summary(
+        "failed",
+        correct_inconsistent=True,
+        error_message=INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+    )
+
+    assert event is not None
+    current = json.loads(encode_current_node_event_json(event))
+    assert current["type"] == "agent_index_data_status"
+    assert current["response_metadata"]["state"] == "failed"
+    assert (
+        current["response_metadata"]["error"]
+        == INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+    )
+
+
+def _sdk_failed_status(callback: CurrentIndexNodeEventCallback, error: str) -> None:
+    # What BaseIndexerToolkit.index_data's except path emits before it
+    # re-raises: _emit_index_event(index_name, error=str(e), state="failed").
+    callback.on_custom_event(
+        "index_data_status",
+        {
+            "index_name": "knowledge",
+            "state": "failed",
+            "error": error,
+            "indexed": 3,
+            "updated": 0,
+            "toolkit_id": 9,
+        },
+        run_id=UUID("00000000-0000-0000-0000-000000000001"),
+    )
+
+
+def test_classified_correction_replaces_the_sdk_failed_status_text() -> None:
+    """#6876: the SDK has already emitted ``failed`` with raw provider text,
+    which projects to the generic fallback; the classified sentence must still
+    reach the live status."""
+
+    published: list[Any] = []
+    callback = _index_callback(published.append)
+    _sdk_failed_status(
+        callback,
+        "403 {'message': 'API rate limit exceeded for 203.0.113.7'}",
+    )
+    observed = json.loads(encode_current_node_event_json(published[-1]))
+    assert observed["response_metadata"]["error"] == "Indexing reported an error."
+
+    event = callback.finish_index_status_for_summary(
+        "failed",
+        correct_inconsistent=True,
+        error_message=INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+    )
+
+    assert event is not None
+    current = json.loads(encode_current_node_event_json(event))
+    assert current["response_metadata"]["state"] == "failed"
+    assert (
+        current["response_metadata"]["error"]
+        == INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+    )
+    assert b"203.0.113.7" not in event.SerializeToString(deterministic=True)
+    # One correction per run.
+    assert (
+        callback.finish_index_status_for_summary(
+            "failed",
+            correct_inconsistent=True,
+            error_message=INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE,
+        )
+        is None
+    )
+
+
+def test_same_state_failed_is_not_corrected_without_a_new_sentence() -> None:
+    # No classified sentence: the SDK's failed status already stands.
+    callback = _index_callback()
+    _sdk_failed_status(callback, "403 {'message': 'raw'}")
+    assert (
+        callback.finish_index_status_for_summary("failed", correct_inconsistent=True)
+        is None
+    )
+    # Not asked to correct an inconsistent status.
+    callback = _index_callback()
+    _sdk_failed_status(callback, "403 {'message': 'raw'}")
+    assert (
+        callback.finish_index_status_for_summary(
+            "failed", error_message=INDEX_INGEST_RATE_LIMITED_SAFE_MESSAGE
+        )
+        is None
+    )
+    # The SDK's status already carries the same sentence.
+    callback = _index_callback()
+    _sdk_failed_status(callback, INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE)
+    assert (
+        callback.finish_index_status_for_summary(
+            "failed",
+            correct_inconsistent=True,
+            error_message=INDEX_INGEST_UNAVAILABLE_SAFE_MESSAGE,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "error_message"),
+    [("partly_indexed", "Indexing failed."), ("failed", "")],
+)
+def test_summary_correction_refuses_a_misplaced_error_message(
+    state: str, error_message: str
+) -> None:
+    with pytest.raises(ValueError):
+        _index_callback().finish_index_status_for_summary(
+            state, error_message=error_message
+        )
 
 
 @pytest.mark.parametrize("error", [None, "", 7, {"message": "failure"}])

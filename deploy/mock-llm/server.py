@@ -8,6 +8,8 @@ What it serves, which is exactly what bifrost's vLLM provider asks for:
 
   POST /v1/chat/completions   streaming (SSE) and unary
   POST /v1/embeddings         deterministic vectors for the index plane (#93)
+  POST /v1/audio/speech       a WAV tone as long as the text (voice read-aloud)
+  POST /v1/audio/transcriptions  a fixed transcript (voice dictation)
   GET  /v1/models             so a model list through the gateway is not empty
   GET  /healthz               for the compose healthcheck
 
@@ -1132,6 +1134,107 @@ def _usage_for(reply: str) -> dict:
     }
 
 
+# ── Audio (voice) ────────────────────────────────────────────────────────────
+#
+# The browser voice client calls /llm/v1/audio/speech (read-aloud) and
+# /llm/v1/audio/transcriptions (dictation, speaking mode). The gateway forwards
+# both here through bifrost, the same way it forwards chat. Without these routes
+# the voice journeys could only ever assert a 404.
+#
+# Which provider reaches which route matters, and it is not this file's choice:
+# bifrost's vLLM adapter (the credential class this mock is reached as, see the
+# module docstring) implements TRANSCRIPTION but refuses SPEECH before it dials.
+# So through the gateway only the transcription route is reachable; the gateway
+# answers speech with 501 `unsupported_operation`, which is the refusal the
+# voice client must show as "this model cannot speak". The speech route is still
+# served, under the paths bifrost's OpenAI and Azure adapters use, so a direct
+# caller and a future provider route both get a real answer.
+AUDIO_SPEECH_PATHS = ("/v1/audio/speech", "/openai/v1/audio/speech")
+AUDIO_TRANSCRIPTION_PATHS = ("/v1/audio/transcriptions", "/v1/audio/translations")
+# Azure's transcription URL names the deployment in the path.
+AZURE_TRANSCRIPTION_PREFIX = "/openai/deployments/"
+AZURE_TRANSCRIPTION_SUFFIX = "/audio/transcriptions"
+
+# What every transcription answers. Fixed, so a journey can assert that the
+# text the composer received is the text this upstream returned: the voice
+# client invents nothing and echoes nothing.
+TRANSCRIPT_TEXT = os.environ.get("MOCK_LLM_TRANSCRIPT", "MOCK TRANSCRIPT from the speech model")
+SPEECH_SAMPLE_RATE = 24000
+# Generated speech: this many seconds per input character, bounded so a long
+# text cannot make the mock produce megabytes.
+SPEECH_SECONDS_PER_CHAR = 0.04
+MAX_SPEECH_SECONDS = 10.0
+MAX_AUDIO_BODY_BYTES = 26 << 20
+
+
+def _speech_pcm(text: str) -> bytes:
+    """A quiet 440 Hz tone, as long as the text would take to read.
+
+    Deterministic, so a test can compare lengths; never silent, so a browser
+    that decodes it schedules real samples.
+    """
+    seconds = min(MAX_SPEECH_SECONDS, max(0.2, len(text) * SPEECH_SECONDS_PER_CHAR))
+    count = int(seconds * SPEECH_SAMPLE_RATE)
+    amplitude = int(0.2 * 32767)
+    step = 2 * math.pi * 440 / SPEECH_SAMPLE_RATE
+    return struct.pack(f"<{count}h", *(int(amplitude * math.sin(i * step)) for i in range(count)))
+
+
+def _wav(pcm: bytes, sample_rate: int = SPEECH_SAMPLE_RATE) -> bytes:
+    """Wrap 16-bit mono PCM in a RIFF/WAVE header."""
+    return b"".join([
+        b"RIFF", struct.pack("<I", 36 + len(pcm)), b"WAVE",
+        b"fmt ", struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16),
+        b"data", struct.pack("<I", len(pcm)), pcm,
+    ])
+
+
+def _wav_seconds(audio: bytes) -> float | None:
+    """The duration of a PCM WAV body with a 44-byte header, or None."""
+    if len(audio) < 44 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        return None
+    channels = struct.unpack_from("<H", audio, 22)[0]
+    sample_rate = struct.unpack_from("<I", audio, 24)[0]
+    bits = struct.unpack_from("<H", audio, 34)[0]
+    if not sample_rate or not channels or not bits:
+        return None
+    return (len(audio) - 44) / (sample_rate * channels * bits / 8)
+
+
+def _is_transcription_path(path: str) -> bool:
+    if path in AUDIO_TRANSCRIPTION_PATHS:
+        return True
+    return path.startswith(AZURE_TRANSCRIPTION_PREFIX) and path.endswith(AZURE_TRANSCRIPTION_SUFFIX)
+
+
+def _parse_multipart(content_type: str, body: bytes) -> tuple[dict, tuple[str, bytes] | None]:
+    """Split a multipart/form-data body into its text fields and its `file` part.
+
+    Standard library only (this module's rule): `email` parses MIME multipart
+    when it is given the Content-Type header the request carried.
+    """
+    from email import policy
+    from email.parser import BytesParser
+
+    message = BytesParser(policy=policy.HTTP).parsebytes(
+        b"Content-Type: " + content_type.encode("latin-1") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    )
+    fields: dict = {}
+    upload = None
+    if not message.is_multipart():
+        return fields, upload
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        payload = part.get_payload(decode=True) or b""
+        if name == "file":
+            upload = (part.get_filename() or "", payload)
+        else:
+            fields[name] = payload.decode("utf-8", "replace")
+    return fields, upload
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "elitea-mock-llm/1"
@@ -1227,6 +1330,12 @@ class Handler(BaseHTTPRequestHandler):
         # accepts a per-credential endpoint).
         if path in ("/v1/images/generations", "/openai/v1/images/generations"):
             self._images_generations()
+            return
+        if path in AUDIO_SPEECH_PATHS:
+            self._audio_speech(path)
+            return
+        if _is_transcription_path(path):
+            self._audio_transcription(path)
             return
         if path not in ("/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/responses"):
             self._send(404, {"error": {"message": "not found", "type": "invalid_request_error"}})
@@ -1428,6 +1537,106 @@ class Handler(BaseHTTPRequestHandler):
         else:
             data = [{"b64_json": TINY_PNG_B64} for _ in range(n)]
         self._send(200, {"created": int(time.time()), "data": data})
+
+    def _audio_error_marker(self, text: str) -> bool:
+        """Answer a scripted provider error when the text names one."""
+        for status, error_type in ((400, "invalid_request_error"),
+                                   (402, "insufficient_quota"),
+                                   (429, "rate_limit_error"),
+                                   (503, "server_error")):
+            if f"[[mock:http_{status}]]" in text:
+                self._send(status, {"error": {
+                    "type": error_type,
+                    "message": "SYNTHETIC_PROVIDER_BODY_MUST_NOT_REACH_UI",
+                    "code": f"fixture_{status}",
+                }})
+                return True
+        return False
+
+    def _audio_speech(self, path: str) -> None:
+        """`POST /v1/audio/speech`: text in, raw audio out (the OpenAI contract)."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length < 0 or length > MAX_BODY_BYTES:
+            self._send(413, {"error": {"message": "body too large", "type": "invalid_request_error"}})
+            return
+        try:
+            request = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._send(400, {"error": {"message": "invalid JSON", "type": "invalid_request_error"}})
+            return
+        text = request.get("input")
+        if not isinstance(text, str) or not text:
+            self._send(400, {"error": {"message": "input is required", "type": "invalid_request_error"}})
+            return
+        response_format = request.get("response_format") or "mp3"
+        raw_model = request.get("model")
+        _record({
+            "path": path,
+            "model": raw_model if isinstance(raw_model, str) else None,
+            "credential": _credential_label(self.headers.get("Authorization") or ""),
+            "input_chars": len(text),
+            "voice": request.get("voice"),
+            "response_format": response_format,
+            "at": time.time(),
+        })
+        if self._audio_error_marker(text):
+            return
+        pcm = _speech_pcm(text)
+        # "pcm" is the headerless form. Every other format is answered as WAV:
+        # this mock encodes no mp3 or opus, and a browser's decodeAudioData
+        # reads the container from the bytes, not from the requested format.
+        if response_format == "pcm":
+            body, content_type = pcm, "audio/L16; rate=24000; channels=1"
+        else:
+            body, content_type = _wav(pcm), "audio/wav"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _audio_transcription(self, path: str) -> None:
+        """`POST /v1/audio/transcriptions`: multipart audio in, text out."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_AUDIO_BODY_BYTES:
+            self._send(413, {"error": {"message": "body too large", "type": "invalid_request_error"}})
+            return
+        content_type = self.headers.get("Content-Type") or ""
+        if not content_type.startswith("multipart/form-data"):
+            self._send(400, {"error": {"message": "multipart/form-data is required", "type": "invalid_request_error"}})
+            return
+        fields, upload = _parse_multipart(content_type, self.rfile.read(length))
+        if upload is None or not upload[1]:
+            self._send(400, {"error": {"message": "file is required", "type": "invalid_request_error"}})
+            return
+        filename, audio = upload
+        seconds = _wav_seconds(audio)
+        _record({
+            "path": path,
+            "model": fields.get("model"),
+            "credential": _credential_label(self.headers.get("Authorization") or ""),
+            "filename": filename,
+            "audio_bytes": len(audio),
+            "audio_seconds": seconds,
+            "language": fields.get("language"),
+            "at": time.time(),
+        })
+        if self._audio_error_marker(fields.get("prompt") or ""):
+            return
+        response_format = fields.get("response_format") or "json"
+        if response_format in ("text", "srt", "vtt"):
+            body = TRANSCRIPT_TEXT.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        payload: dict = {"text": TRANSCRIPT_TEXT}
+        if seconds is not None:
+            # Duration usage: the denomination whisper-class models bill in.
+            payload["usage"] = {"type": "duration", "seconds": round(seconds, 3)}
+        self._send(200, payload)
 
     def _embeddings(self, request: dict) -> None:
         """`POST /v1/embeddings` — what the index plane's embedding hop calls.

@@ -161,6 +161,15 @@ func (CurrentPoVDataNormalizer) Normalize(
 		}, nil
 	default:
 		if request.Operation == CurrentConfigurationNormalizationUpdate {
+			// Legacy issue #6707. The shallow update stores `data` as sent, so
+			// the DIAL protocol rule of the create normalizer is applied here
+			// too; otherwise an edit could store a value the create refuses.
+			if request.Type == "llm_model" {
+				if _, _, err := ValidateLLMModelDialProtocol(request.Data); err != nil {
+					return CurrentConfigurationNormalizationResult{},
+						currentLocalConfigurationFieldError("data." + DialProtocolField)
+				}
+			}
 			return CurrentConfigurationNormalizationResult{
 				Data:     normalizeCurrentShallowUpdateData(request.Data),
 				Complete: true,
@@ -508,7 +517,16 @@ func (s *CurrentConfigurationMutationService) normalizeData(
 	if !result.Complete || result.Data == nil {
 		return nil, currentMutationFieldError(CurrentConfigurationMutationNormalizationRequired, "data")
 	}
-	return cloneCurrentJSONObject(result.Data), nil
+	normalized := cloneCurrentJSONObject(result.Data)
+	// The description rule holds for a create AND an update. An update
+	// stores the submitted object, so without this a PUT could store a
+	// description the create refuses.
+	if typeName == "llm_model" {
+		if err := NormalizeLLMModelDescription(normalized); err != nil {
+			return nil, currentMutationFieldError(CurrentConfigurationMutationInvalid, "data."+LLMModelDescriptionField)
+		}
+	}
+	return normalized, nil
 }
 
 func (s *CurrentConfigurationMutationService) extractSecrets(

@@ -13,20 +13,20 @@
  * `useGetTtsVoicesQuery` RTK Query hooks (spec §2.3: TanStack Query, no
  * RTK Query anywhere in the new app).
  *
- * `socket` is accepted as an explicit parameter, same rationale as
- * `useTextToSpeech.hooks.ts`'s own doc comment (no `SocketClientContext.
- * Provider` mounted yet; `socket` legitimately absent is the browser-TTS
- * fallback path, not a programmer error).
+ * Model speech goes over HTTPS to `/llm/v1/audio/speech`
+ * (`shared/api/voiceTransport.ts`); it used to take a socket.io client that had no
+ * server behind it. `onError` receives the readable message for a failed
+ * read-aloud (`shared/lib/voiceProblems.ts`), so the caller can show it.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-
-import type { SocketClient } from '@/shared/api/socket/client';
 
 import { useModelsList } from '../../api/models';
 import type { TtsVoice } from '../../api/ttsVoices';
 import { useTtsVoices } from '../../api/ttsVoices';
 import type { SpeakableText, TtsSegment } from '../helpers/ttsHelpers';
 import { toSpeakableText } from '../helpers/ttsHelpers';
+import { voiceProblemMessage } from '@/shared/lib/voiceProblems';
+import type { VoiceProblem } from '@/shared/lib/voiceProblems';
 
 import { useTextToSpeech } from './useTextToSpeech.hooks';
 import type { TtsModel, TtsSpokenRange } from './useTextToSpeech.types';
@@ -41,6 +41,8 @@ export interface VoicePlayerProps {
   readonly onVoiceConfigChange: (updates: VoiceConfigUpdate) => void;
   readonly ttsModel: TtsModel | null;
   readonly hasModelTTS: boolean;
+  /** The project the voice settings preview bills. */
+  readonly projectId: string | undefined;
   readonly isPlaying: boolean;
   readonly onStop: () => void;
   readonly onPlay: () => void;
@@ -49,7 +51,8 @@ export interface VoicePlayerProps {
 /** @public */
 export interface UseReadAloudParams {
   readonly projectId: string | undefined;
-  readonly socket: SocketClient | null | undefined;
+  /** Receives the readable message when read-aloud fails or nothing can speak. */
+  readonly onError?: ((message: string) => void) | undefined;
 }
 
 /** @public */
@@ -69,14 +72,20 @@ function pickDefaultModel(items: readonly TtsModel[] | undefined): TtsModel | nu
   return items.find((model) => model.default) ?? items[0] ?? null;
 }
 
+function defaultVoiceId(voices: readonly TtsVoice[] | undefined): string | undefined {
+  const first = voices?.[0];
+  return first ? (first.id ?? first.name) : undefined;
+}
+
 export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
-  const { projectId, socket } = params;
+  const { projectId, onError } = params;
   const [speakingMessageId, setSpeakingMessageId] = useState<string | number | null>(null);
   const [speakingSegments, setSpeakingSegments] = useState<readonly TtsSegment[] | null>(null);
 
   const { data: ttsModelsData } = useModelsList({ projectId, section: 'tts', includeShared: true }, { enabled: !!projectId });
   const ttsModel = useMemo(() => pickDefaultModel(ttsModelsData?.items), [ttsModelsData]);
-  const hasModelTTS = !!(ttsModel && socket);
+  const hasModelTTS = !!(ttsModel && projectId);
+  const handleProblem = useCallback((problem: VoiceProblem) => onError?.(voiceProblemMessage(problem)), [onError]);
 
   // `persist: true` (A9, ELITEA-1312/1313/1315): `voicePlayerProps.
   // onVoiceConfigChange` is the ONLY way a caller can change this hook's
@@ -117,6 +126,7 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
     speak,
     stop: stopTTS,
     isPlaying,
+    isSupported: canSpeak,
     spokenRange,
     showPlayer,
     setShowPlayer,
@@ -124,10 +134,12 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
     setSpeakableText,
   } = useTextToSpeech({
     ttsModel,
-    socket,
+    projectId,
+    onError: handleProblem,
     voiceConfig: {
       voice: resolvedBrowserVoice,
-      voiceId: voiceConfig.voiceId || undefined,
+      // No pick: the provider's first listed voice is its default (`tts_voices` keeps the provider's order).
+      voiceId: voiceConfig.voiceId || defaultVoiceId(ttsVoicesQuery.data?.voices),
       rate: voiceConfig.rate,
       volume: voiceConfig.volume,
     },
@@ -152,13 +164,19 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
       if (!text) return;
       const { text: convertedText, segments }: SpeakableText = toSpeakableText(text);
       if (!convertedText) return;
+      // Nothing can speak (no speech model, no browser voice): say so and do
+      // not arm a player that would sit there silent.
+      if (!canSpeak) {
+        handleProblem('no-model');
+        return;
+      }
       setSpeakingMessageId(msgId ?? null);
       setSpeakingSegments(segments);
       setSpeakableText(convertedText);
       setShowPlayer(true);
       speak(convertedText);
     },
-    [setShowPlayer, setSpeakableText, speak],
+    [canSpeak, handleProblem, setShowPlayer, setSpeakableText, speak],
   );
 
   const onPlay = useCallback(() => {
@@ -189,6 +207,7 @@ export function useReadAloud(params: UseReadAloudParams): UseReadAloudResult {
       onVoiceConfigChange: setVoiceConfig,
       ttsModel,
       hasModelTTS,
+      projectId,
       isPlaying,
       onStop: stopTTS,
       onPlay,

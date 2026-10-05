@@ -118,6 +118,14 @@ func (h *RunHandler) Start(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("this dataset has no cases: add at least one before starting a run"))
 		return
 	}
+	// Excluded cases stay in the dataset and out of the run. The filter is
+	// applied HERE, before the snapshot, so the snapshot is the list the
+	// orchestrator executes and a toggle after the start cannot change it.
+	cases = activeCases(cases)
+	if len(cases) == 0 {
+		apierr.Write(w, errAllCasesExcluded)
+		return
+	}
 
 	snapshot, err := h.buildSnapshot(r.Context(), projectID, input.DimensionIDs, cases)
 	if err != nil {
@@ -148,6 +156,29 @@ func (h *RunHandler) Start(w http.ResponseWriter, r *http.Request) {
 		h.orchestrator.Enqueue(RunRef{ProjectID: projectID, RunID: created.ID})
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// errAllCasesExcluded is the 422 for a dataset whose every case is excluded.
+//
+// It is a 422 and not the 400 an EMPTY dataset gets: the body is well formed
+// and the dataset has cases, but its current state cannot be run. The message
+// names the fix, because "no cases" would send the author to add a case that
+// is already there.
+var errAllCasesExcluded error = &apierr.APIError{
+	Status:  http.StatusUnprocessableEntity,
+	Code:    "unprocessable_entity",
+	Message: "every case in this dataset is excluded: include at least one case before starting a run",
+}
+
+// activeCases drops the excluded cases and keeps the order.
+func activeCases(cases []DatasetCase) []DatasetCase {
+	active := make([]DatasetCase, 0, len(cases))
+	for _, testCase := range cases {
+		if !testCase.Excluded {
+			active = append(active, testCase)
+		}
+	}
+	return active
 }
 
 // buildSnapshot freezes the dimensions a run is scored against.

@@ -187,6 +187,8 @@ export interface NewChatInputVoiceProps {
   readonly isTTSPlaying?: boolean | undefined;
   /** Externally-controlled one-shot mic-recording flag — see this file's module doc for why this replaces the baseline's own internally-owned `isRecording` state. */
   readonly isRecording?: boolean | undefined;
+  /** Receives the readable message when speaking mode's server transcription fails. */
+  readonly onError?: ((message: string) => void) | undefined;
 }
 
 /** @public §3.5 budget: 10 top-level props (grouped). */

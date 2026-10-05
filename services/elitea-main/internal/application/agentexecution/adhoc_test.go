@@ -58,6 +58,9 @@ func TestCurrentAdhocStartBuildsCurrentMainChatInputAndTurn(t *testing.T) {
 	if resolver.adhocCalls != 1 || len(resolver.adhocRequests) != 1 || len(freezer.calls) != 1 {
 		t.Fatalf("resolver calls=%d requests=%d freezer=%d", resolver.adhocCalls, len(resolver.adhocRequests), len(freezer.calls))
 	}
+	if submitted.TriggerOrigin != "" {
+		t.Fatalf("a composer start carried trigger origin %q", submitted.TriggerOrigin)
+	}
 	input := submitted.Input
 	if input.GetThreadId() != request.ConversationUUID ||
 		input.GetConversationId() != request.ConversationUUID ||

@@ -1345,6 +1345,344 @@ components:
             $ref: '#/components/schemas/AnalyticsEstimateTool'
         by_tool_truncated:
           type: boolean
+        evaluation:
+          $ref: '#/components/schemas/AnalyticsEstimateEvaluation'
+
+    AnalyticsUsageFigures:
+      type: object
+      required: [llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One scope's model calls, tokens and estimated cost, from
+        gateway.llm_request_logs. Source internal/domain/analytics/runs.go.
+
+    AnalyticsRunModel:
+      type: object
+      required: [provider, model, llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: One (provider, model) inside a run.
+
+    AnalyticsRunUser:
+      type: object
+      required: [user_id, email, llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        user_id: { type: string }
+        email:
+          type: string
+          description: Empty when the identity tables are absent.
+        name: { type: string }
+        llm_calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: Calls the gateway answered with status 400 or higher.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: One caller inside a run.
+
+    AnalyticsAutomatedActivity:
+      type: object
+      required: [trigger_origin, executions, users, llm_calls, prompt_tokens, completion_tokens, total_tokens, errors, avg_duration_ms, unpriced_calls]
+      properties:
+        trigger_origin:
+          type: string
+          description: How the runs started. One of schedule, webhook or index.
+        executions:
+          type: integer
+          format: int64
+        users:
+          type: integer
+          format: int64
+          description: The people the unattended runs executed as.
+        llm_calls:
+          type: integer
+          format: int64
+          description: >
+            Completed calls (status below 400), the row set of kpis.llm_calls.
+            This row is a share of that total.
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        errors:
+          type: integer
+          format: int64
+          description: >
+            Failed attempts (status 400 or higher). llm_calls leaves them
+            out, as kpis.llm_calls does.
+        avg_duration_ms:
+          type: number
+        unpriced_calls:
+          type: integer
+          format: int64
+          description: Calls the price catalogue does not price. Their tokens count; their money does not.
+        input_cost:
+          type: number
+          description: >
+            Prompt tokens at each call's catalogue rate, an exact decimal.
+            ABSENT when no call in the scope is priced.
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: >
+        One unattended trigger origin's calls in the window (legacy issues
+        6802 and 6881). These calls are excluded from every active-user figure
+        and still counted in every total. A call is unattended only when the
+        run's actor made it inside the run's lifetime. executions and users
+        count every run and person with an attempt.
+
+    AnalyticsExecution:
+      type: object
+      required:
+        [execution_id, capability_id, trigger_origin, actor_user_id, state,
+         admitted_at, available, tool_dimension_available]
+      properties:
+        execution_id: { type: string }
+        capability_id: { type: string }
+        trigger_origin:
+          type: string
+          description: How the run started. One of manual, api, schedule, webhook or index.
+        actor_user_id: { type: string }
+        state: { type: string }
+        admitted_at: { type: string, format: date-time }
+        settled_at: { type: string, format: date-time }
+        available:
+          type: boolean
+          description: False when the figures cannot be measured. Every figure key is then absent.
+        unavailable_reason:
+          type: string
+          description: before_attribution or log_pruned. Present only when available is false.
+        totals: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        by_model:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsRunModel' }
+        by_user:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsRunUser' }
+        by_error_code:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsErrorCodeCount' }
+        tool_dimension_available:
+          type: boolean
+          description: False when this database records no tool calls (shared migration 0119).
+        tools:
+          type: array
+          items: { $ref: '#/components/schemas/ToolAnalytics' }
+      description: One runtime execution's analytics. Source internal/domain/analytics/runs.go.
+
+    AnalyticsEvaluationCase:
+      type: object
+      required: [case_id, agent, judge]
+      properties:
+        case_id: { type: string }
+        agent: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        judge: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+      description: One case of an evaluation run, the agent turn and the judge calls apart.
+
+    AnalyticsEvaluationRun:
+      type: object
+      required: [run_id, application_id, application_version_id, status, created_by, created_at, available]
+      properties:
+        run_id: { type: string }
+        application_id: { type: integer, nullable: true }
+        application_version_id: { type: integer, nullable: true }
+        status: { type: string }
+        created_by: { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        available:
+          type: boolean
+          description: False when the figures cannot be measured. Every figure key is then absent.
+        unavailable_reason:
+          type: string
+          description: before_attribution or log_pruned. Present only when available is false.
+        totals: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        agent: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        judge: { $ref: '#/components/schemas/AnalyticsUsageFigures' }
+        by_case:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsEvaluationCase' }
+          description: One row per case, in case id order, capped at 1000 rows.
+        by_case_truncated:
+          type: boolean
+          description: >
+            True when by_case was cut to its cap. `totals`, `agent` and
+            `judge` still cover every case. Absent when nothing was cut.
+        by_model:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsRunModel' }
+        by_error_code:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsErrorCodeCount' }
+      description: >
+        One evaluation run's analytics. `agent` and `judge` read the same row
+        set as `totals` (inference routes, inside the run's lifetime), so they
+        add up to it. Source internal/domain/analytics/runs.go.
+
+    AnalyticsEstimateEvaluation:
+      type: object
+      required: [evaluation_dimension_available]
+      properties:
+        evaluation_dimension_available:
+          type: boolean
+          description: >
+            False for a window that ends before evaluation calls were
+            attributed (shared migration 0140). Every other key is then
+            absent.
+        attributed_since:
+          type: string
+          format: date-time
+          description: >
+            When this deployment began attributing evaluation calls. Present
+            when evaluation_dimension_available is true.
+        partial:
+          type: boolean
+          description: >
+            True when the window starts before attributed_since. The figures
+            then cover only the attributed part of the window. Absent when
+            the window is complete.
+        runs:
+          type: integer
+          format: int64
+        totals: { $ref: '#/components/schemas/AnalyticsEstimateTotals' }
+        agent: { $ref: '#/components/schemas/AnalyticsEstimateTotals' }
+        judge: { $ref: '#/components/schemas/AnalyticsEstimateTotals' }
+        by_agent:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsEstimateEvaluationAgent' }
+        by_agent_truncated: { type: boolean }
+      description: >
+        The window's evaluation spend (legacy issues 6677 and 6678). These
+        calls name no execution, so the agent split counts them as
+        unattributed; this block attributes them.
+
+    AnalyticsEstimateEvaluationAgent:
+      type: object
+      required:
+        [application_id, name, runs, calls, prompt_tokens, completion_tokens,
+         total_tokens, priced]
+      properties:
+        application_id:
+          type: string
+          description: Empty for a run whose row is gone or names no agent.
+        name: { type: string }
+        runs:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        priced: { type: boolean }
+        input_cost:
+          type: number
+        output_cost:
+          type: number
+        total_cost:
+          type: number
+      description: One evaluated agent's evaluation spend in the window.
 
     AnalyticsEstimateAgent:
       type: object
@@ -4924,6 +5262,18 @@ components:
             real total.
         health:
           $ref: '#/components/schemas/AnalyticsHealth'
+        automated_activity:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyticsAutomatedActivity' }
+          description: >
+            The window's unattended calls, one row per trigger origin (legacy
+            issues 6802 and 6881). kpis.ai_active_users, the adoption pair,
+            daily_activity active users and top_ai_users EXCLUDE these calls;
+            kpis.llm_calls and kpis.total_tokens include them, and each row's
+            llm_calls and total_tokens count the same completed calls, so
+            kpis.llm_calls minus the rows is the people's share. Absent when the
+            deployment cannot tell the origins apart (shared migration 0140
+            has not run).
       description: >
         The Overview tab's response, and the Health tab's — one fetch serves
         both. Answers 501 with
@@ -5707,11 +6057,15 @@ components:
           description: Target project id (quirk — not a user id).
         webhook_secret:
           nullable: true
+          deprecated: true
           x-elitea-passthrough: >-
             NOTE(W2): hardwired nil in the fork result
             (internal/api/v2/eliteacore/handler.go:3380) — always null today,
             future shape unknown on the Go side.
-          description: Always null today (handler.go:3380).
+          description: >
+            Deprecated, and always null. An agent's webhook is its inbound
+            trigger, whose secret is in the vault and is never part of a
+            version or fork payload.
         versions:
           type: array
           items:
@@ -6263,6 +6617,16 @@ components:
           type: string
           nullable: true
           description: '`reviewed` only.'
+        description:
+          type: string
+          nullable: true
+          maxLength: 40
+          description: >
+            `reviewed` only, and llm_model only. The optional one-line text an
+            admin writes on the model (at most 40 characters). Pickers show it
+            under the model name. It is display text and never reaches the
+            provider. Absent when the model has none. `compat` carries the same
+            value inside `data`.
         type:
           type: string
           description: >
@@ -6358,6 +6722,13 @@ components:
           type: integer
           nullable: true
           description: '`reviewed` only.'
+        default_model_configured:
+          type: boolean
+          description: >
+            `reviewed` only. True when `default_model_name` is the default an
+            admin configured for the project or the platform. False when no
+            configured default is in the catalogue and `default_model_name`
+            is only the first item. Omitted when false.
         low_tier_default_model_name:
           type: string
           nullable: true
@@ -10478,10 +10849,20 @@ components:
             because every agent reference in this schema is an `applications`
             row; the QUERY PARAMETER stays `agent_id`.
         is_shared: { type: boolean }
-        case_count: { type: integer }
+        case_count:
+          type: integer
+          description: >
+            Every stored case, excluded ones included. This is the number the
+            per-dataset case cap counts.
+        active_case_count:
+          type: integer
+          description: >
+            The stored cases that are NOT excluded, i.e. the cases a run would
+            execute. Zero with a non-zero `case_count` means every case is
+            excluded, and a run start is refused.
         created_at: { type: string }
         updated_at: { type: string }
-      required: [id, name, description, application_id, is_shared, case_count]
+      required: [id, name, description, application_id, is_shared, case_count, active_case_count]
 
     EvalDatasetDetail:
       description: >
@@ -10546,9 +10927,14 @@ components:
           type: string
           enum: [manual, import, conversation]
         order_index: { type: integer }
+        excluded:
+          type: boolean
+          description: >
+            `true` keeps the case in the dataset but out of every new run. A
+            run start freezes the active case ids into its snapshot.
         created_at: { type: string }
         updated_at: { type: string }
-      required: [id, dataset_id, input, variables, expected_output, source_type, order_index]
+      required: [id, dataset_id, input, variables, expected_output, source_type, order_index, excluded]
 
     EvalDatasetWriteRequest:
       type: object
@@ -10577,7 +10963,33 @@ components:
             map the author writes and the judge prompt reads verbatim
             (internal/api/v2/evaluation/dataset.go:116, Variables map[string]any).
         expected_output: { type: string, nullable: true }
+        excluded:
+          type: boolean
+          description: >
+            Absent keeps the stored flag, so a text edit does not include an
+            excluded case again. A new case is active unless this is `true`.
       required: [input]
+      additionalProperties: false
+
+    EvalDatasetCaseUpdateRequest:
+      type: object
+      description: >
+        Two forms. A body whose ONLY key is `excluded` writes the exclusion
+        flag and nothing else; the include/exclude toggle sends this, so it
+        cannot write a stale copy of the case text back over a newer edit.
+        Any other body is a full rewrite of the case and must carry `input`;
+        in that form an absent `excluded` keeps the stored flag.
+      properties:
+        input: { type: string }
+        variables:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the case's template variables, an arbitrary string-keyed
+            map the author writes and the judge prompt reads verbatim
+            (internal/api/v2/evaluation/dataset.go:116, Variables map[string]any).
+        expected_output: { type: string, nullable: true }
+        excluded: { type: boolean }
       additionalProperties: false
 
     EvalRunSnapshotDimension:
@@ -10878,6 +11290,32 @@ components:
             It selects nothing at call time: the
             inbound path checks a suffix it is given AGAINST this value and
             refuses a mismatch rather than reading a mode out of the URL.
+        target_kind:
+          type: string
+          description: >
+            `pipeline` or `agent`: the kind of version the credential was
+            issued for. An inbound call is refused with the one 401 when the
+            version is now of the other kind, because a version update can
+            change `agent_type`. A create or a rotation records the current
+            kind.
+        events:
+          type: array
+          items: { type: string }
+          description: >
+            The provider events this trigger admits, read from
+            `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event.
+            A new GitHub or GitLab trigger on an AGENT version admits only
+            push and pull or merge request events unless its writer sets a
+            list. A delivery of another event is answered 204 and starts no
+            run. The event header is not signed, so this is a cost control,
+            not an authentication step.
+        allow_variable_overrides:
+          type: boolean
+          description: >
+            Whether the inbound body's `variables` may give new values to the
+            agent's declared variables. Absent means false. A variable is
+            substituted into the agent's instructions, so a caller can change
+            instruction text only when the trigger opts in.
 
     PipelineInboundTriggerModeRequest:
       type: object
@@ -10918,6 +11356,23 @@ components:
             when no preset names one; overrides the preset's own header when
             both are given. `standard_webhooks_hmac` always reads
             `webhook-signature`, and any other name is refused.
+        events:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: { type: string, maxLength: 64 }
+          description: >
+            The provider events the trigger admits, for a GitHub or GitLab
+            trigger only. `["*"]` admits every event. An empty list, and a
+            list on a custom trigger, are refused with 400. Without this
+            field a rotation keeps the stored list; a new trigger gets the
+            default described on `PipelineInboundTrigger.events`.
+        allow_variable_overrides:
+          type: boolean
+          description: >
+            Let the inbound body's `variables` re-value the agent's declared
+            variables. Without this field a rotation keeps the stored value,
+            and a new trigger is off.
 
     PipelineSchedule:
       type: object
@@ -10992,14 +11447,33 @@ components:
     PipelineInboundTriggerRunRequest:
       type: object
       description: >
-        The inbound call's body (inbound.go inboundBody, :70-73). It may be
-        empty, and an unparseable body is accepted as an empty input: a webhook
-        sender's payload format is not this service's contract.
+        The inbound call's body (inbound.go inboundBody). It may be empty, and
+        an unparseable body is accepted as an empty input: a webhook sender's
+        payload format is not this service's contract. For an AGENT version
+        (legacy issue 6656) a body with no `input` is itself the input: a
+        provider payload is given to the agent as its message.
       additionalProperties: false
       properties:
         input:
           type: string
-          description: The text placed in front of the pipeline.
+          description: >
+            The text placed in front of the pipeline or the agent. At most
+            16 KiB; a longer `input` is refused with 400, never cut.
+        variables:
+          type: object
+          description: >
+            AGENT versions only, and only when the trigger sets
+            `allow_variable_overrides`; otherwise this field is ignored. New
+            values for the variables the agent version declares, by name. A
+            name the version does not declare is ignored. A string is used as
+            it is, and a number or a boolean as its JSON text. Other values are
+            ignored. A pipeline ignores this field.
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): internal/api/v2/pipelinetriggers/inbound.go:600 — the
+            object is decoded into map[string]json.RawMessage, keyed by the
+            variable names the agent version declares; the names are the
+            author's, so no fixed property list exists.
 
     PipelineInboundTriggerRunAccepted:
       type: object
@@ -13316,6 +13790,123 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/analytics_execution/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, maxLength: 128 }
+        description: >
+          The runtime execution id. It is the task_id of the agent response
+          the run produced. Letters, digits and the characters - _ . only.
+    get:
+      operationId: getExecutionAnalytics
+      summary: One runtime execution's tokens, estimated cost, models and tools
+      description: |
+        Legacy issues 6667 and 6816. Reads gateway.llm_request_logs by the
+        execution id, with NO date window: a run is a fixed set of calls. The
+        calls must carry the exact id and fall inside the run's lifetime. A
+        nested agent signs its parent's id, so its calls are included.
+
+        `available: false` is not zero. A run admitted before shared migration
+        0100 answers 200 with `available: false`, an `unavailable_reason` and
+        NO figure keys. So does a run older than the gateway's request-log
+        retention whose start the log no longer reaches, even when some of its
+        calls are left. A run that made no model call answers
+        `available: true` with zero totals.
+
+        The /llm edge signs an inbound execution id only for a live execution
+        of the caller, so another person cannot add spend to this run.
+
+        Money is an ESTIMATE at the gateway.gateway_models catalogue rate, the
+        same estimate /analytics_costs publishes under `estimate`.
+      tags: [analytics]
+      responses:
+        '200':
+          description: The execution's analytics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsExecution'
+        '400':
+          description: The project id or the execution id is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >
+            The project holds no execution with this id. An id of another
+            project gets the same answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: The request log or its execution_id column is absent on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /elitea_core/eval_run_analytics/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getEvaluationRunAnalytics
+      summary: One evaluation run's tokens and estimated cost, agent and judge apart
+      description: |
+        Legacy issues 6677 and 6817. The evaluation orchestrator signs every
+        model call with `eval:<run>:case:<case>` (the agent turn) or
+        `eval:<run>:judge:<case>` (a judge call). This read sums the run's
+        calls, its two roles, and one row per case with the roles side by
+        side. The roles are never added into each other.
+
+        A run created before the release that signs these calls (shared
+        migration 0140) answers `available: false` with no figures, never
+        zero. So does a run that scored an answer but has no signed call (a
+        pod of the previous release ran it), and a run whose calls the gateway
+        has pruned. The calls must fall inside the run's lifetime. The /llm
+        edge refuses an inbound `eval:` id, so a caller cannot add spend to a
+        run. Gated on the run read permission AND the analytics permission.
+      tags: [analytics]
+      responses:
+        '200':
+          description: The evaluation run's analytics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsEvaluationRun'
+        '400':
+          description: The project id or the run id is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: The project holds no evaluation run with this id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: The request log or the project's evaluation tables are absent on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   # ==========================================================================
   # CHAT — execution-step traces
   # ==========================================================================
@@ -13637,18 +14228,21 @@ paths:
 
     put:
       operationId: updateEvalDatasetCase
-      summary: Rewrite one case
+      summary: Rewrite one case, or only its exclusion flag
       description: |
         `dataset_id` is in the storage predicate and not only in the path.
         Without it, a caller who knows any case id could edit it through any
         dataset's path and the 404 would never fire.
+
+        A body of `{"excluded": true|false}` alone writes only the flag. Any
+        other body is a full rewrite and needs `input`.
       tags: [applications]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EvalDatasetCaseWriteRequest'
+              $ref: '#/components/schemas/EvalDatasetCaseUpdateRequest'
       responses:
         '200':
           description: The stored case
@@ -13753,6 +14347,14 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: >
+            Every case in the dataset is excluded. The run executes the active
+            cases only, so include at least one case and start again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '501':
           description: >
             A named dimension cannot be scored by this release. The body says
@@ -23619,7 +24221,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
-          description: No such pipeline version in this project
+          description: No such pipeline or agent version in this project
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -23843,10 +24445,11 @@ paths:
   /pipeline_trigger/{project_id}/{token_id}:
     post:
       operationId: runPipelineInboundTrigger
-      summary: Start a pipeline run from an external caller
+      summary: Start a pipeline or agent run from an external caller
       description: |
         The inbound trigger — issue 192. An external system calls this URL and
-        one pipeline version runs.
+        one pipeline version runs. Since legacy issue 6656 the trigger can
+        also belong to an ordinary AGENT version; see "Agent versions" below.
 
         ## This route has NO SESSION
 
@@ -23865,6 +24468,42 @@ paths:
         the pipeline runs from its entry node. An `input` that is not UTF-8
         text, or that holds a NUL character, is answered 422 and names
         `input`.
+
+        ## Agent versions
+
+        An agent answers a message, so its run needs text. The text is the
+        body's `input`, at most 16 KiB. Without one, the request payload is
+        the input, cut at 64 KiB: a GitHub or GitLab event is what the agent
+        reads. A GitHub delivery sent as `application/x-www-form-urlencoded`
+        is decoded from its `payload` field first; the signature is still
+        checked over the raw bytes. A call with no `input` and no payload is
+        answered 422 and names `input`.
+
+        A payload is UNTRUSTED DATA: a signature proves which system sent a
+        delivery, not who wrote its content. The agent gets it inside a fixed
+        envelope that says so, with `<`, `>` and `&` escaped so the content
+        cannot close the envelope. The conversation meta records
+        `input_source: payload`. Toolkits on the agent version run with the
+        trigger creator's access.
+
+        The body's `variables` object gives new values to the variables the
+        agent version declares, only when the trigger sets
+        `allow_variable_overrides`. The credential, the signature modes, the
+        replay rule and every refusal are the same as for a pipeline. An
+        agent run emits no `pipeline.run.*` event.
+
+        A trigger issued for a pipeline is refused with the one 401 after its
+        version becomes an agent, and the reverse. A rotation re-issues it.
+
+        An agent trigger may have at most 4 runs streaming and 30 runs
+        started in 10 minutes. Over that, the call is answered 429 with
+        `Retry-After`.
+
+        ## Events that start no run
+
+        A GitHub `ping` delivery, and a delivery whose event the trigger's
+        `events` list does not hold, are answered 204 and start nothing. This
+        holds for pipeline and agent triggers.
 
         ## Nothing the caller sends selects a tenant
 
@@ -23921,8 +24560,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunAccepted' }
+        '204':
+          description: >
+            The delivery was accepted and starts no run: a GitHub `ping`, or
+            an event the trigger's `events` list does not hold.
         '400':
-          description: The run input is too large
+          description: The `input` is over 16 KiB
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -23937,15 +24580,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: The `input` is not UTF-8 text, or holds a NUL character
+          description: >
+            The `input` is not UTF-8 text, or holds a NUL character, or the
+            trigger starts an agent and the call carries no input
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '429':
+          description: >
+            The trigger starts an agent and already has too many runs
+            streaming, or started too many recently (sent with `Retry-After`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: >
-            This deployment cannot run pipelines, the trigger could not be
-            checked, or the same signed delivery is still being admitted (sent
-            with `Retry-After`)
+            This deployment cannot run pipelines or agents, the trigger could
+            not be checked, or the same signed delivery is still being
+            admitted (sent with `Retry-After`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -23953,7 +24605,7 @@ paths:
   /pipeline_trigger/{project_id}/{token_id}/{provider}:
     post:
       operationId: runPipelineInboundTriggerForProvider
-      summary: Start a pipeline run from a provider-shaped webhook URL
+      summary: Start a pipeline or agent run from a provider-shaped webhook URL
       description: |
         The SAME inbound trigger as the operation above, at the URL a provider
         preset hands out. Read that description first; only the two paragraphs
@@ -24034,8 +24686,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunAccepted' }
+        '204':
+          description: >
+            The delivery was accepted and starts no run: a GitHub `ping`, or
+            an event the trigger's `events` list does not hold.
         '400':
-          description: The run input is too large
+          description: The `input` is over 16 KiB
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -24050,15 +24706,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: The `input` is not UTF-8 text, or holds a NUL character
+          description: >
+            The `input` is not UTF-8 text, or holds a NUL character, or the
+            trigger starts an agent and the call carries no input
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '429':
+          description: >
+            The trigger starts an agent and already has too many runs
+            streaming, or started too many recently (sent with `Retry-After`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: >
-            This deployment cannot run pipelines, the trigger could not be
-            checked, or the same signed delivery is still being admitted (sent
-            with `Retry-After`)
+            This deployment cannot run pipelines or agents, the trigger could
+            not be checked, or the same signed delivery is still being
+            admitted (sent with `Retry-After`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

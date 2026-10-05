@@ -188,7 +188,7 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		active = *body.Active
 	}
 
-	target, err := h.resolveRunTarget(r.Context(), schema, versionID)
+	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesOnly)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
 		writeError(w, http.StatusNotFound, "no such pipeline version in this project")
@@ -206,7 +206,7 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the schedule could not be saved")
 		return
 	}
-	h.annotate(r, versionID, target.Name, 0)
+	h.annotate(r, TargetKindPipeline, versionID, target.Name, 0)
 	writeJSON(w, http.StatusOK, scheduleViewOf(row))
 }
 
@@ -231,6 +231,6 @@ func (h *Handler) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the schedule could not be deleted")
 		return
 	}
-	h.annotate(r, versionID, "", 0)
+	h.annotate(r, TargetKindPipeline, versionID, "", 0)
 	writeJSON(w, http.StatusOK, scheduleView{})
 }

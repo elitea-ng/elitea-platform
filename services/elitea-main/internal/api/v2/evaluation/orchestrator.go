@@ -255,6 +255,31 @@ func (o *Orchestrator) execute(parent context.Context, ref RunRef) {
 	}
 }
 
+// snapshotCases keeps the cases the run's snapshot froze at start, in dataset
+// order.
+//
+// The orchestrator reads the case TEXT from the dataset, but the case LIST is
+// the snapshot's. Without this filter a case excluded at start would run, and
+// a case excluded after start would vanish from a run already counted with it.
+// A snapshot with no cases is a run row written before the snapshot carried
+// them; it executes the cases that are not excluded now.
+func snapshotCases(cases []DatasetCase, snapshot RunSnapshot) []DatasetCase {
+	if len(snapshot.Cases) == 0 {
+		return activeCases(cases)
+	}
+	frozen := make(map[string]bool, len(snapshot.Cases))
+	for _, snapshotCase := range snapshot.Cases {
+		frozen[snapshotCase.ID] = true
+	}
+	kept := make([]DatasetCase, 0, len(snapshot.Cases))
+	for _, testCase := range cases {
+		if frozen[testCase.ID] {
+			kept = append(kept, testCase)
+		}
+	}
+	return kept
+}
+
 // walk scores every case, and returns the error that should make the RUN
 // errored — not the errors that make a CASE errored.
 //
@@ -270,6 +295,7 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
 	if err != nil {
 		return fmt.Errorf("the dataset could not be read: %w", err)
 	}
+	cases = snapshotCases(cases, run.Snapshot)
 	if len(cases) == 0 {
 		return errors.New("the dataset has no cases")
 	}
@@ -288,7 +314,7 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run) error {
 			return nil
 		}
 
-		output, agentErr := o.agentTurn(ctx, ref.ProjectID, actor(run), version, testCase)
+		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
@@ -372,6 +398,11 @@ func (o *Orchestrator) scoreOne(
 
 	verdict, err := o.judgeCall(ctx, JudgeRequest{
 		ProjectID: ref.ProjectID,
+		// The run's author, the same identity the agent turn signs. It was
+		// accepted by this function and never passed on, so every judge call
+		// reached the gateway with no user at all.
+		UserID:        userID,
+		AttributionID: JudgeAttributionID(ref.RunID, testCase.ID),
 		// The judge runs on the AGENT VERSION's own model. This slice has no
 		// separate judge-model setting — that belongs to the suite, which does
 		// not exist here — and silently picking a different model would make
@@ -435,7 +466,7 @@ func (o *Orchestrator) judgeCall(ctx context.Context, req JudgeRequest) (JudgeVe
 // measured.
 func (o *Orchestrator) agentTurn(
 	ctx context.Context,
-	projectID string,
+	ref RunRef,
 	userID string,
 	version AgentVersion,
 	testCase DatasetCase,
@@ -450,10 +481,13 @@ func (o *Orchestrator) agentTurn(
 	messages = append(messages, predict.Message{Role: "user", Content: substitute(testCase.Input, testCase.Variables)})
 
 	output, err := o.completer.Complete(ctx, predict.CompletionRequest{
-		ProjectID: projectID,
+		ProjectID: ref.ProjectID,
 		UserID:    userID,
 		Model:     version.ModelName,
 		Messages:  messages,
+		// Legacy issue 6677: the agent turn's spend is attributed to this run
+		// and case, so it is not lost among unattributed /predict_llm calls.
+		AttributionID: AgentAttributionID(ref.RunID, testCase.ID),
 	})
 	if err != nil {
 		return "", err

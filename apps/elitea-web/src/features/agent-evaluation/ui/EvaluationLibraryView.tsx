@@ -199,6 +199,7 @@ export function EvaluationLibraryView(props: EvaluationLibraryViewProps): ReactN
         projectId={projectId}
         applicationId={applicationId}
         dimension={editor.dimension}
+        canPromote={permissions.canCreate}
         onClose={closeEditor}
       />
 

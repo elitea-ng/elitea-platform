@@ -66,6 +66,39 @@ func RequireResolvedPermissions(
 	)
 }
 
+// HoldsResolvedPermission answers, INSIDE a handler, whether the caller holds
+// `permission` in the route's `{projectID}`, resolved the same way
+// RequireResolvedPermissions resolves its gate.
+//
+// It is for a handler whose required permission depends on the request body
+// or the stored row, so the route gate cannot state it: the dimension update
+// needs dimension.create only when it promotes. A missing principal, project
+// or resolver, and auth.ErrPermissionDenied, answer false; any other
+// resolution failure is returned, so the caller fails the request instead of
+// guessing.
+func HoldsResolvedPermission(
+	resolver auth.PermissionResolver,
+	mode string,
+	permission string,
+) func(*http.Request) (bool, error) {
+	return func(r *http.Request) (bool, error) {
+		user, ok := auth.UserFromContext(r.Context())
+		projectID := chi.URLParam(r, "projectID")
+		if !ok || resolver == nil || projectID == "" {
+			return false, nil
+		}
+		resolution, err := resolver.ResolvePermissions(r.Context(), user, mode, projectID)
+		if errors.Is(err, auth.ErrPermissionDenied) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		_, held := permissionSet(resolution.Permissions)[permission]
+		return held, nil
+	}
+}
+
 // RequireCentralPermissions gates a route on a CENTRAL (project-less)
 // permission — the `administration` and `developer` modes, where
 // `legacyrbac.PostgresResolver` reads auth_core__user_role/auth_core__role

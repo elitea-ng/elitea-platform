@@ -89,32 +89,29 @@ test('the model picker names the project’s default model and its menu lists th
   const urlBefore = page.url();
   await name.click();
 
-  // Located by the list's own `aria-labelledby` (`LLMModelsMenu`'s
-  // `slotProps.list`), so this cannot accidentally match the composer's "+"
-  // menu, which is also a `role="menu"`.
-  const menu = page.locator('[role="menu"][aria-labelledby="model-selector-button"]');
+  // Located by the list's own test id (`LLMModelsMenu`'s `slotProps.list`), so
+  // this cannot accidentally match the composer's "+" menu. The list is a
+  // listbox, and the trigger says so (`aria-haspopup="listbox"`).
+  await expect(name).toHaveAttribute('aria-haspopup', 'listbox');
+  const menu = page.getByTestId('model-selector-listbox');
   await expect(menu).toBeVisible({ timeout: 10_000 });
+  await expect(menu).toHaveAttribute('role', 'listbox');
+  await expect(name).toHaveAttribute('aria-expanded', 'true');
   expect(page.url(), 'the picker opens a menu; it does not navigate away').toBe(urlBefore);
 
   // Exactly the catalogue — no more rows than the server offers, and none
   // fewer. A picker reading the credentials route renders a different count
   // and blank labels.
-  const options = menu.getByRole('menuitem');
+  const options = menu.getByRole('option');
   await expect(options).toHaveCount(items.length);
   for (const model of items) {
-    await expect(menu.getByRole('menuitem', { name: labelOf(model), exact: false })).toHaveCount(1);
+    await expect(menu.getByRole('option', { name: labelOf(model), exact: false })).toHaveCount(1);
   }
 
-  // …and the row the button names is the one the menu marks as chosen.
-  //
-  // Read as the `Mui-selected` CLASS, deliberately, and not as `aria-selected`:
-  // MUI 9's `MenuItem` treats `selected` as presentational for `role="menuitem"`
-  // (it derives `aria-checked` only for the `menuitemcheckbox`/`menuitemradio`
-  // roles — `MenuItem.js`), so there is no ARIA attribute to read here and an
-  // assertion on one would fail for a reason that has nothing to do with the
-  // picker. The class is what `LLMModelsMenu`'s `selected={item.id ===
-  // selectedModel?.id}` really produces, and it is also what draws the check.
-  const chosen = menu.getByRole('menuitem', { name: expectedLabel, exact: false });
+  // …and the row the button names is the one the menu marks as chosen, both
+  // for assistive technology (`aria-selected`) and visually (`Mui-selected`).
+  const chosen = menu.getByRole('option', { name: expectedLabel, exact: false });
+  await expect(chosen).toHaveAttribute('aria-selected', 'true');
   await expect(chosen).toHaveClass(/Mui-selected/);
 
   // Escape closes it and leaves the picker as it was — a menu that dismissed by

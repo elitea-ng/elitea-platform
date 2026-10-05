@@ -45,6 +45,8 @@ export interface AnalyticsOverviewProps {
    * `data`, which no longer publishes a cost at all.
    */
   readonly totalCost?: string | undefined;
+  /** The billing period(s) `totalCost` covers; see `AnalyticsKpiRow`. */
+  readonly totalCostPeriod?: string | undefined;
 }
 
 const kpiRowWrapSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: (theme: Theme) => theme.spacing(2) };
@@ -141,7 +143,7 @@ function displayName(user: UserActivity): string {
   return (user.name ?? '') || user.email || `#${user.user_id}`;
 }
 
-function AnalyticsOverviewImpl({ data, onUserClick, totalCost }: AnalyticsOverviewProps): ReactNode {
+function AnalyticsOverviewImpl({ data, onUserClick, totalCost, totalCostPeriod }: AnalyticsOverviewProps): ReactNode {
   const theme = useTheme();
   const axisStroke = theme.vars.palette.text.primary;
   const axisTickStyle = { fill: axisStroke, fontSize: theme.typography.labelSmall.fontSize };
@@ -171,6 +173,7 @@ function AnalyticsOverviewImpl({ data, onUserClick, totalCost }: AnalyticsOvervi
       <AnalyticsKpiRow
         kpis={data.kpis}
         totalCost={totalCost}
+        totalCostPeriod={totalCostPeriod}
       />
       <Box sx={chartsGridSx}>
         <Box sx={cardSx}>

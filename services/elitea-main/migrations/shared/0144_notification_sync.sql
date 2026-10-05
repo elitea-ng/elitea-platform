@@ -11,7 +11,7 @@
 -- notifications_baseline.sql was verified against one), and pylon, the
 -- scheduler's producers and the moderation and eliteacore writers do not all
 -- stamp it. A BEFORE INSERT/UPDATE trigger stamps `sync_at` for every writer,
--- the same rule the tenant chat tables follow (tenant 0142). No response
+-- the same rule the tenant chat tables follow (tenant 0144). No response
 -- carries the column.
 --
 -- TOMBSTONES. An AFTER DELETE trigger writes one row per deleted notification

@@ -70,6 +70,45 @@ type CompletionRequest struct {
 	Temperature     *float64
 	MaxTokens       *int
 	ReasoningEffort string
+	// AttributionID names the work this call belongs to, for the analytics
+	// reads. It is signed into the identity headers as the execution id
+	// (X-Elitea-Execution-Id, signature v2), and the gateway writes it to
+	// gateway.llm_request_logs.execution_id.
+	//
+	// Empty for a browser's /predict_llm turn: that call belongs to no run.
+	// The evaluation orchestrator sets `eval:<run>:case:<case>` for an agent
+	// turn and `eval:<run>:judge:<case>` for a judge call (legacy issue 6677),
+	// so evaluation spend is queryable per run, per case and per role.
+	//
+	// It is analytics metadata and decides nothing: not routing, not
+	// authorization, not billing. A value outside the edge's charset or length
+	// bound is DROPPED, never sent, by the same rule the /llm edge applies
+	// (internal/llmproxy/identity.go executionIDFromHeader).
+	AttributionID string
+}
+
+// maxAttributionIDLen is the edge's execution id bound
+// (internal/llmproxy/identity.go maxExecutionIDLen) and the width of
+// gateway.llm_request_logs.execution_id (VARCHAR(128), shared 0100).
+const maxAttributionIDLen = 128
+
+// ValidAttributionID reports whether id may be signed as an execution id. The
+// charset is the edge's: the value becomes a request header, and a CR or LF
+// in it would be header injection.
+func ValidAttributionID(id string) bool {
+	if id == "" || len(id) > maxAttributionIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ErrNoContent reports a 200 from the gateway that carried no assistant text.
@@ -169,10 +208,15 @@ func (c *GatewayCompleter) Complete(ctx context.Context, req CompletionRequest) 
 		return "", fmt.Errorf("predict: build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	// No execution id: this turn is made from a browser, not from a runtime
-	// execution, so the identity tuple signs v1 exactly as the
-	// check-connection client does.
-	llmproxy.SignIdentityHeaders(httpReq.Header, c.identitySecret, req.ProjectID, req.UserID, "", "")
+	// A browser's turn carries no attribution id, so the identity tuple signs
+	// v1 exactly as the check-connection client does. A caller that names the
+	// work (the evaluation orchestrator) signs v2 with the id as the execution
+	// id, which the gateway's request log stores for the analytics reads.
+	attributionID := ""
+	if ValidAttributionID(req.AttributionID) {
+		attributionID = req.AttributionID
+	}
+	llmproxy.SignIdentityHeaders(httpReq.Header, c.identitySecret, req.ProjectID, req.UserID, "", attributionID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

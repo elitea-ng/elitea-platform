@@ -1,7 +1,7 @@
 package syncretention
 
 // The sweep against a real PostgreSQL holding the REAL tombstone tables:
-// elitea-main's tenant 0142 applied to two tenant schemas (with no chat
+// elitea-main's tenant 0144 applied to two tenant schemas (with no chat
 // tables, which also proves its guards) and shared 0144 applied over a
 // 001_initial-shaped centry.notifications. Runs when ELITEA_TEST_DATABASE_URL
 // is set; skips otherwise.
@@ -48,7 +48,7 @@ func newSyncPool(t *testing.T) *pgxpool.Pool {
 		admin.Close()
 	})
 
-	tenantSQL, err := os.ReadFile("../../../elitea-main/migrations/tenant/0142_chat_sync.sql")
+	tenantSQL, err := os.ReadFile("../../../elitea-main/migrations/tenant/0144_chat_sync.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func newSyncPool(t *testing.T) *pgxpool.Pool {
 			t.Fatal(err)
 		}
 		if _, err := tx.Exec(ctx, string(tenantSQL)); err != nil {
-			t.Fatalf("apply tenant 0142 to %s: %v", schema, err)
+			t.Fatalf("apply tenant 0144 to %s: %v", schema, err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)

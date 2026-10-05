@@ -157,14 +157,28 @@ type ProjectVectorStore interface {
 	RemoveProjectVectorStore(ctx context.Context, projectID int64) error
 }
 
+// ProjectDefaultModelSeeder copies the platform default model into a new
+// project's vault (#6826). It is satisfied by
+// configurations.PlatformModelDefaultService.
+//
+// It is optional, and its failure does not fail provisioning: a project with
+// no stored default reads the platform default at request time anyway (see
+// internal/application/configurations/platform_default_model.go). The seed
+// only makes the choice the project's own, so a later change of the platform
+// default does not move it.
+type ProjectDefaultModelSeeder interface {
+	SeedProjectModelDefault(ctx context.Context, projectID int64) error
+}
+
 // Provisioner runs the project-create pipeline.
 type Provisioner struct {
-	pool        *pgxpool.Pool
-	migrator    TenantMigrator
-	buckets     ArtifactBootstrapper
-	vault       ProjectVaultBootstrapper
-	vectorStore ProjectVectorStore
-	logger      *slog.Logger
+	pool          *pgxpool.Pool
+	migrator      TenantMigrator
+	buckets       ArtifactBootstrapper
+	vault         ProjectVaultBootstrapper
+	vectorStore   ProjectVectorStore
+	defaultModels ProjectDefaultModelSeeder
+	logger        *slog.Logger
 }
 
 // Option configures a Provisioner at construction time.
@@ -181,6 +195,19 @@ func WithArtifactBuckets(buckets ArtifactBootstrapper) Option {
 // optional: Provision refuses to run without it. See ProjectVaultBootstrapper.
 func WithProjectVault(vault ProjectVaultBootstrapper) Option {
 	return func(p *Provisioner) { p.vault = vault }
+}
+
+// WithDefaultModelSeeder supplies the platform default model seed (#6826).
+// Without it a new project stores no default and reads the platform default at
+// request time. A typed nil is treated as absent, for the reason
+// WithVectorStore gives.
+func WithDefaultModelSeeder(seeder ProjectDefaultModelSeeder) Option {
+	return func(p *Provisioner) {
+		if seeder == nil || isNilPointer(seeder) {
+			return
+		}
+		p.defaultModels = seeder
+	}
 }
 
 // WithVectorStore supplies the project vector-store provisioner. Without it the

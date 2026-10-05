@@ -88,6 +88,7 @@ import { selectAsrModel, useSpeakingModeLoop } from './lib/hooks/useSpeakingMode
 import { useSpeechRecognition } from './lib/hooks/useSpeechRecognition';
 import { useStreamingSpeechRecognition } from './lib/hooks/useStreamingSpeechRecognition';
 import { useReadAloud } from './lib/hooks/useReadAloud.hooks';
+import { voiceErrorMessage } from '@/shared/lib/voiceProblems';
 import { useModelsList } from './api/models';
 import { useChatAttachments } from './model/useChatAttachments';
 import { useNewConversationAttachments } from './model/useNewConversationAttachments';
@@ -196,6 +197,8 @@ export const voiceHooks = {
   useStreamingSpeechRecognition,
   useModelsList,
   selectAsrModel,
+  /** The readable message for a server voice failure code (`shared/lib/voiceProblems.ts`); `undefined` for a browser error name. */
+  voiceErrorMessage,
 };
 
 export { VoiceControlButton } from './ui/VoiceControlButton';

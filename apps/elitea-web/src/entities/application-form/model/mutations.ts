@@ -119,8 +119,8 @@ export interface UseCreateApplicationDraftResult {
  *
  * `webhook_secret` — sent by the baseline's `useCreateApplication.jsx` on
  * every create call — has no field on the generated `ApplicationCreateRequest`
- * (checked directly against `applicationCreateRequest.zod.ts`); dropped
- * here rather than invented. Version tags and pipeline settings are carried
+ * and is not sent. An agent's webhook is its inbound trigger (legacy issue
+ * 6656), which the editor's Triggers section mints on its own routes. Version tags and pipeline settings are carried
  * by `VersionWriteRequest`; tool associations still use their own endpoints.
  */
 export function useCreateApplicationDraft(projectId: string | undefined): UseCreateApplicationDraftResult {

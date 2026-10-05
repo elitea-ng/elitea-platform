@@ -9,7 +9,6 @@ import {
   DEFAULT_STEPS_LIMIT,
   DEFAULT_TEMPERATURE,
 } from '@/shared/lib/constants';
-import { t } from '@/shared/i18n';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { parseValueToIntNumber } from '@/shared/lib/number';
 import { isNullOrUndefined } from '@/shared/lib/object';
@@ -19,14 +18,11 @@ import { CreativitySlider } from './settings/CreativitySlider';
 import { MaxTokensSection } from './settings/MaxTokensSection';
 import { ReasoningSlider } from './settings/ReasoningSlider';
 import { StepsLimitInput } from './settings/StepsLimitInput';
-import { SecretField } from '@/shared/ui/SecretField';
-import { useSecretFieldOptions } from '@/entities/secret';
 
 interface LLMSettingsProps {
   llmSettings?: Record<string, unknown>;
   model?: Record<string, unknown> | undefined;
   onChangeLLMSettings: (field: string) => (value: unknown) => void;
-  showWebhookSecret?: boolean;
   showStepsLimit?: boolean;
 }
 
@@ -107,7 +103,6 @@ interface DerivedSettingsValues {
   reasoningEffort: string;
   temperature: number;
   stepsLimit: number;
-  webhookSecret: string;
   supportsVision: boolean;
   supportsReasoning: boolean;
 }
@@ -127,37 +122,9 @@ function deriveDisplaySettings(
     reasoningEffort: (llmSettings.reasoning_effort as string) ?? DEFAULT_REASONING_EFFORT,
     temperature: (llmSettings.temperature as number) ?? DEFAULT_TEMPERATURE,
     stepsLimit: (llmSettings.steps_limit as number) ?? DEFAULT_STEPS_LIMIT,
-    webhookSecret: (llmSettings.webhook_secret as string) ?? null,
     supportsVision: (model.supports_vision as boolean) ?? false,
     supportsReasoning: (model.supports_reasoning as boolean) ?? false,
   };
-}
-
-/**
- * The webhook-secret field.
- *
- * #441: `secrets` was never supplied to `SecretField` here, so the field
- * rendered as a plain masked text box — no mode toggle, no saved-secret
- * picker, and no "Create new secret" entry for any user, an administrator
- * included. `useSecretFieldOptions()` supplies the caller half.
- *
- * Split into its own component, not inlined in `LLMSettings`: the hook
- * queries, and `showWebhookSecret` is `false` on most of the many screens
- * that mount `LLMSettings`. A component keeps both requests on the one
- * screen that shows the field.
- */
-function WebhookSecretField({ value, onChange }: { readonly value: string; readonly onChange: (next: string) => void }) {
-  const secrets = useSecretFieldOptions();
-  return (
-    <SecretField
-      label={t('widgets.llmModelSelector.llmSettings.webhookSecretLabel', 'Webhook secret')}
-      value={value}
-      onChange={onChange}
-      passwordVisibilityToggle={false}
-      required={false}
-      secrets={secrets}
-    />
-  );
 }
 
 /**
@@ -169,7 +136,6 @@ export const LLMSettings = memo(
     llmSettings = {},
     model = {},
     onChangeLLMSettings,
-    showWebhookSecret = false,
     showStepsLimit = false,
   }: LLMSettingsProps) => {
     const focusOnMaxTokens = useRef(false);
@@ -207,13 +173,6 @@ export const LLMSettings = memo(
         const parsed = parseMaxTokensInput(value);
         onChangeLLMSettings(PROMPT_PAYLOAD_KEY.maxTokens)(parsed);
         setMaxTokens(parsed as number);
-      },
-      [onChangeLLMSettings],
-    );
-
-    const onChangeWebhookSecret = useCallback(
-      (value: string) => {
-        onChangeLLMSettings(PROMPT_PAYLOAD_KEY.webhookSecret)(value);
       },
       [onChangeLLMSettings],
     );
@@ -271,12 +230,6 @@ export const LLMSettings = memo(
           <StepsLimitInput
             value={derived.stepsLimit}
             onChange={onChangeLLMSettings(PROMPT_PAYLOAD_KEY.stepsLimit)}
-          />
-        )}
-        {showWebhookSecret && (
-          <WebhookSecretField
-            value={derived.webhookSecret}
-            onChange={onChangeWebhookSecret}
           />
         )}
         <CapabilitySection

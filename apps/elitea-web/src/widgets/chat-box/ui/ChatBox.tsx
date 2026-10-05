@@ -115,7 +115,7 @@ const ChatBoxInner = memo(function ChatBox({
 
   // Socket client + read-aloud (TTS)
   const socketClient = useSocketClient(); const voiceFeedback = useChatBoxVoiceFeedback(); // #932/#934: VoiceButton's recording flag + its error messages, which had no caller at all
-  const readAloud = voiceHooks.useReadAloud({ projectId: projectIdString, socket: socketClient });
+  const readAloud = voiceHooks.useReadAloud({ projectId: projectIdString, onError: voiceFeedback.onError }); // read-aloud failures share the dictation error toast
   const lifecycle = data.lifecycle;
 
   // Mirror the live, socket-synced history out to the parent's own mirror, when one
@@ -345,7 +345,7 @@ const ChatBoxInner = memo(function ChatBox({
           })}
           attachments={buildChatBoxAttachmentProps(data.attachments, areAttachmentsDisabled)}
           mentions={{ users: state.users, onMentionChange: handleMentionChange }}
-          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying, isRecording: voiceFeedback.isRecording }}
+          voice={{ isSpeakingMode: state.isSpeakingMode, onSpeakingModeToggle: () => state.setIsSpeakingMode(!state.isSpeakingMode), isTTSPlaying: readAloud.isPlaying, isRecording: voiceFeedback.isRecording, onError: voiceFeedback.onError }}
           slots={buildChatBoxInputSlots({
             attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: areAttachmentsDisabled },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },

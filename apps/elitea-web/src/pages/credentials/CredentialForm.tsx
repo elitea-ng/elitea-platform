@@ -31,6 +31,7 @@ import Box from '@mui/material/Box';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -46,6 +47,7 @@ import {
   isCredentialPropertyVisible,
 } from './CredentialFormSection';
 import { CredentialTypeSelector } from './CredentialTypeSelector';
+import { LLM_MODEL_TYPE, connectedInMessage, missingFieldsTooltip } from './llmModelConnectionTest';
 import { useCredentialFormController } from './useCredentialFormController';
 import type { CredentialFormContext, CredentialFormMode, CredentialFormPrefill } from './useCredentialFormController';
 
@@ -180,24 +182,43 @@ interface TestConnectionBlockProps {
   readonly controller: ReturnType<typeof useCredentialFormController>;
 }
 
+/** "Connected in 1.2 s" for an LLM model test, the established wording for a credential's. */
+function successMessage(controller: ReturnType<typeof useCredentialFormController>): string {
+  if (controller.effectiveType === LLM_MODEL_TYPE && controller.testDurationMs !== undefined) {
+    return connectedInMessage(controller.testDurationMs);
+  }
+  return t('credentials.form.testSuccessMessage', 'Connection successful');
+}
+
 /** Split out of `CredentialForm`'s render to keep that function's complexity in budget. */
 function TestConnectionBlock({ controller }: TestConnectionBlockProps): ReactNode {
   const label = controller.typeDescriptor?.check_connection_label ?? t('credentials.form.testConnection', 'Test connection');
+  // The LLM model test needs AI credentials and a model name; the tooltip of
+  // the disabled button names what is missing (`./llmModelConnectionTest.ts`).
+  const missingTooltip = missingFieldsTooltip(controller.missingForTest);
   return (
     <Box sx={testConnectionRowSx}>
-      <BaseBtn
-        variant="secondary"
-        disabled={controller.isTesting}
-        onClick={controller.testConnection}
-      >
-        {label}
-      </BaseBtn>
+      <Tooltip title={missingTooltip}>
+        {/* A disabled button fires no pointer events, so the tooltip hangs on this wrapper. */}
+        <span>
+          <BaseBtn
+            variant="secondary"
+            disabled={controller.isTesting || missingTooltip !== ''}
+            loading={controller.isTesting}
+            onClick={controller.testConnection}
+            data-testid="credential-test-connection"
+          >
+            {label}
+          </BaseBtn>
+        </span>
+      </Tooltip>
       {controller.testResult === 'success' && (
         <Typography
           variant="labelSmall"
           sx={successTextSx}
+          data-testid="credential-test-result"
         >
-          {t('credentials.form.testSuccessMessage', 'Connection successful')}
+          {successMessage(controller)}
         </Typography>
       )}
       {controller.testResult === 'failure' && (

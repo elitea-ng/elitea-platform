@@ -93,16 +93,36 @@ function polarityOptions(): SingleSelectOption[] {
   ];
 }
 
-function tierOptions(canScopeToAgent: boolean): SingleSelectOption[] {
+/**
+ * The scope options.
+ *
+ * On an EDIT the scope can move one way only: an agent dimension can become a
+ * project dimension (legacy issue 6669), and the server refuses the reverse
+ * move with a 409, because other agents can already use a project dimension.
+ * So "This agent only" is disabled for a stored project dimension, and the
+ * select never offers a save that always fails.
+ *
+ * A promotion adds the dimension to the project library, so the server also
+ * asks for the create permission; "Project library" is disabled on a stored
+ * agent dimension for an author who may update but not create.
+ */
+function tierOptions(
+  canScopeToAgent: boolean,
+  canPromote: boolean,
+  storedTier?: EvalDimensionForm['tier'],
+): SingleSelectOption[] {
+  const isStoredProject = storedTier === EVAL_TIER.project;
+  const isStoredAgent = storedTier === EVAL_TIER.agentAdhoc;
   return [
     {
       value: EVAL_TIER.agentAdhoc,
       label: t('features.agentEvaluation.tier.agent', 'This agent only'),
-      disabled: !canScopeToAgent,
+      disabled: !canScopeToAgent || isStoredProject,
     },
     {
       value: EVAL_TIER.project,
       label: t('features.agentEvaluation.tier.project', 'Project library'),
+      disabled: isStoredAgent && !canPromote,
     },
   ];
 }
@@ -131,12 +151,16 @@ export interface DimensionEditorFieldsProps {
   readonly form: EvalDimensionForm;
   readonly isEdit: boolean;
   readonly canScopeToAgent: boolean;
+  /** The caller holds dimension.create, which moving an agent dimension to the project library needs. */
+  readonly canPromote: boolean;
+  /** The tier the stored dimension has. `undefined` in create mode. */
+  readonly storedTier: EvalDimensionForm['tier'] | undefined;
   readonly onFieldChange: <K extends keyof EvalDimensionForm>(key: K, value: EvalDimensionForm[K]) => void;
   readonly onToggleEngine: (engine: EvalEngine) => void;
 }
 
 export function DimensionEditorFields(props: DimensionEditorFieldsProps): ReactNode {
-  const { form, isEdit, canScopeToAgent, onFieldChange, onToggleEngine } = props;
+  const { form, isEdit, canScopeToAgent, canPromote, storedTier, onFieldChange, onToggleEngine } = props;
   const isCode = isCodeOnly(form.allowed_engines);
 
   return (
@@ -166,32 +190,18 @@ export function DimensionEditorFields(props: DimensionEditorFieldsProps): ReactN
       />
 
       {/*
-        Scope is set once, at authoring. On an edit it is rendered read-only
-        because the server does not write `tier` on an update: an agent-scoped
-        rubric silently promoted into the project library on a rename would
-        publish one agent's private criteria to everyone.
+        Scope is editable on an edit too. The update sends the tier the
+        author picked, and the server promotes an agent dimension to the
+        project library on request. A move back is refused, so the option is
+        disabled for a stored project dimension (see `tierOptions`).
       */}
-      {isEdit ? (
-        <InputBase
-          data-testid="dimension-tier-readonly"
-          fullWidth
-          disabled
-          label={t('features.agentEvaluation.field.scope', 'Scope')}
-          value={
-            form.tier === EVAL_TIER.agentAdhoc
-              ? t('features.agentEvaluation.tier.agent', 'This agent only')
-              : t('features.agentEvaluation.tier.project', 'Project library')
-          }
-        />
-      ) : (
-        <SingleSelect
-          label={t('features.agentEvaluation.field.scope', 'Scope')}
-          value={form.tier}
-          options={tierOptions(canScopeToAgent)}
-          onChange={(value) => onFieldChange('tier', value as EvalDimensionForm['tier'])}
-          id="dimension-tier-select"
-        />
-      )}
+      <SingleSelect
+        label={t('features.agentEvaluation.field.scope', 'Scope')}
+        value={form.tier}
+        options={tierOptions(canScopeToAgent, canPromote, isEdit ? storedTier : undefined)}
+        onChange={(value) => onFieldChange('tier', value as EvalDimensionForm['tier'])}
+        id="dimension-tier-select"
+      />
 
       <Box sx={fieldSx}>
         <Typography variant="bodyMedium" component="p">{t('features.agentEvaluation.field.engines', 'Engines')}</Typography>

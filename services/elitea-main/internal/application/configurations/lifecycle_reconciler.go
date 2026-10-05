@@ -3,6 +3,7 @@ package configurations
 import (
 	"context"
 	"errors"
+	"log/slog"
 )
 
 // This reconciler no longer pushes anything into a provider proxy. The Bifrost
@@ -183,6 +184,33 @@ type CurrentConfigurationLifecycleEffectsReconciler struct {
 	renames    CurrentConfigurationRenameEffects
 	deletedLLM CurrentDeletedLLMEffects
 	policy     CurrentProviderProjectPolicy
+	// defaults releases the stored defaults that name a deleted project
+	// model (#6826). nil releases nothing.
+	defaults CurrentDeletedModelDefaultReleaser
+}
+
+// CurrentDeletedModelDefaultReleaser clears the stored defaults that name a
+// deleted model. *PlatformModelDefaultService implements it. Repeating a
+// release is safe: it clears only a default that still names the model.
+type CurrentDeletedModelDefaultReleaser interface {
+	ReleaseDeletedModelDefault(context.Context, PlatformModelDefaultModelRow) error
+}
+
+// WithDeletedModelDefaults makes a delete through the mutation service release
+// the stored defaults that name the deleted model, as the compatibility delete
+// route does. It returns r.
+//
+// It releases project models only. A public-project row deleted through a
+// project route is a platform model deleted outside the governance-gated admin
+// route, so it changes no platform-wide default (see the configurations API
+// handler, releaseDeletedModelDefault).
+func (r *CurrentConfigurationLifecycleEffectsReconciler) WithDeletedModelDefaults(
+	releaser CurrentDeletedModelDefaultReleaser,
+) *CurrentConfigurationLifecycleEffectsReconciler {
+	if r != nil {
+		r.defaults = releaser
+	}
+	return r
 }
 
 func NewCurrentConfigurationLifecycleEffectsReconciler(
@@ -336,7 +364,44 @@ func (r *CurrentConfigurationLifecycleEffectsReconciler) reconcileCurrentConfigu
 			return result, err
 		}
 	}
+	if result, err, failed := r.releaseCurrentDeletedModelDefault(ctx, before); failed {
+		return result, err
+	}
 	return currentConfigurationLifecycleSuccessResult(), nil
+}
+
+// releaseCurrentDeletedModelDefault clears the owning project's stored
+// defaults that name a deleted project model. It is best effort: a failure
+// leaves a stored id that the catalogue precedence skips, so only a context
+// error makes the event retry.
+func (r *CurrentConfigurationLifecycleEffectsReconciler) releaseCurrentDeletedModelDefault(
+	ctx context.Context,
+	before CurrentConfigurationLifecycleSnapshot,
+) (CurrentConfigurationLifecycleReconcileResult, error, bool) {
+	section := CurrentModelSection(before.Section)
+	if r.defaults == nil || !IsSupportedCurrentModelSection(section) ||
+		before.ProjectID <= 0 || before.ProjectID == r.policy.PublicProjectID {
+		return CurrentConfigurationLifecycleReconcileResult{}, nil, false
+	}
+	name, _ := before.Data["name"].(string)
+	if section == CurrentModelSectionVectorStorage {
+		name = before.EliteaTitle
+	}
+	if name == "" {
+		return CurrentConfigurationLifecycleReconcileResult{}, nil, false
+	}
+	err := r.defaults.ReleaseDeletedModelDefault(ctx, PlatformModelDefaultModelRow{
+		OwnerProjectID: before.ProjectID, Section: section, Name: name, Shared: before.Shared,
+	})
+	if err == nil {
+		return CurrentConfigurationLifecycleReconcileResult{}, nil, false
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return currentConfigurationLifecycleEffectFailure(ctx, err, currentLifecycleDeletedLLMFailedCode)
+	}
+	slog.WarnContext(ctx, "the deleted model is still named as a stored default; the catalogue skips it",
+		"project_id", before.ProjectID, "section", before.Section, "err", err)
+	return CurrentConfigurationLifecycleReconcileResult{}, nil, false
 }
 
 func (r *CurrentConfigurationLifecycleEffectsReconciler) resolveCurrentProviderConfiguration(

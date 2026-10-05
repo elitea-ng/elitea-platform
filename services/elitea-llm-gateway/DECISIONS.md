@@ -700,7 +700,7 @@ in a release note.**
   | Limit | Why |
   |---|---|
   | Neither route streams | A streaming speech route needs the detached-drain billing machinery the chat stream has. The pylon TTS client reads the body with `iter_content`, so a unary body still arrives chunked to it; it loses first-byte latency, not audio. |
-  | A response the catalog carries no rate for bills zero | `cost.Calculator` now prices three bases — tokens, seconds and characters (migration 0086) — but only from the catalog. There is no default per-second or per-character price and there must not be one: an invented rate reaches the authoritative budget counter as if it were measured. A model with no catalog audio rate is UNPRICED. The condition is counted on `gateway_audio_unpriced_total` and logged, not hidden. |
+  | A response the catalog carries no rate for bills zero | `cost.Calculator` now prices three bases — tokens, seconds and characters (migration 0086) — but only from the catalog. There is no default per-second or per-character price and there must not be one: an invented rate reaches the authoritative budget counter as if it were measured. A model with no catalog audio rate is UNPRICED. The condition is counted on `gateway_audio_unpriced_total` and logged, not hidden. 2026-10-04: a project WITH a budget is refused such a model before dispatch (501 `audio_unpriced`, `gateway_audio_refused_unpriced_model_total`). The browser voice client calls these routes per utterance and per sentence, so bill-zero was an unbounded hole under a budget. A project without a budget keeps bill-zero-and-count. |
 
   **Two follow-up decisions, both from the adversarial review of this change:**
 
@@ -1220,6 +1220,20 @@ in a release note.**
   *Consequence:* the number gets LARGER, and it now moves with Postgres and
   with core queue depth. `internal/llmproxy/testdata/p99_overhead_benchmark.json`
   records the OLD, narrower metric; do not read it as a measurement of this one.
+
+## Error mapping
+- **2026-10-04 — a provider's status-less `unsupported_operation` refusal
+  answers 501 on EVERY route, not only on the audio routes.** bifrost's
+  `NewUnsupportedOperationError` carries no HTTP status. It used to fall
+  through `statusAndType` to 500 `api_error`, which reads as a gateway crash.
+  `statusAndType` serves every handler, so the 501 `invalid_request_error`
+  applies to chat, embeddings, rerank, images and audio alike. That is
+  deliberate: in each case the provider cannot do the operation, and a retry
+  does not help. A 501 is still a 5xx, so the request-log error class does not
+  change. The OpenAI SDKs retry every status of 500 or more, so their retry
+  behaviour does not change either. A refusal
+  that carries an upstream status keeps that status.
+  `TestUnsupportedOperation_Is501OnEveryRoute` pins the non-audio routes.
 
 ## Resolved follow-ups
 - ✅ `SECRETS_MASTER_KEY` + `GATEWAY_IDENTITY_SECRET` now wired via the chart's

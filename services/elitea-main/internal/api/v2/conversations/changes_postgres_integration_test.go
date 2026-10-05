@@ -2,7 +2,7 @@ package conversations
 
 // The conversation-list delta (`changes_since`, ADR-0025 WP6) through the real
 // List handler, against chat tables built by the tenant migrations themselves
-// (0123, which declares them, and 0142, which installs the sync triggers) in a
+// (0123, which declares them, and 0144, which installs the sync triggers) in a
 // private database. What is under test is per-caller: which rows and which
 // tombstones a given user is told about.
 //
@@ -35,7 +35,7 @@ func newChangesPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, `DROP SCHEMA p_1 CASCADE; CREATE SCHEMA p_1`); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"tenant/0123_agent_chat_message_tables.sql", "tenant/0142_chat_sync.sql"} {
+	for _, path := range []string{"tenant/0123_agent_chat_message_tables.sql", "tenant/0144_chat_sync.sql"} {
 		sql, err := platformmigrations.Files.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

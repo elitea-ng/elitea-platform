@@ -47,6 +47,11 @@ func TestStatusAndType(t *testing.T) {
 		{"infra 503", bErr(http.StatusServiceUnavailable, "", "", "x"), http.StatusServiceUnavailable, "api_error", ""},
 		{"passthrough 400", bErr(http.StatusBadRequest, "invalid_request_error", "", "x"), http.StatusBadRequest, "invalid_request_error", ""},
 		{"no status defaults 500", bErr(0, "", "", "x"), http.StatusInternalServerError, "api_error", ""},
+		// A provider adapter's own "not implemented" refusal carries no status.
+		// It is a 501 the caller can act on, not a 500 that reads as a crash.
+		{"unsupported operation is 501", bErr(0, "", "unsupported_operation", "speech is not supported by vllm provider"), http.StatusNotImplemented, "invalid_request_error", "unsupported_operation"},
+		// An upstream that answered with its own status keeps it.
+		{"unsupported operation keeps upstream status", bErr(http.StatusBadRequest, "", "unsupported_operation", "x"), http.StatusBadRequest, "api_error", "unsupported_operation"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

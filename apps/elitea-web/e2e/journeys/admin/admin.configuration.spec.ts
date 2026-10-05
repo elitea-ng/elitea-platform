@@ -379,6 +379,26 @@ adminTest('J34h: the LLM Proxy model catalogue is authorised and answers', async
   await checkA11y(page);
 });
 
+adminTest('J34o: the platform default model card reads its route', async ({ page }) => {
+  await openConfiguration(page);
+  await page.getByRole('button', { name: /LLM Proxy/ }).click();
+
+  // #6826. The card reads GET /admin/gateway/default_model. The read itself is
+  // the positive terminal state: the error Alert is absent while the read is in
+  // flight, so its absence alone would read a 403 or 500 as success.
+  const read = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith('/admin/gateway/default_model'),
+  );
+  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  expect((await read).status()).toBe(200);
+
+  const card = page.getByTestId('platform-default-model');
+  await expect(card.getByRole('combobox', { name: 'Default model' })).toBeVisible();
+  await expect(page.getByTestId('platform-default-model-error')).toHaveCount(0);
+
+  await checkA11y(page);
+});
+
 adminTest('J34i: the Banner section is an editable form, and the save round-trips', async ({ page }) => {
   await openConfiguration(page);
 

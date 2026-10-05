@@ -175,10 +175,17 @@ type Job struct {
 	Generation          uint64
 	State               JobState
 	CreatedAt           time.Time
+	// TriggerOrigin is how the run started (shared 0140). Empty means a
+	// person at the UI. Only the agent and index admission paths write it;
+	// every other capability takes the column default.
+	TriggerOrigin TriggerOrigin
 }
 
 func (j Job) Validate() error {
 	if j.ID == "" || j.CommandID == "" || j.TenantID == "" || j.ResourceProjectID == "" || j.ProjectionProjectID == "" || j.ActorID == "" {
+		return ErrInvalidJob
+	}
+	if !j.TriggerOrigin.Valid() {
 		return ErrInvalidJob
 	}
 	if !SupportedCapability(j.CapabilityID) || j.Generation == 0 || !j.State.Valid() || j.State != JobPending || j.CreatedAt.IsZero() {

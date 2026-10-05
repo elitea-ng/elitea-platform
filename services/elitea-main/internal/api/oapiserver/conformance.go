@@ -225,13 +225,28 @@ type ManifestEndpoint struct {
 	Method      string `json:"method"`
 	Path        string `json:"path"`
 	OperationID string `json:"operationId"`
+	// OriginRoot marks an entry the UI resolves BESIDE the API base, not
+	// under it (HttpRequestOptions.originRoot in apps/elitea-web's
+	// shared/api/http.ts). Only the /llm data plane — elitea-main's
+	// OpenAI-compatible proxy to elitea-llm-gateway — is called that way.
+	OriginRoot bool `json:"originRoot"`
 }
+
+// llmDataPlanePrefix is the one path family an OriginRoot entry may carry.
+// The /llm data plane is the gateway's OpenAI-compatible surface, outside the
+// /api/v2 server base, so v2.yaml cannot describe it.
+const llmDataPlanePrefix = "/llm/"
 
 // MissingFromSpec is the reverse-direction hook: it returns every manifest
 // endpoint that the OpenAPI document does not cover. An endpoint is covered
 // when its operationId exists in the spec, or — when the manifest entry
 // carries no operationId — when its method+path matches a spec operation's
 // candidate path shape under the same segment rules as RouteSet.Resolves.
+//
+// An OriginRoot entry under /llm/ is not an /api/v2 endpoint, so it is out of
+// the document's scope and never reported. The flag excuses nothing else: an
+// OriginRoot entry on any other path is still checked like every other entry,
+// so the flag cannot be used to slip an /api/v2 endpoint past this gate.
 func MissingFromSpec(ops []SpecOperation, endpoints []ManifestEndpoint) []ManifestEndpoint {
 	byID := make(map[string]struct{}, len(ops))
 	for _, op := range ops {
@@ -240,6 +255,9 @@ func MissingFromSpec(ops []SpecOperation, endpoints []ManifestEndpoint) []Manife
 
 	var missing []ManifestEndpoint
 	for _, ep := range endpoints {
+		if ep.OriginRoot && strings.HasPrefix(ep.Path, llmDataPlanePrefix) {
+			continue
+		}
 		if ep.OperationID != "" {
 			if _, ok := byID[ep.OperationID]; ok {
 				continue

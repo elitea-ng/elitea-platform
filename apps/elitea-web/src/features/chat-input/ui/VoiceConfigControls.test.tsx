@@ -2,7 +2,6 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
-import { createTestSocketClient, type TestSocketClient } from '@/shared/api/socket/testing';
 
 import type { TtsVoice } from '../api/ttsVoices';
 import type { TtsModel } from '../lib/hooks/useTextToSpeech.types';
@@ -29,7 +28,7 @@ describe('VoiceConfigControls', () => {
         onConfigChange={() => {}}
         hasModelTTS={false}
         ttsModel={null}
-        socket={null}
+        projectId={undefined}
         browserVoices={[]}
         voices={[]}
       />,
@@ -47,7 +46,7 @@ describe('VoiceConfigControls', () => {
         onConfigChange={() => {}}
         hasModelTTS={false}
         ttsModel={null}
-        socket={null}
+        projectId={undefined}
         browserVoices={[]}
         voices={[]}
       />,
@@ -62,7 +61,7 @@ describe('VoiceConfigControls', () => {
         onConfigChange={() => {}}
         hasModelTTS={false}
         ttsModel={null}
-        socket={null}
+        projectId={undefined}
         browserVoices={[]}
         voices={[]}
         isPlaying
@@ -81,7 +80,7 @@ describe('VoiceConfigControls', () => {
         onConfigChange={onConfigChange}
         hasModelTTS={false}
         ttsModel={null}
-        socket={null}
+        projectId={undefined}
         browserVoices={voices}
         voices={voices}
       />,
@@ -97,7 +96,6 @@ describe('VoiceConfigControls', () => {
   it('model backend: selecting a voice calls onConfigChange with voiceId set and voiceName cleared', async () => {
     const user = userEvent.setup();
     const onConfigChange = vi.fn();
-    const client: TestSocketClient = createTestSocketClient();
     const voices: TtsVoice[] = [{ id: 'v-1', name: 'Server Voice One' }];
     const { getByRole } = renderWithTheme(
       <VoiceConfigControls
@@ -105,7 +103,7 @@ describe('VoiceConfigControls', () => {
         onConfigChange={onConfigChange}
         hasModelTTS
         ttsModel={TTS_MODEL}
-        socket={client}
+        projectId="p1"
         browserVoices={[]}
         voices={voices}
       />,
@@ -137,7 +135,7 @@ describe('VoiceConfigControls', () => {
         onConfigChange={() => {}}
         hasModelTTS={false}
         ttsModel={null}
-        socket={null}
+        projectId={undefined}
         browserVoices={[]}
         voices={[]}
       />,
@@ -168,7 +166,7 @@ describe('VoiceConfigControls', () => {
           onConfigChange={() => {}}
           hasModelTTS
           ttsModel={TTS_MODEL}
-          socket={null}
+          projectId={undefined}
           browserVoices={[]}
           voices={PROVIDER_VOICES}
         />,
@@ -189,7 +187,7 @@ describe('VoiceConfigControls', () => {
           onConfigChange={() => {}}
           hasModelTTS
           ttsModel={TTS_MODEL}
-          socket={null}
+          projectId={undefined}
           browserVoices={[]}
           voices={PROVIDER_VOICES}
         />,
@@ -207,7 +205,7 @@ describe('VoiceConfigControls', () => {
           onConfigChange={() => {}}
           hasModelTTS
           ttsModel={TTS_MODEL}
-          socket={null}
+          projectId={undefined}
           browserVoices={[browserVoice('Samantha')]}
           voices={[]}
         />,
