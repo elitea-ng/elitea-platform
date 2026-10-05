@@ -1,0 +1,53 @@
+name: CI — Mock LLM
+
+# deploy/mock-llm is the offline provider the browser E2E stack points every
+# model at. Its audio routes (speech, transcriptions) back the
+# chat.voice-transport journey, and its continuation mode backs the chat
+# journeys. Until this workflow existed, no workflow ran its own tests: a
+# regression in the mock's multipart parsing or journal shape showed only as
+# an opaque E2E failure in the chat-stream lane.
+#
+# The tests use the standard library only (unittest + http.server), so the job
+# installs nothing.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/mock-llm/**"
+      - ".github/workflows/ci-mock-llm.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/mock-llm/**"
+      - ".github/workflows/ci-mock-llm.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Mock LLM unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # The mock's image is python:3.12-slim (deploy/mock-llm/Containerfile).
+          python-version: "3.12"
+      - name: Unit tests
+        working-directory: deploy/mock-llm
+        # `shell: bash` runs with -o pipefail, so a failing test fails the
+        # step even though tee is the last command of the pipe.
+        shell: bash
+        # Discovery runs every test_*.py here, so a new test file is covered
+        # without editing this step. The count check refuses a run that found
+        # nothing: "no tests ran" is not a pass.
+        run: |
+          python -m unittest discover -p 'test_*.py' -v 2>&1 | tee unittest.log
+          grep -Eq '^Ran [1-9][0-9]* tests? in' unittest.log

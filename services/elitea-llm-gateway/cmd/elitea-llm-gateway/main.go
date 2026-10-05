@@ -994,6 +994,8 @@ func audioMetricHelp(name string) string {
 		return "Count of audio responses the gateway could not price, because the provider reported no usable usage or the catalog carries no rate for the units it reported. Each one billed zero."
 	case llmproxy.MetricAudioNonTokenBasis:
 		return "Count of requests a non-token rate priced: a per-second or per-character catalog rate, not a per-token one."
+	case llmproxy.MetricAudioRefusedUnpricedModel:
+		return "Count of audio requests refused before dispatch because the project has a budget and the catalog carries no rate for the model."
 	default:
 		return "An audio money-path counter published by the llmproxy package."
 	}

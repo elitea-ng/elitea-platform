@@ -271,7 +271,9 @@ func (g *GovernanceStore) CheckBudget(
 		}
 	}
 
-	return failmode.Decide(natsUp, authoritativeNano, replicaDegradedNano, snap, reqCostNano, params), nil
+	dec := failmode.Decide(natsUp, authoritativeNano, replicaDegradedNano, snap, reqCostNano, params)
+	dec.Budgeted = !snap.IsUnlimited && snap.HardLimitNano > 0
+	return dec, nil
 }
 
 // deltaPayload is the minimal JSON structure written to the GATEWAY_BUDGET_DELTAS

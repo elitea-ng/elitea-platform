@@ -70,6 +70,8 @@ export interface VoiceControlButtonProps {
   readonly onVoiceConfigChange: (updates: VoiceConfigUpdate) => void;
   readonly ttsModel: TtsModel | null;
   readonly hasModelTTS: boolean;
+  /** The project a model voice preview bills (`/llm` edge, `X-Project-Id`). */
+  readonly projectId?: string | undefined;
 }
 
 const containerSx = (theme: Theme) => ({
@@ -113,6 +115,7 @@ export function VoiceControlButton({
   onVoiceConfigChange,
   ttsModel,
   hasModelTTS,
+  projectId,
 }: VoiceControlButtonProps): ReactNode {
   const [dialogOpen, setDialogOpen] = useState(false);
   const voiceFlags = useVoiceFeatureFlags();
@@ -210,6 +213,7 @@ export function VoiceControlButton({
         onCancel={handleDialogClose}
         ttsModel={ttsModel}
         hasModelTTS={hasModelTTS}
+        projectId={projectId}
         isPlaying={isPlaying}
       />
     </>

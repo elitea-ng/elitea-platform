@@ -855,8 +855,15 @@ const GENERATED_OPERATION_COUNT = 276;
  * of the Indexes tab's Save / Save & Reindex split. See
  * GENERATED_OPERATION_COUNT's note above for why it is `handwritten` even
  * though the spec now describes it.
+ *
+ * 271 -> 273 (voice over HTTPS): voice.synthesizeSpeech and
+ * voice.transcribeAudio, the /llm/v1/audio/{speech,transcriptions} data-plane
+ * routes shared/api/voiceTransport.ts calls. Both are `handwritten` with no
+ * operationId: /llm is elitea-main's proxy to the gateway, not part of the
+ * /api/v2 spec, so orval never generates them and GENERATED_OPERATION_COUNT
+ * does not move.
  */
-const MANIFEST_ENTRY_COUNT = 271;
+const MANIFEST_ENTRY_COUNT = 273;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

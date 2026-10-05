@@ -302,7 +302,8 @@ export function buildChatBoxInputSlots({
     // two independent voice controls sharing one footer slot (A9).
     voiceButton: (
       <>
-        <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} />
+        {/* `projectId` selects server dictation when the project has a transcription model; it was never passed, so the mic only ever used the browser engine. */}
+        <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} projectId={voice.projectId} />
         <VoiceControlButton {...voice} />
       </>
     ),

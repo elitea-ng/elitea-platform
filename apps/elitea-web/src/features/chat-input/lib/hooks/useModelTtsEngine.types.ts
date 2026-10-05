@@ -1,9 +1,9 @@
 /**
  * Refs bag shared by `useModelTtsEngine.hooks.ts`'s three sibling
- * implementation files (`.scheduler.ts`/`.socket.ts`/`.raf.ts`) — the model
+ * implementation files (`.scheduler.ts`/`.stream.ts`/`.raf.ts`) — the model
  * (server-side, Web Audio) TTS engine's mutable playback state, ported from
  * `useTextToSpeech.hooks.js`'s ~19 independent `useRef`s (lines 108-171).
- * Bundled into one object so the scheduling/socket/highlight logic can be
+ * Bundled into one object so the scheduling/stream/highlight logic can be
  * split across small, independently-testable functions without each one
  * re-declaring the same long parameter list.
  */
@@ -15,6 +15,8 @@ import type { CharTimeline } from '../helpers/ttsTimeline.helpers';
 export interface PendingPcmChunk {
   readonly samples: Float32Array<ArrayBuffer>;
   readonly sampleRate: number;
+  /** The text position where this chunk's audio ends. The scheduler records it as a highlight waypoint when it schedules the chunk. */
+  readonly charEnd?: number | undefined;
 }
 
 export interface ModelTtsRefs {
@@ -32,9 +34,6 @@ export interface ModelTtsRefs {
   readonly calibratedRate: RefObject<number>;
   readonly charTimeline: RefObject<CharTimeline | null>;
   readonly sentenceWaypoints: RefObject<TtsWaypoint[]>;
-  /** 1-chunk pipeline buffer — a fade is applied right before scheduling. */
-  readonly pendingChunk: RefObject<PendingPcmChunk | null>;
-  readonly newSentence: RefObject<boolean>;
   readonly pcmQueue: RefObject<PendingPcmChunk[]>;
   readonly schedulerTimer: RefObject<ReturnType<typeof setInterval> | null>;
   readonly finalTtsDone: RefObject<boolean>;

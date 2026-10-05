@@ -48,6 +48,9 @@ type Config struct {
 type Proxy struct {
 	rp     *httputil.ReverseProxy
 	logger *slog.Logger
+	// audio caps the /llm/v1/audio requests one principal has in flight
+	// (audio_limits.go).
+	audio *audioInFlight
 }
 
 // New builds a streaming reverse proxy from cfg. It returns an error if the
@@ -108,6 +111,12 @@ func New(cfg Config) (*Proxy, error) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// An audio request the edge stopped (body ceiling, deadline) gets
+			// its own named refusal, not "gateway unavailable".
+			if writeAudioRefusal(w, r, err) {
+				logger.Warn("llmproxy: audio request stopped at the edge", "err", err, "path", r.URL.Path)
+				return
+			}
 			logger.Error("llmproxy: upstream error", "err", err, "path", r.URL.Path)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
@@ -115,14 +124,22 @@ func New(cfg Config) (*Proxy, error) {
 		},
 	}
 
-	return &Proxy{rp: rp, logger: logger}, nil
+	return &Proxy{rp: rp, logger: logger, audio: newAudioInFlight(maxAudioInFlightPerPrincipal)}, nil
 }
 
 // ServeHTTP proxies the request to the gateway. It clears the per-connection
 // write deadline before streaming so the http.Server's global WriteTimeout does
 // not hard-kill a long-lived SSE response on the /llm path (design §9.5). This
 // is the edge-side equivalent of the gateway's WriteTimeout: 0.
+//
+// The /llm/v1/audio routes are not streams. They get a body ceiling and a
+// deadline here (audio_limits.go) before the request leaves the edge.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := limitAudioRequest(w, r, p.audio)
+	if !ok {
+		return
+	}
+	defer release()
 	hop.ClearWriteDeadline(w, p.logger)
 	p.rp.ServeHTTP(w, r)
 }

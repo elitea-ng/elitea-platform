@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
-import { useContext, useMemo } from 'react';
+import { useMemo } from 'react';
 
 import { t } from '@/shared/i18n';
-import { SocketClientContext } from '@/shared/api/socket/client';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 
 import { useModelsList } from '../api/models';
@@ -27,17 +26,16 @@ function pickDefaultModel(items: readonly TtsModel[] | undefined): TtsModel | nu
  * `{persist: false}`, matching the baseline's own "only the settings page
  * writes the committed preference" split).
  *
- * Reads the socket via `useContext(SocketClientContext)`, same rationale as
- * `VoiceConfigDialog.tsx`'s own doc comment.
+ * Model speech needs the selected project, not a socket: it goes over HTTPS
+ * (`shared/api/voiceTransport.ts`), and the `/llm` edge bills that project.
  */
 export function VoicePersonalizationSection(): ReactNode {
   const { config, setConfig, browserVoices } = useVoiceConfig({ persist: true });
-  const socket = useContext(SocketClientContext);
   const projectId = useSelectedProjectId();
 
   const { data: ttsModelsData } = useModelsList({ projectId, section: 'tts', includeShared: true }, { enabled: !!projectId });
   const ttsModel = useMemo(() => pickDefaultModel(ttsModelsData?.items), [ttsModelsData]);
-  const hasModelTTS = !!(ttsModel && socket);
+  const hasModelTTS = !!(ttsModel && projectId);
 
   const { data: ttsVoicesData } = useTtsVoices({ projectId: ttsModel?.project_id ?? projectId, modelName: ttsModel?.name }, { enabled: !!ttsModel });
   const displayVoices: readonly (TtsVoice | SpeechSynthesisVoice)[] = hasModelTTS ? (ttsVoicesData?.voices ?? []) : browserVoices;
@@ -55,7 +53,7 @@ export function VoicePersonalizationSection(): ReactNode {
               onConfigChange={setConfig}
               hasModelTTS={hasModelTTS}
               ttsModel={ttsModel}
-              socket={socket}
+              projectId={projectId}
               browserVoices={browserVoices}
               voices={displayVoices}
             />
