@@ -12,4 +12,6 @@ export const queryKeys = {
   agents: (projectId: number) => ['p', projectId, 'agents'] as const,
   models: (projectId: number) => ['p', projectId, 'models'] as const,
   notifications: (projectId: number) => ['p', projectId, 'notifications'] as const,
+  /** Persisted tool calls of a project's conversations (listMessageTraces), keyed below by conversation and groups. */
+  traces: (projectId: number) => ['p', projectId, 'traces'] as const,
 };

@@ -67,6 +67,26 @@ describe('restorePreparedTurn', () => {
     expect(restored.request.questionId).toBe(Q1);
   });
 
+  it('restores a row queued by an earlier build (the overlay ApplicationTurnRequest body) byte for byte', () => {
+    // Exactly what the pre-1.1 build stored: participant_id always present.
+    const legacy =
+      '{"payload":{"user_input":"hello"},"project_id":7,"participant_id":3,' +
+      `"conversation_uuid":"${UUID}","question_id":"${Q1}"}`;
+    const restored = restorePreparedTurn(legacy);
+    expect(restored.bodyJson).toBe(legacy);
+    expect(restored.request).toMatchObject({ projectId: 7, participantId: 3, userInput: 'hello', model: null });
+  });
+
+  it('restores a ChatSendRequest body without participant_id as a model turn (participant 0)', () => {
+    const body =
+      '{"payload":{"user_input":"hi"},"project_id":7,' +
+      `"conversation_uuid":"${UUID}","question_id":"${Q1}",` +
+      '"llm_settings":{"model_name":"gpt-5","stream":true}}';
+    const restored = restorePreparedTurn(body);
+    expect(restored.bodyJson).toBe(body);
+    expect(restored.request).toMatchObject({ participantId: 0, model: { name: 'gpt-5', projectId: null } });
+  });
+
   it('refuses a stored body that a fresh send would refuse (upper-case question_id)', () => {
     const upper = turn(Q1).bodyJson.replace(Q1, Q1.toUpperCase());
     expect(() => restorePreparedTurn(upper)).toThrow(TurnInputError);

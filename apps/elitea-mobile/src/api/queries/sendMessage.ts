@@ -6,8 +6,8 @@ import type { components } from '@/api/generated/elitea.gen';
 import { isSameOriginApiPath } from '@/api/paths';
 
 /**
- * Chat send: `startApplicationTurn` (overlay op until ADR-0025 WP5), with the
- * application contract for an agent and the adhoc contract for a plain model.
+ * Chat send: `sendChatMessage` (client contract), with the application
+ * contract for an agent and the adhoc contract for a plain model.
  *
  * The body is serialised ONCE and the same string is sent on every retry:
  * the server de-duplicates by `question_id` only for a byte-identical body
@@ -15,7 +15,7 @@ import { isSameOriginApiPath } from '@/api/paths';
  * with the same id → 409).
  */
 
-export type ApplicationTurnRequest = components['schemas']['ApplicationTurnRequest'];
+export type ChatSendRequest = components['schemas']['ChatSendRequest'];
 
 export const EXECUTION_CONTRACT = 'agent.execute.application.v1';
 /** A plain model turn (a conversation with no agent): `llm_settings` names the model. */
@@ -31,6 +31,27 @@ export interface TurnModel {
   projectId: number | null;
 }
 
+/** Who a message mentions (client contract `user_ids` / `is_mentioning_everyone`). */
+export interface TurnMentions {
+  /** USER ids (`entity_meta.id` of a user participant), never participant row ids. */
+  userIds: number[];
+  /** `@Everyone`: every project member except the sender is notified. */
+  everyone: boolean;
+}
+
+/** One uploaded file the message carries (`payload.attachments`). */
+export interface TurnAttachment {
+  /** Exactly the `filepath` the upload returned: `/{bucket}/{conversation_uuid}/{name}`. */
+  filepath: string;
+  /** Display name; the server ignores it. */
+  name: string;
+}
+
+/** The server refuses more mention ids than this (400). */
+export const MAX_MENTION_IDS = 64;
+/** The most attachments one body may carry (the policy's `max_files` is lower). */
+export const MAX_TURN_ATTACHMENTS = 64;
+
 export interface TurnRequest {
   projectId: number;
   conversationUuid: string;
@@ -43,6 +64,8 @@ export interface TurnRequest {
   userInput: string;
   /** Set for a plain model turn (adhoc contract); absent for an agent turn. */
   model?: TurnModel | null;
+  mentions?: TurnMentions | null;
+  attachments?: TurnAttachment[] | null;
 }
 
 export interface PreparedTurn {
@@ -52,7 +75,7 @@ export interface PreparedTurn {
 }
 
 export class TurnInputError extends Error {
-  constructor(readonly reason: 'question_id' | 'too_large' | 'empty' | 'invalid') {
+  constructor(readonly reason: 'question_id' | 'too_large' | 'empty' | 'invalid' | 'mentions' | 'attachments') {
     super(`invalid turn: ${reason}`);
     this.name = 'TurnInputError';
   }
@@ -77,12 +100,20 @@ export function prepareTurn(request: TurnRequest): PreparedTurn {
       throw new TurnInputError('invalid');
     }
   }
-  const body: ApplicationTurnRequest = {
-    payload: { user_input: request.userInput },
+  const userIds = normaliseMentionIds(request.mentions?.userIds ?? []);
+  const everyone = request.mentions?.everyone === true;
+  const attachments = checkAttachments(request.attachments ?? [], request.conversationUuid);
+  const body: ChatSendRequest = {
+    payload: {
+      user_input: request.userInput,
+      ...(attachments.length > 0 ? { attachments: attachments.map((a) => ({ filepath: a.filepath, name: a.name })) } : {}),
+    },
     project_id: request.projectId,
     participant_id: request.participantId,
     conversation_uuid: request.conversationUuid,
     question_id: request.questionId,
+    ...(userIds.length > 0 ? { user_ids: userIds } : {}),
+    ...(everyone ? { is_mentioning_everyone: true } : {}),
     ...(model === null
       ? {}
       : {
@@ -98,12 +129,67 @@ export function prepareTurn(request: TurnRequest): PreparedTurn {
   return { request, bodyJson };
 }
 
+/**
+ * A stored outbox body. Rows queued by earlier builds hold the overlay's
+ * `ApplicationTurnRequest` (participant_id always present); the client
+ * contract's `ChatSendRequest` makes participant_id optional (absent = 0, a
+ * model chat). Both parse; the stored bytes are never rewritten.
+ */
+/**
+ * Mention ids, deduped in first-seen order. Every entry must be a positive
+ * safe integer (a string id is a caller bug: 400 on the server); more than
+ * `MAX_MENTION_IDS` distinct ids is refused.
+ */
+function normaliseMentionIds(ids: readonly unknown[]): number[] {
+  const out: number[] = [];
+  for (const id of ids) {
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) throw new TurnInputError('mentions');
+    if (!out.includes(id)) out.push(id);
+  }
+  if (out.length > MAX_MENTION_IDS) throw new TurnInputError('mentions');
+  return out;
+}
+
+const FILEPATH_MAX = 1024;
+
+/**
+ * Every attachment must be a filepath an upload into THIS conversation
+ * returned (`/{bucket}/{conversation_uuid}/{name}`), so a stale or foreign
+ * path never reaches the server.
+ */
+function checkAttachments(list: readonly TurnAttachment[], conversationUuid: string): TurnAttachment[] {
+  if (list.length > MAX_TURN_ATTACHMENTS) throw new TurnInputError('attachments');
+  for (const item of list) {
+    if (typeof item?.filepath !== 'string' || item.filepath.length > FILEPATH_MAX) throw new TurnInputError('attachments');
+    const [lead, bucket, uuid, name, ...rest] = item.filepath.split('/');
+    const ok =
+      lead === '' &&
+      rest.length === 0 &&
+      typeof bucket === 'string' &&
+      /^[A-Za-z0-9._-]+$/.test(bucket) &&
+      uuid?.toLowerCase() === conversationUuid.toLowerCase() &&
+      typeof name === 'string' &&
+      name !== '' &&
+      name !== '.' &&
+      name !== '..' &&
+      !/[\u0000-\u001f\\]/.test(name);
+    if (!ok) throw new TurnInputError('attachments');
+    if (typeof item.name !== 'string' || item.name.trim() === '' || item.name.length > 255) throw new TurnInputError('attachments');
+  }
+  return [...list];
+}
+
 const StoredBody = z.object({
-  payload: z.object({ user_input: z.string() }),
+  payload: z.object({
+    user_input: z.string(),
+    attachments: z.array(z.object({ filepath: z.string(), name: z.string().optional() })).optional(),
+  }),
   project_id: z.number(),
-  participant_id: z.number(),
+  participant_id: z.number().optional(),
   conversation_uuid: z.string(),
   question_id: z.string(),
+  user_ids: z.array(z.number()).optional(),
+  is_mentioning_everyone: z.boolean().optional(),
   llm_settings: z
     .looseObject({ model_name: z.string(), model_project_id: z.number().optional(), stream: z.boolean().optional() })
     .optional(),
@@ -129,16 +215,30 @@ export function restorePreparedTurn(bodyJson: string): PreparedTurn {
   const request: TurnRequest = {
     projectId: parsed.project_id,
     conversationUuid: parsed.conversation_uuid,
-    participantId: parsed.participant_id,
+    participantId: parsed.participant_id ?? 0,
     questionId: parsed.question_id,
     userInput: parsed.payload.user_input,
     model: parsed.llm_settings
       ? { name: parsed.llm_settings.model_name, projectId: parsed.llm_settings.model_project_id ?? null }
       : null,
+    // Present only when the stored body carried them.
+    ...(parsed.user_ids !== undefined || parsed.is_mentioning_everyone !== undefined
+      ? { mentions: { userIds: parsed.user_ids ?? [], everyone: parsed.is_mentioning_everyone === true } }
+      : {}),
+    ...(parsed.payload.attachments
+      ? {
+          attachments: parsed.payload.attachments.map((a) => ({ filepath: a.filepath, name: a.name ?? basenameOf(a.filepath) })),
+        }
+      : {}),
   };
   // Validates exactly like a fresh send; the stored bytes are what is sent.
   prepareTurn(request);
   return { request, bodyJson };
+}
+
+function basenameOf(filepath: string): string {
+  const slash = filepath.lastIndexOf('/');
+  return slash >= 0 ? filepath.slice(slash + 1) : filepath;
 }
 
 const TurnStarted = z.looseObject({
@@ -171,6 +271,8 @@ export type TurnStartFailure =
   /** 409 for this question_id with a different body: a client bug. */
   | { kind: 'idempotency_conflict' }
   | { kind: 'unsupported_agent' }
+  /** A continuation for a pause that was answered elsewhere (409 `*_already_resolved`). */
+  | { kind: 'already_resolved' }
   /** Another 409 with the server's own message and retry hint. */
   | { kind: 'conflict'; message: string | null; retryable: boolean; retryAfterMs?: number }
   | { kind: 'rejected'; status: number; message: string | null }
@@ -197,12 +299,12 @@ export async function startTurn(
   const { request, bodyJson } = prepared;
   let result;
   try {
-    result = await client.POST('/elitea_core/messages/prompt_lib/{project_id}/{conversation_uuid}', {
+    result = await client.POST('/elitea_core/messages/prompt_lib/{project_id}/{conversation_id}', {
       params: {
-        path: { project_id: String(request.projectId), conversation_uuid: request.conversationUuid },
+        path: { project_id: String(request.projectId), conversation_id: request.conversationUuid },
         query: { execution_contract: executionContractOf(request) },
       },
-      body: JSON.parse(bodyJson) as ApplicationTurnRequest,
+      body: JSON.parse(bodyJson) as ChatSendRequest,
       bodySerializer: () => bodyJson,
       headers: { 'Content-Type': 'application/json' },
       signal: options.signal,
@@ -214,7 +316,13 @@ export async function startTurn(
     throw error;
   }
 
-  const { data, error, response } = result;
+  return readStarted(result);
+}
+
+type PostResult = { data?: unknown; error?: unknown; response: Response };
+
+/** A send's or a continuation's answer: the validated execution, or a TurnStartError. */
+function readStarted({ data, error, response }: PostResult): StartedTurn {
   if (response.ok) {
     const parsed = TurnStarted.safeParse(data);
     if (!parsed.success || !isSameOriginApiPath(parsed.data.events_url)) {
@@ -241,6 +349,9 @@ export async function startTurn(
     throw new TurnStartError({ kind: 'unsupported_agent' });
   }
   if (status === 409) {
+    if (errorCode !== null && /_already_resolved$/.test(errorCode)) {
+      throw new TurnStartError({ kind: 'already_resolved' });
+    }
     if (errorCode !== null && /conflicts with an existing turn/i.test(errorCode)) {
       throw new TurnStartError({ kind: 'idempotency_conflict' });
     }
@@ -252,4 +363,41 @@ export async function startTurn(
     });
   }
   throw new TurnStartError({ kind: 'rejected', status, message });
+}
+
+export type ContinueContract =
+  | 'agent.continue.hitl.v1'
+  | 'agent.continue.authorization.v1'
+  | 'agent.continue.output-limit.v1';
+
+/**
+ * POSTs a continuation (`continueChatExecution`): answers a pause and starts
+ * the rest of the turn. Resolves with the execution to stream; throws
+ * `TurnStartError` (`already_resolved` when someone answered it first) or
+ * `ApiError`. Never retried automatically: a continuation is online-only and
+ * answered again by the user.
+ */
+export async function continueTurn(
+  contract: ContinueContract,
+  body: components['schemas']['ChatContinueRequest'],
+  options: { client?: ApiClient; signal?: AbortSignal } = {},
+): Promise<StartedTurn> {
+  const client = options.client ?? sessionApiClient();
+  let result;
+  try {
+    result = await client.POST('/elitea_core/continue_predict/prompt_lib/{project_id}/{conversation_id}', {
+      params: {
+        path: { project_id: String(body.project_id), conversation_id: body.conversation_uuid },
+        query: { execution_contract: contract },
+      },
+      body,
+      signal: options.signal,
+    });
+  } catch (error) {
+    if (error instanceof ApiError && (error.kind === 'network' || error.kind === 'timeout')) {
+      throw new TurnStartError({ kind: 'transient' }, error);
+    }
+    throw error;
+  }
+  return readStarted(result);
 }

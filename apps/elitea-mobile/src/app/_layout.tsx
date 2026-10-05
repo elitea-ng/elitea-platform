@@ -23,6 +23,9 @@ import { useSession } from '@/state/session';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
 import { startForegroundRefresh } from '@/state/foregroundRefresh';
 import { createSplashGate } from '@/state/splashGate';
+import { sweepUploadTemp } from '@/api/attachments/upload';
+import { sweepDownloadTemp } from '@/features/chat/attachments/opener';
+import { sweepPickerCopies } from '@/features/chat/attachments/pickers';
 
 wireFocusManager();
 wireUpgradeRecovery();
@@ -32,6 +35,10 @@ startSync();
 // Connectivity: react-query's online state, the outbox drain and sync on reconnect.
 wireNetwork();
 startOutbox();
+// Attachment copies a crash or a kill left behind (downloads opened, chunks staged, files picked).
+sweepDownloadTemp();
+sweepUploadTemp();
+sweepPickerCopies();
 // The public policy and minimum version are re-read on every foreground.
 startForegroundRefresh();
 

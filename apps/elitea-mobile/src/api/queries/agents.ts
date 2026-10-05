@@ -70,8 +70,40 @@ export function useAgents(projectId: number | null, search: string = '') {
 }
 
 const AgentDetail = z.looseObject({
-  version_details: z.looseObject({ id: PositiveId }).nullish(),
+  version_details: z
+    .looseObject({
+      id: PositiveId,
+      meta: z.looseObject({ internal_tools: z.array(z.string()).nullish() }).nullish().catch(null),
+    })
+    .nullish(),
 });
+
+/** What a conversation needs to know about an agent's current version. */
+export interface AgentVersion {
+  /** The version a participant runs (`entity_settings.version_id`). */
+  versionId: number;
+  /** The version's enabled internal tools (`attachments`, `ask_user`, …). */
+  internalTools: string[];
+}
+
+/** The agent's current (default) version, or null when it has none. */
+export async function fetchAgentVersion(
+  projectId: number,
+  agentId: number,
+  client: ApiClient = sessionApiClient(),
+  signal?: AbortSignal,
+): Promise<AgentVersion | null> {
+  const detail = await unwrap(
+    client.GET('/elitea_core/application/prompt_lib/{project_id}/{application_id}', {
+      params: { path: { project_id: String(projectId), application_id: agentId } },
+      signal,
+    }),
+  );
+  const parsed = AgentDetail.safeParse(detail);
+  const version = parsed.success ? parsed.data.version_details : null;
+  if (!version) return null;
+  return { versionId: version.id, internalTools: (version.meta?.internal_tools ?? []).filter((t) => typeof t === 'string') };
+}
 
 /** The version a new conversation addresses: the agent's current (default) version. */
 export async function fetchAgentVersionId(
@@ -79,16 +111,28 @@ export async function fetchAgentVersionId(
   agentId: number,
   client: ApiClient = sessionApiClient(),
 ): Promise<number | null> {
-  const detail = await unwrap(
-    client.GET('/elitea_core/application/prompt_lib/{project_id}/{application_id}', {
-      params: { path: { project_id: String(projectId), application_id: agentId } },
-    }),
-  );
-  const parsed = AgentDetail.safeParse(detail);
-  return parsed.success ? (parsed.data.version_details?.id ?? null) : null;
+  return (await fetchAgentVersion(projectId, agentId, client))?.versionId ?? null;
 }
 
-type CreateConversationRequest = components['schemas']['CreateConversationRequest'];
+export function useAgentVersion(projectId: number | null, agentId: number | null) {
+  return useQuery({
+    queryKey: [...queryKeys.agents(projectId ?? 0), 'version', agentId ?? 0],
+    enabled: projectId !== null && agentId !== null,
+    staleTime: 60_000,
+    queryFn: ({ signal }) => fetchAgentVersion(projectId as number, agentId as number, sessionApiClient(), signal),
+  });
+}
+
+/**
+ * The create body. Upstream (06a490427) types `participants` with the READ
+ * shape (`ConversationParticipant`, `id` required) although the create route
+ * reads the same keys as `addConversationParticipants`
+ * (`ConversationParticipantCreate`, no id); the app sends the create shape.
+ */
+type CreateConversationRequest = Omit<components['schemas']['ConversationCreateRequest'], 'participants'> & {
+  participants: components['schemas']['ConversationParticipantCreate'][];
+};
+type WireCreateConversationRequest = components['schemas']['ConversationCreateRequest'];
 
 const Created = z.looseObject({
   id: PositiveId,
@@ -128,7 +172,7 @@ export async function startConversationWithAgent(
   const created = await unwrap(
     client.POST('/elitea_core/conversations/prompt_lib/{project_id}', {
       params: { path: { project_id: String(projectId) } },
-      body,
+      body: body as unknown as WireCreateConversationRequest,
     }),
   );
   const parsed = Created.safeParse(created);

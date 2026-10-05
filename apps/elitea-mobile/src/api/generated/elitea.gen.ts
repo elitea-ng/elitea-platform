@@ -5,9 +5,9 @@
  * Apache-2.0, see contract/LICENSE.elitea) merged with the Agent Zefir
  * native-gap overlay and pruned to contract/client-operations.json.
  *
- * upstream sha256:    56d6638fdcad882675464d031c2d29e1c19f0fe69e70dbf75f3cebce3658b551
- * overlay sha256:     f00053bae6cdc5d0a0be49be5198a449ee7f17b599d5af2069c6258b82421bc9
- * operations sha256:  989fa26b8e9e045e1840b590859d6760a8770e584456d0fc41ff97484ea961ae
+ * upstream sha256:    85e88c9f89b6be7a123db63a53c11a2d1cde10165b6be0123eb6f2ce9c46971d
+ * overlay sha256:     db6509ce6a3543256938693e0904d4e58538e491cf565c4a2cf05b7524102b72
+ * operations sha256:  05048600a2fe1d0f410b623a02e5af92d8e756a45b6ab9df86719e4ebc44a5a5
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -17,7 +17,24 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Anonymous discovery document a client reads before signing in */
+        /**
+         * Public discovery document for clients
+         * @description What a client given only a deployment's origin needs before it signs
+         *     in (ADR-0025 decision 1): the server version (`major.minor`), the
+         *     client contract version, the deployment kind, the brand's display
+         *     name and pack URL, the native authorization endpoints (`null` while
+         *     no native client is registered), the public client policy and the
+         *     minimum client version per registered client id. It discloses nothing
+         *     the deployment's login page does not.
+         *
+         *     Caching: strong `ETag` (hash of the body), `Cache-Control: no-cache`
+         *     (the body follows database state), `If-None-Match` answers 304. When
+         *     the deployment has no configured public origin the URLs are built
+         *     from the request's Host and the response carries
+         *     `Vary: Host, X-Forwarded-Proto`. A failing source answers 503
+         *     `no-store` rather than a document that would wrongly say "no native
+         *     sign-in".
+         */
         get: operations["getClientDiscovery"];
         put?: never;
         post?: never;
@@ -37,8 +54,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Revoke the device session a native token belongs to (RFC 7009)
-         * @description Revokes the whole device session. Unknown or already revoked tokens also answer 200, so the answer reveals nothing. Never refused for an old client version.
+         * Revoke a native device session (RFC 7009)
+         * @description Revokes the WHOLE device session (refresh-token family) the presented
+         *     refresh or access token belongs to (reason `signed_out`). An unknown or
+         *     already-revoked token, or one for another client, also answers 200 with
+         *     no body, so the answer reveals nothing. Form body: `token`,
+         *     `client_id`, optional `token_type_hint`. Answers 404 while no native
+         *     client is registered. NOTE(W2): internal/api/nativeauth/token.go:277.
          */
         post: operations["revokeNativeToken"];
         delete?: never;
@@ -57,8 +79,36 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Exchange an authorization code or a refresh token (native public client)
-         * @description Form-encoded, no client authentication (an Authorization header is refused). The refresh token rotates on every use; re-presenting the immediately previous one within the server's re-delivery window (default 30 s) returns the same successor pair, any other reuse revokes the device session. Below the client's minimum version the answer is 426 before anything is consumed.
+         * Exchange a native authorization code or refresh token
+         * @description The token endpoint for registered native PUBLIC clients (RFC 6749
+         *     section 4.1.3 and 6, ADR-0025 decision 3). No client authentication:
+         *     `client_id` is in the body and an `Authorization` header is refused.
+         *     The body is `application/x-www-form-urlencoded` (at most 8 KiB) and no
+         *     parameter may repeat.
+         *
+         *     `grant_type=authorization_code` takes `code`, `redirect_uri`,
+         *     `client_id` and `code_verifier` (PKCE S256). A code is single-use; a
+         *     replayed code revokes the device session it produced.
+         *     `grant_type=refresh_token` takes `refresh_token`, `client_id` and an
+         *     optional `client_version`. The refresh token rotates on every use.
+         *     Presenting the IMMEDIATELY previous refresh token again within the
+         *     re-delivery window (default 30 seconds) returns the SAME new pair; any
+         *     other reuse revokes the whole device session.
+         *
+         *     Errors are RFC 6749 section 5.2 JSON. A revoked, expired, deactivated
+         *     or reused device session answers 401 with the flat
+         *     `{"error":"device_revoked"}` body (the client wipes its local data);
+         *     clients must persist the new pair before using it and serialise
+         *     refreshes. Failures are rate limited per
+         *     (client, address) and per address (429 with Retry-After). Answers 404
+         *     while no native client is registered.
+         *
+         *     A client states its version in `X-Client-Version` (a refresh grant's
+         *     `client_version` is used when the header is absent and it parses).
+         *     Below the minimum for `client_id` the endpoint answers 426 BEFORE the
+         *     code or refresh token is consumed, so the same credential works once
+         *     the app is updated. Every 200 carries the full `client_policy`.
+         *     NOTE(W2): internal/api/nativeauth/token.go:47.
          */
         post: operations["exchangeNativeToken"];
         delete?: never;
@@ -74,7 +124,32 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The deployment's resolved brand pack, with absolute asset URLs */
+        /**
+         * The resolved brand pack as JSON, with absolute references
+         * @description Serves the same resolved brand pack as `GET /branding/bootstrap.js`
+         *     (one resolver), as JSON, with every same-origin reference
+         *     (`assets.*`, `typography.fontFaces[].url`, `product.docsUrl`) made
+         *     absolute against the deployment's public origin (`DEPLOYMENT_URL`).
+         *     Unauthenticated by design: a native client brands its sign-in screen
+         *     with it.
+         *
+         *     On a deployment with no brand pack of its own the response is the
+         *     product default pack (200), and `X-Elitea-Brand-Layers` says
+         *     `default`. That header lists the contributing layers bottom first:
+         *     `default` or `file`, then `db` when the admin Branding section
+         *     contributed.
+         *
+         *     Caching follows bootstrap.js, with pack.json's OWN entity tag: the
+         *     strong `ETag` is the hash of this response body (which carries the
+         *     public origin and, unbranded, the product default, neither of which
+         *     is in bootstrap.js's tag); `no-cache` on the bare URL;
+         *     `public, max-age=31536000, immutable` when `?v=` equals the current
+         *     ETag value; a stale `?v=` answers 302 to the current URL;
+         *     `If-None-Match` answers 304. When the deployment has no configured
+         *     public origin the absolute URLs are built from the request's Host,
+         *     the response carries `Vary: Host, X-Forwarded-Proto`, and it is
+         *     never immutable.
+         */
         get: operations["getBrandingPackJSON"];
         put?: never;
         post?: never;
@@ -115,6 +190,44 @@ export interface paths {
          *     here so one generated client replaces all four.
          */
         get: operations["listConfigurationModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/application_skills/prompt_lib/{project_id}/{app_version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_version_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List skills attached to an agent version
+         * @description Returns only the skills attached to app_version_id, read from
+         *     entity_skill_mapping.
+         *
+         *     NOTE(#367): this route used to point at the project skills List
+         *     handler, which never read app_version_id and answered with every
+         *     skill in the project, at 200. The five published keys are unchanged —
+         *     a client sees the same shape and different, correct contents. A
+         *     malformed app_version_id is now refused with 400 instead of being
+         *     coerced.
+         *
+         *     NOTE(issue 621): the response schema is ApplicationSkillsList, not
+         *     SkillsList. It is SkillsList plus the `skills` and `max_skills` keys
+         *     the reviewed handler also emits (issue 395). SkillsList itself stays
+         *     as it is, because the project-skills List operation shares it and
+         *     emits neither key.
+         */
+        get: operations["listApplicationSkills"];
         put?: never;
         post?: never;
         delete?: never;
@@ -172,23 +285,151 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
+    "/elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description The conversation's numeric id or its uuid; the server accepts either. */
+                /** @description The conversation UUID. A numeric id is refused with 400: the file is stored as `{conversation_uuid}/{file name}`. */
                 conversation_id: string;
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
             };
             cookie?: never;
         };
-        /** Read one conversation, optionally with its latest message groups */
+        get?: never;
+        put?: never;
+        /**
+         * Upload a file to attach to the next chat message
+         * @description `multipart/form-data` with the bytes in `file`. A small file is one
+         *     request (201). A large one is split into chunks sent with the same
+         *     `file_id` and `file_name` and their `chunk_index`/`total_chunks`;
+         *     every chunk but the last answers 202, the last answers 201 with the
+         *     assembled file. Send the returned `filepath` in the chat send's
+         *     `payload.attachments`. Size limits are the project's storage policy
+         *     (images and documents have separate ceilings); one chunk is at most a
+         *     few MB.
+         */
+        post: operations["uploadConversationAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation UUID (a numeric id is a 400), as in the attachment's `filepath`. */
+                conversation_id: string;
+                /** @description The file name: the last segment of the attachment's `filepath` (`/{bucket}/{conversation_uuid}/{name}`), percent-encoded. A name with a slash, a backslash, `..` or a control character is a 400. */
+                name: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download one file that was attached in a conversation
+         * @description Needs `models.chat.conversation.details` and access to the
+         *     conversation — the same as getConversation. A caller who cannot see
+         *     the conversation gets 404, as for a file that does not exist. The
+         *     bucket is the project's chat attachment bucket; the client never
+         *     names it. HEAD answers the same headers without the body.
+         *
+         *     The answer is always a download: `Content-Disposition: attachment`
+         *     (with an RFC 5987 `filename*`), `X-Content-Type-Options: nosniff`,
+         *     `Content-Security-Policy: sandbox` and
+         *     `Cache-Control: private, no-store`. `Content-Type` is the recorded
+         *     type only when the file's first bytes agree with it; an active type
+         *     (HTML, SVG, XML, script) or a disagreement is
+         *     `application/octet-stream`. One `Range` (`bytes=a-b`, `bytes=a-` or
+         *     `bytes=-n`) answers 206; `If-None-Match` with the `ETag` answers 304.
+         *     NOTE(W2): internal/api/v2/conversations/attachment_download.go:59
+         *     (`DownloadAttachment`).
+         */
+        get: operations["downloadConversationAttachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/continue_predict/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation UUID; must equal the body's `conversation_uuid`. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume a paused turn (human decision, tool authorization, output limit)
+         * @description Answers a pause the event stream announced and starts the turn's
+         *     continuation, answering like the send with a new `events_url`.
+         *     `execution_contract`:
+         *     - `agent.continue.hitl.v1` — a human-in-the-loop decision
+         *       (`hitl_resume: true` plus `hitl_action`/`hitl_value`, or
+         *       `hitl_decisions` for a multi-pause frame);
+         *     - `agent.continue.authorization.v1` — a toolkit/MCP authorization
+         *       answer (`authorization_request_id` + `authorization_action`, or
+         *       batched `hitl_decisions`);
+         *     - `agent.continue.output-limit.v1` — continue an answer cut at the
+         *       model's output limit (`message_id` only).
+         *     A pause that was already answered is a 409 with
+         *     `agent_hitl_already_resolved`, `agent_authorization_already_resolved`
+         *     or `agent_output_limit_already_resolved` and `retryable: false`:
+         *     refresh the transcript instead of retrying.
+         */
+        post: operations["continueChatExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One conversation with its participants
+         * @description Needs `models.chat.conversation.details` and access to the
+         *     conversation itself (a private conversation is visible only to the
+         *     callers the chat authority admits; anyone else gets 403 or 404).
+         *     `messages_limit` > 0 embeds the newest message groups in the legacy
+         *     projection; a client that keeps a transcript reads the message list
+         *     instead.
+         */
         get: operations["getConversation"];
         put?: never;
         post?: never;
-        /** Delete a conversation and its messages */
+        /**
+         * Delete a conversation and its stored attachments
+         * @description Removes the conversation, every message group and the bytes of every
+         *     attachment its messages carried. A client that syncs sees ONE
+         *     `deleted` tombstone for the conversation on the conversation list (no
+         *     per-message tombstones). A 500 after the rows are gone means the byte
+         *     cleanup failed; the conversation is still deleted.
+         */
         delete: operations["deleteConversation"];
         options?: never;
         head?: never;
@@ -219,13 +460,18 @@ export interface paths {
          *     everybody's — see the handler's own comment on why that is a safety
          *     property, not a convenience.
          *
-         *     The route also serves POST (create a conversation), which is
-         *     handwritten in entities/conversation's own conversationApi and is not
-         *     documented here.
+         *     The route also serves POST, createConversation below.
          */
         get: operations["listConversations"];
         put?: never;
-        /** Create a conversation in a project */
+        /**
+         * Create a conversation
+         * @description Creates a conversation owned by the caller, private unless
+         *     `is_private: false` is sent, with the caller's personalization and the
+         *     project's chat defaults applied. Answers 201 with the stored
+         *     conversation; its `uuid` is the id the chat send and the attachment
+         *     upload take.
+         */
         post: operations["createConversation"];
         delete?: never;
         options?: never;
@@ -233,13 +479,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/elitea_core/messages/prompt_lib/{project_id}/{conversation_uuid}": {
+    "/elitea_core/message_trace/prompt_lib/{project_id}/{step_id}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description The conversation's uuid (a send takes the uuid only; the list also takes the numeric id). */
-                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                step_id: number;
+            };
+            cookie?: never;
+        };
+        /**
+         * One trace step in full, fetched on pin expand
+         * @description The light projection plus the heavy fields.
+         *
+         *     `message_group_id` is REQUIRED and is matched together with the step
+         *     id: it is what confines a numeric step id to the message the caller is
+         *     reading, so a step from elsewhere is a 404 rather than a body.
+         */
+        get: operations["getMessageTrace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Trace steps for a conversation — the pin strip under each answer
+         * @description The LIGHT projection: labels, ordering and the bounded `attrs` display
+         *     sidecar. The heavy fields (tool_inputs, tool_output, text, thinking)
+         *     are detail-only and are fetched one step at a time through
+         *     getMessageTrace, so rendering a conversation's chips never detoasts
+         *     them.
+         *
+         *     Rows are ordered by (started_at, id) with null timestamps last. Blank
+         *     thinking steps — transition markers the runtime emits with an action
+         *     but no text — are excluded, because the client draws a pin for every
+         *     row it receives.
+         *
+         *     `total` is null unless include_total=true, so "not counted" stays
+         *     distinguishable from "counted zero".
+         */
+        get: operations["listMessageTraces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/messages/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation. The list takes its numeric id or its UUID; the send takes the UUID only, and it must equal the body's `conversation_uuid`. */
+                conversation_id: string;
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
             };
@@ -247,30 +557,240 @@ export interface paths {
         };
         /**
          * A conversation's transcript, paged or as a delta
-         * @description Legacy mode pages message groups newest first (`limit`, `offset`).
-         *     With `changes_since` it answers the groups changed since the cursor,
-         *     oldest change first, the tombstones of deleted groups and the next
-         *     cursor. A group still streaming changes again when it settles, so a
-         *     delta can return it twice; upsert by `id`. The cursor is bound to the
-         *     conversation's numeric id, whichever spelling the path used.
+         * @description Legacy mode pages message groups newest first (`limit`, default 10,
+         *     at most 100; `offset`). With `changes_since` (ADR-0025 WP6) it answers
+         *     the groups changed since the cursor, oldest change first, the
+         *     tombstones of deleted groups and the next cursor; `offset`, `page`,
+         *     `sort_by`, `sort_order` and `query` are then ignored. A group that is
+         *     still streaming changes again when it settles, so a delta returns it
+         *     again; upsert by `id`.
          */
         get: operations["listConversationMessages"];
         put?: never;
         /**
-         * Send a user message to the conversation's agent or model and start its execution
-         * @description Idempotent per `question_id`: re-sending the byte-identical body
-         *     returns the original execution with `created: false`; a different body
-         *     with the same `question_id` is a 409. The response's `events_url` is a
-         *     same-origin absolute path to the execution's event stream.
+         * Send a chat message and start the answering turn
+         * @description Admits one turn and answers at once with the turn's `events_url`; the
+         *     answer streams on that URL (streamExecutionEvents) and is stored in
+         *     the transcript as it settles.
          *
-         *     `agent.execute.application.v1` addresses the conversation's agent
-         *     (`application` participant). `agent.execute.adhoc.v1` is a plain model
-         *     turn: `participant_id` is the conversation's `dummy` participant, or
-         *     0 when it has none, and `llm_settings.model_name` is required (the
-         *     server does not read the model from the participant: without
-         *     `llm_settings` it answers 422 `unsupported_agent_execution`).
+         *     IDEMPOTENCY. `question_id` is required, client generated and a
+         *     LOWERCASE canonical UUID. It is the admission idempotency key:
+         *     - the same `question_id` with the same body replays the original
+         *       admission — 200 with `created: false` and the SAME `execution_id`,
+         *       `response_message_id` and `events_url`;
+         *     - the same `question_id` with a different body answers 409
+         *       (`Agent execution request conflicts with an existing turn`).
+         *     So a client that lost the response (timeout, dropped connection)
+         *     resends the identical request and follows the `events_url` it gets
+         *     back; it never mints a new `question_id` for a retry.
+         *
+         *     `execution_contract` selects the turn kind:
+         *     `agent.execute.application.v1` (an agent or pipeline participant,
+         *     `participant_id` > 0) or `agent.execute.adhoc.v1` (a model chat,
+         *     `llm_settings` required). A body the current execution path cannot
+         *     run answers 422 `unsupported_agent_execution`. While the previous
+         *     answer of this conversation is still settling, the server waits up to
+         *     about 3 s before it decides.
          */
-        post: operations["startApplicationTurn"];
+        post: operations["sendChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/participant_candidates/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The people who may be added to a conversation
+         * @description Members of the project (platform system accounts and suspended users
+         *     excluded), filtered by `q` and paged by `cursor`. Needs
+         *     `models.chat.participants.create` — the permission of the add this
+         *     list feeds — and access to the conversation. `already_participant`
+         *     marks members who are participants of THIS conversation already
+         *     (the caller is usually one). Ordered by display name, then user id;
+         *     the order is stable, so a cursor never repeats or skips a member.
+         *     Add a candidate with `addConversationParticipants` and
+         *     `{entity_name: user, entity_meta: {id: user_id, user_name: name}}`.
+         *     NOTE(W2): internal/api/v2/conversations/candidates.go:83
+         *     (`ListParticipantCandidates`).
+         */
+        get: operations["listParticipantCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/participant/prompt_lib/{project_id}/{conversation_id}/{participant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description The participant row id (`ConversationParticipant.id`), not the entity id. */
+                participant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a participant from a conversation
+         * @description Needs `models.chat.participant.delete` and access to the
+         *     conversation. The conversation's author cannot be removed (400). An
+         *     id that is not a participant of this conversation is 404.
+         *     NOTE(W2): internal/api/v2/conversations/handler.go:1399
+         *     (`RemoveParticipant`).
+         */
+        delete: operations["deleteConversationParticipant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/participants/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add participants (people, agents, pipelines, toolkits, models) to a conversation
+         * @description Needs `models.chat.participants.create` and access to the
+         *     conversation. The body is ONE participant object or an array of at
+         *     most 100. The batch is all-or-nothing.
+         *
+         *     Per kind (`entity_name`):
+         *     - `user`: `entity_meta.id` is the USER id (> 0). Send
+         *       `entity_meta.user_name` too; it becomes the participant's
+         *       `meta.user_name`, which is what transcripts show.
+         *     - `application` and `pipeline`: `entity_meta.id` (> 0) and
+         *       `entity_meta.project_id` (> 0; defaults to the path project), plus
+         *       `entity_meta.name` for display. Send `entity_settings.version_id`:
+         *       a chat send to an application participant runs that version, and a
+         *       participant without one cannot be targeted by a send.
+         *     - `toolkit`: `entity_meta.id` and `entity_meta.project_id`, as above.
+         *       A conversation that holds a toolkit AND an agent is refused at send
+         *       time with 422 (`agent_chat.sql`); a toolkit belongs in a model
+         *       (ad-hoc) conversation.
+         *     - `llm`: `entity_meta.model_name`.
+         *     - `dummy`: no keys.
+         *
+         *     The answer is the participant rows of THIS request, in request
+         *     order. An entity that is already a participant is not added twice:
+         *     its existing row (and id) is answered again, so a retried add is
+         *     safe. NOTE(W2): internal/api/v2/conversations/handler.go:1297
+         *     (`AddParticipant`).
+         */
+        post: operations["addConversationParticipants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/toolkit_available_tools/prompt_lib/{project_id}/{toolkit_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description Saved toolkit ID in the authorized project. */
+                toolkit_id: number;
+            };
+            cookie?: never;
+        };
+        /**
+         * Discover tools and argument schemas from one saved toolkit
+         * @description Main reads the saved toolkit with the authenticated actor's access.
+         *     Main freezes configuration references and operator guardrails before admission.
+         *     The worker discovers tools from those immutable inputs.
+         *     The response contains the accepted immutable result artifact.
+         *     Discovery is unavailable until the runtime activation flag is enabled.
+         */
+        get: operations["listToolkitAvailableTools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/tools/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List toolkit (tool) instances for a project
+         * @description NOTE(W2): internal/api/v2/toolkits/handler.go:512-535 (List) calling
+         *     pgRepo.ListToolkits (:811-860). limit/offset are read from the query
+         *     string with their OWN clamp — out-of-[1,100] resets to 20
+         *     (handler.go:518-520), narrower than the shared Limit parameter's
+         *     documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
+         *     The caller must be a member of {project_id} (or a super-admin), and a
+         *     repository failure is returned as a safe 500 error.
+         */
+        get: operations["listToolkitInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/notification/prompt_lib/{project_id}/{notification_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mark one of the caller's notifications seen
+         * @description Takes no body and answers the notification. An id that is not the
+         *     caller's answers 400 "Notification is not found" (not 404).
+         */
+        put: operations["markNotificationSeen"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -288,15 +808,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the caller's notifications, paged or as a delta
-         * @description With `changes_since` it answers the caller's notifications changed
-         *     since the cursor, oldest change first, plus tombstones. Combining it
+         * The caller's notifications, paged or as a delta
+         * @description The caller's own notifications (the project in the path is the
+         *     permission scope). Legacy mode pages them (`limit` 1..1000, default
+         *     10; `offset`; `only_new`; `search`; `event_type`; `sort_by`,
+         *     `sort_order`; `only_total=true` answers `total` alone). With
+         *     `changes_since` (ADR-0025 WP6) it answers the notifications changed
+         *     since the cursor, oldest change first, plus tombstones; combining it
          *     with `offset`, `only_new`, `only_total`, `search`, `event_type`,
          *     `sort_by` or `sort_order` is a 400 `invalid_sync_request`.
          */
         get: operations["listNotifications"];
-        /** Mark notifications seen or unseen */
-        put: operations["updateNotifications"];
+        /** Mark several (or all) of the caller's notifications seen or unseen */
+        put: operations["markNotificationsSeen"];
         post?: never;
         delete?: never;
         options?: never;
@@ -391,45 +915,28 @@ export interface components {
             total: number;
             total_pages: number;
         };
-        /**
-         * @description `llm_settings` must be absent for `agent.execute.application.v1` and
-         *     present for `agent.execute.adhoc.v1`; `attachments_info` absent or
-         *     empty. The whole body must stay at or under 512 KiB.
-         */
-        ApplicationTurnRequest: {
-            /** @description Must equal the path's conversation uuid. */
-            conversation_uuid: string;
-            /** @description The model of an adhoc turn; absent on an application turn. */
-            llm_settings?: {
-                model_name: string;
-                /** @description The project the model belongs to, when it is shared from another project. */
-                model_project_id?: number;
-                stream?: boolean;
-            } & {
-                [key: string]: unknown;
-            };
-            /**
-             * @description The agent participant's row id (application contract, at least 1),
-             *     or the `dummy` participant's row id or 0 (adhoc contract).
-             */
-            participant_id: number;
-            payload: {
-                user_input: string;
-            };
-            /** @description Must equal the path's project id. */
-            project_id: number;
-            /** @description Client-generated LOWERCASE canonical UUID; the idempotency key of the turn. */
-            question_id: string;
+        /** @description NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51, CurrentApplicationSkill. */
+        ApplicationSkillAttachment: {
+            description: string;
+            icon_meta?: components["schemas"]["ProjectIconMeta"];
+            name: string;
+            skill_id: number;
+            /** @description NULL when the attachment names a version the skill no longer has. Read it together with `version_missing`. */
+            version_id?: number | null;
+            /** @description True when entity_skill_mapping points at a version that is gone. The row is still listed, because hiding it would report the agent as having no skill at all. */
+            version_missing: boolean;
+            version_name: string;
         };
-        ApplicationTurnStarted: {
-            command_id: string;
-            /** @description False when an identical earlier send was replayed. */
-            created: boolean;
-            /** @description Same-origin absolute path, `/api/v2/executions/{project_id}/{execution_id}/events`. */
-            events_url: string;
-            execution_id: string;
-            response_message_id: string;
-            task_id: string;
+        /**
+         * @description NOTE(issue 621): ONE body answers two clients on this path, and the deployment decides which half is real.
+         *     `items`, `total`, `page`, `page_size` and `total_pages` are the published contract, which apps/elitea-web reads through shared/api/unwrap.ts. `skills` and `max_skills` are the shape apps/elitea-ui reads. The reviewed route (internal/api/v2/applicationskills, currentApplicationSkillsResponse) has emitted all seven keys since issue 395 — before it carried the first five, turning ELITEA_APPLICATION_SKILLS_ENABLED on gave the web client a body with no `items` key, which unwrapList reports as an unrecognised shape and renders as "no skills".
+         *     The compatibility handler this route replaces emits the five keys only. A client reads the union.
+         */
+        ApplicationSkillsList: components["schemas"]["SkillsList"] & {
+            /** @description How many skills one agent version may attach. */
+            max_skills?: number;
+            /** @description The attachment view of the SAME rows `items` carries. The two halves are built from one row set and cannot disagree. */
+            skills?: components["schemas"]["ApplicationSkillAttachment"][];
         };
         /** @description NOTE(W2): union of the version-detail maps the handlers emit. Field presence varies by endpoint (hence the minimal required set): fetchVersionDetails always adds created_at/agent_type/instructions/ welcome_message/llm_settings/meta/conversation_starters/ pipeline_settings/author_id/author/tools/tags/variables (internal/api/v2/applications/handler.go). The application and version create paths return that same stored pipeline-settings and tag state. The author object contains id, email, and name from auth_core__user. UpdateVersion emits a smaller subset without created_at, author, or tools. Fork adds is_forked and omits pipeline_settings. The import detail map has no is_forked and omits created_at, but carries meta, variables, and tags from the canonical stores. Public application details omit variables, created_at, author, and is_forked. Empty-vs-missing: instructions and welcome_message are always present as "" when the DB column is NULL (COALESCE / pointer deref to "" in applications/handler.go). */
         ApplicationVersionDetail: {
@@ -472,6 +979,33 @@ export interface components {
             meta?: components["schemas"]["VersionMeta"] | null;
             name: string;
             status: string;
+        };
+        /** @description One file sent with a message (`item_type` `attachment_message`). `item_details.filepath` is `/{bucket}/{conversation_uuid}/{name}`; download it with downloadConversationAttachment using the last segment as the name. */
+        AttachmentMessageItem: {
+            id: number;
+            item_details: components["schemas"]["AttachmentMessageItemDetails"];
+            /** @description `attachment_message`. */
+            item_type: string;
+            order_index: number;
+        } & {
+            [key: string]: unknown;
+        };
+        AttachmentMessageItemDetails: {
+            /** @description `image` or `document`; read it, do not enumerate it. */
+            attachment_type: string;
+            bucket: string;
+            /** @description The content chunks the model was given: a `{type: text, text}` header chunk and, for an image embedded for the model, `{type: image_url, image_url: {url: data:...}}` — a client may render that data URL as a thumbnail without a download. Empty when nothing was recorded. */
+            content: {
+                [key: string]: unknown;
+            }[];
+            /** @description `/{bucket}/{name}` — the value a chat send's `payload.attachments[].filepath` carried. */
+            filepath: string;
+            id: number;
+            item_type: string;
+            /** @description The stored object name, `{conversation_uuid}/{file name}`. */
+            name: string;
+        } & {
+            [key: string]: unknown;
         };
         /** @description NOTE(W2): internal/domain/applications/types.go:5-9 (no omitempty on any field) and the inline author maps in internal/api/v2/applications/handler.go:451, 600, 790. */
         Author: {
@@ -546,17 +1080,159 @@ export interface components {
             };
             version: string;
         };
-        /** @description The part of the native client policy published before sign-in. */
+        /** @description Resume a paused turn. NOTE(W2): internal/api/v2/agentexecution/route.go:201 (`currentContinuationBody`); which fields are allowed depends on the `execution_contract` (route.go:484-540). */
+        ChatContinueRequest: {
+            /** @description `authorize` or `skip` (agent.continue.authorization.v1, single request). */
+            authorization_action?: string;
+            authorization_request_id?: string;
+            /** Format: uuid */
+            conversation_uuid: string;
+            /** @description The single-pause decision, one the pause frame's `available_actions` offered: `approve`, `reject`, `edit`, `block_with_comment` or `answer`. */
+            hitl_action?: string;
+            /** @description Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`. */
+            hitl_decisions?: {
+                [key: string]: unknown;
+            }[];
+            /** @description True for `agent.continue.hitl.v1` and for a batched authorization answer. */
+            hitl_resume?: boolean;
+            /** @description The decision's value; its type follows the action. `approve`, `reject`: absent. `edit`: a non-empty STRING — the edited value (for a tool-call pause, the edited arguments as JSON text). `block_with_comment`: a non-empty string, the comment. `answer` (an ask_user pause): an OBJECT keyed by question id (each value the chosen option(s) or free text), or a plain string. The same rule applies to each `hitl_decisions[].value`. */
+            hitl_value?: unknown;
+            ignored_mcp_servers?: string[];
+            mcp_tokens?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: uuid
+             * @description The paused answer's message id.
+             */
+            message_id: string;
+            /** Format: int64 */
+            project_id: number;
+            thread_id?: string;
+            user_declined_mcp_servers?: string[];
+            user_input?: string;
+        };
+        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
+        ChatExecutionError: {
+            error: string;
+            message?: string;
+            retryable?: boolean;
+        };
+        /** @description The admitted (or replayed) turn. NOTE(W2): internal/api/v2/agentexecution/route.go:330-337, :423-430 and :550-557 (one shape for send, regenerate and continue). */
+        ChatExecutionStarted: {
+            command_id: string;
+            /** @description True when this request admitted the turn; false when it replayed an earlier admission with the same idempotency key (the same `execution_id` and `events_url` come back). */
+            created: boolean;
+            /** @description The turn's event stream, ALWAYS a same-origin absolute path (`/api/v2/executions/{project_id}/{execution_id}/events`), never a full URL. Resolve it against the deployment origin. */
+            events_url: string;
+            execution_id: string;
+            /** @description The UUID of the assistant message group the turn writes (its `uid` in the message list). */
+            response_message_id: string;
+            /** @description Equal to `execution_id` (legacy name). */
+            task_id: string;
+        };
+        /** @description The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB. */
+        ChatSendRequest: {
+            /**
+             * Format: uuid
+             * @description Must equal the path's conversation id.
+             */
+            conversation_uuid: string;
+            /** Format: uuid */
+            interaction_uuid?: string;
+            /** @description `@everyone`: every project member except the sender is notified. */
+            is_mentioning_everyone?: boolean;
+            /** @description Required for `agent.execute.adhoc.v1` (the model and its settings); must be absent for an application turn. */
+            llm_settings?: {
+                [key: string]: unknown;
+            };
+            mcp_tokens?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: int64
+             * @description The participant that answers. Required (> 0) for `agent.execute.application.v1`; 0 or absent for a model chat (`agent.execute.adhoc.v1`).
+             */
+            participant_id?: number;
+            payload: {
+                attachments?: components["schemas"]["ChatStartAttachment"][];
+                user_input: string;
+            };
+            /**
+             * Format: int64
+             * @description Must equal the path's project id.
+             */
+            project_id: number;
+            /**
+             * Format: uuid
+             * @description REQUIRED, client generated, a LOWERCASE canonical UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`; an upper-case spelling is refused). It is the admission idempotency key of the turn: generate it once per user message, persist it with the unsent message, and send the same value on every retry.
+             */
+            question_id: string;
+            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. */
+            user_ids?: number[];
+        };
+        ChatStartAttachment: {
+            /** @description Exactly the `filepath` the attachment upload returned. */
+            filepath: string;
+            /** @description Display name; ignored by the server. */
+            name?: string;
+        };
+        /** @description The deployment's chat attachment limits (client contract 1.1), so a client can refuse a file before uploading it; the server enforces every one of them again. Byte values are bytes. A project's storage policy may set a different per-file cap, which the upload's 400 names. NOTE(W2): internal/api/v2/discovery/document.go:60 (`AttachmentPolicy`), filled by internal/api/v2/conversations/attachment_limits.go:47 (`CurrentAttachmentLimits`). */
+        ClientAttachmentPolicy: {
+            /** @description Lower-case, leading-dot extensions the model can read. */
+            accepted_extensions: string[];
+            /**
+             * Format: int64
+             * @description The largest single upload request; send a larger file in chunks of at most this size.
+             */
+            chunk_bytes: number;
+            /** @description True when the server downscales a larger image in one of `inline_image_formats` to fit `inline_image_max_bytes`, so a client need not. */
+            inline_image_downscale: boolean;
+            /** @description Extensions handed to the model as images. */
+            inline_image_formats: string[];
+            /**
+             * Format: int64
+             * @description The largest image (raw bytes) handed to the model as an image.
+             */
+            inline_image_max_bytes: number;
+            /**
+             * Format: int64
+             * @description The largest document whose text is extracted for the model; a larger one is stored but not read.
+             */
+            max_extract_bytes: number;
+            /**
+             * Format: int64
+             * @description One non-image file (ARTIFACT_ATTACHMENT_MAX_FILE_MB).
+             */
+            max_file_bytes: number;
+            /** @description Files one message carries in the composer. */
+            max_files: number;
+            /**
+             * Format: int64
+             * @description One image (ARTIFACT_ATTACHMENT_MAX_IMAGE_MB).
+             */
+            max_image_bytes: number;
+            /**
+             * Format: int64
+             * @description One upload, all chunks of one file (ARTIFACT_ATTACHMENT_MAX_TOTAL_MB).
+             */
+            max_total_bytes: number;
+        };
+        /** @description The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:65 (`PublicPolicy`). */
         ClientPublicPolicy: {
-            /** @description Deployment-wide minimum client version; empty for none. */
+            /** @description Deployment-wide minimum client version; empty means none. The document's per-client `min_client_version` entry, when present, is never lower than this. */
             min_client_version: string;
+            /** @description Offline storage is allowed. */
             offline_enabled: boolean;
+            /** @description The client must refuse to run without a device passcode or biometric lock. */
             require_device_lock: boolean;
         };
+        /** @description The 426 answer to a native client whose `X-Client-Version` is below the minimum (ADR-0025 decision 5). Only callers authenticated by a native access token, and the native token endpoint, are judged. NOTE(W2): internal/api/middleware/client_version.go:176 (`WriteClientUpgradeRequired`). */
         ClientUpgradeRequiredError: {
-            /** @enum {string} */
-            error: "client_upgrade_required";
+            /** @description Always client_upgrade_required. */
+            error: string;
             error_description?: string;
+            /** @description The minimum this client must update to. */
             min_client_version: string;
         };
         /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Model (compat) and internal/application/configurations/models.go's CurrentModelCatalogItem (reviewed). */
@@ -572,6 +1248,8 @@ export interface components {
             };
             /** @description `reviewed` only. The project default. */
             default?: boolean;
+            /** @description `reviewed` only, and llm_model only. The optional one-line text an admin writes on the model (at most 40 characters). Pickers show it under the model name. It is display text and never reaches the provider. Absent when the model has none. `compat` carries the same value inside `data`. */
+            description?: string | null;
             /** @description `reviewed` only. */
             display_name?: string | null;
             /** @description `reviewed` only. */
@@ -605,6 +1283,8 @@ export interface components {
         };
         /** @description NOTE(W2): internal/api/v2/configurations/handler.go, ListModels (compat) and internal/application/configurations/models.go, CurrentModelCatalog (reviewed). */
         ConfigurationModelListResponse: {
+            /** @description `reviewed` only. True when `default_model_name` is the default an admin configured for the project or the platform. False when no configured default is in the catalogue and `default_model_name` is only the first item. Omitted when false. */
+            default_model_configured?: boolean;
             /** @description `reviewed` only. `compat` emits neither this key nor the one below, and its `is_default` is always false, so a client reading a default model from a compat deployment gets nothing rather than a wrong answer. */
             default_model_name?: string | null;
             /** @description `reviewed` only. */
@@ -620,44 +1300,77 @@ export interface components {
             low_tier_default_model_project_id?: number | null;
             total: number;
         };
-        ConversationDetail: {
-            /** Format: date-time */
-            created_at: string;
-            created_by?: string;
-            description?: string;
-            folder_id?: string | null;
-            /** @description Numeric id, serialised as a string by this endpoint. */
-            id: string;
+        /** @description A chunk of a chunked upload was stored; the file is assembled when the last chunk arrives, and that request answers 201. NOTE(W2): internal/api/v2/conversations/attachments.go:409. */
+        ConversationAttachmentChunkReceived: {
+            chunk_index: number;
+            file_id: string;
+            message: string;
+            /** @description Always `chunk_received`. */
+            status: string;
+            total_chunks: number;
+        };
+        /** @description One stored file. Send `filepath` back verbatim in the chat send's `payload.attachments`. NOTE(W2): internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`). */
+        ConversationAttachmentUploaded: {
+            /** Format: int64 */
+            file_size: number;
+            /** @description `/{bucket}/{conversation_uuid}/{file name}`. */
+            filepath: string;
+        };
+        /** @description NOTE(W2): read key by key from a free JSON body by internal/api/v2/conversations/handler.go:653 (`Create`). Unknown keys are ignored. */
+        ConversationCreateRequest: {
             instructions?: string;
+            /** @description Defaults to private when absent. A non-boolean value is a 400. */
             is_private?: boolean;
-            message_count?: number;
-            /** @description Present only when `messages_limit` > 0 was requested. */
-            message_groups?: components["schemas"]["MessageGroup"][];
             meta?: {
                 [key: string]: unknown;
             };
-            name: string;
+            name?: string;
+            /** @description Participants to add at creation. Each needs `entity_name` and `entity_meta`; `entity_meta.project_id` defaults to this project. */
             participants?: components["schemas"]["ConversationParticipant"][];
-            /** @description Numeric id, serialised as a string by this endpoint. */
+            /** @description The conversation's origin (`chat` by default; `deepwiki` and similar for hidden ones). */
+            source?: string;
+        };
+        /** @description One conversation with its participants, and with its newest message groups when `messages_limit` is set. NOTE(W2): internal/api/v2/conversations/handler.go:581 (`Get`); the map is built at :604-628. */
+        ConversationDetail: {
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            description?: string;
+            /** @description Null when the conversation sits outside every folder. */
+            folder_id?: string | null;
+            id: string;
+            instructions?: string;
+            /** @description Always present; a row that cannot say reads as private. */
+            is_private: boolean;
+            message_count: number;
+            /** @description Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`. */
+            message_groups?: {
+                [key: string]: unknown;
+            }[];
+            meta: {
+                [key: string]: unknown;
+            };
+            name: string;
+            participants: components["schemas"]["ConversationParticipant"][];
             project_id: string;
             source?: string;
             /** Format: date-time */
             updated_at: string;
+            /** Format: uuid */
             uuid?: string;
-        } & {
-            [key: string]: unknown;
         };
+        /** @description The legacy page carries `total` and `rows` only. With `changes_since` (ADR-0025 WP6) the same two keys keep their meaning — the rows are the legacy row shape, oldest change first, and `total` is the size of the caller's whole filtered list now — and `tombstones`, `next_cursor` and `has_more` are added. */
         ConversationListing: {
-            /** @description Delta mode only. The page was cut short by `limit`; call again at once with `next_cursor`. */
+            /** @description Delta mode only. True when this page was cut short by `limit`; call again with `next_cursor` straight away. */
             has_more?: boolean;
-            /** @description Delta mode only. Opaque; send it as the next `changes_since`. It never passes the server clock minus a 5 s settle window, so recently changed rows are returned again (upsert by id). */
+            /** @description Delta mode only. The opaque cursor for the next call. It never moves past the database clock minus a 5 s settle window, so rows changed within that window come back again; upsert by id. */
             next_cursor?: string;
             rows: components["schemas"]["ConversationSummary"][];
-            /** @description Delta mode only. Conversations deleted or gone from this list for the caller since the cursor. */
+            /** @description Delta mode only. Conversations deleted (`deleted`) or gone from this list for this caller (`access_lost`: made private, the caller removed as a participant, or no longer matching the list filter) since the cursor. A private conversation's deletion is told only to its author, its former user participants and project admins. */
             tombstones?: components["schemas"]["SyncTombstone"][];
             total: number;
         };
-        /** @description One message group of a transcript; delta rows use the same shape. */
+        /** @description One message group of a transcript. NOTE(W2): internal/api/v2/conversations/handler.go:74 (`Message`). Delta rows (`changes_since`) use the same projection, byte for byte. */
         ConversationMessage: {
             author_participant_id?: number;
             content: string;
@@ -665,14 +1378,12 @@ export interface components {
             conversation_id: string;
             /** Format: date-time */
             created_at: string;
-            /** @description The message group's numeric id AS A STRING (tombstones carry it as an integer). */
+            /** @description The message group's numeric id, as a string. Tombstones carry it as an integer. */
             id: string;
             /** @description Present (true) only while the turn is in flight. */
             is_streaming?: boolean;
-            /** @description Attachment items only; omitted for a group without attachments. */
-            message_items?: {
-                [key: string]: unknown;
-            }[];
+            /** @description Omitted, not empty, for a group with no attachments. */
+            message_items?: components["schemas"]["AttachmentMessageItem"][];
             metadata?: {
                 [key: string]: unknown;
             };
@@ -680,16 +1391,17 @@ export interface components {
             /** @description `user` or `assistant`. */
             role: string;
             sent_to_id?: number;
+            /** @description The in-flight turn's execution id; present only with `is_streaming`. */
             task_id?: string;
-            /** @description The group's uuid; for an answer, the `response_message_id` of the send. */
+            /** @description The message group's UUID. For an assistant answer this is the `response_message_id` the send returned. */
             uid: string;
             /**
              * Format: date-time
-             * @description When the group was last rewritten; omitted when never.
+             * @description When the group was last rewritten (an answer finalised or regenerated). Omitted when never.
              */
             updated_at?: string;
         };
-        /** @description Legacy mode: `items`, `total`, `page`, `page_size`, `total_pages`. Delta mode: `items` (changed groups, oldest change first), `total` (groups in the conversation now), `tombstones`, `next_cursor`, `has_more`. */
+        /** @description The transcript page. Legacy mode carries `items`, `total`, `page`, `page_size` and `total_pages` (NOTE(W2): internal/api/v2/conversations/handler.go:148). With `changes_since` (ADR-0025 WP6) it carries `items` (changed groups, oldest change first), `total` (groups in the conversation now), `tombstones`, `next_cursor` and `has_more` (internal/api/v2/conversations/changes.go, `MessageChanges`). */
         ConversationMessageListing: {
             /** @description Delta mode only. See ConversationListing.has_more. */
             has_more?: boolean;
@@ -703,20 +1415,61 @@ export interface components {
             total: number;
             total_pages?: number;
         };
+        /** @description One participant of a conversation (a user, an agent or pipeline, a toolkit, a model). NOTE(W2): internal/api/v2/conversations/handler.go:240 (`Participant`). */
         ConversationParticipant: {
-            entity_meta?: {
+            /** @description The stable keys are typed below; every other key is the kind's own. For a `user` participant `id` is the USER id — the value a chat send's `user_ids` mention list carries — never the participant row id. */
+            entity_meta?: ({
+                /** @description The entity id (user, application, pipeline or toolkit). Absent for `llm` and `dummy`. */
+                id?: number;
+                /** @description An `llm` participant's model. */
+                model_name?: string;
+                /** @description The project that owns an application, pipeline or toolkit. */
+                project_id?: number;
+            } & {
                 [key: string]: unknown;
-            } | null;
-            /** @description `user`, `application`, `toolkit`, `llm`, ... (open set). */
+            }) | null;
+            /** @description `user`, `application`, `toolkit`, `llm` and similar; read it, do not enumerate it. */
+            entity_name: string;
+            entity_settings?: ({
+                /** @description The application or pipeline version a chat send to this participant runs. */
+                version_id?: number;
+            } & {
+                [key: string]: unknown;
+            }) | null;
+            id: number;
+            meta?: ({
+                /** @description Every other kind's display name. */
+                name?: string;
+                /** @description A `user` participant's display name. */
+                user_name?: string;
+            } & {
+                [key: string]: unknown;
+            }) | null;
+        };
+        /** @description One participant to add (see `addConversationParticipants` for the keys each kind needs). NOTE(W2): internal/api/v2/conversations/participant_settings.go:131 (`Participant.Validate`). */
+        ConversationParticipantCreate: {
+            entity_meta: {
+                /** @description The user, application, pipeline or toolkit id. */
+                id?: number;
+                /** @description An `llm` participant's model. */
+                model_name?: string;
+                /** @description The display name of an application, pipeline or toolkit. */
+                name?: string;
+                /** @description The owning project of an application, pipeline or toolkit; defaults to the path project. */
+                project_id?: number;
+                /** @description A user's display name. */
+                user_name?: string;
+            } & {
+                [key: string]: unknown;
+            };
+            /** @description `user`, `application`, `pipeline`, `toolkit`, `llm` or `dummy`. */
             entity_name: string;
             entity_settings?: {
+                /** @description The application or pipeline version to run. */
+                version_id?: number;
+            } & {
                 [key: string]: unknown;
-            } | null;
-            /** @description The participant row id (what a send's `participant_id` names). */
-            id: number;
-            meta?: {
-                [key: string]: unknown;
-            } | null;
+            };
         };
         /** @description NOTE(W2): opaque jsonb array round-trip — see items marker. One caveat to the "never inspects" claim: runPublishValidation decodes the column as []string (eliteacore/handler.go:1028-1029), so non-string elements are silently read as an empty list there (spurious "no conversation starters" warning); the store/return round-trip itself is untyped. */
         ConversationStarters: unknown[];
@@ -734,54 +1487,75 @@ export interface components {
             name: string;
             updated_at: string;
         };
-        CreateConversationRequest: {
+        /** @description A conversation as the create route answers it (201). `id` is the numeric id AS A STRING; `uuid` is the id the chat send path takes. NOTE(W2): internal/api/v2/conversations/handler.go:32 (`Conversation`), written at :740 (201). */
+        CreatedConversation: {
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            description?: string;
+            folder_id?: string | null;
+            id: string;
+            instructions?: string;
             is_private?: boolean;
+            message_count: number;
             meta?: {
                 [key: string]: unknown;
             };
-            name?: string;
-            participants?: ({
-                entity_meta: {
-                    [key: string]: unknown;
-                };
-                entity_name: string;
-                entity_settings?: {
-                    [key: string]: unknown;
-                };
-            } & {
-                [key: string]: unknown;
-            })[];
+            name: string;
+            participants?: components["schemas"]["ConversationParticipant"][];
+            project_id: string;
+            source?: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            uuid?: string;
         };
-        /** @description Flat (error is a string), unlike the nested API error envelope. */
+        /** @description The ADR-0025 `device_revoked` answer: FLAT, unlike the nested error envelope, so a native client tells "wipe local data" (`error` is the string device_revoked) from "refresh once" (`error` is an object). Sent only for native credentials, with `WWW-Authenticate: Bearer error="invalid_token", error_description="device_revoked"`. NOTE(W2): internal/api/middleware/auth.go:453 (`DeviceRevokedBody`). */
         DeviceRevokedError: {
-            /** @enum {string} */
-            error: "device_revoked";
+            /** @description Always device_revoked. */
+            error: string;
             error_description?: string;
         };
-        /** @description What a deployment tells a client before sign-in. A key is never renamed or removed within one client_contract major version. */
+        /** @description The public discovery document served at `/.well-known/elitea-client` (ADR-0025 decision 1). The key set is a contract: adding a key is additive, renaming or removing one bumps `client_contract`. NOTE(W2): marshalled from internal/api/v2/discovery/document.go:36 (`Document`). */
         DiscoveryDocument: {
-            /** @description Absolute URL of the brand pack JSON, content-addressed with `?v=`. */
+            attachments: components["schemas"]["ClientAttachmentPolicy"];
+            /** @description Absolute, content-addressed URL of the brand pack JSON (`.../api/v2/branding/pack.json?v=<etag>`). */
             brand_pack_url: string;
-            /** @description Client contract version, `major.minor`. */
+            /**
+             * @description The client contract version this server speaks (ADR-0025 decision 6).
+             * @example 1.0
+             */
             client_contract: string;
             client_policy: components["schemas"]["ClientPublicPolicy"];
-            /** @enum {string} */
+            /**
+             * @description Who operates the deployment (ELITEA_DEPLOYMENT_KIND).
+             * @enum {string}
+             */
             deployment_kind: "saas" | "self_hosted";
-            /** @description Product name from the deployment's brand pack. */
+            /** @description The product name from the resolved brand pack. */
             display_name: string;
-            /** @description Client id to its effective minimum version; a client without an entry falls back to client_policy.min_client_version. */
+            /** @description Registered, enabled client id → the effective minimum version this deployment serves that client: the higher of `client_policy.min_client_version` and the client's own minimum. A client with no effective minimum is absent, so a client reads its own entry and falls back to `client_policy.min_client_version`. Always an object. */
             min_client_version: {
                 [key: string]: string;
             };
-            /** @description Null while the deployment has no registered native client. */
+            /** @description The native authorization endpoints, or null while no native client is registered on this deployment. */
             native_auth: components["schemas"]["NativeAuthEndpoints"] | null;
-            /** @description `major.minor`, or `dev` for an unversioned build. */
+            /**
+             * @description The server release as `major.minor` only (the full build string is admin-only), or `dev` for a build without a release version.
+             * @example 1.62
+             */
             server_version: string;
         };
         /** @description NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the pylon `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362). */
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
+        };
+        /** @description The 400 answer to a native client whose `X-Client-Version` does not parse (ADR-0025 decision 5). NOTE(W2): internal/api/middleware/client_version.go:190 (`WriteInvalidClientVersion`). */
+        InvalidClientVersionError: {
+            /** @description Always invalid_client_version. */
+            error: string;
+            error_description: string;
         };
         LlmSettings: {
             max_tokens?: number;
@@ -795,122 +1569,194 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        MessageGroup: {
-            author_participant_id: number;
-            /** @description The text items joined with newlines (convenience projection). */
-            content?: string;
-            /** @description Server-local timestamp without zone, e.g. `2026-10-04 12:00:00.123456`. */
-            created_at: string;
-            id: number;
-            is_streaming: boolean;
-            message_items: components["schemas"]["MessageItem"][];
-            meta?: {
-                [key: string]: unknown;
-            } | null;
-            reply_to_id?: number;
-            sent_to_id?: number;
-            task_id?: string;
-            updated_at?: string;
-            uuid: string;
-        } & {
-            [key: string]: unknown;
+        MessageTraceListing: {
+            rows: components["schemas"]["MessageTraceStep"][];
+            /** @description Null unless include_total=true was requested. */
+            total: number | null;
         };
-        MessageItem: {
-            id: number;
-            /** @description For `text_message`, `{content: string}`. */
-            item_details?: {
+        /** @description The light projection of a chat_message_trace_step row: what a resting chip draws, plus what orders it. */
+        MessageTraceStep: {
+            /** @description For a `tool_call` step the keys a client renders are typed below (client contract 1.1); every other key is display-only and may change. */
+            attrs?: ({
+                metadata?: {
+                    display_name?: string;
+                    /** @description The tool's own name when `tool_name` is a prefixed one. */
+                    original_name?: string;
+                    /** @description The sub-agent that ran the tool. */
+                    parent_agent_name?: string;
+                    /** @description The toolkit the tool belongs to. */
+                    toolkit_name?: string;
+                    toolkit_type?: string;
+                } & {
+                    [key: string]: unknown;
+                };
+                response_metadata?: {
+                    [key: string]: unknown;
+                };
+                tool_meta?: {
+                    display_name?: string;
+                    name?: string;
+                } & {
+                    [key: string]: unknown;
+                };
+                /** @description Present on a tool call whose output was chunked: how many of its `total` chunks were `received`, and whether the reassembly is `complete` (its SHA-256 matched). */
+                tool_output_chunks?: {
+                    complete?: boolean;
+                    received?: number;
+                    /** @description A NUL byte was stripped from at least one chunk. */
+                    sanitized?: boolean;
+                    tool_output_sha256?: string;
+                    total?: number;
+                };
+            } & {
                 [key: string]: unknown;
-            } | null;
-            /** @description `text_message`, `attachment_message`, `canvas_message`, ... (open set; unknown types are skipped). */
-            item_type: string;
-            order_index: number;
-        } & {
-            [key: string]: unknown;
+            }) | null;
+            finish_reason?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: int64 */
+            id: number;
+            is_error: boolean;
+            /** @description `tool_call` or `thinking_step`. */
+            kind: string;
+            /** Format: int64 */
+            message_group_id: number;
+            model_name?: string | null;
+            parent_agent_call_id?: string | null;
+            parent_agent_name?: string | null;
+            /** Format: date-time */
+            started_at?: string | null;
+            step_type?: string | null;
+            tool_name?: string | null;
         };
+        MessageTraceStepDetail: components["schemas"]["MessageTraceStep"] & {
+            text?: string | null;
+            thinking?: string | null;
+            tool_inputs?: unknown;
+            tool_output?: string | null;
+        };
+        /** @description Endpoints of the native authorization server (ADR-0025 decision 3). Every URL is absolute. NOTE(W2): internal/api/v2/discovery/document.go:54 (`NativeAuth`). */
         NativeAuthEndpoints: {
             authorization_endpoint: string;
             code_challenge_methods_supported: string[];
-            /** @description The deployment origin; equals the `iss` parameter of an authorization response. */
+            /** @description The deployment origin; a client compares an authorization response's `iss` (RFC 9207) against it. */
             issuer: string;
             revocation_endpoint: string;
             token_endpoint: string;
         };
+        /** @description The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`). */
         NativeClientPolicy: {
+            /** @description When false, block screenshots and screen recording where the platform allows it. */
             allow_screenshots: boolean;
             /**
              * Format: int64
-             * @description Seconds in the background before the app locks again; 0 means it never relocks on resume. 0 to 86400.
+             * @description Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.
              */
             idle_lock_seconds: number;
-            /** @description Effective minimum for this client; empty for none. */
+            /** @description The lowest version this deployment serves this client; empty means none. MAJOR.MINOR.PATCH with an optional -prerelease. */
             min_client_version: string;
+            /** @description Whether attachments may be stored offline, or only messages. */
             offline_attachments: boolean;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The most the app may store for offline use, in megabytes.
+             */
             offline_max_mb: number;
             /**
              * Format: int64
-             * @description 0 disables offline storage.
+             * @description How long data may stay on the device without reaching the server; 0 disables offline storage. 0 to 90.
              */
             offline_retention_days: number;
+            /** @description Refuse to run on a device without a passcode or biometric lock. */
             require_device_lock: boolean;
         };
+        /** @description RFC 6749 section 5.2 error of the native authorization endpoints. NOTE(W2): internal/api/nativeauth/token.go:271 (`writeOAuthError`). */
         NativeOAuthError: {
+            /** @description invalid_request, invalid_client, invalid_grant, unsupported_grant_type, temporarily_unavailable or not_found. */
             error: string;
             error_description?: string;
         };
+        /** @description The RFC 7009 revocation form. NOTE(W2) internal/api/nativeauth/token.go:277. */
         NativeRevokeRequest: {
             client_id: string;
             token: string;
+            /** @description Ignored; the token's prefix decides. */
             token_type_hint?: string;
         };
+        /** @description The token request form. NOTE(W2): internal/api/nativeauth/token.go:40 (`tokenParameters`). */
         NativeTokenRequest: {
             client_id: string;
-            /** @description Recorded on the device (refresh grant). */
+            /** @description The client's version, recorded on the device (refresh_token grant). */
             client_version?: string;
+            /** @description The authorization code (authorization_code grant). */
             code?: string;
-            /** @description PKCE verifier */
+            /** @description The PKCE verifier, 43 to 128 unreserved characters (authorization_code grant). */
             code_verifier?: string;
-            /** @enum {string} */
-            grant_type: "authorization_code" | "refresh_token";
+            /** @description authorization_code or refresh_token. */
+            grant_type: string;
+            /** @description The redirect URI the code was issued to (authorization_code grant). */
             redirect_uri?: string;
+            /** @description The current refresh token (refresh_token grant). */
             refresh_token?: string;
         };
+        /** @description A native token pair. Both tokens are opaque. NOTE(W2): internal/api/nativeauth/token.go:242 (`writeGrant`). */
         NativeTokenResponse: {
-            /** @description Opaque bearer token. */
+            /** @description Opaque bearer token, prefix elnat_. */
             access_token: string;
-            /** @description Present on every 200 unless the server could not read its policy; the client then keeps the last one. */
+            /** @description The full native client policy, with `min_client_version` resolved for this client. Present on every token response; absent only if the policy could not be read since this server started, in which case the client keeps the policy it last received. */
             client_policy?: components["schemas"]["NativeClientPolicy"];
-            /** @description The device session id. */
+            /** @description The device session (refresh-token family) id. */
             device_id: string;
             /**
              * Format: int64
              * @description Seconds until the access token expires.
              */
             expires_in: number;
-            /** @description Opaque; rotated on every use. */
+            /** @description Opaque refresh token, prefix elnrt_; rotated on every use. */
             refresh_token: string;
             /**
              * Format: int64
-             * @description Idle seconds before the device must sign in again.
+             * @description Seconds of idle time before the device must sign in again.
              */
             refresh_token_expires_in: number;
-            /** @description Bearer. */
+            /** @description Always Bearer. */
             token_type: string;
         };
+        /** @description NOTE(W2): internal/api/v2/notifications/api.go:153 (`currentNotificationResponse`). In a list `created_at`/`updated_at` are RFC 3339 to the second; a single read keeps microseconds without a zone. */
         Notification: {
             created_at: string;
             event_type: string;
             id: number;
             is_seen: boolean;
-            /** @description Event-specific JSON value. */
-            meta?: unknown;
+            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. */
+            meta: {
+                /** @description `chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved. */
+                sender?: {
+                    /** Format: int64 */
+                    id: number;
+                    name: string;
+                };
+            } & {
+                [key: string]: unknown;
+            };
             project_id: number;
-            updated_at?: string | null;
+            updated_at: string | null;
             user_id: number;
             uuid: string;
         };
-        /** @description With `changes_since`, `total` counts all of the caller's notifications and the delta fields are added. */
-        NotificationPage: {
+        /** @description NOTE(W2): internal/api/v2/notifications/api.go:383 (`decodeCurrentNotificationBulkUpdate`). */
+        NotificationBulkSeenRequest: {
+            /** @description The string `all`, or an array of notification ids. */
+            ids: string | number[];
+            is_seen: boolean;
+        };
+        /** @description NOTE(W2): the notification routes write the pylon `{"ok": false, "error": ...}` envelope on every failure, including "Notification is not found", which answers 400 rather than 404 (internal/api/v2/notifications/api.go:479-491). */
+        NotificationErrorResponse: {
+            error: string;
+            ok: boolean;
+        };
+        /** @description `total` alone with `only_total=true`; `total` and `rows` otherwise. With `changes_since` (ADR-0025 WP6) `tombstones`, `next_cursor` and `has_more` are added and `total` counts all of the caller's notifications. NOTE(W2): internal/api/v2/notifications/api.go:202 and :561. */
+        NotificationListing: {
             /** @description Delta mode only. See ConversationListing.has_more. */
             has_more?: boolean;
             /** @description Delta mode only. See ConversationListing.next_cursor. */
@@ -918,15 +1764,26 @@ export interface components {
             rows?: components["schemas"]["Notification"][];
             /** @description Delta mode only. Notifications deleted since the cursor. */
             tombstones?: components["schemas"]["SyncTombstone"][];
+            /** Format: int64 */
             total: number;
         };
-        NotificationSeenUpdate: {
-            /** @description Notification ids, or the string `all`. */
-            ids: number[] | "all";
-            is_seen: boolean;
+        /** @description A project member. NOTE(W2): internal/api/v2/conversations/candidates.go:40 (`ParticipantCandidate`). */
+        ParticipantCandidate: {
+            already_participant: boolean;
+            email?: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description The USER id — `entity_meta.id` of a user participant and a `user_ids` mention entry.
+             */
+            user_id: number;
         };
-        NotificationSeenUpdated: {
-            updated: number;
+        /** @description One page of participant candidates. NOTE(W2): internal/api/v2/conversations/candidates.go:75 (`participantCandidatesPage`). */
+        ParticipantCandidatesPage: {
+            has_more: boolean;
+            /** @description Pass as `cursor` for the next page; null on the last page. */
+            next_cursor: string | null;
+            rows: components["schemas"]["ParticipantCandidate"][];
         };
         PipelineSettings: {
             [key: string]: unknown;
@@ -936,6 +1793,13 @@ export interface components {
             id: number;
             name: string;
         };
+        /** @description NOTE(W2): the exact object internal/api/v2/eliteacore/handler.go's normalizeProjectIconMeta produces — the two keys `name` and `url`, each of which may be null, and NO other key survives the write. A null `icon_meta` means the project has no icon. */
+        ProjectIconMeta: {
+            /** @description The stored file name, or null. */
+            name?: string | null;
+            /** @description The stored URL, or null. Nothing here invents one. */
+            url?: string | null;
+        } | null;
         /** @description NOTE(W2): two producers write this body. The three group writes return it from internal/api/v2/projects/groups.go:295-330. The project listing returns an array of it from internal/api/v2/projects/handler.go:134-143 (the Project struct) assembled at :226-251. Both mirror the reference's ProjectListModel, so a client re-renders the group chips without re-fetching. The struct has no `status`, `description` or `role` field: handler_test.go:145-150 pins the eight-key golden body and fails on a non-baseline key. */
         ProjectWithGroups: {
             create_success: boolean;
@@ -951,11 +1815,62 @@ export interface components {
         };
         /** @description Opaque selected-tools blob (object or null) — see marker. */
         SelectedTools: unknown;
+        /** @description NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal "skill", and `updated_at` is always the zero sentinel "0001-01-01T00:00:00Z" — the skills table itself has no updated_at/is_default columns (migrations/001_initial.sql). instructions/tags/versions/ version_details/default_version_id, in contrast, DO round-trip. */
+        Skill: {
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            created_at: string;
+            /** @description skills.meta.default_version_id (issue 874), mirroring applications.meta.default_version_id. The version a NEW attachment proposes. Does NOT change which version an EXISTING agent attachment resolves at chat time — that stays keyed off entity_skill_mapping.skill_version_id, fixed at attach time. */
+            default_version_id?: string;
+            description?: string;
+            id: string;
+            /** @description The CURRENT version's instructions — `base`'s, unless the request named another version (getSkillVersion, updateSkillVersion) — also available at version_details.instructions. */
+            instructions?: string;
+            is_default: boolean;
+            name: string;
+            project_id: string;
+            /** @description The current version's tags (also available at version_details.tags). */
+            tags?: string[];
+            type: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description The CURRENT version (see `instructions`), not always versions[0]. */
+            version_details?: components["schemas"]["SkillVersion"];
+            /** @description EVERY version of the skill (issue 874), `base` first — not just `base`, as before issue 874. getSkill/getSkillVersion both carry the full set; there is no separate list-versions endpoint. */
+            versions?: components["schemas"]["SkillVersion"][];
+        };
+        /** @description Returned whole by List (internal/api/v2/skills/handler.go). Pagination comes from ?page/?page_size; ?query does an ILIKE search over name/description, and ?sort_by (name|created_at)/?sort_order (asc|desc) drive ORDER BY (repos/skills.go List — sort_by is whitelisted, never interpolated raw). */
+        SkillsList: {
+            items: components["schemas"]["Skill"][];
+            page: number;
+            page_size: number;
+            total: number;
+            total_pages: number;
+        };
+        /** @description A skill's content: the instructions an agent follows plus its topical tags. Persisted in skill_versions/skill_version_tag_association (repos/skills.go). Since issue 874 one skill_versions row is no longer the whole story — see Skill.versions. */
+        SkillVersion: {
+            /** Format: date-time */
+            created_at?: string;
+            id?: string;
+            instructions: string;
+            /** @description Whether this is the version named by Skill.default_version_id — the version a NEW attachment proposes. Does not affect which version an EXISTING agent attachment resolves at chat time; see Skill.default_version_id. */
+            is_default?: boolean;
+            /** @description "base" is the always-present working copy every skill has had since creation, and is reserved — it cannot be deleted or reused as a NAMED version's name. Since issue 874 a skill may carry additional named versions alongside it, created by createSkillVersion. */
+            name: string;
+            /** @description The version this one was cloned from (createSkillVersion) or restored from (restoreSkillVersion). Absent when the row has no recorded ancestor. */
+            parent_version_id?: string;
+            /** @description "draft" or "published" (#249). A published version is frozen: updateSkillVersion and deleteSkillVersion both refuse it with 409, mirroring application_versions' own guard. */
+            status?: string;
+            tags: string[];
+        };
+        /** @description A refused `changes_since` request (ADR-0025 WP6). `error` is `invalid_sync_cursor` (400: the cursor does not decode, or was issued for another list, scope or filter), `invalid_limit` (400) or `sync_cursor_expired` (410: the cursor is older than the tombstone retention, 97 days; resync with `changes_since=0`). NOTE(W2): internal/application/changesync/changesync.go (`ErrorBody`). */
         SyncCursorError: {
             error: string;
-            message?: string;
+            message: string;
         };
-        /** @description One removal in a `changes_since` delta. */
+        /** @description One removal in a `changes_since` delta (ADR-0025 WP6). NOTE(W2): internal/application/changesync/changesync.go (`Tombstone`). */
         SyncTombstone: {
             /** Format: date-time */
             deleted_at: string;
@@ -964,21 +1879,34 @@ export interface components {
              * @description The removed item's integer id (for a message, the message group id).
              */
             id: number;
-            /**
-             * @description `deleted`, or `access_lost` (the item left this list for the caller: made private, the caller removed as a participant, or no longer matching the list filter). Unknown reasons are removals too.
-             * @enum {string}
-             */
+            /** @enum {string} */
             reason: "deleted" | "access_lost";
-            /** @description The removed item's uuid; null only where the server stored none. */
+            /** @description The removed item's uuid; null only where none was stored. */
             uuid: string | null;
+        };
+        /** @description NOTE(W2): ListToolkits row (internal/api/v2/toolkits/handler.go:811-860). id/type/name are `elitea_tools` columns (internal/infra/db/migrations/001_initial.sql:177-179); description is COALESCE'd to `''` (never null, handler.go:822). created_at and author_id match the migration's `created_at TIMESTAMP NOT NULL` / `author_id INTEGER NOT NULL` (migration :182-183). The listing query intentionally selects only those migrated columns. */
+        ToolkitInstance: {
+            author_id: number;
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            id: string;
+            meta: {
+                [key: string]: unknown;
+            };
+            name: string;
+            settings: {
+                [key: string]: unknown;
+            };
+            type: string;
+        };
+        /** @description NOTE(W2): `{rows, total}` envelope (internal/api/v2/toolkits/handler.go:526-534). Repository failures are returned as a safe 500 error rather than an indistinguishable empty successful listing. */
+        ToolkitInstanceListResponse: {
+            rows: components["schemas"]["ToolkitInstance"][];
+            total: number;
         };
         /** @description Opaque tool/toolkit settings blob — see marker. */
         ToolSettings: unknown;
-        TurnStartError: {
-            error: string;
-            message?: string;
-            retryable?: boolean;
-        };
         VersionMeta: {
             /** @description Written by UpdateAttachmentStorage as {"toolkit_id": "..."} (eliteacore/handler.go:1777-1781). */
             attachment_storage?: {
@@ -1075,17 +2003,27 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description 410 Gone, `error` = `sync_cursor_expired`: the cursor is older than the server's tombstone retention (97 days). Discard this list's cache and resync with `changes_since=0`. */
-        SyncCursorExpired: {
+        /** @description 426 Upgrade Required: the native client's `X-Client-Version` is below the minimum this deployment serves it; `X-Min-Client-Version` repeats the minimum. Deliberately WITHOUT the `Upgrade` header RFC 9110 requires on a 426: the upgrade is of the app, not of a protocol. */
+        ClientUpgradeRequired: {
+            headers: {
+                "X-Min-Client-Version"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ClientUpgradeRequiredError"];
+            };
+        };
+        /** @description 400: a native client's `X-Client-Version` does not parse as MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Only callers authenticated by a native access token are judged. */
+        InvalidClientVersion: {
             headers: {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["SyncCursorError"];
+                "application/json": components["schemas"]["InvalidClientVersionError"];
             };
         };
-        /** @description 400. For a delta request, `error` is `invalid_sync_cursor` (the cursor does not decode or belongs to another list, scope or filter: discard it and resync from `0`), `invalid_limit`, or (notifications) `invalid_sync_request`. A legacy request's 400 uses the same `error` key with a message. */
-        SyncCursorRefused: {
+        /** @description 410 Gone: the `changes_since` cursor is older than the tombstone retention; the client discards its cache for this list and resyncs with `changes_since=0`. */
+        SyncCursorExpired: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1101,6 +2039,8 @@ export interface components {
         Offset: number;
         /** @description Project identifier (extracted from URL path) */
         ProjectId: string;
+        /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+        XClientVersion: string;
     };
     requestBodies: never;
     headers: never;
@@ -1117,28 +2057,34 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The document. Strong ETag; If-None-Match answers 304. */
+            /** @description The discovery document. */
             200: {
                 headers: {
+                    "Cache-Control"?: string;
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["DiscoveryDocument"];
                 };
             };
-            /** @description Unchanged since the presented entity tag. */
+            /** @description If-None-Match matched the current entity tag. */
             304: {
                 headers: {
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description A source of the document is unavailable; retry later. */
+            /** @description A source of the document is unavailable; retry. */
             503: {
                 headers: {
+                    "Retry-After"?: string;
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1171,8 +2117,35 @@ export interface operations {
                     "application/json": components["schemas"]["NativeOAuthError"];
                 };
             };
-            /** @description invalid_client. */
+            /** @description invalid_client (the client is not registered). */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeOAuthError"];
+                };
+            };
+            /** @description No native client is registered on this deployment. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeOAuthError"];
+                };
+            };
+            /** @description Too many requests from this address; see Retry-After. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeOAuthError"];
+                };
+            };
+            /** @description temporarily_unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1186,7 +2159,8 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "X-Client-Version"?: string;
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
             };
             path?: never;
             cookie?: never;
@@ -1197,7 +2171,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description A new token pair and the full client policy. */
+            /** @description A new token pair. Cache-Control is no-store. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1206,7 +2180,7 @@ export interface operations {
                     "application/json": components["schemas"]["NativeTokenResponse"];
                 };
             };
-            /** @description invalid_request, unsupported_grant_type or invalid_grant. */
+            /** @description invalid_request (including an X-Client-Version that does not parse), unsupported_grant_type or invalid_grant. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1215,7 +2189,7 @@ export interface operations {
                     "application/json": components["schemas"]["NativeOAuthError"];
                 };
             };
-            /** @description invalid_client, or the flat device_revoked body (the app wipes). */
+            /** @description invalid_client (the client is unknown or disabled), or device_revoked: the refresh token's device session was revoked, expired, deactivated or reused, and the client must wipe its local data. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1233,25 +2207,18 @@ export interface operations {
                     "application/json": components["schemas"]["NativeOAuthError"];
                 };
             };
-            /** @description This app version is below the minimum; header X-Min-Client-Version repeats it. */
-            426: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClientUpgradeRequiredError"];
-                };
-            };
+            426: components["responses"]["ClientUpgradeRequired"];
             /** @description Too many failed requests; see Retry-After. */
             429: {
                 headers: {
+                    "Retry-After"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["NativeOAuthError"];
                 };
             };
-            /** @description temporarily_unavailable; see Retry-After. */
+            /** @description temporarily_unavailable; retry after Retry-After. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1265,7 +2232,7 @@ export interface operations {
     getBrandingPackJSON: {
         parameters: {
             query?: {
-                /** @description Content version (the unquoted ETag) as the discovery document's brand_pack_url carries it. */
+                /** @description Content version token — the current ETag value without quotes, as `brand_pack_url` in the discovery document carries it. */
                 v?: string;
             };
             header?: never;
@@ -1274,25 +2241,32 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The pack (the upstream BrandPack schema, asset references made absolute). Header X-Elitea-Brand-Layers lists the contributing layers (default, file, db); `default` alone means the product default rather than a deployment brand. */
+            /** @description The resolved brand pack. */
             200: {
                 headers: {
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag of this response body. */
+                    ETag?: string;
+                    /** @description Comma-separated contributing layers (`default`, `file`, `db`). */
+                    "X-Elitea-Brand-Layers"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["BrandPack"];
                 };
             };
-            /** @description A stale `v`; redirects to the current one (same origin, same path). */
+            /** @description The `?v=` token does not match the current ETag value; Location points at the current-version URL. */
             302: {
                 headers: {
+                    Location?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Unchanged since the presented entity tag. */
+            /** @description If-None-Match matched the current entity tag. */
             304: {
                 headers: {
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -1328,10 +2302,44 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    listApplicationSkills: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                app_version_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skills list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplicationSkillsList"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
     getApplication: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 application_id: number;
                 /** @description Project identifier (extracted from URL path) */
@@ -1350,9 +2358,11 @@ export interface operations {
                     "application/json": components["schemas"]["ApplicationDetail"];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     listApplications: {
@@ -1369,7 +2379,10 @@ export interface operations {
                 /** @description Comma-separated tag filter. Each entry matches a tag NAME or a tag ID. The entries combine with AND: a listed application carries every named tag on one of its versions. Blank entries are ignored (repos/applications.go splitTagFilter). */
                 tags?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1387,20 +2400,259 @@ export interface operations {
                     "application/json": components["schemas"]["ApplicationList"];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    uploadConversationAttachment: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation UUID. A numeric id is refused with 400: the file is stored as `{conversation_uuid}/{file name}`. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** @description Chunked upload only; 0-based. */
+                    chunk_index?: number;
+                    /** Format: binary */
+                    file: string;
+                    /** @description Chunked upload only; the same for every chunk of one file. */
+                    file_id?: string;
+                    /** @description Defaults to the part's file name; directory parts are stripped. */
+                    file_name?: string;
+                    /** @description Chunked upload only. */
+                    total_chunks?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The file is stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationAttachmentUploaded"][];
+                };
+            };
+            /** @description A chunk was stored; send the next one. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationAttachmentChunkReceived"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    downloadConversationAttachment: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-None-Match"?: string;
+                Range?: string;
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation UUID (a numeric id is a 400), as in the attachment's `filepath`. */
+                conversation_id: string;
+                /** @description The file name: the last segment of the attachment's `filepath` (`/{bucket}/{conversation_uuid}/{name}`), percent-encoded. A name with a slash, a backslash, `..` or a control character is a 400. */
+                name: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description The requested range. */
+            206: {
+                headers: {
+                    "Content-Range"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Not modified (the `If-None-Match` ETag matches). */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A numeric conversation id, an invalid file name, or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The range starts past the end of the file; `Content-Range` states its length. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A composition with no object store. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    continueChatExecution: {
+        parameters: {
+            query: {
+                execution_contract: "agent.continue.hitl.v1" | "agent.continue.authorization.v1" | "agent.continue.output-limit.v1";
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation UUID; must equal the body's `conversation_uuid`. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatContinueRequest"];
+            };
+        };
+        responses: {
+            /** @description The continuation was admitted or replayed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionStarted"];
+                };
+            };
+            /** @description A malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description The pause was already answered. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description The body is larger than 512 KiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description Content-Type is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description `unsupported_agent_execution`: the fields do not fit the contract. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description Admission capacity is full; retry after `Retry-After`. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
         };
     };
     getConversation: {
         parameters: {
             query?: {
-                /** @description When > 0, embeds up to this many message groups as `message_groups`. */
+                /** @description Embed this many message groups (0 or absent embeds none). */
                 messages_limit?: number;
-                sort_order?: "asc" | "desc";
+                /** @description Order of the embedded groups, `asc` or `desc`. */
+                sort_order?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
-                /** @description The conversation's numeric id or its uuid; the server accepts either. */
+                /** @description The conversation's numeric id or its UUID; both resolve. */
                 conversation_id: string;
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1418,18 +2670,23 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationDetail"];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     deleteConversation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
-                /** @description The conversation's numeric id or its uuid; the server accepts either. */
+                /** @description The conversation's numeric id or its UUID; both resolve. */
                 conversation_id: string;
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1445,16 +2702,18 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     listConversations: {
         parameters: {
             query?: {
-                /** @description Incremental sync. Absent: the legacy page. Empty or `0`: a full sync in delta shape. Otherwise the `next_cursor` of an earlier delta of the SAME list (same project and same source, entity_name, entity_meta_id, mine and hidden values; another list's cursor is a 400). `offset` is ignored; `limit` defaults to 100 and bounds rows and tombstones each. Losing access to the whole project is a 403, not a tombstone. */
+                /** @description Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged. Empty or `0`: a full sync from the beginning in delta shape. Otherwise the opaque `next_cursor` of a previous delta of THIS list — the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine` and `hidden` values; a cursor from another list is a 400. Rows come oldest change first. Losing access to the whole project is not a tombstone: the client sees 403 and drops that project's cache. */
                 changes_since?: string;
                 /** @description The participant entity's id, paired with entity_name. */
                 entity_meta_id?: string;
@@ -1462,13 +2721,18 @@ export interface operations {
                 entity_name?: string;
                 /** @description `only` inverts the default hidden-conversation exclusion; any other value keeps the default. */
                 hidden?: string;
+                /** @description Page size, at most 100. In delta mode the default is 100, and rows and tombstones are each bounded by it. */
                 limit?: number;
                 mine?: boolean;
+                /** @description Legacy paging only; ignored with `changes_since`. */
                 offset?: number;
                 /** @description Filter by `chat_conversations.source` (e.g. `deepwiki`). */
                 source?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1477,7 +2741,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The matching conversations, newest first. */
+            /** @description The matching conversations, newest first; with `changes_since`, the conversations changed since the cursor, oldest change first, plus tombstones and the next cursor. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1486,17 +2750,29 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationListing"];
                 };
             };
-            400: components["responses"]["SyncCursorRefused"];
+            /** @description `changes_since` is not a cursor this list issued, or `limit` is not a positive integer (SyncCursorError); or, for a native client, `X-Client-Version` does not parse (InvalidClientVersionError). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncCursorError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             410: components["responses"]["SyncCursorExpired"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     createConversation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1505,38 +2781,153 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateConversationRequest"];
+                "application/json": components["schemas"]["ConversationCreateRequest"];
             };
         };
         responses: {
-            /** @description The created conversation (without participants or messages). */
+            /** @description The created conversation. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConversationDetail"];
+                    "application/json": components["schemas"]["CreatedConversation"];
                 };
             };
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    getMessageTrace: {
+        parameters: {
+            query: {
+                /** @description The owning message group, from the trace-list row. */
+                message_group_id: number;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                step_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The full trace step. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageTraceStepDetail"];
+                };
+            };
+            /** @description message_group_id was missing or not a positive integer. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description No such step within that message group. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    listMessageTraces: {
+        parameters: {
+            query?: {
+                include_total?: boolean;
+                /** @description Filter by step kind. Allowed values are `tool_call` and `thinking_step`; anything else is a 400 rather than an empty page. */
+                kind?: string;
+                limit?: number;
+                /** @description Scope to a single message group. A value that is not a positive integer is a 400 rather than an ignored filter — dropping it would return the whole conversation to a caller that asked for one message. Omit the parameter to ask for the whole conversation. */
+                message_group_id?: number;
+                /** @description Comma-separated loaded message-group ids, at most 200. Duplicates are collapsed; a non-integer member is a 400. */
+                message_group_ids?: string;
+                offset?: number;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                conversation_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trace steps for the conversation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageTraceListing"];
+                };
+            };
+            /** @description An unsupported kind, a malformed message_group_id, or a malformed message-group id list. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     listConversationMessages: {
         parameters: {
             query?: {
-                /** @description Empty or `0` is a full sync; otherwise the `next_cursor` of an earlier delta of this transcript. */
+                /** @description Incremental sync (ADR-0025 WP6), as on listConversations. Empty or `0` is a full sync; otherwise the `next_cursor` of a previous delta of THIS conversation's transcript. */
                 changes_since?: string;
-                /** @description At most 100 (default 10; 100 in delta mode, for rows and tombstones each). */
+                /** @description Page size, at most 100 (default 10; 100 in delta mode, for rows and tombstones each). */
                 limit?: number;
                 offset?: number;
+                /** @description Legacy alias, converted through `limit`; `offset` wins when both are sent. */
+                page?: number;
+                /** @description Legacy alias of `limit`; `limit` wins. */
+                page_size?: number;
+                /** @description Literal (not wildcard) text search over message text. */
+                query?: string;
+                sort_by?: string;
+                /** @description Only `asc` flips the default `desc`. */
+                sort_order?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
-                /** @description The conversation's uuid (a send takes the uuid only; the list also takes the numeric id). */
-                conversation_uuid: string;
+                /** @description The conversation. The list takes its numeric id or its UUID; the send takes the UUID only, and it must equal the body's `conversation_uuid`. */
+                conversation_id: string;
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
             };
@@ -1553,23 +2944,35 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationMessageListing"];
                 };
             };
-            400: components["responses"]["SyncCursorRefused"];
+            /** @description `changes_since` is not a cursor this list issued, or `limit` is not a positive integer (SyncCursorError); or, for a native client, `X-Client-Version` does not parse (InvalidClientVersionError). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncCursorError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
             410: components["responses"]["SyncCursorExpired"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
-    startApplicationTurn: {
+    sendChatMessage: {
         parameters: {
             query: {
                 execution_contract: "agent.execute.application.v1" | "agent.execute.adhoc.v1";
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
-                /** @description The conversation's uuid (a send takes the uuid only; the list also takes the numeric id). */
-                conversation_uuid: string;
+                /** @description The conversation. The list takes its numeric id or its UUID; the send takes the UUID only, and it must equal the body's `conversation_uuid`. */
+                conversation_id: string;
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
             };
@@ -1577,81 +2980,297 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ApplicationTurnRequest"];
+                "application/json": components["schemas"]["ChatSendRequest"];
             };
         };
         responses: {
-            /** @description The execution was started (or an identical earlier send was found). */
+            /** @description The turn was admitted (`created` true) or replayed (`created` false). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplicationTurnStarted"];
+                    "application/json": components["schemas"]["ChatExecutionStarted"];
                 };
             };
-            /** @description Invalid request. */
+            /** @description A malformed request, path/body mismatch, an invalid UUID, a bad mention or attachment list. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TurnStartError"];
+                    "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
             401: components["responses"]["401"];
             403: components["responses"]["403"];
-            /** @description The question_id was already used with a different body, or the turn conflicts with server state. */
+            /** @description The `question_id` was already used with a different body. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TurnStartError"];
+                    "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
-            /** @description The request was not application/json. */
+            /** @description The body is larger than 512 KiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description Content-Type is not application/json. */
             415: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
             };
-            /** @description The participant cannot be executed through this contract (`unsupported_agent_execution`). */
+            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TurnStartError"];
+                    "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
-            /** @description The server is busy; retry after the `Retry-After` header. */
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description Admission capacity is full; retry after `Retry-After` with the SAME `question_id`. */
             503: {
                 headers: {
-                    "Retry-After"?: number;
+                    "Retry-After"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TurnStartError"];
+                    "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
         };
     };
-    listNotifications: {
+    listParticipantCandidates: {
         parameters: {
             query?: {
-                /** @description Empty or `0` is a full sync; otherwise the `next_cursor` of an earlier notification delta of the same user. */
-                changes_since?: string;
-                event_type?: string;
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
                 limit?: number;
-                offset?: number;
-                only_new?: boolean;
-                only_total?: boolean;
-                sort_by?: string;
-                sort_order?: "asc" | "desc";
+                /** @description Case-insensitive substring of the name or the e-mail. */
+                q?: string;
+                /** @description The candidate kind. Only `user` is served; it is the default. */
+                type?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of candidates. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ParticipantCandidatesPage"];
+                };
+            };
+            /** @description A `type` other than `user`, a `q` over 100 characters, a `limit` out of range, a cursor this list did not issue, or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A composition without a database; there are no members to list. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteConversationParticipant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description The participant row id (`ConversationParticipant.id`), not the entity id. */
+                participant_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The participant is the conversation's author, or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    addConversationParticipants: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationParticipantCreate"] | components["schemas"]["ConversationParticipantCreate"][];
+            };
+        };
+        responses: {
+            /** @description The participant rows of this request, in request order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationParticipant"][];
+                };
+            };
+            /** @description A malformed body, an unknown kind, a missing required key, more than 100 participants, or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    listToolkitAvailableTools: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description Saved toolkit ID in the authorized project. */
+                toolkit_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available tool descriptions and argument schemas. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        args_schemas: {
+                            [key: string]: {
+                                [key: string]: unknown;
+                            };
+                        };
+                        tools: {
+                            description: string;
+                            name: string;
+                        }[];
+                    };
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            /** @description The selected worker cannot construct this toolkit type. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description Discovery is unavailable or its durable run has not settled. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listToolkitInstances: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+                /** @description Number of items to skip before starting to collect results */
+                offset?: components["parameters"]["Offset"];
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1660,26 +3279,146 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of notifications (with only_total=true, `rows` is absent), or a delta. */
+            /** @description Toolkit instances */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NotificationPage"];
+                    "application/json": components["schemas"]["ToolkitInstanceListResponse"];
                 };
             };
-            400: components["responses"]["SyncCursorRefused"];
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
-            410: components["responses"]["SyncCursorExpired"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
-    updateNotifications: {
+    markNotificationSeen: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                notification_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The notification, now seen. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notification"];
+                };
+            };
+            /** @description An invalid id, or a notification that is not the caller's. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The write failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"];
+                };
+            };
+        };
+    };
+    listNotifications: {
+        parameters: {
+            query?: {
+                /** @description Incremental sync (ADR-0025 WP6). Empty or `0` is a full sync; otherwise the `next_cursor` of a previous notification delta of the same user. */
+                changes_since?: string;
+                event_type?: string;
+                limit?: number;
+                offset?: number;
+                only_new?: boolean;
+                only_total?: boolean;
+                search?: string;
+                /** @description One of the notification's own fields; default `created_at`. */
+                sort_by?: string;
+                /** @description `asc` or `desc` (default). */
+                sort_order?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page or delta. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationListing"];
+                };
+            };
+            /** @description An invalid query (`{ok, error}`), or a refused delta request (`invalid_sync_cursor`, `invalid_sync_request`, `invalid_limit`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"] | components["schemas"]["SyncCursorError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"];
+                };
+            };
+            403: components["responses"]["403"];
+            410: components["responses"]["SyncCursorExpired"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The read failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"];
+                };
+            };
+        };
+    };
+    markNotificationsSeen: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -1688,23 +3427,43 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["NotificationSeenUpdate"];
+                "application/json": components["schemas"]["NotificationBulkSeenRequest"];
             };
         };
         responses: {
-            /** @description The number of notifications changed. */
+            /** @description How many rows changed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NotificationSeenUpdated"];
+                    "application/json": {
+                        /** Format: int64 */
+                        updated: number;
+                    };
                 };
             };
-            400: components["responses"]["400"];
+            /** @description An invalid body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
             401: components["responses"]["401"];
             403: components["responses"]["403"];
-            500: components["responses"]["500"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The write failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"];
+                };
+            };
         };
     };
     listProjects: {
@@ -1713,7 +3472,10 @@ export interface operations {
                 /** @description Presence-only flag. The handler ignores the value, so `check_public_role=false` also switches the check on. */
                 check_public_role?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 public_project_id: number;
             };
@@ -1730,7 +3492,9 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectWithGroups"][];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
 }

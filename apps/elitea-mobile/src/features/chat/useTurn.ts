@@ -1,9 +1,20 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 
 import { queryKeys } from '@/api/queries/keys';
-import { TurnInputError, prepareTurn, type PreparedTurn, type TurnModel } from '@/api/queries/sendMessage';
+import type { components } from '@/api/generated/elitea.gen';
+import {
+  TurnInputError,
+  prepareTurn,
+  type ContinueContract,
+  type PreparedTurn,
+  type TurnAttachment,
+  type TurnMentions,
+  type TurnModel,
+} from '@/api/queries/sendMessage';
 import { log } from '@/lib/log';
+import { network } from '@/lib/network';
+import { noteSentQuestion } from '@/state/selfIdentity';
 import { handOffToOutbox, mustQueueBehindOutbox, queueSend, shouldQueue } from '@/sync/appOutbox';
 import {
   TurnController,
@@ -33,16 +44,57 @@ export interface UseTurnArgs {
   model?: TurnModel | null;
 }
 
+/** What a message carries besides its text. */
+export interface SendExtras {
+  mentions?: TurnMentions | null;
+  attachments?: TurnAttachment[] | null;
+  /** The question_id to use (minted earlier, e.g. before uploading its files). */
+  questionId?: string;
+}
+
+/** The composer's text for an input refusal. */
+export function inputErrorText(error: TurnInputError): string {
+  switch (error.reason) {
+    case 'too_large':
+      return 'This message is too long.';
+    case 'mentions':
+      return 'This message mentions too many people.';
+    case 'attachments':
+      return 'The attached files could not be added to this message.';
+    default:
+      return 'This message cannot be sent.';
+  }
+}
+
 export interface UseTurn {
   live: LiveTurn | null;
   /** Starts (or queues) a new turn. Resolves to an error text when the input cannot be sent. */
-  send: (text: string) => Promise<string | null>;
+  send: (text: string, extras?: SendExtras) => Promise<string | null>;
+  /**
+   * Answers the paused answer and streams the rest of it. Online only and
+   * never queued; resolves to an error text when it cannot start.
+   */
+  continueWith: (contract: ContinueContract, body: components['schemas']['ChatContinueRequest']) => Promise<string | null>;
   /** Re-sends the same body (same question_id) and replays the stream. */
   retry: () => void;
   reconnect: () => void;
   /** Forget a failed or settled turn. */
   dismiss: () => void;
   busy: boolean;
+}
+
+/**
+ * Reads a conversation again once a turn has settled: its messages, and the
+ * persisted tool calls. The tool history is keyed by message group, and a
+ * continuation (an approval, an answer, a sign-in skip, "continue") adds calls
+ * to the group the paused answer already had, so without this the answer
+ * keeps showing the calls read while it was paused.
+ */
+export async function refreshTranscript(queryClient: QueryClient, projectId: number, conversationRef: string): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, conversationRef) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.traces(projectId) }),
+  ]);
 }
 
 /**
@@ -64,7 +116,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     const phase = snapshot.turn.phase;
     if (snapshot.settled || phase === 'done' || phase === 'paused') {
       // Ended while the thread was away: the persisted copy replaces it.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, conversationRef) });
+      void refreshTranscript(queryClient, projectId, conversationRef);
       setLiveTurn(key, null);
       return;
     }
@@ -81,7 +133,11 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
   );
 
   const send = useCallback(
-    async (text: string): Promise<string | null> => {
+    async (text: string, extras: SendExtras = {}): Promise<string | null> => {
+      const fields = {
+        mentions: extras.mentions && (extras.mentions.userIds.length > 0 || extras.mentions.everyone) ? extras.mentions : null,
+        attachments: extras.attachments && extras.attachments.length > 0 ? extras.attachments : null,
+      };
       if (projectId === null || !conversationUuid || participantId === null || key === null) {
         return 'This conversation cannot be messaged from mobile.';
       }
@@ -98,14 +154,14 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
             participantId,
             model,
             userInput: text,
-            questionId: newQuestionId(),
+            ...fields,
+            questionId: extras.questionId ?? newQuestionId(),
           });
         } catch (error) {
-          if (error instanceof TurnInputError) {
-            return error.reason === 'too_large' ? 'This message is too long.' : 'This message cannot be sent.';
-          }
+          if (error instanceof TurnInputError) return inputErrorText(error);
           throw error;
         }
+        noteSentQuestion(prepared.request.questionId);
         try {
           await queueSend(prepared, conversationRef);
         } catch (error) {
@@ -115,12 +171,11 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
         }
         return null;
       }
-      const refetch = () =>
-        queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, conversationRef) });
+      const refetch = () => refreshTranscript(queryClient, projectId, conversationRef);
       let next: TurnController;
       try {
         next = TurnController.create(
-          { projectId, conversationUuid, participantId, model, userInput: text },
+          { projectId, conversationUuid, participantId, model, userInput: text, ...fields, questionId: extras.questionId },
           {
             onSettle: refetch,
             onRefreshNeeded: () => void refetch(),
@@ -133,16 +188,34 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
           },
         );
       } catch (error) {
-        if (error instanceof TurnInputError) {
-          return error.reason === 'too_large' ? 'This message is too long.' : 'This message cannot be sent.';
-        }
+        if (error instanceof TurnInputError) return inputErrorText(error);
         throw error;
       }
+      noteSentQuestion(next.request.questionId);
       // The effect above starts it: a new turn is in phase 'sending'.
       setLiveTurn(key, next);
       return null;
     },
     [projectId, conversationUuid, participantId, model, key, queryClient, conversationRef],
+  );
+
+  const continueWith = useCallback(
+    async (contract: ContinueContract, body: components['schemas']['ChatContinueRequest']): Promise<string | null> => {
+      if (projectId === null || !conversationUuid || key === null) return 'This conversation cannot be continued from mobile.';
+      if (!network.isOnline()) return "You're offline.";
+      const current = getLiveTurn(key);
+      if (current?.isActive) return 'Wait for the current answer to finish.';
+      const refetch = () => refreshTranscript(queryClient, projectId, conversationRef);
+      const next = TurnController.continuation({ projectId, conversationUuid }, contract, body, {
+        onSettle: refetch,
+        onRefreshNeeded: () => void refetch(),
+        // Someone answered it first: the transcript shows what happened.
+        onAlreadyResolved: () => void refetch(),
+      });
+      setLiveTurn(key, next);
+      return null;
+    },
+    [projectId, conversationUuid, key, queryClient, conversationRef],
   );
 
   const retry = useCallback(() => void controller?.reattach(), [controller]);
@@ -152,5 +225,5 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
   }, [key]);
 
   const busy = live !== null && (live.turn.phase === 'sending' || live.turn.phase === 'streaming');
-  return { live, send, retry, reconnect, dismiss, busy };
+  return { live, send, continueWith, retry, reconnect, dismiss, busy };
 }

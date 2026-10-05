@@ -1,4 +1,4 @@
-import { agentParticipant, chatTarget, groupText, toChatMessages } from '@/features/chat/messageModel';
+import { agentParticipant, agentsCanJoin, chatTarget, groupText, inferSelfUserId, participantName, participantUserId, toChatMessages } from '@/features/chat/messageModel';
 
 const participants = [
   { id: 1, entity_name: 'user', entity_meta: { id: 9 } },
@@ -86,7 +86,7 @@ describe('chatTarget', () => {
   });
 
   it('addresses the single agent', () => {
-    expect(chatTarget({ participants })).toEqual({ ok: true, kind: 'agent', participantId: 2, name: 'Helper' });
+    expect(chatTarget({ participants })).toMatchObject({ ok: true, kind: 'agent', participantId: 2, name: 'Helper' });
   });
 
   it("addresses a model conversation's model participant with its saved model", () => {
@@ -113,16 +113,170 @@ describe('chatTarget', () => {
     expect(chatTarget({ participants: [user, dummy(null)] })).toMatchObject({ participantId: 4 });
   });
 
-  it('refuses several agents, and a conversation with other participants it cannot address', () => {
-    expect(chatTarget({ participants: [...participants, { id: 3, entity_name: 'application' }] })).toEqual({
-      ok: false,
-      reason: 'several',
+  // A9: the target matrix.
+  const agent = (id: number, name: string, kind = 'application') => ({
+    id,
+    entity_name: kind,
+    entity_meta: { id: id * 10, project_id: 7 },
+    entity_settings: { version_id: id * 100 },
+    meta: { name },
+  });
+  const toolkit = { id: 9, entity_name: 'toolkit', entity_meta: { id: 90, project_id: 7 }, meta: { name: 'github' } };
+
+  it('several agents: the picked one, else the one that answered last, else the first', () => {
+    const detail = { participants: [user, agent(2, 'Research'), agent(3, 'Writer'), agent(6, 'Flow', 'pipeline')] };
+    expect(chatTarget(detail)).toMatchObject({ ok: true, kind: 'agent', participantId: 2 });
+    expect(chatTarget(detail, { lastAnsweredBy: 3 })).toMatchObject({ participantId: 3, name: 'Writer' });
+    expect(chatTarget(detail, { targetParticipantId: 6, lastAnsweredBy: 3 })).toMatchObject({
+      participantId: 6,
+      agent: { agentId: 60, agentProjectId: 7, versionId: 600 },
     });
-    expect(chatTarget({ participants: [user, { id: 9, entity_name: 'toolkit' }] })).toEqual({ ok: false, reason: 'none' });
+    // A picked agent that was removed meanwhile falls back.
+    expect(chatTarget(detail, { targetParticipantId: 99 })).toMatchObject({ participantId: 2 });
+    const target = chatTarget(detail);
+    expect(target.ok && target.kind === 'agent' && target.choices.map((c) => c.participantId)).toEqual([2, 3, 6]);
+  });
+
+  it('toolkits next to an agent stay read-only, with the reason', () => {
+    expect(chatTarget({ participants: [user, agent(2, 'Research'), toolkit] })).toEqual({ ok: false, reason: 'toolkit_agent' });
+  });
+
+  it('toolkits in a model chat are fine: the model gets them as tools', () => {
+    expect(chatTarget({ participants: [user, toolkit, dummy({ model_name: 'gpt' })] })).toMatchObject({
+      ok: true,
+      kind: 'model',
+      participantId: 4,
+    });
+    expect(chatTarget({ participants: [user, toolkit] })).toMatchObject({ ok: true, kind: 'model', participantId: 0, model: null });
+  });
+
+  it('refuses several models and kinds it cannot address', () => {
     expect(chatTarget({ participants: [user, dummy({ model_name: 'a' }), { ...dummy({ model_name: 'b' }), id: 5 }] })).toEqual({
       ok: false,
       reason: 'several',
     });
+    expect(chatTarget({ participants: [user, { id: 8, entity_name: 'llm', entity_meta: { model_name: 'x' } }] })).toEqual({
+      ok: false,
+      reason: 'none',
+    });
     expect(chatTarget(undefined)).toEqual({ ok: false, reason: 'none' });
+  });
+});
+
+describe('authorship in a shared conversation (A2)', () => {
+  // The getConversation participant shape: a user's display name is
+  // meta.user_name and entity_meta.id is the USER id (not the row id).
+  const shared = [
+    { id: 1, entity_name: 'user', entity_meta: { id: 9 }, meta: { user_name: 'Alice Smith' } },
+    { id: 4, entity_name: 'user', entity_meta: { id: 42 }, meta: { user_name: 'Bob' } },
+    { id: 2, entity_name: 'application', entity_meta: { id: 5, project_id: 7 }, meta: { name: 'Helper' } },
+  ];
+  const groups = [
+    { id: 10, uuid: 'q-alice', author_participant_id: 1, created_at: '2026-10-04 12:00:00', message_items: [text(0, 'Hello')] },
+    { id: 11, uuid: 'q-bob', author_participant_id: 4, created_at: '2026-10-04 12:00:01', message_items: [text(0, 'Hi Alice')] },
+    { id: 12, uuid: 'r-1', author_participant_id: 2, created_at: '2026-10-04 12:00:02', message_items: [text(0, 'Hi both')] },
+  ];
+
+  it('draws only my messages as mine, and names the other person', () => {
+    const messages = toChatMessages({ participants: shared, message_groups: groups }, { selfUserId: 9 });
+    expect(messages.map((m) => [m.key, m.role, m.mine, m.author])).toEqual([
+      ['q-alice', 'user', true, null],
+      ['q-bob', 'user', false, 'Bob'],
+      ['r-1', 'assistant', false, 'Helper'],
+    ]);
+  });
+
+  it('is the same transcript seen by Bob', () => {
+    const messages = toChatMessages({ participants: shared, message_groups: groups }, { selfUserId: 42 });
+    expect(messages.filter((m) => m.role === 'user').map((m) => [m.mine, m.author])).toEqual([
+      [false, 'Alice Smith'],
+      [true, null],
+    ]);
+  });
+
+  it('with "me" unknown: a question this device sent is mine, the rest are named', () => {
+    const messages = toChatMessages(
+      { participants: shared, message_groups: groups },
+      { selfUserId: null, isSentQuestion: (uuid) => uuid === 'q-alice' },
+    );
+    expect(messages.filter((m) => m.role === 'user').map((m) => [m.mine, m.author])).toEqual([
+      [true, null],
+      [true, 'Bob'],
+    ]);
+  });
+
+  it('with one person in the conversation every user message is mine, unnamed', () => {
+    const messages = toChatMessages({ participants: participants, message_groups: [groups[0]].map((g) => ({ ...g, author_participant_id: 1 })) });
+    expect(messages[0]).toMatchObject({ mine: true, author: null });
+  });
+
+  it('proves "me" from a question this device sent', () => {
+    expect(inferSelfUserId({ participants: shared, message_groups: groups }, (uuid) => uuid === 'q-bob')).toBe(42);
+    expect(inferSelfUserId({ participants: shared, message_groups: groups }, () => false)).toBeNull();
+    // An assistant group never proves anything.
+    expect(inferSelfUserId({ participants: shared, message_groups: groups }, (uuid) => uuid === 'r-1')).toBeNull();
+  });
+
+  it('reads a user participant name from meta.user_name and its user id from entity_meta.id', () => {
+    expect(participantName(shared[0] as never)).toBe('Alice Smith');
+    expect(participantUserId(shared[1] as never)).toBe(42);
+    expect(participantUserId(shared[2] as never)).toBeNull();
+  });
+});
+
+describe('failed answers', () => {
+  // As the 4.2.0 server stores a turn that failed: no text, the reason in the group's meta.
+  const failed = {
+    id: 38,
+    uuid: 'f',
+    author_participant_id: 2,
+    content: '',
+    is_streaming: false,
+    created_at: '2026-10-05 17:31:52.933102',
+    message_items: [],
+    meta: {
+      error: 'The run stopped because it reached a platform processing limit.',
+      error_code: 'RESOURCE_EXHAUSTED',
+      is_error: true,
+    },
+  };
+
+  it('carry the stored reason, so the bubble is not blank after a reload', () => {
+    const [message] = toChatMessages({ participants, message_groups: [failed] });
+    expect(message).toMatchObject({ role: 'assistant', text: '', error: 'The run stopped because it reached a platform processing limit.' });
+  });
+
+  it('read the reason from `metadata` too (the messages route), and fall back to a generic one', () => {
+    const [fromMetadata] = toChatMessages({
+      participants,
+      message_groups: [{ ...failed, meta: undefined, metadata: { is_error: true, error: 'Boom.' } }],
+    });
+    expect(fromMetadata.error).toBe('Boom.');
+    const [bare] = toChatMessages({ participants, message_groups: [{ ...failed, meta: { is_error: true } }] });
+    expect(bare.error).toBe('This answer failed.');
+    const [fine] = toChatMessages({ participants, message_groups: [{ ...failed, meta: {}, message_items: [text(0, 'ok')] }] });
+    expect(fine.error).toBeNull();
+  });
+});
+
+describe('agentsCanJoin', () => {
+  const user = { id: 1, entity_name: 'user', entity_meta: { id: 7 } };
+  const dummy = { id: 4, entity_name: 'dummy', entity_meta: {}, entity_settings: {}, meta: {} };
+  const toolkit = { id: 5, entity_name: 'toolkit', entity_meta: { id: 31 }, entity_settings: {}, meta: { name: 'Jira' } };
+
+  it('a model chat without toolkits can take an agent', () => {
+    expect(agentsCanJoin({ participants: [user, dummy] })).toBe(true);
+  });
+
+  it('a model chat with a toolkit cannot: adding one would lock the conversation (toolkit next to agent)', () => {
+    const detail = { participants: [user, dummy, toolkit] };
+    expect(agentsCanJoin(detail)).toBe(false);
+    // What adding the agent would have led to:
+    const withAgent = { participants: [...detail.participants, { id: 6, entity_name: 'application', entity_meta: { id: 9, project_id: 7 }, entity_settings: { version_id: 3 }, meta: { name: 'Helper' } }] };
+    expect(chatTarget(withAgent)).toEqual({ ok: false, reason: 'toolkit_agent' });
+  });
+
+  it('no conversation read yet: no', () => {
+    expect(agentsCanJoin(undefined)).toBe(false);
   });
 });

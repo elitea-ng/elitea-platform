@@ -1,6 +1,8 @@
 import {
   FIXTURE_ORIGIN,
+  attachmentPolicy,
   discoveryDocument,
+  discoveryDocument11,
   discoveryWithoutNativeAuth,
 } from '@/api/__fixtures__/nativeClient';
 import {
@@ -9,9 +11,11 @@ import {
   assessDiscovery,
   checkDiscoveryOrigins,
   contractMajor,
+  contractMinor,
   fetchDiscovery,
   getCachedDiscovery,
   minimumVersionFor,
+  speaksContract,
 } from '@/api/discovery';
 import type { BaseFetch } from '@/api/middleware';
 import { __resetSessionForTests, getSession } from '@/state/session';
@@ -194,5 +198,33 @@ describe('assessDiscovery', () => {
     expect(contractMajor('1.0')).toBe(1);
     expect(contractMajor('1')).toBe(1);
     expect(contractMajor('one')).toBeNull();
+  });
+});
+
+describe('client contract 1.1', () => {
+  it('reads the attachments block of a 1.1 document', () => {
+    const parsed = DiscoveryDocumentSchema.parse(discoveryDocument11());
+    expect(parsed.attachments).toEqual(attachmentPolicy());
+  });
+
+  it('reads a 1.0 document without one', () => {
+    expect(DiscoveryDocumentSchema.parse(discoveryDocument()).attachments).toBeUndefined();
+  });
+
+  it('keeps the document when the attachments block is malformed (the defaults apply)', () => {
+    const parsed = DiscoveryDocumentSchema.safeParse(discoveryDocument11({ attachments: attachmentPolicy({ max_files: 'ten' }) }));
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.attachments).toBeUndefined();
+  });
+
+  it('gates on the contract minor within the same major', () => {
+    expect(contractMinor('1.1')).toBe(1);
+    expect(contractMinor('1')).toBe(0);
+    expect(contractMinor('x')).toBeNull();
+    expect(speaksContract({ client_contract: '1.1' }, 1, 1)).toBe(true);
+    expect(speaksContract({ client_contract: '1.12' }, 1, 1)).toBe(true);
+    expect(speaksContract({ client_contract: '1.0' }, 1, 1)).toBe(false);
+    expect(speaksContract({ client_contract: '2.1' }, 1, 1)).toBe(false);
+    expect(speaksContract(null, 1, 1)).toBe(false);
   });
 });

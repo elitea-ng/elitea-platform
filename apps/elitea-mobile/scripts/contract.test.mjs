@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import YAML from 'yaml';
 
 import {
   ContractError,
@@ -268,10 +269,44 @@ describe('buildContract (real inputs)', () => {
       assert.ok(ops[id].parameters.some((p) => p.name === 'changes_since' && p.in === 'query'), id);
       assert.ok(ops[id].responses['410'], id);
     }
-    for (const schema of ['ConversationListing', 'ConversationMessageListing', 'NotificationPage']) {
+    for (const schema of ['ConversationListing', 'ConversationMessageListing', 'NotificationListing']) {
       const props = doc.components.schemas[schema].properties;
       assert.ok(props.tombstones && props.next_cursor && props.has_more, schema);
     }
     assert.deepEqual(doc.components.schemas.SyncTombstone.properties.reason.enum, ['deleted', 'access_lost']);
+  });
+});
+
+describe('client contract 1.1 (pinned upstream)', () => {
+  it('pins a server that speaks client contract 1.1 and needs no overlay', () => {
+    const { doc } = buildContract();
+    assert.equal(doc.info['x-elitea-client-contract'], '1.1');
+    const overlay = YAML.parse(readFileSync(new URL('../contract/overlay/native-gap.yaml', import.meta.url), 'utf8'));
+    assert.deepEqual(overlay.paths, {});
+    assert.equal(overlay['x-zefir-extend'], undefined);
+  });
+
+  it('keeps the chat enrichment operations, every one tagged client', () => {
+    const { doc } = buildContract();
+    const tags = {};
+    for (const item of Object.values(doc.paths)) {
+      for (const op of Object.values(item)) if (op && op.operationId) tags[op.operationId] = op.tags ?? [];
+    }
+    for (const id of [
+      'sendChatMessage',
+      'continueChatExecution',
+      'uploadConversationAttachment',
+      'downloadConversationAttachment',
+      'addConversationParticipants',
+      'deleteConversationParticipant',
+      'listParticipantCandidates',
+      'listApplicationSkills',
+      'listToolkitInstances',
+      'listToolkitAvailableTools',
+      'listMessageTraces',
+      'getMessageTrace',
+    ]) {
+      assert.ok(tags[id]?.includes('client'), id);
+    }
   });
 });

@@ -10,7 +10,7 @@ this repository.
 | `elitea-v2.yaml.sha256` | `shasum -a 256` of the copy; `npm run contract:verify` fails on any change. |
 | `LICENSE.elitea` | The upstream Apache-2.0 license text and NOTICE, required to redistribute the copy. |
 | `client-operations.json` | The app's declared API surface: the operationIds kept in the generated client. |
-| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet (conversation get/create/delete, transcript list, chat send, notifications list/update, and the ADR-0025 native-client operations listed below), plus `x-zefir-extend` additions to upstream operations and schemas (incremental sync). Each operation and addition records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until: ADR-0025 WP5`). |
+| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). **Empty** since the pin moved to v4.2.0 (client contract 1.1): upstream now defines every operation the app uses. |
 
 ## Generated client
 
@@ -34,12 +34,13 @@ regenerate. Server-sent-event endpoints are typed by hand in `src/api/sse/`.
 | | |
 |---|---|
 | Repository | `elitea-ng/elitea-platform` |
-| Commit | `e7585fee2578779b7e293be196182f8db42263a1` (`origin/main`, 2026-10-04) |
+| Commit | `06a4904277b8040fc718114386fbb555b01890db` (`origin/main`, tag `v4.2.0`, 2026-10-05) |
 | Path | `services/elitea-main/api/openapi/v2.yaml` |
-| SHA-256 | `56d6638fdcad882675464d031c2d29e1c19f0fe69e70dbf75f3cebce3658b551` |
-| Size | 21,456 lines |
-| License | Apache-2.0 (see `LICENSE.elitea`) |
-| Copied | 2026-10-04 |
+| Client contract | `1.1` (`info.x-elitea-client-contract`) |
+| SHA-256 | `85e88c9f89b6be7a123db63a53c11a2d1cde10165b6be0123eb6f2ce9c46971d` |
+| Size | 25,682 lines |
+| License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged since `e7585fee2`) |
+| Copied | 2026-10-05 |
 
 ## Bumping the pinned contract
 
@@ -51,47 +52,31 @@ regenerate. Server-sent-event endpoints are typed by hand in `src/api/sse/`.
 4. Run `npm run contract:verify`, then regenerate and review the diff of the
    generated client.
 
-## Native-client operations (ADR-0025, server branch)
+## Client contract 1.1 (no overlay)
 
-The ADR-0025 operations are implemented on the server branch
-`feat/adr-0025-native-client-support`, which is not on `main` yet. The pin
-above is **not** moved to that branch. Instead the overlay describes the
-operations the app uses, written against that branch at commit
-`398985cdc882c4d35c0f13ff607f1212b3b1c2ab` (WP1 discovery and brand pack
-JSON, WP2 native token and revoke, WP3 `device_revoked`, WP4 client policy and
-`426`):
+Every operation the app uses is defined upstream and tagged `client`. Two were
+renamed when they moved from the overlay: `startApplicationTurn` is now
+`sendChatMessage` (its body schema `ChatSendRequest`), and `updateNotifications`
+is now `markNotificationsSeen`. The path parameter of the transcript and send
+routes is `{conversation_id}` (it takes the conversation uuid).
 
-| operationId | Route |
+| Area | operationIds |
 |---|---|
-| `getClientDiscovery` | `GET /.well-known/elitea-client` (origin root) |
-| `getBrandingPackJSON` | `GET /api/v2/branding/pack.json` (references the upstream `BrandPack` schema) |
-| `exchangeNativeToken` | `POST /api/v2/auth/native/token` (form body; code and refresh grants) |
-| `revokeNativeToken` | `POST /api/v2/auth/native/revoke` (form body) |
+| Chat | `getConversation`, `createConversation`, `deleteConversation`, `listConversations`, `listConversationMessages`, `sendChatMessage`, `continueChatExecution` |
+| Participants | `addConversationParticipants`, `deleteConversationParticipant`, `listParticipantCandidates` |
+| Attachments | `uploadConversationAttachment`, `downloadConversationAttachment` (`GET`; the binary body is read as bytes) |
+| Tool history | `listMessageTraces`, `getMessageTrace` |
+| Agents, skills, toolkits | `listApplications`, `getApplication`, `listApplicationSkills`, `listToolkitInstances`, `listToolkitAvailableTools` |
+| Native client | `getClientDiscovery`, `getBrandingPackJSON`, `exchangeNativeToken`, `revokeNativeToken` |
 
-Incremental sync (ADR-0025 WP6) was added to the overlay against the same
-branch at commit `7665eb30f1d4b88eaac2eccb71af5fb6b72c53ae` (WP6: `changes_since`
-cursors and tombstones), with the shapes as documented by the branch's
-`v2.yaml` and `API_CONTRACT.md` at `04cab926be210784d9147f3753eb5ffe43241795`
-(WP5; that `v2.yaml` has sha256
-`5ad3c4ea805377bfa651e4ceae01ebaa6157fb33fdb50d8d06b34cd7236f4e9a`):
-
-| Where | What |
-|---|---|
-| `listConversations` (upstream) | `changes_since` parameter, `400`/`410`, via `x-zefir-extend` |
-| `ConversationListing` (upstream) | `tombstones`, `next_cursor`, `has_more`, via `x-zefir-extend` |
-| `listConversationMessages` (overlay) | `GET /api/v2/elitea_core/messages/prompt_lib/{project_id}/{conversation}`, legacy page or delta |
-| `listNotifications` (overlay) | `changes_since`, `410`, delta fields on `NotificationPage` |
-| `SyncTombstone`, `SyncCursorError`, `SyncCursorRefused`, `SyncCursorExpired` | the shared delta shapes |
-
-`x-zefir-extend` adds a parameter, a status or a property to an operation or
-schema that the pinned upstream document already defines. Like an overlay
-operation, each addition fails the build once upstream defines the same one.
+Discovery's `attachments` block and the agent progress frames (the
+`x-elitea-client-frames` catalogue, typed by hand in
+`src/features/chat/frames.ts`) are 1.1 additions; the app gates them on
+`client_contract` >= 1.1 (`speaksContract` in `src/api/discovery.ts`) and
+treats a 404 or 501 from an older server as "not available".
 
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).
-
-When a pinned release defines them, `contract:build` fails on each overlay
-copy; delete those and regenerate.
 
 ## Non-affiliation
 

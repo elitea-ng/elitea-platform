@@ -152,3 +152,33 @@ export function brandPack(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+/**
+ * Client contract 1.1 `attachments` block, as the v4.2.0 demo deployment
+ * served it (`GET /.well-known/elitea-client`, 2026-10-05): the server's
+ * defaults (150 MB files, 3 MB images, 5 MiB chunks, 25 MiB extraction,
+ * 48 KiB inline images, server-side downscale on).
+ */
+export function attachmentPolicy(overrides: Record<string, unknown> = {}) {
+  return {
+    max_files: 10,
+    max_total_bytes: 157286400,
+    max_file_bytes: 157286400,
+    max_image_bytes: 3145728,
+    chunk_bytes: 5242880,
+    accepted_extensions: [
+      '.csv', '.doc', '.docx', '.gif', '.htm', '.html', '.jpeg', '.jpg', '.json', '.md', '.pdf',
+      '.png', '.pptx', '.svg', '.txt', '.webp', '.xls', '.xlsx', '.xml', '.yaml', '.yml',
+    ],
+    max_extract_bytes: 26214400,
+    inline_image_max_bytes: 49152,
+    inline_image_formats: ['.gif', '.jpeg', '.jpg', '.png', '.webp'],
+    inline_image_downscale: true,
+    ...overrides,
+  };
+}
+
+/** A client contract 1.1 discovery document (v4.2.0): `attachments` added. */
+export function discoveryDocument11(overrides: Record<string, unknown> = {}) {
+  return discoveryDocument({ server_version: '4.2', client_contract: '1.1', attachments: attachmentPolicy(), ...overrides });
+}

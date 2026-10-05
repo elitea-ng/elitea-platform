@@ -1,0 +1,166 @@
+{
+  "_source": "Python worker (elitea-platform 4.2.0 standalone stack, mock model), agent with an openapi toolkit whose mock_tool_status is a sensitive tool: the node events of the turn up to its approval pause, verbatim. The worker reports the LangGraph interrupt as an agent_tool_error before the agent_hitl_interrupt.",
+  "frames": [
+    {
+      "type": "agent_tool_start",
+      "stream_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+      "message_id": "7c629e1f-6ef7-54eb-9f72-dde870e47315",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "tool_name": "mock_tool_status",
+        "tool_run_id": "01a10d0a-ff78-7381-bea4-f94c93cec32f",
+        "run_id": "01a10d0a-ff78-7381-bea4-f94c93cec32f",
+        "tool_meta": {
+          "name": "mock_tool_status",
+          "metadata": {
+            "display_name": "Mock Tools",
+            "toolkit_name": "MockTools",
+            "toolkit_type": "openapi",
+            "thread_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+            "checkpoint_ns": "agent:08dff02a-cdcf-2b91-5c46-042631cd86cc",
+            "langgraph_node": "agent"
+          }
+        },
+        "tool_inputs": {},
+        "metadata": {
+          "display_name": "Mock Tools",
+          "toolkit_name": "MockTools",
+          "toolkit_type": "openapi",
+          "thread_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+          "checkpoint_ns": "agent:08dff02a-cdcf-2b91-5c46-042631cd86cc",
+          "langgraph_node": "agent"
+        },
+        "timestamp_start": "2026-10-05T17:09:47.001134+00:00",
+        "timestamp_finish": null,
+        "finish_reason": null,
+        "tool_output": null,
+        "error": null
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-10-05T17:09:47.001171+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "982637ba-52d5-4395-aa54-7db10c68db7e"
+    },
+    {
+      "type": "agent_tool_error",
+      "stream_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+      "message_id": "7c629e1f-6ef7-54eb-9f72-dde870e47315",
+      "question_id": null,
+      "content": "\"(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_230380693fca4f08942286bce0580868', 'guardrail_type': 'sensitive_tool', 'node_name': 'sensitive_tool_guard', 'message': \\\"Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.\\\", 'available_actions': ['approve', 'reject', 'block_with_comment'], 'routes': {}, 'tool_name': 'mock_tool_status', 'toolkit_name': 'MockTools', 'toolkit_type': 'openapi', 'action_label': 'MockTools.mock_tool_status', 'tool_args': {'regexp': None, 'headers': {}}, 'tool_args_raw': {'regexp': None, 'headers': {}}, 'policy_message': \\\"Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.\\\", '_pending_messages': [{'type': 'ai', 'data': {'content': '', 'additional_kwargs': {}, 'response_metadata': {'finish_reason': 'tool_calls', 'model_name': 'E2E-MOCK-MODEL', 'model_provider': 'openai'}, 'type': 'ai', 'name': None, 'id': 'lc_run--01a10d0a-f612-7d00-867a-f4ab76c5d03e', 'tool_calls': [{'name': 'mock_tool_status', 'args': {}, 'id': 'call_mock_tool_f22904b36c372634', 'type': 'tool_call'}], 'invalid_tool_calls': [], 'usage_metadata': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2, 'input_token_details': {}, 'output_token_details': {}}}}]}, id='95a8f5c1e4c0c70ec268bf630ec99bbf'),)\"",
+      "thinking": null,
+      "response_metadata": {
+        "tool_name": "mock_tool_status",
+        "tool_run_id": "01a10d0a-ff78-7381-bea4-f94c93cec32f",
+        "run_id": "01a10d0a-ff78-7381-bea4-f94c93cec32f",
+        "tool_meta": {
+          "name": "mock_tool_status",
+          "metadata": {
+            "display_name": "Mock Tools",
+            "toolkit_name": "MockTools",
+            "toolkit_type": "openapi",
+            "thread_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+            "checkpoint_ns": "agent:08dff02a-cdcf-2b91-5c46-042631cd86cc",
+            "langgraph_node": "agent"
+          }
+        },
+        "tool_inputs": {},
+        "metadata": {
+          "display_name": "Mock Tools",
+          "toolkit_name": "MockTools",
+          "toolkit_type": "openapi",
+          "thread_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+          "checkpoint_ns": "agent:08dff02a-cdcf-2b91-5c46-042631cd86cc",
+          "langgraph_node": "agent"
+        },
+        "timestamp_start": "2026-10-05T17:09:47.001134+00:00",
+        "timestamp_finish": "2026-10-05T17:09:47.206888+00:00",
+        "finish_reason": "error",
+        "tool_output": null,
+        "error": "\"(Interrupt(value={'type': 'hitl', 'interrupt_id': 'hitl_230380693fca4f08942286bce0580868', 'guardrail_type': 'sensitive_tool', 'node_name': 'sensitive_tool_guard', 'message': \\\"Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.\\\", 'available_actions': ['approve', 'reject', 'block_with_comment'], 'routes': {}, 'tool_name': 'mock_tool_status', 'toolkit_name': 'MockTools', 'toolkit_type': 'openapi', 'action_label': 'MockTools.mock_tool_status', 'tool_args': {'regexp': None, 'headers': {}}, 'tool_args_raw': {'regexp': None, 'headers': {}}, 'policy_message': \\\"Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.\\\", '_pending_messages': [{'type': 'ai', 'data': {'content': '', 'additional_kwargs': {}, 'response_metadata': {'finish_reason': 'tool_calls', 'model_name': 'E2E-MOCK-MODEL', 'model_provider': 'openai'}, 'type': 'ai', 'name': None, 'id': 'lc_run--01a10d0a-f612-7d00-867a-f4ab76c5d03e', 'tool_calls': [{'name': 'mock_tool_status', 'args': {}, 'id': 'call_mock_tool_f22904b36c372634', 'type': 'tool_call'}], 'invalid_tool_calls': [], 'usage_metadata': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2, 'input_token_details': {}, 'output_token_details': {}}}}]}, id='95a8f5c1e4c0c70ec268bf630ec99bbf'),)\""
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-10-05T17:09:47.207501+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "982637ba-52d5-4395-aa54-7db10c68db7e"
+    },
+    {
+      "type": "agent_hitl_interrupt",
+      "stream_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+      "message_id": "7c629e1f-6ef7-54eb-9f72-dde870e47315",
+      "question_id": null,
+      "content": "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.",
+      "thinking": null,
+      "response_metadata": {
+        "thread_id": "e9322c94-054b-49f9-bb1b-c22195969e93",
+        "chat_project_id": 90107,
+        "message": "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.",
+        "hitl_interrupt": {
+          "type": "hitl",
+          "interrupt_id": "hitl_230380693fca4f08942286bce0580868",
+          "guardrail_type": "sensitive_tool",
+          "node_name": "sensitive_tool_guard",
+          "message": "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.",
+          "available_actions": [
+            "approve",
+            "reject",
+            "block_with_comment"
+          ],
+          "routes": {},
+          "tool_name": "mock_tool_status",
+          "toolkit_name": "MockTools",
+          "toolkit_type": "openapi",
+          "action_label": "MockTools.mock_tool_status",
+          "tool_args": {
+            "regexp": null,
+            "headers": {}
+          },
+          "policy_message": "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'."
+        },
+        "hitl_interrupts": [
+          {
+            "type": "hitl",
+            "interrupt_id": "hitl_230380693fca4f08942286bce0580868",
+            "guardrail_type": "sensitive_tool",
+            "node_name": "sensitive_tool_guard",
+            "message": "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.",
+            "available_actions": [
+              "approve",
+              "reject",
+              "block_with_comment"
+            ],
+            "routes": {},
+            "tool_name": "mock_tool_status",
+            "toolkit_name": "MockTools",
+            "toolkit_type": "openapi",
+            "action_label": "MockTools.mock_tool_status",
+            "tool_args": {
+              "regexp": null,
+              "headers": {}
+            },
+            "policy_message": "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'."
+          }
+        ],
+        "node_name": "sensitive_tool_guard",
+        "available_actions": [
+          "approve",
+          "reject",
+          "block_with_comment"
+        ],
+        "routes": {},
+        "edit_state_key": null
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-10-05T17:09:47.377391+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "982637ba-52d5-4395-aa54-7db10c68db7e"
+    }
+  ]
+}

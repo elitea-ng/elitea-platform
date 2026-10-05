@@ -144,3 +144,29 @@ with [device-verification.md](device-verification.md).
 - **Policy.** `src/security/policy.ts` holds the strict defaults until the server
   supplies a policy (B4).
 
+## Chat enrichment (client contract 1.1)
+
+What the chat does beyond plain text, against servers that speak client contract 1.1
+(discovery `client_contract`; every addition is hidden for a 1.0 server or a 404/501):
+
+- **Mentions.** "@" over the conversation's other people (and "Everyone"); the ids are
+  derived from the final text on send (`src/features/chat/mentions/`) and sent as
+  `user_ids` / `is_mentioning_everyone`. "Me" is learned from notification rows and
+  from messages this device sent (`src/state/selfIdentity.ts`), so other people's
+  messages are drawn as theirs. A `chat_user_mentioned` notification opens the
+  conversation.
+- **Agents, skills, tools.** Several agents per conversation ("To:" chip, "#" to add
+  one pinned to its version), a participants sheet (people and agents; toolkits and
+  models stay web-only), "~" skills and "/" toolkit tools (text only).
+- **Tool activity.** Live tool calls from the progress frames, and from the message
+  traces after a reload; inputs and outputs are capped at 8 KB in memory and never
+  stored.
+- **Pauses.** Approve, reject, edit, block with comment and ask_user answers; toolkit
+  sign-in can be skipped (no OAuth token ever lives on the device; "Open in web" for
+  sign-in); the output-limit Continue. Online only, never queued.
+- **Attachments.** Photos, camera and files, checked against the discovery limits,
+  HEIC converted and JPEG re-encoded (no EXIF/GPS leaves the phone), uploaded in chunks
+  through the guarded fetch, and only then sent. Downloads go through the guarded fetch
+  to a temporary file that is never kept (see open question 6); HTML and SVG are never
+  rendered by the app, only handed to the system preview.
+

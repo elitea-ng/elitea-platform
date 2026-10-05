@@ -6,8 +6,10 @@ import { resolveApiPath } from '@/api/paths';
 import {
   QUESTION_ID_RE,
   TurnStartError,
+  continueTurn,
   prepareTurn,
   startTurn,
+  type ContinueContract,
   type PreparedTurn,
   type StartedTurn,
   type TurnRequest,
@@ -61,6 +63,10 @@ export interface LiveTurn {
    * outbox (`TurnDeps.handOff`); this controller does no more network work.
    */
   queued: boolean;
+  /** This turn continues a paused answer (no user message of its own). */
+  continuation: boolean;
+  /** The names of the files the message carries. */
+  attachmentNames: string[];
 }
 
 export interface TurnDeps {
@@ -85,6 +91,10 @@ export interface TurnDeps {
    * retrying in place (e.g. offline storage is off).
    */
   handOff?: (prepared: PreparedTurn, hint: HandOffHint) => Promise<boolean>;
+  /** Starts the execution instead of a chat send (a continuation). */
+  start?: (signal: AbortSignal) => Promise<StartedTurn>;
+  /** The pause was answered elsewhere (409 `*_already_resolved`). */
+  onAlreadyResolved?: () => void;
 }
 
 export interface HandOffHint {
@@ -100,6 +110,7 @@ export const FAILURE_TEXT = {
   badResponse: 'The workspace sent a reply this app cannot follow.',
   stream: 'Lost the connection to the reply.',
   signedOut: 'You were signed out.',
+  answeredElsewhere: 'Answered elsewhere.',
 } as const;
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -150,6 +161,18 @@ export class TurnController {
   private stream: ResumableStream | null = null;
   private sendAbort: AbortController | null = null;
   private generation = 0;
+  /**
+   * A continuation's execution once admitted. Re-attaching replays its stream
+   * instead of POSTing again: unlike a send (deduplicated by question_id), a
+   * second continuation of the same pause is refused as already resolved.
+   */
+  private admitted: StartedTurn | null = null;
+  /**
+   * A continuation's POST while it is in flight. Detaching never aborts it
+   * (the server may already have admitted it), and a re-attach waits for the
+   * same request instead of POSTing the answer a second time.
+   */
+  private continuationPost: Promise<StartedTurn> | null = null;
 
   constructor(
     private readonly prepared: PreparedTurn,
@@ -165,7 +188,36 @@ export class TurnController {
       failure: null,
       settled: false,
       queued: false,
+      continuation: deps.start !== undefined,
+      attachmentNames: (prepared.request.attachments ?? []).map((a) => a.name),
     };
+  }
+
+  /**
+   * A continuation of a paused answer: POSTs `body` once (online only, never
+   * to the outbox) and streams the rest of the turn like a send.
+   */
+  static continuation(
+    target: { projectId: number; conversationUuid: string },
+    contract: ContinueContract,
+    body: Parameters<typeof continueTurn>[1],
+    deps: Omit<TurnDeps, 'start' | 'handOff' | 'maxSendAttempts'> = {},
+  ): TurnController {
+    const prepared: PreparedTurn = {
+      request: {
+        projectId: target.projectId,
+        conversationUuid: target.conversationUuid,
+        participantId: 0,
+        questionId: newQuestionId(),
+        userInput: '',
+      },
+      bodyJson: JSON.stringify(body),
+    };
+    return new TurnController(prepared, {
+      ...deps,
+      maxSendAttempts: 1,
+      start: (signal) => continueTurn(contract, body, { client: deps.client, signal }),
+    });
   }
 
   static create(request: Omit<TurnRequest, 'questionId'> & { questionId?: string }, deps?: TurnDeps): TurnController {
@@ -250,8 +302,9 @@ export class TurnController {
   }
 
   private async run(generation: number): Promise<void> {
-    const execution = await this.send(generation);
+    const execution = this.state.continuation && this.admitted !== null ? this.admitted : await this.send(generation);
     if (execution === null || generation !== this.generation) return;
+    if (this.state.continuation) this.admitted = execution;
     this.update({ execution });
     await this.streamExecution(execution, generation);
   }
@@ -265,7 +318,9 @@ export class TurnController {
       const abort = new AbortController();
       this.sendAbort = abort;
       try {
-        return await startTurn(this.prepared, { client: this.deps.client, signal: abort.signal });
+        return this.deps.start
+          ? await this.postContinuation(this.deps.start)
+          : await startTurn(this.prepared, { client: this.deps.client, signal: abort.signal });
       } catch (error) {
         if (generation !== this.generation) return null;
         if (isUnreachable(error) && (await this.tryHandOff(generation, error))) return null;
@@ -291,6 +346,10 @@ export class TurnController {
               return null;
             case 'unsupported_agent':
               this.fail('send', FAILURE_TEXT.unsupported, false);
+              return null;
+            case 'already_resolved':
+              this.fail('send', FAILURE_TEXT.answeredElsewhere, false);
+              this.deps.onAlreadyResolved?.();
               return null;
             case 'rejected':
               this.fail('send', f.message ?? FAILURE_TEXT.rejected, false);
@@ -320,6 +379,27 @@ export class TurnController {
         if (this.sendAbort === abort) this.sendAbort = null;
       }
     }
+  }
+
+  /**
+   * POSTs a continuation once and records its admission whichever attachment
+   * is current when the answer arrives. Only a POST that failed is sent again.
+   */
+  private postContinuation(start: NonNullable<TurnDeps['start']>): Promise<StartedTurn> {
+    if (this.continuationPost === null) {
+      const post = start(new AbortController().signal).then((execution) => {
+        this.admitted = execution;
+        return execution;
+      });
+      this.continuationPost = post;
+      post.then(
+        () => {},
+        () => {
+          if (this.continuationPost === post) this.continuationPost = null;
+        },
+      );
+    }
+    return this.continuationPost;
   }
 
   /** Gives the turn to the outbox; true when it is stored there and this turn stops. */

@@ -4,7 +4,6 @@ import { parseFrame, type Frame } from '@/features/chat/frames';
 import {
   GENERIC_FAILURE,
   INITIAL_TURN,
-  PAUSED_STATUS,
   isTurnTerminal,
   reduceTurn,
   type TurnState,
@@ -68,7 +67,10 @@ describe('turnReducer over fixtures', () => {
 
   it('treats a run-level HITL pause as terminal', () => {
     const { state, consumed, total } = play('hitl-terminal');
-    expect(state).toMatchObject({ phase: 'paused', status: PAUSED_STATUS });
+    // This synthesised interrupt has no interrupt_id and no actions: nothing
+    // mobile can answer, so the pause is unanswerable here (the UI offers the
+    // web app). The worker golden frames cover the real shapes.
+    expect(state).toMatchObject({ phase: 'paused', status: null, pause: null });
     expect(consumed).toBe(total);
   });
 

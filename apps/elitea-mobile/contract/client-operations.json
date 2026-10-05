@@ -10,12 +10,24 @@
     "listConfigurationModels",
     "createConversation",
     "deleteConversation",
-    "startApplicationTurn",
+    "sendChatMessage",
     "listNotifications",
-    "updateNotifications",
+    "markNotificationsSeen",
+    "markNotificationSeen",
     "getClientDiscovery",
     "getBrandingPackJSON",
     "exchangeNativeToken",
-    "revokeNativeToken"
+    "revokeNativeToken",
+    "continueChatExecution",
+    "uploadConversationAttachment",
+    "downloadConversationAttachment",
+    "addConversationParticipants",
+    "deleteConversationParticipant",
+    "listParticipantCandidates",
+    "listApplicationSkills",
+    "listToolkitInstances",
+    "listToolkitAvailableTools",
+    "listMessageTraces",
+    "getMessageTrace"
   ]
 }

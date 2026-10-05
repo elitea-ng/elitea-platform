@@ -6,7 +6,9 @@ import type { BaseFetch } from '@/api/middleware';
  * A scripted workspace for API-level tests. Each route answers from a queue
  * (the last answer repeats); every request URL is recorded.
  */
-export type Answer = { status: number; body?: unknown; headers?: Record<string, string> } | 'network_error';
+export type Answer =
+  | { status: number; body?: unknown; headers?: Record<string, string>; /** Raw bytes instead of a JSON body. */ raw?: Uint8Array }
+  | 'network_error';
 
 export interface FakeServer {
   client: ApiClient;
@@ -31,6 +33,9 @@ export function fakeServer(): FakeServer {
     if (!route) return new Response(JSON.stringify({ error: 'no route' }), { status: 404 });
     const answer = route.answers.length > 1 ? route.answers.shift()! : route.answers[0];
     if (answer === 'network_error') throw new TypeError('Network request failed');
+    if (answer.raw !== undefined) {
+      return new Response(answer.raw as unknown as BodyInit, { status: answer.status, headers: answer.headers });
+    }
     return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), {
       status: answer.status,
       headers: { 'Content-Type': 'application/json', ...answer.headers },

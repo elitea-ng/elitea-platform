@@ -5,6 +5,7 @@ import { sessionApiClient, type ApiClient } from '@/api/client';
 import { unwrap } from '@/api/errors';
 import type { components } from '@/api/generated/elitea.gen';
 import { queryKeys } from '@/api/queries/keys';
+import { learnSelfUserId } from '@/state/selfIdentity';
 import { offlineNotifications, offlineUnseenCount, readWithFallback } from '@/sync/offlineReads';
 
 export type Notification = components['schemas']['Notification'];
@@ -48,11 +49,45 @@ export async function fetchNotifications(projectId: number, client: ApiClient = 
           signal: deadline,
         }),
       );
-      return Array.isArray(page?.rows) ? page.rows : [];
+      const rows = Array.isArray(page?.rows) ? page.rows : [];
+      // Every row's recipient is the caller: that is "me" in shared conversations.
+      learnSelfUserId(rows[0]?.user_id);
+      return rows;
     },
     () => offlineNotifications(projectId, NOTIFICATIONS_PAGE_SIZE),
     signal,
   );
+}
+
+/**
+ * Learns the caller's user id from the newest notification (its recipient),
+ * when a screen needs "me" and nothing has told it yet. A caller with no
+ * notification at all stays unknown (the thread then names every person).
+ */
+export async function fetchSelfUserIdFromNotifications(
+  projectId: number,
+  client: ApiClient = sessionApiClient(),
+  signal?: AbortSignal,
+): Promise<number | null> {
+  const page = await unwrap(
+    client.GET('/notifications/notifications/prompt_lib/{project_id}', {
+      params: { path: { project_id: String(projectId) }, query: { limit: 1, offset: 0, sort_order: 'desc' } },
+      signal,
+    }),
+  );
+  const id = Array.isArray(page?.rows) ? page.rows[0]?.user_id : undefined;
+  learnSelfUserId(id);
+  return typeof id === 'number' ? id : null;
+}
+
+export function useLearnSelfUserId(projectId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: [...queryKeys.notifications(projectId ?? 0), 'self'],
+    enabled: enabled && projectId !== null,
+    staleTime: Infinity,
+    retry: false,
+    queryFn: ({ signal }) => fetchSelfUserIdFromNotifications(projectId as number, sessionApiClient(), signal),
+  });
 }
 
 export async function markAllSeen(projectId: number, client: ApiClient = sessionApiClient()): Promise<number> {
@@ -63,6 +98,14 @@ export async function markAllSeen(projectId: number, client: ApiClient = session
     }),
   );
   return typeof result?.updated === 'number' ? result.updated : 0;
+}
+
+/** Marks one notification seen (`markNotificationSeen`); true when the server accepted it. */
+export async function markSeen(projectId: number, notificationId: number, client: ApiClient = sessionApiClient()): Promise<boolean> {
+  const { response } = await client.PUT('/notifications/notification/prompt_lib/{project_id}/{notification_id}', {
+    params: { path: { project_id: String(projectId), notification_id: notificationId } },
+  });
+  return response.ok;
 }
 
 export function useUnseenCount(projectId: number | null) {

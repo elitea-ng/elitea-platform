@@ -81,6 +81,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // The offline store is SQLCipher (src/db/). Needs a native build; Expo Go and web have
     // no SQLCipher, and the store refuses to run without it (src/db/open.ts).
     ['expo-sqlite', { useSQLCipher: true }],
+    // Attachments: the photo library and the camera, asked for only when the user picks.
+    // No microphone (photos only), so RECORD_AUDIO is blocked on Android. On Android 13+
+    // the system photo picker needs no media permission at all.
+    [
+      'expo-image-picker',
+      {
+        photosPermission: `${identity.displayName} attaches the photos you choose to a message.`,
+        cameraPermission: `${identity.displayName} uses the camera to take a photo you attach to a message.`,
+        microphonePermission: false,
+      },
+    ],
     // No plaintext URL cache: responses (tokens, transcripts) are never written to
     // Library/Caches/<bundle id>/Cache.db (DEF-R2). Our own plugin, see plugins/.
     './plugins/withNoHttpCache',

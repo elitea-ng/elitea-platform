@@ -26,7 +26,19 @@ import type { Db } from '@/db/sql';
  * it is showing the copy saved on this device.
  */
 
-type MessageGroup = components['schemas']['MessageGroup'];
+/**
+ * The thread's message-group shape. Upstream types `message_groups` as loose
+ * records (the legacy projection); this is the subset the thread reads.
+ */
+export interface MessageGroup {
+  id: number;
+  uuid: string;
+  author_participant_id: number;
+  is_streaming: boolean;
+  created_at: string;
+  content: string;
+  message_items: { id: number; item_type: string; order_index: number; item_details: Record<string, unknown> }[];
+}
 type Participant = components['schemas']['ConversationParticipant'];
 
 const offlineCopies = new WeakSet<object>();
@@ -212,11 +224,15 @@ export async function offlineConversation(
         name: record.row?.name ?? '',
         created_at: record.row?.created_at ?? '',
         updated_at: record.row?.updated_at ?? '',
+        created_by: '',
+        // Unknown on this device: read as private, as the server does.
+        is_private: true,
+        message_count: rows.length,
         meta: (record.row?.meta as Record<string, unknown> | null | undefined) ?? {},
         participants: participantsFromRows(rows),
       };
   // Newest first, as the network read answers with sort_order=desc.
-  return mark({ ...base, message_groups: groups.reverse() });
+  return mark({ ...base, message_groups: groups.reverse() as unknown as Record<string, unknown>[] });
 }
 
 export async function offlineNotifications(

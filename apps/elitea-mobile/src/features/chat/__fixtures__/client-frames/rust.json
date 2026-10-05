@@ -1,0 +1,225 @@
+{
+  "hitl_interrupt": {
+    "agent_name": null,
+    "content": "Review the generated answer.",
+    "created_at": "2026-08-14T12:00:01+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "available_actions": [
+        "approve",
+        "reject",
+        "edit"
+      ],
+      "chat_project_id": 7,
+      "edit_state_key": "answer",
+      "history_contract_version": 1,
+      "hitl_interrupt": {
+        "available_actions": [
+          "approve",
+          "reject",
+          "edit"
+        ],
+        "call_digest": "sha256:3659370961d36fee843ffbbcdb36d7611c71313d02f1db914420b8bd2f25e8f2",
+        "definition_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "edit_state_key": "answer",
+        "guardrail_type": "pipeline_hitl",
+        "history_contract_version": 1,
+        "interaction_type": "pipeline_hitl_node",
+        "interrupt_id": "hitl_g1:Nlk3CWHTb-6EP_u82zbXYRxxMT0C8duRRCC4vS8l6PI",
+        "message": "Review the generated answer.",
+        "node_name": "review",
+        "routes": {
+          "approve": "publish",
+          "edit": "revise",
+          "reject": "END"
+        },
+        "type": "hitl"
+      },
+      "hitl_interrupts": [
+        {
+          "available_actions": [
+            "approve",
+            "reject",
+            "edit"
+          ],
+          "call_digest": "sha256:3659370961d36fee843ffbbcdb36d7611c71313d02f1db914420b8bd2f25e8f2",
+          "definition_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "edit_state_key": "answer",
+          "guardrail_type": "pipeline_hitl",
+          "history_contract_version": 1,
+          "interaction_type": "pipeline_hitl_node",
+          "interrupt_id": "hitl_g1:Nlk3CWHTb-6EP_u82zbXYRxxMT0C8duRRCC4vS8l6PI",
+          "message": "Review the generated answer.",
+          "node_name": "review",
+          "routes": {
+            "approve": "publish",
+            "edit": "revise",
+            "reject": "END"
+          },
+          "type": "hitl"
+        }
+      ],
+      "interaction_type": "pipeline_hitl_node",
+      "message": "Review the generated answer.",
+      "node_name": "review",
+      "routes": {
+        "approve": "publish",
+        "edit": "revise",
+        "reject": "END"
+      },
+      "thread_id": "thread-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_hitl_interrupt"
+  },
+  "mcp_authorization": {
+    "agent_name": null,
+    "content": "Authorization is required to use the Customer Support MCP toolkit. Choose Authorize to sign in, or Skip to stop this pipeline safely.",
+    "created_at": "2026-08-14T12:00:01+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "authorization_servers": [
+        "https://login.example.invalid"
+      ],
+      "available_actions": [
+        "authorize",
+        "skip"
+      ],
+      "call_digest": "sha256:e66cb54c723b9a49a2bfe20cb662f0c0f8a71bd235b1beaf5dcc92d33e5a8648",
+      "chat_project_id": 7,
+      "guardrail_type": "mcp_auth",
+      "interrupt_id": "mcp_auth_g1:5my1THI7mkmiv-IMtmLwwPinG9I1sb6vXcyS0z5ahkg",
+      "message": "Authorization is required to use the Customer Support MCP toolkit. Choose Authorize to sign in, or Skip to stop this pipeline safely.",
+      "node_name": "lookup",
+      "resource_metadata": {
+        "authorization_servers": [
+          "https://login.example.invalid"
+        ],
+        "oauth_authorization_server": {
+          "authorization_endpoint": "https://login.example.invalid/authorize",
+          "code_challenge_methods_supported": [
+            "S256"
+          ],
+          "grant_types_supported": [
+            "authorization_code",
+            "refresh_token"
+          ],
+          "issuer": "https://login.example.invalid",
+          "registration_endpoint": "https://login.example.invalid/register",
+          "token_endpoint": "https://login.example.invalid/token"
+        },
+        "scopes_supported": [
+          "mcp:read"
+        ]
+      },
+      "resource_metadata_url": "https://mcp.example.invalid/.well-known/oauth-protected-resource",
+      "resume_strategy": "root",
+      "root_thread_id": "thread-1",
+      "server_url": "https://mcp.example.invalid/v1/mcp",
+      "thread_id": "thread-1",
+      "tool_args": {},
+      "tool_call_id": "pipeline:lookup:4",
+      "tool_name": "search_records",
+      "toolkit_name": "Customer Support",
+      "toolkit_type": "mcp",
+      "www_authenticate": "Bearer resource_metadata=\"https://mcp.example.invalid/.well-known/oauth-protected-resource\""
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "mcp_authorization_required"
+  },
+  "requires_confirmation": {
+    "agent_name": null,
+    "content": "Continue",
+    "created_at": "2026-08-14T12:00:01+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "finish_reason": "length",
+      "thread_id": "thread-1",
+      "tool_run_id": "llm-limited"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_requires_confirmation"
+  },
+  "tool_end": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:02+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": null,
+      "finish_reason": "stop",
+      "metadata": {},
+      "run_id": "call-1",
+      "timestamp_finish": "2026-08-14T12:00:02+00:00",
+      "timestamp_start": "2026-08-14T12:00:01+00:00",
+      "tool_inputs": {
+        "issue_number": 42
+      },
+      "tool_meta": {
+        "metadata": {},
+        "name": "lookup_issue"
+      },
+      "tool_name": "lookup_issue",
+      "tool_output": "{\"title\":\"Bounded result\"}",
+      "tool_run_id": "call-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_end"
+  },
+  "tool_start": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:01+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {},
+      "run_id": "call-1",
+      "timestamp_finish": null,
+      "timestamp_start": "2026-08-14T12:00:01+00:00",
+      "tool_inputs": {
+        "issue_number": 42
+      },
+      "tool_meta": {
+        "metadata": {},
+        "name": "lookup_issue"
+      },
+      "tool_name": "lookup_issue",
+      "tool_output": null,
+      "tool_run_id": "call-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_tool_start"
+  }
+}

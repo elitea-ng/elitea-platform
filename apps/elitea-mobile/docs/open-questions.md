@@ -65,8 +65,12 @@ Also define the key schema, such as `serverUrl`, `lockServer`, and policy overri
 ## 6. Offline attachments (follow-up)
 
 The offline store keeps conversations, transcripts, notifications and the outbox.
-Attachments are not stored, whatever `offline_attachments` says, and an offline
-thread marks messages with attachments as viewable in the web app only. The design
+Attachments are not stored, whatever `offline_attachments` says. Online, a file of a
+sent message is downloaded when tapped (client contract 1.1), written to a temporary
+file for the viewer or the system preview, and deleted when the viewer closes, at the
+next open, when the thread goes, at app start and with the session's caches; the
+inline thumbnails the model was given live in the encrypted transcript rows. Offline,
+the files cannot be opened. The design
 (per-file AES-GCM through `expo-crypto`, each file key wrapped by the database key,
 files deleted with the store and by the same retention and size cap) is in
 plan-app B4.6; it needs a decision on download triggers and size limits before it

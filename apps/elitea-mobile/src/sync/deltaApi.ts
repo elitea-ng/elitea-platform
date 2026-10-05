@@ -97,10 +97,10 @@ export async function fetchMessageChanges(
   signal?: AbortSignal,
 ): Promise<DeltaPage<ConversationMessage>> {
   const body = await unwrap(
-    client.GET('/elitea_core/messages/prompt_lib/{project_id}/{conversation_uuid}', {
+    client.GET('/elitea_core/messages/prompt_lib/{project_id}/{conversation_id}', {
       params: {
         // The transcript list takes the numeric id; its cursor is bound to it.
-        path: { project_id: String(projectId), conversation_uuid: String(conversationId) },
+        path: { project_id: String(projectId), conversation_id: String(conversationId) },
         query: { limit: DELTA_LIMIT, changes_since: cursor },
       },
       signal,

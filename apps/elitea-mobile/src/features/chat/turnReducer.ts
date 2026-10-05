@@ -1,4 +1,12 @@
 import type { Frame, NodeEvent } from '@/features/chat/frames';
+import {
+  isToolFrame,
+  mergeFanout,
+  pauseOf,
+  reduceToolFrame,
+  type ToolStep,
+  type TurnPause,
+} from '@/features/chat/toolActivity';
 
 /**
  * One turn's live state, folded from execution frames.
@@ -19,7 +27,7 @@ export type TurnPhase =
   /** Execution started; waiting for or receiving frames. */
   | 'streaming'
   | 'done'
-  /** Paused for something mobile cannot do (approval, MCP sign-in). */
+  /** Paused for the user: an approval, an answer, or a toolkit sign-in (`pause`). */
   | 'paused'
   | 'failed';
 
@@ -40,6 +48,14 @@ export interface TurnState {
   unknownFrames: number;
   /** Set after an intermediate response: the next delta starts a new paragraph. */
   paragraphPending: boolean;
+  /** The tool calls of this turn, in start order (memory only, capped I/O). */
+  tools: ToolStep[];
+  /**
+   * What the turn waits for. Terminal pauses set phase `paused`; a fan-out
+   * child's approval and the output-limit offer are recorded while the turn
+   * goes on.
+   */
+  pause: TurnPause | null;
 }
 
 export const INITIAL_TURN: TurnState = {
@@ -50,9 +66,9 @@ export const INITIAL_TURN: TurnState = {
   refreshRequests: 0,
   unknownFrames: 0,
   paragraphPending: false,
+  tools: [],
+  pause: null,
 };
-
-export const PAUSED_STATUS = 'Needs your approval — continue in the web app.';
 export const GENERIC_FAILURE = 'The agent could not finish this reply.';
 const MAX_ERROR_TEXT = 300;
 
@@ -157,14 +173,21 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
         content: streaming.content === '' && text !== '' ? text : streaming.content,
       };
     }
-    case 'agent_tool_start': {
-      const tool = node.response_metadata?.tool_name;
-      return { ...streaming, status: tool ? `Using ${tool}…` : 'Using a tool…' };
-    }
-    case 'agent_tool_end':
-      return { ...streaming, status: null };
+    case 'agent_requires_confirmation':
+      // The answer stopped at the model's output limit; it still settles.
+      return { ...streaming, pause: pauseOf(node) };
     default:
       break;
+  }
+  if (isToolFrame(node.type)) {
+    const tools = reduceToolFrame(streaming.tools, node);
+    if (node.type === 'agent_tool_start') {
+      const started = tools.find((t) => t.status === 'running' && t.id === tools[tools.length - 1]?.id);
+      const label = started?.displayName ?? started?.name;
+      return { ...streaming, tools, status: label ? `Using ${label}…` : 'Using a tool…' };
+    }
+    const running = tools.some((t) => t.status === 'running');
+    return { ...streaming, tools, status: running ? streaming.status : null };
   }
   if (FAILURE_TYPES.has(node.type)) {
     return {
@@ -174,10 +197,13 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
       error: { message: failureText(node.content), retryable: true },
     };
   }
-  if (isTerminalPause(node)) {
-    return { ...streaming, phase: 'paused', status: PAUSED_STATUS };
+  if (node.type === 'agent_hitl_interrupt' || node.type === 'mcp_authorization_required') {
+    const tools = node.type === 'mcp_authorization_required' ? reduceToolFrame(streaming.tools, node) : streaming.tools;
+    const pause = pauseOf(node);
+    const merged = pause === null ? streaming.pause : mergeFanout(streaming.pause, pause);
+    if (isTerminalPause(node)) return { ...streaming, tools, pause: merged, phase: 'paused', status: null };
+    return { ...streaming, tools, pause: merged };
   }
-  if (node.type === 'mcp_authorization_required') return streaming;
   if (PROGRESS_TYPES.has(node.type) || node.type.startsWith('agent_')) return streaming;
   return { ...streaming, unknownFrames: streaming.unknownFrames + 1 };
 }

@@ -6,7 +6,7 @@ import { prepareTurn } from '@/api/queries/sendMessage';
 import { migrate } from '@/db/migrations';
 import { offlineStore } from '@/db/offlineStore';
 import { Db } from '@/db/sql';
-import { clearLiveTurns, getLiveTurn, turnKey } from '@/features/chat/turnController';
+import { clearLiveTurns, getLiveTurn, setLiveTurn, turnKey, type TurnController } from '@/features/chat/turnController';
 import { useTurn } from '@/features/chat/useTurn';
 import { __setOnlineForTests } from '@/lib/network';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
@@ -101,5 +101,87 @@ describe('useTurn.send', () => {
     });
     expect(problem).toEqual(expect.any(String));
     expect(getLiveTurn(turnKey(P, UUID))).toBeUndefined();
+  });
+
+  // A4: the composer's mentions reach the wire as user_ids.
+  it('sends the mentions as user_ids and is_mentioning_everyone', async () => {
+    const db = await openStore();
+    jest.spyOn(outboxDrainer, 'drain').mockResolvedValue({ sent: 0, failed: 0, waiting: 1 });
+    const server = fakeServer();
+    server.on('POST', `/elitea_core/messages/prompt_lib/${P}/${UUID}`, { status: 503 });
+    globalThis.fetch = ((input: RequestInfo, init?: RequestInit) => server.fetch(new Request(input, init))) as typeof fetch;
+    const { result } = await renderTurn();
+    await act(async () => {
+      await result.current.send('@Anna @Everyone hi', { mentions: { userIds: [42], everyone: true } });
+    });
+    // The workspace answered 503, so the turn went to the outbox; the bytes sent are the stored ones.
+    const post = server.requests.find((r) => r.method === 'POST');
+    expect(JSON.parse(post!.body!)).toMatchObject({ user_ids: [42], is_mentioning_everyone: true });
+    const [queued] = await listOutbox(db, P, UUID);
+    expect(queued.bodyJson).toBe(post!.body);
+  });
+
+  it('refuses a send that mentions more than 64 people, with its own text', async () => {
+    await openStore();
+    const { result } = await renderTurn();
+    let problem: string | null = null;
+    await act(async () => {
+      problem = await result.current.send('hi', { mentions: { userIds: Array.from({ length: 65 }, (_, i) => i + 1), everyone: false } });
+    });
+    expect(problem).toBe('This message mentions too many people.');
+  });
+
+  it('continueWith refuses offline and never queues a continuation', async () => {
+    const db = await openStore();
+    __setOnlineForTests(false);
+    const { result } = await renderTurn();
+    let problem: string | null = null;
+    await act(async () => {
+      problem = await result.current.continueWith('agent.continue.output-limit.v1', {
+        project_id: P,
+        conversation_uuid: UUID,
+        message_id: 'resp-1',
+      });
+    });
+    expect(problem).toBe("You're offline.");
+    expect(getLiveTurn(turnKey(P, UUID))).toBeUndefined();
+    expect(await listOutbox(db, P, UUID)).toEqual([]);
+  });
+
+  it('continueWith starts a live continuation turn online', async () => {
+    await openStore();
+    const server = fakeServer();
+    globalThis.fetch = ((input: RequestInfo, init?: RequestInit) => server.fetch(new Request(input, init))) as typeof fetch;
+    const { result } = await renderTurn();
+    await act(async () => {
+      await result.current.continueWith('agent.continue.output-limit.v1', { project_id: P, conversation_uuid: UUID, message_id: 'resp-1' });
+    });
+    expect(getLiveTurn(turnKey(P, UUID))?.getSnapshot().continuation).toBe(true);
+  });
+});
+
+describe('useTurn settling', () => {
+  it('reads the tool history again when a turn (or a continuation of it) has settled', async () => {
+    await openStore();
+    // The answer's tool history as read while it was paused: one call. The
+    // approved continuation writes a second call into the SAME message group,
+    // so the group ids — the traces query's key — do not change.
+    const traces = ['p', P, 'traces', 42, '34'];
+    const conversation = ['p', P, 'conversation', '42'];
+    queries!.setQueryData(traces, new Map([[34, [{ id: 'trace-19' }]]]));
+    queries!.setQueryData(conversation, { id: 42 });
+    const snapshot = { settled: true, turn: { phase: 'done' } };
+    const ended = {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => {},
+      reattach: async () => {},
+      detach: () => {},
+    } as unknown as TurnController;
+    setLiveTurn(turnKey(P, UUID), ended);
+
+    await renderTurn();
+
+    expect(queries!.getQueryState(conversation)?.isInvalidated).toBe(true);
+    expect(queries!.getQueryState(traces)?.isInvalidated).toBe(true);
   });
 });

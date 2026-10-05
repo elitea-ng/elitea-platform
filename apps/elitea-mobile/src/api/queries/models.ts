@@ -85,7 +85,16 @@ export function useModels(projectId: number | null, enabled: boolean = true) {
   });
 }
 
-type CreateConversationRequest = components['schemas']['CreateConversationRequest'];
+/**
+ * The create body. Upstream (06a490427) types `participants` with the READ
+ * shape (`ConversationParticipant`, `id` required) although the create route
+ * reads the same keys as `addConversationParticipants`
+ * (`ConversationParticipantCreate`, no id); the app sends the create shape.
+ */
+type CreateConversationRequest = Omit<components['schemas']['ConversationCreateRequest'], 'participants'> & {
+  participants: components['schemas']['ConversationParticipantCreate'][];
+};
+type WireCreateConversationRequest = components['schemas']['ConversationCreateRequest'];
 
 const Created = z.looseObject({
   id: z
@@ -129,7 +138,7 @@ export async function startConversationWithModel(
   const created = await unwrap(
     client.POST('/elitea_core/conversations/prompt_lib/{project_id}', {
       params: { path: { project_id: String(projectId) } },
-      body,
+      body: body as unknown as WireCreateConversationRequest,
     }),
   );
   const parsed = Created.safeParse(created);

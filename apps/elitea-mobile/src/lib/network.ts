@@ -1,5 +1,6 @@
 import { onlineManager } from '@tanstack/react-query';
 import { addNetworkStateListener, getNetworkStateAsync, type NetworkState } from 'expo-network';
+import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 
 /**
@@ -37,6 +38,13 @@ export const network = {
     };
   },
 };
+
+const subscribeOnline = (listener: () => void) => network.subscribe(() => listener());
+
+/** The device's online state, re-rendering on change. */
+export function useOnline(): boolean {
+  return useSyncExternalStore(subscribeOnline, network.isOnline, network.isOnline);
+}
 
 /** Starts listening (idempotent). */
 export function wireNetwork(): void {

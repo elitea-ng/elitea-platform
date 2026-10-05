@@ -1,11 +1,8 @@
+import { router } from 'expo-router';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import {
-  markAllSeen,
-  notificationTitle,
-  useInvalidateNotifications,
-  useNotifications,
-} from '@/api/queries/notifications';
+import { markAllSeen, markSeen, useInvalidateNotifications, useNotifications } from '@/api/queries/notifications';
+import { describeNotification } from '@/features/notifications/notificationModel';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
@@ -51,15 +48,36 @@ export default function NotificationsScreen() {
             </Text>
           }
           ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: palette.border }]} />}
-          renderItem={({ item }) => (
-            <View style={styles.row}>
-              {!item.is_seen ? <View style={[styles.dot, { backgroundColor: palette.accent }]} /> : null}
-              <Text style={[styles.title, { color: palette.text, fontWeight: item.is_seen ? '400' : '600' }]}>
-                {notificationTitle(item.event_type)}
-              </Text>
-              <Text style={[styles.age, { color: palette.textSecondary }]}>{formatAge(item.created_at)}</Text>
-            </View>
-          )}
+          renderItem={({ item }) => {
+            const view = describeNotification(item);
+            const row = (
+              <>
+                {!item.is_seen ? <View style={[styles.dot, { backgroundColor: palette.accent }]} /> : null}
+                <Text style={[styles.title, { color: palette.text, fontWeight: item.is_seen ? '400' : '600' }]}>
+                  {view.title}
+                </Text>
+                <Text style={[styles.age, { color: palette.textSecondary }]}>{formatAge(item.created_at)}</Text>
+              </>
+            );
+            const ref = view.conversationRef;
+            if (ref === null) return <View style={styles.row}>{row}</View>;
+            return (
+              <Pressable
+                accessibilityRole="link"
+                accessibilityHint="Opens the conversation"
+                style={styles.row}
+                onPress={() => {
+                  if (!item.is_seen && projectId !== null && !isOfflineCopy(notifications.data)) {
+                    void markSeen(projectId, item.id)
+                      .catch(() => false)
+                      .then(invalidate);
+                  }
+                  router.push({ pathname: '/c/[id]', params: { id: ref } });
+                }}>
+                {row}
+              </Pressable>
+            );
+          }}
         />
       )}
     </View>

@@ -173,6 +173,9 @@ function classify(error: unknown): Exclude<Classified, { kind: 'sent' }> {
         return { kind: 'retry', retryAfterMs: failure.retryAfterMs };
       case 'conflict':
         return failure.retryable ? { kind: 'retry', retryAfterMs: failure.retryAfterMs } : { kind: 'failed', reason: 'conflict' };
+      case 'already_resolved':
+        // A send never resolves a pause; the server closed this turn: final.
+        return { kind: 'failed', reason: 'conflict' };
       case 'idempotency_conflict':
         return { kind: 'failed', reason: 'idempotency_conflict' };
       case 'unsupported_agent':

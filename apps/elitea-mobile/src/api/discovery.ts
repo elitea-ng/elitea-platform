@@ -45,6 +45,24 @@ const PublicPolicySchema = z.looseObject({
   min_client_version: VERSION_TEXT,
 });
 
+const BYTES = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const EXTENSIONS = z.array(z.string().min(1).max(32)).max(512);
+
+/** Client contract 1.1: the deployment's chat attachment limits. */
+export const AttachmentPolicySchema = z.looseObject({
+  max_files: z.number().int().nonnegative().max(10_000),
+  max_total_bytes: BYTES,
+  max_file_bytes: BYTES,
+  max_image_bytes: BYTES,
+  chunk_bytes: BYTES,
+  accepted_extensions: EXTENSIONS,
+  max_extract_bytes: BYTES,
+  inline_image_max_bytes: BYTES,
+  inline_image_formats: EXTENSIONS,
+  inline_image_downscale: z.boolean(),
+});
+export type AttachmentPolicy = z.infer<typeof AttachmentPolicySchema>;
+
 export const DiscoveryDocumentSchema = z.looseObject({
   server_version: z.string().max(32),
   client_contract: z.string().max(16),
@@ -54,15 +72,23 @@ export const DiscoveryDocumentSchema = z.looseObject({
   native_auth: NativeAuthSchema.nullable(),
   client_policy: PublicPolicySchema,
   min_client_version: z.record(z.string().max(128), VERSION_TEXT),
+  // Client contract 1.1. A 1.0 server has none, and a malformed block must not
+  // cost the whole document: it reads as absent (the app's defaults apply).
+  attachments: AttachmentPolicySchema.optional().catch(undefined),
 });
 
 export type DiscoveryDocument = z.infer<typeof DiscoveryDocumentSchema>;
 export type NativeAuthEndpoints = z.infer<typeof NativeAuthSchema>;
 
-// The runtime schema must stay assignable to the contract's type (overlay
-// written against server commit 398985cdc); a drift fails typecheck here.
+// The runtime schema must stay assignable to the contract's type; a drift
+// fails typecheck here. `attachments` is required upstream (1.1) but optional
+// here, because the app also serves 1.0 servers.
 type Assignable<A, B> = A extends B ? true : false;
-const contractCheck: Assignable<DiscoveryDocument, components['schemas']['DiscoveryDocument']> = true;
+type WireDiscovery = components['schemas']['DiscoveryDocument'];
+const contractCheck: Assignable<
+  DiscoveryDocument,
+  Omit<WireDiscovery, 'attachments'> & { attachments?: WireDiscovery['attachments'] }
+> = true;
 void contractCheck;
 
 export type DiscoveryFailure =
@@ -163,6 +189,20 @@ export function minimumVersionFor(document: DiscoveryDocument, clientId: string 
 export function contractMajor(contract: string): number | null {
   const match = /^(\d{1,4})(?:\.\d{1,6})?$/.exec(contract.trim());
   return match ? Number(match[1]) : null;
+}
+
+/** The minor of a `major.minor` contract version (`1` → 0), or null when it does not parse. */
+export function contractMinor(contract: string): number | null {
+  const match = /^(\d{1,4})(?:\.(\d{1,6}))?$/.exec(contract.trim());
+  return match ? Number(match[2] ?? '0') : null;
+}
+
+/** True when the document's contract is `major.minor` or newer within the same major. */
+export function speaksContract(document: Pick<DiscoveryDocument, 'client_contract'> | null | undefined, major: number, minor: number): boolean {
+  if (!document) return false;
+  const docMajor = contractMajor(document.client_contract);
+  const docMinor = contractMinor(document.client_contract);
+  return docMajor === major && docMinor !== null && docMinor >= minor;
 }
 
 export function assessDiscovery(

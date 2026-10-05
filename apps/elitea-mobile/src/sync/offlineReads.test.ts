@@ -85,7 +85,7 @@ describe('toMessageGroup', () => {
       messageRow(4, { message_items: [{ id: 9, item_type: 'attachment_message', order_index: 0, item_details: {} }] }) as never,
     );
     expect(group).toMatchObject({ id: 4, uuid: expect.any(String), author_participant_id: 2, is_streaming: false });
-    expect(group?.message_items.map((i) => i.item_type)).toEqual(['text_message', 'attachment_message']);
+    expect(group?.message_items.map((i: { item_type: string }) => i.item_type)).toEqual(['text_message', 'attachment_message']);
     expect(toMessageGroup({ ...messageRow(1), id: 'x' } as never)).toBeNull();
   });
 });

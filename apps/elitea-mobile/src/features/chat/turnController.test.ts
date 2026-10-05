@@ -366,7 +366,7 @@ describe('TurnController', () => {
   it('retries a retryable 409 and shows the server message for a final one', async () => {
     const h = harness([
       () => json(409, { error: 'agent_regeneration_pending', message: 'wait', retryable: true }, { 'Retry-After': '1' }),
-      () => json(409, { error: 'agent_hitl_already_resolved', message: 'Refresh first.', retryable: false }),
+      () => json(409, { error: 'conversation_changed', message: 'Refresh first.', retryable: false }),
     ]);
     await h.controller.start();
     expect(h.sent).toHaveLength(2);
@@ -450,5 +450,103 @@ describe('TurnController', () => {
     expect(getLiveTurn('7:x')).toBe(b);
     clearLiveTurns();
     expect(getLiveTurn('7:x')).toBeUndefined();
+  });
+});
+
+describe('continuations (A8)', () => {
+  function continuationHarness(answer: () => Response | Promise<Response>, onAlreadyResolved = jest.fn()) {
+    const sent: Sent[] = [];
+    const fetch: BaseFetch = async (input, init) => {
+      sent.push({ url: input.url, body: await input.clone().text(), contentType: new Headers(init?.headers).get('Content-Type') });
+      return answer();
+    };
+    const client = createApiClient({ origin: ORIGIN, auth: { kind: 'session' }, fetch });
+    const stream = fakeStreamTransport();
+    const onSettle = jest.fn(async () => {});
+    const body = { project_id: 7, conversation_uuid: CONV, message_id: 'resp-1', thread_id: 'thread-1', hitl_resume: true, hitl_action: 'approve' };
+    const controller = TurnController.continuation({ projectId: 7, conversationUuid: CONV }, 'agent.continue.hitl.v1', body, {
+      client,
+      transport: stream.transport,
+      appState: null,
+      sleep: async () => {},
+      onSettle,
+      onAlreadyResolved,
+    });
+    return { controller, sent, stream, onSettle, onAlreadyResolved };
+  }
+
+  it('POSTs the decision once to continue_predict and streams the rest of the answer', async () => {
+    const h = continuationHarness(() => started());
+    const run = h.controller.start();
+    await flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0].url).toBe(`${ORIGIN}/api/v2/elitea_core/continue_predict/prompt_lib/7/${CONV}?execution_contract=agent.continue.hitl.v1`);
+    expect(JSON.parse(h.sent[0].body)).toMatchObject({ hitl_action: 'approve', message_id: 'resp-1' });
+    expect(h.controller.getSnapshot().continuation).toBe(true);
+    h.stream.connections[0].push(loadFixtureText('simple-answer'));
+    await run;
+    expect(h.controller.getSnapshot().turn.phase).toBe('done');
+    expect(h.onSettle).toHaveBeenCalled();
+  });
+
+  it('a 409 *_already_resolved fails as "Answered elsewhere", not retried, and asks for a refetch', async () => {
+    const h = continuationHarness(() => json(409, { error: 'agent_hitl_already_resolved', retryable: false }));
+    await h.controller.start();
+    expect(h.sent).toHaveLength(1);
+    expect(h.controller.getSnapshot()).toMatchObject({
+      failure: 'send',
+      turn: { phase: 'failed', error: { message: FAILURE_TEXT.answeredElsewhere, retryable: false } },
+    });
+    expect(h.onAlreadyResolved).toHaveBeenCalledTimes(1);
+    expect(h.stream.connections).toHaveLength(0);
+  });
+
+  it('a lost answer is not re-sent by itself (online only, the user retries)', async () => {
+    const h = continuationHarness(() => {
+      throw new TypeError('Network request failed');
+    });
+    await h.controller.start();
+    expect(h.sent).toHaveLength(1);
+    expect(h.controller.getSnapshot().turn).toMatchObject({ phase: 'failed', error: { retryable: true } });
+  });
+
+  it('re-attaching a continuation replays its stream and never POSTs it again', async () => {
+    const h = continuationHarness(() => started());
+    const first = h.controller.start();
+    await flush();
+    h.controller.detach();
+    await first;
+    const second = h.controller.reattach();
+    await flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.stream.connections).toHaveLength(2);
+    h.stream.connections[1].push(loadFixtureText('simple-answer'));
+    await second;
+    expect(h.controller.getSnapshot().turn.phase).toBe('done');
+  });
+
+  it('a continuation detached while its POST is in flight is not POSTed again on re-attach', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = continuationHarness(async () => {
+      await gate;
+      return started();
+    });
+    const first = h.controller.start();
+    await flush();
+    expect(h.sent).toHaveLength(1);
+    h.controller.detach();
+    const second = h.controller.reattach();
+    await flush();
+    release();
+    await flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.stream.connections).toHaveLength(1);
+    h.stream.connections[0].push(loadFixtureText('simple-answer'));
+    await Promise.all([first, second]);
+    expect(h.controller.getSnapshot()).toMatchObject({ failure: null, turn: { phase: 'done' } });
+    expect(h.onAlreadyResolved).not.toHaveBeenCalled();
   });
 });
