@@ -2108,6 +2108,190 @@ fn input_attachments_are_spliced_into_the_human_message_after_the_user_text() {
     );
 }
 
+/// One stored attachment as main projects it into `chat_history` and into
+/// `input_attachments`: the header chunk that keeps its `elitea_attachment`
+/// marker, then the document text.
+fn stored_attachment_chunks(file: &str, text: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "type": "text",
+            "text": format!("Bucket: chat-attachments\nFilename: conv/{file}\nfilepath: /chat-attachments/conv/{file}"),
+            "elitea_attachment": {
+                "needs_content_extraction": true,
+                "bucket": "chat-attachments",
+                "name": format!("conv/{file}"),
+                "filepath": format!("/chat-attachments/conv/{file}"),
+                "item_id": "11111111-1111-1111-1111-111111111111"
+            }
+        }),
+        json!({"type": "text", "text": text}),
+    ]
+}
+
+fn visible_texts(request: &LlmRequest) -> Vec<String> {
+    request
+        .contents
+        .iter()
+        .map(|content| {
+            content
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    Part::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// Demo issue 2: the second and third questions in a chat that already holds
+/// a file failed with INVALID_INPUT, because main's history projection keeps
+/// the stored header chunk's `elitea_attachment` marker and history admission
+/// refused the third key. Each turn here gets the history main would send,
+/// with and without a new attachment, over one durable session.
+#[tokio::test]
+async fn follow_up_turns_in_a_chat_with_attachments_are_admitted_and_answered() {
+    let sessions = Arc::new(InMemorySessionService::new());
+    let first_file = stored_attachment_chunks("msa.pdf", "Notice period: 90 days.");
+    let second_file = stored_attachment_chunks("sla.pdf", "Service credit: 10%.");
+    let user_message = |question: &str, files: &[Vec<Value>]| {
+        let mut content = vec![json!({"type": "text", "text": question})];
+        for file in files {
+            content.extend(file.iter().cloned());
+        }
+        json!({"role": "user", "content": content, "additional_kwargs": {}})
+    };
+    let answer = |text: &str| {
+        json!({"role": "assistant", "content": [{"type": "text", "text": text}], "additional_kwargs": {}})
+    };
+    let turns = [
+        ("What is the notice period?", Vec::new(), first_file.clone()),
+        (
+            "And the early termination fee?",
+            vec![
+                user_message("What is the notice period?", &[first_file.clone()]),
+                answer("The resumed answer is 42."),
+            ],
+            Vec::new(),
+        ),
+        (
+            "Compare it with the SLA credit.",
+            vec![
+                user_message("What is the notice period?", &[first_file.clone()]),
+                answer("The resumed answer is 42."),
+                user_message("And the early termination fee?", &[]),
+                answer("The resumed answer is 42."),
+            ],
+            second_file.clone(),
+        ),
+    ];
+    for (turn, (question, history, attachments)) in turns.into_iter().enumerate() {
+        let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+        request.payload.chat_history = history;
+        request.payload.input_attachments = attachments;
+        request.payload.user_input = UserInput::Text(question.to_owned());
+        let profile = OrdinaryNoToolProfile::validate(&request)
+            .unwrap_or_else(|error| panic!("turn {} must be admitted: {error:?}", turn + 1));
+        let plan = OrdinaryNativeAgentPlan::from_authorized(
+            &request,
+            &profile,
+            &AuthorizedNativeCommandBinding::fixture(),
+            &request.payload.input_attachments,
+        )
+        .expect("native plan");
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let model = FixtureBoundModel {
+            model: Arc::new(CapturingFinalLlm {
+                requests: Arc::clone(&captured),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            completed: "The resumed answer is 42.".to_owned(),
+        };
+        let session_service: Arc<dyn SessionService> = sessions.clone();
+        let assembled = assemble_ordinary_native_with_sessions(
+            model,
+            plan,
+            Vec::new(),
+            SensitiveToolCatalog::default(),
+            session_service,
+        )
+        .await
+        .expect("assembly");
+        let (mut run, _projector, completion) = assembled.start().expect("run");
+        while run.next_event().await.expect("event").is_some() {}
+        completion.select().await.expect("completion");
+
+        let requests = captured.lock().expect("captured requests");
+        let [model_request] = requests.as_slice() else {
+            panic!("exactly one model request per turn");
+        };
+        let texts = visible_texts(model_request);
+        let all = texts.join("\n");
+        assert!(texts.last().is_some_and(|last| last.starts_with(question)));
+        // The first file's text stays in front of the model on every turn.
+        assert!(all.contains("Notice period: 90 days."), "turn {}: {all}", turn + 1);
+        assert_eq!(turn == 2, all.contains("Service credit: 10%."));
+        assert!(!all.contains("elitea_attachment"));
+        assert!(!all.contains("needs_content_extraction"));
+    }
+}
+
+/// A fresh session is seeded from `chat_history`. A history attachment chunk
+/// reaches the seed as its text, without the marker. A malformed marker is
+/// still refused at admission.
+#[test]
+fn history_attachment_markers_are_admitted_stripped_and_still_validated() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    let mut content = vec![json!({"type": "text", "text": "earlier question"})];
+    content.extend(stored_attachment_chunks("msa.pdf", "Notice period: 90 days."));
+    request.payload.chat_history = vec![
+        json!({"role": "user", "content": content, "additional_kwargs": {}}),
+        json!({"role": "assistant", "content": [{"type": "text", "text": "90 days"}], "additional_kwargs": {}}),
+    ];
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("history with a file");
+    let history = profile.chat_history();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].parts.len(), 3);
+    let seeded = format!("{:?}", history[0]);
+    assert!(seeded.contains("Filename: conv/msa.pdf"));
+    assert!(seeded.contains("Notice period: 90 days."));
+    assert!(!seeded.contains("elitea_attachment"));
+
+    for marker in [
+        json!("not an object"),
+        json!({"needs_content_extraction": "yes"}),
+        json!({"needs_content_extraction": true, "bucket": "chat-attachments"}),
+        json!({"bucket": "x".repeat(257)}),
+    ] {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        request.payload.chat_history = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "header", "elitea_attachment": marker}],
+            "additional_kwargs": {}
+        })];
+        assert_eq!(
+            OrdinaryNoToolProfile::validate(&request)
+                .expect_err("malformed history marker")
+                .code(),
+            super::runtime::NativeAgentAssemblyErrorCode::InvalidInput
+        );
+    }
+    // Any other extra key is still outside the frozen history shape.
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    request.payload.chat_history = vec![json!({
+        "role": "user",
+        "content": [{"type": "text", "text": "header", "cache_control": {}}],
+        "additional_kwargs": {}
+    })];
+    assert_eq!(
+        OrdinaryNoToolProfile::validate(&request)
+            .expect_err("unknown history key")
+            .code(),
+        super::runtime::NativeAgentAssemblyErrorCode::InvalidInput
+    );
+}
+
 #[test]
 fn session_definition_lineage_is_request_independent_and_application_version_scoped() {
     let mut first_request = ordinary_request(AgentExecutionKind::Application);
