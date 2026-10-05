@@ -20,7 +20,7 @@ function lastUrl(spy: MockInstance<typeof fetch>): string {
 }
 
 describe('originRoot', () => {
-  it('resolves the path against the base ORIGIN, dropping the /api/v2 path', async () => {
+  it('resolves the path beside /api/v2, not under it', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
     await createHttpClient({ baseUrl: '/api/v2' }).post('/llm/v1/audio/speech', { body: '{}', originRoot: true });
     expect(lastUrl(spy)).toBe(`${ORIGIN}/llm/v1/audio/speech`);
@@ -33,6 +33,21 @@ describe('originRoot', () => {
       originRoot: true,
     });
     expect(lastUrl(spy)).toBe('https://api.example.test/llm/v1/audio/speech');
+  });
+
+  it('keeps a path prefix in front of /api/v2 (an ingress path)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    await createHttpClient({ baseUrl: 'https://host.example.test/elitea/api/v2/' }).post('/llm/v1/audio/speech', {
+      body: '{}',
+      originRoot: true,
+    });
+    expect(lastUrl(spy)).toBe('https://host.example.test/elitea/llm/v1/audio/speech');
+  });
+
+  it('keeps a relative path prefix too', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    await createHttpClient({ baseUrl: '/elitea/api/v2' }).post('/llm/v1/audio/transcriptions', { body: '{}', originRoot: true });
+    expect(lastUrl(spy)).toBe(`${ORIGIN}/elitea/llm/v1/audio/transcriptions`);
   });
 
   it('leaves every other request under the base path', async () => {

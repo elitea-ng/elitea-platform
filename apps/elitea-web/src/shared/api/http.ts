@@ -98,7 +98,13 @@ export interface HttpRequestOptions {
   query?: Readonly<Record<string, string | number | boolean | undefined>>;
   /** A peripheral poll whose 401 must NOT escalate to re-auth — see `features/notifications/api/notifications.ts` for the logout loop this exists to stop. */
   background?: boolean;
-  /** Resolve `path` against the API base's ORIGIN, not its path: the `/llm` data plane sits beside `/api/v2`, not under it. */
+  /**
+   * Resolve `path` beside the API base, not under it: the `/llm` data plane
+   * is a sibling of `/api/v2`. The base's trailing `/api/v2` is removed and any
+   * path prefix before it is kept, as `shared/lib/api-url.ts`'s
+   * `toOpenAiBaseUrl` does, so `https://host/elitea/api/v2` gives
+   * `https://host/elitea/llm/...`.
+   */
   originRoot?: boolean;
   /** Read a SUCCESSFUL body as an `ArrayBuffer` (audio). A failure body still parses as JSON or text. */
   binary?: boolean;
@@ -198,6 +204,11 @@ function serializeBody(method: HttpMethod, body: unknown, url: string): string |
   }
 }
 
+/** The base URL with its trailing `/api/v2` removed: the root that `/llm` and `/api/v2` share. A path prefix before `/api/v2` stays. */
+function siblingRoot(base: URL): string {
+  return base.origin + base.pathname.replace(/\/api\/v2\/?$/, '').replace(/\/$/, '');
+}
+
 interface PreparedRequest {
   url: string;
   init: RequestInit;
@@ -205,7 +216,7 @@ interface PreparedRequest {
 
 function prepare(cfg: HttpConfig, credentials: RequestCredentials, method: HttpMethod, path: string, options: HttpRequestOptions): PreparedRequest {
   const base = new URL(cfg.baseUrl, window.location.origin);
-  const url = buildUrl(options.originRoot === true ? base.origin : base.toString(), path, options.query);
+  const url = buildUrl(options.originRoot === true ? siblingRoot(base) : base.toString(), path, options.query);
   const headers = new Headers(options.headers);
   const body = serializeBody(method, options.body, url);
   if (body !== undefined && typeof options.body !== 'string' && !isPreEncodedBody(options.body) && !headers.has('Content-Type')) {
