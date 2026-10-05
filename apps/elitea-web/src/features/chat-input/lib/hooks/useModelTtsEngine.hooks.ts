@@ -4,7 +4,7 @@
  * across `.types.ts` (the shared refs bag), `.scheduler.ts` (AudioContext +
  * buffered PCM queue), `.stream.ts` (one `POST /llm/v1/audio/speech` per
  * sentence — it replaced the socket.io `tts_*` events, see
- * `api/voiceTransport.ts`), and `.raf.ts` (highlight-loop math) — this file
+ * `shared/api/voiceTransport.ts`), and `.raf.ts` (highlight-loop math) — this file
  * wires those pieces into React effects/callbacks and stays a thin
  * dispatcher, per those files' own module docs (§3.5 budgets).
  *
@@ -19,8 +19,8 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 
-import { isVoiceAbort, VoiceTransportError } from '../../api/voiceTransport';
-import type { SpeechRequest, VoiceErrorCode } from '../../api/voiceTransport';
+import { isVoiceAbort, VoiceTransportError } from '@/shared/api/voiceTransport';
+import type { SpeechRequest, VoiceErrorCode } from '@/shared/api/voiceTransport';
 import { buildCharTimeline } from '../helpers/ttsTimeline.helpers';
 import { speechInstructionsFor } from '../helpers/voiceAudio.helpers';
 

@@ -8,7 +8,7 @@
  * talk to one: dictation streamed PCM as `asr_audio_chunk` events and
  * read-aloud waited for `tts_audio_chunk` events that never came. Both now go
  * over plain HTTPS through the session-authenticated `/llm` edge and the
- * gateway (`features/chat-input/api/voiceTransport.ts`):
+ * gateway (`shared/api/voiceTransport.ts`):
  *
  *  1. DICTATION. A project with a transcription (`asr`) model: the mic opens,
  *     the browser cuts the utterance on silence, uploads ONE WAV to

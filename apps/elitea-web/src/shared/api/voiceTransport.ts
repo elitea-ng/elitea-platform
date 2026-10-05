@@ -23,11 +23,13 @@ export const TRANSCRIPTION_PATH = '/llm/v1/audio/transcriptions';
  * Why a voice request failed, as the UI words it:
  *  - `model-unavailable` — the model is not found, its provider cannot do
  *    this operation (501 `unsupported_operation`), or `/llm` has no backend.
- *  - `limit` — a budget (402) or rate limit (429) refused it.
+ *  - `budget` — the project budget is used up (402). It stays refused until
+ *    the budget resets, so the user must see it.
+ *  - `limit` — a rate limit refused it (429). It clears on its own.
  *  - `too-large` — the edge refused the body (413).
  *  - `failed` — anything else, including a network failure.
  */
-export type VoiceErrorCode = 'model-unavailable' | 'limit' | 'too-large' | 'failed';
+export type VoiceErrorCode = 'model-unavailable' | 'budget' | 'limit' | 'too-large' | 'failed';
 
 export class VoiceTransportError extends Error {
   readonly code: VoiceErrorCode;
@@ -46,7 +48,8 @@ export function isVoiceAbort(err: unknown): boolean {
 }
 
 function codeForStatus(status: number): VoiceErrorCode {
-  if (status === 402 || status === 429) return 'limit';
+  if (status === 402) return 'budget';
+  if (status === 429) return 'limit';
   if (status === 413) return 'too-large';
   if (status === 404 || status === 501 || status === 503) return 'model-unavailable';
   return 'failed';

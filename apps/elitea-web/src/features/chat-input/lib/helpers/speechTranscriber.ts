@@ -16,10 +16,12 @@
  *
  * A RATE LIMIT IS DROPPED QUIETLY, as the old server dropped a 429: the
  * utterance is lost, recording stays alive, and the user keeps talking. Every
- * other refusal is reported once through `onError`.
+ * other refusal is reported once through `onError`. That includes a used-up
+ * budget (402, code `budget`): it does not clear on its own, so a quiet drop
+ * would let the user dictate forever with nothing landing in the composer.
  */
-import { isVoiceAbort, transcribeAudio, VoiceTransportError } from '../../api/voiceTransport';
-import type { VoiceErrorCode } from '../../api/voiceTransport';
+import { isVoiceAbort, transcribeAudio, VoiceTransportError } from '@/shared/api/voiceTransport';
+import type { VoiceErrorCode } from '@/shared/api/voiceTransport';
 
 import { encodeWav } from './voiceAudio.helpers';
 

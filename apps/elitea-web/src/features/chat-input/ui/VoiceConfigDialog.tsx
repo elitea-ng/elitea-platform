@@ -11,7 +11,7 @@ import type { TtsVoice } from '../api/ttsVoices';
 import type { TtsModel } from '../lib/hooks/useTextToSpeech.types';
 import type { VoiceConfig } from '../lib/hooks/useVoiceConfig.hooks';
 import { useVoiceConfig } from '../lib/hooks/useVoiceConfig.hooks';
-import { voiceProblemMessage } from '../lib/voiceProblems';
+import { voiceProblemMessage } from '@/shared/lib/voiceProblems';
 
 import { VoiceConfigControls } from './VoiceConfigControls';
 
@@ -24,7 +24,7 @@ import { VoiceConfigControls } from './VoiceConfigControls';
  * With no speech model configured the dialog SAYS so, above the controls:
  * the voice then comes from the browser, and a user who expected the
  * project's model would otherwise hear a different voice with no reason
- * given. The model preview goes over HTTPS (`api/voiceTransport.ts`) and
+ * given. The model preview goes over HTTPS (`shared/api/voiceTransport.ts`) and
  * needs the selected project, which the `/llm` edge bills.
  *
  * PUBLIC SLOT for the sibling "voice-asr" cluster: `VoiceControlButton.jsx`

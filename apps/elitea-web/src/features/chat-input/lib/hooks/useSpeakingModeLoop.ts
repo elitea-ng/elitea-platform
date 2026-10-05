@@ -40,7 +40,7 @@ import type { RefObject } from 'react';
 import type { ModelListItem } from '../../api/models';
 import { useModelsList } from '../../api/models';
 import { useSelectedProjectId } from '../../api/useSelectedProjectId';
-import { voiceErrorMessage } from '../voiceProblems';
+import { voiceErrorMessage } from '@/shared/lib/voiceProblems';
 import type { TranscriptEvent } from './useSpeechRecognition';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { useStreamingSpeechRecognition } from './useStreamingSpeechRecognition';
@@ -59,22 +59,33 @@ const LATENCY_EWMA_ALPHA = 0.3; // weight given to the most-recent sample
 const VAD_SILENCE_MS = 600;
 
 /**
- * Deliberately narrower than `../helpers/asrHelpers`'s exported
- * `isWhisperModel` (which also matches "transcribe") — old-app parity:
- * `useSpeakingModeLoop.hooks.js`'s own private `isWhisperModelName` is a
- * SEPARATE, narrower classifier from `asr.helpers.js`'s. N4: reproduce the
- * documented (if inconsistent) old-app behaviour rather than silently
- * unifying the two classifiers.
+ * A model that answers only the realtime WebSocket protocol. Every ASR request
+ * now goes to the batch route `POST /llm/v1/audio/transcriptions`
+ * (`useStreamingSpeechRecognition.ts`), which such a model cannot serve.
  */
-function isWhisperModelNameForSelection(name: string | undefined): boolean {
-  return Boolean(name && name.toLowerCase().includes('whisper'));
+function isRealtimeOnlyAsrModel(name: string | undefined): boolean {
+  return Boolean(name && name.toLowerCase().includes('realtime'));
 }
 
-/** `useSpeakingModeLoop.hooks.js`'s `selectAsrModel` — prefer a default streaming model, then any streaming model, then a default whisper model, then any whisper model. */
+/** A model known to serve the batch transcription route: the whisper family and the `*-transcribe` models. */
+function isBatchAsrModel(name: string | undefined): boolean {
+  const lower = name?.toLowerCase() ?? '';
+  return lower.includes('whisper') || lower.includes('transcribe');
+}
+
+/**
+ * The ASR model for server recognition, or `undefined` to use the browser
+ * engine. The old app preferred a streaming (realtime) model, because it
+ * reached that model over a WebSocket. The browser now sends every utterance
+ * to the batch route, so the order is: a default batch model, any batch
+ * model, a default other model, any other model. A realtime-only model is
+ * never selected; with only realtime models, the browser engine runs.
+ */
 export function selectAsrModel(items: readonly ModelListItem[]): ModelListItem | undefined {
-  const streaming = items.filter((m) => !isWhisperModelNameForSelection(m.name));
-  const whisper = items.filter((m) => isWhisperModelNameForSelection(m.name));
-  return streaming.find((m) => m.default) ?? streaming[0] ?? whisper.find((m) => m.default) ?? whisper[0];
+  const usable = items.filter((m) => !isRealtimeOnlyAsrModel(m.name));
+  const batch = usable.filter((m) => isBatchAsrModel(m.name));
+  const other = usable.filter((m) => !isBatchAsrModel(m.name));
+  return batch.find((m) => m.default) ?? batch[0] ?? other.find((m) => m.default) ?? other[0];
 }
 
 /** @public The injected-slot contract — see this file's module doc. */
@@ -96,7 +107,7 @@ export interface UseSpeakingModeLoopParams {
   readonly inputRef: RefObject<SpeakingModeInputHandle | null>;
   readonly isStreaming: boolean;
   readonly isTTSPlaying: boolean;
-  /** Receives the readable message for a server transcription failure (`../voiceProblems.ts`). Browser-engine errors stay silent, as before. */
+  /** Receives the readable message for a server-recognition failure: a voice problem code or a microphone failure (`shared/lib/voiceProblems.ts`). Browser-engine errors stay silent, as before. */
   readonly onError?: ((message: string) => void) | undefined;
 }
 

@@ -1,5 +1,5 @@
 /**
- * Pure audio helpers for the HTTP voice transport (`api/voiceTransport.ts`).
+ * Pure audio helpers for the HTTP voice transport (`shared/api/voiceTransport.ts`).
  *
  * Two pieces of the old socket.io server's work moved into the browser with
  * the transport, and both are ported here byte-for-byte in behaviour:

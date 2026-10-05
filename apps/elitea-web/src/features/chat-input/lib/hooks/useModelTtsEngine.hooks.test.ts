@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { voiceTransportMock } from '../__mocks__/voiceTransport.mock';
 
-import { VoiceTransportError } from '../../api/voiceTransport';
-import type { SpeechRequest } from '../../api/voiceTransport';
+import { VoiceTransportError } from '@/shared/api/voiceTransport';
+import type { SpeechRequest } from '@/shared/api/voiceTransport';
 
 import { useModelTtsEngine, type UseModelTtsEngineParams } from './useModelTtsEngine.hooks';
 import type { TtsModel, TtsSpokenRange, TtsStatus } from './useTextToSpeech.types';

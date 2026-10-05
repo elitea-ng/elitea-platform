@@ -2,7 +2,7 @@
  * useStreamingSpeechRecognition — server recognition over HTTPS.
  *
  * The microphone (`../helpers/speechCapture.ts`) and the transcription route
- * (`../../api/voiceTransport.ts`) are replaced with doubles: the capture
+ * (`shared/api/voiceTransport.ts`) are replaced with doubles: the capture
  * double hands the test the frame callback, so a test "speaks" by pushing
  * loud frames and "pauses" by pushing silent ones, and every upload is a
  * promise the test answers. Everything between them — the segmenter, the
@@ -15,8 +15,8 @@ import { speechCaptureMock } from '../__mocks__/speechCapture.mock';
 import { voiceTransportMock } from '../__mocks__/voiceTransport.mock';
 
 import type { ModelListItem } from '../../api/models';
-import { VoiceTransportError } from '../../api/voiceTransport';
-import type { TranscriptionRequest } from '../../api/voiceTransport';
+import { VoiceTransportError } from '@/shared/api/voiceTransport';
+import type { TranscriptionRequest } from '@/shared/api/voiceTransport';
 
 import { useStreamingSpeechRecognition } from './useStreamingSpeechRecognition';
 

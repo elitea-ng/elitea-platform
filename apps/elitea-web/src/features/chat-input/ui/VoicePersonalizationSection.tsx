@@ -27,7 +27,7 @@ function pickDefaultModel(items: readonly TtsModel[] | undefined): TtsModel | nu
  * writes the committed preference" split).
  *
  * Model speech needs the selected project, not a socket: it goes over HTTPS
- * (`api/voiceTransport.ts`), and the `/llm` edge bills that project.
+ * (`shared/api/voiceTransport.ts`), and the `/llm` edge bills that project.
  */
 export function VoicePersonalizationSection(): ReactNode {
   const { config, setConfig, browserVoices } = useVoiceConfig({ persist: true });

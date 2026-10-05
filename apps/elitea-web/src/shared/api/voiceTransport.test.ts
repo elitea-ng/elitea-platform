@@ -57,7 +57,7 @@ describe('synthesizeSpeech', () => {
     [404, 'model_not_found', 'model-unavailable'],
     [501, 'unsupported_operation', 'model-unavailable'],
     [503, 'llm_not_configured', 'model-unavailable'],
-    [402, 'insufficient_quota', 'limit'],
+    [402, 'insufficient_quota', 'budget'],
     [429, 'rate_limit_exceeded', 'limit'],
     [413, 'request_too_large', 'too-large'],
     [500, 'api_error', 'failed'],

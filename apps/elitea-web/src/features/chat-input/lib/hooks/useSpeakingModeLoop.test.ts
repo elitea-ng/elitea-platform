@@ -66,7 +66,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '../../../../test/setup';
-import { VoiceTransportError } from '../../api/voiceTransport';
+import { VoiceTransportError } from '@/shared/api/voiceTransport';
 import { speechCaptureMock } from '../__mocks__/speechCapture.mock';
 import { voiceTransportMock } from '../__mocks__/voiceTransport.mock';
 
@@ -112,11 +112,11 @@ function speak(doubles: ServerAsrDoubles): void {
   });
 }
 
-/** MSW handler returning a single default streaming (non-whisper) ASR model — selects the server path. */
-function mockStreamingAsrModel(): void {
+/** MSW handler returning a single default batch (whisper) ASR model — selects the server path. */
+function mockBatchAsrModel(): void {
   server.use(
     http.get(`${BASE}/configurations/models/:projectId`, () =>
-      HttpResponse.json({ items: [{ name: 'gpt-4o-realtime', project_id: 1, default: true }], total: 1 }),
+      HttpResponse.json({ items: [{ name: 'whisper-1', project_id: 1, default: true }], total: 1 }),
     ),
   );
 }
@@ -277,28 +277,36 @@ describe('selectAsrModel', () => {
     expect(selectAsrModel([])).toBeUndefined();
   });
 
-  it('prefers the default streaming model over any other', () => {
+  it('picks the whisper model over a realtime model, even when the realtime model is the default', () => {
     const items = [
-      { id: '1', name: 'gpt-realtime-a' },
-      { id: '2', name: 'gpt-realtime-b', default: true },
-      { id: '3', name: 'whisper-1', default: true },
+      { id: '1', name: 'gpt-4o-realtime-preview', default: true },
+      { id: '2', name: 'whisper-1' },
     ];
-    expect(selectAsrModel(items)?.name).toBe('gpt-realtime-b');
-  });
-
-  it('falls back to any streaming model when none is marked default', () => {
-    const items = [{ id: '1', name: 'gpt-realtime-a' }, { id: '2', name: 'whisper-1', default: true }];
-    expect(selectAsrModel(items)?.name).toBe('gpt-realtime-a');
-  });
-
-  it('falls back to the default whisper model when no streaming model exists', () => {
-    const items = [{ id: '1', name: 'whisper-1' }, { id: '2', name: 'whisper-2', default: true }];
-    expect(selectAsrModel(items)?.name).toBe('whisper-2');
-  });
-
-  it('falls back to any whisper model as a last resort', () => {
-    const items = [{ id: '1', name: 'whisper-1' }];
     expect(selectAsrModel(items)?.name).toBe('whisper-1');
+  });
+
+  it('returns undefined (the browser engine) when only realtime models exist', () => {
+    const items = [{ id: '1', name: 'gpt-4o-realtime-preview', default: true }, { id: '2', name: 'gpt-realtime-mini' }];
+    expect(selectAsrModel(items)).toBeUndefined();
+  });
+
+  it('prefers the default batch model, and counts *-transcribe as batch', () => {
+    const items = [
+      { id: '1', name: 'whisper-1' },
+      { id: '2', name: 'gpt-4o-mini-transcribe', default: true },
+      { id: '3', name: 'some-asr', default: true },
+    ];
+    expect(selectAsrModel(items)?.name).toBe('gpt-4o-mini-transcribe');
+  });
+
+  it('falls back to any batch model before an unknown model', () => {
+    const items = [{ id: '1', name: 'some-asr', default: true }, { id: '2', name: 'whisper-1' }];
+    expect(selectAsrModel(items)?.name).toBe('whisper-1');
+  });
+
+  it('falls back to the default unknown (non-realtime) model, then any', () => {
+    expect(selectAsrModel([{ id: '1', name: 'asr-a' }, { id: '2', name: 'asr-b', default: true }])?.name).toBe('asr-b');
+    expect(selectAsrModel([{ id: '1', name: 'asr-a' }])?.name).toBe('asr-a');
   });
 });
 
@@ -442,7 +450,7 @@ describe('useSpeakingModeLoop (native-fallback path — empty ASR model list)', 
 
 describe('useSpeakingModeLoop (server path is selected once an ASR model is available)', () => {
   it('opens the microphone (the server ASR path) instead of the native recognizer when a model resolves', async () => {
-    mockStreamingAsrModel();
+    mockBatchAsrModel();
     installServerAsrDoubles();
 
     await setupSpeakingWithAsrModelReady();
@@ -461,7 +469,7 @@ describe('useSpeakingModeLoop (server path is selected once an ASR model is avai
    * transcript answered by the test (`onTranscript` + `onTranscriptDone`).
    */
   async function setupSpeakingServer(): Promise<ReturnType<typeof setup> & { readonly doubles: ServerAsrDoubles }> {
-    mockStreamingAsrModel();
+    mockBatchAsrModel();
     const doubles = installServerAsrDoubles();
     const rendered = await setupSpeakingWithAsrModelReady();
     await waitFor(() => expect(doubles.frames.push).not.toBeNull());
@@ -521,7 +529,7 @@ describe('useSpeakingModeLoop (server path is selected once an ASR model is avai
   });
 
   it('a server transcription failure reaches onError as a readable message', async () => {
-    mockStreamingAsrModel();
+    mockBatchAsrModel();
     const doubles = installServerAsrDoubles();
     voiceTransportMock.transcribeAudio.mockImplementation(() => Promise.reject(new VoiceTransportError('model-unavailable')));
     const onError = vi.fn();
@@ -534,5 +542,22 @@ describe('useSpeakingModeLoop (server path is selected once an ASR model is avai
     speak(doubles);
 
     await waitFor(() => expect(onError).toHaveBeenCalledWith('The speech model is not available. Check the AI configuration.'));
+  });
+
+  it('a denied microphone on the server path reaches onError as a readable message', async () => {
+    mockBatchAsrModel();
+    installServerAsrDoubles();
+    speechCaptureMock.startSpeechCapture.mockImplementation(() => Promise.reject(new DOMException('denied', 'NotAllowedError')));
+    const onError = vi.fn();
+    const rendered = setup('proj-1', onError);
+    await waitForReady(rendered.apiRef);
+    await waitFor(() => expect(rendered.queryClient.getQueryState(ASR_MODELS_QUERY_KEY('proj-1'))?.status).toBe('success'));
+    act(() => rendered.apiRef.current?.setLoopProps({ isSpeakingMode: true, isStreaming: false, isTTSPlaying: false }));
+
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(
+        'Microphone access denied. Please allow microphone access in your browser settings.',
+      ),
+    );
   });
 });

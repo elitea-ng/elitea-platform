@@ -4585,8 +4585,9 @@
   "pages.agents.editApplication.triggers.modeCustomHmacHint": "The sender signs the request body with the secret and sends the hex digest in {{header}}. Rotating keeps this header.",
   "pages.agents.editApplication.triggers.variablesClosed": "Callers cannot change the agent’s variables.",
   "pages.agents.editApplication.triggers.variablesOpen": "Anyone with this URL can change the agent’s variables, and so its instructions.",
+  "features.chatInput.voice.budget": "The project budget is used up. The voice request was refused.",
   "features.chatInput.voice.failed": "The voice request failed. Try again.",
-  "features.chatInput.voice.limit": "A budget or rate limit stopped the voice request.",
+  "features.chatInput.voice.limit": "A rate limit stopped the voice request. Wait and try again.",
   "features.chatInput.voice.modelUnavailable": "The speech model is not available. Check the AI configuration.",
   "features.chatInput.voice.noModel": "No speech model is configured for this project.",
   "features.chatInput.voice.tooLarge": "The recording is too long to transcribe."

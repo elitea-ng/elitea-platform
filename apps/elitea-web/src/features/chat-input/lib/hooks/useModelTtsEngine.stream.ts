@@ -2,17 +2,17 @@
  * The HTTP speech stream of the model TTS engine: one `POST
  * /llm/v1/audio/speech` per sentence, decoded and queued for gap-free
  * playback. It replaces the socket.io `tts_audio_chunk`/`tts_done`/`tts_error`
- * listeners (`api/voiceTransport.ts` says why).
+ * listeners (`shared/api/voiceTransport.ts` says why).
  *
  * The old server sent one sentence's PCM and then `tts_done {char_end}`. Each
  * HTTP answer is exactly one sentence, so {@link appendSentence} does the same
  * work in one step: fade the sentence in and out (no pop at the boundary),
- * queue it, and record the `char_end` waypoint the highlight interpolates on.
+ * and queue it with the `char_end` waypoint the highlight interpolates on.
  * The NEXT sentence is requested while the current one decodes, so playback
  * does not wait one round trip per sentence.
  */
-import { synthesizeSpeech } from '../../api/voiceTransport';
-import type { SpeechRequest } from '../../api/voiceTransport';
+import { synthesizeSpeech } from '@/shared/api/voiceTransport';
+import type { SpeechRequest } from '@/shared/api/voiceTransport';
 import { applyFade } from '../helpers/ttsPcm.helpers';
 import { splitSpeechSegments } from '../helpers/voiceAudio.helpers';
 
@@ -21,15 +21,16 @@ import type { ModelTtsRefs } from './useModelTtsEngine.types';
 
 const FADE_SECONDS = 0.005;
 
-/** Queues one decoded sentence and records its `char_end` highlight waypoint. */
+/**
+ * Queues one decoded sentence with its `char_end`. The scheduler records the
+ * highlight waypoint when it schedules the sentence, from the real start time,
+ * so a late answer (a gap in playback) does not move the highlight ahead.
+ */
 function appendSentence(refs: ModelTtsRefs, samples: Float32Array<ArrayBuffer>, sampleRate: number, charEnd: number): void {
   const fade = Math.floor(sampleRate * FADE_SECONDS);
   applyFade(samples, fade, 'in');
   applyFade(samples, fade, 'out');
-  enqueueSamples(refs, samples, sampleRate);
-  // From total samples queued, not `nextStartTime`, so the waypoint is right
-  // however far the scheduler has got through the queue.
-  refs.sentenceWaypoints.current.push({ charPos: charEnd, audioTime: refs.totalEnqueuedSamples.current / sampleRate });
+  enqueueSamples(refs, samples, sampleRate, charEnd);
 }
 
 /** The last sentence is queued: the scheduler may drain and end the stream. */

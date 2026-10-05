@@ -11,7 +11,7 @@
  *   microphone frames (`../helpers/speechCapture.ts`)
  *     -> silence segmenter (`UtteranceSegmenter`, the old server's whisper VAD)
  *     -> one upload per utterance (`../helpers/speechTranscriber.ts`)
- *     -> `POST /llm/v1/audio/transcriptions` (`../../api/voiceTransport.ts`).
+ *     -> `POST /llm/v1/audio/transcriptions` (`shared/api/voiceTransport.ts`).
  *
  * The callbacks keep the old event contract, so `useSpeakingModeLoop` and
  * `VoiceButton` are unchanged: `onSpeechStarted` (was `asr_speech_started`),
@@ -42,7 +42,7 @@ export interface UseStreamingSpeechRecognitionParams {
   readonly onTranscriptDone?: () => void;
   readonly onSpeechStarted?: () => void;
   readonly onVadFlush?: () => void;
-  /** A `getUserMedia` class (`not-allowed`/`audio-capture`/`network`) or a voice problem code (`../voiceProblems.ts`). */
+  /** A `getUserMedia` class (`not-allowed`/`audio-capture`/`network`) or a voice problem code (`shared/lib/voiceProblems.ts`). */
   readonly onError?: (error: string) => void;
   readonly projectId?: string | undefined;
   readonly asrModel?: ModelListItem | undefined;

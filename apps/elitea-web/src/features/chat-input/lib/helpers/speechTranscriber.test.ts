@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { voiceTransportMock } from '../__mocks__/voiceTransport.mock';
 
-import { VoiceTransportError } from '../../api/voiceTransport';
-import type { TranscriptionRequest } from '../../api/voiceTransport';
+import { VoiceTransportError } from '@/shared/api/voiceTransport';
+import type { TranscriptionRequest } from '@/shared/api/voiceTransport';
 
 import { createSpeechTranscriber } from './speechTranscriber';
 
@@ -85,6 +85,15 @@ describe('createSpeechTranscriber', () => {
     uploads[0]?.reject(new VoiceTransportError('limit'));
     await settle();
     expect(onError).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it('reports a used-up budget (402) instead of dropping it like a rate limit', async () => {
+    const { transcriber, onError, onDone } = make();
+    transcriber.add(new Float32Array(10));
+    uploads[0]?.reject(new VoiceTransportError('budget'));
+    await settle();
+    expect(onError.mock.calls).toEqual([['budget']]);
     expect(onDone).toHaveBeenCalledOnce();
   });
 

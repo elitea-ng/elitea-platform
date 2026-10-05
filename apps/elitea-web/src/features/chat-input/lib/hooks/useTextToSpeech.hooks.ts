@@ -11,7 +11,7 @@
  * otherwise a thin dispatcher over whichever engine is currently active.
  *
  * The baseline's condition was `ttsModel && socket && …`. The socket is gone
- * (`api/voiceTransport.ts`); the model engine needs the project instead,
+ * (`shared/api/voiceTransport.ts`); the model engine needs the project instead,
  * because the `/llm` edge bills the project the request names.
  *
  * `onError` is how a failure becomes a message instead of silence: a failed
@@ -20,7 +20,7 @@
  */
 import { useCallback, useState } from 'react';
 
-import type { VoiceProblem } from '../voiceProblems';
+import type { VoiceProblem } from '@/shared/lib/voiceProblems';
 
 import { useBrowserTtsEngine } from './useBrowserTtsEngine.hooks';
 import { useModelTtsEngine } from './useModelTtsEngine.hooks';

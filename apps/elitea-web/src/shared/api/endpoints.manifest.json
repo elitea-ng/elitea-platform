@@ -3198,7 +3198,7 @@
       ]
     },
     {
-      "$comment": "Voice read-aloud. The /llm data plane (elitea-main's session-authenticated proxy to elitea-llm-gateway), not /api/v2: the path is resolved from the API ORIGIN (HttpRequestOptions.originRoot). The answer is raw audio (binary: true). Replaced the socket.io tts_* events, which had no server.",
+      "$comment": "Voice read-aloud and the settings voice preview. The /llm data plane (elitea-main's session-authenticated proxy to elitea-llm-gateway), not /api/v2: the path is resolved beside /api/v2 (HttpRequestOptions.originRoot). The answer is raw audio (binary: true). Replaced the socket.io tts_* events, which had no server.",
       "id": "voice.synthesizeSpeech",
       "method": "POST",
       "path": "/llm/v1/audio/speech",
@@ -3207,11 +3207,11 @@
       "responseSchema": "ArrayBuffer",
       "fixture": null,
       "usedBy": [
-        "features/chat-input/api/voiceTransport.ts"
+        "shared/api/voiceTransport.ts"
       ]
     },
     {
-      "$comment": "Voice dictation and speaking mode: one multipart WAV upload per utterance. The /llm data plane, resolved from the API ORIGIN (HttpRequestOptions.originRoot). Replaced the socket.io asr_* events, which had no server.",
+      "$comment": "Voice dictation and speaking mode: one multipart WAV upload per utterance. The /llm data plane, resolved beside /api/v2 (HttpRequestOptions.originRoot). Replaced the socket.io asr_* events, which had no server.",
       "id": "voice.transcribeAudio",
       "method": "POST",
       "path": "/llm/v1/audio/transcriptions",
@@ -3220,7 +3220,7 @@
       "responseSchema": "{ text: string }",
       "fixture": null,
       "usedBy": [
-        "features/chat-input/api/voiceTransport.ts"
+        "shared/api/voiceTransport.ts"
       ]
     }
   ]

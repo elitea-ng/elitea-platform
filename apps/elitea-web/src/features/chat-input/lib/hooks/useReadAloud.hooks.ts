@@ -14,9 +14,9 @@
  * RTK Query anywhere in the new app).
  *
  * Model speech goes over HTTPS to `/llm/v1/audio/speech`
- * (`api/voiceTransport.ts`); it used to take a socket.io client that had no
+ * (`shared/api/voiceTransport.ts`); it used to take a socket.io client that had no
  * server behind it. `onError` receives the readable message for a failed
- * read-aloud (`../voiceProblems.ts`), so the caller can show it.
+ * read-aloud (`shared/lib/voiceProblems.ts`), so the caller can show it.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -25,8 +25,8 @@ import type { TtsVoice } from '../../api/ttsVoices';
 import { useTtsVoices } from '../../api/ttsVoices';
 import type { SpeakableText, TtsSegment } from '../helpers/ttsHelpers';
 import { toSpeakableText } from '../helpers/ttsHelpers';
-import { voiceProblemMessage } from '../voiceProblems';
-import type { VoiceProblem } from '../voiceProblems';
+import { voiceProblemMessage } from '@/shared/lib/voiceProblems';
+import type { VoiceProblem } from '@/shared/lib/voiceProblems';
 
 import { useTextToSpeech } from './useTextToSpeech.hooks';
 import type { TtsModel, TtsSpokenRange } from './useTextToSpeech.types';

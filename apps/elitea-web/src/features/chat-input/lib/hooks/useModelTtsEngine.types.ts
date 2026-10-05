@@ -15,6 +15,8 @@ import type { CharTimeline } from '../helpers/ttsTimeline.helpers';
 export interface PendingPcmChunk {
   readonly samples: Float32Array<ArrayBuffer>;
   readonly sampleRate: number;
+  /** The text position where this chunk's audio ends. The scheduler records it as a highlight waypoint when it schedules the chunk. */
+  readonly charEnd?: number | undefined;
 }
 
 export interface ModelTtsRefs {

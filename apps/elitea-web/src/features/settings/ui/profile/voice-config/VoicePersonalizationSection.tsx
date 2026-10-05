@@ -8,7 +8,9 @@ import Box from '@mui/material/Box';
 import Slider from '@mui/material/Slider';
 import Typography from '@mui/material/Typography';
 
+import { VoiceTransportError } from '@/shared/api/voiceTransport';
 import { AccordionConstants } from '@/shared/lib/constants';
+import { voiceProblemMessage } from '@/shared/lib/voiceProblems';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
@@ -23,6 +25,7 @@ import {
   formatSpeedLabel,
   loadStored,
   pickSelectedVoice,
+  playModelPreview,
   shouldUseModelVoices,
   speakBrowserPreview,
   storeVoiceConfig,
@@ -64,7 +67,7 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
   );
 
   // A resolved model is enough: model speech goes over HTTPS to
-  // `/llm/v1/audio/speech` (`features/chat-input/api/voiceTransport.ts`). The
+  // `/llm/v1/audio/speech` (`shared/api/voiceTransport.ts`). The
   // old app also required a live socket.io connection, and elitea-main runs
   // no socket.io server.
   const hasModelTTS = !!ttsModel;
@@ -127,21 +130,23 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
   const voiceOptions = toVoiceOptions(displayVoices, useModelVoices);
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const handlePreview = useCallback(() => {
-    if (useModelVoices) {
-      // Model-backed preview needs the HTTPS + Web Audio TTS engine
-      // (`features/chat-input/lib/hooks/useTextToSpeech.hooks.ts` +
-      // `useModelTtsEngine.hooks.ts`). That engine is feature-private to
-      // `features/chat-input`; `no-sideways-features` forbids importing it
-      // from here, and duplicating its request pipeline / audio scheduling
-      // is out of this fix's scope — it needs a shared-home promotion first
-      // (the same path `ThemeModeToggle` took to `shared/ui` for this exact
-      // page). No-op rather than silently playing the wrong (browser) voice
-      // under the configured model voice's label.
+    setPreviewError(null);
+    if (useModelVoices && ttsModel) {
+      // The model voice plays over HTTPS (`shared/api/voiceTransport.ts`), the
+      // same route the chat read-aloud uses. A failure gets the shared voice
+      // message, not a silent click.
+      setIsPlaying(true);
+      playModelPreview({ projectId, model: ttsModel.name, voice: config.voiceId, rate: config.rate, volume: config.volume })
+        .catch((err: unknown) => {
+          setPreviewError(voiceProblemMessage(err instanceof VoiceTransportError ? err.code : 'failed'));
+        })
+        .finally(() => setIsPlaying(false));
       return;
     }
     speakBrowserPreview(config.rate, config.volume, setIsPlaying);
-  }, [useModelVoices, config.rate, config.volume]);
+  }, [useModelVoices, ttsModel, projectId, config.voiceId, config.rate, config.volume]);
 
   return (
     <BasicAccordion
@@ -217,6 +222,11 @@ export const VoicePersonalizationSection = memo(({ projectId }: VoicePersonaliza
                     {t('settings.voice.preview', 'Preview Voice')}
                   </BaseBtn>
                 </Box>
+              )}
+              {previewError && (
+                <Typography role="alert" variant="bodySmall" color="error" data-testid="voice-preview-error">
+                  {previewError}
+                </Typography>
               )}
             </Box>
           ),

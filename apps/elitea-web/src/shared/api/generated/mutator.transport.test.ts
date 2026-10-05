@@ -1,7 +1,7 @@
 /**
  * `eliteaFetch`'s transport flags: each one reaches the HTTP client only when
  * the caller set it. `originRoot` + `binary` are what the `/llm` audio routes
- * use (`features/chat-input/api/voiceTransport.ts`).
+ * use (`shared/api/voiceTransport.ts`).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

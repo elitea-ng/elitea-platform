@@ -22,9 +22,14 @@ export type ModelTickOutcome =
 
 function computeSpokenRange(refs: ModelTtsRefs, elapsed: number, text: string, allReceived: boolean, totalDuration: number): { readonly start: number; readonly end: number } | null {
   const waypoints = refs.sentenceWaypoints.current;
+  // While more audio can still come, nothing is heard past the end of the
+  // scheduled audio: the next sentence's request has not returned yet. Hold
+  // the highlight there instead of extrapolating into text not yet spoken.
+  const scheduledEnd = refs.playStartTime.current !== null ? refs.nextStartTime.current - refs.playStartTime.current : elapsed;
+  const heard = allReceived ? elapsed : Math.min(elapsed, scheduledEnd);
   const charPos =
     waypoints.length > 0
-      ? charPosFromWaypoints(elapsed, waypoints, text.length, allReceived, totalDuration, refs.calibratedRate.current)
+      ? charPosFromWaypoints(heard, waypoints, text.length, allReceived, totalDuration, refs.calibratedRate.current)
       : charPosFromTimeline(elapsed, refs.charTimeline.current, allReceived, totalDuration, refs.calibratedRate.current, text.length);
   return wordRangeAround(text, charPos);
 }

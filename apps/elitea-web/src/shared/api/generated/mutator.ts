@@ -164,7 +164,7 @@ export async function eliteaFetch<T>(
    * marks a peripheral poll whose 401 must not escalate into a re-auth — see
    * `HttpRequestOptions.background` in `shared/api/http.ts` for why that
    * distinction exists. `originRoot` and `binary` are the `/llm` audio
-   * routes' needs (`features/chat-input/api/voiceTransport.ts`).
+   * routes' needs (`shared/api/voiceTransport.ts`).
    */
   transport: { readonly background?: boolean; readonly originRoot?: boolean; readonly binary?: boolean } = {},
 ): Promise<T> {
