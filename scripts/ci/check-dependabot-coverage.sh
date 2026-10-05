@@ -67,7 +67,7 @@ fi
 # would have failed on every entry. That is a loud failure rather than a silent
 # pass, which is the only reason it was caught on the first run.
 # Both spellings: `directory: /x` and a `directories:` list of `- /x` items.
-# Multi-directory entries are what give one pull request per ecosystem.
+# Multi-directory entries keep one entry per ecosystem; the multi-ecosystem group in dependabot.yml folds them into one pull request.
 configured=$(awk '
   /^[[:space:]]+directory:/      { sub(/^[[:space:]]+directory:[[:space:]]*/, ""); print; next }
   /^[[:space:]]+directories:/    { inlist = 1; next }
