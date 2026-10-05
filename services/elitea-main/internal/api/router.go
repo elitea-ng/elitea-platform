@@ -4360,6 +4360,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
 			}))
+			// The session cookie authenticates /llm, and the browser voice
+			// client POSTs audio here with it. A cookie-authenticated write
+			// must prove it came from this origin (CSRF from a same-site
+			// sibling). Bearer, API-key and forwarded-token callers pass.
+			r.Use(apimw.BrowserWriteOrigin)
 			// Membership admits the caller-supplied project selector header
 			// (issue #318). Without it the edge admits no selector that names
 			// another project, so /llm keeps billing the caller's own project
