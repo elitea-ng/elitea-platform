@@ -75,7 +75,11 @@ impl Settings {
                         "{ENV_PREFIX}FIXTURE_STEP_SECONDS must not be negative, got '{text}'"
                     )));
                 }
-                Duration::from_secs_f64(seconds)
+                Duration::try_from_secs_f64(seconds).map_err(|_| {
+                    ConfigError(format!(
+                        "{ENV_PREFIX}FIXTURE_STEP_SECONDS is out of range, got '{text}'"
+                    ))
+                })?
             }
         };
         let engine_socket =
@@ -131,6 +135,8 @@ mod tests {
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "x")]).is_err());
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "-1")]).is_err());
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "inf")]).is_err());
+        // Finite but too large for a Duration: a config error, not a panic.
+        assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "1e20")]).is_err());
     }
 
     #[test]
