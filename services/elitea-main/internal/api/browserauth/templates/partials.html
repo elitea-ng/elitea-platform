@@ -7,7 +7,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <meta name="referrer" content="no-referrer">
-    {{if .Brand.FaviconURL}}<link rel="icon" href="{{.Brand.FaviconURL}}">{{end}}
+    {{template "head-assets" .}}{{end}}
+{{/*
+  head-same-origin is "head" for a page whose form posts to a route that checks
+  Origin (the native consent page). Under no-referrer a browser serializes the
+  Origin of every non-GET request as "null" (Fetch, "serializing a request
+  origin"), so the check could never pass; same-origin keeps the real Origin on
+  the same-origin POST and still sends no referrer to any other origin.
+*/}}
+{{define "head-same-origin"}}<meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="referrer" content="same-origin">
+    {{template "head-assets" .}}{{end}}
+{{define "head-assets"}}{{if .Brand.FaviconURL}}<link rel="icon" href="{{.Brand.FaviconURL}}">{{end}}
     <script>{{.Script}}</script>
     <style>{{.Style}}</style>
     {{if .Brand.Style}}<style>{{.Brand.Style}}</style>{{end}}{{end}}

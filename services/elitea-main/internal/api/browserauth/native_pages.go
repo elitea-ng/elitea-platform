@@ -105,7 +105,13 @@ func (p *NativePages) RenderConsent(w http.ResponseWriter, r *http.Request, cons
 	if consent.FormAction != "" {
 		formAction += " " + consent.FormAction
 	}
-	writeNativePage(w, http.StatusOK, authPageCSP(formAction, brand.StyleSource), body.Bytes())
+	// same-origin, not the sign-in pages' no-referrer: the decision POST is
+	// checked against Origin, and under no-referrer a browser sends
+	// "Origin: null" on every POST (Fetch, "serializing a request origin"),
+	// so no real browser could ever answer the page. same-origin still sends
+	// no referrer to any other origin. The meta tag in the template says the
+	// same, because the last policy a browser sees wins.
+	writeNativePage(w, http.StatusOK, authPageCSP(formAction, brand.StyleSource), "same-origin", body.Bytes())
 }
 
 // RenderError writes the error page with the given status.
@@ -121,11 +127,12 @@ func (p *NativePages) RenderError(w http.ResponseWriter, r *http.Request, status
 		writeProblem(w, http.StatusServiceUnavailable)
 		return
 	}
-	writeNativePage(w, status, authPageCSP("'none'", brand.StyleSource), body.Bytes())
+	writeNativePage(w, status, authPageCSP("'none'", brand.StyleSource), "no-referrer", body.Bytes())
 }
 
-func writeNativePage(w http.ResponseWriter, status int, csp string, body []byte) {
+func writeNativePage(w http.ResponseWriter, status int, csp, referrerPolicy string, body []byte) {
 	chooserHeaders(w)
+	w.Header().Set("Referrer-Policy", referrerPolicy)
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

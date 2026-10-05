@@ -137,7 +137,7 @@ func TestConsentPageEscapesAndPinsFormAction(t *testing.T) {
 	if !strings.Contains(csp, "form-action 'self' dev.elitea.conformance:;") || !strings.Contains(csp, "frame-ancestors 'none'") {
 		t.Fatalf("CSP = %q", csp)
 	}
-	if recorder.Header().Get("X-Frame-Options") != "DENY" || recorder.Header().Get("Referrer-Policy") != "no-referrer" ||
+	if recorder.Header().Get("X-Frame-Options") != "DENY" || recorder.Header().Get("Referrer-Policy") != "same-origin" ||
 		recorder.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("headers = %v", recorder.Header())
 	}
