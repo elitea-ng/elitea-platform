@@ -102,6 +102,10 @@ func TestNativeFlowEndToEnd(t *testing.T) {
 	if revoke.Code != http.StatusOK || revoke.Body.Len() != 0 {
 		t.Fatalf("revoke = %d %q", revoke.Code, revoke.Body.String())
 	}
+	if revoke.Header().Get("Cache-Control") != "no-store" || revoke.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("revoke Cache-Control %q, Pragma %q; want no-store and no-cache",
+			revoke.Header().Get("Cache-Control"), revoke.Header().Get("Pragma"))
+	}
 	state := s.family(pair.DeviceID)
 	if reason(state) != domain.ReasonSignedOut || state.tokenID != nil || s.anchorExists(anchor) {
 		t.Fatalf("after revoke: %+v anchor=%v", state, s.anchorExists(anchor))
