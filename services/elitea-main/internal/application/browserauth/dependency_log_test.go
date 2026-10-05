@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
@@ -69,5 +71,65 @@ func TestRejectedCredentialIsNotLoggedAsDependencyFailure(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "wrong password") {
 		t.Fatalf("rejected credential was logged as a failure:\n%s", logs.String())
+	}
+}
+
+// Authorize runs on every request the gateway edge forwards. During a session
+// store or database outage it used to write one ERROR line per request, so a
+// busy instance buried the first useful line under thousands of copies. The
+// per-request path now logs the first failure at once, then at most one line
+// per window that says how many it held back.
+func TestAuthorizeDependencyFailureLogIsThrottled(t *testing.T) {
+	logs := captureDefaultLog(t)
+
+	service, sessions, _, _, _, clock := newTestService(t)
+	begin := beginFlow(t, service, "oidc", browserflow.ProtocolCorrelation{Nonce: "nonce-1"})
+	sessions.readErr = errors.New("dial tcp 10.0.0.9:6379: connection refused")
+
+	for range 100 {
+		if _, err := service.Authorize(context.Background(), begin.SessionID); !errors.Is(err, ErrDependencyUnavailable) {
+			t.Fatalf("error = %v, want %v", err, ErrDependencyUnavailable)
+		}
+	}
+	if lines := strings.Count(logs.String(), "level=ERROR"); lines != 1 {
+		t.Fatalf("100 failing Authorize calls wrote %d ERROR lines, want 1:\n%s", lines, logs.String())
+	}
+	if !strings.Contains(logs.String(), "connection refused") ||
+		!strings.Contains(logs.String(), "read authenticated browser session") {
+		t.Fatalf("the first failure must still carry the operation and cause:\n%s", logs.String())
+	}
+
+	clock.Set(clock.Now().Add(authorizeFailureLogWindow + time.Second))
+	if _, err := service.Authorize(context.Background(), begin.SessionID); !errors.Is(err, ErrDependencyUnavailable) {
+		t.Fatalf("error = %v, want %v", err, ErrDependencyUnavailable)
+	}
+	if lines := strings.Count(logs.String(), "level=ERROR"); lines != 2 {
+		t.Fatalf("after the window, want a second ERROR line, got %d:\n%s", lines, logs.String())
+	}
+	if !strings.Contains(logs.String(), "suppressed=99") {
+		t.Fatalf("the second line must say how many failures it held back:\n%s", logs.String())
+	}
+}
+
+// identity.ProvisionService logs the repository cause itself and returns the
+// bare ErrProvisioningFailed. Logging that sentinel a second time here added a
+// line with no cause in it.
+func TestProvisioningFailureAlreadyLoggedByIdentityIsNotLoggedAgain(t *testing.T) {
+	logs := captureDefaultLog(t)
+
+	service, _, _, provisioner, _, clock := newTestService(t)
+	provisioner.err = identity.ErrProvisioningFailed
+	correlation := browserflow.ProtocolCorrelation{Nonce: "nonce-1"}
+	begin := beginFlow(t, service, "oidc", correlation)
+	_, err := service.Complete(context.Background(), CompleteRequest{
+		SessionID:     begin.SessionID,
+		TransactionID: begin.TransactionID,
+		Provider:      "oidc",
+	}, &assertionVerifierStub{assertion: validAssertion(clock.Now(), "oidc", correlation)})
+	if !errors.Is(err, ErrDependencyUnavailable) {
+		t.Fatalf("error = %v, want %v", err, ErrDependencyUnavailable)
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("a provisioning failure identity already logged was logged again:\n%s", logs.String())
 	}
 }
