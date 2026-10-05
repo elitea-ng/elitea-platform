@@ -3484,6 +3484,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.AddAttachments)
 					r.With(projectPermission("models.chat.attachments.delete")).
 						Delete("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteAttachments)
+					// Client contract 1.1: one attachment's bytes, scoped by the
+					// conversation (attachment_download.go). It takes the
+					// conversation READ, like getConversation — reading a file
+					// that was sent in a conversation is not a wider claim than
+					// reading the conversation — and NOT the artifacts bucket
+					// permission, which would reach every conversation's files.
+					r.With(requireConversationRead).
+						Get("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
+					r.With(requireConversationRead).
+						Head("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
 					r.With(requireConversationRead).
 						Get("/context_analytics/prompt_lib/{projectID}/{conversationID}", convHandler.GetContextStatus)
 					// The strategy READ is new here (pylon exposed only the

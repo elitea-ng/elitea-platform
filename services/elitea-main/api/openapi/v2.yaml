@@ -15511,6 +15511,99 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The conversation UUID (a numeric id is a 400), as in the attachment's `filepath`.
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+        description: >-
+          The file name: the last segment of the attachment's `filepath`
+          (`/{bucket}/{conversation_uuid}/{name}`), percent-encoded. A name
+          with a slash, a backslash, `..` or a control character is a 400.
+    get:
+      operationId: downloadConversationAttachment
+      summary: Download one file that was attached in a conversation
+      description: |
+        Needs `models.chat.conversation.details` and access to the
+        conversation — the same as getConversation. A caller who cannot see
+        the conversation gets 404, as for a file that does not exist. The
+        bucket is the project's chat attachment bucket; the client never
+        names it. HEAD answers the same headers without the body.
+
+        The answer is always a download: `Content-Disposition: attachment`
+        (with an RFC 5987 `filename*`), `X-Content-Type-Options: nosniff`,
+        `Content-Security-Policy: sandbox` and
+        `Cache-Control: private, no-store`. `Content-Type` is the recorded
+        type only when the file's first bytes agree with it; an active type
+        (HTML, SVG, XML, script) or a disagreement is
+        `application/octet-stream`. One `Range` (`bytes=a-b`, `bytes=a-` or
+        `bytes=-n`) answers 206; `If-None-Match` with the `ETag` answers 304.
+        NOTE(W2): internal/api/v2/conversations/attachment_download.go:59
+        (`DownloadAttachment`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Range
+          in: header
+          required: false
+          schema: { type: string }
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The whole file.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            ETag:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: The requested range.
+          headers:
+            Content-Range:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304': { description: Not modified (the `If-None-Match` ETag matches). }
+        '400':
+          description: >-
+            A numeric conversation id, an invalid file name, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '416':
+          description: The range starts past the end of the file; `Content-Range` states its length.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition with no object store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /executions/{project_id}/{execution_id}/events:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
