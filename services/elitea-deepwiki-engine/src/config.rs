@@ -8,6 +8,7 @@
 use crate::ingest::IngestSettings;
 use crate::ingest::egress::EgressPolicy;
 use crate::ingest::limits::IngestLimits;
+use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -19,6 +20,29 @@ pub const DEFAULT_SOCKET: &str = "/run/deepwiki/engine.sock";
 
 /// Python's `scratch_path` default.
 pub const DEFAULT_SCRATCH_PATH: &str = "/tmp/deepwiki";
+
+/// The build-space owner when neither `ELITEA_DEEPWIKI_BUILD_OWNER` nor
+/// `HOSTNAME` is set.
+pub const DEFAULT_BUILD_OWNER: &str = "elitea-deepwiki-engine";
+
+/// A database URL. It can carry a password, so its `Debug` form is
+/// redacted and nothing formats it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DatabaseUrl(String);
+
+impl DatabaseUrl {
+    /// The URL itself, for the connection only.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DatabaseUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DatabaseUrl(<redacted>)")
+    }
+}
 
 /// A setting that cannot be used.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -41,6 +65,59 @@ pub struct Settings {
     /// Repository ingest: the git-host allowlist, the per-job limits and
     /// the scratch root (see `ingest::limits` for the defaults).
     pub ingest: IngestSettings,
+    /// `ELITEA_DEEPWIKI_DATABASE_URL`: the `deepwiki` database (the Python
+    /// service's variable). Unset: no index storage, no reconciliation.
+    pub database_url: Option<DatabaseUrl>,
+    /// `ELITEA_DEEPWIKI_BUILD_OWNER`, else `HOSTNAME` (the pod name): the
+    /// identity a build is recorded under. It must survive a restart of
+    /// this process and differ between replicas, because the startup
+    /// reconciliation deletes every build of this owner.
+    pub build_owner: String,
+    /// `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default 2 h): the sweep
+    /// deletes a build whose heartbeat is older.
+    pub build_stale_after: Duration,
+    /// The model client's process-wide settings.
+    pub model: ModelEnvSettings,
+}
+
+/// What the environment decides about model calls; the invocation's
+/// `llm_settings` decide the rest (`llm::settings`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEnvSettings {
+    /// `ELITEA_DEEPWIKI_TLS_CA_FILE`: a PEM bundle trusted in addition to
+    /// the platform roots, for a gateway behind a private CA. The Go host
+    /// reads the same variable for its callback hop.
+    pub tls_ca_file: Option<PathBuf>,
+    /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
+    /// inputs per embedding request, default 64.
+    pub embed_batch_size: usize,
+    /// `ELITEA_DEEPWIKI_EMBED_CONCURRENCY`: embedding requests in flight,
+    /// default 4. The Python engine sent them one at a time.
+    pub embed_concurrency: usize,
+}
+
+fn model_settings(
+    raw: &impl Fn(&str) -> Option<String>,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<ModelEnvSettings, ConfigError> {
+    let batch = match lookup("WIKI_EMBED_BATCH_SIZE").filter(|v| !v.is_empty()) {
+        None => DEFAULT_BATCH_SIZE,
+        Some(text) => match text.trim().parse::<usize>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                return Err(ConfigError(format!(
+                    "WIKI_EMBED_BATCH_SIZE must be a whole number of at least 1, got '{text}'"
+                )));
+            }
+        },
+    };
+    let concurrency = positive_count(raw, "EMBED_CONCURRENCY", DEFAULT_CONCURRENCY as u64)?;
+    Ok(ModelEnvSettings {
+        tls_ca_file: raw("TLS_CA_FILE").map(PathBuf::from),
+        embed_batch_size: batch,
+        embed_concurrency: usize::try_from(concurrency)
+            .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
+    })
 }
 
 /// A whole number of at least 1, or the default when unset.
@@ -153,11 +230,28 @@ impl Settings {
         let engine_socket =
             PathBuf::from(raw("ENGINE_SOCKET").unwrap_or_else(|| DEFAULT_SOCKET.to_owned()));
         let ingest = ingest_settings(&raw)?;
+        let model = model_settings(&raw, &lookup)?;
+        let database_url = raw("DATABASE_URL")
+            .map(|url| url.trim().to_owned())
+            .filter(|url| !url.is_empty())
+            .map(DatabaseUrl);
+        let build_owner = raw("BUILD_OWNER")
+            .or_else(|| lookup("HOSTNAME").filter(|v| !v.trim().is_empty()))
+            .map_or_else(|| DEFAULT_BUILD_OWNER.to_owned(), |v| v.trim().to_owned());
+        let build_stale_after = positive_seconds(
+            &raw,
+            "BUILD_STALE_SECONDS",
+            crate::storage::build::DEFAULT_STALE_AFTER,
+        )?;
         Ok(Self {
             runner,
             fixture_step,
             engine_socket,
             ingest,
+            database_url,
+            build_owner,
+            build_stale_after,
+            model,
         })
     }
 
@@ -264,6 +358,45 @@ mod tests {
     }
 
     #[test]
+    fn storage_settings_default_and_parse() {
+        let parsed = settings(&[]);
+        assert_eq!(parsed.as_ref().map(|s| s.database_url.clone()), Ok(None));
+        assert_eq!(
+            parsed.as_ref().map(|s| s.build_owner.clone()),
+            Ok(DEFAULT_BUILD_OWNER.to_owned())
+        );
+        assert_eq!(
+            parsed.map(|s| s.build_stale_after),
+            Ok(Duration::from_hours(2))
+        );
+        let parsed = settings(&[
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:secret@db/deepwiki",
+            ),
+            ("HOSTNAME", "deepwiki-7f9c"),
+            ("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "600"),
+        ]);
+        let Ok(parsed) = parsed else {
+            panic!("settings refused");
+        };
+        assert_eq!(parsed.build_owner, "deepwiki-7f9c");
+        assert_eq!(parsed.build_stale_after, Duration::from_mins(10));
+        // The password never reaches a Debug form.
+        assert!(!format!("{parsed:?}").contains("secret"));
+        assert_eq!(
+            parsed.database_url.as_ref().map(DatabaseUrl::expose),
+            Some("postgresql://u:secret@db/deepwiki")
+        );
+        let owner = settings(&[
+            ("HOSTNAME", "pod"),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ]);
+        assert_eq!(owner.map(|s| s.build_owner), Ok("replica-a".to_owned()));
+        assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "0")]).is_err());
+    }
+
+    #[test]
     fn the_fixture_step_is_seconds() {
         let parsed = settings(&[
             ("ELITEA_DEEPWIKI_RUNNER", "fixture"),
@@ -273,5 +406,33 @@ mod tests {
             parsed.map(|s| (s.runner, s.fixture_step)),
             Ok((RunnerKind::Fixture, Duration::from_millis(250)))
         );
+    }
+
+    #[test]
+    fn the_model_settings_read_their_python_names() {
+        let defaults = settings(&[]).map(|s| s.model);
+        assert_eq!(
+            defaults,
+            Ok(ModelEnvSettings {
+                tls_ca_file: None,
+                embed_batch_size: DEFAULT_BATCH_SIZE,
+                embed_concurrency: DEFAULT_CONCURRENCY,
+            })
+        );
+        let set = settings(&[
+            ("ELITEA_DEEPWIKI_TLS_CA_FILE", "/etc/ca.pem"),
+            ("WIKI_EMBED_BATCH_SIZE", "16"),
+            ("ELITEA_DEEPWIKI_EMBED_CONCURRENCY", "2"),
+        ])
+        .map(|s| s.model);
+        assert_eq!(
+            set,
+            Ok(ModelEnvSettings {
+                tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
+                embed_batch_size: 16,
+                embed_concurrency: 2,
+            })
+        );
+        assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
     }
 }

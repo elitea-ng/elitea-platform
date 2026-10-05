@@ -1,0 +1,3 @@
+# Product names the storage documentation spells as they are spelled, not
+# code identifiers to put in backticks. ".." keeps clippy's default list.
+doc-valid-idents = ["PostgreSQL", "SQLite", ".."]

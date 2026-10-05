@@ -10,11 +10,11 @@
 )]
 
 use elitea_deepwiki_engine::config::Settings;
-use elitea_deepwiki_engine::{build_runner, healthcheck, server};
+use elitea_deepwiki_engine::{build_runner, healthcheck, server, storage};
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str = "usage: elitea-deepwiki-engine [serve | healthcheck | --version]";
+const USAGE: &str = "usage: elitea-deepwiki-engine [serve | healthcheck | migrate | --version]";
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
@@ -22,6 +22,7 @@ async fn main() -> ExitCode {
     match command.as_deref() {
         None | Some("serve") => serve().await,
         Some("healthcheck") => healthcheck().await,
+        Some("migrate") => migrate().await,
         Some("--version") => {
             println!("elitea-deepwiki-engine {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -56,7 +57,7 @@ async fn healthcheck() -> ExitCode {
     }
 }
 
-async fn serve() -> ExitCode {
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -64,9 +65,76 @@ async fn serve() -> ExitCode {
         )
         .with_writer(std::io::stderr)
         .init();
+}
+
+/// `python -m elitea_deepwiki.storage`: apply the service migrations to
+/// `ELITEA_DEEPWIKI_DATABASE_URL`. Exit 0 when the database is at the
+/// newest migration (whether or not this run applied one), 1 otherwise.
+/// It reads only that variable, as the Python entry point does, so a
+/// migration Job needs no runner settings.
+async fn migrate() -> ExitCode {
+    init_tracing();
+    let dsn = std::env::var(storage::DSN_ENV).unwrap_or_default();
+    if dsn.trim().is_empty() {
+        tracing::error!(
+            "{} is not set, so there is no database to migrate. It must name the same database the service itself connects to.",
+            storage::DSN_ENV
+        );
+        return ExitCode::FAILURE;
+    }
+    let pool = match storage::lazy_pool(&dsn, 1) {
+        Ok(pool) => pool,
+        Err(error) => {
+            tracing::error!(%error, "cannot migrate");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcome = storage::migrate::apply_all(&pool).await;
+    pool.close().await;
+    match outcome {
+        Ok(applied) if applied.is_empty() => {
+            tracing::info!("the database is already at the newest migration");
+            ExitCode::SUCCESS
+        }
+        Ok(applied) => {
+            tracing::info!(
+                "applied {} migration(s): {}",
+                applied.len(),
+                applied.join(", ")
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "migration failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// With a database configured: reconcile abandoned builds at start and
+/// sweep stale ones periodically, in the background.
+fn start_reconciler(settings: &Settings) {
+    let Some(url) = settings.database_url.as_ref() else {
+        return;
+    };
+    match storage::lazy_pool(url.expose(), 2) {
+        Ok(pool) => {
+            let space = storage::build::BuildSpace::new(pool, settings.build_owner.clone());
+            tokio::spawn(storage::build::run_reconciler(
+                space,
+                settings.build_stale_after,
+            ));
+        }
+        Err(error) => tracing::error!(%error, "no build reconciliation"),
+    }
+}
+
+async fn serve() -> ExitCode {
+    init_tracing();
     let Some(settings) = settings() else {
         return ExitCode::FAILURE;
     };
+    start_reconciler(&settings);
     let runner = build_runner(&settings);
     let listener = match server::bind(&settings.engine_socket) {
         Ok(listener) => listener,

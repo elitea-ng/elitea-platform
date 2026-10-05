@@ -65,6 +65,24 @@ impl StopSignal {
     pub fn is_requested(&self) -> bool {
         self.requested.load(Ordering::SeqCst)
     }
+
+    /// Resolve once a stop is requested (at once if it already was).
+    ///
+    /// A model call awaits this beside its request, so a stop aborts a
+    /// call that may otherwise wait minutes for its first token.
+    pub async fn stopped(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            // Registered before the flag is read, so a request that lands
+            // between the two still wakes this waiter.
+            notified.as_mut().enable();
+            if self.is_requested() {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 /// The hooks one tool run reports through.
