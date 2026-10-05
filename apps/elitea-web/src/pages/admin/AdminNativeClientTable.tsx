@@ -84,13 +84,22 @@ export function NativeClientTable({ clients, busyIds, onEdit, onToggleEnabled, o
             const name = client.display_name !== '' ? client.display_name : client.client_id;
             return (
               <TableRow key={client.client_id} hover data-testid={`native-client-row-${client.client_id}`}>
-                <TableCell>
-                  <Typography variant="bodyMedium">{name}</Typography>
-                  <Typography variant="bodySmall" color="text.secondary" sx={{ fontFamily: monoFontFamily }}>
+                <TableCell sx={{ minWidth: '8rem' }}>
+                  <Typography variant="bodyMedium" component="div">
+                    {name}
+                  </Typography>
+                  <Typography
+                    variant="bodySmall"
+                    component="div"
+                    color="text.secondary"
+                    sx={{ fontFamily: monoFontFamily, overflowWrap: 'anywhere' }}
+                  >
                     {client.client_id}
                   </Typography>
                 </TableCell>
-                <TableCell sx={{ wordBreak: 'break-all' }}>
+                {/* A floor width: without it the column shrank to a few
+                    characters and broke every URI mid-word. */}
+                <TableCell sx={{ minWidth: '12rem', overflowWrap: 'anywhere' }}>
                   {client.redirect_uris.map((uri) => (
                     <Typography key={uri} variant="bodySmall" component="div" sx={{ fontFamily: monoFontFamily }}>
                       {uri}

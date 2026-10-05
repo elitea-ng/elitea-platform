@@ -31,7 +31,7 @@ export function NativeDeviceRevokeDialog({ device, busy, onCancel, onConfirm }: 
         <Typography variant="bodyMedium">
           {t(
             'shared.nativeDevices.revokeDialog.body',
-            '“{{name}}” ({{app}}) is signed out now. The app wipes its local data the next time it contacts the server, and signing in again on that device registers it as a new device.',
+            '“{{name}}” ({{app}}) will be signed out at once. The app wipes its local data the next time it contacts the server, and signing in again on that device registers it as a new device.',
             { name: device?.device_name ?? '', app: device?.client_name ?? '' },
           )}
         </Typography>

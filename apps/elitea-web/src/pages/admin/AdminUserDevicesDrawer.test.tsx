@@ -114,6 +114,8 @@ describe('Admin › Users → Devices', () => {
     await user.click(within(drawer).getByRole('button', { name: 'Revoke Cy’s phone' }));
     const confirm = await screen.findByTestId('native-device-revoke-dialog');
     expect(confirm).toHaveTextContent('wipes its local data the next time it contacts the server');
+    // Before the click nothing has happened yet: the body says what WILL.
+    expect(confirm).toHaveTextContent('will be signed out at once');
     expect(revoked).toHaveLength(0);
 
     await user.click(within(confirm).getByTestId('native-device-revoke-confirm'));

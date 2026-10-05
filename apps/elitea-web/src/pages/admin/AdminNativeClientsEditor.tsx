@@ -80,6 +80,14 @@ function outcomeSentence(outcome: NativeClientWriteOutcome): string {
     : t('pages.admin.nativeClients.result.saved', 'Saved.');
 }
 
+function removedSentence(outcome: NativeClientWriteOutcome): string {
+  return outcome.revokedDevices > 0
+    ? t('pages.admin.nativeClients.result.removedRevoked', 'Removed. {{count}} signed-in devices were signed out.', {
+        count: outcome.revokedDevices,
+      })
+    : t('pages.admin.nativeClients.result.removed', 'Removed.');
+}
+
 function confirmBody(action: PendingAction): string {
   const name = clientName(action.client);
   const count = action.client.active_devices;
@@ -262,7 +270,7 @@ export function AdminNativeClientsEditor() {
     deleteMutation.mutate(pending.client.client_id, {
       onSuccess: (outcome) => {
         setPending(undefined);
-        setNotice({ severity: 'success', text: outcomeSentence(outcome) });
+        setNotice({ severity: 'success', text: removedSentence(outcome) });
       },
       onError: (error: unknown) => {
         setPending(undefined);

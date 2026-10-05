@@ -243,7 +243,7 @@ describe('AdminNativeClientsEditor', () => {
     await waitFor(() => expect(recorded.map((entry) => entry.method)).toEqual(['DELETE']));
     expect(recorded[0]!.url).toMatch(/\/admin\/native_clients\/administration\/com\.example\.desktop$/);
     expect(await screen.findByTestId('admin-native-clients-notice')).toHaveTextContent(
-      'Saved. 3 signed-in devices were signed out.',
+      'signed-in devices were signed out.',
     );
   });
 
@@ -348,5 +348,30 @@ describe('AdminNativeClientsEditor', () => {
     const notice = await screen.findByTestId('admin-native-clients-notice');
     expect(notice).toHaveTextContent('Failed to save that native client.');
     expect(notice).not.toHaveTextContent('store_unavailable');
+  });
+  // Regression: the name and the client_id were two inline spans, rendered
+  // run together ("Example Desktopcom.example.desktop").
+  it('puts the client id on its own line under the name', async () => {
+    useHandlers();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    const row = rowOf('com.example.desktop');
+    expect(within(row).getByText('Example Desktop').tagName).toBe('DIV');
+    expect(within(row).getByText('com.example.desktop').tagName).toBe('DIV');
+  });
+
+  it('reports a removal as a removal, not as "Saved."', async () => {
+    useHandlers();
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminNativeClientsEditor />);
+    await screen.findByText('Example Desktop');
+
+    await user.click(within(rowOf('com.example.desktop')).getByRole('button', { name: 'Remove' }));
+    await user.click(within(await screen.findByTestId('native-client-confirm-dialog')).getByTestId('native-client-confirm'));
+
+    expect(await screen.findByTestId('admin-native-clients-notice')).toHaveTextContent(
+      'Removed. 3 signed-in devices were signed out.',
+    );
   });
 });

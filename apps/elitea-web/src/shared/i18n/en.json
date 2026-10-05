@@ -4680,7 +4680,7 @@
   "shared.nativeDevices.reason.user": "Revoked by the user",
   "shared.nativeDevices.reason.userDeactivated": "Account suspended",
   "shared.nativeDevices.revoke": "Revoke",
-  "shared.nativeDevices.revokeDialog.body": "“{{name}}” ({{app}}) is signed out now. The app wipes its local data the next time it contacts the server, and signing in again on that device registers it as a new device.",
+  "shared.nativeDevices.revokeDialog.body": "“{{name}}” ({{app}}) will be signed out at once. The app wipes its local data the next time it contacts the server, and signing in again on that device registers it as a new device.",
   "shared.nativeDevices.revokeDialog.cancel": "Cancel",
   "shared.nativeDevices.revokeDialog.confirm": "Revoke",
   "shared.nativeDevices.revokeDialog.title": "Revoke device",
@@ -4690,5 +4690,7 @@
   "pages.admin.nativeClients.dialog.clientIdRequired": "Enter the client ID the app sends.",
   "pages.admin.nativeClients.dialog.clientIdTaken": "A client with this ID is already registered. Edit it instead.",
   "pages.admin.nativeClients.error.forbidden": "You do not have permission to manage native clients.",
-  "pages.admin.users.devices.forbidden": "You do not have permission to manage this user’s devices."
+  "pages.admin.users.devices.forbidden": "You do not have permission to manage this user’s devices.",
+  "pages.admin.nativeClients.result.removed": "Removed.",
+  "pages.admin.nativeClients.result.removedRevoked": "Removed. {{count}} signed-in devices were signed out."
 }

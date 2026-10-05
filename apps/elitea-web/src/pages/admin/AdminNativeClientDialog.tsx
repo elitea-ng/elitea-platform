@@ -114,7 +114,10 @@ export function AdminNativeClientDialog({
           ? t('pages.admin.nativeClients.dialog.editTitle', 'Edit native client')
           : t('pages.admin.nativeClients.dialog.createTitle', 'Register native client')}
       </DialogTitle>
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', pt: '0.5rem' }}>
+      {/* `&&`: MUI zeroes the padding-top of a DialogContent that follows a
+          DialogTitle with a more specific rule than a plain `sx`, which cut
+          the first field's outlined label in half. */}
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', '&&': { pt: '0.75rem' } }}>
         {serverError !== undefined ? (
           <Alert severity="error" data-testid="native-client-dialog-error">
             {serverError}
