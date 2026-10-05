@@ -115,7 +115,9 @@ func (p *NativePages) RenderConsent(w http.ResponseWriter, r *http.Request, cons
 // depth against a cross-site POST). So with `no-referrer` every Continue from
 // a real browser was answered 403 "The answer did not come from this server's
 // page" -- Chromium and WebKit both, found by the settings.devices journey;
-// the Go conformance client sends no Origin, so it never saw it.
+// the Go conformance client sends no Origin, so it never saw it. The page's
+// `<meta name="referrer">` (templates/native_consent.html) says the same: a
+// meta overrides this header, and the shared auth-page head says no-referrer.
 // `same-origin` sends the real Origin on the same-origin decision POST and
 // still sends NO Referer on any cross-origin request, so the request handle
 // in this page's URL never reaches the app's redirect URI.

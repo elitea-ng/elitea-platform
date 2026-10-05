@@ -141,6 +141,12 @@ func TestConsentPageEscapesAndPinsFormAction(t *testing.T) {
 		recorder.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("headers = %v", recorder.Header())
 	}
+	// The meta must agree with the header: a document under no-referrer sends
+	// `Origin: null` on its form POST, which the decision handler refuses.
+	if !strings.Contains(body, `<meta name="referrer" content="same-origin">`) ||
+		strings.Contains(body, `content="no-referrer"`) {
+		t.Fatal("the consent page must declare referrer policy same-origin, never no-referrer")
+	}
 	for _, hook := range []string{`id="native-consent-form"`, `data-testid="native-consent-allow"`, `data-testid="native-consent-deny"`} {
 		if !strings.Contains(body, hook) {
 			t.Fatalf("missing test hook %s", hook)
