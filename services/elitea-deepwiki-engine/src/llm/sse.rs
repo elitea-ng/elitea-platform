@@ -7,7 +7,8 @@
 //! whole has one.
 //!
 //! The subset of the SSE grammar a completion stream uses: lines end in
-//! `\n` or `\r\n`; `data:` lines of one event join with `\n`; a blank line
+//! `\n`, `\r\n` or a lone `\r`; a UTF-8 byte order mark at the start of
+//! the stream is skipped; `data:` lines of one event join with `\n`; a blank line
 //! ends the event; `:` starts a comment (a keep-alive); `event:` names the
 //! event (only `error` matters); `id:` and `retry:` are ignored. A trailing
 //! event without its blank line is still delivered at the end of the
@@ -80,7 +81,15 @@ pub struct SseDecoder {
     has_data: bool,
     total: usize,
     events: usize,
+    /// The last line ended in `\r` at the end of a chunk: a `\n` that
+    /// starts the next chunk is the second half of that `\r\n`.
+    skip_lf: bool,
+    /// The start of the stream was checked for a byte order mark.
+    bom_checked: bool,
 }
+
+/// The UTF-8 byte order mark.
+const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 impl SseDecoder {
     #[must_use]
@@ -101,18 +110,38 @@ impl SseDecoder {
         if self.total > self.limits.max_stream_bytes {
             return Err(SseError::StreamTooLarge);
         }
+        let mut chunk = chunk;
+        if self.skip_lf && !chunk.is_empty() {
+            self.skip_lf = false;
+            chunk = chunk.strip_prefix(b"\n").unwrap_or(chunk);
+        }
         self.pending.extend_from_slice(chunk);
+        if !self.bom_checked {
+            if self.pending.len() < BOM.len() && BOM.starts_with(&self.pending) {
+                // Not enough bytes to tell yet.
+                return Ok(());
+            }
+            self.bom_checked = true;
+            if self.pending.starts_with(BOM) {
+                self.pending.drain(..BOM.len());
+            }
+        }
         let mut start = 0;
         let mut from = self.scanned;
-        while let Some(offset) = self.pending[from..].iter().position(|b| *b == b'\n') {
+        while let Some(offset) = self.pending[from..]
+            .iter()
+            .position(|b| *b == b'\n' || *b == b'\r')
+        {
             let end = from + offset;
-            let line_end = if end > start && self.pending[end - 1] == b'\r' {
-                end - 1
-            } else {
-                end
-            };
-            let line = self.pending[start..line_end].to_vec();
+            let line = self.pending[start..end].to_vec();
             start = end + 1;
+            if self.pending[end] == b'\r' {
+                match self.pending.get(start) {
+                    Some(b'\n') => start += 1,
+                    Some(_) => {}
+                    None => self.skip_lf = true,
+                }
+            }
             from = start;
             if line.len() > self.limits.max_line_bytes {
                 return Err(SseError::LineTooLong);
@@ -133,6 +162,7 @@ impl SseDecoder {
     ///
     /// As [`SseDecoder::push`].
     pub fn finish(&mut self, out: &mut Vec<SseEvent>) -> Result<(), SseError> {
+        self.bom_checked = true;
         if !self.pending.is_empty() {
             let line = std::mem::take(&mut self.pending);
             self.scanned = 0;
@@ -267,6 +297,47 @@ mod tests {
         assert_eq!(
             decode(&[b"data: \xff\xfe\n\n"], SseLimits::default()),
             Err(SseError::NotUtf8)
+        );
+    }
+
+    #[test]
+    fn a_lone_carriage_return_ends_a_line() {
+        let stream = b"data: a\r\rdata: b\r\n\r\ndata: c\r\r";
+        for split in 0..stream.len() {
+            let (a, b) = stream.split_at(split);
+            let Ok(events) = decode(&[a, b], SseLimits::default()) else {
+                panic!("split at {split} failed");
+            };
+            assert_eq!(data(&events), ["a", "b", "c"], "split at {split}");
+        }
+        // A `\r\n` split across chunks is one line end, not two.
+        let events = decode(
+            &[b"data: a\r", b"\ndata: b\r", b"\n\r\n"],
+            SseLimits::default(),
+        );
+        assert_eq!(events.map(|e| data(&e).join("|")), Ok("a\nb".to_owned()));
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_is_skipped() {
+        let stream = b"\xEF\xBB\xBFdata: x\n\n";
+        for split in 0..stream.len() {
+            let (a, b) = stream.split_at(split);
+            let events = decode(&[a, b], SseLimits::default());
+            assert_eq!(
+                events.map(|e| data(&e).join("|")),
+                Ok("x".to_owned()),
+                "split at {split}"
+            );
+        }
+        // Only at the start of the stream.
+        assert_eq!(
+            decode(
+                &[b"data: x\n\n\xEF\xBB\xBFdata: y\n\n"],
+                SseLimits::default()
+            )
+            .map(|e| e.len()),
+            Ok(1)
         );
     }
 }
