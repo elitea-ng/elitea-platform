@@ -50,7 +50,16 @@ type Surface struct {
 	ClientContract string `json:"client_contract"`
 	// Operations is keyed "METHOD /path", the path as written in the document.
 	Operations map[string]*Operation `json:"operations"`
+	// Frames is the client frame catalogue (contract 1.1): the `data` shape
+	// of each `execution.node_event` type a client renders, keyed by
+	// `data.type`, from the document's x-elitea-client-frames. A frame is
+	// read by the client, so it is compared like a response.
+	Frames map[string]*Shape `json:"frames,omitempty"`
 }
+
+// FramesExtension is the document-root extension mapping a frame type to the
+// component schema of its `data`.
+const FramesExtension = "x-elitea-client-frames"
 
 // Operation is what a client can observe of one operation.
 type Operation struct {
@@ -130,6 +139,11 @@ func Normalize(doc *openapi3.T) (*Surface, error) {
 			surface.ClientContract = version
 		}
 	}
+	frames, err := normalizeFrames(doc)
+	if err != nil {
+		return nil, err
+	}
+	surface.Frames = frames
 	for path, item := range doc.Paths.Map() {
 		for method, op := range item.Operations() {
 			if op == nil || !hasTag(op.Tags, Tag) {
@@ -143,6 +157,38 @@ func Normalize(doc *openapi3.T) (*Surface, error) {
 		}
 	}
 	return surface, nil
+}
+
+// normalizeFrames reads x-elitea-client-frames: frame type -> a
+// `#/components/schemas/<name>` reference. A reference to a schema the
+// document does not hold is an error rather than a silently shorter
+// catalogue.
+func normalizeFrames(doc *openapi3.T) (map[string]*Shape, error) {
+	raw, ok := doc.Extensions[FramesExtension]
+	if !ok {
+		return nil, nil
+	}
+	entries, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("clientcontract: %s must map a frame type to a schema reference, got %T", FramesExtension, raw)
+	}
+	const prefix = "#/components/schemas/"
+	frames := make(map[string]*Shape, len(entries))
+	for frameType, value := range entries {
+		ref, ok := value.(string)
+		if !ok || !strings.HasPrefix(ref, prefix) {
+			return nil, fmt.Errorf("clientcontract: %s.%s must be a %s<name> string", FramesExtension, frameType, prefix)
+		}
+		var schema *openapi3.SchemaRef
+		if doc.Components != nil {
+			schema = doc.Components.Schemas[strings.TrimPrefix(ref, prefix)]
+		}
+		if schema == nil || schema.Value == nil {
+			return nil, fmt.Errorf("clientcontract: %s.%s names %s, which the document does not define", FramesExtension, frameType, ref)
+		}
+		frames[frameType] = newWalker().shape(&openapi3.SchemaRef{Ref: ref, Value: schema.Value})
+	}
+	return frames, nil
 }
 
 func hasTag(tags []string, tag string) bool {

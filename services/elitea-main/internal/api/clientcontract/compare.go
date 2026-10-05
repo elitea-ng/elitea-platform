@@ -42,6 +42,16 @@ func Compare(locked, current *Surface) []string {
 		c.operation(was, now)
 		out = append(out, c.problems...)
 	}
+	for _, frameType := range sortedKeys(locked.Frames) {
+		now, ok := current.Frames[frameType]
+		if !ok {
+			out = append(out, fmt.Sprintf("frame %s: removed from %s", frameType, FramesExtension))
+			continue
+		}
+		c := &comparer{op: "frame " + frameType}
+		c.shape("data", response, locked.Frames[frameType], now)
+		out = append(out, c.problems...)
+	}
 	return out
 }
 

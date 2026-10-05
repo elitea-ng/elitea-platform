@@ -2143,6 +2143,319 @@ components:
               type: string
               description: Every other kind's display name.
 
+    # --- Client frame catalogue (client contract 1.1). The `data` of an
+    # `execution.node_event` SSE event, per `data.type`; see
+    # x-elitea-client-frames at the document root and API_CONTRACT.md
+    # "Agent progress frames". Every schema is open: a client ignores keys it
+    # does not know, and the workers add keys over time.
+
+    ClientFrameEnvelope:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the node event JSON both workers build
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:1096,
+        `_event_json`) and elitea-main replays verbatim as the SSE `data`;
+        the per-type keys live in `response_metadata`.
+      required: [type, response_metadata]
+      properties:
+        type:
+          type: string
+          description: The frame type; the key of x-elitea-client-frames.
+        stream_id:
+          type: string
+          nullable: true
+          description: The conversation UUID the turn streams into.
+        message_id:
+          type: string
+          nullable: true
+          description: The answer's message group UUID (`response_message_id`).
+        content:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): text for most frames (a pause's message, an output
+            chunk's slice), null for tool frames
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:1109).
+        created_at: { type: string, nullable: true }
+
+    ClientFrameToolMetadata:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the tool's display and hierarchy metadata
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:612,
+        `_tool_start`); the typed keys are what a client renders.
+      properties:
+        toolkit_name: { type: string, nullable: true }
+        toolkit_type: { type: string, nullable: true }
+        display_name: { type: string, nullable: true }
+        original_name: { type: string, nullable: true }
+        parent_agent_name:
+          type: string
+          nullable: true
+          description: Set when a sub-agent ran the tool; group the tool under it.
+        parent_agent_call_id: { type: string, nullable: true }
+
+    ClientFrameToolCall:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one tool call entry
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:618,
+        `entry`), identical in `agent_tool_start`, `agent_tool_end` and
+        `agent_tool_error`; keyed by `tool_run_id`.
+      required: [tool_name, tool_run_id]
+      properties:
+        tool_name: { type: string }
+        tool_run_id:
+          type: string
+          description: The key of one call across its start, chunks and end.
+        tool_meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the tool descriptor
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:611).
+          properties:
+            name: { type: string, nullable: true }
+        tool_inputs:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the tool's own argument object, whatever the tool takes
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:622).
+          description: The arguments the model called the tool with. May be sensitive; show on demand.
+        metadata:
+          $ref: '#/components/schemas/ClientFrameToolMetadata'
+        timestamp_start: { type: string, nullable: true }
+        timestamp_finish: { type: string, nullable: true }
+        finish_reason:
+          type: string
+          nullable: true
+          description: '`stop` on success, `error` on failure; absent or null while running.'
+        tool_output:
+          type: string
+          nullable: true
+          description: >-
+            The result as text. Empty when it was chunked (see
+            `tool_output_chunks`); null on failure.
+        error:
+          type: string
+          nullable: true
+          description: The failure text of an `agent_tool_error`.
+        tool_output_chunks:
+          type: object
+          nullable: true
+          description: >-
+            Present when the output was too large for one frame: it arrived
+            as `total` `agent_tool_output_chunk` frames before this one, and
+            their concatenation hashes to `tool_output_sha256`.
+          required: [total, tool_output_sha256]
+          properties:
+            total: { type: integer }
+            tool_output_sha256: { type: string }
+
+    ClientFrameAgentToolStart:
+      description: >-
+        A tool call started. `response_metadata` is the call entry; a later
+        `agent_tool_end` or `agent_tool_error` with the same `tool_run_id`
+        completes it. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              $ref: '#/components/schemas/ClientFrameToolCall'
+
+    ClientFrameAgentToolEnd:
+      description: >-
+        A tool call finished (`agent_tool_end`) or failed
+        (`agent_tool_error`; `content` repeats the error). A client that
+        missed the start builds the call from this frame alone. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              $ref: '#/components/schemas/ClientFrameToolCall'
+
+    ClientFrameAgentToolOutputChunk:
+      description: >-
+        One slice of a tool result too large for one frame. `content` is the
+        slice; the slices of one call arrive in `index` order before its
+        `agent_tool_end`. Not terminal. NOTE(W2):
+        internal/transport/runtimegrpc/nodeevent/tool_output_chunk.go:52.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            content: { type: string }
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the chunk position
+                (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:788).
+              required: [tool_output_chunk]
+              properties:
+                tool_output_chunk:
+                  type: object
+                  required: [tool_call_id, index, total, tool_output_sha256]
+                  properties:
+                    tool_call_id:
+                      type: string
+                      description: The `tool_run_id` of the call the slice belongs to.
+                    index: { type: integer }
+                    total: { type: integer }
+                    tool_output_sha256: { type: string }
+
+    ClientFrameHitlInterruptDetail:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one pending interrupt as the runtime raised it
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:430,
+        `_normalize_hitl_pause`); guardrail kinds add their own keys.
+      properties:
+        interrupt_id:
+          type: string
+          nullable: true
+          description: Echo it in `hitl_decisions[].interrupt_id`.
+        tool_call_id: { type: string, nullable: true }
+        message: { type: string, nullable: true }
+        available_actions:
+          type: array
+          nullable: true
+          items: { type: string }
+          description: Some of approve, reject, edit, block_with_comment, answer, authorize, skip.
+        guardrail_type: { type: string, nullable: true }
+        action_label: { type: string, nullable: true }
+        policy_message: { type: string, nullable: true }
+        tool_name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        tool_args:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the paused tool's own arguments
+            (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:430).
+          description: The arguments awaiting approval; `edit` sends a replacement object.
+        questions:
+          type: array
+          nullable: true
+          description: An `ask_user` pause's questions; `answer` sends an object keyed by question id.
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one ask_user question
+              (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:430);
+              its option keys follow the tool.
+        parent_agent_name: { type: string, nullable: true }
+
+    ClientFrameHitlInterrupt:
+      description: >-
+        The turn paused for a human decision. Terminal, unless it is a
+        fan-out child pause (`response_metadata.metadata` carries both
+        `parent_agent_name` and `child_thread_id`): then siblings keep
+        streaming and only the parent's terminal frame ends the turn. Answer
+        it with continueChatExecution and `agent.continue.hitl.v1`.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the pause projection
+                (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:441).
+              properties:
+                thread_id: { type: string, nullable: true }
+                message: { type: string, nullable: true }
+                available_actions:
+                  type: array
+                  nullable: true
+                  items: { type: string }
+                hitl_interrupt:
+                  $ref: '#/components/schemas/ClientFrameHitlInterruptDetail'
+                hitl_interrupts:
+                  type: array
+                  nullable: true
+                  description: Every pending interrupt; a parallel pause carries several, one decision each.
+                  items:
+                    $ref: '#/components/schemas/ClientFrameHitlInterruptDetail'
+                metadata:
+                  $ref: '#/components/schemas/ClientFrameToolMetadata'
+
+    ClientFrameMcpAuthorizationRequest:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): one toolkit's authorization request
+        (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:707);
+        `resource_metadata` follows the server's OAuth metadata.
+      properties:
+        server_url: { type: string, nullable: true }
+        resource_metadata_url: { type: string, nullable: true }
+        www_authenticate: { type: string, nullable: true }
+        resource_metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the protected resource's OAuth metadata, minus provided
+            settings (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:707).
+        tool_run_id: { type: string, nullable: true }
+        tool_name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        toolkit_type: { type: string, nullable: true }
+
+    ClientFrameMcpAuthorizationRequired:
+      description: >-
+        A toolkit needs the user to sign in; the tool has not run. Sent as
+        progress first; the frame that carries
+        `response_metadata.authorization_requests` is terminal. Continue with
+        `agent.continue.authorization.v1` (authorize or skip).
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              allOf:
+                - $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+                - type: object
+                  properties:
+                    thread_id: { type: string, nullable: true }
+                    authorization_requests:
+                      type: array
+                      nullable: true
+                      items:
+                        $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+
+    ClientFrameRequiresConfirmation:
+      description: >-
+        The answer stopped at the model's output limit. Not terminal by
+        itself; offer Continue, which is continueChatExecution with
+        `agent.continue.output-limit.v1`.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the output-limit pause
+                (services/elitea-worker-rust/src/agents/events.rs:2148).
+              properties:
+                finish_reason: { type: string, nullable: true }
+
     ParticipantCandidatesPage:
       type: object
       description: >-
@@ -2696,14 +3009,25 @@ components:
           description: True for `agent.continue.hitl.v1` and for a batched authorization answer.
         hitl_action:
           type: string
-          description: The single-pause decision (`approve`, `reject`, `edit`, `respond` and similar, as the pause frame offered).
+          description: >-
+            The single-pause decision, one the pause frame's
+            `available_actions` offered: `approve`, `reject`, `edit`,
+            `block_with_comment` or `answer`.
         hitl_value:
-          description: The decision's value (an edited value, a free-text answer); its type follows the action.
+          description: >-
+            The decision's value; its type follows the action. `approve`,
+            `reject`: absent. `edit`: a non-empty STRING — the edited value
+            (for a tool-call pause, the edited arguments as JSON text).
+            `block_with_comment`: a non-empty string, the comment. `answer`
+            (an ask_user pause): an OBJECT keyed by question id (each value
+            the chosen option(s) or free text), or a plain string. The same
+            rule applies to each `hitl_decisions[].value`.
           x-elitea-passthrough: >-
             NOTE(W2): read as json.RawMessage
-            (internal/api/v2/agentexecution/route.go:208) and validated per
-            action by `currentHITLValue`; a string for `respond`, an object
-            for `edit`, absent otherwise.
+            (internal/api/v2/agentexecution/route.go:753, `currentHITLValue`):
+            a JSON string for every action but `answer`, which also admits an
+            object and is canonicalised; edit, block_with_comment and answer
+            refuse an empty value (internal/application/agentexecution/continue.go:313).
         hitl_decisions:
           type: array
           description: Per-interrupt decisions for a multi-pause frame, instead of `hitl_action`.
@@ -11883,6 +12207,21 @@ components:
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+# The client frame catalogue (client contract 1.1): the `data.type` values of
+# an `execution.node_event` a client renders tool activity and pauses from,
+# each mapped to the schema of its `data`. internal/api/clientcontract locks
+# these schemas like an operation's response (additive only), and
+# TestClientFrameCatalogueAcceptsWorkerFrames validates frames captured from
+# BOTH workers against them (testdata/client-frames/).
+x-elitea-client-frames:
+  agent_tool_start: '#/components/schemas/ClientFrameAgentToolStart'
+  agent_tool_end: '#/components/schemas/ClientFrameAgentToolEnd'
+  agent_tool_error: '#/components/schemas/ClientFrameAgentToolEnd'
+  agent_tool_output_chunk: '#/components/schemas/ClientFrameAgentToolOutputChunk'
+  agent_hitl_interrupt: '#/components/schemas/ClientFrameHitlInterrupt'
+  mcp_authorization_required: '#/components/schemas/ClientFrameMcpAuthorizationRequired'
+  agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
+
 paths:
   /.well-known/elitea-client:
     # Root-mounted (RFC 8615), outside /api/v2 and outside the auth group
