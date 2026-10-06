@@ -43,6 +43,34 @@ NS=elitea
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea.yaml"
 
+# Schema validation of the NATS renders (R9). The template job in helm-lint.yml
+# runs kubeconform on the charts it can template without network; these two
+# vendor an upstream subchart, so this suite is where their renders exist.
+# KUBECONFORM names the binary; CI sets NATS_REQUIRE_KUBECONFORM=1 so a missing
+# binary fails instead of reading as a pass. The approver-policy schema is not
+# in the pinned CRD catalog release, so it comes from the catalog commit that
+# added it (pinned by SHA).
+KUBECONFORM="${KUBECONFORM:-}"
+# (Not ${CRD_SCHEMAS:-...}: the template's own braces would end the expansion.)
+if [ -z "${CRD_SCHEMAS:-}" ]; then
+  CRD_SCHEMAS='https://raw.githubusercontent.com/datreeio/CRDs-catalog/v0.0.12/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+fi
+POLICY_SCHEMAS='https://raw.githubusercontent.com/datreeio/CRDs-catalog/b2fd9c93e43e444946da75401bfa0eac8eeb9a38/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+: > "$TMP/refusals"
+if [ -n "$KUBECONFORM" ]; then
+  if "$KUBECONFORM" -strict -summary -kubernetes-version 1.30.0 \
+      -schema-location default -schema-location "$CRD_SCHEMAS" -schema-location "$POLICY_SCHEMAS" \
+      "$TMP/nats-scale1.yaml" "$TMP/nats-ha.yaml" "$TMP/nats-ha-ap.yaml" "$TMP/bootstrap.yaml" > "$TMP/kubeconform.out" 2>&1; then
+    echo "ok	kubeconform: the nats (scale-1, HA, HA + approver-policy) and nats-bootstrap renders are schema-valid" >> "$TMP/refusals"
+  else
+    echo "KUBECONFORM-FAILED	kubeconform on the NATS renders	$(tr '\n' ' ' < "$TMP/kubeconform.out")" >> "$TMP/refusals"
+  fi
+elif [ "${NATS_REQUIRE_KUBECONFORM:-0}" = "1" ]; then
+  echo "KUBECONFORM-MISSING	kubeconform on the NATS renders	NATS_REQUIRE_KUBECONFORM=1 and KUBECONFORM is unset" >> "$TMP/refusals"
+else
+  echo "kubeconform: skipped (set KUBECONFORM to a kubeconform binary to validate the NATS renders)" >&2
+fi
+
 # Refusals: each render below MUST fail, with the reason named.
 refuse() {
   local name="$1" want="$2"; shift 2
@@ -54,7 +82,6 @@ refuse() {
     echo "WRONG-REASON	$name	$(tail -1 "$TMP/refusal.err")" >> "$TMP/refusals"
   fi
 }
-: > "$TMP/refusals"
 EL=(elitea "$DIR/helm/elitea" -n "$NS"
     --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
     --set-string llmGateway.egressPosture=public-unrestricted)
@@ -399,6 +426,25 @@ for p in sorted(prefixes):
     names = [f"{p}_NATS_TLS_{k}_FILE" for k in ("CA", "CERT", "KEY")]
     check(f"the chart renders all three of {p}_NATS_TLS_*_FILE the code builds", all(n in rendered_env for n in names), [n for n in names if n not in rendered_env])
 check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY"}, sorted(prefixes))
+
+# ── one NATS server version everywhere (R9) ───────────────────────────────
+# The chart pins the server; CI's plaintext suites, the secured tests' server
+# binary and compose must run the same one, or a test passes on a server the
+# cluster does not run.
+pins = {yaml.safe_load(open(root / "deploy/helm/nats" / f))["nats"]["container"]["image"]["tag"] for f in ("values-scale1.yaml", "values-ha.yaml")}
+check("both NATS profiles pin one server image", len(pins) == 1, pins)
+pin = next(iter(pins))
+image_re = re.compile(r"\bnats:(2\.[0-9][0-9A-Za-z.\-]*)")
+seen = {}
+for rel in (".github/workflows", "deploy", "scripts"):
+    for f in (root / rel).rglob("*"):
+        if f.suffix not in (".yml", ".yaml", ".sh") or "/charts/" in str(f) or "/helm/" in str(f):
+            continue
+        for m in image_re.finditer(f.read_text(errors="replace")):
+            seen.setdefault(m.group(1), set()).add(str(f.relative_to(root)))
+check("CI, compose and the test scripts run the chart's NATS image (found some)", seen, seen)
+for tag, files in sorted(seen.items()):
+    check(f"nats:{tag} is the chart's pin nats:{pin}", tag == pin, sorted(files))
 
 # ── the Argo CD sample ────────────────────────────────────────────────────
 def app(f):

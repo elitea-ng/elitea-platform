@@ -288,7 +288,23 @@ jobs:
       # subchart with `helm dependency build`, which needs network access the
       # template matrix below does not take. Whether each grant is RIGHT is the
       # secured permission tests' job (ci-go.yml, ci-gateway.yml).
+      #
+      # It also runs kubeconform on the nats (scale-1, HA, HA with
+      # approver-policy) and nats-bootstrap renders: the template matrix below
+      # excludes those two charts because templating them needs the vendored
+      # subchart, and this step is where their renders exist.
+      # NATS_REQUIRE_KUBECONFORM makes a missing binary a failure, not a skip.
+      - name: Install kubeconform (for the NATS renders)
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+          kubeconform -v
+
       - name: NATS security — the charts agree on identities, issuer and policy
+        env:
+          KUBECONFORM: kubeconform
+          NATS_REQUIRE_KUBECONFORM: "1"
         run: |
           python3 -c 'import yaml' 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
@@ -308,7 +324,8 @@ jobs:
           # Charts `helm template` cannot cover on this runner, with the reason:
           # nats/ vendors an upstream subchart, so templating it needs
           # `helm dependency build` and network access to the upstream repo,
-          # and nats-bootstrap/ is its companion hook chart.
+          # and nats-bootstrap/ is its companion hook chart. Both ARE rendered
+          # and schema-checked (kubeconform) by the NATS security step above.
           excluded="nats nats-bootstrap"
           matrix="$(grep -oE '^ +- chart: [a-z0-9-]+' .github/workflows/helm-lint.yml \
                       | awk '{print $3}' | tr '\n' ' ')"

@@ -303,7 +303,7 @@ jobs:
       - name: Start NATS (JetStream)
         run: |
           set -euo pipefail
-          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12.0-alpine -js -m 8222
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
               # The same server binary, out of the container, for the
