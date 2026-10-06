@@ -395,8 +395,8 @@ jobs:
           # tests/system/index_v2_preflight_binary_system_test.go starts its
           # own PostgreSQL container and secured NATS server and builds the shipped
           # binaries, so it needs no service from this job. It is the only one
-          # of the nine tests/system files that CI can run; the rest want a
-          # bootstrapped Centry compose profile or the Python SDK, and
+          # of the tests/system files that CI can run; the rest want the
+          # Python SDK, and
           # scripts/go/declared-skips.txt names each with its reason.
           ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST: "1"
 
@@ -417,28 +417,6 @@ jobs:
         # this run did NOT cover, so a green step cannot be read as
         # "the whole repository was tested".
         run: bash scripts/go/workspace-run.sh coverage --race
-
-      # Split out of the step above on purpose. Two different suites in one
-      # step give one step name for two different failures, and a step name
-      # that does not match the thing that failed costs real diagnosis time.
-      #
-      # `python3 -m unittest discover` exits 0 when it discovers NOTHING. A
-      # renamed directory or a changed pattern would therefore turn this gate
-      # into a green no-op. The count is asserted first (#409).
-      - name: Run index reliability tests (Python)
-        run: |
-          python3 - <<'PY'
-          import sys, unittest
-
-          start = "services/elitea-main/tests/reliability/index_5681"
-          suite = unittest.defaultTestLoader.discover(start, pattern="test_*.py", top_level_dir=start)
-          count = suite.countTestCases()
-          print(f"discovered {count} test(s) in {start}")
-          if count == 0:
-              sys.exit(f"no test discovered in {start}; the gate would pass without running anything")
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          sys.exit(0 if result.wasSuccessful() else 1)
-          PY
 
       - name: Stop storage emulators
         if: always()

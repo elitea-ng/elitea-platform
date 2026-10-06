@@ -35,8 +35,7 @@
 #
 # It uses `rc` (rustfs/rc, the RustFS CLI), which is the client the compose stacks
 # already use to create the bucket (rustfs-bucket-init in
-# deploy/docker-compose.standalone-full.yml and runtime-artifacts-bucket-init in
-# deploy/centry-hybrid/pov-compose.yml). One client for the store, not two.
+# deploy/docker-compose.standalone-full.yml). One client for the store, not two.
 set -euo pipefail
 
 usage() {
@@ -51,7 +50,7 @@ usage: migrate-artifacts.sh --source <libcloud-storage-root> --alias <rc-alias>
                  /data/libcloud/storage, which is <centry>/pylon_main/libcloud/
                  storage on the host).
   --alias        An `rc` alias that already addresses the target store, e.g.
-                 `rc alias set hybrid http://127.0.0.1:9000 elitea <secret>`.
+                 `rc alias set target http://127.0.0.1:9000 elitea <secret>`.
   --container    Target bucket. Default: elitea-artifacts. It must equal
                  STORAGE_CONTAINER on elitea-main.
   --key-prefix   Target key prefix. Default: empty. It must equal

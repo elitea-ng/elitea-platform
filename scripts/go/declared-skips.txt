@@ -19,16 +19,16 @@
 #
 # BEFORE YOU ADD A LINE HERE, TRY THE OTHER THREE ANSWERS FIRST:
 #
-#   1. Give CI the service the test wants. A container is cheap. The Redis
-#      service and the three isolated databases in ci-go.yml each revived a
-#      suite that had never run.
+#   1. Give CI the service the test wants. A container is cheap. The three
+#      isolated databases in ci-go.yml each revived a suite that had never
+#      run.
 #   2. Make the guard FAIL instead of skip when a "require" flag is on, as
 #      ELITEA_REQUIRE_LEGACY_RBAC_POSTGRES_TEST does.
 #   3. Delete the test if nobody intends to run it. A test that always skips
 #      is not coverage; it is the appearance of coverage.
 #
 # A line belongs here only when the test needs something CI genuinely cannot
-# give it: a bootstrapped Centry compose profile, a private cookie file, a
+# give it: a private cookie file, a
 # credentialed staging deployment, a pinned worker container, or a sibling
 # repository.
 
@@ -41,19 +41,6 @@ github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestEditorLifecyclePostgresTraceReceiptIdentity	The editor-lifecycle job in ci-go.yml runs nine scenarios on isolated PostgreSQL 18. Its required flag rejects missing configuration.
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestEditorLifecyclePostgresTracePagination	The editor-lifecycle job in ci-go.yml runs nine scenarios on isolated PostgreSQL 18. Its required flag rejects missing configuration.
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestEditorEmptyStopPostgres	The editor-lifecycle job in ci-go.yml requires all four empty-Stop scenarios on isolated PostgreSQL 18. Missing fixture configuration fails that dedicated job.
-
-# ── The test needs a bootstrapped Centry compose profile ─────────────────────
-#
-# Each one drives the running hybrid runtime: real certificates, a real Redis
-# ACL, a private authenticated browser cookie, and a request file that names a
-# live toolkit. See services/elitea-main/tests/system/README.md. CI holds none
-# of that. The one file in this package that CI CAN run —
-# index_v2_preflight_binary_system_test.go — starts its own containers, and
-# ci-go.yml sets ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST=1 for it.
-
-github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestExistingComposeIndexReliability	Drives the already-running local Centry hybrid profile through its public HTTPS route, with an owner-only session cookie and a live toolkit Configuration ID.
-github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestExistingComposeIndexIssue5681ProductionScale	The bounded tests/reliability/index_5681/run.sh wrapper owns this gate. It needs a dedicated compose project, image digests, and credential canaries.
-github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestExistingComposeIndexIssue5681OwnerCleanup	Only the issue #5681 wrapper starts this, in a separate process, after the gate above exits.
 
 # ── The test needs the Python SDK, which is a separate repository ────────────
 

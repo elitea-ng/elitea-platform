@@ -5,7 +5,7 @@
 // not 2xx. An address that nothing registers therefore breaks every router that
 // names the middleware, and it breaks them at the edge.
 //
-// deploy/centry-hybrid/traefik/middlewares.yml points `go-main-auth` at
+// The retired deploy/centry-hybrid edge pointed `go-main-auth` at
 // http://elitea-main:8080/internal/auth/main. elitea-main registers
 // that path in internal/api/production_router.go, inside the branch that
 // composes production authentication. cmd/elitea-main/main.go enters that
@@ -35,7 +35,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -48,18 +47,6 @@ import (
 // authConfigVariable selects production authentication. main.go reads it, and
 // production_router.go registers the edge-auth path only in that branch.
 const authConfigVariable = "ELITEA_AUTH_CONFIG_FILE"
-
-// hybridGatewayService is the Traefik container of the foundation stack.
-const hybridGatewayService = "elitea-hybrid-gateway"
-
-// hybridFoundationSetName selects the configuration set that the foundation
-// stack loads.
-const hybridFoundationSetName = "centry-hybrid foundation edge"
-
-// composeVariablePattern matches a Compose interpolation such as
-// `${ELITEA_PLATFORM_DIR:-../elitea-platform}`. The default form holds a colon,
-// so a volume string must lose these before it is split on the colon.
-var composeVariablePattern = regexp.MustCompile(`\$\{[^}]*\}`)
 
 // edgeAuthMiddleware is one middleware definition, with the address this
 // gate follows and the chain members that reach further definitions.
@@ -85,8 +72,6 @@ type edgeWithEdgeAuth struct {
 // composeModel is the subset of a Compose file this gate reads.
 type composeModel struct {
 	Services map[string]struct {
-		Command     []string  `yaml:"command"`
-		Volumes     []string  `yaml:"volumes"`
 		Environment yaml.Node `yaml:"environment"`
 	} `yaml:"services"`
 }
@@ -176,25 +161,6 @@ func expandMiddlewares(named []string, definitions map[string]edgeAuthMiddleware
 	return reached
 }
 
-// configSetByName returns one declared set. It fails when the name is gone,
-// because a gate that silently checks nothing is the defect this file exists
-// for.
-func configSetByName(t *testing.T, name string) configSet {
-	t.Helper()
-	for _, set := range configSets() {
-		if set.name == name {
-			return set
-		}
-	}
-	t.Fatalf(
-		"no configuration set is named %q, so this gate stopped gating. "+
-			"Update configSets() in edge_middlewares_test.go, or update the "+
-			"name in this file.",
-		name,
-	)
-	return configSet{}
-}
-
 // TestEveryLoadedEdgeAuthTargetIsRegistered is the gate.
 func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
 	root := repoRoot(t)
@@ -204,8 +170,7 @@ func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
 		paths := set.resolve(t, root)
 
 		// Merge the set, because a router in one file names a middleware that
-		// another file in the same set defines. That is how the hybrid edge is
-		// built.
+		// another file in the same set defines.
 		definitions := map[string]edgeAuthMiddleware{}
 		routerFile := map[string]string{}
 		routerMiddlewares := map[string][]string{}
@@ -338,179 +303,4 @@ func assertEdgeAuthTarget(
 			strings.Join(set.composeFiles, ", "),
 		)
 	}
-}
-
-// TestHybridFoundationEdgeLoadsTheComposeMount keeps the declared set equal to
-// the mount.
-//
-// The declaration in configSets() is a claim about a Compose volume list. A
-// claim that nobody checks goes stale, and this repository has already shipped
-// a gate that stopped gating when a file moved (#157). This test reads the
-// volume list and fails when the two disagree, in either direction:
-//
-//   - a directory mount, or a new file mount, puts an unchecked router into the
-//     stack. That is exactly how index-routes.yml reached the foundation stack
-//     (#378);
-//   - a removed mount leaves the set claiming a file the stack never loads.
-func TestHybridFoundationEdgeLoadsTheComposeMount(t *testing.T) {
-	root := repoRoot(t)
-	set := configSetByName(t, hybridFoundationSetName)
-	if len(set.composeFiles) != 1 {
-		t.Fatalf(
-			"set %q declares %d Compose files. This gate reads one volume "+
-				"list. Update this file when the stack gains a second Compose "+
-				"file.",
-			set.name, len(set.composeFiles),
-		)
-	}
-	composeRelative := set.composeFiles[0]
-	compose := parseCompose(t, root, composeRelative)
-
-	gateway, present := compose.Services[hybridGatewayService]
-	if !present {
-		t.Fatalf(
-			"%s declares no service named %q, so this gate stopped gating. "+
-				"Update hybridGatewayService in this file.",
-			composeRelative, hybridGatewayService,
-		)
-	}
-
-	dynamicDir := ""
-	for _, argument := range gateway.Command {
-		if value, found := strings.CutPrefix(argument, "--providers.file.directory="); found {
-			dynamicDir = strings.TrimSuffix(value, "/")
-		}
-	}
-	if dynamicDir == "" {
-		t.Fatalf(
-			"service %q in %s passes no --providers.file.directory flag, so "+
-				"this gate cannot tell which mounts are edge configuration. "+
-				"Update this file.",
-			hybridGatewayService, composeRelative,
-		)
-	}
-
-	var loaded []string
-	for _, volume := range gateway.Volumes {
-		source, destination, found := splitComposeVolume(volume)
-		if !found {
-			t.Fatalf(
-				"service %q in %s declares the volume %q, which this gate "+
-					"cannot read as source:destination.",
-				hybridGatewayService, composeRelative, volume,
-			)
-		}
-		if destination != dynamicDir && filepath.Dir(destination) != dynamicDir {
-			// A mount outside the dynamic directory is not edge
-			// configuration. Certificates and sockets land here.
-			continue
-		}
-		sourceRelative, found := repoRelativeSource(source)
-		if !found {
-			t.Fatalf(
-				"service %q in %s mounts %q into %q, and this gate cannot "+
-					"resolve that source inside this repository.",
-				hybridGatewayService, composeRelative, source, destination,
-			)
-		}
-		absolute := filepath.Join(root, sourceRelative)
-		information, err := os.Stat(absolute)
-		if err != nil {
-			t.Fatalf(
-				"service %q in %s mounts %s, which does not exist: %v",
-				hybridGatewayService, composeRelative, sourceRelative, err,
-			)
-		}
-		if destination == dynamicDir {
-			// A whole directory. Traefik loads every file in it, so every
-			// file joins the set.
-			if !information.IsDir() {
-				t.Fatalf(
-					"service %q in %s mounts the file %s at the dynamic "+
-						"directory %s.",
-					hybridGatewayService, composeRelative, sourceRelative, dynamicDir,
-				)
-			}
-			matches, err := filepath.Glob(filepath.Join(absolute, "*.yml"))
-			if err != nil {
-				t.Fatalf("glob %s: %v", absolute, err)
-			}
-			for _, match := range matches {
-				relative, relErr := filepath.Rel(root, match)
-				if relErr != nil {
-					relative = match
-				}
-				loaded = append(loaded, relative)
-			}
-			continue
-		}
-		if information.IsDir() {
-			t.Fatalf(
-				"service %q in %s mounts the directory %s at the single file "+
-					"%s.",
-				hybridGatewayService, composeRelative, sourceRelative, destination,
-			)
-		}
-		loaded = append(loaded, sourceRelative)
-	}
-
-	if len(loaded) == 0 {
-		t.Fatalf(
-			"service %q in %s mounts no file into %s, so the edge loads "+
-				"nothing and this gate proved nothing.",
-			hybridGatewayService, composeRelative, dynamicDir,
-		)
-	}
-
-	// resolve() is what the other gates read, so this comparison reads it too.
-	// A set that declares a directory and a set that declares single files must
-	// both be comparable with the mount.
-	declared := make([]string, 0, len(set.files))
-	for _, path := range set.resolve(t, root) {
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			relative = path
-		}
-		declared = append(declared, relative)
-	}
-	sort.Strings(declared)
-	sort.Strings(loaded)
-	if strings.Join(declared, "\n") == strings.Join(loaded, "\n") {
-		return
-	}
-	t.Errorf(
-		"set %q declares one file list, and %s mounts another.\n"+
-			"  declared: %s\n"+
-			"  mounted:  %s\n"+
-			"Every mounted file loads in the same Traefik process, so every "+
-			"mounted file must be in the set. A file that reaches the stack "+
-			"outside the set is checked by no edge gate (#378).\n"+
-			"Update configSets() in edge_middlewares_test.go, or correct the "+
-			"volume list.",
-		set.name, composeRelative,
-		strings.Join(declared, ", "), strings.Join(loaded, ", "),
-	)
-}
-
-// splitComposeVolume returns the source and the destination of a short-form
-// Compose volume. It removes the `${NAME:-default}` interpolations first,
-// because that form holds a colon and the short form is split on the colon.
-func splitComposeVolume(volume string) (string, string, bool) {
-	cleaned := composeVariablePattern.ReplaceAllString(strings.TrimSpace(volume), "VARIABLE")
-	parts := strings.Split(cleaned, ":")
-	if len(parts) < 2 {
-		return "", "", false
-	}
-	return parts[0], strings.TrimSuffix(parts[1], "/"), true
-}
-
-// repoRelativeSource turns a mount source into a path inside this repository.
-// Every tracked edge mount points into deploy/, whatever prefix the Compose
-// interpolation adds in front of it.
-func repoRelativeSource(source string) (string, bool) {
-	index := strings.Index(source, "deploy/")
-	if index < 0 {
-		return "", false
-	}
-	return source[index:], true
 }

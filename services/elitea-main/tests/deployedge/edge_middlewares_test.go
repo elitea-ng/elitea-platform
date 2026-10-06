@@ -3,11 +3,12 @@
 //
 // A Traefik router that names a middleware nobody defines does not fail loudly.
 // Traefik logs `middleware "x@file" does not exist`, drops the router, and
-// keeps serving. In deploy/centry-hybrid the dropped routers are the ones that
-// select Go, and base.yml holds a PathPrefix("/") catch-all to pylon at
-// priority 1. The caller then gets HTTP 200 from pylon for a path the
+// keeps serving. The traffic then falls to whichever router matches next, so
+// the caller gets an answer from the wrong process for a path the
 // configuration says goes to elitea-main, and the header-stripping middleware
-// that the dropped router carried never runs either.
+// that the dropped router carried never runs either. (The retired
+// deploy/centry-hybrid stack shipped exactly that: a PathPrefix("/")
+// catch-all to pylon answered HTTP 200.)
 //
 // This test resolves every middleware reference against the definitions that
 // load with it, and it FAILS CLOSED: a configuration set whose files vanished,
@@ -29,7 +30,8 @@
 //
 // The No Binaries workflow runs this gate on every pull request. ci-go.yml
 // also runs it, but ci-go.yml is path-filtered and does not select
-// deploy/centry-hybrid/**, so it alone would miss an edge-only change.
+// deploy/traefik/** or deploy/runtime/**, so it alone would miss an edge-only
+// change.
 package deployedge_test
 
 import (
@@ -93,48 +95,6 @@ type configSet struct {
 
 func configSets() []configSet {
 	return []configSet{
-		{
-			name: "centry-hybrid foundation edge",
-			// This set holds two files and NOT the whole directory.
-			// deploy/centry-hybrid/traefik/index-routes.yml is excluded on
-			// purpose: its routers name an edge-auth endpoint that this
-			// stack does not register (#378). The exclusion is not a claim
-			// this file makes on its own —
-			// TestHybridFoundationEdgeLoadsTheComposeMount in
-			// edge_auth_target_test.go reads the Compose volume list and
-			// fails when the two stop agreeing.
-			files: []string{
-				"deploy/centry-hybrid/traefik/base.yml",
-				"deploy/centry-hybrid/traefik/middlewares.yml",
-			},
-			composeFiles: []string{"deploy/centry-hybrid/docker-compose.yml"},
-			mountedBy:    "deploy/centry-hybrid/docker-compose.yml mounts these two files under /etc/traefik/dynamic",
-		},
-		{
-			name:  "centry-hybrid PoV edge",
-			files: []string{"deploy/centry-hybrid/traefik/index-routes.yml"},
-			// deploy/centry-hybrid/compose.sh mounts ONLY this file, as
-			// /etc/traefik/dynamic/index.yml, into the private centry
-			// auth_gateway. That gateway supplies its own base.yml, which
-			// defines these three names against its own elitea-main-auth
-			// service. Those definitions are not readable from here, so they
-			// are declared rather than parsed. A fourth name appearing in
-			// index-routes.yml still fails this gate.
-			externalDefinitions: []string{
-				"strip-caller-auth-context",
-				"normalize-runtime-public-authority",
-				"go-main-auth",
-			},
-			// The same private base.yml defines the two services these routers
-			// name. It points them at the private stack's own containers. A
-			// third service name in index-routes.yml still fails the gate.
-			externalServices: []string{"elitea-main", "current-main"},
-			// The Compose model of this stack is in the private centry
-			// repository, so no tracked file can be read for it. The set also
-			// contributes no edgeAuth address: the definitions above are
-			// external, so this gate never sees an address to check.
-			mountedBy: "deploy/centry-hybrid/compose.sh ELITEA_INDEX_ROUTE_FILE -> /etc/traefik/dynamic/index.yml",
-		},
 		{
 			name:         "standalone edge",
 			files:        []string{"deploy/traefik/dynamic.yml"},

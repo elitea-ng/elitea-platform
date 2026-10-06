@@ -59,9 +59,8 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// it would have traded an immediate 404 for a 30s timeout and a 500.
 		//
 		// They were deleted rather than repaired because the replacement
-		// transport already ships (runtimecomposition + the Redis command
-		// stream + services/elitea-worker-python, deployed in
-		// deploy/centry-hybrid/pov-compose.yml), and elitea-docs'
+		// transport already ships (runtimecomposition + the runtime command
+		// bus + services/elitea-worker-python), and elitea-docs'
 		// spec-transport-implementation.mdx lists indexersvc/rpc.go under
 		// "Delete after bounded dispatch/control/output adapters land".
 		//

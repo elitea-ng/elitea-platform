@@ -6,7 +6,6 @@
 #                                      file CI runs Playwright against.
 #   THIS FILE                          the same eight services + elitea-llm-gateway
 #                                      (Bifrost), wired into elitea-main's /llm.
-#   centry-hybrid/                     legacy mixed deployment. Not needed here.
 #
 # The postgres/nats/rustfs/rustfs-bucket-init/oidc-mock blocks below are
 # hand-duplicated from docker-compose.e2e-standalone.yml rather than layered
@@ -98,8 +97,8 @@
 #
 # ── What still does NOT work, and why ────────────────────────────────────────
 #     * Toolkit-bearing agents fail regardless: the SDK resolves toolkits via
-#       /api/v2/elitea_core/tools_list/{project_id}, which centry-hybrid routes
-#       to PYLON — Go's equivalent is a different path and answers 501 by
+#       /api/v2/elitea_core/tools_list/{project_id}, which the retired
+#       centry-hybrid stack routed to PYLON — Go's equivalent is a different path and answers 501 by
 #       design. Same for nested application references and the artifact toolkit.
 #       A plain adhoc turn touches none of them.
 #

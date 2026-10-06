@@ -1728,8 +1728,8 @@ main:
       # process serves cleartext, so the origin is derived from its own listener
       # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>).
       #
-      # Set it only where another server answers that path — centry-hybrid aims
-      # it at the edge, which routes the path to legacy Centry. It must then be
+      # Set it only where another server answers that path (the retired
+      # centry-hybrid stack aimed it at an edge that routed it to legacy Centry). It must then be
       # an https ORIGIN, with no path, query or fragment, on an address that
       # TERMINATES TLS. An https origin on elitea-main's own cleartext port is
       # refused at boot.
@@ -1896,8 +1896,8 @@ main:
     # and provision that ServiceAccount outside this chart so it exists when the
     # hook runs.
     serviceAccountName: ""
-    # -all-tenants mirrors deploy/centry-hybrid/pov-compose.yml's elitea-migrate
-    # invocation: apply the shared history, then the tenant history for every
+    # -all-tenants mirrors the elitea-migrate invocation of the retired
+    # centry-hybrid PoV stack: apply the shared history, then the tenant history for every
     # existing legacy project. Both cmd/elitea-migrate flags are idempotent —
     # already-applied migration files are skipped — so re-running on every
     # upgrade is safe.

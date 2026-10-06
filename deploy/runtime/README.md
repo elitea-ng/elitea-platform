@@ -258,10 +258,10 @@ elitea-main → gateway → mock returns the mock's echo (streaming and unary).
 Joining those into one journey is #284.
 
 Toolkit-bearing agents will fail here regardless. The SDK resolves toolkits
-through `/api/v2/elitea_core/tools_list/{project_id}`, which `deploy/centry-hybrid`
-routes to **pylon**; Go's equivalent is a different path and answers 501 by
+through `/api/v2/elitea_core/tools_list/{project_id}`, which the retired `deploy/centry-hybrid`
+stack routed to **pylon**; Go's equivalent is a different path and answers 501 by
 design. Nested application references and the artifact toolkit are pylon-backed
-in the hybrid for the same reason. A plain adhoc turn touches none of them.
+in a mixed deployment for the same reason. A plain adhoc turn touches none of them.
 
 The web chat surface also still emits into a noop socket.io client rather than
 subscribing to `{events_url}`; that port is #93.
@@ -288,7 +288,7 @@ which aimed TLS at that same cleartext port, so every turn logged
 `http: server gave HTTP response to HTTPS client` — a deployment fault reported
 per turn, hiding the routing gap behind it. `internal/runtimecomposition/config.go`
 now refuses that value at boot. Set the variable only where another server
-answers the path, as centry-hybrid does with its edge.
+answers the path, as the retired centry-hybrid stack did with its edge.
 
 The cost is one bounded request of 3 s for each send, regeneration, continuation
 and ad-hoc turn. The failure is now visible. The client writes the cause to the

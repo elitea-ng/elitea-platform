@@ -47,9 +47,7 @@ import (
 )
 
 // This gate reads `browserEdgeFiles` from edge_identity_strip_test.go: the two
-// edge files that serve a browser directly. The centry-hybrid set is out of
-// scope for the same reason it is there. Its base.yml holds a catch-all to
-// pylon, so a root-mounted Go path resolves by a different mechanism.
+// edge files that serve a browser directly.
 //
 // The cluster runs a THIRD browser edge, a Gateway API HTTPRoute, and for a
 // whole release this file could not see it (#568). edge_gateway_api_test.go
