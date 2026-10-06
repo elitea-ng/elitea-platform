@@ -112,13 +112,17 @@ def naming_answer(prompt: str):
         node_count = int(count.group(1)) if count else 0
         named = []
         for page in pages:
-            name = _page_name(page.get("page_symbols") or [])
+            if not isinstance(page, dict):
+                continue
+            symbols = page.get("page_symbols")
+            symbols = symbols if isinstance(symbols, list) else []
+            name = _page_name(symbols)
             named.append({
                 "page_id": page.get("page_id"),
                 "page_name": name,
                 "description": f"How {name.lower()} works ({page.get('symbol_count')} symbols).",
                 "retrieval_query": " ".join(
-                    str(s.get("name", "")) for s in (page.get("page_symbols") or [])[:4]
+                    str(s.get("name", "")) for s in symbols[:4] if isinstance(s, dict)
                 ),
             })
         if node_count % 5 == 0 and len(named) > 1:
@@ -139,7 +143,11 @@ def naming_answer(prompt: str):
         }) + "\n```"
     if "SECTION (derived from" in prompt:
         pages = _section_of(prompt, "PAGES IN THIS SECTION:\n", "\n\nOutput ONLY valid JSON")
-        first = pages[0].get("page_name", "Overview") if isinstance(pages, list) and pages else "Overview"
+        first = (
+            pages[0].get("page_name", "Overview")
+            if isinstance(pages, list) and pages and isinstance(pages[0], dict)
+            else "Overview"
+        )
         return json.dumps({
             "section_name": f"Domain of {first}",
             "section_description": "Derived from its pages.",
