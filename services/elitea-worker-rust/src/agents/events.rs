@@ -717,6 +717,11 @@ struct ActiveModelTurn {
     timestamp_start: String,
     content: String,
     thinking: String,
+    /// Every content part the turn's partial events carried, in order. ADK's
+    /// Runner (`preserve_streamed_content`) fills a terminal event that
+    /// arrives with NO content with exactly these parts, concatenated; the
+    /// count is what tells that restatement apart from a terminal delta.
+    streamed_parts: usize,
 }
 
 struct CompletedModelTurn {
@@ -2435,17 +2440,25 @@ impl AgentEventProjector {
         // every provider's terminal event (OpenAI-compatible, Gemini,
         // Anthropic, the output-continuation scope) carries only its own
         // delta, so it appends like any other: stripping the text so far as a
-        // "restated prefix" lost leading characters (#6675).
+        // "restated prefix" lost leading characters (#6675). The one exception
+        // is ADK's Runner refilling an EMPTY terminal with the streamed parts,
+        // which `without_runner_restatement` removes (#1082).
         let aggregate = model_event.aggregate && !matches!(self.state, ProjectionState::Active(_));
+        let (model_content, model_thinking, streamed_parts) = self.without_runner_restatement(
+            event,
+            model_event.content,
+            model_event.thinking,
+            model_event.aggregate,
+        );
         let model_content = if let Some(overlap) = self.continuation_overlap.as_mut() {
-            overlap.project(model_event.content, aggregate, model_event.closes_turn)?
+            overlap.project(model_content, aggregate, model_event.closes_turn)?
         } else {
-            model_event.content
+            model_content
         };
         let (next_content, content_delta) =
             merge_stream_value(previous_content, model_content, aggregate)?;
         let (next_thinking, thinking_delta) =
-            merge_stream_value(previous_thinking, model_event.thinking, aggregate)?;
+            merge_stream_value(previous_thinking, model_thinking, aggregate)?;
         let next_timestamp_start = timestamp_start.to_owned();
 
         let mut batch = ProjectedAgentEventBatch::new();
@@ -2498,9 +2511,57 @@ impl AgentEventProjector {
                 timestamp_start: next_timestamp_start,
                 content: next_content,
                 thinking: next_thinking,
+                streamed_parts,
             });
         }
         Ok(batch)
+    }
+
+    /// Drop a terminal event that only restates the streamed turn (#1082).
+    ///
+    /// ADK's Runner (`preserve_streamed_content`) fills a terminal event that
+    /// arrives with NO content — every OpenAI-compatible stream ends with an
+    /// empty finish chunk — with all of the turn's streamed parts. That event
+    /// is not a delta: appending it streamed, and stored as the provisional
+    /// answer, the whole reply a second time. It is recognised structurally:
+    /// exactly the parts the partials carried, with exactly their text. The
+    /// RAW text is compared: under output continuation the projected turn is
+    /// overlap-trimmed and the restatement is not. A terminal that carries a
+    /// delta of its own (#6675) differs in parts or text and still appends.
+    ///
+    /// Returns the content and thinking to project and the turn's running
+    /// count of streamed parts.
+    fn without_runner_restatement(
+        &self,
+        event: &Event,
+        content: String,
+        thinking: String,
+        aggregate: bool,
+    ) -> (String, String, usize) {
+        let event_parts = event.content().map_or(0, |content| content.parts.len());
+        let ProjectionState::Active(turn) = &self.state else {
+            return (content, thinking, if aggregate { 0 } else { event_parts });
+        };
+        if !aggregate {
+            return (
+                content,
+                thinking,
+                turn.streamed_parts.saturating_add(event_parts),
+            );
+        }
+        let streamed_text = self
+            .continuation_overlap
+            .as_ref()
+            .map_or(turn.content.as_str(), |overlap| {
+                overlap.raw_content.as_str()
+            });
+        if turn.streamed_parts == event_parts
+            && streamed_text == content
+            && turn.thinking == thinking
+        {
+            return (String::new(), String::new(), turn.streamed_parts);
+        }
+        (content, thinking, turn.streamed_parts)
     }
 
     fn project_model_steps(
