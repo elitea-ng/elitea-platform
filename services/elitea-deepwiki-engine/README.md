@@ -417,7 +417,8 @@ calibration profile is an error (Python fell back to `calibrated`).
 ## Model client (`src/llm/`)
 
 ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
-(the copy `gix` pulls) over rustls. Indexing and generation (the native runner) and `ask` / deep research (phase 6) build on it.
+(the copy `gix` pulls) over rustls. Indexing, generation (the native
+runner), `ask` and deep research use it.
 
 - `ModelSettings::from_llm_settings` reads the block the facade writes:
   `api_base` | `openai_api_base`, `api_key` | `openai_api_key`,
