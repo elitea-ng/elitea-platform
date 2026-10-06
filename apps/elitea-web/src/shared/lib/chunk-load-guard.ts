@@ -64,16 +64,41 @@ export interface ChunkLoadGuard {
 
 /** Signals that a cross-document navigation (or tab close) has started. */
 const LEAVE_EVENTS = ['beforeunload', 'pagehide'] as const;
-/** Signals that the document is still the one the user is looking at. */
-const STAY_EVENTS = ['pointerdown', 'keydown'] as const;
+/**
+ * Signals that the document is still the one the user is looking at. `focus`
+ * covers returning from the browser's own "leave this page?" prompt, whose
+ * Stay button is browser chrome and dispatches no input to the page.
+ */
+const STAY_EVENTS = ['pointerdown', 'keydown', 'focus'] as const;
 
-export function createChunkLoadGuard(target: GuardTarget): ChunkLoadGuard {
+/**
+ * How long a leave signal is believed without a page change. A real
+ * navigation tears the document down well inside this; a navigation that
+ * never happens (a cancelled unload prompt, a `mailto:` link, a download a
+ * browser fires `beforeunload` for) must not hold route chunks pending
+ * forever, so the flag clears itself and held loads retry.
+ */
+export const LEAVE_TIMEOUT_MS = 2000;
+
+export interface ChunkLoadGuardOptions {
+  readonly leaveTimeoutMs?: number;
+  readonly setTimer?: (callback: () => void, ms: number) => unknown;
+  readonly clearTimer?: (handle: unknown) => void;
+}
+
+export function createChunkLoadGuard(target: GuardTarget, options: ChunkLoadGuardOptions = {}): ChunkLoadGuard {
+  const leaveTimeoutMs = options.leaveTimeoutMs ?? LEAVE_TIMEOUT_MS;
+  const setTimer = options.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
+  const clearTimer = options.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   let leaving = false;
+  let leaveTimer: unknown;
   const deferred = new Set<() => void>();
 
   const stay = () => {
     if (!leaving) return;
     leaving = false;
+    if (leaveTimer !== undefined) clearTimer(leaveTimer);
+    leaveTimer = undefined;
     const released = [...deferred];
     deferred.clear();
     for (const release of released) release();
@@ -82,31 +107,39 @@ export function createChunkLoadGuard(target: GuardTarget): ChunkLoadGuard {
   for (const type of LEAVE_EVENTS) {
     target.addEventListener(type, () => {
       leaving = true;
+      if (leaveTimer !== undefined) clearTimer(leaveTimer);
+      leaveTimer = setTimer(stay, leaveTimeoutMs);
     });
   }
   for (const type of STAY_EVENTS) {
     target.addEventListener(type, stay, { capture: true });
   }
-  // A non-persisted pageshow is the initial load; only a bfcache restore
-  // brings back a page whose leave signal already fired.
+  // A bfcache restore is the same document coming back: it stayed. The
+  // initial (non-persisted) pageshow says nothing about a leave.
   target.addEventListener('pageshow', (event) => {
     if ((event as PageTransitionEvent).persisted) stay();
   });
+
+  // An import that fails while the page is leaving is held. If the page does
+  // leave, it never settles, so nothing reloads. If the page stays, the import
+  // is RETRIED rather than its failure re-thrown: the failure was caused by
+  // the unload, so the retry normally succeeds; a genuinely missing chunk
+  // fails again — with the page no longer leaving — and reaches TanStack's
+  // reload-once path, so stale-deployment recovery is unchanged.
+  const attempt = <T>(importer: () => Promise<T>): Promise<T> =>
+    importer().catch((error: unknown) => {
+      if (!leaving) throw error;
+      return new Promise<void>((release) => {
+        deferred.add(release);
+      }).then(() => attempt(importer));
+    });
 
   return {
     isLeaving: () => leaving,
     guard:
       <T>(importer: () => Promise<T>) =>
       () =>
-        importer().catch((error: unknown) => {
-          if (!leaving) throw error;
-          // Settles only if the page turns out to stay (see `stay`).
-          return new Promise<void>((release) => {
-            deferred.add(release);
-          }).then((): never => {
-            throw error;
-          });
-        }),
+        attempt(importer),
   };
 }
 

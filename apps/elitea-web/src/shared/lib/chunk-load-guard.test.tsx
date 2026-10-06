@@ -94,6 +94,51 @@ describe('createChunkLoadGuard', () => {
     await expect(pending).rejects.toThrow(WEBKIT_CANCELLED);
   });
 
+  it('retries the import when the page stays, so a load the unload cancelled succeeds', async () => {
+    const target = new EventTarget();
+    const guard = createChunkLoadGuard(target);
+    const module = { default: () => null };
+    const importer = vi
+      .fn<() => Promise<typeof module>>()
+      .mockRejectedValueOnce(new TypeError(WEBKIT_CANCELLED))
+      .mockResolvedValueOnce(module);
+    target.dispatchEvent(new Event('beforeunload'));
+    const pending = guard.guard(importer)();
+    await flush();
+    expect(importer).toHaveBeenCalledTimes(1);
+
+    target.dispatchEvent(new Event('pointerdown'));
+    await expect(pending).resolves.toBe(module);
+    expect(importer).toHaveBeenCalledTimes(2);
+  });
+
+  it('a leave signal expires on its own, so a navigation that never happens holds nothing forever', async () => {
+    const target = new EventTarget();
+    const timers: Array<() => void> = [];
+    const guard = createChunkLoadGuard(target, {
+      leaveTimeoutMs: 2000,
+      setTimer: (callback) => timers.push(callback),
+      clearTimer: () => undefined,
+    });
+    target.dispatchEvent(new Event('beforeunload'));
+    const pending = guard.guard(failingImporter)();
+    await flush();
+    expect(guard.isLeaving()).toBe(true);
+
+    timers.at(-1)?.();
+    expect(guard.isLeaving()).toBe(false);
+    // Retried with the page no longer leaving: a genuine failure surfaces.
+    await expect(pending).rejects.toThrow(WEBKIT_CANCELLED);
+  });
+
+  it('returning focus (Stay on the browser prompt) counts as the page staying', () => {
+    const target = new EventTarget();
+    const guard = createChunkLoadGuard(target);
+    target.dispatchEvent(new Event('beforeunload'));
+    target.dispatchEvent(new Event('focus'));
+    expect(guard.isLeaving()).toBe(false);
+  });
+
   it('ignores the initial (non-persisted) pageshow', () => {
     const target = new EventTarget();
     const guard = createChunkLoadGuard(target);
