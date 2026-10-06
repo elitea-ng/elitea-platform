@@ -162,14 +162,14 @@ created by that account's bootstrap, history 1, TTL
 `stream_sequence`, `num_delivered`, `reason` (a stable low-cardinality code),
 `worker` (the worker's client name), `recorded_at_unix_millis`. No envelope
 bytes, no delivery ID, no command field: the record says where to look, not
-what the command said. The alert is the bucket being non-empty —
+what the command said. The alert is new records being written —
 `EliteaRuntimeCommandDeadLettered` in deploy/helm/nats/templates/prometheusrule.yaml,
-`nats_stream_total_messages{stream_name="KV_ELITEA_RT_V1_DEADLETTER"} > 0` —
+`max(increase(nats_stream_last_seq{stream_name="KV_ELITEA_RT_V1_DEADLETTER"}[1h])) > 0` —
 plus the workers' ERROR log line `worker_command.dead_lettered` and their
-in-process counter. Deleting a record (`nats kv del`) leaves a delete marker,
-which `nats_stream_total_messages` still counts until the bucket's TTL; the
-alert therefore reads "records were written in the last 7 days", and
-`nats kv ls` is the current list. `EliteaRuntimeCommandStreamNearlyFull` fires before a
+in-process counter. Any write moves the bucket's last sequence, so the alert
+fires for records written within the last hour and clears on its own (an
+operator's `nats kv del` writes a delete marker, which echoes it for at most
+that hour). `nats kv ls` is the current list. `EliteaRuntimeCommandStreamNearlyFull` fires before a
 stream starts backpressuring dispatch.
 
 ## Limits (owner decision Q6)

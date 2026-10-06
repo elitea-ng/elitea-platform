@@ -93,9 +93,14 @@ const (
 	// RetryDelay is the NakWithDelay for a command the claim told the worker
 	// to retry later; it matches the old reclaim idle time.
 	RetryDelay = 60 * time.Second
-	// PoisonDelay is the NakWithDelay for a command the worker cannot
-	// verify or decode. The message is never terminated: a Term would free
-	// the subject and PostgreSQL would re-offer the poison every 30s.
+	// PoisonDelay is the NakWithDelay for a poison command the worker
+	// cannot decode or run (malformed envelope, unsupported command): a Term
+	// would free the subject and PostgreSQL would re-offer the poison every
+	// 30s. Poison that can never verify (a signature failure or a subject
+	// hash mismatch) is instead terminated, and only after its dead-letter
+	// record is written: a re-offer fails the same pre-claim check. A poison
+	// whose record cannot be written is nak'd with RetryDelay, never parked
+	// or terminated without its record.
 	PoisonDelay = 24 * time.Hour
 	// DeadLetterTTL is the dead-letter bucket's TTL.
 	DeadLetterTTL = 7 * 24 * time.Hour

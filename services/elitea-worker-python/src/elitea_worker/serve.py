@@ -602,13 +602,15 @@ class WorkerServeLoop:
             self._event_sink(f"{event}_unavailable", DependencyUnavailable())
 
     async def _dead_letter(self, delivery: CommandDelivery, error: WorkerError) -> None:
-        """Poison: one dead-letter record, then NakWithDelay(24h), an ERROR line.
+        """Poison: one dead-letter record, then a park or a Term, an ERROR line.
 
-        Never Term: that frees the delivery subject and PostgreSQL re-offers
-        the poison every 30 seconds. The message stays PENDING and the server
-        keeps it away for the poison delay.
+        Ordinary poison is parked with NakWithDelay(24h), never terminated: a
+        Term frees the delivery subject and PostgreSQL re-offers the poison
+        every 30 seconds. Poison that can never verify (``TERMINAL_POISON``:
+        a signature failure or a subject hash mismatch) is terminated, since a
+        re-offer fails the same pre-claim check.
 
-        The record comes FIRST. A poison parked without a record is invisible
+        The record comes FIRST, for both. A poison parked without a record is invisible
         to the alert, so a failed write is answered with the ordinary retry
         delay instead (see :meth:`_dispose_poison`).
         """
