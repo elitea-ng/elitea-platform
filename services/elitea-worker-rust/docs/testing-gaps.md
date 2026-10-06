@@ -94,10 +94,11 @@ Detailed diagnostics remain tracked by [OBS-RUST-01](source-mapping/agent-runtim
 
 The [2026-10-06 consolidation](source-mapping/point5-consolidation-20261006.md) records the latest Point 5 evidence.
 Real-backend editor preservation checks pass. Main's new static consumers still require database and deployed acceptance.
-The latest Worker restart probe retains its runtime and commits the second JavaScript read, but still fails.
-The [Supervisor ownership mapping](source-mapping/code-supervisor-task-ownership-20261006.md) identifies an abandoned result collector and an unrenewed lease.
-Retain its failed receipts and repeat the same boundary after the ownership correction deploys.
-Keep crash recovery, typed failure display, and complete-cohort acceptance open until their proofs pass.
+The [Supervisor ownership mapping](source-mapping/code-supervisor-task-ownership-20261006.md) preserves the failed v6 probe and the successful v7 retest.
+The deployed v7 Worker-only restart retains its execution and original runtime, then completes all four languages.
+Eight unique reads commit. Runtime cleanup, one final browser result, and browser reload all pass.
+This exact Worker-loss boundary closes. Supervisor/Main replacement and Kubernetes restart recovery retain separate acceptance requirements.
+Keep typed failure display and complete-cohort acceptance open until their proofs pass.
 State rename reference rewriting remains a separate editor gap.
 Workspaces remain outside this register in the post-worker backlog.
 

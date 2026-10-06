@@ -73,8 +73,39 @@ The initial lint failure and intermediate checks remain in the private evidence 
 Native linking reports the existing macOS large-`__eh_frame` warning.
 The source packet is `/private/tmp/elitea-code-supervisor-owned-jobs-20261006/`.
 These checks use one Cargo job and no service, database, or credential environment.
-Native lifecycle tests do not prove deployed recovery.
-Repeat the unchanged fixture after Supervisor deployment.
-Require eight unique committed reads, four completed Code jobs, one final output, and confirmed cleanup.
-Retain the original JavaScript runtime during Worker replacement.
-Do not close the Code recovery gate before browser, ledger, runtime, and cleanup evidence agree.
+Native lifecycle tests do not prove deployed recovery. The separate acceptance below supplies that proof for Worker loss.
+
+## Deployed Worker restart acceptance
+
+The unchanged fixture runs with marker `gate5-worker-recovery-delay-20261006-v7` in persistent chat 825.
+It uses pipeline 143, saved version 166, and execution `a616b7ad27dba1187664b51da230a260`, generation 1.
+Only the Worker restarts during the active JavaScript node. Main, Supervisor, and Web remain running.
+
+| Component | Source revision | Deployed image |
+| --- | --- | --- |
+| Worker | `fee3d059dc493b8061f356f0f6e13c5c94f06190` | `sha256:38c6306b4d9fa004608b56bc35767ce8dea6bd3205ecf8345bf0501e703570bd` |
+| Supervisor | `45b152a92854997911401a8d08263b220e065a99` | `sha256:d3b2bca6a3ccab0a23cb1a8570ea38c31e6a298ce3bad924155abf415d9939a4` |
+
+The replacement Worker claim has attempt 2. The execution and original JavaScript runtime remain unchanged.
+The runtime identity is `b10535207f183a0ab0cb42b02ea4b1e8`.
+All four language nodes complete: Python, JavaScript, TypeScript, and Rust.
+Eight unique reads commit, with one `user_get` and one `application_list` operation per language.
+The operator records five checkpoint identities and seven dispatches: three preparations and four Code executions.
+All seven runtime containers are absent after completion. No owned sandbox lease remains active.
+
+The final response has identity `10e07ff2-e015-53ce-8b96-b7a0bdce5239` in response group 7368.
+Its persisted, live browser, and reloaded browser forms share canonical SHA256 `08f00e7d57e57cad3fe4581551278ad6f06bc312734baacd3c0a6e6218e2f4bc`.
+The reloaded chat contains one v7 request and one final result. No Stop control remains.
+The selected version remains `gate5-recovery-delay`.
+Earlier failed results remain in history and are not removed to make this acceptance pass.
+
+Evidence resides under `/private/tmp/elitea-code-recovery-readiness-20261006/worker-only-operator-v7/`.
+`watch-1/CONTROL_RECEIPT.json` records the actual fault and restoration. It does not claim recovery by itself.
+`verify-1/VERIFY_RECEIPT.json` proves ledger, effect, runtime, and cleanup outcomes.
+`verify-1/BROWSER_RECEIPT.json` supplies the separate live and reload proof.
+The database receipt retains its original `browser_verified: false` value. The browser receipt references its exact checksum.
+`verify-1/LIVE.png` and `verify-1/RELOAD.png` preserve the displayed result.
+
+This acceptance closes this exact Worker-loss recovery boundary.
+It does not prove Supervisor or Main replacement, Kubernetes restart recovery, complete-cohort load, or typed failure display.
+These gates remain separate. Production capability registration remains disabled. Point 5 remains open.

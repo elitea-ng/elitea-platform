@@ -105,8 +105,12 @@ The v6 restart retest commits JavaScript sequence 2 but still fails before TypeS
 The original JavaScript container exits successfully with a valid result receipt.
 The Supervisor loses its request-owned result collector after Worker disconnection. Its unrenewed lease expires before receipt persistence.
 The [Supervisor task ownership correction](source-mapping/code-supervisor-task-ownership-20261006.md) passes 24 focused tests and strict Clippy.
-Its deployment and unchanged restart retest remain required.
-Successful restart acceptance and confirmed runtime cleanup remain open.
+The Supervisor deploys from `45b152a92`. The unchanged v7 Worker-only restart test passes in persistent chat 825.
+The same execution and original JavaScript runtime complete all four languages, with eight unique committed reads.
+All seven preparation and execution containers are removed. No owned sandbox lease remains active.
+The browser displays one final result, which matches persisted output after reload. No Stop control remains.
+This closes the exact Worker-loss Code recovery boundary. Supervisor/Main replacement and Kubernetes recovery remain separate gates.
+Typed Code failure display and complete-cohort acceptance remain open. Point 5 remains open.
 The [empty-document editor correction](../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) passes 110 focused tests and real-backend first-node browser checks.
 The completed prior CI has one failed visual job and two configured skips. The replacement-head visual result remains required.
 Recovery latency and its generic public error remain explicit gates. No recovery success is claimed for this probe.

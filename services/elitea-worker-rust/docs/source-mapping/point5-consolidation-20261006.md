@@ -21,9 +21,10 @@ Existing shared workspace foundation code remains intact.
 | --- | --- | --- | --- |
 | Main static pause persistence and continuation | [Main consumers](../../../../docs/source-mapping/graph-main-static-consumers-20261006.md) | Generated SQL, repository selectors, content inspection, and focused tests pass. | Real PostgreSQL locking, duplicate consumption, and deployed continuation remain open. |
 | Web recovery and ordered YAML callers | [Web consumers](../../../../apps/elitea-web/docs/source-mapping/point5-web-consumer-composition-20261006.md) | Focused tests, typechecking, strict lint, and the editor checks below pass. | Deployed recovery controls and nested static execution remain open. |
-| Same-consumer restart delivery | [Pending recovery](code-same-consumer-pending-recovery-20261006.md) | 45 focused tests and strict Worker Clippy pass. | Deployed recovery remains open until the exact restart probe passes. |
-| Retained hydration recovery | [Shared Supervisor correction](code-retained-hydration-recovery-20261006.md) | Twelve selected tests and strict Clippy pass. PostgreSQL CI passes at `9ae93a9ee`; the corrected Supervisor is deployed. | The v5 restart still fails at the separate Worker observation boundary. |
-| Continuous Code platform observation | [Worker pump lifetime](../../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) | Sixteen selected tests and strict Clippy pass. | Worker image replacement and exact v6 restart acceptance remain open. |
+| Same-consumer restart delivery | [Pending recovery](code-same-consumer-pending-recovery-20261006.md) | 45 focused tests and strict Worker Clippy pass. Combined v7 Worker restart acceptance passes. | Supervisor/Main replacement remains separate. |
+| Retained hydration recovery | [Shared Supervisor correction](code-retained-hydration-recovery-20261006.md) | Twelve selected tests and strict Clippy pass. Prior PostgreSQL CI and combined v7 Worker restart acceptance pass. | Kubernetes recovery and wider failure phases remain separate. |
+| Continuous Code platform observation | [Worker pump lifetime](../../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) | Sixteen selected tests and strict Clippy pass. Worker `fee3d059d` completes the v7 restart probe. | Complete-cohort acceptance remains open. |
+| Supervisor result collector ownership | [Task ownership](code-supervisor-task-ownership-20261006.md) | 24 selected tests and strict Clippy pass. Deployed Supervisor `45b152a92` preserves the collector during Worker loss. | Supervisor/Main replacement and typed failure display remain separate. |
 | First-node YAML authoring | [Empty-document correction](../../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) | 110 selected tests, typechecking, lint, and real-backend LLM/Agent first-node checks pass. | Replacement-head visual CI remains required. |
 | Fixed Parallel and data-driven Map | Existing distinct contracts and preserved Worker source | Both designs remain present. | Admission stays disabled until assembled acceptance passes. |
 | SplitOut and Aggregate | Data shaping catalog | Planned contracts and operation families remain documented. | Rust execution, editor integration, and acceptance remain open. |
@@ -120,3 +121,12 @@ The UI therefore displays `INTERNAL` and the generic runtime error.
 That diagnostic loss remains recorded; this probe is not an operator rejection or a successful recovery.
 
 Point 5 remains open. Production capability registration remains disabled.
+
+## Worker restart acceptance after the corrections
+
+The [v7 acceptance](code-supervisor-task-ownership-20261006.md#deployed-worker-restart-acceptance) repeats the unchanged fixture after Supervisor deployment.
+It passes with Worker `fee3d059d` and Supervisor `45b152a92`.
+The same execution and original JavaScript runtime complete all four Code languages after Worker replacement.
+Eight unique reads commit. All seven dispatched runtime containers are removed; no owned sandbox lease remains active.
+The persisted, live, and reloaded answer checksums match. The chat displays one final result and no Stop control.
+This closes the tested Worker-loss boundary. It does not close the other Point 5 gates or enable production admission.
