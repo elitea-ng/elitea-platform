@@ -544,7 +544,9 @@ Dead in that path and not ported: the hierarchical and agentic modes
 - **Orphan seeds are walked in insertion order** (Python: a `set`, hash
   seed order; the reference is patched to match).
 - `DEEPWIKI_MAX_SYMBOLS_PER_PAGE` below 1 is ignored (Python looped
-  forever); the structure timestamp is UTC.
+  forever); the structure timestamp is UTC. A split part's `page_order`
+  (`page_order * 100 + part`, from the model's number) saturates at the
+  `i64` bounds (Python's integers have none).
 - **The sanitizer is time-bounded.** One page gets 5 s of wall clock
   (`SANITIZE_BUDGET`) and one search at most 1,000,000 backtracking steps;
   past either, the page keeps its unsanitised text with a warning (the

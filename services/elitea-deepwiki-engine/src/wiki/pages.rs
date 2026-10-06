@@ -51,8 +51,10 @@ pub fn max_symbols_per_page(graph_nodes: usize, file_count: usize) -> usize {
 /// keep the rationale (so they still route to cluster expansion) but not
 /// the metadata, exactly as Python built them.
 ///
-/// DELIBERATE DIFFERENCE: a cap below 1 (`DEEPWIKI_MAX_SYMBOLS_PER_PAGE=0`)
-/// made Python's chunk loop spin forever; it is ignored here.
+/// DELIBERATE DIFFERENCES: a cap below 1 (`DEEPWIKI_MAX_SYMBOLS_PER_PAGE=0`)
+/// made Python's chunk loop spin forever; it is ignored here. A part's
+/// `page_order` (`page_order * 100 + part`, `page_order` from the model)
+/// saturates at the `i64` bounds; Python's integers have none.
 pub fn split_overloaded_pages<H: std::hash::BuildHasher>(
     structure: &mut WikiStructureSpec,
     max_symbols: usize,
@@ -115,7 +117,10 @@ pub fn split_overloaded_pages<H: std::hash::BuildHasher>(
                 };
                 new_pages.push(PageSpec {
                     page_name: format!("{}{suffix}", page.page_name),
-                    page_order: page.page_order * 100 + i64::try_from(part).unwrap_or(i64::MAX),
+                    page_order: page
+                        .page_order
+                        .saturating_mul(100)
+                        .saturating_add(i64::try_from(part).unwrap_or(i64::MAX)),
                     description: page.description.clone(),
                     content_focus: page.content_focus.clone(),
                     rationale: format!("{} [auto-split part {part}/{parts}]", page.rationale),
@@ -482,5 +487,32 @@ mod tests {
         assert_eq!(pages[1].page_order, 201);
         assert!(pages[1].rationale.ends_with("[auto-split part 1/3]"));
         assert_eq!(structure.total_pages, 4);
+    }
+
+    /// `page_order` is model output: a huge one saturates instead of
+    /// overflowing (a panic in a debug build, a wrap in release).
+    #[test]
+    fn a_huge_page_order_saturates() {
+        for (order, want) in [(i64::MAX / 10, i64::MAX), (i64::MIN / 10, i64::MIN + 1)] {
+            let mut big = page(4);
+            big.page_order = order;
+            let mut structure = WikiStructureSpec {
+                wiki_title: "W".into(),
+                overview: "o".into(),
+                sections: vec![SectionSpec {
+                    section_name: "S".into(),
+                    section_order: 1,
+                    description: "d".into(),
+                    rationale: "r".into(),
+                    pages: vec![big],
+                }],
+                total_pages: 1,
+            };
+            assert_eq!(
+                split_overloaded_pages(&mut structure, 3, &HashMap::new()),
+                1
+            );
+            assert_eq!(structure.sections[0].pages[0].page_order, want);
+        }
     }
 }
