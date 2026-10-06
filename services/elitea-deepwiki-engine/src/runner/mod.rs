@@ -126,6 +126,12 @@ impl Context {
         }
     }
 
+    /// The invocation's stop signal, for a model call to race against.
+    #[must_use]
+    pub fn stop_signal(&self) -> &StopSignal {
+        &self.stop
+    }
+
     /// Fail with the stop line once a stop was requested.
     ///
     /// # Errors

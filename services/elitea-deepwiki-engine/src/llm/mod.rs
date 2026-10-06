@@ -28,8 +28,8 @@ pub mod tokens;
 pub mod transport;
 
 pub use chat::{
-    ChatClient, ChatMessage, ChatRequest, ChatResponse, Sampling, ToolCall, ToolChoice,
-    ToolDefinition, Usage,
+    ChatClient, ChatMessage, ChatRequest, ChatResponse, Sampling, SystemPrompt, ToolCall,
+    ToolChoice, ToolDefinition, Usage,
 };
 pub use embeddings::{EmbeddingClient, EmbeddingOptions};
 pub use settings::{ModelSettings, Provider, embedding_model_name};

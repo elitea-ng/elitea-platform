@@ -13,7 +13,10 @@ deterministic, prompt-aware OpenAI-compatible stub. It returns a well-formed
 symbols for the cluster planner's naming prompts, and canned markdown for
 pages, so the pipeline has something of the right *shape* to work with.
 `LLM_STUB_RECORD=<path>` makes it append every chat request body to a file
-(the Rust engine's structure parity gate compares two such records). No model is
+(the Rust engine's structure parity gate compares two such records).
+`LLM_STUB_SCRIPT=<path>` (or `llm_stub.set_script`) scripts the tool-calling
+turns of an agent loop, for the ask / deep research parity gate; without it
+the stub answers as before. No model is
 called, nothing leaves the machine, and a run is reproducible.
 
 It is deliberately **not** in CI: it needs the `engine` extra (~1.1 GB, torch

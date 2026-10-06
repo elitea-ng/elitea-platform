@@ -51,7 +51,7 @@ that is not a socket is refused, never deleted.
 `context_paths` and `extra_context` are resolved by the host, which removes
 both keys. A request that still carries a non-empty one is refused with a
 `ValueError`, never answered without its attachments. The native `ask`
-resolves them itself in phase 6.
+keeps that refusal: the host resolves the attachments for every engine.
 
 ## Runners
 
@@ -818,6 +818,112 @@ duplicate sums, `reduceat` and pairwise sums, and the power iteration.
 - **Page cap.** A classic answer keeps its first 500 pages
   (`MAX_CLASSIC_PAGES`) in structure order; the rest, and the sections left
   empty, are dropped with a warning. Python drafted every page listed.
+
+## Ask, deep research and `resolve_wiki` (`src/ask/`)
+
+ADR-0026 phase 6 (decision 8). Not wired to a runner yet: the native runner
+calls `ask::run_tool(tool, &arguments, &QueryDeps { pool, transport,
+embedding_options, limits: Limits::from_env()?, clock: Clock::System },
+repository_analysis, context)` for `ask`, `deep_research` and
+`resolve_wiki`, after `runner::prepare_arguments`. The generic entry points
+(`ask::run_agent` over any `store::IndexStore` and `agent::Model`) are what
+the parity gate drives.
+
+* **Reads are PostgreSQL only** (decision 5): `store::PgIndex` over the
+  `storage` read path. The Python tools read the scratch `.wiki.db` in six
+  places the PostgreSQL adapter never reached (`StorageQueryService`'s
+  `storage.conn` SQL and `search_fts5`; the research tools'
+  `_search_unified_db_fts`, `_get_unified_db_relationships`,
+  `_get_code_from_unified_db`), so on a replica `search_symbols` failed
+  and `get_code` answered "Code graph not available". Each is a method of
+  `IndexStore` with the same SQL over the ADR-0022 tables.
+* **`ask`** is `AskEngine` (`DEEPWIKI_ASK_AGENTIC=1`): `search_symbols`,
+  `get_relationships_tool`, `get_code`, `search_docs`, `query_graph`
+  (the JQL parser, `ask::jql`), `think`; the answer fragments as `token`
+  lines, Python's `[THINKING_STEP]` / `[ASK_EVENT]` JSON as `thinking`
+  lines. Narration before a tool call streams as tokens and joins the
+  answer, as in Python.
+* **`deep_research`** is `DeepResearchEngine`: `search_codebase`,
+  `get_symbol_relationships`, `search_graph`, `think`, the todo list
+  (`write_todos`, `todo_update` events normalised as `tool_operations` did:
+  `pending` → `not-started`, `_` → `-`) and `deepagents`' `StateBackend`
+  file system (`ls`, `read_file`, `write_file`, `edit_file`, `delete`,
+  `glob`, `grep`; writes apply after the step, results over 80 000
+  characters are evicted to `/large_tool_results/`); progress as the
+  worker's display lines (`🔧 Calling: …`, `✓ tool: …`), no tokens.
+* **`resolve_wiki`**: one user message, temperature 0, `{api_base}/v1`,
+  `max_tokens` or 4000; a model failure is an unsuccessful result.
+* **Prompts** are the Python values in `src/ask/prompts/*.txt`;
+  `PROMPTS_MANIFEST.json` hashes them (`tests/ask_prompts.rs` re-derives
+  the engine's from the Python source and, with
+  `ELITEA_DEEPWIKI_PARITY_VENV`, the `LangChain` / `deepagents` ones from
+  the installed packages). `TOOLS.json` holds the tool definitions as
+  `LangChain` built them. System messages carry only the prompt, the date
+  and the step budget (`llm::SystemPrompt`, crate-built); repository text
+  goes in user and tool messages.
+* **Summarisation**: `LangChain`'s middleware with the Python thresholds
+  (85 % / 10 % of the model profile's `max_input_tokens`, else 170 000
+  tokens / the last 6 messages), the approximate token count, the
+  AI/tool-safe cut, the XML transcript.
+* **Limits** (Python enforced none): `DEEPWIKI_ASK_MAX_ITERATIONS`
+  (default 8, the budget the ask prompt states) tool calls for `ask`;
+  `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` (default 15) tool-calling steps
+  and 25 calls per step for deep research; then `tool_choice: none`.
+  Arguments are validated as pydantic did (lax coercions, the same error
+  text) and then clamped (`k`, `max_depth`, `max_lines`, JQL `limit`); file
+  paths cannot leave the virtual root; the file system holds at most 1 000
+  files and 16 MiB.
+* **Stop**: a checkpoint before every model call and every tool; a model
+  call aborts at once.
+
+### Deliberate differences
+
+- The pinned `deepagents` 0.7.13 has no todo list and refuses the backend
+  factory the Python engine passes: the live Python deep research fails
+  with `TypeError` before its first model call. The port is the agent
+  ADR-0026 specifies: `write_todos` added, the `task` sub-agent left out
+  (the engine passed `subagents=[]`). The reference run makes the same two
+  changes to Python.
+- No repository analysis is loaded (Python read it from the scratch
+  cache): "No repository overview available." unless the runner passes
+  one. The worker's plain log lines (paths, cache keys) and deep
+  research's "Cache Selection" step are not sent.
+- Arguments that are not a JSON object get an error result and the loop
+  goes on (Python dropped the call and ended with an empty answer); a
+  storage failure is the tool's "… failed: …" text, never "no results";
+  `get_code` for an unknown name says "not found".
+- The summary call is not streamed; deep research's summary does not write
+  `/conversation_history/{session}.md`. Timestamps and the prompt date are
+  UTC.
+- Model failures are classified engine errors; an unknown wiki is
+  `resource_not_found` in the result.
+
+### Parity
+
+```bash
+# Python: index the golden repository, run the scripted conversation of
+# tests/fixtures/ask/script.json against the e2e stub (LLM_STUB_SCRIPT
+# turns), call every tool of calls.json directly, probe the file system
+PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src python parity/python_ask_dump.py \
+    tests/fixtures/wiki/golden/repo tests/fixtures/ask/ref \
+    --script tests/fixtures/ask/script.json --calls tests/fixtures/ask/calls.json
+```
+
+`tests/ask_golden.rs` (no Python, no network) replays it over the recorded
+rows: every request body of both agents is the Python body turn by turn
+(messages, tool calls, tool results, tool definitions, model, temperature,
+token budget, stream flag; only `stream_options` is ours), the lines and
+results are Python's (timestamps masked; results of one step compared as a
+set, Python's threads ordered them), all 33 direct tool calls and all 55
+file-system and todo calls give Python's text. `tests/ask_pg.rs` runs the
+same calls over PostgreSQL (CI): 27 of 33 are identical; the six that differ
+are pinned with their reason — FTS ranking (`search_symbols "note store"`,
+`query_graph text:note`, `search_codebase`: the same hits, reordered), the
+`via` anchors the published edges do not carry (two
+`get_relationships_tool` calls), and edge order
+(`get_symbol_relationships`). `tests/ask_behaviour.rs` covers the token
+channel, todos, the limits, a stop, steered arguments, summarisation, and
+`resolve_wiki` and the streamed client over HTTP.
 
 ## Parity with the Python engine
 

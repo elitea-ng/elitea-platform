@@ -1,0 +1,6 @@
+Focus on external interactions:
+- API contracts and protocols
+- External service integrations
+- Data exchange formats
+- Error handling and retry logic
+- Configuration and credentials
