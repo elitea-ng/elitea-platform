@@ -25,6 +25,16 @@ as before.
 ``LLM_STUB_RECORD=<path>`` appends each chat request body, one JSON line
 per request in arrival order, to that file. The ADR-0026 structure parity
 gate compares the Python engine's requests with the Rust engine's.
+
+``LLM_STUB_SCRIPT=<path>`` (or ``set_script``) scripts the tool-calling
+turns of an agent loop: a JSON list whose entries are taken in order, one
+per chat request that offers ``tools``. An entry is either
+``{"content": "<text>"}`` (a final answer) or ``{"tool_calls": [{"id":
+"<id>", "name": "<tool>", "arguments": {...}}], "content": "<optional
+text>"}``. A request without ``tools`` (a summary, a page, a structure),
+or one that arrives after the script is used up, is answered as before, so
+a run without a script is unchanged. The ADR-0026 ask / deep research
+parity gate scripts its conversations this way.
 """
 import hashlib, json, math, os, re, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -178,6 +188,44 @@ def answer(prompt: str) -> str:
 
 
 _RECORD_LOCK = threading.Lock()
+_SCRIPT_LOCK = threading.Lock()
+_SCRIPT: list = []
+
+
+def set_script(turns) -> None:
+    """Replace the scripted tool-calling turns (see the module comment)."""
+    with _SCRIPT_LOCK:
+        _SCRIPT[:] = list(turns or [])
+
+
+def _load_script() -> None:
+    path = os.environ.get("LLM_STUB_SCRIPT")
+    if path:
+        with open(path, encoding="utf-8") as handle:
+            set_script(json.load(handle))
+
+
+def next_scripted_turn(request):
+    """The next scripted turn for a request that offers tools, or None."""
+    if not request.get("tools"):
+        return None
+    with _SCRIPT_LOCK:
+        return _SCRIPT.pop(0) if _SCRIPT else None
+
+
+def _tool_calls(turn) -> list:
+    return [
+        {
+            "id": call.get("id", f"call_{i}"),
+            "type": "function",
+            "function": {
+                "name": call["name"],
+                "arguments": call["arguments"] if isinstance(call.get("arguments"), str)
+                else json.dumps(call.get("arguments", {})),
+            },
+        }
+        for i, call in enumerate(turn.get("tool_calls") or [])
+    ]
 
 
 def record(request) -> None:
@@ -226,6 +274,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.endswith("/chat/completions"):
             record(request)
+            turn = next_scripted_turn(request)
+            if turn is not None:
+                self._send_turn(request, turn)
+                return
             prompt = "\n".join(
                 str(m.get("content", "")) for m in request.get("messages", [])
             )
@@ -261,8 +313,42 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(404); self.end_headers()
 
+    def _send_turn(self, request, turn):
+        """Answer one scripted turn, streamed when the request streams."""
+        content = turn.get("content") or ""
+        calls = _tool_calls(turn)
+        finish = "tool_calls" if calls else "stop"
+        if request.get("stream"):
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            base = {"id": "chatcmpl-stub", "object": "chat.completion.chunk",
+                    "created": 0, "model": request.get("model", "stub")}
+
+            def send(delta, reason=None):
+                chunk = dict(base, choices=[{"index": 0, "finish_reason": reason, "delta": delta}])
+                self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+
+            for start in range(0, len(content), 400):
+                send({"content": content[start:start + 400]})
+            # Each call in one delta: id, name and the whole arguments.
+            for index, call in enumerate(calls):
+                send({"tool_calls": [dict(call, index=index)]})
+            send({}, finish)
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
+        message = {"role": "assistant", "content": content or None}
+        if calls:
+            message["tool_calls"] = calls
+        self._send({"id": "chatcmpl-stub", "object": "chat.completion",
+                    "created": 0, "model": request.get("model", "stub"),
+                    "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
+
 
 if __name__ == "__main__":
+    _load_script()
     # Loopback by default (the manual harness); a compose service binds all
     # interfaces and takes the mock's port so the gateway's egress allowlist
     # (`llm-mock:8090`) needs no change.

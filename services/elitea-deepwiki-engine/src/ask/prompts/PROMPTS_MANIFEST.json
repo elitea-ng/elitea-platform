@@ -1,0 +1,122 @@
+{
+  "prompts": [
+    {
+      "file": "ask_workflow.txt",
+      "source": "src/elitea_deepwiki/engine/ask_prompts.py",
+      "symbol": "ASK_WORKFLOW_INSTRUCTIONS",
+      "sha256": "ee79b747e30de22dbd3954552167d434a74d0b6f4135bfc2c381ec8b331bc530"
+    },
+    {
+      "file": "ask_tools.txt",
+      "source": "src/elitea_deepwiki/engine/ask_prompts.py",
+      "symbol": "ASK_TOOL_INSTRUCTIONS",
+      "sha256": "2e63db7ffc77c28caab019067a1d3e97291a46526992d28bbdb11f396f0c5cb3"
+    },
+    {
+      "file": "ask_output.txt",
+      "source": "src/elitea_deepwiki/engine/ask_prompts.py",
+      "symbol": "ASK_OUTPUT_INSTRUCTIONS",
+      "sha256": "b8bd950b03b18ef56e2ab83a1d5323e34c5add488863f9f69bf1cfaa896894e3"
+    },
+    {
+      "file": "research_workflow.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_WORKFLOW_INSTRUCTIONS",
+      "sha256": "c0cdaa3636fca84419ab9f47f9a3fafb4ffb3e0acc1dca4617be2e7d4f86c786"
+    },
+    {
+      "file": "research_tools.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "TOOL_USAGE_INSTRUCTIONS",
+      "sha256": "2cecc25da999f717d9cc839b2bc32ff52113a8da52f610a35e8f41d71494b24e"
+    },
+    {
+      "file": "research_stopping.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "STOPPING_CRITERIA",
+      "sha256": "1647ab20a82b2d617d6c99113dce1ab444005987db2239306604b0b0bbb44724"
+    },
+    {
+      "file": "research_output.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "OUTPUT_FORMAT_INSTRUCTIONS",
+      "sha256": "57458462c22b8c6f8333e2ba4590f7a478f07fb0308bb897bbb713bd61d8a0a0"
+    },
+    {
+      "file": "research_type_general.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['general']",
+      "sha256": "68bc252cd2deb7c64b18942fa939575cb049209d28b29ec4c59ea920d338d394"
+    },
+    {
+      "file": "research_type_architecture.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['architecture']",
+      "sha256": "b1a9db4c206e6b37e1be38e11a55b46878194131460de8f09d2bb1f2546fd673"
+    },
+    {
+      "file": "research_type_implementation.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['implementation']",
+      "sha256": "efb7f0eaa7cdafb33ace1b29e5411463c9793e154ce84292b15d4612c752b59d"
+    },
+    {
+      "file": "research_type_security.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['security']",
+      "sha256": "cbd0a711efbb1310df0d9d9aa0aecc394650dfa2ff6bc35b93537e219940a608"
+    },
+    {
+      "file": "research_type_integration.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['integration']",
+      "sha256": "745a3e2770063962c8e6e38660c92cc98f74e4cc34bc43a0586d7f0783e26dee"
+    },
+    {
+      "file": "research_type_debugging.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['debugging']",
+      "sha256": "ba841b0d2397650543d1fad98ed0666369ecb8d5a4677473a9d08c25e5758cd3"
+    },
+    {
+      "file": "research_type_feature.txt",
+      "source": "src/elitea_deepwiki/engine/deep_research/research_prompts.py",
+      "symbol": "RESEARCH_TYPE_PROMPTS",
+      "selector": "['feature']",
+      "sha256": "a109914da31563797fd54626d6d600a370bf0b7620c7585bf7bba94a8ab21f6f"
+    },
+    {
+      "file": "resolution.txt",
+      "source": "src/elitea_deepwiki/wiki_query.py",
+      "symbol": "RESOLUTION_PROMPT",
+      "sha256": "7eb9c012f50460970be0fbf502f4409444b228d400248a45a8888ff4a4aea3be"
+    },
+    {
+      "file": "todo_system.txt",
+      "package": "langchain==1.4.0",
+      "module": "langchain.agents.middleware.todo",
+      "symbol": "WRITE_TODOS_SYSTEM_PROMPT",
+      "sha256": "f5ac422b1b71a61b9a6d1367d93fa7bd6671c42e9ac63c593aec98a8e2ff7f7a"
+    },
+    {
+      "file": "summary_prompt.txt",
+      "package": "langchain==1.4.0",
+      "module": "langchain.agents.middleware.summarization",
+      "symbol": "DEFAULT_SUMMARY_PROMPT",
+      "sha256": "3db0629298e760ec31ccb85d9102ef6c7d93f613b1dbc6b74ad18dce14538d0e"
+    },
+    {
+      "file": "summary_prompt_deepagents.txt",
+      "package": "deepagents==0.7.13",
+      "module": "deepagents.middleware.summarization",
+      "symbol": "DEEPAGENTS_DEFAULT_SUMMARY_PROMPT",
+      "sha256": "403eb2c93d8f8684545e1d863e1e2844fceec6f8808df16a585290b3a18aa16e"
+    }
+  ]
+}

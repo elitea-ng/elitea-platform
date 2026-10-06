@@ -58,11 +58,53 @@ impl Sampling {
     }
 }
 
+/// A system prompt assembled from embedded templates and values the
+/// ENGINE chose (a date, a step budget): never repository text. Only this
+/// crate can build one, so the rule of the module comment holds for a
+/// prompt that is not a single `'static` text.
+///
+/// One part is sent as a string; several are sent as text content blocks,
+/// as `LangChain` sends a system message a middleware appended to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemPrompt {
+    parts: Vec<String>,
+}
+
+impl SystemPrompt {
+    /// One text.
+    pub(crate) fn text(text: String) -> Self {
+        Self { parts: vec![text] }
+    }
+
+    /// Text content blocks, in order.
+    pub(crate) fn blocks(parts: Vec<String>) -> Self {
+        Self { parts }
+    }
+
+    /// The parts, in order.
+    #[must_use]
+    pub fn parts(&self) -> &[String] {
+        &self.parts
+    }
+
+    fn content(&self) -> Value {
+        match self.parts.as_slice() {
+            [one] => json!(one),
+            parts => parts
+                .iter()
+                .map(|text| json!({"type": "text", "text": text}))
+                .collect(),
+        }
+    }
+}
+
 /// One message of the conversation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatMessage {
     /// An embedded prompt. `'static` on purpose: see the module comment.
     System(&'static str),
+    /// An assembled system prompt; see [`SystemPrompt`].
+    SystemPrompt(SystemPrompt),
     User(String),
     Assistant {
         content: Option<String>,
@@ -257,6 +299,9 @@ impl ChatClient {
             .iter()
             .map(|message| match message {
                 ChatMessage::System(text) => json!({"role": system_role, "content": text}),
+                ChatMessage::SystemPrompt(prompt) => {
+                    json!({"role": system_role, "content": prompt.content()})
+                }
                 ChatMessage::User(text) => json!({"role": "user", "content": text}),
                 ChatMessage::Assistant {
                     content,

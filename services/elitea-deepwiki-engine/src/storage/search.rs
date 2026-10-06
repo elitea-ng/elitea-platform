@@ -328,7 +328,7 @@ impl IndexReader {
 /// `PostgresBackend._bm25_scores`: every document matching `terms`, scored
 /// in one statement, the legacy formula term for term (including the
 /// query-term multiplicity, `Counter(terms)`).
-async fn bm25_scores(
+pub(crate) async fn bm25_scores(
     tx: &mut PgConnection,
     wiki: &str,
     branch: &str,

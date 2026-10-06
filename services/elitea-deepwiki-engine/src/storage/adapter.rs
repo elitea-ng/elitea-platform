@@ -84,7 +84,7 @@ impl NodeRecord {
         node
     }
 
-    fn from_row(row: &PgRow) -> Result<Self> {
+    pub(crate) fn from_row(row: &PgRow) -> Result<Self> {
         Ok(Self {
             node_id: row.try_get("node_id")?,
             rel_path: row.try_get("rel_path")?,
@@ -153,7 +153,7 @@ impl EdgeRecord {
         edge
     }
 
-    fn from_row(row: &PgRow) -> Result<Self> {
+    pub(crate) fn from_row(row: &PgRow) -> Result<Self> {
         Ok(Self {
             source_id: row.try_get("source_id")?,
             target_id: row.try_get("target_id")?,
@@ -173,7 +173,7 @@ pub struct Scope {
 }
 
 /// `_NODE_SELECT`.
-const NODE_SELECT: &str = "SELECT node_id, rel_path, file_name, language, start_line, end_line, \
+pub(crate) const NODE_SELECT: &str = "SELECT node_id, rel_path, file_name, language, start_line, end_line, \
      symbol_name, symbol_type, parent_symbol, source_text, docstring, signature, \
      is_architectural, is_doc, is_test, chunk_type, macro_cluster, micro_cluster \
      FROM wiki_nodes";
@@ -419,7 +419,7 @@ impl UnifiedDb {
     }
 }
 
-async fn nodes_by_id(
+pub(crate) async fn nodes_by_id(
     connection: &mut PgConnection,
     wiki: &str,
     node_ids: &[&str],

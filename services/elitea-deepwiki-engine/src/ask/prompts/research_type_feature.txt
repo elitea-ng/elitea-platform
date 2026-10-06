@@ -1,0 +1,6 @@
+Focus on implementation planning:
+- Where the feature should be added
+- Existing patterns to follow
+- Required changes and additions
+- Impact on existing functionality
+- Testing requirements

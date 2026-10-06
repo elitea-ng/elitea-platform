@@ -26,7 +26,7 @@
 mod ast;
 mod extract;
 mod lower;
-mod text;
+pub(crate) mod text;
 mod unparse;
 
 #[cfg(test)]

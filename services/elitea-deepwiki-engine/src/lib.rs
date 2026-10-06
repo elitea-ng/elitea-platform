@@ -4,6 +4,7 @@
 //! over a Unix socket (`server`). Phase 1 carries the protocol and the two
 //! runners that need no engine: `unavailable` and `fixture`.
 
+pub mod ask;
 pub mod config;
 pub mod errors;
 pub mod graph;
