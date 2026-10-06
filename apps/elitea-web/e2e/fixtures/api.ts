@@ -3317,6 +3317,14 @@ export async function fillComposer(scope: Page | Locator, prompt: string) {
  * `goto` means the app has just navigated, so the retry runs with the app
  * already settled. Only the two interruption messages are retried; every
  * other navigation failure is raised unchanged.
+ *
+ * NOT ALL OF IT WAS THE APP'S OWN ROUTING. A bare `Frame load interrupted`
+ * (no "by another navigation to …") was, in the CI traces, mostly WebKit
+ * cancelling a lazy route chunk as the `goto` began and TanStack Router
+ * answering the chunk error with `window.location.reload()`, which replaced
+ * the `goto`. That reload is gone (`src/shared/lib/chunk-load-guard.ts`). The
+ * retry stays for the genuine case above: an in-app redirect that lands while
+ * the `goto` is in flight.
  */
 export async function gotoAppRoute(
   page: Page,

@@ -26,6 +26,12 @@
  * boundary, not user/session state) — `<RouterProvider router={router} />`
  * (`app/App.tsx`) does not override `context`, so every guard runs against
  * the stub's safe "user not loaded" defaults until a session store lands.
+ *
+ * Route components arrive through `shared/lib/chunk-load-guard`'s
+ * `lazyRouteComponent` (wired by `vite.config.ts`, pinned by
+ * `router.lazy-guard.test.ts`): a chunk import cancelled because the page is
+ * being navigated away from no longer makes the router reload the page and
+ * replace that navigation.
  */
 import { createRouter } from '@tanstack/react-router';
 
