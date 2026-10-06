@@ -47,6 +47,7 @@ from elitea_worker.transport.nats_jetstream import (
     NatsCommandBusConnection,
     NatsTlsPaths,
     RUNTIME_API_PREFIX,
+    SubjectTokenMismatch,
     bind_command_consumer,
     delivery_subject,
     delivery_token,
@@ -400,6 +401,62 @@ def test_poison_is_dead_lettered_and_left_pending_with_the_real_serve_loop(
             # PostgreSQL re-offer stays a no-op; the 24h nak keeps it away.
             assert await _live_copy(producer, _INDEX, delivery_id)
             assert await _fetch_one(consumer, delivery_id, seconds=1.5) is None
+
+    asyncio.run(run())
+
+
+def test_unverifiable_poison_is_recorded_then_terminated_freeing_its_subject(
+    environment: dict[str, Any],
+) -> None:
+    """S2 on the real server: Term removes it from the WorkQueue stream."""
+
+    async def run() -> None:
+        delivery_id = f"py-term-{uuid.uuid4()}"
+        async with (
+            _client(environment, _PRODUCER) as producer,
+            _worker(environment) as connection,
+        ):
+            consumer = await _bind(connection)
+            recorded: list[str] = []
+            real_store = consumer._dead_letters  # noqa: SLF001
+
+            class ObservedStore:
+                async def put(self, key: str, value: bytes) -> int:
+                    revision = await real_store.put(key, value)
+                    recorded.append(key)
+                    return revision
+
+            consumer._dead_letters = ObservedStore()  # noqa: SLF001
+            await _publish(producer, delivery_id, b"subject-names-another-command")
+            stop = asyncio.Event()
+
+            async def process(delivery: CommandDelivery) -> DeliveryResult:
+                raise SubjectTokenMismatch()
+
+            async def stop_after_record() -> None:
+                while not recorded:
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(0.5)
+                stop.set()
+
+            loop = WorkerServeLoop(
+                consumer=consumer,
+                process_delivery=process,
+                max_concurrency=1,
+                queue_capacity=1,
+                in_progress_interval_millis=1_000,
+                dependency_retry_millis=100,
+                shutdown_timeout_millis=5_000,
+            )
+            watcher = asyncio.create_task(stop_after_record())
+            try:
+                await asyncio.wait_for(loop.run(stop), timeout=20)
+            finally:
+                watcher.cancel()
+
+            assert f"index.{delivery_token(delivery_id)}" in recorded
+            # Terminated: the WorkQueue message is gone, its capacity freed.
+            assert not await _live_copy(producer, _INDEX, delivery_id)
 
     asyncio.run(run())
 

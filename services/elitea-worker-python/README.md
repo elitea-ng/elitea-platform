@@ -79,7 +79,8 @@ hash token to equal `sha256(command.idempotency_key)` before it claims.
 | owned (queued or running) | `+WPI` every `nats_in_progress_interval_millis`; it resets AckWait |
 | terminal PostgreSQL receipt (settled, obsolete, retired) | double ack (`AckSync`), only after the receipt; an already-acknowledged message is idempotent success |
 | retry later, lease held elsewhere, recovery not possible now, retryable failure | `NakWithDelay(nats_retry_delay_millis)` |
-| poison: decode or signature failure, subject mismatch, a command it cannot serve, any non-retryable failure | one record in the `ELITEA_RT_V1_DEADLETTER` bucket FIRST, then `NakWithDelay(24h)` and an ERROR line `worker_command.dead_lettered`. Never `Term`: that frees the subject and PostgreSQL would re-offer the poison every 30s |
+| poison that can never verify: the signed envelope's digest or signature fails, or the subject does not name the signed command | one record in the `ELITEA_RT_V1_DEADLETTER` bucket FIRST, then `Term` (frees its stream capacity) and the ERROR line `worker_command.dead_lettered`. A PostgreSQL re-offer of the same delivery fails the same check before any claim and is terminated again |
+| any other poison: a decode failure, a command it cannot serve, any non-retryable failure | one record in the `ELITEA_RT_V1_DEADLETTER` bucket FIRST, then `NakWithDelay(24h)` and an ERROR line `worker_command.dead_lettered`. Never `Term`: that frees the subject and PostgreSQL would re-offer the poison every 30s |
 | poison whose record the bucket refused | not parked: `NakWithDelay(nats_retry_delay_millis)`, an ERROR line `worker_command.dead_letter_write_failed` carrying `dead_letter_write_failures_total`; the next delivery retries the record without running the command again |
 | SIGTERM | stop pulling, keep heartbeating owned work until it ends or the deadline passes, exit without ack or nak (AckWait redelivers) |
 

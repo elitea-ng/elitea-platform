@@ -9,9 +9,13 @@ It has no publish, result, output or callback method: the worker binds to the
 durable pull consumer the bootstrap Job created, pulls, sends ``+WPI``
 heartbeats for what it owns, acknowledges only after a terminal PostgreSQL
 receipt, naks with a delay, and records a poison command in the dead-letter
-bucket. It never creates, edits or deletes a stream or a consumer, and never
-terminates a message (``Term`` would free the delivery subject, and PostgreSQL
-would re-offer the poison every 30 seconds).
+bucket. It never creates, edits or deletes a stream or a consumer. It
+terminates (``Term``) exactly two kinds of poison, after recording them: a
+command whose signed envelope fails verification and one whose subject does
+not name the signed command. Neither can ever become valid, and ``Term``
+frees the stream capacity a 24h nak would hold; a PostgreSQL re-offer of the
+same delivery fails the same check before any claim and is terminated again.
+Every other poison is nak'd for 24h and stays PENDING on its subject.
 
 Only the signed envelope in the message body is authority. The subject's hash
 token and the headers are compared with the verified command, never trusted
@@ -239,6 +243,13 @@ def require_subject_names_command(
         raise SubjectTokenMismatch()
 
 
+class CommandSignatureRejected(WorkerError):
+    """The signed envelope failed verification (digest or Ed25519 signature)."""
+
+    def __init__(self, safe_message: str) -> None:
+        super().__init__("AUTHORIZATION_FAILED", safe_message, exit_code=4)
+
+
 class SubjectTokenMismatch(WorkerError):
     def __init__(self) -> None:
         super().__init__(
@@ -246,6 +257,14 @@ class SubjectTokenMismatch(WorkerError):
             "The command subject does not name the signed command's delivery.",
             exit_code=2,
         )
+
+
+#: Poison that is recorded and then TERMINATED rather than nak'd for 24h: it
+#: fails a check that happens before any claim and can never pass.
+TERMINAL_POISON: tuple[type[WorkerError], ...] = (
+    CommandSignatureRejected,
+    SubjectTokenMismatch,
+)
 
 
 class DeadLetterUnrecorded(DependencyUnavailable):
@@ -429,6 +448,14 @@ class JetStreamCommandConsumer:
         """``NakWithDelay(24h)`` without a new record (already dead-lettered)."""
 
         await self._nak(delivery, POISON_DELAY_SECONDS)
+
+    async def terminate(self, delivery: CommandDelivery) -> None:
+        """``Term``: only for :data:`TERMINAL_POISON`, only after its record."""
+
+        message = delivery.message
+        if message is None or delivery.is_settled:
+            return
+        await message.term()
 
     async def record_dead_letter(
         self, delivery: CommandDelivery, *, reason: str
@@ -936,6 +963,7 @@ __all__ = [
     "CommandBusAbsent",
     "CommandBusDrift",
     "CommandDelivery",
+    "CommandSignatureRejected",
     "DEAD_LETTER_BUCKET",
     "DEAD_LETTER_SCHEMA",
     "DEFAULT_API_PREFIX",
@@ -948,6 +976,7 @@ __all__ = [
     "POISON_DELAY_SECONDS",
     "RUNTIME_API_PREFIX",
     "SubjectTokenMismatch",
+    "TERMINAL_POISON",
     "bind_command_consumer",
     "dead_letter_key",
     "delivery_subject",

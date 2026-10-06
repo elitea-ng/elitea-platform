@@ -30,6 +30,7 @@ from elitea_worker.serve import (
 )
 from elitea_worker.transport.nats_jetstream import (
     CommandDelivery,
+    CommandSignatureRejected,
     SubjectTokenMismatch,
     TransportMessageRejected,
 )
@@ -78,6 +79,8 @@ class FakeConsumer:
         self.dead_lettered: list[tuple[CommandDelivery, str]] = []
         self.dead_letter_error: Exception | None = None
         self.dead_letter_failures: list[tuple[CommandDelivery, str]] = []
+        self.terminated: list[CommandDelivery] = []
+        self.answers: list[str] = []
 
     @property
     def delivery_batch_size(self) -> int:
@@ -115,12 +118,18 @@ class FakeConsumer:
         self.retried.append(delivery)
 
     async def park(self, delivery: CommandDelivery) -> None:
+        self.answers.append("park")
         self.parked.append(delivery)
+
+    async def terminate(self, delivery: CommandDelivery) -> None:
+        self.answers.append("term")
+        self.terminated.append(delivery)
 
     async def record_dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
         if self.dead_letter_error is not None:
             self.dead_letter_failures.append((delivery, reason))
             raise self.dead_letter_error
+        self.answers.append("record")
         self.dead_lettered.append((delivery, reason))
 
 
@@ -868,6 +877,99 @@ def test_production_processor_refuses_a_subject_that_does_not_name_the_command(
     with pytest.raises(SubjectTokenMismatch) as caught:
         asyncio.run(processor.process(_delivery(1, delivery_id="outbox-1")))
     assert caught.value.retryable is False
+
+
+def test_production_processor_turns_a_signature_failure_into_terminal_poison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(raw, authenticator):
+        raise AuthorizationFailure("The signed worker command signature is invalid.")
+
+    monkeypatch.setattr(serve_module, "parse_and_verify_signed_command", refuse)
+    processor = ProductionDeliveryProcessor.__new__(ProductionDeliveryProcessor)
+    processor._authenticator = object()  # type: ignore[attr-defined]
+
+    with pytest.raises(CommandSignatureRejected) as caught:
+        asyncio.run(processor.process(_delivery(1)))
+    assert caught.value.code == "AUTHORIZATION_FAILED"
+    assert caught.value.retryable is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        CommandSignatureRejected("The signed worker command signature is invalid."),
+        SubjectTokenMismatch(),
+    ],
+)
+def test_unverifiable_poison_is_recorded_then_terminated_never_parked(
+    error: WorkerError,
+) -> None:
+    """S2: it can never become valid, so Term frees its stream capacity.
+
+    The record comes first. Nothing is quarantined: a PostgreSQL re-offer of
+    the same delivery fails the same pre-claim check and is terminated again.
+    """
+
+    async def run() -> None:
+        delivery = _delivery(1)
+        consumer = FakeConsumer((delivery,), redeliver=True)
+        stop = asyncio.Event()
+        calls = 0
+        events: list[str] = []
+
+        async def process(_: CommandDelivery) -> DeliveryResult:
+            nonlocal calls
+            calls += 1
+            raise error
+
+        async def stop_after_two() -> None:
+            while len(consumer.terminated) < 2:
+                await asyncio.sleep(0)
+            stop.set()
+
+        runtime = _runtime(
+            consumer, process, event_sink=lambda event, _error: events.append(event)
+        )
+        watcher = asyncio.create_task(stop_after_two())
+        try:
+            await asyncio.wait_for(runtime.run(stop), timeout=1.0)
+        finally:
+            watcher.cancel()
+
+        assert consumer.parked == consumer.retried == []
+        assert consumer.answers[:4] == ["record", "term", "record", "term"]
+        assert consumer.dead_lettered[0] == (delivery, error.code)
+        assert calls >= 2
+        assert events.count(DEAD_LETTERED_EVENT) >= 2
+
+    asyncio.run(run())
+
+
+def test_a_terminal_poison_whose_record_fails_is_retried_not_terminated() -> None:
+    async def run() -> None:
+        consumer = FakeConsumer((_delivery(1),))
+        consumer.dead_letter_error = DependencyUnavailable("bucket unreachable")
+        stop = asyncio.Event()
+
+        async def process(_: CommandDelivery) -> DeliveryResult:
+            raise SubjectTokenMismatch()
+
+        async def stop_after_retry() -> None:
+            while not consumer.retried:
+                await asyncio.sleep(0)
+            stop.set()
+
+        watcher = asyncio.create_task(stop_after_retry())
+        try:
+            await asyncio.wait_for(_runtime(consumer, process).run(stop), timeout=1.0)
+        finally:
+            watcher.cancel()
+
+        assert consumer.terminated == consumer.parked == []
+        assert len(consumer.retried) == 1
+
+    asyncio.run(run())
 
 
 class _HungCloser:

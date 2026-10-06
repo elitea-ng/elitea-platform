@@ -92,8 +92,11 @@ class FakeMsg:
         if "in_progress" in self.fail:
             raise ConnectionError("+WPI lost")
 
-    async def term(self) -> None:  # pragma: no cover - must never be called
-        raise AssertionError("a worker never terminates a command message")
+    async def term(self) -> None:
+        self.calls.append(("term", None))
+        if "term" in self.fail:
+            raise ConnectionError("term lost")
+        self._acked = True
 
 
 def _message(delivery_id: str = "outbox-1", *, sequence: int = 1, **kwargs: Any) -> FakeMsg:
@@ -506,6 +509,21 @@ def test_record_dead_letter_records_where_to_look_never_what_it_said() -> None:
         }
         assert b"ENVELOPE" not in raw
         assert b"outbox-secret-id" not in raw
+
+    asyncio.run(run())
+
+
+def test_terminate_terms_once_and_only_an_unanswered_message() -> None:
+    async def run() -> None:
+        message = _message("unverifiable")
+        consumer = _consumer()
+        await consumer.terminate(_delivery_of(message))
+        await consumer.terminate(_delivery_of(message))  # already answered
+        assert message.calls == [("term", None)]
+        assert set(bus.TERMINAL_POISON) == {
+            bus.CommandSignatureRejected,
+            bus.SubjectTokenMismatch,
+        }
 
     asyncio.run(run())
 

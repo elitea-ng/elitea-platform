@@ -47,6 +47,7 @@ from elitea_worker.execution.delivery import (
     ToolkitCallToolDeliveryProcessor,
 )
 from elitea_worker.execution.errors import (
+    AuthorizationFailure,
     DependencyUnavailable,
     InvalidInput,
     WorkerError,
@@ -77,7 +78,9 @@ from elitea_worker.transport.reconnect_channel import (
 from elitea_worker.transport.output_spool import EncryptedOutputSpool
 from elitea_worker.transport.nats_jetstream import (
     DEAD_LETTER_BUCKET,
+    TERMINAL_POISON,
     CommandDelivery,
+    CommandSignatureRejected,
     JetStreamCommandConsumer,
     NatsCommandBusConnection,
     bind_command_consumer,
@@ -109,6 +112,8 @@ class DeliveryConsumer(Protocol):
     async def retry_later(self, delivery: CommandDelivery) -> None: ...
 
     async def park(self, delivery: CommandDelivery) -> None: ...
+
+    async def terminate(self, delivery: CommandDelivery) -> None: ...
 
     async def record_dead_letter(
         self, delivery: CommandDelivery, *, reason: str
@@ -572,6 +577,11 @@ class WorkerServeLoop:
             # a failure after that point is reported, never dead-lettered.
             return
         key = delivery.dead_letter_key
+        if isinstance(error, TERMINAL_POISON):
+            # Terminated, not parked: a re-offer of the same delivery fails the
+            # same pre-claim check, so there is nothing to quarantine.
+            await self._dispose_poison(delivery, error, owned=True)
+            return
         if key not in self._quarantined:
             if len(self._quarantined) < self._quarantine_cap:
                 self._quarantined.add(key)
@@ -597,7 +607,10 @@ class WorkerServeLoop:
             raise
         except Exception as exc:
             self.dead_letter_write_failures += 1
-            if key in self._unrecorded or len(self._unrecorded) < self._quarantine_cap:
+            terminal = isinstance(error, TERMINAL_POISON)
+            if not terminal and (
+                key in self._unrecorded or len(self._unrecorded) < self._quarantine_cap
+            ):
                 self._unrecorded[key] = error
             self._event_sink(
                 DEAD_LETTER_WRITE_FAILED_EVENT,
@@ -615,6 +628,11 @@ class WorkerServeLoop:
         self._unrecorded.pop(key, None)
         self.dead_lettered += 1
         self._event_sink(DEAD_LETTERED_EVENT, _dead_letter_notice(error, delivery))
+        if isinstance(error, TERMINAL_POISON):
+            await self._answer_poison(
+                self._consumer.terminate, delivery, "nats_term", owned=owned
+            )
+            return
         await self._answer_poison(
             self._consumer.park, delivery, "nats_park", owned=owned
         )
@@ -690,6 +708,20 @@ def _dead_letter_notice(
     infrastructure coordinates, not execution content; the delivery ID and the
     command itself are never printed.
     """
+    if isinstance(error, TERMINAL_POISON):
+        return WorkerError(
+            code=error.code,
+            safe_message=(
+                f"{error.safe_message} "
+                f"Message {delivery.entry_id} (delivery {delivery.num_delivered}) is "
+                f"poison that can never verify: it is recorded in "
+                f"{DEAD_LETTER_BUCKET} under {delivery.dead_letter_key} and "
+                f"TERMINATED, freeing its stream capacity. A re-offer of the same "
+                f"delivery fails the same check before any claim."
+            ),
+            exit_code=error.exit_code,
+            retryable=error.retryable,
+        )
     return WorkerError(
         code=error.code,
         safe_message=(
@@ -818,10 +850,15 @@ class ProductionDeliveryProcessor:
         )
 
     async def process(self, delivery: CommandDelivery) -> DeliveryResult:
-        _, command = parse_and_verify_signed_command(
-            delivery.signed_envelope,
-            authenticator=self._authenticator,
-        )
+        try:
+            _, command = parse_and_verify_signed_command(
+                delivery.signed_envelope,
+                authenticator=self._authenticator,
+            )
+        except AuthorizationFailure as exc:
+            # A digest or signature that does not verify can never verify:
+            # recorded, then terminated (TERMINAL_POISON), not parked 24h.
+            raise CommandSignatureRejected(exc.safe_message) from exc
         # After the signature, before the claim: the subject's hash token must
         # name this signed command's delivery, or the message is poison.
         require_subject_names_command(delivery, command.idempotency_key)
