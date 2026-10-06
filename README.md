@@ -9,7 +9,7 @@ elitea-platform/
 ├── services/
 │   ├── elitea-llm-gateway/  # LLM gateway service
 │   ├── elitea-main/         # Go API server (chi/v5, pgx/v5, go-redis/v9)
-│   ├── elitea-scheduler/    # Scheduled job runner (Go, cron + Redis RPC)
+│   ├── elitea-scheduler/    # Background workers: price sync, budget write-back, retention sweeps (Go)
 │   └── elitea-worker-python/# Python worker runtime and SDK
 ├── apps/
 │   ├── elitea-ui/           # React SPA (git submodule)

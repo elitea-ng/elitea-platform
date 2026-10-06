@@ -1,10 +1,9 @@
-package scheduler
+package maintenance
 
-// The maintenance gate on the dispatch pass.
+// The maintenance switch the retention sweepers share.
 //
-// What is worth pinning is not that a boolean is read, but the three decisions
-// around it: which loop it stops, what it does to `last_run`, and which way it
-// fails.
+// What is worth pinning is not that a boolean is read, but which way it fails
+// and that it reads the row the admin surface writes.
 
 import (
 	"context"
@@ -20,15 +19,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// switchStore answers the maintenance point read with a chosen value, and
-// records every Exec so a suppressed tick can be shown to have written nothing.
+// switchStore answers the maintenance point read with a chosen value.
 type switchStore struct {
 	// value is the JSON stored in centry.platform_config, or nil for "no row".
 	value []byte
 	// queryErr makes the read fail, for the permissive-failure case.
 	queryErr error
 	queries  int
-	execs    []recordedExec
 }
 
 func (s *switchStore) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
@@ -37,16 +34,9 @@ func (s *switchStore) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 		return nil, s.queryErr
 	}
 	if !strings.Contains(sql, "centry.platform_config") {
-		// The dispatch pass's own schedule query. A suppressed tick must never
-		// reach it, and reaching it is what this failure reports.
-		return nil, errors.New("the schedule query ran during a maintenance window")
+		return nil, errors.New("the switch read a table other than centry.platform_config")
 	}
 	return &switchRows{value: s.value}, nil
-}
-
-func (s *switchStore) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	s.execs = append(s.execs, recordedExec{sql: sql, args: args})
-	return pgconn.NewCommandTag("UPDATE 1"), nil
 }
 
 // switchRows is a one-column, at-most-one-row result.
@@ -107,20 +97,19 @@ func TestMaintenanceActiveReadsTheSwitch(t *testing.T) {
 		"not even a bool":   {store: &switchStore{value: jsonValue(t, "yes")}, want: false},
 		"malformed on disk": {store: &switchStore{value: []byte("{oops")}, want: false},
 	} {
-		scheduler := newTestScheduler(testCase.store, &fixedDispatcher{receivers: 1})
-		if got := scheduler.MaintenanceActive(context.Background()); got != testCase.want {
+		if got := New(testCase.store).Active(context.Background()); got != testCase.want {
 			t.Errorf("%s: MaintenanceActive = %v, want %v", name, got, testCase.want)
 		}
 	}
 }
 
-// TestEveryFailureModeKeepsDispatching is the direction that matters, stated on
+// TestEveryFailureModeKeepsWorking is the direction that matters, stated on
 // its own because it is the opposite of the HTTP gate's.
 //
-// An unreadable switch must not halt every scheduled job on the platform. That
+// An unreadable switch must not halt every background job on the platform. That
 // would be an outage this daemon caused rather than one an operator asked for,
 // and it would be indistinguishable from a maintenance window nobody opened.
-func TestEveryFailureModeKeepsDispatching(t *testing.T) {
+func TestEveryFailureModeKeepsWorking(t *testing.T) {
 	t.Parallel()
 
 	for name, store := range map[string]*switchStore{
@@ -131,40 +120,9 @@ func TestEveryFailureModeKeepsDispatching(t *testing.T) {
 		"explicit false":  {value: jsonValue(t, false)},
 		"json null value": {value: []byte("null")},
 	} {
-		scheduler := newTestScheduler(store, &fixedDispatcher{receivers: 1})
-		if scheduler.MaintenanceActive(context.Background()) {
-			t.Errorf("%s: the scheduler stopped dispatching on a switch it could not trust", name)
+		if New(store).Active(context.Background()) {
+			t.Errorf("%s: the sweepers would stop on a switch they could not trust", name)
 		}
-	}
-}
-
-// TestASuppressedTickWritesNothing.
-//
-// `last_run` is the only record that a schedule ran, and both the admin listing
-// and timeToRun read it as one. Stamping it for a run that was suppressed says
-// "this ran" about work nothing performed — issue #305's defect reached by a
-// different route — and it would consume the schedule's slot, so the job would
-// not run promptly when the window lifts.
-//
-// The store also fails the schedule query outright, so this proves the dispatch
-// pass was not merely harmless but never reached.
-func TestASuppressedTickWritesNothing(t *testing.T) {
-	t.Parallel()
-
-	store := &switchStore{value: jsonValue(t, true)}
-	dispatcher := &fixedDispatcher{receivers: 1}
-	scheduler := newTestScheduler(store, dispatcher)
-
-	if !scheduler.MaintenanceActive(context.Background()) {
-		t.Fatal("the switch is on and was not read as on")
-	}
-	// tick() itself needs Redis for its lock, so the suppression is exercised at
-	// the seam tick() consults. What matters is that nothing downstream ran.
-	if len(store.execs) != 0 {
-		t.Errorf("a suppressed tick wrote %d row(s): %+v", len(store.execs), store.execs)
-	}
-	if dispatcher.calls != 0 {
-		t.Errorf("a suppressed tick dispatched %d job(s)", dispatcher.calls)
 	}
 }
 
@@ -176,8 +134,8 @@ func TestASuppressedTickWritesNothing(t *testing.T) {
 // contract with no compiler behind it. This reads elitea-main's source and
 // fails when the two drift, which is the only check available.
 //
-// A drift would be silent and total: the scheduler would read a row nobody
-// writes, find nothing, and dispatch straight through every maintenance window
+// A drift would be silent and total: the sweepers would read a row nobody
+// writes, find nothing, and delete straight through every maintenance window
 // while the API reported one was open.
 func TestMaintenanceKeysMatchTheAdminSurface(t *testing.T) {
 	t.Parallel()
@@ -198,7 +156,7 @@ func TestMaintenanceKeysMatchTheAdminSurface(t *testing.T) {
 		// wolf about a drift that had not happened.
 		declaration := regexp.MustCompile(constant + `\s*=\s*"` + regexp.QuoteMeta(want) + `"`)
 		if !declaration.MatchString(string(source)) {
-			t.Errorf("elitea-main does not declare %s = %q; this scheduler reads a row the admin "+
+			t.Errorf("elitea-main does not declare %s = %q; this daemon reads a row the admin "+
 				"surface does not write, so every maintenance window would be ignored here",
 				constant, want)
 		}

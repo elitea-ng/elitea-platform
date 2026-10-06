@@ -331,9 +331,6 @@ services:
     image: ghcr.io/elitea-ng/elitea-scheduler:dev
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
-      REDIS_URL: "redis:6379"
-      RPC_CHANNEL: "elitea_rpc"
-      RPC_HMAC_KEY: ""
       HTTP_ADDR: ":8081"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
       # Audit-event retention sweep (issue #619). centry.audit_events gained a
@@ -350,8 +347,6 @@ services:
       SYNC_TOMBSTONE_RETENTION_DAYS: "97"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       otel-collector:
         condition: service_started

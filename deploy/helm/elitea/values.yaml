@@ -2031,15 +2031,11 @@ scheduler:
   # Service: nothing calls in, the process polls and consumes.
   #
   # READ services/elitea-scheduler/RETIREMENT.md AND THIS CHART'S README BEFORE
-  # INSTALLING. In short: this binary carries FOUR independent responsibilities
-  # and the three that matter are not the scheduler loop —
-  #   1. the legacy centry.schedule poller (NOT the owner of product schedule
-  #      occurrences; elitea-main's scheduling kernel is). It starts
-  #      UNCONDITIONALLY — there is no env flag to turn it off (main.go always
-  #      calls sched.Run). Which jobs it acts on is decided by DATA: the enabled
-  #      flag on centry.schedule rows. Installing this chart against a database
-  #      whose rows for a job elitea-main also registers are still enabled gives
-  #      you TWO CLOCKS for that job, which RETIREMENT.md forbids.
+  # INSTALLING. In short: this binary carries independent background workers
+  # and dispatches no schedules — the legacy centry.schedule poller that
+  # PUBLISHed Pylon RPC over Redis was deleted (nothing consumed it, issue
+  # #305), and with it this component's only use of Redis:
+  #   1. (removed) the legacy centry.schedule poller;
   #   2. the price-catalog sync worker (PRICE_SYNC_ENABLED, off by default);
   #   3. the budget write-back consumer (BUDGET_WRITEBACK_ENABLED, off by
   #      default) that drains GATEWAY_BUDGET_DELTAS into
@@ -2051,10 +2047,8 @@ scheduler:
   # (2), (3) and (4) are the reason the image cannot simply be deleted; they
   # have no relocation decision yet.
 
-  # Single replica. The poller's mutual exclusion is a Redis tick lock, so extra
-  # replicas are not incorrect, but they buy nothing: every tick is executed once
-  # regardless, and the price-sync/write-back workers are likewise
-  # single-consumer shaped. The retention sweep takes no lock at all — its
+  # Single replica. The price-sync/write-back workers are single-consumer
+  # shaped, so extra replicas are not incorrect but buy nothing. The retention sweep takes no lock at all — its
   # batches use FOR UPDATE SKIP LOCKED, so two sweepers take disjoint rows.
   # Scale out only with a specific measured reason.
   replicaCount: 1
@@ -2065,8 +2059,7 @@ scheduler:
     pullPolicy: IfNotPresent
 
   # Recreate, not RollingUpdate: two generations overlapping during a rollout
-  # would both hold pollers contending for the same Redis tick lock and the same
-  # durable NATS consumer. A few seconds of no scheduler is cheaper than that.
+  # would both bind the same durable NATS consumer. A few seconds of no scheduler is cheaper than that.
   strategy:
     type: Recreate
 
@@ -2090,11 +2083,6 @@ scheduler:
     # Empty means the binary's own default (localhost) — never correct in a
     # cluster. Set this.
     DATABASE_URL: ""
-    # host:port, NOT a redis:// URL — the value is passed straight to
-    # goredis.Options.Addr.
-    # Empty means the top-level `redis` block, resolved in this namespace.
-    REDIS_URL: ""
-    RPC_CHANNEL: "elitea_rpc"
     # Must match .Values.healthPort below; the chart does not derive one from the
     # other so that an operator changing one and not the other fails loudly at
     # probe time rather than silently listening on the wrong port.
@@ -2219,20 +2207,10 @@ scheduler:
 
   # Sensitive vars from Kubernetes Secrets (rendered as valueFrom.secretKeyRef),
   # never plaintext in the ConfigMap above — same shape as
-  # the `llmGateway:` block and this chart's `main:` block.
-  #
-  # RPC_HMAC_KEY signs the Pylon/Arbiter RPC payloads the poller publishes on
-  # RPC_CHANNEL. `optional: true` because the binary tolerates an empty key (it
-  # then publishes unsigned) — which is exactly why you should set it: an absent
-  # Secret does not fail, it downgrades.
-  #
-  #   kubectl create secret generic elitea-scheduler-secrets \
-  #     --from-literal=rpc-hmac-key=...
-  secrets:
-    RPC_HMAC_KEY:
-      secretName: elitea-scheduler-secrets
-      key: rpc-hmac-key
-      optional: true
+  # the `llmGateway:` block and this chart's `main:` block. The binary reads
+  # none today (RPC_HMAC_KEY went with the legacy RPC dispatcher), so the map
+  # is empty; an operator may still add entries.
+  secrets: {}
 
   # Port the in-process health server listens on (must equal the port in
   # env.HTTP_ADDR above).
@@ -2273,8 +2251,8 @@ scheduler:
       failureThreshold: 3
 
   # No HorizontalPodAutoscaler template in this chart, deliberately. Every unit of
-  # work here is serialised behind a Redis tick lock or a single durable consumer,
-  # so added replicas raise cost and lock contention without raising throughput —
+  # work here is a single durable consumer or a SKIP LOCKED sweep, so added
+  # replicas raise cost without raising throughput —
   # an HPA would be a control that cannot help. Set replicaCount by hand if a
   # measured reason ever appears.
 

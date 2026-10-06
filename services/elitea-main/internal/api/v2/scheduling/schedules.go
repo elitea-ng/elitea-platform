@@ -9,12 +9,14 @@ package scheduling
 //
 // One row of `centry.schedule` is a cron expression bound to the NAME of an
 // internal platform RPC (`rpc_func`) plus its keyword arguments. It is not a
-// tenant workload and not a pipeline: `services/elitea-scheduler` polls this
-// exact table once a minute, and for each row whose cron is due it publishes
-// `rpc_func` onto the Redis/Arbiter bus fire-and-forget and stamps `last_run`
-// (services/elitea-scheduler/internal/scheduler/scheduler.go).
+// tenant workload and not a pipeline. `services/elitea-scheduler` used to poll
+// this table once a minute and publish each due `rpc_func` onto the
+// Redis/Arbiter bus for legacy Pylon. Nothing in the Go stack consumed that
+// bus (issue #305), so that dispatcher was deleted; in a Go-only deployment
+// these rows are read and edited here and executed only by a legacy Pylon
+// scheduling plugin, where one still runs against the same database.
 //
-// So this table is live, shared, and executing. It is also the mechanism the
+// So this table is live and shared. It is also the mechanism the
 // indexing transition itself depends on — services/elitea-scheduler/RETIREMENT.md
 // records that "the current `index_scheduling` row is disabled in the hybrid
 // deployment" in favour of elitea-main's own `index.schedule.scan.v1`, and
