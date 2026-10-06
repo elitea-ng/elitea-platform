@@ -17,6 +17,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/auditretention"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/authstateretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
@@ -170,6 +171,21 @@ func main() {
 		slog.Error("native auth retention sweep did not start", "err", nativeErr)
 	} else {
 		go nativeSweeper.Run(ctx)
+	}
+
+	// Browser sign-in state retention (elitea-main shared 0145 and 0117):
+	// bounded batched deletes of expired Form sessions, Form login
+	// transactions and attempt windows, and of expired OIDC/SAML browser
+	// sessions, whose store had a DeleteExpired that nothing called.
+	// Correctness never depends on it: elitea-main filters on expiry at read
+	// time. Gated on maintenance like the audit and sync sweeps.
+	if authStateSweeper, authStateErr := authstateretention.New(
+		pool, maintenanceSwitch.Active, authstateretention.Config{}, logger,
+	); authStateErr != nil {
+		slog.Error("auth state retention sweep did not start; the sign-in state tables grow without bound",
+			"err", authStateErr)
+	} else {
+		go authStateSweeper.Run(ctx)
 	}
 
 	// Budget write-back consumer (design §8.6): durable pull consumer draining
