@@ -53,11 +53,12 @@ services:
         condition: service_healthy
 
   # `git daemon` over the sample repository from the conformance fixtures,
-  # committed on first start. Plain Alpine plus `apk add git git-daemon` at
-  # start: the alpine/git image ships git without the daemon (Alpine packages
-  # it separately), and there is no small image that carries both.
+  # committed on first start. Plain debian:trixie-slim (Debian 13, like every
+  # image in this stack) plus `apt-get install git` at start: Debian's `git`
+  # package carries `git daemon`. The healthcheck probes the port with bash's
+  # /dev/tcp, because trixie-slim ships no `nc`.
   deepwiki-git:
-    image: docker.io/library/alpine:3.21
+    image: docker.io/library/debian:trixie-slim
     entrypoint: ["/bin/sh", "/opt/deepwiki-git-daemon.sh"]
     environment:
       DEEPWIKI_GIT_REPOSITORY: acme/e2e-generated
@@ -65,7 +66,7 @@ services:
       - ./scripts/deepwiki-git-daemon.sh:/opt/deepwiki-git-daemon.sh:ro
       - ../conformance/provider/fixtures/deepwiki/retrieval/sample-repo/corpus:/corpus:ro
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -f /repos/.ready && nc -z 127.0.0.1 9418"]
+      test: ["CMD", "bash", "-c", "test -f /repos/.ready && exec 3<>/dev/tcp/127.0.0.1/9418"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -75,7 +76,7 @@ services:
   # GATEWAY_EGRESS_ALLOWLIST (`llm-mock:8090`) and the seeded credential's
   # api_base need no change. Any model name is accepted.
   llm-mock:
-    image: docker.io/library/python:3.12-slim
+    image: docker.io/library/python:3.12.14-slim-trixie
     build: !reset null
     entrypoint: ["python", "/opt/llm_stub.py"]
     environment:
