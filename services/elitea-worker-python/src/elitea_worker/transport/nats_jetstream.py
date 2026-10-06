@@ -71,6 +71,8 @@ HEADER_MSG_ID = "Nats-Msg-Id"
 HEADER_DELIVERY_ID = "Elitea-Delivery-Id"
 
 DEAD_LETTER_BUCKET = "ELITEA_RT_V1_DEADLETTER"
+# The dead-letter reason of a message of this durable whose metadata cannot be read.
+_UNDECODABLE_REASON = "METADATA_UNREADABLE"
 DEAD_LETTER_SCHEMA = "elitea.runtime.dead-letter.v1"
 
 #: The only inbox prefix the permission table grants the elitea-worker user.
@@ -389,10 +391,13 @@ class JetStreamCommandConsumer:
         """Answer only what this durable may answer; skip the rest.
 
         A reply subject of THIS durable with unreadable metadata can never
-        decode: it is terminated. A reply of another stream or consumer (or
-        none) cannot be answered by this identity at all — the permission
-        table grants it this durable's ack subjects only — so it is reported
-        and left to its own consumer's AckWait.
+        decode: it is dead-lettered, then terminated. Like every terminated
+        poison it is never terminated without its record: when the record
+        cannot be written it is nak'd with the retry delay, so the next
+        delivery retries the record. A reply of another stream or consumer
+        (or none) cannot be answered by this identity at all — the
+        permission table grants it this durable's ack subjects only — so it
+        is reported and left to its own consumer's AckWait.
         """
 
         reply = getattr(message, "reply", None)
@@ -405,6 +410,20 @@ class JetStreamCommandConsumer:
             except Exception:
                 foreign = False
             if not foreign:
+                delivery = self._undecodable_delivery(message, reply)
+                try:
+                    await self.record_dead_letter(delivery, reason=_UNDECODABLE_REASON)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._events("nats_delivery_undecodable_unrecorded", exc)
+                    try:
+                        await message.nak(delay=self._retry_delay)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self._events("nats_nak_unavailable", DependencyUnavailable())
+                    return
                 self._events("nats_delivery_undecodable_terminated", error)
                 try:
                     await message.term()
@@ -414,6 +433,32 @@ class JetStreamCommandConsumer:
                     self._events("nats_term_unavailable", DependencyUnavailable())
                 return
         self._events("nats_delivery_foreign_skipped", error)
+
+    def _undecodable_delivery(self, message: Any, reply: str) -> CommandDelivery:
+        """Where the record points for a message whose metadata is unreadable.
+
+        The ack subject ``$JS.ACK.<stream>.<consumer>.<delivered>.<sseq>...``
+        carries the coordinates; a field that does not parse is recorded as 0.
+        """
+
+        def number(index: int) -> int:
+            fields = reply[len(self._ack_prefix) :].split(".")
+            try:
+                value = int(fields[index])
+            except (IndexError, ValueError):
+                return 0
+            return value if value >= 0 else 0
+
+        subject = getattr(message, "subject", "")
+        return CommandDelivery(
+            stream=self._stream,
+            consumer=self._consumer,
+            subject=subject if isinstance(subject, str) else "",
+            stream_sequence=number(1),
+            num_delivered=number(0),
+            signed_envelope=b"",
+            message=message,
+        )
 
     async def in_progress(self, deliveries: Sequence[CommandDelivery]) -> int:
         """``+WPI`` for every owned, unanswered message; resets AckWait.

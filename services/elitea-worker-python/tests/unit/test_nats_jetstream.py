@@ -328,19 +328,52 @@ class _UnreadableMetadata(FakeMsg):
         raise ValueError("unparsable reply")
 
 
-def test_an_undecodable_message_of_this_durable_is_terminated_alone() -> None:
+def test_an_undecodable_message_of_this_durable_is_dead_lettered_then_terminated_alone() -> None:
     async def run() -> None:
         good = _message("a", sequence=1)
-        broken = _UnreadableMetadata(subject=good.subject, data=b"x", sequence=2)
+        broken = _UnreadableMetadata(
+            subject=good.subject, data=b"x", sequence=2, num_delivered=3
+        )
         events: list[str] = []
+        kv = FakeKV()
         consumer = _consumer(
             FakeSubscription([[broken, good]]),
+            kv=kv,
             event_sink=lambda event, _error: events.append(event),
         )
         deliveries = await consumer.fetch()
         assert [delivery.stream_sequence for delivery in deliveries] == [1]
         assert broken.calls == [("term", None)]
         assert events == ["nats_delivery_undecodable_terminated"]
+        # The record exists before the Term, and points at the message by
+        # the coordinates its ack subject carries.
+        assert list(kv.records) == [f"index.{_token('a')}"]
+        record = json.loads(kv.records[f"index.{_token('a')}"])
+        assert record["reason"] == "METADATA_UNREADABLE"
+        assert (record["stream"], record["consumer"]) == (STREAM, CONSUMER)
+        assert (record["stream_sequence"], record["num_delivered"]) == (2, 3)
+        assert record["subject"] == good.subject
+
+    asyncio.run(run())
+
+
+def test_an_undecodable_message_is_never_terminated_without_its_record() -> None:
+    """The record failed: nak with the retry delay, so the next delivery retries it."""
+
+    async def run() -> None:
+        good = _message("a", sequence=1)
+        broken = _UnreadableMetadata(subject=good.subject, data=b"x", sequence=2)
+        events: list[str] = []
+        consumer = _consumer(
+            FakeSubscription([[broken, good]]),
+            kv=FakeKV(fail=True),
+            event_sink=lambda event, _error: events.append(event),
+            retry_delay_millis=5_000,
+        )
+        deliveries = await consumer.fetch()
+        assert [delivery.stream_sequence for delivery in deliveries] == [1]
+        assert broken.calls == [("nak", 5.0)]
+        assert events == ["nats_delivery_undecodable_unrecorded"]
 
     asyncio.run(run())
 
