@@ -564,11 +564,10 @@ func waitForRedis(t *testing.T, ctx context.Context, client *redis.Client, conta
 	}
 }
 
-func runtimeMainEnvironment(databaseURL string, legacyRedisPort, controlRedisPort, publicPort, controlPort, outputPort, contentPort int, producerPasswordPath, authConfigPath string, pki runtimePKI, signing signingMaterial) []string {
+func runtimeMainEnvironment(databaseURL string, controlRedisPort, publicPort, controlPort, outputPort, contentPort int, producerPasswordPath, authConfigPath string, pki runtimePKI, signing signingMaterial) []string {
 	return []string{
 		"DATABASE_URL=" + databaseURL,
 		"SKIP_MIGRATIONS=1",
-		fmt.Sprintf("REDIS_URL=127.0.0.1:%d", legacyRedisPort),
 		"APPLICATION_SECRET_KEY=" + publicSecret,
 		"ELITEA_AUTH_CONFIG_FILE=" + authConfigPath,
 		"ELITEA_RUNTIME_ENABLED=true",

@@ -2243,26 +2243,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}
 
-	// Canvas presence's roster store. Until it moves onto NATS KV it is the
-	// Redis HASH store at REDIS_URL; its publish already rides the
-	// live-update bus. Both halves or neither — see v2canvaspresence.Backend.
-	eventStreamRedis, err := newEventStreamRedisClient(ctx, os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("compose canvas presence store: %w", err)
-	}
+	// Canvas presence's cross-replica wiring: the roster in a JetStream KV
+	// bucket on the live-update NATS server, published on the live-update
+	// bus. Both halves or neither — see v2canvaspresence.Backend. A server
+	// without JetStream fails startup here, like an unreachable one does.
 	var canvasPresence v2canvaspresence.Backend
-	if eventStreamRedis != nil {
-		defer func() {
-			if err := eventStreamRedis.Close(); runErr == nil && err != nil {
-				runErr = fmt.Errorf("close canvas presence store: %w", err)
-			}
-		}()
-		if liveNATSBus != nil {
-			canvasPresence = v2canvaspresence.Backend{
-				Store: v2canvaspresence.NewRedisStore(eventStreamRedis),
-				Bus:   liveNATSBus,
-			}
+	if eventsNATS != nil {
+		presenceStore, err := newCanvasPresenceStore(ctx, eventsNATS, os.LookupEnv)
+		if err != nil {
+			return fmt.Errorf("compose canvas presence store: %w", err)
 		}
+		canvasPresence = v2canvaspresence.Backend{Store: presenceStore, Bus: liveNATSBus}
 	}
 
 	// The toolkit TYPE catalogue (GET /elitea_core/toolkits/prompt_lib/

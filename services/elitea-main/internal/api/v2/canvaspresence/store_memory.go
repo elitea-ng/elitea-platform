@@ -7,9 +7,9 @@ import (
 )
 
 // MemoryStore is the single-replica Store. It is the DEFAULT so that a
-// deployment with no Redis still serves the route correctly for one replica,
-// rather than answering 500 — the same direction internal/api/v2/conversations
-// takes when its object store is absent.
+// deployment with no live-update plane still serves the route correctly for
+// one replica, rather than answering 500 — the same direction
+// internal/api/v2/conversations takes when its object store is absent.
 //
 // Its limit is the one NewHandler states: two replicas hold two rosters.
 type MemoryStore struct {

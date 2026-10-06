@@ -165,8 +165,8 @@ type Editor struct {
 // deadline, so List never returns an editor whose last heartbeat is older than
 // the TTL, with no sweeper and no cron.
 //
-// Implementations: NewRedisStore (shared across replicas) and NewMemoryStore
-// (single replica; see NewHandler's degrade note).
+// Implementations: NewNATSStore (a JetStream KV bucket shared across
+// replicas) and NewMemoryStore (single replica; see NewHandler's degrade note).
 type Store interface {
 	// Touch records or refreshes one editor under key, expiring after ttl.
 	Touch(ctx context.Context, key string, editor Editor, ttl time.Duration) error
@@ -189,7 +189,7 @@ type CanvasResolver interface {
 
 // Emitter publishes the roster on the project channel. *events.Publisher
 // satisfies it; a nil Emitter means "publish nothing", which is the state a
-// deployment with no Redis is in.
+// deployment with no live-update plane (ELITEA_EVENTS_NATS_URL unset) is in.
 type Emitter interface {
 	Emit(ctx context.Context, projectID, eventType string, payload any)
 }
@@ -221,8 +221,8 @@ func WithStore(store Store) Option {
 // WithEmitter supplies the publisher. A nil Emitter (the default) still serves
 // the route: the caller gets the roster back in the response body, so a single
 // tab's own presence is correct even with no bus. What is lost is the push to
-// the OTHER tabs, and that is exactly what a deployment with no Redis loses on
-// every other surface too.
+// the OTHER tabs, and that is exactly what a deployment with no live-update
+// plane loses on every other surface too.
 func WithEmitter(emitter Emitter) Option {
 	return func(h *Handler) {
 		if emitter != nil {
@@ -276,12 +276,11 @@ func WithClock(now func() time.Time) Option {
 // NewHandler builds the heartbeat handler.
 //
 // The DEFAULT store is in-process. That is a real degrade and it is stated
-// rather than hidden: with more than one replica and no Redis store injected,
+// rather than hidden: with more than one replica and no shared store injected,
 // two editors served by different replicas do not see each other. The
-// production wiring passes NewRedisStore (router.go), and every elitea-main
-// deployment in this repository runs Redis — the same fact
-// cmd/elitea-main/event_stream_redis.go relies on for the SSE stream this route
-// publishes onto.
+// production wiring passes a Backend over NewNATSStore and the live-update
+// NATS bus (cmd/elitea-main), which is also the bus the SSE stream this route
+// publishes onto reads from.
 func NewHandler(resolver CanvasResolver, opts ...Option) *Handler {
 	h := &Handler{
 		resolver: resolver,
@@ -409,7 +408,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 
 // RosterKey is the store key for one canvas's roster. Both components are
 // server-derived: projectID is the gated mount segment and canvasUUID is what
-// the resolver read out of schema(projectID). Exported so the Redis store's
+// the resolver read out of schema(projectID). Exported so the shared store's
 // tests and the router's wiring name the same thing.
 func RosterKey(projectID, canvasUUID string) string {
 	return "canvas_presence:" + projectID + ":" + canvasUUID

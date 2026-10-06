@@ -41,7 +41,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// errRosterUnavailable stands in for a Redis that is down.
+// errRosterUnavailable stands in for a shared store that is down.
 var errRosterUnavailable = errors.New("roster store unavailable")
 
 // ---------------------------------------------------------------------------

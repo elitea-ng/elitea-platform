@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"net"
+	"os"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,51 @@ func TestEventsNATSConnFailsWhenTheServerIsUnreachable(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "s3cret") {
 		t.Errorf("error %q leaks the credential in the URL", err)
+	}
+}
+
+func TestEventsNATSReplicas(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]int{"": 1, "  ": 1, "1": 1, "3": 3, " 3 ": 3} {
+		got, err := eventsNATSReplicas(envLookup(map[string]string{eventsNATSReplicasEnv: value}))
+		if err != nil || got != want {
+			t.Errorf("%s=%q: got (%d, %v), want (%d, nil)", eventsNATSReplicasEnv, value, got, err, want)
+		}
+	}
+	if got, err := eventsNATSReplicas(envLookup(nil)); err != nil || got != 1 {
+		t.Errorf("unset: got (%d, %v), want (1, nil)", got, err)
+	}
+	for _, value := range []string{"0", "-1", "three", "1.5"} {
+		if _, err := eventsNATSReplicas(envLookup(map[string]string{eventsNATSReplicasEnv: value})); err == nil {
+			t.Errorf("%s=%q was accepted; a typo must not silently become a replica count", eventsNATSReplicasEnv, value)
+		}
+	}
+}
+
+func TestCanvasPresenceStoreRequiresAConnection(t *testing.T) {
+	t.Parallel()
+
+	if _, err := newCanvasPresenceStore(context.Background(), nil, envLookup(nil)); err == nil {
+		t.Fatal("newCanvasPresenceStore(nil conn) error = nil, want an error")
+	}
+}
+
+// The boot path end to end against a real JetStream server: the URL dials,
+// and the presence bucket is created on that connection.
+func TestEventsNATSBootComposesThePresenceStore(t *testing.T) {
+	url := os.Getenv("ELITEA_TEST_NATS_URL")
+	if url == "" {
+		t.Skip("set ELITEA_TEST_NATS_URL (a JetStream-enabled NATS) to run the live-update boot test")
+	}
+	conn, err := newEventsNATSConn(envLookup(map[string]string{eventsNATSURLEnv: url}), nil)
+	if err != nil || conn == nil {
+		t.Fatalf("newEventsNATSConn() = (%v, %v), want a connection", conn, err)
+	}
+	t.Cleanup(conn.Close)
+
+	store, err := newCanvasPresenceStore(context.Background(), conn, envLookup(nil))
+	if err != nil || store == nil {
+		t.Fatalf("newCanvasPresenceStore() = (%v, %v), want a store", store, err)
 	}
 }
