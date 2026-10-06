@@ -525,13 +525,6 @@ func TestCloseDeliversBufferedPublishes(t *testing.T) {
 	}
 }
 
-func TestConnect_BadURL(t *testing.T) {
-	// An unroutable URL fails the 1s dial — exercises the error branch of Connect.
-	if _, err := Connect("nats://127.0.0.1:1", "test", "test"); err == nil {
-		t.Fatal("expected connect error to unreachable server")
-	}
-}
-
 func waitForSubs(t *testing.T, fc *fakeConn, n int) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)

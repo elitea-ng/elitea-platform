@@ -140,25 +140,10 @@ func WithBufferedPublish() Option {
 	return func(eb *EventBus) { eb.flush = false }
 }
 
-// Connect dials NATS and returns an EventBus. url is the NATS server URL
-// (nats://host:4222); name identifies the client in NATS monitoring; source is
-// stamped into every published Event. A dial failure is returned to the
-// caller. After the first successful dial the client reconnects forever.
-func Connect(url, name, source string, opts ...Option) (*EventBus, error) {
-	nc, err := nats.Connect(url,
-		nats.Name(name),
-		nats.Timeout(ConnectTimeout),
-		nats.MaxReconnects(-1),
-		nats.ReconnectWait(500*time.Millisecond),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("natsbus: connect: %w", err)
-	}
-	return New(realConn{Conn: nc}, source, opts...), nil
-}
-
-// NewFromConn wraps a connection the caller dialled itself — the composition
-// root does, because the same connection also backs JetStream KV.
+// NewFromConn wraps a connection the caller dialled itself. It is the only
+// way to build a bus over a real server: the composition root dials with the
+// live-update plane's client identity (cmd/elitea-main, newEventsNATSConn), and
+// the same connection also backs JetStream KV.
 func NewFromConn(nc *nats.Conn, source string, opts ...Option) *EventBus {
 	return New(realConn{Conn: nc}, source, opts...)
 }
