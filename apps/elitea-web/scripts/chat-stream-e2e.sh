@@ -88,10 +88,20 @@ cleanup() {
   # directory on EVERY run (the workflow uploads it either way), so a failed
   # or flaky turn can be read by its timestamps. #1081's first run failed a
   # chat journey five minutes before the dump; a later run flaked one.
+  #
+  # The report directory is written by the Playwright CONTAINER in CI, so it is
+  # root's until the workflow's chown step; write through `sudo -n tee` when
+  # it is not ours (a passwordless sudo, which the CI runner has).
+  stack_logs="${WEB_DIR}/playwright-report/stack-logs.txt"
   mkdir -p "${WEB_DIR}/playwright-report" 2>/dev/null || true
+  if [ -w "${WEB_DIR}/playwright-report" ]; then
+    write_logs() { cat > "$stack_logs"; }
+  else
+    write_logs() { sudo -n tee "$stack_logs" >/dev/null; }
+  fi
   STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" STANDALONE_LOG_TAIL=all \
     "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main llm-mock \
-    > "${WEB_DIR}/playwright-report/stack-logs.txt" 2>&1 || true
+    2>&1 | write_logs || true
   if [ "$KEEP" -eq 0 ]; then
     echo "→ Tearing down ${PROJECT}…"
     STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" \
