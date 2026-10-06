@@ -179,15 +179,15 @@ has no binary rollback to version 1, which was Stage B's rule all along.
 | `indexer_worker` | `services/elitea-worker-python` — the agent worker serves index ingest on the same command stream and consumer group as agent execution |
 | `worker_core` | the worker's own runtime; replaced with it |
 | `provider_worker` | ADR-0012 P3. The Go successor owns provider descriptors, and no hybrid route reaches this plugin |
-| `runtime_engine_litellm` | **dropped**, and already dropped before this change (#323). It ran a LiteLLM proxy inside the container — a second LLM data plane with no budget and no billing. The LLM data plane is `elitea-llm-gateway`, reached through `elitea-main` at `/llm/v1`. Its configuration file is kept beside the rollback overlay, which is the only thing that would need it |
+| `runtime_engine_litellm` | **dropped**, and already dropped before this change (#323). It ran a LiteLLM proxy inside the container — a second LLM data plane with no budget and no billing. The LLM data plane is `elitea-llm-gateway`, reached through `elitea-main` at `/llm/v1`. Nothing in the repository configures it any more |
 
 ### Retired with the service: the vault-parity gate
 
 `services/elitea-main/tests/vaultparity` asserted that pylon-indexer and
 elitea-main read one `SECRETS_MASTER_KEY` and could read each other's Fernet
-vaults (issue 418). With `services/pylon-indexer` deleted and the service
-behind the `index-v1` rollback profile, elitea-main is the only compose
-service that carries the key, so the package's subject no longer exists and it
+vaults (issue 418). With `services/pylon-indexer` and its rollback
+profile deleted, elitea-main is the only compose service that carries the
+key, so the package's subject no longer exists and it
 was removed in the same change rather than left to fail on a path that is
 gone. The single-key rule for elitea-main itself is still enforced by the
-Helm render suite and `deploy/scripts/compose.sh preflight`.
+Helm render suite.

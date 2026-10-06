@@ -232,7 +232,7 @@ func matrixPermissionsFor(t *testing.T, mode, name string) []string {
 // product tables the corpus needs; its Go role seeds are then replaced by the
 // exported pylon matrix, central grants included and per-project grants
 // deliberately absent; the ledgered corpus runs last, exactly as elitea-migrate
-// runs it in deploy/centry-hybrid/pov-compose.yml.
+// ran it in the retired deploy/centry-hybrid/pov-compose.yml.
 func newPylonShapedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newIsolatedDatabase(t)

@@ -76,8 +76,8 @@ broader scenario can be claimed closed by a system test.
 
 The configuration-validation handler has no provider/source/PgVector effect,
 so this topology cannot honestly prove that an indexing SDK side effect is
-invoked only once. The production-scale issue #5681 gate separately requires
-its source/model fixture receipt to remain byte-for-byte unchanged across a
+invoked only once. The production-scale issue #5681 gate (retired with
+deploy/centry-hybrid) separately required its source/model fixture receipt to remain byte-for-byte unchanged across a
 post-terminal worker restart. A crash after the SDK/PgVector side effect but
 before Main durably commits terminal output is still an ambiguous at-least-once
 window; it requires an SDK-owned idempotency key or a durable worker effect

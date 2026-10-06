@@ -1196,6 +1196,12 @@ services:
       # postgres. The schema is guaranteed by elitea-migrate below.
       pgbouncer:
         condition: service_healthy
+      # The runtime material (signing key, keyring, listener keypairs, the
+      # files auth.form.yml names) is installed into standalone_runtime_main
+      # by runtime-material; main must not start on a missing or half-copied
+      # tree. runtime-redis used to carry this ordering transitively.
+      runtime-material:
+        condition: service_completed_successfully
       elitea-deepwiki:
         condition: service_healthy
       elitea-inventory:

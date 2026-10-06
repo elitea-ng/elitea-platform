@@ -47,10 +47,11 @@ and anyone using the mixed `deploy/centry-hybrid` stack.
 1. Delete the `runtimeRedis` block from every values file (and from Argo CD
    `valuesObject`/`helm.values`). The render fails until you do.
 2. After the upgrade, delete what the old release or your own tooling left
-   behind. A `helm upgrade` removes the chart-owned Deployment, Service,
-   ConfigMap and PVC, but a PVC kept by `helm.sh/resource-policy`, a
-   storage-class retain policy or an Argo CD `Prune=false` survives, and the
-   material Secret was always yours:
+   behind. A `helm upgrade` removes the chart-owned Deployment, Service and
+   ConfigMap; the data PVC always survives (the chart annotated it
+   `helm.sh/resource-policy: keep`), as does anything an Argo CD
+   `Prune=false` or a storage-class retain policy kept, and the material
+   Secret was always yours:
 
    ```bash
    kubectl -n <ns> delete deployment,service elitea-runtime-redis --ignore-not-found
