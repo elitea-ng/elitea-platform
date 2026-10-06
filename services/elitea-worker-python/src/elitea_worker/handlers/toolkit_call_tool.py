@@ -1,7 +1,7 @@
 """``toolkit.call_tool.v1`` handler kernel: run ONE tool of ONE toolkit.
 
 The kernel makes exactly one SDK call and returns a bounded typed result. It
-does not publish a Redis message, emit an output frame, or settle; the delivery
+does not publish a command-bus message, emit an output frame, or settle; the delivery
 processor owns all of that, exactly as it does for ``index.ingest.v1``.
 
 Why a tool that RAISED is a successful run here. The caller asked whether the
@@ -89,7 +89,7 @@ class ToolkitCallToolResult:
 class ToolkitCallToolHandler:
     """Invoke one SDK tool through one bounded synchronous execution slot.
 
-    One admitted kernel invocation makes one SDK call. Redis redelivery can run
+    One admitted kernel invocation makes one SDK call. Command-bus redelivery can run
     a later invocation again; this class makes no exactly-once-effect claim,
     and the same warning that stands over ``IndexIngestHandler`` stands here.
     Running a toolkit tool IS effecting provider work.

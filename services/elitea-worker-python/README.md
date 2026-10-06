@@ -6,7 +6,7 @@ The production worker image carries one explicit
 `elitea.indexing-runtime-capability-profile.v1` profile. Its evidence source is
 `elitea-sdk.lock.json`; the profile is also packaged into the wheel so the
 `serve` entry point can verify the deployed artifact before it reads workload
-credentials or opens Redis, gRPC, HTTPS or PostgreSQL connections.
+credentials or opens NATS, gRPC, HTTPS or PostgreSQL connections.
 
 The current Pylon Indexer baseline installs `elitea-sdk[all]==0.8.30` from
 `centry/pylon_indexer/plugins/sdk_plugin/requirements.txt`. The standalone
@@ -55,44 +55,47 @@ The chained local cause contains dependency identifiers and exception class
 names only; it never includes credentials, URLs, configuration values or
 filesystem paths.
 
-## Redis command stream lifecycle
+## Command bus (NATS JetStream)
 
-Runtime v1 permits one worker consumer group per Redis command stream. The
-group may contain any bounded number of worker consumers or pods. A worker
-reads or reclaims one of the bounded reference-only commands, completes the
-business operation and durable settlement, then retires that exact stream
-entry with one restricted Redis Lua operation. Before mutation, the operation
-requires `<stream>:delivery-index.v1` to map the verified command
-`idempotency_key` to that entry ID, requires `XRANGE` to return exactly the
-same one-field `signed_envelope`, and requires the entry to be pending in the
-configured group under that exact worker consumer. It then atomically applies
-`XACK`, `XDEL`, and delivery-index `HDEL`. Exact `(1, 1, 1)` confirms the first
-terminal mutation. A retry that finds the mapping, exact entry, and PEL record
-all absent returns the distinct idempotent-success status `(2, 0, 0)`. Every
-partial or conflicting state is a failure; absence is accepted only after the
-caller has already validated durable settlement and requested terminal
-retirement for that same verified delivery. The all-absent state is a safe
-desired-state result under that durable authority; it is not proof that this
-exact Lua call previously ran. Runtime v1 deliberately avoids an unbounded
-Redis retirement-tombstone key.
+`docs/runtime-command-bus.md` at the repository root is the normative contract;
+`src/elitea_worker/transport/nats_jetstream.py` is this worker's side of it and
+the only module that imports the NATS client. The Redis Streams transport is
+deleted: there is no transport flag and no mixed mode.
 
-Do not attach a second consumer group to the same command stream: post-settlement
-deletion would remove entries before that group necessarily consumes them. A
-second group requires a separate stream or a future multi-group retention
-protocol.
+Each route has one WorkQueue stream (`ELITEA_RT_V1_VALIDATE`,
+`ELITEA_RT_V1_AGENT`, `ELITEA_RT_V1_INDEX`) and one durable pull consumer
+created by the NATS bootstrap Job. Every worker replica of a route binds to that
+durable; a worker never creates, edits or deletes a stream, a consumer or the
+dead-letter bucket, and at start it refuses to run when the stream or the durable
+is absent or not the contract's shape (subjects, WorkQueue, explicit ack,
+AckWait 60s, MaxDeliver -1, pull, the route's filter). A command is published on
+`elitea.rt.v1.<route>.d.<sha256(delivery_id)>`; the body is exactly the signed
+envelope, and after verifying the signature the worker requires the subject's
+hash token to equal `sha256(command.idempotency_key)` before it claims.
 
-The production #5681 failure mode is solved structurally by keeping settings,
-files, images and outputs off Redis, enforcing a producer-side entry limit and
-using a non-dropping stream-capacity gate. Phase-one deployment therefore uses
-a dedicated, TLS/ACL-protected Redis control endpoint and treats a client-side
-pre-decode RESP allocation cap as additional hardening against a compromised
-or badly misconfigured control endpoint, not as the primary incident fix.
+| Situation | What the worker does |
+| --- | --- |
+| intake | reserves delivery permits first, then pulls at most that many, waiting at most `nats_fetch_expires_millis` |
+| owned (queued or running) | `+WPI` every `nats_in_progress_interval_millis`; it resets AckWait |
+| terminal PostgreSQL receipt (settled, obsolete, retired) | double ack (`AckSync`), only after the receipt; an already-acknowledged message is idempotent success |
+| retry later, lease held elsewhere, recovery not possible now, retryable failure | `NakWithDelay(nats_retry_delay_millis)` |
+| poison: decode or signature failure, subject mismatch, a command it cannot serve, any non-retryable failure | `NakWithDelay(24h)`, one record in the `ELITEA_RT_V1_DEADLETTER` bucket, and an ERROR line `worker_command.dead_lettered`. Never `Term`: that frees the subject and PostgreSQL would re-offer the poison every 30s |
+| SIGTERM | stop pulling, keep heartbeating owned work until it ends or the deadline passes, exit without ack or nak (AckWait redelivers) |
 
-Atomic deletion bounds retention only for settled entries. It does not bound
-the command backlog while workers or control dependencies are unavailable.
-The producer-side capacity gate must retain work durably in PostgreSQL when the
-stream is full. Do not use `MAXLEN` trimming for this purpose: trimming may
-silently remove an unconsumed or pending command before durable settlement.
+The dead-letter record (`schema: elitea.runtime.dead-letter.v1`) holds the
+stream, consumer, subject, stream sequence, delivery count, a stable reason code,
+the worker's client name and the time; never envelope bytes, the delivery ID or
+any command field. The worker also keeps the dead-letter keys it refused in
+`<spool_root>/quarantine.v2`, so the one redelivery after the 24h delay (before
+the stream's MaxAge removes the message) is parked again without running.
+
+The connection is mTLS as the `elitea-worker` identity (`nats_ca_path`,
+`nats_certificate_path`, `nats_private_key_path`: TLS 1.3, the deployed CA only,
+never host system roots) on the inbox prefix `_INBOX_elitea-worker`, the only
+one the NATS permission table grants. `nats://` without client material is for
+compose only; `tls://` requires all three paths, and user information in the URL
+is refused. The TLS material is read from disk again before every reconnect, so
+a rotated certificate is presented without a restart.
 
 ## Production serve composition
 
@@ -113,10 +116,12 @@ The current `elitea.runtime-deploy.v1` shape is:
   "workload_session_id": "session-issued-by-elitea-main",
   "producer_id": "python-worker-pod-1",
   "consumer_id": "python-worker-pod-1-consumer",
-  "redis_url": "rediss://elitea-worker@redis-control.internal:6379/0",
-  "redis_password_path": "/run/secrets/redis-password",
-  "redis_stream": "elitea.runtime.commands.v1",
-  "redis_group": "elitea-python-workers",
+  "nats_url": "tls://nats.elitea.svc:4222",
+  "nats_ca_path": "/run/secrets/nats/ca.crt",
+  "nats_certificate_path": "/run/secrets/nats/tls.crt",
+  "nats_private_key_path": "/run/secrets/nats/tls.key",
+  "nats_stream": "ELITEA_RT_V1_INDEX",
+  "nats_consumer": "elitea-index-worker-v1",
   "control_target": "elitea-main-control.internal:8443",
   "output_target": "elitea-main-output.internal:8444",
   "content_origin": "https://elitea-main-content.internal:8445",
@@ -128,10 +133,10 @@ The current `elitea.runtime-deploy.v1` shape is:
   "spool_root": "/var/lib/elitea-worker/output-spool",
   "spool_key_path": "/run/secrets/output-spool-key",
   "limits": {
-    "redis_read_batch": 8,
-    "redis_block_millis": 1000,
-    "redis_reclaim_idle_millis": 60000,
-    "redis_reclaim_interval_millis": 5000,
+    "nats_fetch_batch": 8,
+    "nats_fetch_expires_millis": 1000,
+    "nats_in_progress_interval_millis": 5000,
+    "nats_retry_delay_millis": 60000,
     "dependency_retry_millis": 250,
     "delivery_max_concurrency": 4,
     "delivery_queue_capacity": 8,
@@ -153,7 +158,7 @@ The current `elitea.runtime-deploy.v1` shape is:
 }
 ```
 
-Redis entry/field size, complete gRPC request/response size, content-body size
+Transport message/payload size, complete gRPC request/response size, content-body size
 and output-frame size are selected by `limits_revision` and are not repeated as
 deployment values. In runtime v1 they are 64 KiB, 48 KiB, 64 KiB, 80 KiB,
 256 KiB and 64 KiB, respectively. The response allowance is larger because a
@@ -162,18 +167,13 @@ one requires a new compatible protocol limits revision, not an
 environment-specific JSON override.
 
 Runtime v1 also fixes the initial liveness profile: the Go business-claim lease
-is 30 seconds, the Redis PEL heartbeat interval is at most 10 seconds, and an
-entry cannot be reclaimed until it has been idle for at least 60 seconds. A
-heartbeat atomically checks that the entry is still pending under the local
-consumer before refreshing it; stale local state cannot take ownership back
-from a peer that already reclaimed the delivery.
+is 30 seconds, the consumer's AckWait is 60 seconds, and the `+WPI` heartbeat
+period is at most 15 seconds (a quarter of AckWait). A heartbeat on a message
+the server has since redelivered elsewhere is ignored by the server, and the
+claim, not the transport, decides who may execute.
 
-The Redis password and workload/spool private keys must be non-empty regular
-files with no group or world permission bits. A Redis password file may contain
-at most 514 raw bytes. The worker removes at most one terminal LF and its
-immediately preceding CR, then requires 1..512 bytes of valid UTF-8 with no
-remaining CR, LF, or NUL; it preserves those exact text bytes when authenticating
-to Redis. The spool key is exactly 32 raw bytes. The command verification
+The workload/spool private keys must be non-empty regular files with no group
+or world permission bits. The spool key is exactly 32 raw bytes. The command verificationThe command verification
 keyring contains public keys and has this strict form:
 
 ```json
@@ -188,57 +188,26 @@ keyring contains public keys and has this strict form:
 }
 ```
 
-`serve` opens a binary `redis.asyncio` TLS connection with the canonical ACL
-username from the URL and the password from its protected file, and bounds both
-new reads and `XAUTOCLAIM` pages.
-The connection uses only the deployed private CA, never host system roots. The
-stream and its one consumer group must be provisioned from `0-0` by the Go
-control-plane/operator before workers start. Initial creation and recreation
-must never start at `$`: an existing mapped delivery may predate the group.
-Worker ACLs must not grant
-`XGROUP`, `XADD`, `PUBLISH`, or arbitrary write authority. A missing group is a
-retryable dependency failure, not a reason for a worker to create one. Redis
-worker ACLs grant the restricted script only its stream and delivery-index keys
-and the `HGET`, `XRANGE`, `XPENDING`, `XACK`, `XDEL`, and `HDEL` operations it
-prevalidates or applies. Redis `EVAL` ACLs cannot grant one named script, so the
-worker credential remains a bounded control-plane denial-of-service trust
-boundary despite those key and command restrictions. It must never be shared
-with provider code or the synchronous SDK bridge.
+`serve` connects as described in "Command bus" above, binds the durable and the
+dead-letter bucket, and only then starts pulling. An unreachable server is
+retried; an absent or drifted stream, durable or bucket refuses to start.
 
-Phase one requires one logical Redis primary, whether deployed standalone,
-behind Sentinel, or behind a service endpoint. Redis Cluster is not supported:
-the two-key scripts intentionally address `<stream>` and
-`<stream>:delivery-index.v1`, whose unchanged names do not guarantee one hash
-slot. The endpoint must enable persistence and no-eviction behavior, and backup
-or restore the stream and delivery-index hash atomically as one consistency
-unit. The producer compares `XLEN` with `HLEN` before every append and fails
-with `CONTROL_DELIVERY_INDEX_INCONSISTENT` without mutation when only one side
-was lost. PostgreSQL visibility repair may rebuild a delivery after coordinated
-loss of both keys, but it must not guess how to repair a partial Redis state.
-
-The delivery-index protocol is not compatible with mixed old and new
-producers or workers on one stream. An old worker can retire a stream entry
-without removing its new mapping, while a new worker must refuse an unmapped
-entry written by an old producer. Deployment therefore requires a coordinated
-drain and cutover to a new versioned stream and consumer group; do not perform
-an in-place rolling upgrade on the same stream.
-
-Redis has no worker result/output API. Generated gRPC clients use mTLS and exact
+The command bus has no worker result/output API. Generated gRPC clients use mTLS and exact
 workload session/producer metadata. Content uses an mTLS `httpx.AsyncClient`
 with `http2=True`, HTTP/1 disabled, CA verification, redirects disabled,
 bounded connections/timeouts, and an explicit negotiated-HTTP/2 response check.
 
 Every signed delivery derives a separate AES-256-GCM spool key and opaque
 directory from its complete execution identity. A spool is never shared by the
-whole Redis stream. The existing delivery transaction retains authority across
+whole stream. The existing delivery transaction retains authority across
 claim, HTTPS input, bounded synchronous SDK execution, output ACK, durable
-settlement, then and only then stable-ID-bound atomic `XACK` + `XDEL` + `HDEL`.
+settlement, then and only then the double ack of that exact message.
 
 SIGINT/SIGTERM arms one shutdown deadline shared by delivery drain and all
-dependency closure. HTTP, gRPC, Redis and supervisor closure run concurrently;
+dependency closure. HTTP, gRPC, NATS and supervisor closure run concurrently;
 they cannot each consume a fresh copy of the configured timeout. Expiry returns
 the stable retryable dependency error and never creates a shutdown-path command
-ACK, so unfinished entries remain reclaimable. Intake, heartbeat, and delivery
+ack or nak, so unfinished messages are redelivered after AckWait. Intake, heartbeat, and delivery
 tasks are supervised as one runtime: an unexpected sibling exit fails the
 process instead of leaving an apparently live worker stalled on its stop event.
 The phase-one synchronous SDK
@@ -247,12 +216,15 @@ supervisor must enforce its process termination grace after the worker deadline.
 The planned async SDK phase removes that cancellation limitation.
 
 The repository tests include unit/component coverage and a worker CLI
-subprocess retry/SIGTERM lifecycle test with a fake unavailable Redis module;
-that test is not end to end. The opt-in harness under
+subprocess retry/SIGTERM lifecycle test against an unreachable NATS server;
+that test is not end to end. `tests/service/test_nats_commands_service.py` runs
+the real transport as the `elitea-worker` identity against the NATS chart's own
+rendered config, permission table and bootstrap script (`natstest-serve`; the
+`nats-runtime-worker` job in `ci-python.yml`) and fails on any permission
+violation. The opt-in harness under
 `services/elitea-main/tests/system` separately starts PostgreSQL 16, the
-current-baseline and dedicated TLS/ACL Redis 7 instances, the Go binaries and
-independent Python `serve`
-processes. It proves the small configuration-validation topology, reclaim after
+command bus, the Go binaries and independent Python `serve`
+processes. It proves the small configuration-validation topology, redelivery after
 three authorization failures, settlement, retirement and SSE replay. It does
 not prove production load/soak, process failover, restart-based certificate
 rotation, the large-artifact path or the complete production-scale #5681

@@ -34,7 +34,7 @@ def require_indexing_runtime_capabilities(
     ocr_probe: Callable[[], None] | None = None,
     markdown_probe: Callable[[], None] | None = None,
 ) -> str:
-    """Verify the complete image-local indexing profile before opening Redis.
+    """Verify the complete image-local indexing profile before opening the command bus.
 
     The public failure is deliberately stable and secret-free. The chained
     in-process cause contains only admitted dependency identifiers and exception

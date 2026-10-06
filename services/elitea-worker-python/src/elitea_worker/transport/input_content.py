@@ -1,4 +1,4 @@
-"""Scoped, bounded HTTPS content retrieval separate from control and Redis."""
+"""Scoped, bounded HTTPS content retrieval separate from control and the command bus."""
 
 from __future__ import annotations
 

@@ -21,10 +21,6 @@ from elitea_worker.config import RuntimeDeployConfig, read_regular_file
 from elitea_worker.execution.errors import InvalidInput
 
 
-_MAX_REDIS_PASSWORD_BYTES = 512
-_MAX_REDIS_PASSWORD_FILE_BYTES = _MAX_REDIS_PASSWORD_BYTES + 2
-
-
 class _PublicKeyEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -69,7 +65,6 @@ class RuntimeTrustMaterial:
     certificate_bytes: bytes
     private_key_bytes: bytes
     spool_master_key: bytes
-    redis_password: str
     signing_keys: ExactEd25519PublicKeyResolver
     ca_path: Path
     certificate_path: Path
@@ -103,7 +98,6 @@ class RuntimeTrustMaterial:
         )
         if len(spool_key) != 32:
             raise InvalidInput("The output spool key is unavailable or unsafe.")
-        redis_password_text = _load_redis_password(config.redis_password_path)
         resolver = load_ed25519_keyring(config.ed25519_keyring_path)
         # Parsing the chain now proves the configured certificate and key match.
         context = _base_client_context(config.ca_path)
@@ -119,7 +113,6 @@ class RuntimeTrustMaterial:
             certificate_bytes=certificate,
             private_key_bytes=private_key,
             spool_master_key=spool_key,
-            redis_password=redis_password_text,
             signing_keys=resolver,
             ca_path=config.ca_path,
             certificate_path=config.certificate_path,
@@ -161,28 +154,6 @@ def _base_client_context(ca_path: Path) -> ssl.SSLContext:
         ssl.CERT_REQUIRED,
     )
     return context
-
-
-def _load_redis_password(path: Path) -> str:
-    raw = read_regular_file(
-        path,
-        max_bytes=_MAX_REDIS_PASSWORD_FILE_BYTES,
-        private=True,
-        description="Redis ACL password",
-    )
-    if raw.endswith(b"\n"):
-        raw = raw[:-1]
-        if raw.endswith(b"\r"):
-            raw = raw[:-1]
-    if (
-        not 1 <= len(raw) <= _MAX_REDIS_PASSWORD_BYTES
-        or any(marker in raw for marker in (b"\r", b"\n", b"\x00"))
-    ):
-        raise InvalidInput("The Redis ACL password is unavailable or unsafe.")
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise InvalidInput("The Redis ACL password is unavailable or unsafe.") from exc
 
 
 def _parse_keyring(raw: bytes) -> ExactEd25519PublicKeyResolver:

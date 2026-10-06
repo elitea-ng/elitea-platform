@@ -335,8 +335,8 @@ def test_an_unsupported_toolkit_settles_with_a_reason_instead_of_being_skipped()
     assert bound.tool_name == "deliver"
 
 
-def test_no_setting_no_argument_and_no_result_reaches_the_redis_command() -> None:
-    """Redis carries references. This asserts it, byte for byte.
+def test_no_setting_no_argument_and_no_result_reaches_the_bus_command() -> None:
+    """The command bus carries references. This asserts it, byte for byte.
 
     The settings hold a credential and the arguments hold caller content, so a
     command that embedded either would put both on a transport that has neither

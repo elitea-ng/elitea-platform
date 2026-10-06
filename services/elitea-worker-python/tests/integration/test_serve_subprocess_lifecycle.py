@@ -1,7 +1,9 @@
-"""Real CLI subprocess lifecycle with fake unavailable Redis.
+"""Real CLI subprocess lifecycle against an unreachable NATS server.
 
-This verifies production config/trust bootstrap, retry and SIGTERM handling. It
-does not claim to be the Go/Python/PostgreSQL/Redis/TLS cross-process E2E test.
+This verifies production config/trust bootstrap, retry and SIGTERM handling
+with the real nats-py client and the real mTLS context. It does not claim to be
+the Go/Python/PostgreSQL/NATS cross-process E2E test (tests/service holds the
+live secured-NATS proof).
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import base64
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -32,7 +35,7 @@ _ROOT = Path(__file__).parents[4]
 def test_serve_subprocess_retries_safely_then_drains_on_sigterm(tmp_path: Path) -> None:
     fake_packages = tmp_path / "fake-packages"
     fake_packages.mkdir()
-    # This test owns the Redis retry and signal lifecycle. The immutable image
+    # This test owns the NATS retry and signal lifecycle. The immutable image
     # capability gate has dedicated unit and container tests; shadow it here so
     # host OS binaries/libraries cannot make this subprocess test non-hermetic.
     (fake_packages / "sitecustomize.py").write_text(
@@ -50,46 +53,6 @@ sys.modules[agent_module.__name__] = agent_module
 """.lstrip(),
         encoding="utf-8",
     )
-    redis_package = fake_packages / "redis"
-    redis_asyncio = redis_package / "asyncio"
-    redis_asyncio.mkdir(parents=True)
-    (redis_package / "__init__.py").write_text("", encoding="utf-8")
-    (redis_package / "exceptions.py").write_text(
-        "class ResponseError(Exception):\n    pass\n",
-        encoding="utf-8",
-    )
-    (redis_asyncio / "__init__.py").write_text(
-        """
-class ConnectionPool:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-    async def aclose(self):
-        return None
-
-class _UnavailableRedis:
-    def __init__(self, *, connection_pool):
-        self.connection_pool = connection_pool
-    async def ping(self):
-        raise OSError("simulated unavailable Redis")
-    async def aclose(self):
-        return None
-
-Redis = _UnavailableRedis
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (redis_asyncio / "connection.py").write_text(
-        """
-class Connection:
-    def _connection_arguments(self):
-        return {"host": "redis.invalid", "port": 6379}
-
-class SSLConnection(Connection):
-    pass
-""".lstrip(),
-        encoding="utf-8",
-    )
-
     config_path = _write_runtime_material(tmp_path)
     trust = RuntimeTrustMaterial.load(load_deploy_config(config_path))
     # The private-plane context contains only the deployment CA, not the host
@@ -120,7 +83,7 @@ class SSLConnection(Connection):
             line = process.stderr.readline()
             if line:
                 startup_stderr.append(line)
-                if '"event":"redis_startup_unavailable"' in line:
+                if '"event":"nats_connection_error"' in line:
                     break
             elif process.poll() is not None:
                 break
@@ -137,9 +100,11 @@ class SSLConnection(Connection):
     assert process.returncode == 0
     assert stdout == ""
     stderr = "".join(startup_stderr) + stderr
-    assert '"event":"redis_startup_unavailable"' in stderr
+    assert '"event":"nats_connection_error"' in stderr
     assert '"safe_message":"A required runtime dependency is unavailable."' in stderr
-    assert "simulated unavailable Redis" not in stderr
+    # The raw connection error (host, port, errno text) never reaches the log.
+    assert "Connect call failed" not in stderr
+    assert "Errno" not in stderr
     assert "Traceback" not in stderr
 
 
@@ -195,9 +160,10 @@ def _write_runtime_material(root: Path) -> Path:
     spool_key_path = root / "spool.key"
     spool_key_path.write_bytes(os.urandom(32))
     spool_key_path.chmod(0o600)
-    redis_password_path = root / "redis-password"
-    redis_password_path.write_bytes(b"test-redis-password")
-    redis_password_path.chmod(0o600)
+    # A port nothing listens on: bind, read it, release it.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
     spool_root = root / "spool"
     spool_root.mkdir(mode=0o700)
 
@@ -207,10 +173,12 @@ def _write_runtime_material(root: Path) -> Path:
         "workload_session_id": "session-1",
         "producer_id": "producer-1",
         "consumer_id": "consumer-1",
-        "redis_url": "rediss://elitea-worker@redis.invalid:6379/0",
-        "redis_password_path": str(redis_password_path),
-        "redis_stream": "runtime.commands.v1",
-        "redis_group": "python-workers",
+        "nats_url": f"tls://127.0.0.1:{closed_port}",
+        "nats_ca_path": str(ca_path),
+        "nats_certificate_path": str(certificate_path),
+        "nats_private_key_path": str(private_key_path),
+        "nats_stream": "ELITEA_RT_V1_VALIDATE",
+        "nats_consumer": "elitea-configuration-worker-v1",
         "control_target": "control.invalid:8443",
         "output_target": "output.invalid:8444",
         "content_origin": "https://content.invalid",
@@ -223,10 +191,10 @@ def _write_runtime_material(root: Path) -> Path:
         "spool_key_path": str(spool_key_path),
         "agent_checkpoint_connection_path": str(root / "agent-checkpoint-connection"),
         "limits": {
-            "redis_read_batch": 1,
-            "redis_block_millis": 100,
-            "redis_reclaim_idle_millis": 60000,
-            "redis_reclaim_interval_millis": 100,
+            "nats_fetch_batch": 1,
+            "nats_fetch_expires_millis": 100,
+            "nats_in_progress_interval_millis": 1000,
+            "nats_retry_delay_millis": 1000,
             "dependency_retry_millis": 100,
             "delivery_max_concurrency": 1,
             "delivery_queue_capacity": 1,

@@ -634,7 +634,7 @@ class IndexIngestResult:
 class IndexIngestHandler:
     """Invoke the current synchronous SDK business method through one bound.
 
-    One admitted kernel invocation makes one SDK call. Redis redelivery can run
+    One admitted kernel invocation makes one SDK call. Command-bus redelivery can run
     a later invocation again; this class makes no exactly-once-effect claim.
     """
 

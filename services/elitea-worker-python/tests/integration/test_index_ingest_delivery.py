@@ -60,11 +60,32 @@ from elitea_worker.protocol.indexing import (
 from elitea_worker.protocol.node_event import encode_current_node_event_json
 from elitea_worker.handlers.indexing import IndexIngestInputBinding, IndexIngestResult
 from elitea_worker.transport.input_content import ClaimBoundInputRequestBuilder
-from elitea_worker.transport.redis_commands import RedisCommandDelivery
+from elitea_worker.transport.nats_jetstream import CommandDelivery
 
 _NOW = 1_700_000_000_000
 _WORKLOAD = "index-worker-1"
 _PRODUCER = "index-producer-1"
+
+def _command_delivery(
+    stream: str,
+    entry_id: str,
+    fields: dict[str, bytes],
+) -> CommandDelivery:
+    """A delivered command as the JetStream consumer hands it over.
+
+    The processors read only the signed envelope; the coordinates are what
+    the serve loop and the acker key on.
+    """
+
+    assert set(fields) == {"signed_envelope"}
+    return CommandDelivery(
+        stream="ELITEA_RT_V1_VALIDATE",
+        consumer="elitea-configuration-worker-v1",
+        subject=f"elitea.rt.v1.validate.d.{hashlib.sha256(f'{stream}/{entry_id}'.encode()).hexdigest()}",
+        stream_sequence=int(entry_id.split("-")[0]) if entry_id.split("-")[0].isdigit() else 1,
+        num_delivered=1,
+        signed_envelope=fields["signed_envelope"],
+    )
 
 
 class InlineSupervisor:
@@ -509,8 +530,8 @@ class Case:
     values: dict[str, bytes]
 
     @property
-    def delivery(self) -> RedisCommandDelivery:
-        return RedisCommandDelivery(
+    def delivery(self) -> CommandDelivery:
+        return _command_delivery(
             "index-ingest.v1",
             "1-0",
             {"signed_envelope": self.signed.SerializeToString(deterministic=True)},
@@ -946,7 +967,7 @@ def test_index_delivery_corrects_zero_output_parser_failure(
     asyncio.run(run())
 
 
-def test_embedding_admission_record_preserves_sdk_proxy_input_and_never_enters_redis(
+def test_embedding_admission_record_preserves_sdk_proxy_input_and_never_enters_the_command_bus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     case = _embedding_case()
@@ -2405,7 +2426,7 @@ def test_pending_node_event_replays_without_settlement_input_or_sdk(
     asyncio.run(run())
 
 
-def test_node_event_ack_loss_replays_on_redis_redelivery_without_sdk(
+def test_node_event_ack_loss_replays_on_bus_redelivery_without_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
