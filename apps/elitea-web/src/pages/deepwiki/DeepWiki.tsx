@@ -112,23 +112,13 @@ export function DeepWiki({
   const query = useWikiList(projectId, identity, { enabled });
 
   if (!enabled) return null;
-  if (query.isPending) {
-    return (
-      <Box sx={tabPanelSx}>
-        <AnimatedLoadingText text={t('deepwiki.loading', 'Loading wikis…')} />
-      </Box>
-    );
-  }
-  if (query.isError) {
-    return (
-      <Box sx={tabPanelSx}>
-        <BannerMessage
-          variant="error"
-          message={t('deepwiki.loadFailed', 'The wikis for this project could not be loaded.')}
-        />
-      </Box>
-    );
-  }
+
+  // The toolkit controls stay mounted while the listing loads. Saving new
+  // settings changes the repository identity, which changes the listing's
+  // query key, so the listing is pending again; an early return here
+  // unmounted the settings panel, and it came back without its "Settings
+  // saved" notice (the native real-engine journey caught it).
+  const data = query.isSuccess ? query.data : undefined;
 
   // The wiki chosen last time is reopened when the listing STILL CONTAINS it,
   // otherwise the first one is. A stored id that no longer resolves — the
@@ -138,7 +128,7 @@ export function DeepWiki({
   // The first wiki is what a project with no stored choice opens. A list that
   // needs a click before it shows anything reads as an empty screen on a
   // project with one wiki, which is the common case.
-  const open = query.data.wikis.find((wiki) => wiki.wiki_id === selectedWikiId) ?? query.data.wikis[0];
+  const open = openWiki(data?.wikis, selectedWikiId);
   const chatTarget = chatTargetFor(projectId, toolkitId, settings, open);
 
   return (
@@ -159,18 +149,21 @@ export function DeepWiki({
         }}
       />
       <Box sx={tabPanelSx}>
-        <WikiList
-          wikis={query.data.wikis}
-          allWikis={query.data.allWikis}
-          // The OPEN wiki is the highlighted one, not only an explicitly
-          // clicked one: a restored choice that reads back as unselected says
-          // the list and the reader are showing different wikis.
-          selectedWikiId={open?.wiki_id}
-          onSelect={(wiki) => {
-            setChosenWikiId(wiki.wiki_id ?? null);
-            if (wiki.wiki_id !== undefined) versionStorage.save(wiki.wiki_id);
-          }}
-        />
+        <ListingStatus pending={query.isPending} failed={query.isError} />
+        {data === undefined ? null : (
+          <WikiList
+            wikis={data.wikis}
+            allWikis={data.allWikis}
+            // The OPEN wiki is the highlighted one, not only an explicitly
+            // clicked one: a restored choice that reads back as unselected says
+            // the list and the reader are showing different wikis.
+            selectedWikiId={open?.wiki_id}
+            onSelect={(wiki) => {
+              setChosenWikiId(wiki.wiki_id ?? null);
+              if (wiki.wiki_id !== undefined) versionStorage.save(wiki.wiki_id);
+            }}
+          />
+        )}
         {open === undefined ? null : (
           <ReaderArea
             projectId={projectId}
@@ -227,6 +220,25 @@ interface ToolkitControlsProps {
 }
 
 /** The header bar — the page's name and its actions — and the panels under it. */
+/** The listing's loading or failure line, in place of the list. */
+function ListingStatus({ pending, failed }: { readonly pending: boolean; readonly failed: boolean }): React.JSX.Element | null {
+  if (pending) return <AnimatedLoadingText text={t('deepwiki.loading', 'Loading wikis…')} />;
+  if (failed) {
+    return (
+      <BannerMessage
+        variant="error"
+        message={t('deepwiki.loadFailed', 'The wikis for this project could not be loaded.')}
+      />
+    );
+  }
+  return null;
+}
+
+/** The stored choice when the listing still holds it, else the first wiki. */
+function openWiki(wikis: readonly WikiManifest[] | undefined, selectedWikiId: string | null): WikiManifest | undefined {
+  return wikis?.find((wiki) => wiki.wiki_id === selectedWikiId) ?? wikis?.[0];
+}
+
 function ToolkitControls({
   projectId,
   toolkitId,
