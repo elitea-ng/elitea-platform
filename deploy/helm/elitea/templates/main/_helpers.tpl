@@ -955,6 +955,9 @@ and the term that actually moves is the one this counts.
      elitea-main-runtime identity. Empty means the top-level `nats` block;
      templates/natsClient.yaml issues the certificate and refuses a URL that
      disagrees with nats.tls. */}}
+{{- if not (or (get $runtimeNats "url") .Values.nats.service) -}}
+{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or the top-level nats.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
+{{- end -}}
 {{- if and (get $runtimeNats "url") (contains "@" (get $runtimeNats "url" | toString)) -}}
 {{- fail "runtime.nats.url carries user information. With mTLS the client certificate is the identity, and this URL is rendered into a ConfigMap." -}}
 {{- end -}}
