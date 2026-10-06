@@ -1,0 +1,278 @@
+# NATS wrapper chart — the defaults every profile shares (#1076).
+#
+# values-scale1.yaml and values-ha.yaml layer the topology on top of this file;
+# Helm always reads this one first. What lives here is the SECURITY of the
+# server, because it must not differ between profiles:
+#
+#   * TLS is required on the client port, with a server certificate issued by
+#     a DEDICATED NATS CA (templates/ca.yaml), not by elitea-internal-ca. The
+#     CA is separate so that the right to create a Certificate against the
+#     platform's internal issuer is not also the right to mint a NATS identity.
+#   * Every client presents a certificate from that CA. `verify_and_map` maps
+#     its URI SAN, spiffe://elitea.internal/nats/<identity>, to a user in the
+#     `authorization` block below, and the user's permissions decide what it
+#     may publish and subscribe to. There is no `no_auth_user` and no
+#     `allow_non_tls`: a connection without a mapped certificate is refused.
+#   * The users live in the top-level `authorization {}` block, so they are all
+#     in the global account. The JetStream assets stay where they are.
+#   * templates/networkpolicy.yaml admits only the named clients to 4222.
+#
+# There is no "security off" switch. The chart ships for clusters, and the
+# plaintext posture belongs to compose (deploy/docker-compose.yml), where only
+# compose services can reach the server. templates/guards.yaml refuses a render
+# that turns TLS, verify_and_map or the user table off.
+
+security:
+  # The dedicated NATS CA. With `create: true` this chart renders the chain
+  # cert-manager needs, all NAMESPACED in this release's namespace:
+  #   Issuer <name>-selfsigned -> Certificate <name> (isCA) -> Issuer <name>
+  # The server certificate below, the bootstrap Job's certificate and every
+  # platform client certificate are issued by Issuer <name>. A namespaced
+  # Issuer signs only Certificates in its own namespace, so install the
+  # platform (deploy/helm/elitea) in the same namespace as this release — or
+  # set create: false and point every chart at a ClusterIssuer backed by a
+  # dedicated CA you manage (issuerRef below, nats.tls.issuerRef in the elitea
+  # chart, tls.issuerRef in nats-bootstrap).
+  ca:
+    create: true
+    name: elitea-nats-ca
+    # The CA's own lifetime. A renewed CA has a NEW key, and certificates
+    # signed by the old one stop verifying against the new ca.crt, so this is
+    # long on purpose; plan a CA rotation as a maintenance window.
+    duration: 87600h   # 10y
+    renewBefore: 8760h # 1y
+  # Used only when ca.create is false: the issuer that signs the server
+  # certificate. It MUST be backed by a CA that signs nothing but NATS
+  # identities.
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+  # The server certificate. Its secret name is nats.config.nats.tls.secretName
+  # below (one value, so the mount and the Certificate cannot disagree).
+  serverCertificate:
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+
+# Ingress to the NATS pods. 4222 (clients) is admitted only from the pods
+# named here; 6222 (cluster routes, HA) only from the NATS pods themselves;
+# 7777 (prometheus exporter) from `metricsFrom`. 8222 (monitoring) gets no
+# rule: the exporter sidecar scrapes it over localhost, and kubelet probes are
+# not subject to NetworkPolicy on the CNIs this chart is tested with.
+networkPolicy:
+  enabled: true
+  # Set true ONLY when `enabled` is false because your own NetworkPolicy (or
+  # an equivalent CNI policy) already admits nothing but the four clients to
+  # 4222. templates/guards.yaml refuses `enabled: false` without it: the chart
+  # cannot see your policy, so this is a statement, not a probe.
+  externallyManaged: false
+  # Each entry admits pods labelled app.kubernetes.io/name=<name> in
+  # <namespace> ("" = this release's namespace). These are the four NATS
+  # identities that exist today; the agent worker is added with the runtime
+  # command bus, not before.
+  clients:
+    - name: elitea-main
+      namespace: ""
+    - name: elitea-llm-gateway
+      namespace: ""
+    - name: elitea-scheduler
+      namespace: ""
+    - name: nats-bootstrap
+      namespace: ""
+  # Raw NetworkPolicyPeer entries appended to the 4222 rule, for a client the
+  # list above cannot describe.
+  extraFrom: []
+  # Who may scrape the exporter on 7777. Metrics carry connection and stream
+  # counts, not message data. Narrow this to your Prometheus namespace.
+  metricsFrom:
+    - namespaceSelector: {}
+
+nats:
+  # The CA bundle the server verifies client certificates against. cert-manager
+  # writes ca.crt (the NATS CA) into the server certificate's Secret.
+  tlsCA:
+    enabled: true
+    secretName: elitea-nats-server-tls
+    key: ca.crt
+
+  config:
+    nats:
+      tls:
+        enabled: true
+        # Issued by templates/server-certificate.yaml.
+        secretName: elitea-nats-server-tls
+        merge:
+          # Require a client certificate and map its URI SAN to a user below.
+          verify_and_map: true
+          # TLS handshake timeout, seconds.
+          timeout: 3
+
+    # The upstream monitor port stays plain HTTP on 8222: the exporter sidecar
+    # scrapes it over localhost and kubelet probes read /healthz. The
+    # NetworkPolicy gives it no ingress rule.
+
+    merge:
+      # ── THE PERMISSION TABLE ─────────────────────────────────────────────
+      #
+      # One user per client identity. A user name is the URI SAN its
+      # certificate carries. Each user may subscribe to its own inbox prefix
+      # only (natsconn.InboxPrefix), so no client reads another's JetStream
+      # API replies or acks.
+      #
+      # Nobody but elitea-nats-bootstrap may create, update, delete or purge a
+      # stream: every stream and KV bucket is created by the bootstrap Job,
+      # and the services only bind to them.
+      #
+      # Every grant here is exercised by a test that runs the service's real
+      # code against a nats-server started from THIS rendered config
+      # (libs/go/natsconn/natstest, run by ci-go.yml and ci-gateway.yml). A
+      # grant that is missing fails that test; a grant nothing uses is noise
+      # to be removed.
+      authorization:
+        users:
+          # elitea-main: the project SSE relay, the canvas presence roster
+          # it publishes, and the presence KV bucket it reads and writes.
+          - user: "spiffe://elitea.internal/nats/elitea-main"
+            permissions:
+              publish:
+                allow:
+                  - "gateway.events.project.*.events"
+                  - "$KV.ELITEA_CANVAS_PRESENCE.>"
+                  - "$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE"
+                  - "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE"
+                  - "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE.>"
+                  - "$JS.API.CONSUMER.INFO.KV_ELITEA_CANVAS_PRESENCE.*"
+                  - "$JS.API.CONSUMER.DELETE.KV_ELITEA_CANVAS_PRESENCE.*"
+                  - "$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>"
+                deny:
+                  - "gateway.budget.>"
+                  - "gateway.ratelimit.>"
+                  - "gateway.events.ops.>"
+                  - "$JS.API.STREAM.CREATE.>"
+                  - "$JS.API.STREAM.UPDATE.>"
+                  - "$JS.API.STREAM.DELETE.>"
+                  - "$JS.API.STREAM.PURGE.>"
+                  - "$JS.API.STREAM.MSG.DELETE.>"
+                  - "$JS.API.ACCOUNT.PURGE.>"
+              subscribe:
+                allow:
+                  - "gateway.events.project.>"
+                  - "_INBOX_elitea-main.>"
+
+          # elitea-llm-gateway: the budget and rate-limit counter streams
+          # (Nats-Incr), the write-behind delta stream, the soft-alert
+          # cooldown bucket, and the events it publishes.
+          - user: "spiffe://elitea.internal/nats/elitea-llm-gateway"
+            permissions:
+              publish:
+                allow:
+                  - "gateway.budget.counter.>"
+                  - "gateway.ratelimit.counter.>"
+                  - "gateway.budget.delta"
+                  - "gateway.events.project.*.events"
+                  - "gateway.events.ops.>"
+                  - "$KV.GATEWAY_ALERT_COOLDOWN.>"
+                  - "$JS.API.STREAM.INFO.GATEWAY_BUDGET"
+                  - "$JS.API.STREAM.INFO.GATEWAY_RATELIMIT"
+                  - "$JS.API.STREAM.INFO.GATEWAY_BUDGET_DELTAS"
+                  - "$JS.API.STREAM.INFO.KV_GATEWAY_ALERT_COOLDOWN"
+                  - "$JS.API.DIRECT.GET.GATEWAY_BUDGET.>"
+                  - "$JS.API.DIRECT.GET.GATEWAY_RATELIMIT.>"
+                  - "$JS.API.STREAM.MSG.GET.GATEWAY_BUDGET"
+                  - "$JS.API.STREAM.MSG.GET.GATEWAY_RATELIMIT"
+                deny:
+                  - "$JS.API.STREAM.CREATE.>"
+                  - "$JS.API.STREAM.UPDATE.>"
+                  - "$JS.API.STREAM.DELETE.>"
+                  - "$JS.API.STREAM.PURGE.>"
+                  - "$JS.API.STREAM.MSG.DELETE.>"
+                  - "$JS.API.ACCOUNT.PURGE.>"
+              subscribe:
+                allow:
+                  - "_INBOX_elitea-llm-gateway.>"
+
+          # elitea-scheduler: the budget write-back durable pull consumer on
+          # GATEWAY_BUDGET_DELTAS. It creates its own consumer (the consumer
+          # config is the scheduler's tuning), and nothing else.
+          - user: "spiffe://elitea.internal/nats/elitea-scheduler"
+            permissions:
+              publish:
+                allow:
+                  - "$JS.API.STREAM.INFO.GATEWAY_BUDGET_DELTAS"
+                  - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                  - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+                  - "$JS.API.CONSUMER.DURABLE.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                  - "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                  - "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                  - "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+                deny:
+                  - "$JS.API.STREAM.CREATE.>"
+                  - "$JS.API.STREAM.UPDATE.>"
+                  - "$JS.API.STREAM.DELETE.>"
+                  - "$JS.API.STREAM.PURGE.>"
+                  - "$JS.API.STREAM.MSG.DELETE.>"
+                  - "$JS.API.ACCOUNT.PURGE.>"
+              subscribe:
+                allow:
+                  - "_INBOX_elitea-scheduler.>"
+
+          # elitea-nats-bootstrap: owns every stream and KV bucket. The only
+          # identity that may create, update, delete or purge a stream, and
+          # the one that will create the runtime command bus's durable
+          # consumers. It publishes no data.
+          - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap"
+            permissions:
+              publish:
+                allow:
+                  - "$JS.API.INFO"
+                  - "$JS.API.STREAM.NAMES"
+                  - "$JS.API.STREAM.LIST"
+                  - "$JS.API.STREAM.INFO.>"
+                  - "$JS.API.STREAM.CREATE.>"
+                  - "$JS.API.STREAM.UPDATE.>"
+                  - "$JS.API.STREAM.DELETE.>"
+                  - "$JS.API.STREAM.PURGE.>"
+                  - "$JS.API.CONSUMER.CREATE.>"
+                  - "$JS.API.CONSUMER.DURABLE.CREATE.>"
+                  - "$JS.API.CONSUMER.INFO.>"
+                  - "$JS.API.CONSUMER.NAMES.>"
+                  - "$JS.API.CONSUMER.LIST.>"
+              subscribe:
+                allow:
+                  - "_INBOX_elitea-nats-bootstrap.>"
+
+          # elitea-worker: RESERVED for the runtime command bus
+          # (elitea.rt.v1.>). No client presents this identity yet, and no
+          # stream it names exists yet; the grants record the shape the next
+          # change fills in: pull and ack on its route consumers, never
+          # publish a command, never administer a stream.
+          - user: "spiffe://elitea.internal/nats/elitea-worker"
+            permissions:
+              publish:
+                allow:
+                  - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
+                  - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
+                  - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
+                  - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.*"
+                  - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.*"
+                  - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.*"
+                  - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.*"
+                  - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.*"
+                  - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.*"
+                  - "$JS.ACK.ELITEA_RT_V1_VALIDATE.>"
+                  - "$JS.ACK.ELITEA_RT_V1_AGENT.>"
+                  - "$JS.ACK.ELITEA_RT_V1_INDEX.>"
+                deny:
+                  - "elitea.rt.v1.*.d.>"
+                  - "gateway.>"
+                  - "$JS.API.STREAM.CREATE.>"
+                  - "$JS.API.STREAM.UPDATE.>"
+                  - "$JS.API.STREAM.DELETE.>"
+                  - "$JS.API.STREAM.PURGE.>"
+                  - "$JS.API.STREAM.MSG.DELETE.>"
+                  - "$JS.API.ACCOUNT.PURGE.>"
+                  - "$JS.API.CONSUMER.CREATE.>"
+                  - "$JS.API.CONSUMER.DURABLE.CREATE.>"
+                  - "$JS.API.CONSUMER.DELETE.>"
+              subscribe:
+                allow:
+                  - "_INBOX_elitea-worker.>"

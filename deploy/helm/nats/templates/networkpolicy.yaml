@@ -1,0 +1,59 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ns := include "elitea-nats.namespace" . }}
+# Ingress to the NATS pods (#1076). Before this, any pod that could route to
+# the Service could open a connection; mTLS now refuses one without a mapped
+# certificate, and this policy keeps every other pod from reaching the port at
+# all. The two are separate controls on purpose: a leaked client certificate is
+# useless from a pod this policy does not admit.
+#
+# 8222 (monitoring) has no rule: only the exporter sidecar (localhost) and
+# kubelet probes read it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-nats.fullname" . }}-ingress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-nats.serverSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Clients: only the identities the permission table names.
+    - ports:
+        - port: 4222
+          protocol: TCP
+      from:
+        {{- range .Values.networkPolicy.clients }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace | default $ns }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ required "networkPolicy.clients[].name is required" .name }}
+        {{- end }}
+        {{- with .Values.networkPolicy.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    {{- if .Values.nats.config.cluster.enabled }}
+    # Cluster routes, between the NATS pods only.
+    - ports:
+        - port: {{ .Values.nats.config.cluster.port | default 6222 }}
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "elitea-nats.serverSelectorLabels" . | nindent 14 }}
+    {{- end }}
+    {{- if and .Values.nats.promExporter.enabled .Values.networkPolicy.metricsFrom }}
+    # The prometheus exporter sidecar.
+    - ports:
+        - port: {{ .Values.nats.promExporter.port | default 7777 }}
+          protocol: TCP
+      from:
+        {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
+    {{- end }}
+{{- end }}

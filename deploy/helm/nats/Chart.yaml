@@ -1,9 +1,13 @@
 apiVersion: v2
 name: nats
 description: >-
-  NATS JetStream coordination substrate for elitea-llm-gateway (BF0.2b).
-  Wraps the upstream nats chart; profiles select scale-1 (replicas=1, HA waived)
-  or HA (replicas>=3, RAFT quorum). NATS Server 2.12.0+ (required for Nats-Incr).
+  NATS JetStream shared by elitea-main (live updates, canvas presence),
+  elitea-llm-gateway (budget and rate-limit counters) and elitea-scheduler
+  (budget write-back). Wraps the upstream nats chart; profiles select scale-1
+  (replicas=1, HA waived) or HA (replicas>=3, RAFT quorum). Secured (#1076):
+  TLS with a dedicated cert-manager NATS CA, client certificates mapped to
+  per-service users (verify_and_map), and an ingress NetworkPolicy.
+  NATS Server 2.12.0+ (required for Nats-Incr).
 type: application
 version: 0.1.0
 # appVersion pins the NATS Server line: 2.12.0+ is REQUIRED for the atomic

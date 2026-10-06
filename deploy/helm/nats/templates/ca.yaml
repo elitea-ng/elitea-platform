@@ -1,0 +1,51 @@
+{{- if .Values.security.ca.create }}
+# The DEDICATED NATS CA (#1076). Separate from elitea-internal-ca on purpose:
+# whoever may create a Certificate against an issuer may mint an identity it
+# signs, and a NATS identity carries publish rights on the budget counters.
+# Keep Certificate-create RBAC on Issuer {{ .Values.security.ca.name }} as
+# narrow as you keep the Secrets it writes.
+#
+# The usual cert-manager bootstrap chain, namespaced:
+#   selfSigned Issuer -> CA Certificate (isCA) -> CA Issuer
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.security.ca.name }}-selfsigned
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.security.ca.name }}
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.security.ca.name }}
+  isCA: true
+  commonName: {{ .Values.security.ca.name }}
+  duration: {{ .Values.security.ca.duration }}
+  renewBefore: {{ .Values.security.ca.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.security.ca.name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.security.ca.name }}
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Values.security.ca.name }}
+{{- end }}
