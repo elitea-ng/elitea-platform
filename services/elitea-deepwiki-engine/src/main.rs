@@ -10,19 +10,31 @@
 )]
 
 use elitea_deepwiki_engine::config::Settings;
-use elitea_deepwiki_engine::{build_runner, healthcheck, server, storage};
+use elitea_deepwiki_engine::{build_runner, healthcheck, server, storage, worker};
+use std::future::Future;
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str = "usage: elitea-deepwiki-engine [serve | healthcheck | migrate | --version]";
+const USAGE: &str =
+    "usage: elitea-deepwiki-engine [serve | healthcheck | migrate | worker | --version]";
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let command = std::env::args().nth(1);
     match command.as_deref() {
-        None | Some("serve") => serve().await,
-        Some("healthcheck") => healthcheck().await,
-        Some("migrate") => migrate().await,
+        None | Some("serve") => on_runtime(None, serve()),
+        Some("healthcheck") => on_runtime(None, healthcheck()),
+        Some("migrate") => on_runtime(None, migrate()),
+        // The generate_wiki child: its runtime threads are its settings'.
+        Some("worker") => match settings() {
+            Some(settings) => {
+                let threads = settings.worker.threads;
+                on_runtime(Some(threads), async move {
+                    init_tracing();
+                    worker::run(&settings).await
+                })
+            }
+            None => ExitCode::FAILURE,
+        },
         Some("--version") => {
             println!("elitea-deepwiki-engine {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -30,6 +42,29 @@ async fn main() -> ExitCode {
         Some(_) => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
+        }
+    }
+}
+
+/// Run `future` on a multi-thread runtime (`threads` workers, or one per
+/// core).
+fn on_runtime(threads: Option<usize>, future: impl Future<Output = ExitCode>) -> ExitCode {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(threads) = threads {
+        builder.worker_threads(threads.max(1));
+    }
+    match builder.build() {
+        Ok(runtime) => {
+            let code = runtime.block_on(future);
+            // A blocking read never ends on its own (the worker's stdin
+            // stays open while its parent lives): do not wait for it.
+            runtime.shutdown_timeout(Duration::from_secs(1));
+            code
+        }
+        Err(error) => {
+            eprintln!("cannot start the async runtime: {error}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -142,8 +177,14 @@ async fn serve() -> ExitCode {
     let Some(settings) = settings() else {
         return ExitCode::FAILURE;
     };
+    let runner = match build_runner(&settings) {
+        Ok(runner) => runner,
+        Err(error) => {
+            tracing::error!(%error, "cannot start the runner");
+            return ExitCode::FAILURE;
+        }
+    };
     start_reconciler(&settings);
-    let runner = build_runner(&settings);
     let listener = match server::bind(&settings.engine_socket) {
         Ok(listener) => listener,
         Err(error) => {

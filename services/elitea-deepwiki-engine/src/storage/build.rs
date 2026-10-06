@@ -485,6 +485,26 @@ pub struct Build {
     published: bool,
 }
 
+/// Rows per cluster-column `UPDATE` ([`Build::set_clusters`]).
+const CLUSTER_ROUND: usize = 10_000;
+
+/// Delete the build `build_id` and, by cascade, everything it staged. The
+/// generation worker's parent calls this after the child ended, so a child
+/// that was killed before it could abandon its build leaves no staging
+/// rows. Returns whether a build was deleted (a published or abandoned
+/// build is already gone).
+///
+/// # Errors
+///
+/// [`StorageError::Database`].
+pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<bool> {
+    let done = sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
+        .bind(build_id)
+        .execute(pool)
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
 /// The node `COPY`'s column list (no `fts`: it is generated).
 const NODE_COPY: &str = "COPY deepwiki_build.wiki_nodes (build_id, node_id, rel_path, file_name, \
      language, start_line, end_line, symbol_name, symbol_type, parent_symbol, source_text, \
@@ -685,6 +705,84 @@ impl Build {
             writer.end_row().await?;
         }
         writer.finish().await
+    }
+
+    /// Replace the staged edges with `edges` (Phase 2's
+    /// `persist_weights_to_db`): delete the build's edges and `COPY` the new
+    /// ones, in one transaction, so a failure leaves the old edges. Call
+    /// [`collapse_edges`] first (the primary key refuses a repeated
+    /// `(source, target, rel_type)`).
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Publish`] for a build the sweep removed or an edge
+    /// that cannot be encoded; [`StorageError::Database`].
+    pub async fn replace_edges(&mut self, edges: &[IndexEdge]) -> Result<u64> {
+        self.heartbeat().await?;
+        let mut connection = self.pool.acquire().await?;
+        let mut transaction = connection.begin().await?;
+        sqlx::query("DELETE FROM deepwiki_build.wiki_edges WHERE build_id = $1")
+            .bind(&self.id)
+            .execute(&mut *transaction)
+            .await?;
+        let mut writer = CopyWriter::start(&mut transaction, EDGE_COPY).await?;
+        for edge in edges {
+            let encoded = encode_edge(&mut writer, &self.id, edge);
+            if let Err(error) = encoded {
+                writer.abort("edge encoding failed").await?;
+                return Err(error);
+            }
+            writer.end_row().await?;
+        }
+        let written = writer.finish().await?;
+        transaction.commit().await?;
+        Ok(written)
+    }
+
+    /// Set the Phase 3 cluster columns of staged nodes:
+    /// `(node_id, macro_cluster, micro_cluster)`, in rounds of
+    /// 10,000 rows. A node not listed keeps `NULL`.
+    ///
+    /// The `UPDATE` rewrites each row, so PostgreSQL recomputes its stored
+    /// `fts` column: the price of staging the nodes before Phase 2, whose
+    /// lexical search reads them.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Publish`] for a build the sweep removed;
+    /// [`StorageError::Database`].
+    pub async fn set_clusters(
+        &mut self,
+        clusters: &[(String, Option<i32>, Option<i32>)],
+    ) -> Result<u64> {
+        self.heartbeat().await?;
+        let mut updated = 0;
+        for round in clusters.chunks(CLUSTER_ROUND) {
+            let ids: Vec<&str> = round.iter().map(|(id, _, _)| id.as_str()).collect();
+            let sections: Vec<Option<i32>> = round.iter().map(|(_, m, _)| *m).collect();
+            let pages: Vec<Option<i32>> = round.iter().map(|(_, _, p)| *p).collect();
+            updated += sqlx::query(
+                "UPDATE deepwiki_build.wiki_nodes AS n \
+                 SET macro_cluster = c.macro_cluster, micro_cluster = c.micro_cluster \
+                 FROM unnest($2::text[], $3::int4[], $4::int4[]) \
+                     AS c(node_id, macro_cluster, micro_cluster) \
+                 WHERE n.build_id = $1 AND n.node_id = c.node_id",
+            )
+            .bind(&self.id)
+            .bind(&ids)
+            .bind(&sections)
+            .bind(&pages)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        }
+        Ok(updated)
+    }
+
+    /// The pool the build reads and writes through.
+    #[must_use]
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// Delete the build and everything it staged; also after a failed

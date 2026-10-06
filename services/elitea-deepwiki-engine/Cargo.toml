@@ -48,6 +48,12 @@ leiden-rs = { path = "vendor/leiden-rs", version = "=0.8.1", default-features = 
 # client adds no TLS stack. No default features: no native-tls, no cookies,
 # no decompression; `stream` is not needed (`Response::chunk` reads SSE).
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "http2"] }
+# The generation worker child (ADR-0026 decision 10): its own `RLIMIT_AS` /
+# `RLIMIT_CPU`, the parent's SIGTERM-then-SIGKILL stop, and (Linux) a death
+# signal when the parent goes away. Safe wrappers, so the crate keeps
+# `unsafe_code = "forbid"`. Already in the tree (gix, tempfile); the exact
+# pin the worker crate uses.
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "process"] }
 # The migration ledger checksum (`migrate.py`: SHA-256 hex). Already in
 # the tree through sqlx-postgres.
 sha2 = "=0.10.9"
@@ -64,7 +70,7 @@ thiserror = "=2.0.20"
 # LangChain's OpenAIEmbeddings did. Both BPE files are compiled in
 # (`include_str!`), so there is no runtime download and no chars/4 fallback.
 tiktoken-rs = "=0.12.1"
-tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["sync"] }
 tracing = "=0.1.44"
 # NFKD for the sanitizer's node-id slug (`unicodedata.normalize`). Already
@@ -101,6 +107,15 @@ rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs
 tokio = { version = "=1.53.1", features = ["test-util"] }
 # The TLS side of the model client's mock gateway; the version reqwest uses.
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
+
+[features]
+# TEST ONLY. In a debug build, a `repo_config` base URL of
+# `http://127.0.0.1:<port>` or `http://localhost:<port>` clones over plain
+# http, so the end-to-end tests can serve a repository with
+# `git http-backend` to the worker CHILD process (which cannot be handed a
+# pre-admitted target). A release build ignores the feature: the clone URL
+# is always `https://` there. CI enables it through `--all-features`.
+loopback-git-http = []
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -56,6 +56,64 @@ pub struct ConfigError(pub String);
 pub enum RunnerKind {
     Unavailable,
     Fixture,
+    /// The Rust engine itself (ADR-0026): `generate_wiki` in a worker
+    /// child process. Needs `ELITEA_DEEPWIKI_DATABASE_URL`.
+    Native,
+}
+
+/// The default address-space cap of a generation worker (16 GiB).
+///
+/// `RLIMIT_AS` counts reserved address space, not resident memory: thread
+/// stacks (the Python parser pool reserves 256 MiB per thread) and malloc
+/// arenas count in full. The cap is therefore well above the resident
+/// peak of a large repository (1.3–3.2 GB measured on elitea-platform);
+/// it stops a runaway, it does not size the pod.
+pub const DEFAULT_WORKER_MEMORY_BYTES: u64 = 16 << 30;
+
+/// The smallest address-space cap the settings accept (1 GiB): below it a
+/// worker cannot even start its thread pools.
+pub const MIN_WORKER_MEMORY_BYTES: u64 = 1 << 30;
+
+/// The default CPU-time cap of a generation worker (4 h of CPU).
+pub const DEFAULT_WORKER_CPU_SECONDS: u64 = 4 * 3600;
+
+/// The smallest CPU-time cap the settings accept (1 min).
+pub const MIN_WORKER_CPU_SECONDS: u64 = 60;
+
+/// The most worker threads a generation may use.
+pub const MAX_WORKER_THREADS: u64 = 256;
+
+/// The limits of one `generate_wiki` worker child process (ADR-0026
+/// decision 10). The child applies them to itself before it reads its
+/// request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerSettings {
+    /// `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES`: `RLIMIT_AS`, default 16 GiB.
+    pub memory_bytes: u64,
+    /// `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`: `RLIMIT_CPU` (soft; the hard
+    /// limit is 10 s above it), default 4 h.
+    pub cpu_seconds: u64,
+    /// `ELITEA_DEEPWIKI_WORKER_THREADS`: the child's parser and runtime
+    /// threads (`RAYON_NUM_THREADS`, the tokio workers), default the
+    /// available parallelism, at most 8. Each parser thread reserves its
+    /// stack in the address space the cap counts.
+    pub threads: usize,
+}
+
+impl Default for WorkerSettings {
+    fn default() -> Self {
+        Self {
+            memory_bytes: DEFAULT_WORKER_MEMORY_BYTES,
+            cpu_seconds: DEFAULT_WORKER_CPU_SECONDS,
+            threads: default_worker_threads(),
+        }
+    }
+}
+
+/// The available parallelism, at most 8.
+#[must_use]
+pub fn default_worker_threads() -> usize {
+    std::thread::available_parallelism().map_or(4, |n| n.get().min(8))
 }
 
 /// Everything the sidecar reads from the environment.
@@ -85,6 +143,8 @@ pub struct Settings {
     pub publish: PublishSettings,
     /// The model client's process-wide settings.
     pub model: ModelEnvSettings,
+    /// The `generate_wiki` worker child's limits.
+    pub worker: WorkerSettings,
 }
 
 /// What the environment decides about model calls; the invocation's
@@ -256,6 +316,34 @@ fn build_owner(
     Ok(owner)
 }
 
+fn worker_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<WorkerSettings, ConfigError> {
+    let defaults = WorkerSettings::default();
+    let memory_bytes = positive_count(raw, "WORKER_MEMORY_BYTES", defaults.memory_bytes)?;
+    if memory_bytes < MIN_WORKER_MEMORY_BYTES {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_MEMORY_BYTES must be at least {MIN_WORKER_MEMORY_BYTES} (1 GiB of address space), got {memory_bytes}"
+        )));
+    }
+    let cpu_seconds = positive_count(raw, "WORKER_CPU_SECONDS", defaults.cpu_seconds)?;
+    if cpu_seconds < MIN_WORKER_CPU_SECONDS {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_CPU_SECONDS must be at least {MIN_WORKER_CPU_SECONDS}, got {cpu_seconds}"
+        )));
+    }
+    let threads = positive_count(raw, "WORKER_THREADS", defaults.threads as u64)?;
+    if threads > MAX_WORKER_THREADS {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_THREADS must be at most {MAX_WORKER_THREADS}, got {threads}"
+        )));
+    }
+    Ok(WorkerSettings {
+        memory_bytes,
+        cpu_seconds,
+        threads: usize::try_from(threads)
+            .map_err(|_| ConfigError(format!("{ENV_PREFIX}WORKER_THREADS is out of range")))?,
+    })
+}
+
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
     let defaults = IngestLimits::default();
     Ok(IngestSettings {
@@ -287,11 +375,7 @@ impl Settings {
         let runner = match raw("RUNNER").as_deref().map(str::trim) {
             None | Some("unavailable") => RunnerKind::Unavailable,
             Some("fixture") => RunnerKind::Fixture,
-            Some("native") => {
-                return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER=native: the native analysis engine is not part of this build yet (ADR-0026 phases 2-6); use 'fixture' or 'unavailable'"
-                )));
-            }
+            Some("native") => RunnerKind::Native,
             Some("legacy") => {
                 return Err(ConfigError(format!(
                     "{ENV_PREFIX}RUNNER=legacy names the Python engine, which this binary is not; run the elitea-deepwiki -engine image for it"
@@ -299,7 +383,7 @@ impl Settings {
             }
             Some(other) => {
                 return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER must be one of ['unavailable', 'fixture'], got '{other}'"
+                    "{ENV_PREFIX}RUNNER must be one of ['unavailable', 'fixture', 'native'], got '{other}'"
                 )));
             }
         };
@@ -345,6 +429,12 @@ impl Settings {
             )));
         }
         let publish = publish_settings(&raw)?;
+        let worker = worker_settings(&raw)?;
+        if runner == RunnerKind::Native && database_url.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine stages and publishes every index in the deepwiki PostgreSQL database (ADR-0026 decision 5) and has no other index storage. Set it to the database the migrations ran on, or use 'fixture' or 'unavailable'."
+            )));
+        }
         Ok(Self {
             runner,
             fixture_step,
@@ -355,6 +445,7 @@ impl Settings {
             build_stale_after,
             publish,
             model,
+            worker,
         })
     }
 
@@ -397,7 +488,12 @@ mod tests {
     #[test]
     fn unparsable_values_fail_the_start() {
         assert!(settings(&[("ELITEA_DEEPWIKI_RUNNER", "bogus")]).is_err());
-        assert!(settings(&[("ELITEA_DEEPWIKI_RUNNER", "native")]).is_err());
+        // Native without a database: refused at start, naming the setting.
+        let native = settings(&[("ELITEA_DEEPWIKI_RUNNER", "native")]);
+        assert!(
+            matches!(&native, Err(ConfigError(m)) if m.contains("ELITEA_DEEPWIKI_DATABASE_URL")),
+            "{native:?}"
+        );
         assert!(settings(&[("ELITEA_DEEPWIKI_RUNNER", "legacy")]).is_err());
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "x")]).is_err());
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "-1")]).is_err());
@@ -583,6 +679,56 @@ mod tests {
             ("PUBLISH_SLOTS", "65"),
             ("PUBLISH_SLOTS", "1.5"),
             ("PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS", "inf"),
+        ] {
+            let key = format!("ELITEA_DEEPWIKI_{name}");
+            assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
+        }
+    }
+
+    #[test]
+    fn native_runs_with_a_database() {
+        let parsed = settings(&[
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ]);
+        assert_eq!(parsed.map(|s| s.runner), Ok(RunnerKind::Native));
+    }
+
+    #[test]
+    fn the_worker_limits_default_and_parse_strictly() {
+        let defaults = settings(&[]).map(|s| s.worker);
+        assert_eq!(defaults, Ok(WorkerSettings::default()));
+        assert_eq!(
+            WorkerSettings::default().memory_bytes,
+            DEFAULT_WORKER_MEMORY_BYTES
+        );
+        let set = settings(&[
+            ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648"),
+            ("ELITEA_DEEPWIKI_WORKER_CPU_SECONDS", "600"),
+            ("ELITEA_DEEPWIKI_WORKER_THREADS", "2"),
+        ])
+        .map(|s| s.worker);
+        assert_eq!(
+            set,
+            Ok(WorkerSettings {
+                memory_bytes: 2 << 30,
+                cpu_seconds: 600,
+                threads: 2,
+            })
+        );
+        for (name, bad) in [
+            ("WORKER_MEMORY_BYTES", "0"),
+            ("WORKER_MEMORY_BYTES", "16GiB"),
+            ("WORKER_MEMORY_BYTES", "1048576"),
+            ("WORKER_CPU_SECONDS", "-1"),
+            ("WORKER_CPU_SECONDS", "59"),
+            ("WORKER_CPU_SECONDS", "1.5"),
+            ("WORKER_THREADS", "0"),
+            ("WORKER_THREADS", "257"),
         ] {
             let key = format!("ELITEA_DEEPWIKI_{name}");
             assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
