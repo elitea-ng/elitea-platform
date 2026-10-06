@@ -34,6 +34,16 @@
 -- was. Removal is the scheduler's job (internal/authstateretention); no
 -- correctness depends on it.
 --
+-- ONLY HASHES OF SESSION IDS ARE STORED. The Form session ID is the bearer
+-- credential in the browser cookie. Redis kept it in memory only; PostgreSQL
+-- is backed up and replicated, so a dump would hand out live sessions. Each
+-- row is keyed on the lowercase hex SHA-256 of the ID, as 0141 does for native
+-- tokens: a plain hash is enough because the ID has 256 bits of entropy. The
+-- login transaction's binding to its originating session is the same hash,
+-- in the column and inside the transaction record. The cookie is unchanged.
+-- The transaction ID itself stays as given: it is the provider round-trip
+-- `state`, and its row holds the PKCE verifier in the clear anyway.
+--
 -- NO DATA MIGRATION. Sessions last at most cookie.lifetime_seconds, login
 -- transactions five minutes and attempt windows one minute. A deployment of
 -- this file signs Form-session users out once.
@@ -43,15 +53,17 @@
 
 CREATE SCHEMA IF NOT EXISTS elitea_auth;
 
--- The Form browser session. The cookie carries `id`; the row is the session.
+-- The Form browser session. The cookie carries the ID; the row is keyed on
+-- its hash and is the session.
 CREATE TABLE IF NOT EXISTS elitea_auth.form_sessions (
-    -- 32 CSPRNG bytes, unpadded base64url (authsession.randomSessionID).
-    id         text        PRIMARY KEY,
+    -- Hex SHA-256 of the cookie's ID (32 CSPRNG bytes, unpadded base64url,
+    -- authsession.randomSessionID). Never the ID itself.
+    id_hash    text        PRIMARY KEY,
     -- The JSON-encoded sessionstate.State, at most 64 KiB.
     record     bytea       NOT NULL,
     expires_at timestamptz NOT NULL,
-    CONSTRAINT form_sessions_id_shape
-        CHECK (length(id) = 43),
+    CONSTRAINT form_sessions_id_hash_shape
+        CHECK (id_hash ~ '^[0-9a-f]{64}$'),
     CONSTRAINT form_sessions_record_size
         CHECK (octet_length(record) BETWEEN 1 AND 65536)
 );
@@ -59,23 +71,24 @@ CREATE TABLE IF NOT EXISTS elitea_auth.form_sessions (
 CREATE INDEX IF NOT EXISTS form_sessions_expires_idx
     ON elitea_auth.form_sessions (expires_at);
 
--- The one-time login transaction. `provider` and `originating_session_id` are
--- the binding a callback must present before the row is consumed; a mismatch
--- leaves the row in place.
+-- The one-time login transaction. `provider` and `originating_session_hash`
+-- (hex SHA-256 of the originating Form session ID) are the binding a callback
+-- must present before the row is consumed; a mismatch leaves the row in place.
 CREATE TABLE IF NOT EXISTS elitea_auth.form_login_transactions (
     -- 32 CSPRNG bytes, unpadded base64url (browserflow.NewTransactionID).
-    id                     text        PRIMARY KEY,
-    provider               text        NOT NULL,
-    originating_session_id text        NOT NULL,
-    -- The canonical JSON browserflow.Transaction, at most 64 KiB.
-    record                 bytea       NOT NULL,
-    expires_at             timestamptz NOT NULL,
+    id                       text        PRIMARY KEY,
+    provider                 text        NOT NULL,
+    originating_session_hash text        NOT NULL,
+    -- The canonical JSON browserflow.Transaction, at most 64 KiB. Its
+    -- originating_session_id field holds the same hash, never the raw ID.
+    record                   bytea       NOT NULL,
+    expires_at               timestamptz NOT NULL,
     CONSTRAINT form_login_transactions_id_shape
         CHECK (length(id) = 43),
     CONSTRAINT form_login_transactions_provider_size
         CHECK (length(provider) BETWEEN 1 AND 64),
-    CONSTRAINT form_login_transactions_session_size
-        CHECK (length(originating_session_id) BETWEEN 1 AND 512),
+    CONSTRAINT form_login_transactions_session_hash_shape
+        CHECK (originating_session_hash ~ '^[0-9a-f]{64}$'),
     CONSTRAINT form_login_transactions_record_size
         CHECK (octet_length(record) BETWEEN 1 AND 65536)
 );

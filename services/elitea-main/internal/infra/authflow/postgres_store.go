@@ -1,10 +1,17 @@
 // Package authflow persists one-time browser authentication transactions in
 // PostgreSQL (elitea_auth.form_login_transactions, shared migration 0145).
+//
+// The originating session ID is the Form session cookie's bearer value. A row
+// never holds it: the binding column and the record's originating_session_id
+// both hold sessionHash(id), the hex SHA-256 of the ID (the same row key the
+// session store uses). Consume restores the caller's ID on the returned value.
 package authflow
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +70,12 @@ func (s *PostgresStore) Create(ctx context.Context, transaction browserflow.Tran
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	record, err := encodeTransaction(transaction)
+	if err := transaction.Validate(); err != nil {
+		return "", err
+	}
+	stored := transaction
+	stored.OriginatingSessionID = sessionHash(transaction.OriginatingSessionID)
+	record, err := encodeTransaction(stored)
 	if err != nil {
 		return "", err
 	}
@@ -89,15 +101,15 @@ func (s *PostgresStore) Create(ctx context.Context, transaction browserflow.Tran
 		}
 		tag, err := s.pool.Exec(opCtx, `
 			INSERT INTO elitea_auth.form_login_transactions AS current
-			    (id, provider, originating_session_id, record, expires_at)
+			    (id, provider, originating_session_hash, record, expires_at)
 			VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5::double precision / 1000))
 			ON CONFLICT (id) DO UPDATE
 			    SET provider = EXCLUDED.provider,
-			        originating_session_id = EXCLUDED.originating_session_id,
+			        originating_session_hash = EXCLUDED.originating_session_hash,
 			        record = EXCLUDED.record,
 			        expires_at = EXCLUDED.expires_at
 			    WHERE current.expires_at <= now()`,
-			id, transaction.Provider, transaction.OriginatingSessionID, record, ttlMilliseconds,
+			id, stored.Provider, stored.OriginatingSessionID, record, ttlMilliseconds,
 		)
 		if err != nil {
 			return "", storeError(ctx, "create")
@@ -134,13 +146,14 @@ func (s *PostgresStore) Consume(
 	opCtx, cancel := context.WithTimeout(ctx, operationLimit)
 	defer cancel()
 
+	originatingHash := sessionHash(originatingSessionID)
 	var record []byte
 	err := s.pool.QueryRow(opCtx, `
 		DELETE FROM elitea_auth.form_login_transactions
-		WHERE id = $1 AND provider = $2 AND originating_session_id = $3
+		WHERE id = $1 AND provider = $2 AND originating_session_hash = $3
 		  AND expires_at > now()
 		RETURNING record`,
-		id, provider, originatingSessionID,
+		id, provider, originatingHash,
 	).Scan(&record)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -153,13 +166,22 @@ func (s *PostgresStore) Consume(
 	if err != nil {
 		return browserflow.Transaction{}, err
 	}
-	if transaction.Provider != provider || transaction.OriginatingSessionID != originatingSessionID {
+	if transaction.Provider != provider || transaction.OriginatingSessionID != originatingHash {
 		return browserflow.Transaction{}, ErrInvalidRecord
 	}
+	// The binding matched; hand the caller back the ID it presented.
+	transaction.OriginatingSessionID = originatingSessionID
 	if !transaction.ActiveAt(s.now().UTC()) {
 		return browserflow.Transaction{}, browserflow.ErrTransactionRejected
 	}
 	return transaction, nil
+}
+
+// sessionHash is the stored form of an originating session ID: the lowercase
+// hex SHA-256 of the ID string, as authsession.IDHash keys session rows.
+func sessionHash(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
 }
 
 func encodeTransaction(transaction browserflow.Transaction) ([]byte, error) {

@@ -71,11 +71,11 @@ var steps = []step{
 		name: "elitea_auth.form_sessions",
 		sql: `
 			WITH doomed AS (
-			    SELECT id FROM elitea_auth.form_sessions
+			    SELECT id_hash FROM elitea_auth.form_sessions
 			    WHERE expires_at < $1 ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED
 			), gone AS (
 			    DELETE FROM elitea_auth.form_sessions AS victim
-			    USING doomed WHERE victim.id = doomed.id RETURNING 1
+			    USING doomed WHERE victim.id_hash = doomed.id_hash RETURNING 1
 			)
 			SELECT count(*) FROM gone`,
 		grace: expiryGrace,

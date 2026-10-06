@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,11 +49,23 @@ func TestPostgresStoreCreateConsumeAndReplay(t *testing.T) {
 	if createdID != id || browserflow.ValidateTransactionID(createdID) != nil {
 		t.Fatalf("created ID = %q", createdID)
 	}
-	var provider, session string
-	if err := pool.QueryRow(context.Background(),
-		`SELECT provider, originating_session_id FROM elitea_auth.form_login_transactions WHERE id = $1`, id,
-	).Scan(&provider, &session); err != nil || provider != "oidc" || session != "session-1" {
-		t.Fatalf("stored binding = %q %q, %v", provider, session, err)
+	// The originating session ID is the session cookie's bearer value: the
+	// row holds only its SHA-256, in the binding column and in the record,
+	// and the database computes the same hash.
+	var provider, session, record, whole string
+	var matchesDatabaseHash bool
+	if err := pool.QueryRow(context.Background(), `
+		SELECT provider, originating_session_hash, convert_from(record, 'UTF8'), t::text,
+		       originating_session_hash = encode(sha256(convert_to($2, 'UTF8')), 'hex')
+		FROM elitea_auth.form_login_transactions AS t WHERE id = $1`, id, "session-1",
+	).Scan(&provider, &session, &record, &whole, &matchesDatabaseHash); err != nil ||
+		provider != "oidc" || session != sessionHash("session-1") || !matchesDatabaseHash {
+		t.Fatalf("stored binding = %q %q (database hash match %t), %v", provider, session, matchesDatabaseHash, err)
+	}
+	for _, text := range []string{record, whole} {
+		if strings.Contains(text, "session-1") {
+			t.Fatalf("a stored row contains the raw originating session ID: %s", text)
+		}
 	}
 	if ttl := remainingLifetime(t, pool, id); ttl <= 4*time.Minute || ttl > 5*time.Minute {
 		t.Fatalf("lifetime = %s, want the derived five minutes", ttl)
@@ -205,8 +218,8 @@ func TestPostgresStoreCollisionRecomputesRemainingAbsoluteLifetime(t *testing.T)
 	secondID := testTransactionID(61)
 	pool := authstatetest.Pool(t, 4)
 	authstatetest.Exec(t, pool, `
-		INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record, expires_at)
-		VALUES ($1, 'oidc', 'other', 'unrelated', now() + interval '1 hour')`, firstID)
+		INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_hash, record, expires_at)
+		VALUES ($1, 'oidc', repeat('0', 64), 'unrelated', now() + interval '1 hour')`, firstID)
 
 	calls := 0
 	generate := func() (string, error) {
@@ -278,15 +291,22 @@ func TestPostgresStoreConsumesMalformedRecordsWithoutReturningClaims(t *testing.
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	validTransaction := testTransaction(now, "oidc", "session-1")
-	validRecord, err := json.Marshal(validTransaction)
+	// What Create writes: the record binds the HASH of the originating session.
+	storedTransaction := validTransaction
+	storedTransaction.OriginatingSessionID = sessionHash(validTransaction.OriginatingSessionID)
+	validRecord, err := json.Marshal(storedTransaction)
 	if err != nil {
 		t.Fatal(err)
 	}
 	unknownRecord := append(append([]byte(nil), validRecord[:len(validRecord)-1]...), []byte(`,"unknown":true}`)...)
 	duplicateRecord := append(append([]byte(nil), validRecord[:len(validRecord)-1]...), []byte(`,"provider":"oidc"}`)...)
-	mismatchedTransaction := validTransaction
+	mismatchedTransaction := storedTransaction
 	mismatchedTransaction.Provider = "saml"
 	mismatchedRecord, err := json.Marshal(mismatchedTransaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawSessionRecord, err := json.Marshal(validTransaction)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,6 +321,7 @@ func TestPostgresStoreConsumesMalformedRecordsWithoutReturningClaims(t *testing.
 		{name: "duplicate field", record: duplicateRecord},
 		{name: "non canonical whitespace", record: append([]byte(" "), validRecord...)},
 		{name: "record binding differs from the binding columns", record: mismatchedRecord},
+		{name: "record holds the raw originating session ID", record: rawSessionRecord},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			id := testTransactionID(byte(20 + index))
@@ -320,15 +341,17 @@ func TestPostgresStoreConsumesMalformedRecordsWithoutReturningClaims(t *testing.
 	}
 
 	// What Redis had to detect at read time, the table refuses at write time:
-	// a missing or empty binding, an empty or oversized record.
+	// a missing binding, a binding that is not a hash, an empty or oversized
+	// record.
 	t.Run("the table refuses incomplete rows", func(t *testing.T) {
 		for name, statement := range map[string]string{
-			"missing provider":            `INSERT INTO elitea_auth.form_login_transactions (id, originating_session_id, record, expires_at) VALUES ($1, 's', 'r', now())`,
+			"missing provider":            `INSERT INTO elitea_auth.form_login_transactions (id, originating_session_hash, record, expires_at) VALUES ($1, repeat('a', 64), 'r', now())`,
 			"missing originating session": `INSERT INTO elitea_auth.form_login_transactions (id, provider, record, expires_at) VALUES ($1, 'oidc', 'r', now())`,
-			"missing record":              `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, expires_at) VALUES ($1, 'oidc', 's', now())`,
-			"empty record":                `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record, expires_at) VALUES ($1, 'oidc', 's', ''::bytea, now())`,
-			"oversized record":            `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record, expires_at) VALUES ($1, 'oidc', 's', convert_to(repeat('x', 65537), 'UTF8'), now())`,
-			"missing expiry":              `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record) VALUES ($1, 'oidc', 's', 'r')`,
+			"raw originating session":     `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_hash, record, expires_at) VALUES ($1, 'oidc', 'session-1', 'r', now())`,
+			"missing record":              `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_hash, expires_at) VALUES ($1, 'oidc', repeat('a', 64), now())`,
+			"empty record":                `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_hash, record, expires_at) VALUES ($1, 'oidc', repeat('a', 64), ''::bytea, now())`,
+			"oversized record":            `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_hash, record, expires_at) VALUES ($1, 'oidc', repeat('a', 64), convert_to(repeat('x', 65537), 'UTF8'), now())`,
+			"missing expiry":              `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_hash, record) VALUES ($1, 'oidc', repeat('a', 64), 'r')`,
 		} {
 			if _, err := pool.Exec(context.Background(), statement, testTransactionID(50)); err == nil {
 				t.Fatalf("%s: the table stored the row", name)

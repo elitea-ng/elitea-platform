@@ -106,6 +106,73 @@ func TestPostgresStoreCreateReadKeepsSensitiveStateOutOfOpaqueID(t *testing.T) {
 // A login begin creates an unauthenticated session. It lives PreLoginTTL,
 // not the cookie lifetime: it is useful only for the one five-minute login
 // transaction bound to it.
+// The cookie's session ID is a bearer credential and PostgreSQL is backed up:
+// no row may hold it, in any column or inside the record. Each row is keyed on
+// the hex SHA-256 of the ID, which the database computes identically.
+func TestPostgresStoreRowsNeverHoldTheRawSessionID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	issued := []string{testSessionID(40), testSessionID(41), testSessionID(42)}
+	store, pool := newTestStore(t, time.Hour, 5*time.Minute, sequenceGenerator(issued...))
+	created, err := store.Create(context.Background(), incompleteState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := store.Rotate(context.Background(), created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := store.RotateAndReplace(context.Background(), rotated, completedState(now.Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authenticated != issued[2] {
+		t.Fatalf("final ID = %q, want %q", authenticated, issued[2])
+	}
+
+	rows, err := pool.Query(context.Background(), `
+		SELECT id_hash, convert_from(record, 'UTF8'), t::text,
+		       id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')
+		FROM elitea_auth.form_sessions AS t`, authenticated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var idHash, record, whole string
+		var matchesDatabaseHash bool
+		if err := rows.Scan(&idHash, &record, &whole, &matchesDatabaseHash); err != nil {
+			t.Fatal(err)
+		}
+		count++
+		if idHash != IDHash(authenticated) || !matchesDatabaseHash {
+			t.Fatalf("row key = %q, want the SHA-256 of the live ID %q", idHash, IDHash(authenticated))
+		}
+		for _, id := range issued {
+			for _, text := range []string{idHash, record, whole} {
+				if strings.Contains(text, id) {
+					t.Fatalf("a stored row contains the raw session ID %q", id)
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows = %d, want only the authenticated session", count)
+	}
+
+	// The table itself refuses a raw ID as a key.
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO elitea_auth.form_sessions (id_hash, record, expires_at) VALUES ($1, '{}', now() + interval '1 hour')`,
+		testSessionID(43)); err == nil {
+		t.Fatal("the table stored a raw session ID as a row key")
+	}
+}
+
 func TestPostgresStoreGivesAPreLoginSessionThePreLoginLifetime(t *testing.T) {
 	t.Parallel()
 
@@ -170,7 +237,7 @@ func TestPostgresStoreRotateAndReplaceCommitsAuthenticatedStateAtomically(t *tes
 	}
 	// Three of the five pre-login minutes are gone.
 	authstatetest.Exec(t, pool,
-		`UPDATE elitea_auth.form_sessions SET expires_at = now() + interval '2 minutes' WHERE id = $1`, createdID)
+		`UPDATE elitea_auth.form_sessions SET expires_at = now() + interval '2 minutes' WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, createdID)
 
 	rotatedID, err := store.RotateAndReplace(context.Background(), createdID, completedState(now.Add(time.Hour)))
 	if err != nil {
@@ -227,7 +294,7 @@ func TestPostgresStoreRotateInvalidatesOldIDAndPreservesRemainingLifetime(t *tes
 		t.Fatal(err)
 	}
 	authstatetest.Exec(t, pool,
-		`UPDATE elitea_auth.form_sessions SET expires_at = now() + interval '23 minutes' WHERE id = $1`, createdID)
+		`UPDATE elitea_auth.form_sessions SET expires_at = now() + interval '23 minutes' WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, createdID)
 	before := expiresAt(t, pool, createdID)
 
 	rotatedID, err := store.Rotate(context.Background(), createdID)
@@ -353,7 +420,7 @@ func TestPostgresStoreRejectsMalformedAndUnknownRecords(t *testing.T) {
 	t.Run("the table refuses an oversized or empty record", func(t *testing.T) {
 		for _, record := range [][]byte{[]byte(strings.Repeat("x", MaxRecordBytes+1)), {}} {
 			_, err := pool.Exec(context.Background(),
-				`INSERT INTO elitea_auth.form_sessions (id, record, expires_at) VALUES ($1, $2, now() + interval '1 hour')`,
+				`INSERT INTO elitea_auth.form_sessions (id_hash, record, expires_at) VALUES (encode(sha256(convert_to($1, 'UTF8')), 'hex'), $2, now() + interval '1 hour')`,
 				testSessionID(69), record)
 			if err == nil {
 				t.Fatalf("a %d-byte record was stored", len(record))
@@ -646,7 +713,7 @@ func TestPostgresStoreRotationLockWaitIsBoundedAndFailsClosed(t *testing.T) {
 	}
 	defer func() { _ = holder.Rollback(context.Background()) }()
 	if _, err := holder.Exec(context.Background(),
-		`SELECT 1 FROM elitea_auth.form_sessions WHERE id = $1 FOR UPDATE`, id); err != nil {
+		`SELECT 1 FROM elitea_auth.form_sessions WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex') FOR UPDATE`, id); err != nil {
 		t.Fatal(err)
 	}
 
@@ -721,14 +788,14 @@ func storeOn(
 func insertRaw(t *testing.T, pool *pgxpool.Pool, id string, record []byte, lifetime time.Duration) {
 	t.Helper()
 	authstatetest.Exec(t, pool, `
-		INSERT INTO elitea_auth.form_sessions (id, record, expires_at)
-		VALUES ($1, $2, now() + make_interval(secs => $3))`, id, record, lifetime.Seconds())
+		INSERT INTO elitea_auth.form_sessions (id_hash, record, expires_at)
+		VALUES (encode(sha256(convert_to($1, 'UTF8')), 'hex'), $2, now() + make_interval(secs => $3))`, id, record, lifetime.Seconds())
 }
 
 func expire(t *testing.T, pool *pgxpool.Pool, id string) {
 	t.Helper()
 	if authstatetest.Exec(t, pool,
-		`UPDATE elitea_auth.form_sessions SET expires_at = now() - interval '1 millisecond' WHERE id = $1`, id) != 1 {
+		`UPDATE elitea_auth.form_sessions SET expires_at = now() - interval '1 millisecond' WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, id) != 1 {
 		t.Fatalf("no row %q to expire", id)
 	}
 }
@@ -737,7 +804,7 @@ func exists(t *testing.T, pool *pgxpool.Pool, id string) bool {
 	t.Helper()
 	var present bool
 	if err := pool.QueryRow(context.Background(),
-		`SELECT EXISTS (SELECT 1 FROM elitea_auth.form_sessions WHERE id = $1)`, id).Scan(&present); err != nil {
+		`SELECT EXISTS (SELECT 1 FROM elitea_auth.form_sessions WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex'))`, id).Scan(&present); err != nil {
 		t.Fatal(err)
 	}
 	return present
@@ -747,7 +814,7 @@ func rawRecord(t *testing.T, pool *pgxpool.Pool, id string) []byte {
 	t.Helper()
 	var record []byte
 	if err := pool.QueryRow(context.Background(),
-		`SELECT record FROM elitea_auth.form_sessions WHERE id = $1`, id).Scan(&record); err != nil {
+		`SELECT record FROM elitea_auth.form_sessions WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, id).Scan(&record); err != nil {
 		t.Fatal(err)
 	}
 	return record
@@ -766,7 +833,7 @@ func expiresAt(t *testing.T, pool *pgxpool.Pool, id string) time.Time {
 	t.Helper()
 	var value time.Time
 	if err := pool.QueryRow(context.Background(),
-		`SELECT expires_at FROM elitea_auth.form_sessions WHERE id = $1`, id).Scan(&value); err != nil {
+		`SELECT expires_at FROM elitea_auth.form_sessions WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, id).Scan(&value); err != nil {
 		t.Fatal(err)
 	}
 	return value
@@ -776,7 +843,7 @@ func remainingLifetime(t *testing.T, pool *pgxpool.Pool, id string) time.Duratio
 	t.Helper()
 	var seconds float64
 	if err := pool.QueryRow(context.Background(),
-		`SELECT extract(epoch FROM expires_at - now()) FROM elitea_auth.form_sessions WHERE id = $1`, id).Scan(&seconds); err != nil {
+		`SELECT extract(epoch FROM expires_at - now()) FROM elitea_auth.form_sessions WHERE id_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`, id).Scan(&seconds); err != nil {
 		t.Fatal(err)
 	}
 	return time.Duration(seconds * float64(time.Second))

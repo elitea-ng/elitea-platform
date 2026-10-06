@@ -1,12 +1,19 @@
 // Package authsession persists Form browser authentication sessions in
 // PostgreSQL (elitea_auth.form_sessions, shared migration 0145).
+//
+// The session ID is the browser cookie's bearer value. A row never holds it:
+// every row is keyed on IDHash(id), the hex SHA-256 of the ID. PostgreSQL is
+// backed up, so a dump must not hand out live sessions; a plain hash is enough
+// because the ID has 256 bits of entropy.
 package authsession
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -90,9 +97,9 @@ func newPostgresStore(pool *pgxpool.Pool, config Config, generate idGenerator) (
 // overwritten; an expired row under the same ID is absent to every read, so
 // it is replaced, exactly as an expired Redis key no longer blocked SET NX.
 const insertSQL = `
-INSERT INTO elitea_auth.form_sessions AS current (id, record, expires_at)
+INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at)
 VALUES ($1, $2, now() + make_interval(secs => $3::double precision / 1000))
-ON CONFLICT (id) DO UPDATE
+ON CONFLICT (id_hash) DO UPDATE
     SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at
     WHERE current.expires_at <= now()`
 
@@ -114,7 +121,7 @@ func (s *PostgresStore) Create(ctx context.Context, state sessionstate.State) (s
 		if !validSessionID(id) {
 			return "", ErrInvalidID
 		}
-		tag, err := s.pool.Exec(opCtx, insertSQL, id, record, ttl.Milliseconds())
+		tag, err := s.pool.Exec(opCtx, insertSQL, IDHash(id), record, ttl.Milliseconds())
 		if err != nil {
 			return "", storeError(ctx, "create", err)
 		}
@@ -142,7 +149,7 @@ func (s *PostgresStore) Delete(ctx context.Context, id string) error {
 	}
 	opCtx, cancel := context.WithTimeout(ctx, operationLimit)
 	defer cancel()
-	if _, err := s.pool.Exec(opCtx, `DELETE FROM elitea_auth.form_sessions WHERE id = $1`, id); err != nil {
+	if _, err := s.pool.Exec(opCtx, `DELETE FROM elitea_auth.form_sessions WHERE id_hash = $1`, IDHash(id)); err != nil {
 		return storeError(ctx, "delete", err)
 	}
 	return nil
@@ -166,8 +173,8 @@ func (s *PostgresStore) ConsumeForLogout(ctx context.Context, id string) (sessio
 	)
 	err := s.pool.QueryRow(opCtx, `
 		DELETE FROM elitea_auth.form_sessions
-		WHERE id = $1
-		RETURNING record, expires_at > now()`, id,
+		WHERE id_hash = $1
+		RETURNING record, expires_at > now()`, IDHash(id),
 	).Scan(&record, &live)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -247,8 +254,8 @@ func (s *PostgresStore) rotateRecord(
 	)
 	err = tx.QueryRow(opCtx, `
 		SELECT record, expires_at FROM elitea_auth.form_sessions
-		WHERE id = $1 AND expires_at > now()
-		FOR UPDATE`, id,
+		WHERE id_hash = $1 AND expires_at > now()
+		FOR UPDATE`, IDHash(id),
 	).Scan(&stored, &expiresAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -271,15 +278,15 @@ func (s *PostgresStore) rotateRecord(
 		}
 		var tag interface{ RowsAffected() int64 }
 		if ttl > 0 {
-			tag, err = tx.Exec(opCtx, insertSQL, candidate, replacementRecord, ttl.Milliseconds())
+			tag, err = tx.Exec(opCtx, insertSQL, IDHash(candidate), replacementRecord, ttl.Milliseconds())
 		} else {
 			tag, err = tx.Exec(opCtx, `
-				INSERT INTO elitea_auth.form_sessions AS current (id, record, expires_at)
+				INSERT INTO elitea_auth.form_sessions AS current (id_hash, record, expires_at)
 				VALUES ($1, $2, $3)
-				ON CONFLICT (id) DO UPDATE
+				ON CONFLICT (id_hash) DO UPDATE
 				    SET record = EXCLUDED.record, expires_at = EXCLUDED.expires_at
 				    WHERE current.expires_at <= now()`,
-				candidate, replacementRecord, expiresAt)
+				IDHash(candidate), replacementRecord, expiresAt)
 		}
 		if err != nil {
 			return "", storeError(ctx, "rotate", err)
@@ -293,7 +300,7 @@ func (s *PostgresStore) rotateRecord(
 		err = ErrIDCollision
 		return "", err
 	}
-	if _, err = tx.Exec(opCtx, `DELETE FROM elitea_auth.form_sessions WHERE id = $1`, id); err != nil {
+	if _, err = tx.Exec(opCtx, `DELETE FROM elitea_auth.form_sessions WHERE id_hash = $1`, IDHash(id)); err != nil {
 		return "", storeError(ctx, "rotate", err)
 	}
 	if err = tx.Commit(opCtx); err != nil {
@@ -341,7 +348,7 @@ func (s *PostgresStore) readRecord(ctx context.Context, id string) (sessionstate
 	var record []byte
 	err := s.pool.QueryRow(opCtx, `
 		SELECT record FROM elitea_auth.form_sessions
-		WHERE id = $1 AND expires_at > now()`, id,
+		WHERE id_hash = $1 AND expires_at > now()`, IDHash(id),
 	).Scan(&record)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -358,7 +365,7 @@ func (s *PostgresStore) readRecord(ctx context.Context, id string) (sessionstate
 		// Remove this malformed immutable record only if it has not changed
 		// since the read above. Best effort: the read already failed closed.
 		_, _ = s.pool.Exec(opCtx,
-			`DELETE FROM elitea_auth.form_sessions WHERE id = $1 AND record = $2`, id, record)
+			`DELETE FROM elitea_auth.form_sessions WHERE id_hash = $1 AND record = $2`, IDHash(id), record)
 		return sessionstate.State{}, nil, err
 	}
 	return state, record, nil
@@ -386,6 +393,14 @@ func randomSessionID() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(random), nil
+}
+
+// IDHash is the row key of session id: the lowercase hex SHA-256 of the ID
+// string (elitea_auth.form_sessions.id_hash). The login-transaction store
+// binds a transaction to its originating session with the same hash.
+func IDHash(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
 }
 
 func validSessionID(id string) bool {

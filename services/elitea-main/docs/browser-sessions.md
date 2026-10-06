@@ -86,6 +86,9 @@ every deployment. The Form graph followed the same rule later: its sessions
 moved from a dedicated auth Redis to `elitea_auth.form_sessions`,
 `form_login_transactions` and `browser_attempt_windows` (shared migration
 0145). No auth state is in Redis now, and readiness checks the database only.
+The session cookie's ID is never stored: rows are keyed on its SHA-256, and a
+login transaction binds the same hash, because PostgreSQL is backed up and
+Redis was not.
 
 ## The SPA contract
 

@@ -94,11 +94,12 @@ func TestSweepRemovesOnlyWhatIsPastRetention(t *testing.T) {
 	insideForm := now.Add(-expiryGrace + time.Minute)
 	live := now.Add(time.Hour)
 	for index, expiresAt := range []time.Time{pastForm, insideForm, live} {
-		exec(`INSERT INTO elitea_auth.form_sessions (id, record, expires_at) VALUES ($1, '{}', $2)`,
+		exec(`INSERT INTO elitea_auth.form_sessions (id_hash, record, expires_at)
+		      VALUES (encode(sha256(convert_to($1, 'UTF8')), 'hex'), '{}', $2)`,
 			opaqueID(index), expiresAt)
 		exec(`INSERT INTO elitea_auth.form_login_transactions
-		          (id, provider, originating_session_id, record, expires_at)
-		      VALUES ($1, 'form', 's', '{}', $2)`, opaqueID(index), expiresAt)
+		          (id, provider, originating_session_hash, record, expires_at)
+		      VALUES ($1, 'form', repeat('0', 64), '{}', $2)`, opaqueID(index), expiresAt)
 		exec(`INSERT INTO elitea_auth.browser_attempt_windows (key, attempts, window_ends_at)
 		      VALUES ($1, 1, $2)`, attemptKey(index), expiresAt)
 	}
