@@ -114,6 +114,12 @@ resources:
     cpu: 250m
     memory: 128Mi
 
+# The NATS chart's NetworkPolicy admits the Job pod by its
+# app.kubernetes.io/name label, nats-bootstrap (deploy/helm/nats
+# networkPolicy.clients). A nameOverride changes that label and is refused
+# unless this is true — set it after adding the new name to that list.
+networkPolicyClientNameManaged: false
+
 # Extra args appended to every `nats` invocation. Connection, TLS and inbox
 # flags are rendered from the values above.
 extraNatsArgs: ""

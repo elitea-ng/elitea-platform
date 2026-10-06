@@ -12,15 +12,15 @@ a credential into a ConfigMap.
 {{- $clients := list -}}
 {{- $urls := dict -}}
 {{- if and .Values.main.enabled (include "elitea-main.usesNats" .) -}}
-{{- $clients = append $clients (dict "identity" "elitea-main" "fullname" (include "elitea-main.fullname" .) "labels" (include "elitea-main.labels" .)) -}}
+{{- $clients = append $clients (dict "identity" "elitea-main" "name" (include "elitea-main.name" .) "fullname" (include "elitea-main.fullname" .) "labels" (include "elitea-main.labels" .)) -}}
 {{- with get (.Values.main.env | default dict) "ELITEA_EVENTS_NATS_URL" }}{{ $_ := set $urls "main.env.ELITEA_EVENTS_NATS_URL" . }}{{ end -}}
 {{- end -}}
 {{- if .Values.llmGateway.enabled -}}
-{{- $clients = append $clients (dict "identity" "elitea-llm-gateway" "fullname" (include "elitea-llm-gateway.fullname" .) "labels" (include "elitea-llm-gateway.labels" .)) -}}
+{{- $clients = append $clients (dict "identity" "elitea-llm-gateway" "name" (include "elitea-llm-gateway.name" .) "fullname" (include "elitea-llm-gateway.fullname" .) "labels" (include "elitea-llm-gateway.labels" .)) -}}
 {{- with get (.Values.llmGateway.env | default dict) "GATEWAY_NATS_URL" }}{{ $_ := set $urls "llmGateway.env.GATEWAY_NATS_URL" . }}{{ end -}}
 {{- end -}}
 {{- if .Values.scheduler.enabled -}}
-{{- $clients = append $clients (dict "identity" "elitea-scheduler" "fullname" (include "elitea-scheduler.fullname" .) "labels" (include "elitea-scheduler.labels" .)) -}}
+{{- $clients = append $clients (dict "identity" "elitea-scheduler" "name" (include "elitea-scheduler.name" .) "fullname" (include "elitea-scheduler.fullname" .) "labels" (include "elitea-scheduler.labels" .)) -}}
 {{- with get (.Values.scheduler.env | default dict) "GATEWAY_NATS_URL" }}{{ $_ := set $urls "scheduler.env.GATEWAY_NATS_URL" . }}{{ end -}}
 {{- end -}}
 {{- if and $clients .Values.nats.service -}}
@@ -36,6 +36,23 @@ a credential into a ConfigMap.
 {{- $natsNs := .Values.nats.namespace | default .Release.Namespace -}}
 {{- if and $clients $tls.enabled (eq ($tls.issuerRef.kind | default "Issuer") "Issuer") (ne $natsNs .Release.Namespace) -}}
 {{- fail (printf "nats.namespace is %q but this release installs into %q, and nats.tls.issuerRef is a namespaced Issuer (%s). The NATS chart's CA Issuer lives in the NATS namespace and signs only there, so the client Certificates this chart creates in %q would never be issued and every pod would wait for its Secret forever. Install the platform into %q, or back a ClusterIssuer with a CA used for NATS only and set nats.tls.issuerRef.kind=ClusterIssuer (deploy/helm/nats README)." $natsNs .Release.Namespace $tls.issuerRef.name .Release.Namespace $natsNs) -}}
+{{- end -}}
+
+{{- /* ── Gate 1c: the NATS NetworkPolicy admits these pods by name ── */ -}}
+{{- /*
+deploy/helm/nats/templates/networkpolicy.yaml admits 4222 from pods labelled
+app.kubernetes.io/name=<identity> (its networkPolicy.clients). A nameOverride
+here changes that label, and the pod is then dropped at the NATS port: a
+connect timeout, with nothing naming the override. So a renamed NATS client
+is refused unless the operator states that the NATS chart's list says the
+same (nats.networkPolicyClientNamesManaged).
+*/ -}}
+{{- if not .Values.nats.networkPolicyClientNamesManaged -}}
+{{- range $c := $clients -}}
+{{- if ne $c.name $c.identity -}}
+{{- fail (printf "%s's pods are labelled app.kubernetes.io/name=%s (a nameOverride), but the NATS chart's NetworkPolicy admits NATS clients by name and lists %q (deploy/helm/nats networkPolicy.clients). The pods would be dropped at the NATS port. Add %q to that list (or drop the override), then set nats.networkPolicyClientNamesManaged=true here to say so." $c.identity $c.name $c.identity $c.name) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- /* ── Gate 2: every rendered URL agrees with the posture, and carries no credential ── */ -}}

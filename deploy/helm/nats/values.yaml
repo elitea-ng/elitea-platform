@@ -115,8 +115,11 @@ networkPolicy:
   externallyManaged: false
   # Each entry admits pods labelled app.kubernetes.io/name=<name> in
   # <namespace> ("" = this release's namespace). These are the four NATS
-  # identities that exist today; the agent worker is added with the runtime
-  # command bus, not before.
+  # clients that exist today; the agent worker is added with the runtime
+  # command bus, not before. The names are the platform chart's and the
+  # bootstrap chart's DEFAULT pod names: both refuse a nameOverride on a NATS
+  # client unless the operator says this list was changed to match
+  # (nats.networkPolicyClientNamesManaged / networkPolicyClientNameManaged).
   clients:
     - name: elitea-main
       namespace: ""

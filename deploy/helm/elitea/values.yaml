@@ -297,6 +297,14 @@ nats:
     renewBefore: 360h  # 15d
     mountPath: /etc/elitea/nats-client
 
+  # The NATS chart's NetworkPolicy admits 4222 from pods labelled
+  # app.kubernetes.io/name=elitea-main / elitea-llm-gateway / elitea-scheduler
+  # (deploy/helm/nats networkPolicy.clients). A main/llmGateway/scheduler
+  # nameOverride changes that label, so templates/natsClient.yaml refuses it
+  # unless this is true — set it only after adding the new name to the NATS
+  # chart's networkPolicy.clients.
+  networkPolicyClientNamesManaged: false
+
 # The top-level `redis` block (the plaintext "general purpose" Redis, service
 # elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
 # GONE. Its three uses moved or were deleted: the project SSE stream to NATS

@@ -114,7 +114,15 @@ refuse "elitea: nats:// gateway URL"          "not tls://"                   "${
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: credential in a scheduler URL" "user information"            "${EL[@]}" --set-string scheduler.env.GATEWAY_NATS_URL=tls://u:p@elitea-nats:4222
 refuse "elitea: NATS in another namespace, namespaced Issuer" "is a namespaced Issuer" "${EL[@]}" --set nats.namespace=nats-elsewhere
+refuse "elitea: renamed NATS client, policy not updated" "would be dropped at the NATS port" "${EL[@]}" --set scheduler.nameOverride=sched
+refuse "bootstrap: renamed Job pod, policy not updated" "would time out at the NATS port" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set nameOverride=nb
 refuse "elitea: tls:// with TLS off"          "tls:// but nats.tls.enabled is false" "${EL[@]}" --set nats.tls.enabled=false --set nats.tls.allowPlaintext=true --set-string llmGateway.env.GATEWAY_NATS_URL=tls://elitea-nats:4222
+# A renamed client renders once the operator states the policy matches.
+if "$HELM" template "${EL[@]}" --set scheduler.nameOverride=sched --set nats.networkPolicyClientNamesManaged=true > /dev/null 2> "$TMP/rn.err"; then
+  echo "ok	elitea: a renamed client with the policy managed renders" >> "$TMP/refusals"
+else
+  echo "REFUSED-A-VALID-TOPOLOGY	elitea: renamed client, managed	$(tail -1 "$TMP/rn.err")" >> "$TMP/refusals"
+fi
 # NATS in another namespace renders with a ClusterIssuer.
 if "$HELM" template "${EL[@]}" --set nats.namespace=nats-elsewhere --set nats.tls.issuerRef.kind=ClusterIssuer --set nats.tls.issuerRef.name=nats-ca > /dev/null 2> "$TMP/ci.err"; then
   echo "ok	elitea: NATS elsewhere with a ClusterIssuer renders" >> "$TMP/refusals"
@@ -335,7 +343,10 @@ for ident, (pfx, cm, urlvar) in prefix.items():
         continue
     spec = d["spec"]["template"]["spec"]
     ctr = spec["containers"][0]
-    check(f"{ident}: pod label is one the NetworkPolicy admits", d["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") == ident)
+    np_names = {p["podSelector"]["matchLabels"]["app.kubernetes.io/name"]
+                for r in kinds(scale1, "NetworkPolicy")[0]["spec"]["ingress"] if r["ports"][0]["port"] == 4222
+                for p in r["from"] if "podSelector" in p}
+    check(f"{ident}: pod label is one the NATS NetworkPolicy admits", d["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") in np_names)
     vol = [v for v in spec.get("volumes", []) if v["name"] == "nats-client-tls"]
     mnt = [m for m in ctr.get("volumeMounts", []) if m["name"] == "nats-client-tls"]
     check(f"{ident}: mounts the Secret its Certificate writes", vol and vol[0]["secret"]["secretName"] == certs[ident]["spec"]["secretName"] and mnt)
