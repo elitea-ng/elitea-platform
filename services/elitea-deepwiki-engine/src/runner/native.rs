@@ -1055,25 +1055,78 @@ exit 0
 
     #[tokio::test]
     async fn the_query_tools_run_in_process_and_never_spawn_a_worker() {
-        // A worker that would fail loudly if spawned: the query tools must
-        // reach `ask::run_tool`, whose first step (the model settings)
-        // refuses an argument set with no llm_settings.
+        // A worker that would fail loudly if spawned. Each answer below is
+        // the query tool's own, reached in this process before any model
+        // or database call; a spawned worker would answer "ended without
+        // a result" instead.
         let (runner, root) = scripted("#!/bin/sh\necho spawned >&2\nexit 7\n");
         let (context, _receiver, _stop) = context();
-        for tool in ["ask", "deep_research", "resolve_wiki"] {
-            let mut arguments = Map::new();
-            arguments.insert("question".to_owned(), Value::String("q".to_owned()));
-            let outcome = runner.run(tool, arguments, &context).await;
-            let text = match &outcome {
-                Ok(value) => value.to_string(),
-                Err(error) => error.message.clone(),
-            };
-            assert!(!text.contains("ended without a result"), "{tool}: {text}");
+        let run = |tool: &'static str, arguments: Value| {
+            let runner = runner.clone();
+            let context = context.clone();
+            async move {
+                let arguments = arguments.as_object().cloned().unwrap_or_default();
+                runner.run(tool, arguments, &context).await
+            }
+        };
+        let gateway = json!({"api_base": "http://127.0.0.1:1", "api_key": "k", "model_name": "m"});
+        for tool in ["ask", "deep_research"] {
+            // `parse_request`: an unsuccessful result.
+            let result = run(tool, json!({"question": "q"})).await;
+            assert_eq!(
+                result.ok(),
+                Some(json!({
+                    "success": false,
+                    "error": "No repository specified",
+                    "error_type": "ValueError",
+                    "error_category": "invalid_input",
+                })),
+                "{tool}"
+            );
+            // The model settings: an engine error.
+            let refused = run(
+                tool,
+                json!({"question": "q", "repo_config": {"repository": "a/b"}}),
+            )
+            .await
+            .map_err(|e| (e.error_type, e.message));
+            assert_eq!(
+                refused,
+                Err((
+                    ErrorType::Value,
+                    "llm_settings.api_base is required".to_owned()
+                )),
+                "{tool}"
+            );
+            // The embedding model: an engine error.
+            let refused = run(
+                tool,
+                json!({"question": "q", "repo_config": {"repository": "a/b"},
+                       "llm_settings": gateway, "embedding_model": 5}),
+            )
+            .await
+            .map_err(|e| (e.error_type, e.message));
             assert!(
-                !text.contains("not supported by the native engine"),
-                "{tool}: {text}"
+                matches!(&refused, Err((ErrorType::Value, m)) if m.starts_with("embedding_model must be")),
+                "{tool}: {refused:?}"
             );
         }
+        // resolve_wiki: no wikis is NONE; wikis without a model a refusal.
+        let none = run("resolve_wiki", json!({"question": "q"})).await;
+        assert_eq!(none.ok(), Some(json!({"success": true, "wiki_id": "NONE"})));
+        let refused = run(
+            "resolve_wiki",
+            json!({"question": "q", "wikis": [{"wiki_id": "w"}]}),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(refused["success"], json!(false));
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("llm_settings carries no model_name")),
+            "{refused}"
+        );
         let unknown = runner.run("list_wikis", Map::new(), &context).await.err();
         assert_eq!(unknown.map(|e| e.error_type), Some(ErrorType::Key));
         let _ = std::fs::remove_dir_all(&root);
