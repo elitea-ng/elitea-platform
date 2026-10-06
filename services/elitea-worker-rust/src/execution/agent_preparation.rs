@@ -47,9 +47,7 @@ use crate::protocol::control::{
     InvocationSubmissionPermit, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
 };
 use crate::protocol::elitea::runtime::v1::{DigestAlgorithmV1, DigestV1};
-use crate::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandRetirer, RedisRetirementClient,
-};
+use crate::transport::command_bus::{CommandDelivery, CommandRetirementClient, CommandRetirer};
 use crate::transport::{ControlRpc, InputContentClient, InputContentError, MaterializedInput};
 
 /// Immutable preparation policy.
@@ -320,7 +318,7 @@ pub enum AgentPreparationOutcome {
 /// coordinator. No raw fence or delivery content is exposed.
 pub struct PreparedAgentInvocation {
     #[allow(dead_code)] // Consumed by the next authorize-and-run slice.
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     #[allow(dead_code)] // Consumed by the next authorize-and-run slice.
     verified: VerifiedAgentCommand,
     request: AgentExecutionRequest,
@@ -450,7 +448,7 @@ impl PreparedAgentAuthorization {
 #[allow(dead_code)] // Consumed by the next native ADK invocation slice.
 pub(crate) struct PreparedAgentAuthorizationPayload {
     #[allow(dead_code)] // Consumed by the native ADK invocation slice.
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     #[allow(dead_code)] // Consumed by the native ADK invocation slice.
     verified: VerifiedAgentCommand,
     request: AgentExecutionRequest,
@@ -551,7 +549,7 @@ impl InvocationAuthorizationPayload for PreparedAgentAuthorizationPayload {
 /// value at the actual supervised submission boundary.
 #[allow(dead_code)] // Consumed by the next native ADK invocation slice.
 pub(crate) struct AuthorizedAgentRun {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     request: AgentExecutionRequest,
     output_authority: AgentExecutionOutputAuthority,
@@ -574,7 +572,7 @@ enum NativeCheckpointAuthorization {
 
 impl AuthorizedAgentRun {
     pub(crate) fn from_node_checkpoint(
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
         request: AgentExecutionRequest,
         output: PreparedAgentOutput,
@@ -598,7 +596,7 @@ impl AuthorizedAgentRun {
     }
     #[allow(dead_code)]
     pub(crate) fn from_checkpoint(
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
         request: AgentExecutionRequest,
         output: PreparedAgentOutput,
@@ -671,7 +669,7 @@ impl AuthorizedAgentRun {
     ///
     /// On failure, the returned value still owns the complete unstarted run and
     /// connector so the coordinator can close it without losing output,
-    /// submission, lease, or Redis authority.
+    /// submission, lease, or command-bus authority.
     #[allow(dead_code)] // Consumed by the capability-disabled native lifecycle.
     pub(crate) fn bind_progress_publisher<C: AgentProgressConnector>(
         self,
@@ -768,10 +766,10 @@ impl<C> AuthorizedAgentProgressBindError<C> {
 /// Authorized application/ad-hoc run with inseparable progress ownership.
 ///
 /// No method exposes the request, submission permit, raw cursor, output
-/// session, lease, or Redis delivery independently.
+/// session, lease, or command delivery independently.
 #[allow(dead_code)] // Consumed by the capability-disabled native lifecycle.
 pub(crate) struct CursorBoundAuthorizedAgentRun<C: AgentProgressConnector> {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     request: AgentExecutionRequest,
     publisher: FreshAgentProgressPublisher<C>,
@@ -1263,13 +1261,13 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         selection: FreshAgentTerminalSelection,
         occurred_at_unix_millis: i64,
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<RC>>,
+        retirer: Arc<CommandRetirer<RC>>,
         recovery_config: AgentTerminalRecoveryConfig,
     ) -> AgentAuthorizedLifecycleCompletion
     where
         C: AgentTerminalReplay,
         R: ControlRpc + 'static,
-        RC: RedisRetirementClient + 'static,
+        RC: CommandRetirementClient + 'static,
     {
         let Self {
             delivery,
@@ -1314,12 +1312,12 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 .map_err(|error| ("agent_lifecycle.settlement_failed", error.retryable()))?;
             tracing::info!(event = "agent_settlement_prepared");
             let settlement_receipt_id = receipt.receipt_id().to_owned();
-            tracing::info!(event = "agent_redis_retirement_started");
+            tracing::info!(event = "agent_command_retirement_started");
             retirer
                 .retire_agent_command(delivery, &verified, receipt.into())
                 .await
                 .map_err(|error| (error.code(), error.retryable()))?;
-            tracing::info!(event = "agent_redis_retirement_completed");
+            tracing::info!(event = "agent_command_retirement_completed");
             Ok::<_, (&'static str, bool)>((sequence, settlement_receipt_id))
         })
         .await;
@@ -1371,7 +1369,7 @@ impl AuthorizedAgentRun {
 ///
 /// The accepted claim can no longer create output or submission authority. The
 /// empty spool lock remains owned until lease shutdown completes, while the
-/// supervisor retains capacity and Redis remains deliberately unacknowledged.
+/// supervisor retains capacity and the command remains deliberately unacknowledged.
 #[allow(dead_code)] // Consumed by the next supervised authorization coordinator.
 pub(crate) struct AgentAuthorizationUnknown {
     execution_kind: AgentExecutionKind,
@@ -1390,7 +1388,7 @@ impl AgentAuthorizationUnknown {
 
     /// Close only local authority after an unknown authorization effect.
     ///
-    /// No terminal, settlement, or Redis retirement authority is returned.
+    /// No terminal, settlement, or command retirement authority is returned.
     #[allow(dead_code)] // Used by the next supervised authorization coordinator.
     pub(crate) async fn close_no_ack(self) -> AgentAuthorizationUnknownCompletion {
         let Self {
@@ -1441,7 +1439,7 @@ impl AgentAuthorizationUnknownCompletion {
 /// a canonical pre-invocation terminal cause such as durable Stop.
 pub struct PreInvocationTerminal {
     #[allow(dead_code)] // Consumed by the next output-coordination slice.
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     #[allow(dead_code)] // Consumed by the next output-coordination slice.
     verified: VerifiedAgentCommand,
     #[allow(dead_code)] // Consumed by the next output-coordination slice.
@@ -1479,7 +1477,7 @@ impl PreInvocationTerminal {
     pub(crate) fn into_test_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedAgentCommand,
         AgentExecutionOutputAuthority,
         PreparedAgentOutput,
@@ -1506,7 +1504,7 @@ impl PreInvocationTerminal {
 /// published or retired under another admitted invocation. Capacity remains
 /// with either the pre-invocation caller or the process supervisor.
 pub(crate) struct AgentFailureTerminal {
-    pub(super) delivery: RedisCommandDelivery,
+    pub(super) delivery: CommandDelivery,
     pub(super) verified: VerifiedAgentCommand,
     pub(super) output_authority: AgentExecutionOutputAuthority,
     pub(super) output: PreparedAgentOutput,
@@ -1633,7 +1631,7 @@ impl std::error::Error for PreInvocationTerminalCause {
 /// # Errors
 ///
 /// Returns typed admission/control/lease/input/deadline failures. Any returned
-/// error owns no output or Redis retirement authority; the command remains
+/// error owns no output or command retirement authority; the command remains
 /// unacknowledged for recovery. Durable cancellation is instead returned as a
 /// `PreInvocationTerminal` carrying its exact output authority.
 pub async fn prepare_fresh_agent_invocation<R>(
@@ -1773,7 +1771,7 @@ where
 
 struct ActiveAgentPreparation {
     kind: AgentExecutionKind,
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     output_spool: PreparedAgentOutput,
     execution: LeaseMonitoredAgentExecution,
@@ -1958,7 +1956,7 @@ fn is_terminal_lease(error: &ClaimLeaseError) -> bool {
 }
 
 fn pre_invocation_terminal(
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     output_spool: PreparedAgentOutput,
     execution: LeaseMonitoredAgentExecution,

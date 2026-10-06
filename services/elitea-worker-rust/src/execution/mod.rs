@@ -7,6 +7,7 @@ mod agent_invocation;
 pub mod agent_lease;
 pub mod agent_preparation;
 mod checkpoint_recovery;
+pub(crate) mod command_delivery;
 mod execution_delivery_processor;
 pub mod invocation_admission;
 mod invocation_supervisor;
@@ -14,7 +15,6 @@ mod native_agent_lifecycle;
 mod node_recovery;
 pub mod output_delivery;
 pub(crate) mod production;
-mod redis_delivery;
 mod toolkit_delivery;
 mod toolkit_delivery_processor;
 mod toolkit_output;
@@ -24,13 +24,15 @@ mod agent_lease_tests;
 #[cfg(test)]
 mod agent_preparation_tests;
 #[cfg(test)]
+mod command_delivery_tests;
+#[cfg(test)]
 mod invocation_admission_tests;
 #[cfg(test)]
 mod invocation_supervisor_tests;
 #[cfg(test)]
-mod output_delivery_tests;
+mod nats_live_tests;
 #[cfg(test)]
-mod redis_delivery_tests;
+mod output_delivery_tests;
 #[cfg(test)]
 mod toolkit_output_tests;
 

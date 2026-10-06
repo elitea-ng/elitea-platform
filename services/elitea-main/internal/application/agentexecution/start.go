@@ -79,7 +79,7 @@ type CurrentApplicationTarget struct {
 	ApplicationVersionID int64
 	Variables            json.RawMessage
 	VersionDetails       json.RawMessage
-	// Main resolver-only carrier; never serialized into execution input or Redis.
+	// Main resolver-only carrier; never serialized into execution input or the command bus.
 	SourceVersionDetails json.RawMessage
 	ChatHistory          json.RawMessage
 	InternalTools        json.RawMessage

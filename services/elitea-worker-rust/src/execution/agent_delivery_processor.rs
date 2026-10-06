@@ -1,10 +1,10 @@
 //! Whole-delivery composition for application and ad-hoc agent commands.
 //!
-//! This is the sole bridge from Redis PEL ownership into claim routing,
+//! This is the sole bridge from `JetStream` delivery ownership into claim routing,
 //! encrypted-output preflight, fresh preparation and the process-owned native
 //! invocation coordinator. Its processing future does not return until the
 //! exact command is retired or deliberately retained for recovery, allowing
-//! the Redis runtime to heartbeat the PEL entry for the full lifecycle.
+//! the delivery runtime to heartbeat (`+WPI`) the message for the full lifecycle.
 
 #![allow(dead_code)] // Production bootstrap and capability registration remain gated.
 
@@ -24,6 +24,7 @@ use super::agent_preparation::{
     AgentInputMaterializer, AgentPreparationConfig, AgentPreparationError, AgentPreparationOutcome,
     prepare_fresh_agent_invocation_with,
 };
+use super::command_delivery::{CommandDeliveryProcessor, verification_poison};
 use super::invocation_admission::InvocationAdmission;
 use super::invocation_supervisor::InvocationSupervisionError;
 use super::native_agent_lifecycle::NativeAuthorizedAgentLifecycle;
@@ -34,7 +35,6 @@ use super::output_delivery::{
     publish_pre_invocation_terminal, reconcile_empty_agent_output_recovery,
     recover_accepted_terminal,
 };
-use super::redis_delivery::RedisDeliveryProcessor as RedisDeliveryProcessorContract;
 use crate::agents::runtime::NativeAgentAssembler;
 use crate::diagnostics::attach_command_trace_parent;
 use crate::protocol::command::{
@@ -45,11 +45,11 @@ use crate::protocol::control::{
 };
 use crate::protocol::output::RuntimeFailureKind;
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandRetirer, RedisRetirementClient,
+use crate::transport::command_bus::{
+    CommandDelivery, CommandRetirementClient, CommandRetirer, DeliveryVerdict,
 };
 
-/// Complete application/ad-hoc command processor behind one Redis delivery
+/// Complete application/ad-hoc command processor behind one command delivery
 /// worker. Every field is an immutable process-owned dependency; no execution
 /// path may resolve a second client or service locator after claim.
 pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
@@ -60,7 +60,7 @@ pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
     authenticator: Arc<dyn SignedCommandAuthenticator>,
     output: AgentOutputPreflight,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     replay: Arc<T>,
     input: Arc<I>,
     clock: Arc<K>,
@@ -73,7 +73,7 @@ pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
 impl<R, RC, T, K, D, I> AgentDeliveryProcessor<R, RC, T, K, D, I>
 where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
@@ -85,7 +85,7 @@ where
         authenticator: Arc<dyn SignedCommandAuthenticator>,
         output: AgentOutputPreflight,
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<RC>>,
+        retirer: Arc<CommandRetirer<RC>>,
         replay: Arc<T>,
         input: Arc<I>,
         clock: Arc<K>,
@@ -125,7 +125,7 @@ where
     }
 
     /// Stop later native submissions. Normal process shutdown calls this only
-    /// after Redis intake has stopped and all owned delivery futures drained.
+    /// after command intake has stopped and all owned delivery futures drained.
     pub(super) fn stop(&self) -> Result<(), InvocationSupervisionError> {
         self.coordinator.stop()
     }
@@ -137,7 +137,7 @@ where
 
     async fn process_owned(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
     ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError> {
         if self.node_recovery {
@@ -181,7 +181,7 @@ where
     /// until restored browser output and deployed recovery acceptance pass.
     pub(super) async fn process_checkpoint_verified(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
     ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError>
     where
@@ -203,7 +203,7 @@ where
 
     pub(super) async fn process_verified_delivery(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
     ) {
         let command = verified.command();
@@ -221,8 +221,8 @@ where
             capability_id = %command.capability_id,
             parent_execution_id = %command.parent_execution_id,
             parent_call_id = %command.parent_call_id,
-            redis_stream = %delivery.stream(),
-            redis_entry_id = %delivery.entry_id(),
+            nats_stream = %delivery.stream(),
+            nats_stream_sequence = delivery.stream_sequence(),
             trace_context_present = !command.traceparent.is_empty(),
             remote_parent = tracing::field::Empty,
             outcome = tracing::field::Empty,
@@ -331,7 +331,7 @@ where
 
     async fn process_node_recovery_verified(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
     ) -> Result<AgentDeliveryProcessOutcome, AgentDeliveryProcessError>
     where
@@ -611,20 +611,20 @@ where
 }
 
 #[async_trait]
-impl<R, RC, T, K, D, I> RedisDeliveryProcessorContract for AgentDeliveryProcessor<R, RC, T, K, D, I>
+impl<R, RC, T, K, D, I> CommandDeliveryProcessor for AgentDeliveryProcessor<R, RC, T, K, D, I>
 where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
     I: AgentInputMaterializer + 'static,
 {
-    async fn process(&self, delivery: RedisCommandDelivery) {
+    async fn process(&self, delivery: CommandDelivery) -> DeliveryVerdict {
         let verification = tracing::info_span!(
             "agent.delivery.verify",
-            redis_stream = %delivery.stream(),
-            redis_entry_id = %delivery.entry_id(),
+            nats_stream = %delivery.stream(),
+            nats_stream_sequence = delivery.stream_sequence(),
             outcome = tracing::field::Empty,
             error_code = tracing::field::Empty,
             retryable = tracing::field::Empty,
@@ -644,8 +644,9 @@ where
                 verified
             }
             Err(error) => {
+                let poison = verification_poison(&error);
                 let error = AgentDeliveryProcessError::Delivery(error.into());
-                verification.record("outcome", "failed_no_ack");
+                verification.record("outcome", "poison");
                 verification.record("error_code", error.code());
                 verification.record("retryable", error.retryable());
                 verification.in_scope(|| {
@@ -655,10 +656,17 @@ where
                         retryable = error.retryable(),
                     );
                 });
-                return;
+                return DeliveryVerdict::poison(poison);
             }
         };
+        if let Err(verdict) = delivery.bind_idempotency_key(&verified.command().idempotency_key) {
+            verification.in_scope(|| {
+                tracing::warn!(event = "agent_delivery_subject_mismatch");
+            });
+            return verdict;
+        }
         self.process_verified_delivery(delivery, verified).await;
+        DeliveryVerdict::Processed
     }
 }
 
@@ -667,7 +675,7 @@ pub(super) fn native_agent_delivery_processor<A, C, R, RC, K, I>(
     authenticator: Arc<dyn SignedCommandAuthenticator>,
     output: AgentOutputPreflight,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     input: Arc<I>,
     clock: Arc<K>,
     admission: InvocationAdmission,
@@ -681,7 +689,7 @@ where
     A: NativeAgentAssembler,
     C: AgentProgressConnector + AgentTerminalReplay + Clone + Send + Sync + 'static,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
     I: AgentInputMaterializer + 'static,
 {

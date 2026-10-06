@@ -28,7 +28,6 @@ use crate::protocol::output::{
 };
 use crate::spool::{SpoolLimits, SpoolMasterKey};
 use crate::transport::OutputGrpcConfig;
-use crate::transport::redis_commands::{RedisCommandDelivery, RedisCommandLimits};
 
 const DEADLINE: i64 = 1_700_000_100_000;
 const NOW: i64 = DEADLINE + 1_000;
@@ -103,16 +102,7 @@ fn fresh(response: ClaimCommandResponseV1) -> FreshToolkitDelivery {
     let verified = verified(&raw);
     let claim = test_accepted_agent_claim(&verified, response, "workload-1", "worker-1", NOW)
         .expect("authenticated claim");
-    let delivery = RedisCommandDelivery::decode(
-        b"runtime.commands.v1",
-        b"1700000000000-0",
-        vec![(b"signed_envelope".to_vec(), raw)],
-        RedisCommandLimits {
-            max_entry_bytes: 64 * 1024,
-            max_field_bytes: 48 * 1024,
-        },
-    )
-    .expect("delivery");
+    let delivery = crate::transport::command_bus::test_agent_delivery(raw);
     test_fresh_toolkit_delivery(delivery, verified, claim)
 }
 

@@ -69,7 +69,7 @@ def build_static_handler_registry(
 
 
 class OfflineValidationWorker:
-    """Conformance-only composition; it has no Redis or network dependency."""
+    """Conformance-only composition; it has no command-bus or network dependency."""
 
     def __init__(self) -> None:
         self._handler = ConfigurationValidationHandler(EliteaSdkAdapter())

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 )
 
@@ -32,30 +34,13 @@ func TestConfigFromEnvAcceptsCompleteBoundedProductionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !config.Enabled || config.RedisPoolSize != 8 || config.MaxOutstanding != 128 || config.StreamMaxEntries != 256 {
+	if !config.Enabled || config.MaxOutstanding != 128 || config.NATSURL != "tls://elitea-nats:4222" ||
+		!config.NATSMaterial.Enabled() || config.CommandStream != "ELITEA_RT_V1_VALIDATE" {
 		t.Fatalf("unexpected runtime config: %+v", config)
 	}
 }
 
 func TestConfigIntegerConversionsRespectProtocolBounds(t *testing.T) {
-	environment := validEnvironment()
-	environment["ELITEA_RUNTIME_REDIS_POOL_SIZE"] = "64"
-	if _, err := ConfigFromEnv(mapLookup(environment)); err != nil {
-		t.Fatalf("maximum Redis pool size rejected: %v", err)
-	}
-
-	environment["ELITEA_RUNTIME_REDIS_POOL_SIZE"] = "65"
-	if _, err := ConfigFromEnv(mapLookup(environment)); err == nil ||
-		!strings.Contains(err.Error(), "runtime Redis pool size is invalid") {
-		t.Fatalf("out-of-range Redis pool size error = %v", err)
-	}
-
-	if err := validateRedisURL("rediss://runtime@redis.internal:65535/0"); err != nil {
-		t.Fatalf("maximum Redis TCP port rejected: %v", err)
-	}
-	if err := validateRedisURL("rediss://runtime@redis.internal:65536/0"); err == nil {
-		t.Fatal("out-of-range Redis TCP port was accepted")
-	}
 	if err := validateTCPAddress(":65535"); err != nil {
 		t.Fatalf("maximum listener TCP port rejected: %v", err)
 	}
@@ -75,49 +60,19 @@ func TestConfigIndexIngestDispatchIsOptionalAndDedicated(t *testing.T) {
 
 	environment := validEnvironment()
 	environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
-	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "commands.v1.index.ingest.indexing.shared.1.0"
-	environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] = "elitea-indexer-worker-v1"
-	environment["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "64"
+	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_INDEX"
 	config, err := ConfigFromEnv(mapLookup(environment))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !config.IndexIngestDispatchEnabled || config.IndexIngestCommandStream != environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] || config.IndexIngestConsumerGroup != environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] || config.IndexIngestStreamMaxEntries != 64 {
+	if !config.IndexIngestDispatchEnabled || config.IndexIngestCommandStream != "ELITEA_RT_V1_INDEX" ||
+		consumerFor(config.IndexIngestCommandStream) != "elitea-index-worker-v1" {
 		t.Fatalf("unexpected index ingest dispatch config: %+v", config)
 	}
 
 	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = environment["ELITEA_RUNTIME_COMMAND_STREAM"]
 	if _, err := ConfigFromEnv(mapLookup(environment)); err == nil || !strings.Contains(err.Error(), "dedicated") {
 		t.Fatalf("shared runtime stream was accepted: %v", err)
-	}
-
-	for _, alias := range []struct {
-		name       string
-		validation string
-		index      string
-	}{
-		{
-			name:       "index aliases validation delivery index",
-			validation: "commands.validation",
-			index:      "commands.validation:delivery-index.v1",
-		},
-		{
-			name:       "validation aliases index delivery index",
-			validation: "commands.index:delivery-index.v1",
-			index:      "commands.index",
-		},
-	} {
-		t.Run(alias.name, func(t *testing.T) {
-			environment := validEnvironment()
-			environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
-			environment["ELITEA_RUNTIME_COMMAND_STREAM"] = alias.validation
-			environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = alias.index
-			environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] = "elitea-indexer-worker-v1"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "64"
-			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil || !strings.Contains(err.Error(), "dedicated") {
-				t.Fatalf("derived Redis key alias was accepted: %v", err)
-			}
-		})
 	}
 }
 
@@ -127,21 +82,15 @@ func TestConfigIndexIngestDispatchFailsClosed(t *testing.T) {
 		apply func(map[string]string)
 	}{
 		{
-			name: "missing group",
+			name: "a stream outside the contract",
 			apply: func(values map[string]string) {
-				delete(values, "ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP")
+				values["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "commands.v1.index.ingest.indexing.shared.2.0"
 			},
 		},
 		{
-			name: "non canonical capacity",
+			name: "a stream with no permission row",
 			apply: func(values map[string]string) {
-				values["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "064"
-			},
-		},
-		{
-			name: "capacity above bound",
-			apply: func(values map[string]string) {
-				values["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "1025"
+				values["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_INDEX2"
 			},
 		},
 		{
@@ -161,9 +110,7 @@ func TestConfigIndexIngestDispatchFailsClosed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			environment := validEnvironment()
 			environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "commands.v1.index.ingest.indexing.shared.1.0"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] = "elitea-indexer-worker-v1"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "64"
+			environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_INDEX"
 			test.apply(environment)
 			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {
 				t.Fatal("invalid index ingest dispatch config was accepted")
@@ -172,7 +119,7 @@ func TestConfigIndexIngestDispatchFailsClosed(t *testing.T) {
 	}
 }
 
-func TestConfigAgentExecutionDispatchIsOptionalWorkerPooledAndBounded(t *testing.T) {
+func TestConfigAgentExecutionDispatchIsOptionalAndMayShareTheIndexStream(t *testing.T) {
 	baseline, err := ConfigFromEnv(mapLookup(validEnvironment()))
 	if err != nil {
 		t.Fatal(err)
@@ -184,17 +131,13 @@ func TestConfigAgentExecutionDispatchIsOptionalWorkerPooledAndBounded(t *testing
 	environment := validEnvironment()
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
 	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "commands.v1.agent.execute.agents.shared.1.0"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "elitea-agent-worker-v1"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "64"
+	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	config, err := ConfigFromEnv(mapLookup(environment))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !config.AgentExecutionDispatchEnabled ||
-		config.AgentExecutionCommandStream != environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] ||
-		config.AgentExecutionConsumerGroup != "elitea-agent-worker-v1" ||
-		config.AgentExecutionStreamMaxEntries != 64 {
+	if !config.AgentExecutionDispatchEnabled || config.AgentExecutionCommandStream != "ELITEA_RT_V1_AGENT" ||
+		consumerFor(config.AgentExecutionCommandStream) != "elitea-agent-worker-v1" {
 		t.Fatalf("unexpected agent execution config: %+v", config)
 	}
 
@@ -203,32 +146,15 @@ func TestConfigAgentExecutionDispatchIsOptionalWorkerPooledAndBounded(t *testing
 		t.Fatalf("shared validation/agent stream was accepted: %v", err)
 	}
 
+	// The standalone profile: index ingest on the agent stream, one durable.
 	environment = validEnvironment()
 	environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
-	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "commands.v1.index.ingest.indexing.shared.2.0"
-	environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] = "elitea-indexer-worker-v2"
-	environment["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "64"
+	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
 	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"]
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"]
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "64"
+	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	if _, err := ConfigFromEnv(mapLookup(environment)); err != nil {
-		t.Fatalf("shared index/agent worker pool was rejected: %v", err)
-	}
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "different-worker-pool"
-	if _, err := ConfigFromEnv(mapLookup(environment)); err == nil || !strings.Contains(err.Error(), "consumer group") {
-		t.Fatalf("one stream with competing capability groups was accepted: %v", err)
-	}
-
-	environment = validEnvironment()
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "commands.v1.agent.execute.agents.shared.1.0"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "elitea-agent-worker-v1"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "1025"
-	if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {
-		t.Fatal("unbounded agent execution stream capacity was accepted")
+		t.Fatalf("shared index/agent stream was rejected: %v", err)
 	}
 }
 
@@ -241,9 +167,7 @@ func TestConfigAgentExecutionCurrentMainOriginFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			environment := validEnvironment()
 			environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-			environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "commands.v1.agent.execute.agents.shared.1.0"
-			environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "elitea-agent-worker-v1"
-			environment["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "64"
+			environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 			environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = value
 			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {
 				t.Fatalf("unsafe current Main origin accepted: %q", value)
@@ -279,11 +203,7 @@ func TestConfigIndexSchedulingIsExplicitAndRequiresDurableIndexAdmission(
 
 	enabled := validEnvironment()
 	enabled["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
-	enabled["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] =
-		"commands.v1.index.ingest.indexing.shared.2.0"
-	enabled["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] =
-		"elitea-indexer-worker-v2"
-	enabled["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "64"
+	enabled["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_INDEX"
 	enabled["ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED"] = "true"
 	enabled["ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID"] = "elitea-main-pov-1"
 	config, err := ConfigFromEnv(mapLookup(enabled))
@@ -310,11 +230,7 @@ func TestConfigIndexSchedulingRequiresCanonicalUniqueInstanceID(t *testing.T) {
 		t.Run(instanceID, func(t *testing.T) {
 			environment := validEnvironment()
 			environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] =
-				"commands.v1.index.ingest.indexing.shared.2.0"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] =
-				"elitea-indexer-worker-v2"
-			environment["ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"] = "64"
+			environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_INDEX"
 			environment["ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED"] = "true"
 			environment["ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID"] = instanceID
 			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {
@@ -426,9 +342,9 @@ func TestConfigSSEStreamLimitsRequireExplicitEnablement(t *testing.T) {
 	}
 }
 
-func TestIndexIngestProductionRedisEntryBoundIsStrictlyBelow64KiB(t *testing.T) {
-	if productionIndexRedisEntrySize >= 64*1024 {
-		t.Fatalf("index ingest Redis entry bound=%d, must be below 64 KiB", productionIndexRedisEntrySize)
+func TestIndexIngestProductionMessageBoundIsStrictlyBelow64KiB(t *testing.T) {
+	if productionIndexTransportMessageBytes >= 64*1024 {
+		t.Fatalf("index ingest message bound=%d, must be below 64 KiB", productionIndexTransportMessageBytes)
 	}
 }
 
@@ -442,35 +358,53 @@ func TestIndexIngestEmbeddingBindingUsesDedicatedCapabilityVersion(t *testing.T)
 	}
 }
 
-func TestConfigRedisURLContract(t *testing.T) {
+func TestConfigNATSURLAndIdentityContract(t *testing.T) {
 	tests := []struct {
-		name string
-		url  string
+		name  string
+		apply func(map[string]string)
 	}{
-		{name: "plaintext", url: "redis://runtime@redis.internal:6379/0"},
-		{name: "missing username", url: "rediss://redis.internal:6379/0"},
-		{name: "password in URL", url: "rediss://runtime:secret@redis.internal:6379/0"},
-		{name: "query", url: "rediss://runtime@redis.internal:6379/0?protocol=2"},
-		{name: "fragment", url: "rediss://runtime@redis.internal:6379/0#fragment"},
-		{name: "missing port", url: "rediss://runtime@redis.internal/0"},
-		{name: "leading-zero port", url: "rediss://runtime@redis.internal:06379/0"},
-		{name: "missing database path", url: "rediss://runtime@redis.internal:6379"},
-		{name: "nonzero database", url: "rediss://runtime@redis.internal:6379/1"},
-		{name: "noncanonical database", url: "rediss://runtime@redis.internal:6379/01"},
-		{name: "encoded username", url: "rediss://runtime%2Dworker@redis.internal:6379/0"},
-		{name: "unsupported username character", url: "rediss://runtime+worker@redis.internal:6379/0"},
-		{name: "unicode username", url: "rediss://runtimé@redis.internal:6379/0"},
-		{name: "unicode host", url: "rediss://runtime@rédis.internal:6379/0"},
-		{name: "leading whitespace", url: " rediss://runtime@redis.internal:6379/0"},
+		{name: "missing URL", apply: func(v map[string]string) { delete(v, "ELITEA_RUNTIME_NATS_URL") }},
+		{name: "nats:// beside client material", apply: func(v map[string]string) { v["ELITEA_RUNTIME_NATS_URL"] = "nats://elitea-nats:4222" }},
+		{name: "credential in URL", apply: func(v map[string]string) { v["ELITEA_RUNTIME_NATS_URL"] = "tls://user:secret@elitea-nats:4222" }},
+		{name: "token in URL", apply: func(v map[string]string) { v["ELITEA_RUNTIME_NATS_URL"] = "tls://token@elitea-nats:4222" }},
+		{name: "half-configured TLS", apply: func(v map[string]string) { delete(v, "ELITEA_RUNTIME_NATS_TLS_KEY_FILE") }},
+		{name: "tls:// without material", apply: func(v map[string]string) {
+			delete(v, "ELITEA_RUNTIME_NATS_TLS_CA_FILE")
+			delete(v, "ELITEA_RUNTIME_NATS_TLS_CERT_FILE")
+			delete(v, "ELITEA_RUNTIME_NATS_TLS_KEY_FILE")
+		}},
+		{name: "whitespace", apply: func(v map[string]string) { v["ELITEA_RUNTIME_NATS_URL"] = "tls://elitea-nats:4222 " }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			environment := validEnvironment()
-			environment["ELITEA_RUNTIME_REDIS_URL"] = test.url
+			test.apply(environment)
 			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {
-				t.Fatalf("invalid Redis URL %q was accepted", test.url)
+				t.Fatal("an invalid runtime NATS configuration was accepted")
 			}
 		})
+	}
+
+	// The compose posture: plaintext, no identity.
+	environment := validEnvironment()
+	environment["ELITEA_RUNTIME_NATS_URL"] = "nats://nats:4222"
+	delete(environment, "ELITEA_RUNTIME_NATS_TLS_CA_FILE")
+	delete(environment, "ELITEA_RUNTIME_NATS_TLS_CERT_FILE")
+	delete(environment, "ELITEA_RUNTIME_NATS_TLS_KEY_FILE")
+	config, err := ConfigFromEnv(mapLookup(environment))
+	if err != nil || config.NATSMaterial.Enabled() {
+		t.Fatalf("the plaintext compose posture: enabled=%t err=%v", config.NATSMaterial.Enabled(), err)
+	}
+}
+
+// Every Redis-era variable is gone from the configuration surface: a stale
+// deployment that still sets them gets no Redis client, and nothing in the
+// composition reads them (TestNoRuntimeRedisLookups in nats_test.go).
+func TestConfigNeedsNoRedis(t *testing.T) {
+	for name := range validEnvironment() {
+		if strings.Contains(name, "REDIS") || strings.Contains(name, "CONSUMER_GROUP") || strings.Contains(name, "STREAM_MAX_ENTRIES") {
+			t.Errorf("the valid runtime environment still carries %s", name)
+		}
 	}
 }
 
@@ -484,13 +418,12 @@ func mapLookup(values map[string]string) LookupEnv {
 func validEnvironment() map[string]string {
 	values := map[string]string{
 		"ELITEA_RUNTIME_ENABLED":                   "true",
-		"ELITEA_RUNTIME_COMMAND_STREAM":            "commands.v1.configuration.validate.v1.validation-small.shared-claim-scoped-authority.1.0",
+		"ELITEA_RUNTIME_COMMAND_STREAM":            "ELITEA_RT_V1_VALIDATE",
 		"ELITEA_RUNTIME_MAX_OUTSTANDING":           "128",
-		"ELITEA_RUNTIME_STREAM_MAX_ENTRIES":        "256",
-		"ELITEA_RUNTIME_REDIS_URL":                 "rediss://runtime@redis.internal:6379/0",
-		"ELITEA_RUNTIME_REDIS_PASSWORD_FILE":       "/run/secrets/runtime-redis-password",
-		"ELITEA_RUNTIME_REDIS_CA_FILE":             "/run/secrets/runtime-redis-ca.pem",
-		"ELITEA_RUNTIME_REDIS_POOL_SIZE":           "8",
+		"ELITEA_RUNTIME_NATS_URL":                  "tls://elitea-nats:4222",
+		"ELITEA_RUNTIME_NATS_TLS_CA_FILE":          "/etc/elitea/runtime-nats-client/ca.crt",
+		"ELITEA_RUNTIME_NATS_TLS_CERT_FILE":        "/etc/elitea/runtime-nats-client/tls.crt",
+		"ELITEA_RUNTIME_NATS_TLS_KEY_FILE":         "/etc/elitea/runtime-nats-client/tls.key",
 		"ELITEA_RUNTIME_SIGNING_KEY_ID":            "runtime-key-2026-01",
 		"ELITEA_RUNTIME_SIGNING_KEY_FILE":          "/run/secrets/runtime-signing-key.pem",
 		"ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE": "/run/config/runtime-signing-keyring.json",
@@ -530,5 +463,16 @@ func TestSandboxGrantAudiencesAreOptionalExactAndBounded(t *testing.T) {
 		if _, err := ConfigFromEnv(mapLookup(env)); err == nil {
 			t.Fatalf("invalid sandbox audiences accepted: %q", raw)
 		}
+	}
+}
+
+func TestRuntimeNATSTLSNamesAreNatsconns(t *testing.T) {
+	// The prefix is the one the NATS permission table's RUNTIME account
+	// reserved for elitea-main-runtime.
+	if runtimeNATSPrefix != natsconn.EnvPrefixRuntime {
+		t.Fatalf("runtimeNATSPrefix = %q, natsconn.EnvPrefixRuntime = %q", runtimeNATSPrefix, natsconn.EnvPrefixRuntime)
+	}
+	if natsconn.EnvNames(runtimeNATSPrefix) != [3]string{runtimeNATSTLSCAFileEnv, runtimeNATSTLSCertFileEnv, runtimeNATSTLSKeyFileEnv} {
+		t.Fatalf("natsconn reads %v", natsconn.EnvNames(runtimeNATSPrefix))
 	}
 }

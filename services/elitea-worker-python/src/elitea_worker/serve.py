@@ -8,7 +8,7 @@ import json
 import signal
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -47,15 +47,12 @@ from elitea_worker.execution.delivery import (
     ToolkitCallToolDeliveryProcessor,
 )
 from elitea_worker.execution.errors import (
+    AuthorizationFailure,
     DependencyUnavailable,
     InvalidInput,
-    ResourceExhausted,
     WorkerError,
 )
-from elitea_worker.execution.quarantine import (
-    CompositeQuarantineStore,
-    FileQuarantineStore,
-)
+from elitea_worker.execution.quarantine import FileQuarantineStore
 from elitea_worker.execution.supervisor import ExecutionSupervisor
 from elitea_worker.handlers.validation import ConfigurationValidationHandler
 from elitea_worker.indexing_runtime_capabilities import (
@@ -79,41 +76,71 @@ from elitea_worker.transport.reconnect_channel import (
     ReconnectableOutputStub,
 )
 from elitea_worker.transport.output_spool import EncryptedOutputSpool
-from elitea_worker.transport.redis_asyncio import RedisAsyncioControlClient
-from elitea_worker.transport.redis_quarantine import SharedQuarantineStore
-from elitea_worker.transport.redis_commands import (
-    RedisCommandConsumer,
-    RedisCommandDelivery,
+from elitea_worker.transport.nats_jetstream import (
+    DEAD_LETTER_BUCKET,
+    TERMINAL_POISON,
+    CommandDelivery,
+    CommandSignatureRejected,
+    JetStreamCommandConsumer,
+    NatsCommandBusConnection,
+    bind_command_consumer,
+    require_subject_names_command,
+    runtime_api_prefix,
 )
 from elitea_worker.transport.runtime_context import ClaimBoundEliteaTokenClient
 
 
 class DeliveryConsumer(Protocol):
+    """The serve loop's whole view of the command bus.
+
+    Intake, heartbeat and the three non-ack answers. The ack itself is not
+    here: only the delivery processor may acknowledge, and only after the
+    terminal PostgreSQL receipt.
+    """
+
     @property
     def delivery_batch_size(self) -> int: ...
 
-    @property
-    def heartbeat_batch_size(self) -> int: ...
-
-    async def read(
+    async def fetch(
         self,
         *,
         count: int | None = None,
-        block_ms: int | None = None,
-    ) -> tuple[RedisCommandDelivery, ...]: ...
+    ) -> tuple[CommandDelivery, ...]: ...
 
-    async def heartbeat_pending(
-        self,
-        entry_ids: tuple[str, ...],
-    ) -> tuple[str, ...]: ...
+    async def in_progress(self, deliveries: Sequence[CommandDelivery]) -> int: ...
 
-    async def reclaim_page(
-        self,
-        *,
-        min_idle_ms: int,
-        start_id: str = "0-0",
-        count: int | None = None,
-    ) -> tuple[str, tuple[RedisCommandDelivery, ...]]: ...
+    async def retry_later(self, delivery: CommandDelivery) -> None: ...
+
+    async def park(self, delivery: CommandDelivery) -> None: ...
+
+    async def release(self, delivery: CommandDelivery) -> None: ...
+
+    async def terminate(self, delivery: CommandDelivery) -> None: ...
+
+    async def record_dead_letter(
+        self, delivery: CommandDelivery, *, reason: str
+    ) -> None: ...
+
+
+#: Claim answers that leave the command for a later delivery. Each is answered
+#: with NakWithDelay(retry delay), which frees the slot now instead of holding
+#: it until AckWait.
+_RETRY_LATER_DISPOSITIONS = frozenset(
+    {
+        DeliveryDisposition.OWNED_ELSEWHERE_NOACK,
+        DeliveryDisposition.RECOVERY_REQUIRED_NOACK,
+        DeliveryDisposition.RETRY_LATER_NOACK,
+    }
+)
+
+#: The ERROR log line the dead-letter alert pairs with the bucket being
+#: non-empty (docs/runtime-command-bus.md, "Dead letter").
+DEAD_LETTERED_EVENT = "worker_command.dead_lettered"
+#: The ERROR line for a poison whose dead-letter record could not be written.
+#: The poison is then NOT parked: it is nak'd with the retry delay, so the
+#: next delivery retries the record (without running the command again).
+DEAD_LETTER_WRITE_FAILED_EVENT = "worker_command.dead_letter_write_failed"
+_ERROR_EVENTS = frozenset({DEAD_LETTERED_EVENT, DEAD_LETTER_WRITE_FAILED_EVENT})
 
 
 @dataclass(slots=True)
@@ -144,12 +171,11 @@ class _ShutdownBudget:
 
 
 class QuarantineStore(Protocol):
-    """The durable half of the quarantine.
+    """The durable, process-local half of the quarantine.
 
-    Narrow by design, like the command consumer beside it: record one entry,
-    read them all back, and nothing else. `clear` is deliberately absent from
-    what the serve loop can reach — a worker that decided an entry is hopeless
-    is not the component that may decide it is repaired.
+    Narrow by design, like the command consumer beside it: record one key,
+    read them all back, and nothing else. A worker that decided a delivery is
+    hopeless is not the component that may decide it is repaired.
     """
 
     @property
@@ -161,17 +187,16 @@ class QuarantineStore(Protocol):
 
 
 class WorkerServeLoop:
-    """Bounded read/reclaim queue with no data-plane publication surface."""
+    """Bounded pull queue with no data-plane publication surface."""
 
     def __init__(
         self,
         *,
         consumer: DeliveryConsumer,
-        process_delivery: Callable[[RedisCommandDelivery], Awaitable[DeliveryResult]],
+        process_delivery: Callable[[CommandDelivery], Awaitable[DeliveryResult]],
         max_concurrency: int,
         queue_capacity: int,
-        reclaim_idle_millis: int,
-        reclaim_interval_millis: int,
+        in_progress_interval_millis: int,
         dependency_retry_millis: int,
         shutdown_timeout_millis: int,
         event_sink: Callable[[str, WorkerError | None], None] | None = None,
@@ -181,8 +206,7 @@ class WorkerServeLoop:
             min(
                 max_concurrency,
                 queue_capacity,
-                reclaim_idle_millis,
-                reclaim_interval_millis,
+                in_progress_interval_millis,
                 dependency_retry_millis,
                 shutdown_timeout_millis,
             )
@@ -193,40 +217,74 @@ class WorkerServeLoop:
         self._consumer = consumer
         self._process = process_delivery
         self._max_concurrency = max_concurrency
-        self._queue: asyncio.Queue[RedisCommandDelivery | None] = asyncio.Queue(
+        self._queue: asyncio.Queue[CommandDelivery | None] = asyncio.Queue(
             queue_capacity
         )
-        self._reclaim_idle = reclaim_idle_millis
-        self._reclaim_interval = reclaim_interval_millis / 1000
+        self._in_progress_interval = in_progress_interval_millis / 1000
         self._dependency_retry = dependency_retry_millis / 1000
         self._shutdown_timeout = shutdown_timeout_millis / 1000
-        self._owned_entry_ids: set[tuple[str, str]] = set()
-        # Entries this process refuses to re-lease, because re-running them
-        # cannot change the outcome. See `_worker`'s non-retryable branch.
+        # Every message this process owns, queued or active, keyed by its
+        # stream sequence. The value is the NEWEST delivery of that sequence:
+        # a redelivery that arrives while the first is still running is not
+        # run twice, but its reply subject is the one the server now tracks,
+        # so heartbeats go there.
+        self._owned: dict[tuple[str, int], CommandDelivery] = {}
+        # Dead-letter keys this process refuses to run again. A poison message
+        # is naked with the contract's 24h delay, so the server keeps it away
+        # for that long; this set (and the durable store behind it) makes the
+        # one redelivery after the delay, before the stream's MaxAge removes
+        # it, a park instead of a second run.
         #
         # Bounded like every other buffer here: an unbounded set would turn a
         # broken dependency into a memory leak. The cap is the same order as the
-        # ownership window, so it can hold every entry this worker could have
-        # in flight, and one more round of them.
-        # Entry ids, not (stream, entry_id) like `_owned_entry_ids`: runtime v1
-        # binds ONE stream to this consumer group, and this loop drives exactly
-        # one consumer, so the stream is a constant here. Keying on it too would
-        # mean deriving the name a second way for the durable load, and a
-        # mismatch there would silently un-quarantine everything.
+        # ownership window, so it can hold every delivery this worker could
+        # have in flight, and one more round of them.
         self._quarantined: set[str] = set()
         self._quarantine_cap = 2 * (queue_capacity + max_concurrency)
-        # Optional on purpose. Without a store the quarantine still stops the
-        # spin for the life of this process, which is the whole of the defect
-        # for a single-worker deployment; with one it also survives a restart
-        # and is shared with every other worker in the group.
+        # Optional on purpose: without a store the decision lasts this
+        # process, and the server-side 24h delay still holds across restarts.
         self._quarantine_store = quarantine_store
-        # One token covers each fetched, queued, or actively processed PEL entry.
-        self._ownership_slots: asyncio.Queue[None] = asyncio.Queue(
-            queue_capacity + max_concurrency
-        )
-        for _ in range(queue_capacity + max_concurrency):
+        # One token covers each fetched, queued, or actively processed message.
+        # Reserved BEFORE the pull, so a fetch never asks for more than this
+        # worker can hold (the semaphore-before-pull rule).
+        #
+        # THE BOUND: max_concurrency + prefetch, where prefetch is at most one
+        # pull batch (nats_fetch_batch) and never more than the queue holds.
+        # It is NOT queue_capacity + max_concurrency (96 by default): a message
+        # this replica holds but cannot start is still num_ack_pending on the
+        # server, so KEDA's nats-jetstream scaler (lag = num_pending +
+        # num_ack_pending, KEDA v2.10..v2.21 getMaxMsgLag) counts it as
+        # in-flight while no other replica may take it, and a scale-in kills
+        # the pod holding it. So a pull asks for the workers free to start a
+        # command now, plus at most one small fixed prefetch; everything else
+        # stays on the server for whichever replica is free.
+        self._prefetch = max(1, min(consumer.delivery_batch_size, queue_capacity))
+        ownership = max_concurrency + self._prefetch
+        self._ownership_slots: asyncio.Queue[None] = asyncio.Queue(ownership)
+        for _ in range(ownership):
             self._ownership_slots.put_nowait(None)
+        # Held by a heartbeat round for its whole send, and by every delayed
+        # nak around "stop owning it, then nak". A +WPI that reaches the server
+        # AFTER a -NAK with a delay resets that message's redelivery timer to
+        # AckWait (nats-server consumer.go progressUpdate), so a 24h poison
+        # delay, or the retry delay, would collapse into a 60s loop. Under this
+        # lock no heartbeat round can still be carrying a message that has
+        # been nak'd, and no later round sees it: it is no longer owned.
+        self._answer_lock = asyncio.Lock()
         self._event_sink = event_sink or (lambda _event, _error: None)
+        #: Poison deliveries this process dead-lettered (an in-process count;
+        #: the worker has no metrics endpoint, the alert is the bucket).
+        self.dead_lettered = 0
+        #: Dead-letter records the bucket refused (in-process; carried on every
+        #: DEAD_LETTER_WRITE_FAILED_EVENT line as the running total).
+        self.dead_letter_write_failures = 0
+        # Poison this process decided on but could not record yet: the next
+        # delivery of the key retries the record instead of being parked.
+        # Bounded like the quarantine it belongs to.
+        self._unrecorded: dict[str, WorkerError] = {}
+        # Fetched and owned, but never queued because shutdown cancelled the
+        # intake mid-put. Released (nak without delay) by the shutdown path.
+        self._unqueued: list[CommandDelivery] = []
 
     async def run(self, stop: asyncio.Event) -> None:
         if stop.is_set():
@@ -234,11 +292,11 @@ class WorkerServeLoop:
         await self._load_durable_quarantine()
         intake = asyncio.create_task(
             self._intake_loop(stop),
-            name="elitea-redis-intake",
+            name="elitea-command-intake",
         )
         heartbeat = asyncio.create_task(
             self._heartbeat_loop(),
-            name="elitea-redis-heartbeat",
+            name="elitea-command-heartbeat",
         )
         workers = tuple(
             asyncio.create_task(self._worker(), name=f"elitea-delivery-{index}")
@@ -259,8 +317,15 @@ class WorkerServeLoop:
                 failed = next(task for task in background if task in done)
                 await _raise_unexpected_background_exit(failed)
 
+            # Graceful shutdown: stop pulling; give every fetched-but-unstarted
+            # message back NOW (a nak without delay, so another replica takes
+            # it instead of this one starting it only to be cut off); keep
+            # heartbeating what is running until it ends or the deadline
+            # passes. Running work is never acked or naked on the way out;
+            # AckWait redelivers whatever is left.
             intake.cancel()
             await asyncio.gather(intake, return_exceptions=True)
+            await self._release_unstarted()
             drain = asyncio.create_task(
                 self._queue.join(),
                 name="elitea-delivery-drain",
@@ -301,35 +366,15 @@ class WorkerServeLoop:
                 _detach_cancelled_tasks(background)
 
     async def _intake_loop(self, stop: asyncio.Event) -> None:
-        """Fairly alternate bounded new reads with reclaim maintenance."""
+        """Reserve capacity, then pull at most that many messages."""
 
-        loop = asyncio.get_running_loop()
-        cursor = "0-0"
-        next_reclaim = loop.time() + self._reclaim_interval
         while not stop.is_set():
             reserved = 0
-            operation = "read"
-            reclaim_due = False
             try:
                 reserved = await self._reserve_delivery_capacity()
-                now = loop.time()
-                reclaim_due = now >= next_reclaim
-                if reclaim_due:
-                    operation = "reclaim"
-                    cursor, deliveries = await self._consumer.reclaim_page(
-                        min_idle_ms=self._reclaim_idle,
-                        start_id=cursor,
-                        count=reserved,
-                    )
-                else:
-                    # The read releases its reservation no later than the next
-                    # reclaim turn. RedisCommandConsumer additionally caps this
-                    # value by the deployment's configured XREADGROUP block.
-                    block_ms = max(1, int((next_reclaim - now) * 1_000))
-                    deliveries = await self._consumer.read(
-                        count=reserved,
-                        block_ms=block_ms,
-                    )
+                if stop.is_set():
+                    break
+                deliveries = await self._consumer.fetch(count=reserved)
                 accepted_reservation = reserved
                 reserved = 0
                 await self._enqueue_reserved(
@@ -339,74 +384,45 @@ class WorkerServeLoop:
             except asyncio.CancelledError:
                 raise
             except WorkerError as exc:
-                self._event_sink(f"redis_{operation}_rejected", exc)
-                if reclaim_due:
-                    cursor = "0-0"
+                self._event_sink("nats_fetch_rejected", exc)
                 await _wait_or_stop(stop, self._dependency_retry)
             except Exception:
-                self._event_sink(
-                    f"redis_{operation}_unavailable",
-                    DependencyUnavailable(),
-                )
-                if reclaim_due:
-                    cursor = "0-0"
+                self._event_sink("nats_fetch_unavailable", DependencyUnavailable())
                 await _wait_or_stop(stop, self._dependency_retry)
             finally:
-                if reclaim_due:
-                    next_reclaim = loop.time() + self._reclaim_interval
                 self._release_delivery_capacity(reserved)
 
-    async def _persist_quarantine(
-        self,
-        delivery: RedisCommandDelivery,
-        error: WorkerError,
-    ) -> None:
-        """Make the refusal outlive this process.
+    async def _release_unstarted(self) -> None:
+        """Nak, without delay, every owned message no worker task has started."""
 
-        In-memory alone, a restart re-runs the parked command once and parks it
-        again — the spin returns, just slower and once per process. Recording it
-        is what makes the decision survive, and what shares it with every other
-        worker in the group.
-
-        Never fatal, and never allowed to undo the in-memory decision: the entry
-        is already quarantined here whatever the store says, so a store outage
-        degrades to the process-local behaviour rather than resuming the spin.
-        The two failure shapes are announced separately because they need
-        different operator responses — a refusal is a bound that was reached, an
-        unavailability is a dependency to fix.
-        """
-        if self._quarantine_store is None:
-            return
-        try:
-            stored = await self._quarantine_store.add(
-                delivery.entry_id,
-                reason_code=error.code,
+        unstarted = list(self._unqueued)
+        self._unqueued.clear()
+        while True:
+            try:
+                delivery = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            # Taken off the queue here, so no worker task can start it.
+            self._queue.task_done()
+            if delivery is not None:
+                unstarted.append(delivery)
+        for delivery in unstarted:
+            await self._answer_owned(
+                self._consumer.release, delivery, "nats_release"
             )
-        except asyncio.CancelledError:
-            raise
-        except WorkerError as exc:
-            self._event_sink("quarantine_write_rejected", exc)
-            return
-        except Exception:
-            self._event_sink("quarantine_write_unavailable", DependencyUnavailable())
-            return
-        if not stored:
-            # The DURABLE cap refused it, which is a different bound from this
-            # process's own cap and has to be said separately: this entry will
-            # be re-run once by the next worker that starts.
-            self._event_sink("quarantine_store_full", error)
+        if unstarted:
+            self._event_sink("deliveries_released_on_shutdown", None)
 
     async def _load_durable_quarantine(self) -> None:
-        """Adopt this group's existing refusals before reading any command.
+        """Adopt this worker's earlier refusals before pulling any command.
 
         Ordering is the point: seeding AFTER intake starts would leave a window
-        in which the very entry a previous process parked is executed once more,
-        which is the behaviour this exists to remove.
+        in which a delivery a previous process parked is executed once more.
 
         A failure to read is NOT fatal. Refusing to start would turn a
         degraded-but-working worker into an outage; the cost of continuing is
-        that a parked entry runs once more and is parked again. Announced either
-        way, because the two states are operationally different.
+        that a parked delivery the server redelivers after its 24h delay runs
+        once more and is dead-lettered again. Announced either way.
         """
         if self._quarantine_store is None:
             return
@@ -423,70 +439,76 @@ class WorkerServeLoop:
         self._quarantined.update(recorded)
         if recorded:
             self._event_sink("quarantine_loaded", None)
-        # A record that lost lines is still usable, but the entries it lost will
+        # A record that lost lines is still usable, but the deliveries it lost
         # each run once more before being parked again — so it is reported.
         if getattr(self._quarantine_store, "malformed_lines", 0):
             self._event_sink(
                 "quarantine_record_damaged",
                 InvalidInput("The quarantine record contains unreadable lines."),
             )
-        # Which TIER degraded, not merely that something did: a shared-tier
-        # failure means the decision stops crossing replicas, a local-tier
-        # failure means it stops surviving a restart. Same event class, very
-        # different operator response.
-        if getattr(self._quarantine_store, "shared_failed", False):
-            self._event_sink(
-                "quarantine_shared_unavailable",
-                DependencyUnavailable(
-                    "The shared quarantine is unreadable; the decision is local "
-                    "to this worker until it returns."
-                ),
-            )
-        if getattr(self._quarantine_store, "local_failed", False):
-            self._event_sink(
-                "quarantine_local_unavailable",
-                DependencyUnavailable(
-                    "The local quarantine record is unreadable; the decision "
-                    "may not survive a restart."
-                ),
-            )
-        # Reported rather than done quietly: this worker has just written rows
-        # for refusals it never made, which is a change an operator reading the
-        # file should be able to correlate with something.
-        if getattr(self._quarantine_store, "backfilled", 0):
-            self._event_sink("quarantine_backfilled", None)
-        # The local cap refused to copy part of the group's decision, so those
-        # entries are honoured now and forgotten at the next restart.
-        if getattr(self._quarantine_store, "backfill_refused", 0):
-            self._event_sink(
-                "quarantine_backfill_incomplete",
-                ResourceExhausted(
-                    "The local quarantine record is full; part of the shared "
-                    "decision will not survive a restart."
-                ),
-            )
+
+    async def _persist_quarantine(self, key: str, error: WorkerError) -> None:
+        """Make the refusal outlive this process. Never fatal."""
+        if self._quarantine_store is None:
+            return
+        try:
+            stored = await self._quarantine_store.add(key, reason_code=error.code)
+        except asyncio.CancelledError:
+            raise
+        except WorkerError as exc:
+            self._event_sink("quarantine_write_rejected", exc)
+            return
+        except Exception:
+            self._event_sink("quarantine_write_unavailable", DependencyUnavailable())
+            return
+        if not stored:
+            self._event_sink("quarantine_store_full", error)
 
     async def _heartbeat_loop(self) -> None:
         while True:
-            await asyncio.sleep(self._reclaim_interval)
+            await asyncio.sleep(self._in_progress_interval)
             try:
-                await self._heartbeat_pending()
+                await self._heartbeat_owned()
             except asyncio.CancelledError:
                 raise
             except WorkerError as exc:
-                self._event_sink("redis_heartbeat_rejected", exc)
+                self._event_sink("nats_in_progress_rejected", exc)
             except Exception:
-                self._event_sink("redis_heartbeat_unavailable", DependencyUnavailable())
+                self._event_sink("nats_in_progress_unavailable", DependencyUnavailable())
 
-    async def _heartbeat_pending(self) -> None:
-        owned = tuple(sorted(self._owned_entry_ids))
-        batch_size = self._consumer.heartbeat_batch_size
-        if batch_size < 1:
-            raise DependencyUnavailable("The Redis PEL heartbeat batch is invalid.")
-        for offset in range(0, len(owned), batch_size):
-            batch = owned[offset : offset + batch_size]
-            entry_ids = tuple(entry_id for _, entry_id in batch)
-            await self._consumer.heartbeat_pending(entry_ids)
+    async def _heartbeat_owned(self) -> None:
+        async with self._answer_lock:
+            owned = tuple(self._owned.values())
+            if owned:
+                await self._consumer.in_progress(owned)
+
+    def _disown(self, key: tuple[str, int]) -> CommandDelivery | None:
+        """Stop owning (and heartbeating) one message; free its slot.
+
+        Returns the NEWEST delivery of it: when the server redelivered the
+        message while it was still running here, the newer copy's reply
+        subject is the one the server tracks, so that copy is the one an
+        answer must go to — and, being no longer owned, it is never
+        heartbeated or answered again.
+        """
+
+        delivery = self._owned.pop(key, None)
+        if delivery is not None:
+            self._release_delivery_capacity(1)
+        return delivery
+
+    async def _answer_owned(
+        self,
+        answer: Callable[[CommandDelivery], Awaitable[None]],
+        delivery: CommandDelivery,
+        event: str,
+    ) -> None:
+        """A delayed nak of an owned message, never crossed by a +WPI."""
+
+        key = (delivery.stream, delivery.stream_sequence)
+        async with self._answer_lock:
+            current = self._disown(key) or delivery
+            await self._answer(answer, current, event)
 
     async def _reserve_delivery_capacity(self) -> int:
         await self._ownership_slots.get()
@@ -505,7 +527,7 @@ class WorkerServeLoop:
 
     async def _enqueue_reserved(
         self,
-        deliveries: tuple[RedisCommandDelivery, ...],
+        deliveries: tuple[CommandDelivery, ...],
         *,
         reserved: int,
     ) -> None:
@@ -514,30 +536,42 @@ class WorkerServeLoop:
         if len(deliveries) > reserved:
             self._release_delivery_capacity(reserved)
             raise DependencyUnavailable(
-                "Redis returned more deliveries than the worker reserved."
+                "JetStream returned more messages than the worker reserved."
             )
 
-        accepted: list[RedisCommandDelivery] = []
+        accepted: list[CommandDelivery] = []
+        parked: list[CommandDelivery] = []
         for delivery in deliveries:
-            key = (delivery.stream, delivery.entry_id)
-            if key in self._owned_entry_ids:
+            key = (delivery.stream, delivery.stream_sequence)
+            if key in self._owned:
+                # A redelivery of a message still running here (AckWait passed
+                # before a heartbeat landed). Not run twice; the newest reply
+                # subject takes over the heartbeat.
+                self._owned[key] = delivery
                 self._release_delivery_capacity(1)
                 continue
-            # A quarantined entry is dropped BEFORE it can be handed to a
-            # worker. XAUTOCLAIM keeps returning it — it is still in the PEL,
-            # and deliberately so (see `_worker`) — but re-executing it would
-            # only reproduce the same refusal, which is what made one
-            # undeliverable output spin every reclaim turn indefinitely.
-            #
-            # Silent on purpose: the quarantine decision is announced ONCE, by
-            # the worker that made it. Re-announcing it on every reclaim page is
-            # the log flood this replaces.
-            if delivery.entry_id in self._quarantined:
+            # A delivery this worker already dead-lettered is parked again
+            # BEFORE it can reach a worker task. Re-running it would only
+            # reproduce the same refusal. Silent on purpose: the decision was
+            # announced once, by the worker that made it.
+            if (
+                delivery.rejection is None
+                and delivery.dead_letter_key in self._quarantined
+            ):
+                parked.append(delivery)
                 self._release_delivery_capacity(1)
                 continue
-            self._owned_entry_ids.add(key)
+            self._owned[key] = delivery
             accepted.append(delivery)
         self._release_delivery_capacity(reserved - len(deliveries))
+
+        for delivery in parked:
+            error = self._unrecorded.get(delivery.dead_letter_key)
+            if error is not None:
+                # Decided, never recorded: retry the record, not the command.
+                await self._dispose_poison(delivery, error, owned=False)
+            else:
+                await self._answer(self._consumer.park, delivery, "nats_park")
 
         queued = 0
         try:
@@ -545,12 +579,119 @@ class WorkerServeLoop:
                 await self._queue.put(delivery)
                 queued += 1
         except BaseException:
-            for delivery in accepted[queued:]:
-                key = (delivery.stream, delivery.entry_id)
-                if key in self._owned_entry_ids:
-                    self._owned_entry_ids.remove(key)
-                    self._release_delivery_capacity(1)
+            # Still owned (and heartbeated): the shutdown path gives these
+            # back with a nak without delay rather than leaving them to
+            # AckWait.
+            self._unqueued.extend(accepted[queued:])
             raise
+
+    async def _answer(
+        self,
+        answer: Callable[[CommandDelivery], Awaitable[None]],
+        delivery: CommandDelivery,
+        event: str,
+    ) -> None:
+        """Send one nak; a failure is reported, and AckWait is the fallback."""
+        try:
+            await answer(delivery)
+        except asyncio.CancelledError:
+            raise
+        except WorkerError as exc:
+            self._event_sink(f"{event}_rejected", exc)
+        except Exception:
+            self._event_sink(f"{event}_unavailable", DependencyUnavailable())
+
+    async def _dead_letter(self, delivery: CommandDelivery, error: WorkerError) -> None:
+        """Poison: one dead-letter record, then a park or a Term, an ERROR line.
+
+        Ordinary poison is parked with NakWithDelay(24h), never terminated: a
+        Term frees the delivery subject and PostgreSQL re-offers the poison
+        every 30 seconds. Poison that can never verify (``TERMINAL_POISON``:
+        a signature failure or a subject hash mismatch) is terminated, since a
+        re-offer fails the same pre-claim check.
+
+        The record comes FIRST, for both. A poison parked without a record is invisible
+        to the alert, so a failed write is answered with the ordinary retry
+        delay instead (see :meth:`_dispose_poison`).
+        """
+        if delivery.is_settled:
+            # The processor already acknowledged it after a terminal receipt;
+            # a failure after that point is reported, never dead-lettered.
+            return
+        key = delivery.dead_letter_key
+        if isinstance(error, TERMINAL_POISON):
+            # Terminated, not parked: a re-offer of the same delivery fails the
+            # same pre-claim check, so there is nothing to quarantine.
+            await self._dispose_poison(delivery, error, owned=True)
+            return
+        if key not in self._quarantined:
+            if len(self._quarantined) < self._quarantine_cap:
+                self._quarantined.add(key)
+            else:
+                # Announced rather than silently widened: past the cap this
+                # process forgets the decision; the server's delay still holds.
+                self._event_sink("delivery_quarantine_full", error)
+        await self._dispose_poison(delivery, error, owned=True)
+
+    async def _dispose_poison(
+        self,
+        delivery: CommandDelivery,
+        error: WorkerError,
+        *,
+        owned: bool,
+    ) -> None:
+        """Record, then park; or, when the record fails, retry later."""
+
+        key = delivery.dead_letter_key
+        try:
+            await self._consumer.record_dead_letter(delivery, reason=error.code)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.dead_letter_write_failures += 1
+            terminal = isinstance(error, TERMINAL_POISON)
+            if not terminal and (
+                key in self._unrecorded or len(self._unrecorded) < self._quarantine_cap
+            ):
+                self._unrecorded[key] = error
+            self._event_sink(
+                DEAD_LETTER_WRITE_FAILED_EVENT,
+                _dead_letter_write_failure_notice(
+                    error,
+                    delivery,
+                    total=self.dead_letter_write_failures,
+                    cause=exc,
+                ),
+            )
+            await self._answer_poison(
+                self._consumer.retry_later, delivery, "nats_nak", owned=owned
+            )
+            return
+        self._unrecorded.pop(key, None)
+        self.dead_lettered += 1
+        self._event_sink(DEAD_LETTERED_EVENT, _dead_letter_notice(error, delivery))
+        if isinstance(error, TERMINAL_POISON):
+            await self._answer_poison(
+                self._consumer.terminate, delivery, "nats_term", owned=owned
+            )
+            return
+        await self._answer_poison(
+            self._consumer.park, delivery, "nats_park", owned=owned
+        )
+        await self._persist_quarantine(key, error)
+
+    async def _answer_poison(
+        self,
+        answer: Callable[[CommandDelivery], Awaitable[None]],
+        delivery: CommandDelivery,
+        event: str,
+        *,
+        owned: bool,
+    ) -> None:
+        if owned:
+            await self._answer_owned(answer, delivery, event)
+        else:
+            await self._answer(answer, delivery, event)
 
     async def _worker(self) -> None:
         while True:
@@ -558,82 +699,105 @@ class WorkerServeLoop:
             if delivery is None:
                 self._queue.task_done()
                 return
-            key = (delivery.stream, delivery.entry_id)
+            key = (delivery.stream, delivery.stream_sequence)
             try:
+                if delivery.rejection is not None:
+                    # The transport shape itself is poison; nothing to decode.
+                    self._event_sink("delivery_rejected", delivery.rejection)
+                    await self._dead_letter(delivery, delivery.rejection)
+                    continue
                 result = await self._process(delivery)
                 self._event_sink(result.disposition.value, result.execution_error)
+                if result.disposition in _RETRY_LATER_DISPOSITIONS:
+                    await self._answer_owned(
+                        self._consumer.retry_later, delivery, "nats_nak"
+                    )
             except asyncio.CancelledError:
                 raise
             except WorkerError as exc:
                 self._event_sink("delivery_rejected", exc)
-                # `retryable` used to be printed and then ignored. The entry is
-                # never ACKed on this path — correctly, because the output it
-                # owes was never delivered and ACKing would discard the command
-                # — so it stayed in the PEL and XAUTOCLAIM handed it back every
-                # reclaim turn, forever. Measured: one undeliverable output
-                # rejected every 15-45s for 13 minutes, with `retryable: false`
-                # in every line.
-                #
-                # Re-running it cannot change the answer, so this process stops
-                # taking it. The entry is left PENDING rather than ACKed: that
-                # keeps the command recoverable by the server-side repair the
-                # refusal asks for, and losing a command is worse than leaving
-                # one parked.
-                #
-                # LIMITS, stated because they are not obvious. This is
-                # process-local: a second worker, or this one after a restart,
-                # will pick the entry up again and refuse it again. Durable
-                # dead-lettering needs the control plane to own the decision,
-                # which is the same missing "server-side recovery" the message
-                # names. What this does fix is the spin, and the silence.
-                if not exc.retryable:
-                    if len(self._quarantined) < self._quarantine_cap:
-                        self._quarantined.add(delivery.entry_id)
-                        self._event_sink(
-                            "delivery_quarantined",
-                            _quarantine_notice(exc, key),
-                        )
-                        await self._persist_quarantine(delivery, exc)
-                    else:
-                        # Announced rather than silently widened: past the cap
-                        # the old spin resumes, and an operator must know that
-                        # is what they are now looking at.
-                        self._event_sink("delivery_quarantine_full", exc)
+                if exc.retryable:
+                    await self._answer_owned(
+                        self._consumer.retry_later, delivery, "nats_nak"
+                    )
+                else:
+                    # `retryable: false` means re-running cannot change the
+                    # answer: a decode or signature failure, a subject that
+                    # does not name the signed command, a command this worker
+                    # cannot serve, or an output nothing can deliver. Measured
+                    # on the earlier transport: one undeliverable output rejected every
+                    # 15-45s for 13 minutes. Dead-letter it once instead.
+                    await self._dead_letter(delivery, exc)
             except Exception as exc:
                 _emit_unexpected_delivery_failure(exc)
                 self._event_sink("delivery_unavailable", DependencyUnavailable())
+                await self._answer_owned(
+                    self._consumer.retry_later, delivery, "nats_nak"
+                )
             finally:
-                if key in self._owned_entry_ids:
-                    self._owned_entry_ids.remove(key)
-                    self._release_delivery_capacity(1)
+                self._disown(key)
                 self._queue.task_done()
 
 
-def _quarantine_notice(
+def _dead_letter_notice(
     error: WorkerError,
-    key: tuple[str, str],
+    delivery: CommandDelivery,
 ) -> WorkerError:
-    """The one-shot, operator-facing statement that an entry was parked.
+    """The one-shot, operator-facing statement that a delivery was poison.
 
     It keeps the original `code` and `retryable` so the event still classifies
-    the same way, and names the entry plus the remedy — because the underlying
-    refusal ("server-side recovery is required") says what must happen without
-    saying to WHAT, and nothing in this process performs that recovery.
-
-    The stream name and Redis entry id are infrastructure identifiers, not
-    execution content, so they are safe to print under the same rules as the
-    rest of `safe_message`.
+    the same way, and names where to look. The stream, sequence and key are
+    infrastructure coordinates, not execution content; the delivery ID and the
+    command itself are never printed.
     """
-    stream, entry_id = key
+    if isinstance(error, TERMINAL_POISON):
+        return WorkerError(
+            code=error.code,
+            safe_message=(
+                f"{error.safe_message} "
+                f"Message {delivery.entry_id} (delivery {delivery.num_delivered}) is "
+                f"poison that can never verify: it is recorded in "
+                f"{DEAD_LETTER_BUCKET} under {delivery.dead_letter_key} and "
+                f"TERMINATED, freeing its stream capacity. A re-offer of the same "
+                f"delivery fails the same check before any claim."
+            ),
+            exit_code=error.exit_code,
+            retryable=error.retryable,
+        )
     return WorkerError(
         code=error.code,
         safe_message=(
             f"{error.safe_message} "
-            f"Entry {entry_id} on stream {stream} is left PENDING and will not "
-            f"be retried by this worker; re-running it cannot change the "
-            f"outcome. The execution's own output is lost — a caller waiting on "
-            f"it sees no answer. Clearing the pending entry requires the "
-            f"server-side recovery named above."
+            f"Message {delivery.entry_id} (delivery {delivery.num_delivered}) is "
+            f"poison: it is left PENDING with a 24h redelivery delay and recorded "
+            f"in {DEAD_LETTER_BUCKET} under {delivery.dead_letter_key}. Re-running "
+            f"it cannot change the outcome; the execution's own output is lost. "
+            f"Clearing it requires the server-side recovery named above."
+        ),
+        exit_code=error.exit_code,
+        retryable=error.retryable,
+    )
+
+
+def _dead_letter_write_failure_notice(
+    error: WorkerError,
+    delivery: CommandDelivery,
+    *,
+    total: int,
+    cause: BaseException,
+) -> WorkerError:
+    """The operator-facing statement that a poison could not be recorded."""
+
+    reason = cause.code if isinstance(cause, WorkerError) else "DEPENDENCY_UNAVAILABLE"
+    return WorkerError(
+        code=error.code,
+        safe_message=(
+            f"Message {delivery.entry_id} (delivery {delivery.num_delivered}) is "
+            f"poison, but its record under {delivery.dead_letter_key} could not be "
+            f"written to {DEAD_LETTER_BUCKET} ({reason}). It is NOT parked: it is "
+            f"nak'd with the retry delay so its next delivery retries the record, "
+            f"without running the command again in this process. "
+            f"dead_letter_write_failures_total={total}."
         ),
         exit_code=error.exit_code,
         retryable=error.retryable,
@@ -697,7 +861,7 @@ class ProductionDeliveryProcessor:
         supervisor: ExecutionSupervisor,
         handler: ConfigurationValidationHandler,
         control: ControlPlane,
-        command_acker: RedisCommandConsumer,
+        command_acker: JetStreamCommandConsumer,
         input_client: ScopedInputContentClient,
         output_stub: GeneratedOutputStub,
         index_client_context_factory: IndexClientContextFactory | None = None,
@@ -727,11 +891,19 @@ class ProductionDeliveryProcessor:
             ("x-elitea-producer-id", config.producer_id),
         )
 
-    async def process(self, delivery: RedisCommandDelivery) -> DeliveryResult:
-        _, command = parse_and_verify_signed_command(
-            delivery.signed_envelope,
-            authenticator=self._authenticator,
-        )
+    async def process(self, delivery: CommandDelivery) -> DeliveryResult:
+        try:
+            _, command = parse_and_verify_signed_command(
+                delivery.signed_envelope,
+                authenticator=self._authenticator,
+            )
+        except AuthorizationFailure as exc:
+            # A digest or signature that does not verify can never verify:
+            # recorded, then terminated (TERMINAL_POISON), not parked 24h.
+            raise CommandSignatureRejected(exc.safe_message) from exc
+        # After the signature, before the claim: the subject's hash token must
+        # name this signed command's delivery, or the message is poison.
+        require_subject_names_command(delivery, command.idempotency_key)
         binding = _execution_spool_binding(command, self._config.producer_id)
         lock_state = self._locks.get(binding)
         if lock_state is None:
@@ -748,7 +920,7 @@ class ProductionDeliveryProcessor:
 
     async def _process_bound(
         self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         command: command_pb2.WorkerCommandV1,
         binding: bytes,
     ) -> DeliveryResult:
@@ -901,7 +1073,7 @@ async def serve_deployment(
         raise
     except Exception as exc:
         # Startup and cleanup use the same safe public error boundary. Raw TLS,
-        # filesystem, Redis and channel failures remain available only as the
+        # filesystem, NATS and channel failures remain available only as the
         # chained cause for in-process diagnostics.
         raise DependencyUnavailable() from exc
 
@@ -923,7 +1095,7 @@ async def _serve_deployment_inner(
         _observe_shutdown(stop, shutdown_budget),
         name="elitea-shutdown-deadline",
     )
-    redis_client: RedisAsyncioControlClient | None = None
+    nats: NatsCommandBusConnection | None = None
     control: ReconnectableControlPlane | None = None
     output: ReconnectableOutputStub | None = None
     http_client: httpx.AsyncClient | None = None
@@ -932,38 +1104,42 @@ async def _serve_deployment_inner(
         trust = RuntimeTrustMaterial.load(config)
         validate_private_directory(config.spool_root, description="output spool root")
         limits = config.limits
-        redis_client = RedisAsyncioControlClient.connect(
-            config.redis_url,
-            password=trust.redis_password,
-            ssl_context=trust.http_client_context(),
-            max_connections=limits.delivery_max_concurrency + 4,
-            socket_connect_timeout_seconds=limits.grpc_deadline_millis / 1000,
-            socket_timeout_seconds=(limits.redis_block_millis + 1_000) / 1000,
+        # The command bus: the elitea-worker identity's mTLS connection, named
+        # by consumer_id for observability. The certificate is the identity.
+        nats = NatsCommandBusConnection(
+            url=config.nats_url,
+            name=config.consumer_id,
+            tls=config.nats_tls,
+            connect_timeout_seconds=limits.grpc_deadline_millis / 1000,
+            event_sink=_emit_runtime_event,
         )
-        if not await _wait_for_redis(redis_client, config, stop):
+        if not await _wait_for_nats(nats, config, stop):
             return
-        consumer = RedisCommandConsumer(
-            redis_client,
-            stream=config.redis_stream,
-            group=config.redis_group,
-            consumer=config.consumer_id,
-            max_entry_bytes=limits.redis_max_entry_bytes,
-            max_field_bytes=limits.redis_max_field_bytes,
-            read_count=limits.redis_read_batch,
-            block_ms=limits.redis_block_millis,
+        # Bind, never create: the stream, the durable and the dead-letter
+        # bucket belong to the NATS bootstrap Job. Absence or drift refuses
+        # to start.
+        consumer = await bind_command_consumer(
+            nats.client,
+            event_sink=_emit_runtime_event,
+            stream=config.nats_stream,
+            consumer=config.nats_consumer,
+            worker_name=config.consumer_id,
+            fetch_batch=limits.nats_fetch_batch,
+            fetch_expires_millis=limits.nats_fetch_expires_millis,
+            retry_delay_millis=limits.nats_retry_delay_millis,
+            ack_timeout_seconds=limits.grpc_deadline_millis / 1000,
+            max_message_bytes=limits.max_transport_message_bytes,
+            max_payload_bytes=limits.max_transport_payload_bytes,
+            # With an identity the worker is in the WORKER account and reaches
+            # the RUNTIME durables through the imports mapped to
+            # JS.RUNTIME.API; without one (compose) through $JS.API.
+            api_prefix=runtime_api_prefix(config.nats_tls),
         )
-        # Two tiers, because they fail independently. The Redis hash is scoped to
-        # this (stream, group) and is what makes the decision cross replicas; the
-        # spool file is what still works when Redis does not. See
-        # execution/quarantine.py's CompositeQuarantineStore.
-        quarantine_store = CompositeQuarantineStore(
-            shared=SharedQuarantineStore(
-                redis_client,
-                stream=config.redis_stream,
-                group=config.redis_group,
-            ),
-            local=FileQuarantineStore(config.spool_root / "quarantine.v1"),
-        )
+        # The shared, alertable record is the dead-letter bucket. This file
+        # keeps a parked delivery from running again after its 24h delay; see
+        # execution/quarantine.py. v2: keyed by dead-letter key, not by the
+        # old transport entry ID.
+        quarantine_store = FileQuarantineStore(config.spool_root / "quarantine.v2")
         metadata = (
             ("x-elitea-workload-session", config.workload_session_id),
             ("x-elitea-producer-id", config.producer_id),
@@ -1046,8 +1222,7 @@ async def _serve_deployment_inner(
             process_delivery=processor.process,
             max_concurrency=limits.delivery_max_concurrency,
             queue_capacity=limits.delivery_queue_capacity,
-            reclaim_idle_millis=limits.redis_reclaim_idle_millis,
-            reclaim_interval_millis=limits.redis_reclaim_interval_millis,
+            in_progress_interval_millis=limits.nats_in_progress_interval_millis,
             dependency_retry_millis=limits.dependency_retry_millis,
             shutdown_timeout_millis=limits.shutdown_timeout_millis,
             event_sink=_emit_runtime_event,
@@ -1064,7 +1239,7 @@ async def _serve_deployment_inner(
             http_client=http_client,
             control=control,
             output=output,
-            redis_client=redis_client,
+            nats=nats,
             budget=shutdown_budget,
         )
 
@@ -1121,7 +1296,7 @@ async def _close_runtime_resources(
     http_client: httpx.AsyncClient | None,
     control: ReconnectableControlPlane | None,
     output: ReconnectableOutputStub | None,
-    redis_client: RedisAsyncioControlClient | None,
+    nats: NatsCommandBusConnection | None,
     budget: _ShutdownBudget,
 ) -> None:
     """Close every owned dependency concurrently within one remaining budget."""
@@ -1136,7 +1311,7 @@ async def _close_runtime_resources(
             http_client,
             control,
             output,
-            redis_client,
+            nats,
         )
     ):
         return
@@ -1156,8 +1331,8 @@ async def _close_runtime_resources(
         closers.append(control.close(grace=remaining))
     if output is not None:
         closers.append(output.close(grace=remaining))
-    if redis_client is not None:
-        closers.append(redis_client.aclose())
+    if nats is not None:
+        closers.append(nats.aclose())
 
     tasks = tuple(
         asyncio.create_task(closer, name=f"elitea-runtime-close-{index}")
@@ -1221,47 +1396,55 @@ async def _raise_unexpected_background_exit(task: asyncio.Task[object]) -> None:
     raise DependencyUnavailable("A worker runtime task exited unexpectedly.")
 
 
-async def _wait_for_redis(
-    client: RedisAsyncioControlClient,
+async def _wait_for_nats(
+    connection: NatsCommandBusConnection,
     config: RuntimeDeployConfig,
     stop: asyncio.Event,
 ) -> bool:
+    """Connect, retrying until connected or asked to stop.
+
+    nats-py itself keeps retrying an unreachable server (reconnect attempts
+    are unbounded) and reports each failure through the connection's error
+    callback; this loop covers a connect that gives up anyway.
+    """
+
     retry = config.limits.dependency_retry_millis / 1000
     while not stop.is_set():
         try:
-            acknowledged = await _ping_or_stop(client, stop)
-            if acknowledged is None:
+            connected = await _connect_or_stop(connection, stop)
+            if connected is None:
                 return False
-            if not acknowledged:
-                raise RuntimeError("Redis ping was not acknowledged")
             return True
         except asyncio.CancelledError:
             raise
         except Exception:
-            _emit_runtime_event("redis_startup_unavailable", DependencyUnavailable())
+            _emit_runtime_event("nats_startup_unavailable", DependencyUnavailable())
             await _wait_or_stop(stop, retry)
     return False
 
 
-async def _ping_or_stop(
-    client: RedisAsyncioControlClient,
+async def _connect_or_stop(
+    connection: NatsCommandBusConnection,
     stop: asyncio.Event,
 ) -> bool | None:
-    """Do not let a connecting Redis socket delay a requested shutdown."""
+    """Do not let a connecting NATS socket delay a requested shutdown."""
 
-    ping_task = asyncio.create_task(client.ping(), name="elitea-redis-startup-ping")
-    stop_task = asyncio.create_task(stop.wait(), name="elitea-redis-startup-stop")
+    connect_task = asyncio.create_task(
+        connection.connect(), name="elitea-nats-startup-connect"
+    )
+    stop_task = asyncio.create_task(stop.wait(), name="elitea-nats-startup-stop")
     try:
         done, _ = await asyncio.wait(
-            (ping_task, stop_task),
+            (connect_task, stop_task),
             return_when=asyncio.FIRST_COMPLETED,
         )
         if stop_task in done:
-            _detach_cancelled_tasks((ping_task,))
+            _detach_cancelled_tasks((connect_task,))
             return None
-        return await ping_task
+        await connect_task
+        return True
     except asyncio.CancelledError:
-        _detach_cancelled_tasks((ping_task,))
+        _detach_cancelled_tasks((connect_task,))
         raise
     finally:
         stop_task.cancel()
@@ -1338,6 +1521,8 @@ def _install_signal_handlers(stop: asyncio.Event) -> Callable[[], None]:
 
 def _emit_runtime_event(event: str, error: WorkerError | None) -> None:
     diagnostic: dict[str, object] = {"event": event}
+    if event in _ERROR_EVENTS:
+        diagnostic["level"] = "error"
     if error is not None:
         diagnostic.update(
             code=error.code,

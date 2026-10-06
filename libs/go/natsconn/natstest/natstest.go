@@ -77,9 +77,10 @@ type Server struct {
 	port     int
 	httpPort int
 
-	mu  sync.Mutex
-	cmd *exec.Cmd
-	log *bytes.Buffer
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	log     *bytes.Buffer
+	logFile *os.File
 }
 
 // Start renders the test PKI, writes the chart's config with local paths and
@@ -113,29 +114,60 @@ func Start(t testing.TB) *Server {
 		t.Fatalf("read %s: %v", EnvSecureConf, err)
 	}
 
-	s := &Server{dir: t.TempDir(), bin: bin, cliBin: cli, repoRoot: root}
-	if err := s.writePKI(); err != nil {
-		t.Fatalf("test PKI: %v", err)
-	}
-	s.port, s.httpPort = freePort(t), freePort(t)
-	localConf, err := s.localise(string(rendered))
+	s, err := launch(t.TempDir(), bin, string(rendered), cli, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.conf = filepath.Join(s.dir, "nats.conf")
-	if err := os.WriteFile(s.conf, []byte(localConf), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(s.dir, "js"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	s.start(t)
 	t.Cleanup(s.Stop)
 	return s
 }
 
+// Launch starts the same secured server outside a Go test, for the Rust and
+// Python workers' integration tests (cmd/natstest-serve). dir must exist and
+// is the caller's to remove after Stop.
+func Launch(dir, serverBin, renderedConf, cliBin string) (*Server, error) {
+	root, err := findRepoRoot()
+	if err != nil {
+		return nil, err
+	}
+	return launch(dir, serverBin, renderedConf, cliBin, root)
+}
+
+func launch(dir, bin, rendered, cli, root string) (*Server, error) {
+	s := &Server{dir: dir, bin: bin, cliBin: cli, repoRoot: root}
+	if err := s.writePKI(); err != nil {
+		return nil, fmt.Errorf("test PKI: %w", err)
+	}
+	var err error
+	if s.port, err = freePortErr(); err != nil {
+		return nil, err
+	}
+	if s.httpPort, err = freePortErr(); err != nil {
+		return nil, err
+	}
+	localConf, err := s.localise(rendered)
+	if err != nil {
+		return nil, err
+	}
+	s.conf = filepath.Join(s.dir, "nats.conf")
+	if err := os.WriteFile(s.conf, []byte(localConf), 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(s.dir, "js"), 0o700); err != nil {
+		return nil, err
+	}
+	if err := s.startErr(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 // URL is the client URL: tls://, no credential, as the chart renders it.
 func (s *Server) URL() string { return fmt.Sprintf("tls://127.0.0.1:%d", s.port) }
+
+// MonitorURL is the server's plain-HTTP monitoring endpoint (8222 in the
+// chart), what the KEDA nats-jetstream scaler reads.
+func (s *Server) MonitorURL() string { return fmt.Sprintf("http://127.0.0.1:%d", s.httpPort) }
 
 // PlainURL is the same address with a nats:// scheme, for refusal tests.
 func (s *Server) PlainURL() string { return fmt.Sprintf("nats://127.0.0.1:%d", s.port) }
@@ -173,12 +205,14 @@ func (s *Server) Lookup(prefix, identity string, extra map[string]string) func(s
 	}
 }
 
-// BootstrapIdentities are the three per-account bootstrap identities, keyed
-// by the account name bootstrap.sh takes (NATS_BOOTSTRAP_ACCOUNTS).
+// BootstrapIdentities are the per-account bootstrap identities, keyed by the
+// account name bootstrap.sh takes (NATS_BOOTSTRAP_ACCOUNTS). SCHEDULER has no
+// JetStream and so no bootstrap.
 var BootstrapIdentities = map[string]string{
 	"main":    natsconn.IdentityBootstrapMain,
 	"gateway": natsconn.IdentityBootstrapGateway,
 	"runtime": natsconn.IdentityBootstrapRuntime,
+	"worker":  natsconn.IdentityBootstrapWorker,
 }
 
 // Bootstrap runs deploy/helm/nats-bootstrap/files/bootstrap.sh exactly as
@@ -187,22 +221,7 @@ var BootstrapIdentities = map[string]string{
 // overrides the script's tuning variables.
 func (s *Server) Bootstrap(t testing.TB, env map[string]string) string {
 	t.Helper()
-	tlsDir := filepath.Join(s.dir, "bootstrap-tls")
-	if _, err := os.Stat(tlsDir); err != nil {
-		if err := os.MkdirAll(tlsDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		for acct, id := range BootstrapIdentities {
-			if err := os.Symlink(s.clientDir(id), filepath.Join(tlsDir, acct)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	vars := map[string]string{"NATS_TLS_DIR": tlsDir}
-	for k, v := range env {
-		vars[k] = v
-	}
-	out, err := s.runBootstrap(vars)
+	out, err := s.BootstrapAll(env)
 	if err != nil {
 		t.Fatalf("bootstrap.sh: %v\n%s\nserver log:\n%s", err, out, s.Log())
 	}
@@ -210,6 +229,27 @@ func (s *Server) Bootstrap(t testing.TB, env map[string]string) string {
 		s.RequireNoViolations(t, id)
 	}
 	return out
+}
+
+// BootstrapAll is Bootstrap outside a Go test (cmd/natstest-serve): the same
+// one run over every account, returning the script's output and its error.
+func (s *Server) BootstrapAll(env map[string]string) (string, error) {
+	tlsDir := filepath.Join(s.dir, "bootstrap-tls")
+	if _, err := os.Stat(tlsDir); err != nil {
+		if err := os.MkdirAll(tlsDir, 0o700); err != nil {
+			return "", err
+		}
+		for acct, id := range BootstrapIdentities {
+			if err := os.Symlink(s.clientDir(id), filepath.Join(tlsDir, acct)); err != nil {
+				return "", err
+			}
+		}
+	}
+	vars := map[string]string{"NATS_TLS_DIR": tlsDir}
+	for k, v := range env {
+		vars[k] = v
+	}
+	return s.runBootstrap(vars)
 }
 
 // RunBootstrap runs bootstrap.sh for identity's account only, presenting
@@ -283,14 +323,18 @@ func (s *Server) Log() string {
 // Stop stops the server. Safe to call twice.
 func (s *Server) Stop() {
 	s.mu.Lock()
-	cmd := s.cmd
-	s.cmd = nil
+	cmd, file := s.cmd, s.logFile
+	s.cmd, s.logFile = nil, nil
 	s.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
+	if file != nil {
+		s.mu.Lock()
+		_ = file.Close()
+		s.mu.Unlock()
+	}
 }
 
 // Restart stops the server and starts it again on the same port and store.
@@ -300,18 +344,52 @@ func (s *Server) Restart(t testing.TB) {
 	s.start(t)
 }
 
+// ResetJetStream stops the server, deletes its JetStream store and starts it
+// again on the same port, empty: every account loses every stream, consumer
+// and bucket. It is how a test simulates the loss of an asset now that no
+// identity may delete one; Bootstrap re-creates them. Connected clients
+// reconnect on their own.
+func (s *Server) ResetJetStream(t testing.TB) {
+	t.Helper()
+	s.Stop()
+	js := filepath.Join(s.dir, "js")
+	if err := os.RemoveAll(js); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(js, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s.start(t)
+}
+
 func (s *Server) start(t testing.TB) {
 	t.Helper()
+	if err := s.startErr(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// LogPath is the file the server's output is also written to, so a process
+// that is not this one (a Rust or Python test) can read the permissions
+// violations it logged.
+func (s *Server) LogPath() string { return filepath.Join(s.dir, "nats-server.log") }
+
+func (s *Server) startErr() error {
 	var log bytes.Buffer
+	file, err := os.OpenFile(s.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(s.bin, "-c", s.conf)
 	cmd.Env = append(os.Environ(), "SERVER_NAME=natstest")
-	cmd.Stdout = &syncWriter{mu: &s.mu, w: &log}
+	cmd.Stdout = &syncWriter{mu: &s.mu, w: &log, file: file}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start nats-server: %v", err)
+		_ = file.Close()
+		return fmt.Errorf("start nats-server: %w", err)
 	}
 	s.mu.Lock()
-	s.cmd, s.log = cmd, &log
+	s.cmd, s.log, s.logFile = cmd, &log, file
 	s.mu.Unlock()
 
 	health := fmt.Sprintf("http://127.0.0.1:%d/healthz?js-enabled-only=true", s.httpPort)
@@ -321,23 +399,27 @@ func (s *Server) start(t testing.TB) {
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return
+				return nil
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	s.Stop()
-	t.Fatalf("nats-server did not become healthy:\n%s", s.Log())
+	return fmt.Errorf("nats-server did not become healthy:\n%s", s.Log())
 }
 
 type syncWriter struct {
-	mu *sync.Mutex
-	w  *bytes.Buffer
+	mu   *sync.Mutex
+	w    *bytes.Buffer
+	file *os.File
 }
 
 func (w *syncWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.file != nil {
+		_, _ = w.file.Write(p)
+	}
 	return w.w.Write(p)
 }
 
@@ -525,12 +607,20 @@ func serial() *big.Int {
 
 func freePort(t testing.TB) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	p, err := freePortErr()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return p
+}
+
+func freePortErr() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
 	defer func() { _ = l.Close() }()
-	return l.Addr().(*net.TCPAddr).Port
+	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 // findRepoRoot walks up from the working directory to the directory holding

@@ -14,7 +14,7 @@ import (
 // THE PROBLEM THIS SOLVES. A node event is one output frame, and the frame is
 // bounded at 64 KiB by the runtime limits conformance document
 // (`testdata/proto/runtime/v1/configuration-validation/conformance-limits.json`,
-// `max_output_frame_bytes`, itself under the 48 KiB `max_redis_field_bytes`).
+// `max_output_frame_bytes`, itself under the 48 KiB `max_transport_payload_bytes`).
 // Both workers enforce that bound on the WHOLE event — the Python worker at
 // 60 KiB (`MAX_CURRENT_NODE_EVENT_JSON_BYTES`) and the native worker at 40 KiB
 // for a tool value (`MAX_TOOL_EVENT_VALUE_BYTES`) — so a tool result larger

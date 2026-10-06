@@ -18,10 +18,9 @@ use elitea_worker_rust::protocol::elitea::runtime::v1::{
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
     PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
 };
-use elitea_worker_rust::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandLimits, RedisCommandRetirer, RedisRetirementClient,
-    RedisRetirementClientError, RedisRetirementConfig, RedisRetirementRequest,
-    RedisRetirementResponse,
+use elitea_worker_rust::transport::command_bus::{
+    CommandBusLimits, CommandDelivery, CommandRetirementClient, CommandRetirementClientError,
+    CommandRetirementConfig, CommandRetirementRequest, CommandRetirer, delivery_subject,
 };
 use elitea_worker_rust::transport::{ControlGrpcConfig, ControlRpc};
 use prost::Message;
@@ -47,27 +46,25 @@ fn bytes(name: &str) -> Vec<u8> {
         .collect()
 }
 
-fn delivery(name: &str) -> RedisCommandDelivery {
+fn delivery(name: &str) -> CommandDelivery {
     delivery_bytes(bytes(name))
 }
 
-fn delivery_bytes(signed_envelope: Vec<u8>) -> RedisCommandDelivery {
-    RedisCommandDelivery::decode(
-        b"runtime.commands.v1",
-        b"1700000000000-0",
-        vec![(b"signed_envelope".to_vec(), signed_envelope)],
-        RedisCommandLimits {
-            max_entry_bytes: 64 * 1024,
-            max_field_bytes: 48 * 1024,
-        },
+fn delivery_bytes(signed_envelope: Vec<u8>) -> CommandDelivery {
+    // The fixtures' idempotency key names the delivery subject.
+    CommandDelivery::decode(
+        &delivery_subject("ELITEA_RT_V1_AGENT", "outbox-1").expect("contract subject"),
+        "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.1.9.9.1700000000000000000.0",
+        signed_envelope,
+        CommandBusLimits::runtime_v1(),
     )
-    .expect("Redis command delivery")
+    .expect("command delivery")
 }
 
 struct RouteState {
     events: Mutex<Vec<&'static str>>,
     retirement_requests: Mutex<usize>,
-    retirement_result: Mutex<Result<RedisRetirementResponse, RedisRetirementClientError>>,
+    retirement_result: Mutex<Result<(), CommandRetirementClientError>>,
 }
 
 struct RouteControl {
@@ -130,11 +127,11 @@ impl ControlRpc for RouteControl {
 struct RouteRetirementClient(Arc<RouteState>);
 
 #[async_trait]
-impl RedisRetirementClient for RouteRetirementClient {
+impl CommandRetirementClient for RouteRetirementClient {
     async fn retire_delivery(
         &self,
-        _request: RedisRetirementRequest,
-    ) -> Result<RedisRetirementResponse, RedisRetirementClientError> {
+        _request: CommandRetirementRequest,
+    ) -> Result<(), CommandRetirementClientError> {
         self.0.events.lock().expect("events").push("retire");
         *self
             .0
@@ -151,21 +148,13 @@ fn router(
     AgentDeliveryRouter<RouteControl, RouteRetirementClient>,
     Arc<RouteState>,
 ) {
-    router_with(
-        claim_fixture,
-        false,
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    )
+    router_with(claim_fixture, false, Ok(()))
 }
 
 fn router_with(
     claim_fixture: &str,
     prepare_fails: bool,
-    retirement_result: Result<RedisRetirementResponse, RedisRetirementClientError>,
+    retirement_result: Result<(), CommandRetirementClientError>,
 ) -> (
     AgentDeliveryRouter<RouteControl, RouteRetirementClient>,
     Arc<RouteState>,
@@ -193,12 +182,11 @@ fn router_with(
         },
     )
     .expect("control client");
-    let retirer = RedisCommandRetirer::new(
+    let retirer = CommandRetirer::new(
         RouteRetirementClient(Arc::clone(&state)),
-        RedisRetirementConfig {
-            stream: "runtime.commands.v1".to_owned(),
-            group: "rust-workers".to_owned(),
-            consumer: "worker-1".to_owned(),
+        CommandRetirementConfig {
+            stream: "ELITEA_RT_V1_AGENT".to_owned(),
+            consumer: "elitea-agent-worker-v1".to_owned(),
         },
     )
     .expect("retirement client");
@@ -324,7 +312,7 @@ async fn prepared_settlement_recovery_retires_without_second_rpc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn every_input_free_output_recovery_is_routed_without_redis_ack() {
+async fn every_input_free_output_recovery_is_routed_without_an_ack() {
     for (claim_fixture, expected_kind) in [
         (
             "claim_active_lease_noack",
@@ -389,15 +377,7 @@ async fn retry_later_remains_unacknowledged() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn settlement_failure_never_retires_the_delivery() {
-    let (router, state) = router_with(
-        "claim_recover_terminal_ack",
-        true,
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let (router, state) = router_with("claim_recover_terminal_ack", true, Ok(()));
 
     assert!(matches!(
         router
@@ -424,7 +404,7 @@ async fn retirement_failure_never_returns_completed() {
     let (router, state) = router_with(
         "claim_recover_settlement",
         false,
-        Err(RedisRetirementClientError::DependencyUnavailable),
+        Err(CommandRetirementClientError::DependencyUnavailable),
     );
 
     assert!(matches!(

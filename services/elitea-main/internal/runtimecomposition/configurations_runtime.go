@@ -15,7 +15,7 @@ import (
 )
 
 // CurrentConfigurationsRuntime is the independently composable current
-// Configurations read/model/vault boundary. It has no Redis, worker, gRPC, or
+// Configurations read/model/vault boundary. It has no command bus, worker, gRPC, or
 // index-ingest dependency; those systems consume this capability rather than
 // owning provider credentials.
 type CurrentConfigurationsRuntime struct {

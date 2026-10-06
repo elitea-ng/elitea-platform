@@ -105,44 +105,51 @@ go test ./services/elitea-main/tests/system \
 
 ## Self-contained configuration validation topology
 
-`TestProductionRuntimeCrossProcessSystem` starts real PostgreSQL 16 and two
-Redis 7 containers, then independently starts the production `elitea-main`
-binary and four `elitea-worker serve` processes. It uses a private, typed
-application admission seam because the public runtime routes remain
-deliberately unmounted until their current-product RBAC and audit contract is
-ported. Public route/UI evidence remains a separate deployment gate.
+`TestProductionRuntimeCrossProcessSystem` starts a real PostgreSQL 16
+container and a nats-server from the NATS chart's own rendered permission
+table (`libs/go/natsconn/natstest`, assets created by the real
+`bootstrap.sh`), then independently starts the production `elitea-main`
+binary and four `elitea-worker serve` processes. elitea-main publishes as
+`elitea-main-runtime` in the RUNTIME account; every worker pulls as
+`elitea-worker` from the WORKER account, through the `JS.RUNTIME.API`
+service imports. It uses a private, typed application admission seam because
+the public runtime routes remain deliberately unmounted until their
+current-product RBAC and audit contract is ported. Public route/UI evidence
+remains a separate deployment gate.
 
-Three workers independently prove fail-closed command-signature, durable
-workload-identity binding, and mTLS trust-root enforcement: each leaves the
-command unclaimed and unacknowledged. The authorized worker then reclaims the
-same pending reference and completes Redis reference delivery, mTLS gRPC
-claim, HTTP/2 content fetch, the configuration-validation business handler,
-mTLS gRPC output/settlement, and atomic stable-delivery-bound `XACK` + `XDEL`
-+ delivery-index `HDEL`.
+A worker with the wrong verification keyring cannot verify the command's
+signature: it records one dead letter and terminates the message, and never
+claims (the test then publishes the same bytes again, as PostgreSQL's
+visibility repair would). Two more workers prove durable workload-identity
+binding and mTLS trust-root enforcement: each leaves the command unclaimed
+and unacknowledged, and the test naks it for immediate redelivery instead of
+waiting out AckWait. The authorized worker then completes JetStream delivery,
+mTLS gRPC claim, HTTP/2 content fetch, the configuration-validation business
+handler, mTLS gRPC output/settlement, and the post-settlement double ack that
+removes the command from the WorkQueue stream.
 
-The harness adds two test-only, bounded fault proxies; production transport is
-unchanged:
+The harness adds one test-only, bounded fault proxy; production transport is
+unchanged. The output proxy preserves the worker's mTLS identity and
+workload-session metadata, receives Main's first positive committed ACK,
+withholds it from the worker, and holds reconnects until the harness
+restarts Main, PostgreSQL, and the worker.
 
-1. The output proxy preserves the worker's mTLS identity and workload-session
-   metadata, receives Main's first positive committed ACK, withholds it from
-   the worker, and holds reconnects until the harness restarts Main,
-   PostgreSQL, and the worker.
-2. The Redis proxy forwards the atomic retirement `EVAL`, receives the exact
-   successful `{1,1,1}` response, and closes the worker connection before
-   returning that response.
+Before an authorized claim, the same pending command is also preserved
+through a NATS server restart (same store, `sync_interval: always`), a
+PostgreSQL restart and a Main restart. After the committed-ACK fault, the
+restarted worker takes the redelivered command and replays its encrypted
+spool. A settled command published again (the counterpart of a lost ack) is
+double-acked after the claim answers settled, with no second claim, output or
+dead letter. The final assertions require one claim, one inbox record, one
+business result, one settlement, one replay event with a valid monotonic
+cursor, an empty command stream and worker spool. Thus retry cannot create a
+second durable business output.
 
-Before an authorized claim, the same real pending delivery is also preserved
-through Redis AOF recovery, PostgreSQL restart, and Main restart. After the
-committed-ACK fault, the restarted worker reclaims the aged PEL entry and
-replays its encrypted spool. The final assertions require one claim, one inbox
-record, one business result, one settlement, one replay event with a valid
-monotonic cursor, and empty Redis stream, PEL, delivery-index mapping, and
-worker spool. Thus retry cannot create a second durable business output.
-
-Against the same TLS/ACL broker, the test also verifies that worker credentials
-cannot `XADD`, `HSET`, or `PUBLISH`, while producer credentials cannot
-`XREADGROUP`, `XACK`, or `XDEL`. Both roles are restricted to the command
-stream and its delivery-index key.
+The test also asserts the bus's least privilege from the server's own
+permission-violation log: the worker cannot publish a command, purge the
+stream, delete a message or create a consumer; the producer cannot pull, ack
+or delete a message; neither reaches another plane's subjects; and the run
+ends with exactly those expected violations.
 
 Run it explicitly; the ordinary unit/component suites do not start Docker:
 
@@ -154,7 +161,7 @@ go test -count=1 -v ./services/elitea-main/tests/system \
 ```
 
 The selected Python environment must contain the worker dependencies, notably
-the pinned SDK, `redis`, `h2`, `grpcio`, `httpx`, `pydantic`, and
+the pinned SDK, `nats-py`, `h2`, `grpcio`, `httpx`, `pydantic`, and
 `cryptography`. `ELITEA_SYSTEM_PYTHONPATH` may point at an additional local
 dependency directory.
 
@@ -240,6 +247,6 @@ Override the default `centry-elitea-indexer-worker-1` with
 PostgreSQL/PgVector support, Docker CLI/daemon access, or a running configured
 container fails the gate; only a disabled gate skips. The tool/provider
 boundary is a deterministic blocker underneath the real installed SDK
-callable. Redis reference delivery, the production worker serve loop, gRPC,
+callable. Command-bus delivery, the production worker serve loop, gRPC,
 public authentication and an external source provider remain outside this
 gate; the existing compose and cross-process harnesses own those boundaries.

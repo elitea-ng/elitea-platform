@@ -82,10 +82,12 @@ MAX_SAFE_STRING_BYTES = 256
 ENVELOPE_SCHEMA_REVISION = "elitea.runtime.signed-worker-command.v1"
 PROTOCOL_REVISION = "elitea.runtime.v1"
 CAPABILITY_VERSION = "1"
-LIMITS_REVISION = "elitea.runtime.limits.conformance.v2"
+LIMITS_REVISION = "elitea.runtime.limits.conformance.v3"
 CLAIM_LEASE_TTL_MILLIS = 30_000
 MAX_LEASE_POLL_INTERVAL_MILLIS = 10_000
-MIN_REDIS_RECLAIM_IDLE_MILLIS = 2 * CLAIM_LEASE_TTL_MILLIS
+# The command bus consumer's AckWait (docs/runtime-command-bus.md): twice the
+# claim lease, so one lost +WPI never hands live work to another worker.
+COMMAND_BUS_ACK_WAIT_MILLIS = 2 * CLAIM_LEASE_TTL_MILLIS
 OUTPUT_SCHEMA_REVISION = "elitea.runtime.execution-output.v1"
 CONFORMANCE_HMAC_KEY_ID = "elitea-runtime-v1-conformance-hmac"
 CONFORMANCE_HMAC_KEY = b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"

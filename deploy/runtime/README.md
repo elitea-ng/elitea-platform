@@ -1,7 +1,7 @@
 # The runtime plane — what `ELITEA_RUNTIME_ENABLED=true` actually costs
 
 This directory holds the non-secret half of the runtime plane for the full
-standalone stack: the TLS Redis config, the production auth config, and the two
+standalone stack: the TLS Redis config (no client left; removed next), the production auth config, and the two
 scripts that install generated material and pre-create the dispatch streams. The
 secret half is minted by [`../scripts/gen-runtime-certs.sh`](../scripts/gen-runtime-certs.sh)
 into `deploy/certs/runtime/`, which is gitignored and must stay that way.
@@ -19,11 +19,14 @@ else.
 
 ## The six things it drags in
 
-1. **TLS Redis, not the plaintext one.** Agent dispatch is Redis Streams —
-   `internal/transport/redisdispatch/agent.go` does the `XADD`; there is no NATS
-   in this path. `ELITEA_RUNTIME_REDIS_URL` must be `rediss://` with an ACL
-   username, no password in the URL (it comes from `_REDIS_PASSWORD_FILE`), and
-   an explicit `/0` database. The client pins `MinVersion: TLS 1.3`.
+1. **The command bus: NATS JetStream.** Dispatch publishes signed envelopes on
+   the JetStream streams `nats-bootstrap` creates
+   ([`docs/runtime-command-bus.md`](../../docs/runtime-command-bus.md)).
+   `ELITEA_RUNTIME_NATS_URL` is `nats://nats:4222` in compose (plaintext, no
+   identity); `docker-compose.nats-secure.yml` switches it to `tls://` with
+   the `elitea-main-runtime` client certificate. The TLS `runtime-redis` has
+   no client left (Form auth keeps its state in PostgreSQL); it is removed
+   with the next change.
 2. **Three mTLS listeners, not one.** Control gRPC `:9443`, output gRPC `:9444`,
    content HTTPS `:9445`, each with its own `_TLS_CERT_FILE`, `_TLS_KEY_FILE`
    and `_TLS_CLIENT_CA_FILE`. All three demand
@@ -91,12 +94,13 @@ the service. It reads every file back through `securefile` before it exits, so
 a missing key stops the pod there rather than in a restart loop. The Secret's
 key names are the file names that `gen-runtime-certs.sh` writes.
 
-## Consumer groups are created by the control plane
+## Streams and durable consumers are created by the control plane
 
-The worker's Redis ACL user deliberately has no `XGROUP`. A consumer that can
-create its own group can, after losing one, recreate it at the stream head and
-silently skip every command in flight. [`bootstrap-streams.sh`](bootstrap-streams.sh)
-creates them from `0-0` as a bootstrap user that can do nothing else.
+The worker may not create a consumer (its NATS permissions deny it). A
+consumer that can create its own durable can, after losing one, recreate it in
+a way that skips every command in flight. The `nats-bootstrap` service runs
+[`deploy/helm/nats-bootstrap/files/bootstrap.sh`](../helm/nats-bootstrap/files/bootstrap.sh),
+the same script the cluster's hook Job runs, as the only identity that may.
 
 ## Workload sessions are provisioned, never self-registered
 
@@ -165,8 +169,8 @@ nothing. Three things about it are not guessable from the compose file:
 **It has no environment configuration.** Config is one JSON file —
 `elitea-worker serve --config /run/elitea/runtime.json`, `extra="forbid"`. The
 only environment variable the worker itself reads is `ELITEA_SENSITIVE_TOOLS`.
-See [`worker-runtime.json`](worker-runtime.json); its `redis_stream` /
-`redis_group` must match the compose env on elitea-main, and its
+See [`worker-runtime.json`](worker-runtime.json); its `nats_stream` /
+`nats_consumer` must match the compose env on elitea-main, and its
 `workload_session_id` / `producer_id` must match the row `seed-runtime` writes.
 
 **`platform_origin` needs its own TLS front.** The worker rejects a non-https

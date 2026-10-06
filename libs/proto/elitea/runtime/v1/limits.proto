@@ -11,8 +11,15 @@ message ProtocolLimitsV1 {
   string limits_revision = 1;
   uint64 max_worker_command_bytes = 2;
   uint64 max_signed_envelope_bytes = 3;
-  uint64 max_redis_field_bytes = 4;
-  uint64 max_redis_entry_bytes = 5;
+  // The command-bus transport bounds (ADR-0010 amendment: NATS JetStream).
+  // max_transport_payload_bytes bounds the message body, which is exactly the
+  // SignedWorkerCommandEnvelopeV1 bytes. max_transport_message_bytes bounds the
+  // whole message the server stores (body plus headers) and is the stream's
+  // MaxMsgSize. Before limits revision conformance.v3 these were
+  // max_redis_field_bytes and max_redis_entry_bytes; the field numbers and
+  // wire encoding are unchanged.
+  uint64 max_transport_payload_bytes = 4;
+  uint64 max_transport_message_bytes = 5;
   uint64 max_input_manifest_bytes = 6;
   uint32 max_input_entries = 7;
   uint64 max_input_content_bytes = 8;

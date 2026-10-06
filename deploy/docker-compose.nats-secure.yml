@@ -18,7 +18,11 @@
 #   * `nats-bootstrap` presents each account's bootstrap identity and creates
 #     that account's assets with the permissions a cluster gives it;
 #   * `elitea-main` presents its own identity (URI SAN
-#     spiffe://elitea.internal/nats/elitea-main) over tls://.
+#     spiffe://elitea.internal/nats/elitea-main) over tls://, and its runtime
+#     plane presents elitea-main-runtime (the command bus producer);
+#   * the worker (standalone-full only) needs one more overlay,
+#     docker-compose.nats-secure-worker.yml: it presents elitea-worker (the
+#     command bus consumer) with deploy/runtime/worker-runtime.nats-secure.json.
 #
 # A permission the chart is missing then shows up here as a "Permissions
 # Violation" in `podman compose logs nats`, the same line a cluster logs.
@@ -46,6 +50,7 @@ services:
       - ./certs/nats/clients/elitea-nats-bootstrap-main:/etc/nats-client/main:ro
       - ./certs/nats/clients/elitea-nats-bootstrap-gateway:/etc/nats-client/gateway:ro
       - ./certs/nats/clients/elitea-nats-bootstrap-runtime:/etc/nats-client/runtime:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-worker:/etc/nats-client/worker:ro
 
   elitea-main:
     environment:
@@ -53,5 +58,10 @@ services:
       ELITEA_EVENTS_NATS_TLS_CA_FILE: /etc/nats-client/ca.crt
       ELITEA_EVENTS_NATS_TLS_CERT_FILE: /etc/nats-client/tls.crt
       ELITEA_EVENTS_NATS_TLS_KEY_FILE: /etc/nats-client/tls.key
+      ELITEA_RUNTIME_NATS_URL: "tls://nats:4222"
+      ELITEA_RUNTIME_NATS_TLS_CA_FILE: /etc/runtime-nats-client/ca.crt
+      ELITEA_RUNTIME_NATS_TLS_CERT_FILE: /etc/runtime-nats-client/tls.crt
+      ELITEA_RUNTIME_NATS_TLS_KEY_FILE: /etc/runtime-nats-client/tls.key
     volumes:
       - ./certs/nats/clients/elitea-main:/etc/nats-client:ro
+      - ./certs/nats/clients/elitea-main-runtime:/etc/runtime-nats-client:ro

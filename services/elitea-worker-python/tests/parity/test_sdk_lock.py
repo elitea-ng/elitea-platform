@@ -154,6 +154,19 @@ def test_worker_dependency_and_lock_share_one_sdk_identity() -> None:
     # "elitea-sdk tier 3 wiring" survives deleting that step outright, because
     # it also appears in a paths comment.
     assert "services/elitea-llm-gateway/scripts/sdk-conformance/run.sh" in worker_ci
+    # The live command-bus proof (docs/runtime-command-bus.md). Assert the
+    # INVOCATION and the require flag: without the flag the test skips, and a
+    # skipped permission test reads exactly like a passing one.
+    assert (
+        "services/elitea-worker-python/tests/service/test_nats_commands_service.py"
+        in worker_ci
+    )
+    assert 'ELITEA_REQUIRE_NATS_SECURE_TEST: "1"' in worker_ci
+    assert "bash scripts/nats/ci-secure-test-env.sh" in worker_ci
+    assert "./libs/go/natsconn/natstest/cmd/natstest-serve" in worker_ci
+    # The Redis Streams transport is deleted; its job must not come back.
+    assert "redis-runtime-worker" not in worker_ci
+    assert "redis:7-alpine" not in worker_ci
     assert lock["distribution_version"] == SDK_DISTRIBUTION_VERSION
     assert lock["source"]["revision"] == SDK_SOURCE_REVISION
     assert lock["source"]["git_archive_sha256"] == SDK_SOURCE_ARCHIVE_SHA256

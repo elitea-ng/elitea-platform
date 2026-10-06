@@ -168,8 +168,9 @@ assert rust == python, "the two implementations were given different runtime.jso
 parsed = json.loads(rust)
 required = {
     "schema_version", "limits_revision", "workload_session_id", "producer_id",
-    "consumer_id", "redis_url", "redis_password_path", "redis_stream",
-    "redis_group", "control_target", "output_target", "content_origin",
+    "consumer_id", "nats_url", "nats_ca_path", "nats_certificate_path",
+    "nats_private_key_path", "nats_stream", "nats_consumer",
+    "control_target", "output_target", "content_origin",
     "platform_origin", "ca_path", "certificate_path", "private_key_path",
     "ed25519_keyring_path", "spool_root", "spool_key_path",
     "agent_checkpoint_connection_path", "limits",

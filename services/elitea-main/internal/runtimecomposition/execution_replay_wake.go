@@ -12,14 +12,18 @@ import (
 
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/redis/go-redis/v9"
+	"github.com/nats-io/nats.go"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
+// executionReplayWakeSubject is core NATS, not JetStream: the wake-up is
+// advisory, and a lost one costs latency only (PostgreSQL polling).
+const executionReplayWakeSubject = commandbus.ReplayWakeSubject
+
 const (
-	executionReplayWakeChannel     = "elitea:runtime:execution-replay:wake:v1"
 	executionReplayWakeQueueSize   = 1024
 	executionReplayWakeHistorySize = 4096
-	executionReplayWakeTimeout     = 100 * time.Millisecond
 	executionReplayWakeRetryMin    = 250 * time.Millisecond
 	executionReplayWakeRetryMax    = 30 * time.Second
 )
@@ -41,13 +45,40 @@ func (w executionReplayWake) key() string {
 	return w.ProjectID + "\x00" + w.ExecutionID
 }
 
-// redisExecutionReplayWakeBus carries only a tiny, advisory wake signal. The
-// SSE handler always replays PostgreSQL after a wake, so a lost or duplicated
-// Redis message cannot lose, forge, or reorder execution output. One shared
-// subscription serves every SSE stream in this elitea-main process.
-type redisExecutionReplayWakeBus struct {
-	client *redis.Client
-	logger *slog.Logger
+// replayWakeTransport is the slice of NATS the wake bus uses; a fake stands in
+// for it in unit tests.
+type replayWakeTransport interface {
+	Publish(subject string, data []byte) error
+	Subscribe(subject string, deliver func([]byte)) (unsubscribe func() error, err error)
+}
+
+type natsReplayWakeTransport struct{ conn *nats.Conn }
+
+func (t natsReplayWakeTransport) Publish(subject string, data []byte) error {
+	return t.conn.Publish(subject, data)
+}
+
+func (t natsReplayWakeTransport) Subscribe(subject string, deliver func([]byte)) (func() error, error) {
+	sub, err := t.conn.Subscribe(subject, func(msg *nats.Msg) { deliver(msg.Data) })
+	if err != nil {
+		return nil, err
+	}
+	if err := sub.SetPendingLimits(executionReplayWakeQueueSize, 1<<20); err != nil {
+		_ = sub.Unsubscribe()
+		return nil, err
+	}
+	return sub.Unsubscribe, nil
+}
+
+// natsExecutionReplayWakeBus carries only a tiny, advisory wake signal between
+// elitea-main replicas, on core NATS (elitea.rt.v1.replay.wake, the
+// elitea-main-runtime identity). The SSE handler always replays PostgreSQL
+// after a wake, so a lost or duplicated message cannot lose, forge, or
+// reorder execution output. One shared subscription serves every SSE stream
+// in this elitea-main process.
+type natsExecutionReplayWakeBus struct {
+	transport replayWakeTransport
+	logger    *slog.Logger
 
 	notify chan executionReplayWake
 
@@ -59,12 +90,19 @@ type redisExecutionReplayWakeBus struct {
 	queueWarned atomic.Bool
 }
 
-func newRedisExecutionReplayWakeBus(client *redis.Client, logger *slog.Logger) (*redisExecutionReplayWakeBus, error) {
-	if client == nil || logger == nil {
-		return nil, errors.New("execution replay wake Redis client and logger are required")
+func newNATSExecutionReplayWakeBus(conn *nats.Conn, logger *slog.Logger) (*natsExecutionReplayWakeBus, error) {
+	if conn == nil {
+		return nil, errors.New("execution replay wake NATS connection is required")
 	}
-	return &redisExecutionReplayWakeBus{
-		client:    client,
+	return newExecutionReplayWakeBus(natsReplayWakeTransport{conn: conn}, logger)
+}
+
+func newExecutionReplayWakeBus(transport replayWakeTransport, logger *slog.Logger) (*natsExecutionReplayWakeBus, error) {
+	if transport == nil || logger == nil {
+		return nil, errors.New("execution replay wake transport and logger are required")
+	}
+	return &natsExecutionReplayWakeBus{
+		transport: transport,
 		logger:    logger,
 		notify:    make(chan executionReplayWake, executionReplayWakeQueueSize),
 		waiters:   make(map[string]map[uint64]chan struct{}),
@@ -73,10 +111,10 @@ func newRedisExecutionReplayWakeBus(client *redis.Client, logger *slog.Logger) (
 }
 
 // Notify is deliberately non-blocking. Local streams wake immediately after
-// the durable transaction commits; the bounded Redis queue fans the same wake
-// to other replicas. Queue pressure or Redis loss falls back to PostgreSQL
+// the durable transaction commits; the bounded queue fans the same wake to
+// other replicas over NATS. Queue pressure or NATS loss falls back to PostgreSQL
 // polling and therefore affects latency only, never correctness.
-func (b *redisExecutionReplayWakeBus) Notify(projectID, executionID string, cursor uint64) {
+func (b *natsExecutionReplayWakeBus) Notify(projectID, executionID string, cursor uint64) {
 	if b == nil {
 		return
 	}
@@ -94,7 +132,7 @@ func (b *redisExecutionReplayWakeBus) Notify(projectID, executionID string, curs
 	}
 }
 
-func (b *redisExecutionReplayWakeBus) Wait(ctx context.Context, projectID, executionID string, afterCursor uint64) (bool, error) {
+func (b *natsExecutionReplayWakeBus) Wait(ctx context.Context, projectID, executionID string, afterCursor uint64) (bool, error) {
 	if b == nil || ctx == nil || projectID == "" || executionID == "" ||
 		len(projectID) > 32 || len(executionID) > 128 {
 		return false, errors.New("execution replay wake wait is invalid")
@@ -128,59 +166,42 @@ func (b *redisExecutionReplayWakeBus) Wait(ctx context.Context, projectID, execu
 	}
 }
 
-func (b *redisExecutionReplayWakeBus) Run(ctx context.Context) error {
-	if b == nil || b.client == nil || ctx == nil {
+// Run subscribes once (retrying with backoff until the first subscribe
+// succeeds; nats.go re-subscribes by itself after a reconnect) and publishes
+// queued wakes until ctx ends.
+func (b *natsExecutionReplayWakeBus) Run(ctx context.Context) error {
+	if b == nil || b.transport == nil || ctx == nil {
 		return errors.New("execution replay wake lifecycle is incomplete")
 	}
 	go b.runPublisher(ctx)
 	retryDelay := executionReplayWakeRetryMin
-	for ctx.Err() == nil {
-		pubsub := b.client.Subscribe(ctx, executionReplayWakeChannel)
-		if _, err := pubsub.Receive(ctx); err != nil {
-			_ = pubsub.Close()
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			b.logger.Warn("execution replay wake subscription failed; bounded polling remains active", "err", err)
-			if err := waitForReplayWakeRetry(ctx, retryDelay); err != nil {
-				return err
-			}
-			retryDelay = min(retryDelay*2, executionReplayWakeRetryMax)
-			continue
+	for {
+		unsubscribe, err := b.transport.Subscribe(executionReplayWakeSubject, b.receive)
+		if err == nil {
+			<-ctx.Done()
+			_ = unsubscribe()
+			return ctx.Err()
 		}
-		retryDelay = executionReplayWakeRetryMin
-		messages := pubsub.Channel(redis.WithChannelSize(executionReplayWakeQueueSize))
-		closed := false
-		for !closed {
-			select {
-			case <-ctx.Done():
-				_ = pubsub.Close()
-				return ctx.Err()
-			case message, ok := <-messages:
-				if !ok {
-					closed = true
-					continue
-				}
-				var wake executionReplayWake
-				if json.Unmarshal([]byte(message.Payload), &wake) != nil || !wake.valid() {
-					continue
-				}
-				b.dispatch(wake)
-			}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		_ = pubsub.Close()
-		if ctx.Err() == nil {
-			b.logger.Warn("execution replay wake subscription stopped; bounded polling remains active")
-			if err := waitForReplayWakeRetry(ctx, retryDelay); err != nil {
-				return err
-			}
-			retryDelay = min(retryDelay*2, executionReplayWakeRetryMax)
+		b.logger.Warn("execution replay wake subscription failed; bounded polling remains active", "err", err)
+		if err := waitForReplayWakeRetry(ctx, retryDelay); err != nil {
+			return err
 		}
+		retryDelay = min(retryDelay*2, executionReplayWakeRetryMax)
 	}
-	return ctx.Err()
 }
 
-func (b *redisExecutionReplayWakeBus) runPublisher(ctx context.Context) {
+func (b *natsExecutionReplayWakeBus) receive(payload []byte) {
+	var wake executionReplayWake
+	if json.Unmarshal(payload, &wake) != nil || !wake.valid() {
+		return
+	}
+	b.dispatch(wake)
+}
+
+func (b *natsExecutionReplayWakeBus) runPublisher(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,10 +212,7 @@ func (b *redisExecutionReplayWakeBus) runPublisher(ctx context.Context) {
 			if err != nil {
 				continue
 			}
-			publishContext, cancel := context.WithTimeout(ctx, executionReplayWakeTimeout)
-			err = b.client.Publish(publishContext, executionReplayWakeChannel, encoded).Err()
-			cancel()
-			if err != nil && ctx.Err() == nil {
+			if err := b.transport.Publish(executionReplayWakeSubject, encoded); err != nil && ctx.Err() == nil {
 				b.logger.Warn("execution replay wake publish failed; bounded polling remains active", "err", err)
 			}
 		}
@@ -212,7 +230,7 @@ func waitForReplayWakeRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (b *redisExecutionReplayWakeBus) dispatch(wake executionReplayWake) {
+func (b *natsExecutionReplayWakeBus) dispatch(wake executionReplayWake) {
 	key := wake.key()
 	b.mu.Lock()
 	if wake.Cursor > b.highWater[key] {
@@ -235,7 +253,7 @@ func (b *redisExecutionReplayWakeBus) dispatch(wake executionReplayWake) {
 	b.mu.Unlock()
 }
 
-func (b *redisExecutionReplayWakeBus) removeWaiter(key string, waiterID uint64) {
+func (b *natsExecutionReplayWakeBus) removeWaiter(key string, waiterID uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.waiters[key], waiterID)
@@ -246,7 +264,7 @@ func (b *redisExecutionReplayWakeBus) removeWaiter(key string, waiterID uint64) 
 
 type wakingNodeEventIngestor struct {
 	next outputNodeEventIngestor
-	wake *redisExecutionReplayWakeBus
+	wake *natsExecutionReplayWakeBus
 }
 
 type outputNodeEventIngestor interface {
@@ -278,7 +296,7 @@ func agentTerminalNodeEvent(data []byte) bool {
 
 type wakingAgentExecutionIngestor struct {
 	next outputAgentExecutionIngestor
-	wake *redisExecutionReplayWakeBus
+	wake *natsExecutionReplayWakeBus
 }
 
 type outputAgentExecutionIngestor interface {
@@ -294,6 +312,6 @@ func (i wakingAgentExecutionIngestor) IngestAgent(ctx context.Context, frame out
 }
 
 var (
-	_ executionapi.ReplayWaiter = (*redisExecutionReplayWakeBus)(nil)
-	_ publisherRunner           = (*redisExecutionReplayWakeBus)(nil)
+	_ executionapi.ReplayWaiter = (*natsExecutionReplayWakeBus)(nil)
+	_ publisherRunner           = (*natsExecutionReplayWakeBus)(nil)
 )

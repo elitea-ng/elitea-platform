@@ -15,6 +15,17 @@ a credential into a ConfigMap.
 {{- $clients = append $clients (dict "identity" "elitea-main" "name" (include "elitea-main.name" .) "fullname" (include "elitea-main.fullname" .) "labels" (include "elitea-main.labels" .)) -}}
 {{- with get (.Values.main.env | default dict) "ELITEA_EVENTS_NATS_URL" }}{{ $_ := set $urls "main.env.ELITEA_EVENTS_NATS_URL" . }}{{ end -}}
 {{- end -}}
+{{- /* elitea-main's runtime plane: the command bus producer, its own identity
+       (elitea-main-runtime) in the same pod, with its own Secret and mount. */ -}}
+{{- if and .Values.main.enabled (.Values.main.runtime | default dict).enabled -}}
+{{- $clients = append $clients (dict "identity" "elitea-main-runtime" "policyName" "elitea-main" "name" (include "elitea-main.name" .) "fullname" (printf "%s-runtime" (include "elitea-main.fullname" .)) "labels" (include "elitea-main.labels" .)) -}}
+{{- $_ := set $urls "main.runtime.nats.url (or the `nats` block)" (include "elitea-main.runtimeNatsUrl" .) -}}
+{{- end -}}
+{{- /* The worker (Rust or Python image): the command bus consumer. */ -}}
+{{- if .Values.worker.enabled -}}
+{{- $clients = append $clients (dict "identity" "elitea-worker" "policyName" "elitea-worker-python" "name" (include "elitea-worker-python.name" .) "fullname" (include "elitea-worker-python.fullname" .) "labels" (include "elitea-worker-python.labels" .)) -}}
+{{- $_ := set $urls "worker.runtime.natsUrl (or the `nats` block)" (.Values.worker.runtime.natsUrl | default (include "elitea.natsUrl" .)) -}}
+{{- end -}}
 {{- if .Values.llmGateway.enabled -}}
 {{- $clients = append $clients (dict "identity" "elitea-llm-gateway" "name" (include "elitea-llm-gateway.name" .) "fullname" (include "elitea-llm-gateway.fullname" .) "labels" (include "elitea-llm-gateway.labels" .)) -}}
 {{- with get (.Values.llmGateway.env | default dict) "GATEWAY_NATS_URL" }}{{ $_ := set $urls "llmGateway.env.GATEWAY_NATS_URL" . }}{{ end -}}
@@ -29,7 +40,7 @@ a credential into a ConfigMap.
 
 {{- /* ── Gate 1: plaintext only on purpose ── */ -}}
 {{- if and $clients (not $tls.enabled) (not $tls.allowPlaintext) -}}
-{{- fail "nats.tls.enabled is false while elitea-main, the LLM gateway or the scheduler dials NATS. The NATS chart (deploy/helm/nats) requires TLS and a client certificate, so these components would fail every connection; a plaintext NATS lets any pod read every tenant's events and reset budget counters (#1076). Keep nats.tls.enabled, or — for a NATS you run plaintext on purpose — also set nats.tls.allowPlaintext=true." -}}
+{{- fail "nats.tls.enabled is false while elitea-main, its runtime plane, the LLM gateway or the scheduler dials NATS. The NATS chart (deploy/helm/nats) requires TLS and a client certificate, so these components would fail every connection; a plaintext NATS lets any pod read every tenant's events and reset budget counters (#1076). Keep nats.tls.enabled, or — for a NATS you run plaintext on purpose — also set nats.tls.allowPlaintext=true." -}}
 {{- end -}}
 
 {{- /* ── Gate 1b: a namespaced issuer signs only in its own namespace ── */ -}}
@@ -41,7 +52,10 @@ a credential into a ConfigMap.
 {{- /* ── Gate 1c: the NATS NetworkPolicy admits these pods by name ── */ -}}
 {{- /*
 deploy/helm/nats/templates/networkpolicy.yaml admits 4222 from pods labelled
-app.kubernetes.io/name=<identity> (its networkPolicy.clients). A nameOverride
+app.kubernetes.io/name=<identity> (its networkPolicy.clients; a second
+identity in the same pod, elitea-main-runtime, and the worker, whose pods keep
+the elitea-worker-python name for either image, are admitted by their pod's
+name, policyName). A nameOverride
 here changes that label, and the pod is then dropped at the NATS port: a
 connect timeout, with nothing naming the override. So a renamed NATS client
 is refused unless the operator states that the NATS chart's list says the
@@ -49,8 +63,9 @@ same (nats.networkPolicyClientNamesManaged).
 */ -}}
 {{- if not .Values.nats.networkPolicyClientNamesManaged -}}
 {{- range $c := $clients -}}
-{{- if ne $c.name $c.identity -}}
-{{- fail (printf "%s's pods are labelled app.kubernetes.io/name=%s (a nameOverride), but the NATS chart's NetworkPolicy admits NATS clients by name and lists %q (deploy/helm/nats networkPolicy.clients). The pods would be dropped at the NATS port. Add %q to that list (or drop the override), then set nats.networkPolicyClientNamesManaged=true here to say so." $c.identity $c.name $c.identity $c.name) -}}
+{{- $listed := $c.policyName | default $c.identity -}}
+{{- if ne $c.name $listed -}}
+{{- fail (printf "%s's pods are labelled app.kubernetes.io/name=%s (a nameOverride), but the NATS chart's NetworkPolicy admits NATS clients by name and lists %q (deploy/helm/nats networkPolicy.clients). The pods would be dropped at the NATS port. Add %q to that list (or drop the override), then set nats.networkPolicyClientNamesManaged=true here to say so." $c.identity $c.name $listed $c.name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

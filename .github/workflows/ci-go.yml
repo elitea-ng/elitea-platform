@@ -30,6 +30,9 @@ on:
       - "deploy/helm/nats/**"
       - "deploy/helm/nats-bootstrap/**"
       - "scripts/nats/**"
+      # internal/transport/commandbus pins its constants to the command bus
+      # contract document.
+      - "docs/runtime-command-bus.md"
       # The vet and test steps below run scripts/go/workspace-run.sh. A change
       # to that script, or to the Taskfile that calls it, must run this
       # workflow. A gate that does not trigger on the file it guards is the
@@ -65,6 +68,9 @@ on:
       - "deploy/helm/nats/**"
       - "deploy/helm/nats-bootstrap/**"
       - "scripts/nats/**"
+      # internal/transport/commandbus pins its constants to the command bus
+      # contract document.
+      - "docs/runtime-command-bus.md"
       # The vet and test steps below run scripts/go/workspace-run.sh. A change
       # to that script, or to the Taskfile that calls it, must run this
       # workflow. A gate that does not trigger on the file it guards is the
@@ -205,21 +211,6 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-      # Backs ELITEA_TEST_REDIS_ADDR below (#423). Tests across
-      # internal/transport/redisdispatch, internal/infra/db/repos and
-      # internal/infra/authsvc want a real Redis.
-      # Every one of them skipped itself on every run, so the transport that
-      # carries every worker command had no service-backed coverage at all.
-      # A Redis container costs a few seconds.
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -388,23 +379,21 @@ jobs:
           # under us. That must read as a failure, not as silence (#423).
           ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST: "true"
 
-          # The Redis service above.
-          ELITEA_TEST_REDIS_ADDR: "localhost:6379"
-
           # The NATS (JetStream) container started above.
           ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
 
           # Opt-in real-service reliability tests. Each needs only the
-          # PostgreSQL and Redis services this job already runs. Measured
-          # locally: backlog 19 s, visibility repair 41 s, three Redis
-          # capacity rounds under 2 s.
+          # PostgreSQL service and the secured NATS server (natstest, on the
+          # chart's own permissions) this job already provisions. Measured
+          # locally: backlog 19 s, visibility repair 3 s, three JetStream
+          # capacity rounds under 10 s.
           ELITEA_RUNTIME_POSTGRES_RELIABILITY_TEST: "1"
           ELITEA_RUNTIME_VISIBILITY_REPAIR_TEST: "1"
-          ELITEA_RUNTIME_REDIS_RELIABILITY_ROUNDS: "3"
+          ELITEA_RUNTIME_NATS_RELIABILITY_ROUNDS: "3"
 
           # tests/system/index_v2_preflight_binary_system_test.go starts its
-          # own PostgreSQL and TLS Redis containers and builds the shipped
+          # own PostgreSQL container and secured NATS server and builds the shipped
           # binaries, so it needs no service from this job. It is the only one
           # of the nine tests/system files that CI can run; the rest want a
           # bootstrapped Centry compose profile or the Python SDK, and
@@ -416,7 +405,7 @@ jobs:
           ELITEA_REQUIRE_CLIENT_CONTRACT_BASE: "1"
 
           # A skip that nothing declares FAILS this job. Locally the ledger
-          # only reports, so a developer with no PostgreSQL or Redis can still
+          # only reports, so a developer with no PostgreSQL or NATS can still
           # run `task test`. Same shape as CONTRACT_REQUIRE_PARITY.
           ELITEA_REQUIRE_DECLARED_SKIPS: "1"
         # One aggregation for CI and for `task test`. The inline loop that used

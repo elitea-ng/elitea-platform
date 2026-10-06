@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x65litea/runtime/v1/limits.proto\x12\x11\x65litea.runtime.v1\"\xf9\x03\n\x10ProtocolLimitsV1\x12\x17\n\x0flimits_revision\x18\x01 \x01(\t\x12 \n\x18max_worker_command_bytes\x18\x02 \x01(\x04\x12!\n\x19max_signed_envelope_bytes\x18\x03 \x01(\x04\x12\x1d\n\x15max_redis_field_bytes\x18\x04 \x01(\x04\x12\x1d\n\x15max_redis_entry_bytes\x18\x05 \x01(\x04\x12 \n\x18max_input_manifest_bytes\x18\x06 \x01(\x04\x12\x19\n\x11max_input_entries\x18\x07 \x01(\r\x12\x1f\n\x17max_input_content_bytes\x18\x08 \x01(\x04\x12\x1e\n\x16max_output_frame_bytes\x18\t \x01(\x04\x12\x1d\n\x15max_validation_issues\x18\n \x01(\r\x12\x1d\n\x15max_safe_string_bytes\x18\x0b \x01(\r\x12\x1e\n\x16\x63laim_lease_ttl_millis\x18\x0c \x01(\x04\x12&\n\x1emax_lease_poll_interval_millis\x18\r \x01(\x04\x12\x1e\n\x16max_grpc_request_bytes\x18\x0e \x01(\x04\x12\x1f\n\x17max_grpc_response_bytes\x18\x0f \x01(\x04J\x04\x08\x10\x10 BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x65litea/runtime/v1/limits.proto\x12\x11\x65litea.runtime.v1\"\x85\x04\n\x10ProtocolLimitsV1\x12\x17\n\x0flimits_revision\x18\x01 \x01(\t\x12 \n\x18max_worker_command_bytes\x18\x02 \x01(\x04\x12!\n\x19max_signed_envelope_bytes\x18\x03 \x01(\x04\x12#\n\x1bmax_transport_payload_bytes\x18\x04 \x01(\x04\x12#\n\x1bmax_transport_message_bytes\x18\x05 \x01(\x04\x12 \n\x18max_input_manifest_bytes\x18\x06 \x01(\x04\x12\x19\n\x11max_input_entries\x18\x07 \x01(\r\x12\x1f\n\x17max_input_content_bytes\x18\x08 \x01(\x04\x12\x1e\n\x16max_output_frame_bytes\x18\t \x01(\x04\x12\x1d\n\x15max_validation_issues\x18\n \x01(\r\x12\x1d\n\x15max_safe_string_bytes\x18\x0b \x01(\r\x12\x1e\n\x16\x63laim_lease_ttl_millis\x18\x0c \x01(\x04\x12&\n\x1emax_lease_poll_interval_millis\x18\r \x01(\x04\x12\x1e\n\x16max_grpc_request_bytes\x18\x0e \x01(\x04\x12\x1f\n\x17max_grpc_response_bytes\x18\x0f \x01(\x04J\x04\x08\x10\x10 BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,5 +33,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
   _globals['_PROTOCOLLIMITSV1']._serialized_start=54
-  _globals['_PROTOCOLLIMITSV1']._serialized_end=559
+  _globals['_PROTOCOLLIMITSV1']._serialized_end=571
 # @@protoc_insertion_point(module_scope)

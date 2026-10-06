@@ -52,15 +52,15 @@ Three components carry a native `HorizontalPodAutoscaler`; the fourth uses a dif
   <Card title="elitea-main" icon="server">CPU/memory HPA, `minReplicas: 2` / `maxReplicas: 10` by default. Scaling this past what `postgresql.maxConnections` was sized for is refused at render time — see [Production deployment overview](/deployment/overview#sizing-the-postgresql-connection-budget).</Card>
   <Card title="elitea-web" icon="layout"> CPU/memory HPA. Stateless; a rollout is safe at any time.</Card>
   <Card title="llm-gateway" icon="waypoints">An HPA on a custom `/llm` SSE-connection metric — CPU/memory is a poor signal for I/O-bound streaming. **Off by default**: it needs the Prometheus Adapter installed and configured to surface that gauge metric, or it reports `FailedGetPodsMetric` and silently pins at `minReplicas`.</Card>
-  <Card title="agent worker" icon="cpu">**No native HPA.** An agent execution spends most of its life waiting on a model, so CPU/memory never reflects backlog. Queue-depth autoscaling through **KEDA** is available (`worker.autoscaling`, off by default) — it scales on the Redis consumer group's pending-entry depth. The chart refuses to install a KEDA `ScaledObject` unless KEDA is actually present, rather than creating an object nothing reads.</Card>
+  <Card title="agent worker" icon="cpu">**No native HPA.** An agent execution spends most of its life waiting on a model, so CPU/memory never reflects backlog. Queue-depth autoscaling through **KEDA** is available (`worker.autoscaling`, off by default) — it scales on the worker durable's waiting plus held commands on the NATS command bus (`num_pending + num_ack_pending`, read from the NATS monitoring port). The chart refuses to install a KEDA `ScaledObject` unless KEDA is actually present, rather than creating an object nothing reads.</Card>
 </CardGroup>
 
 <Warning>
-KEDA's scaler must be able to verify the runtime Redis's private CA — install the KEDA operator with that CA mounted first. A scaler that cannot connect reports no depth, which scales the fleet **down** while the backlog grows; the chart cannot detect this for you.
+KEDA's scaler reads `/jsz` on the NATS chart's headless service, port 8222 (plain HTTP, no credential); the NATS chart's NetworkPolicy admits the KEDA operator there (`networkPolicy.monitoringFrom`). A scaler that cannot connect reports no lag, which scales the fleet **down** while the backlog grows; the chart cannot detect this for you.
 </Warning>
 
 <Note>
-The agent worker's own replica count stays correct at `>1` — the database enforces one active claim per execution regardless (`execution_claims_active_idx` is unique on `(execution_id, generation)` while a claim is live) — but scaling out is not free capacity by default. Measure the Redis consumer group's read rate before raising it or turning KEDA on; a long `cooldownSeconds` (300s default) is deliberate, because an in-flight agent execution can run for minutes and a short cooldown turns every quiet moment into a round of terminations.
+The agent worker's own replica count stays correct at `>1` — the database enforces one active claim per execution regardless (`execution_claims_active_idx` is unique on `(execution_id, generation)` while a claim is live) — but scaling out is not free capacity by default. Measure the command bus durable's delivery rate before raising it or turning KEDA on; a long `cooldownSeconds` (300s default) is deliberate, because an in-flight agent execution can run for minutes and a short cooldown turns every quiet moment into a round of terminations.
 </Note>
 
 ## Backups

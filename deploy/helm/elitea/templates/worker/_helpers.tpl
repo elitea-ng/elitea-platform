@@ -36,7 +36,7 @@ this list does not name is a provisioning mistake that fails loudly rather than
 a file the worker silently ignores.
 */}}
 {{- define "elitea-worker-python.materialFiles" -}}
-runtime-ca.crt agent-worker-client.crt agent-worker-client.key command-signing-keyring.json redis-worker-password worker-output-spool-key agent-checkpoint-connection{{ if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }} rust-compiled-profiles.json{{ end }}
+runtime-ca.crt agent-worker-client.crt agent-worker-client.key command-signing-keyring.json worker-output-spool-key agent-checkpoint-connection{{ if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }} rust-compiled-profiles.json{{ end }}
 {{- end }}
 
 {{/*

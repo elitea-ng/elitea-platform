@@ -38,7 +38,6 @@ use crate::protocol::elitea::runtime::v1::{
 };
 use crate::protocol::output::RuntimeFailureKind;
 use crate::spool::{SpoolLimits, SpoolMasterKey};
-use crate::transport::redis_commands::{RedisCommandDelivery, RedisCommandLimits};
 use crate::transport::{
     ControlGrpcConfig, ControlRpc, InputContentError, MaterializedInput, OutputGrpcConfig,
 };
@@ -220,16 +219,7 @@ async fn fresh(
         .claim_agent(&verified, NOW)
         .await
         .expect("accepted claim");
-    let delivery = RedisCommandDelivery::decode(
-        b"runtime.commands.v1",
-        b"1700000000000-0",
-        vec![(b"signed_envelope".to_vec(), raw)],
-        RedisCommandLimits {
-            max_entry_bytes: 64 * 1024,
-            max_field_bytes: 48 * 1024,
-        },
-    )
-    .expect("Redis delivery");
+    let delivery = crate::transport::command_bus::test_agent_delivery(raw);
     state.calls.lock().expect("calls").clear();
     test_fresh_agent_delivery(delivery, verified, claim)
 }

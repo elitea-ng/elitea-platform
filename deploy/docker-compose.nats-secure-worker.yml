@@ -1,0 +1,17 @@
+# OPT-IN overlay, on top of docker-compose.standalone-full.yml AND
+# docker-compose.nats-secure.yml: the worker joins the secured command bus as
+# its own NATS identity, elitea-worker (URI SAN
+# spiffe://elitea.internal/nats/elitea-worker; deploy/scripts/gen-nats-certs.sh
+# mints it).
+#
+#   podman compose -f deploy/docker-compose.standalone-full.yml \
+#     -f deploy/docker-compose.nats-secure.yml \
+#     -f deploy/docker-compose.nats-secure-worker.yml up -d
+#
+# A separate file because docker-compose.yml and the e2e stack run no worker,
+# and an overlay that names a service the base lacks creates a broken one.
+services:
+  elitea-worker:
+    volumes:
+      - ./runtime/worker-runtime.nats-secure.json:/run/elitea/runtime.json:ro
+      - ./certs/nats/clients/elitea-worker:/etc/nats-client:ro

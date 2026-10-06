@@ -7,6 +7,13 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # The live command-bus test runs the worker against the NATS chart's
+      # own permission table and the real bootstrap (docs/runtime-command-bus.md).
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
+      - "libs/go/natsconn/**"
+      - "docs/runtime-command-bus.md"
       - ".github/workflows/ci-rust.yml"
   push:
     branches:
@@ -16,6 +23,13 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # The live command-bus test runs the worker against the NATS chart's
+      # own permission table and the real bootstrap (docs/runtime-command-bus.md).
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
+      - "libs/go/natsconn/**"
+      - "docs/runtime-command-bus.md"
       - ".github/workflows/ci-rust.yml"
   workflow_dispatch:
 
@@ -171,12 +185,59 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: services/elitea-worker-rust
 
+      # The live command-bus test (src/execution/nats_live_tests.rs) runs the
+      # worker's real NATS transport as elitea-worker against a secured
+      # nats-server built from the NATS chart's own rendered nats.conf and the
+      # real bootstrap.sh (natstest-serve), then greps the server log for
+      # permission violations. Steps in this job, not a new job: the plan's
+      # concurrent-job cap. ELITEA_REQUIRE_NATS_SECURE_TEST=1 turns a missing
+      # environment into a FAILURE: a skipped permission test reads exactly
+      # like a passing one.
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            go.work.sum
+            libs/go/*/go.sum
+
+      - name: Provision the secured NATS permission test
+        working-directory: .
+        run: bash scripts/nats/ci-secure-test-env.sh
+
+      - name: Start the secured NATS test server
+        working-directory: .
+        run: |
+          env_file="${RUNNER_TEMP}/natsenv.json"
+          nohup go run ./libs/go/natsconn/natstest/cmd/natstest-serve -out "$env_file" \
+            > "${RUNNER_TEMP}/natstest-serve.log" 2>&1 &
+          for _ in $(seq 1 180); do
+            [ -s "$env_file" ] && break
+            sleep 1
+          done
+          if [ ! -s "$env_file" ]; then
+            echo "natstest-serve did not write $env_file" >&2
+            cat "${RUNNER_TEMP}/natstest-serve.log" >&2
+            exit 1
+          fi
+          echo "ELITEA_TEST_NATS_SECURE_ENV=$env_file" >> "$GITHUB_ENV"
+
       - name: Run all targets and features
         env:
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS: "1"
           ELITEA_TEST_DATABASE_GUARD: "disposable-pg18"
+          ELITEA_REQUIRE_NATS_SECURE_TEST: "1"
         run: cargo test --locked --all-targets --all-features
+
+      - name: Show the NATS test server log on failure
+        if: failure()
+        working-directory: .
+        run: cat "${RUNNER_TEMP}/natstest-serve.log" || true
 
       - name: Verify sandbox phase deadlines with PostgreSQL
         env:

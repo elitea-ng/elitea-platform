@@ -16,15 +16,17 @@ from elitea_worker.constants import (
     MAX_GRPC_REQUEST_BYTES,
     MAX_GRPC_RESPONSE_BYTES,
     MAX_LEASE_POLL_INTERVAL_MILLIS,
-    MIN_REDIS_RECLAIM_IDLE_MILLIS,
 )
 from elitea_worker.execution.errors import InvalidInput
+from elitea_worker.transport.nats_jetstream import NatsTlsPaths, validate_route
 
 
 _MAX_CONFIG_BYTES = 64 * 1024
 _MAX_IDENTITY_BYTES = 256
-_V1_REDIS_ENTRY_BYTES = 64 * 1024
-_V1_REDIS_FIELD_BYTES = 48 * 1024
+# docs/runtime-command-bus.md: the stream's MaxMsgSize (body plus headers)
+# and the signed envelope body. limits.proto fields 5 and 4.
+_V1_TRANSPORT_MESSAGE_BYTES = 64 * 1024
+_V1_TRANSPORT_PAYLOAD_BYTES = 48 * 1024
 _V1_INPUT_CONTENT_BYTES = 256 * 1024
 _V1_OUTPUT_FRAME_BYTES = 64 * 1024
 
@@ -34,10 +36,16 @@ class RuntimeLimits(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    redis_read_batch: int = Field(gt=0, le=64)
-    redis_block_millis: int = Field(ge=100, le=30_000)
-    redis_reclaim_idle_millis: int = Field(ge=1_000, le=86_400_000)
-    redis_reclaim_interval_millis: int = Field(ge=100, le=60_000)
+    # The command bus (docs/runtime-command-bus.md, "Worker configuration").
+    # Messages per pull: never more than the consumer's MaxRequestBatch (64)
+    # nor than the free delivery permits at the moment of the pull.
+    nats_fetch_batch: int = Field(ge=1, le=64)
+    # How long one pull waits (the consumer's MaxRequestExpires is 30s).
+    nats_fetch_expires_millis: int = Field(ge=100, le=30_000)
+    # The +WPI period: at most a quarter of the 60s AckWait.
+    nats_in_progress_interval_millis: int = Field(ge=1_000, le=15_000)
+    # NakWithDelay for a command the claim said to retry later.
+    nats_retry_delay_millis: int = Field(ge=1_000, le=300_000)
     dependency_retry_millis: int = Field(ge=100, le=60_000)
     delivery_max_concurrency: int = Field(gt=0, le=128)
     delivery_queue_capacity: int = Field(gt=0, le=512)
@@ -65,10 +73,6 @@ class RuntimeLimits(BaseModel):
             raise ValueError("delivery queue must hold at least one item per worker")
         if self.sync_max_in_flight < self.sync_max_workers:
             raise ValueError("sync in-flight bound cannot be below the thread count")
-        if self.redis_reclaim_idle_millis < MIN_REDIS_RECLAIM_IDLE_MILLIS:
-            raise ValueError("Redis reclaim idle must be at least twice the Go claim lease")
-        if self.redis_reclaim_interval_millis > MAX_LEASE_POLL_INTERVAL_MILLIS:
-            raise ValueError("Redis PEL heartbeat cannot be slower than the lease profile")
         if _V1_OUTPUT_FRAME_BYTES > self.output_max_queued_bytes:
             raise ValueError("one output frame must fit inside the output queue")
         if self.http_max_keepalive_connections > self.http_max_connections:
@@ -79,12 +83,12 @@ class RuntimeLimits(BaseModel):
     # Consumers remain explicit while operators cannot select an incompatible
     # local wire profile.
     @property
-    def redis_max_entry_bytes(self) -> int:
-        return _V1_REDIS_ENTRY_BYTES
+    def max_transport_message_bytes(self) -> int:
+        return _V1_TRANSPORT_MESSAGE_BYTES
 
     @property
-    def redis_max_field_bytes(self) -> int:
-        return _V1_REDIS_FIELD_BYTES
+    def max_transport_payload_bytes(self) -> int:
+        return _V1_TRANSPORT_PAYLOAD_BYTES
 
     @property
     def grpc_max_request_bytes(self) -> int:
@@ -113,10 +117,16 @@ class RuntimeDeployConfig(BaseModel):
     workload_session_id: str
     producer_id: str
     consumer_id: str
-    redis_url: str = Field(min_length=1, max_length=2048)
-    redis_password_path: Path
-    redis_stream: str = Field(min_length=1, max_length=512)
-    redis_group: str = Field(min_length=1, max_length=256)
+    # The command bus. consumer_id above is the NATS connection name
+    # (observability only, never an identity: the client certificate is).
+    nats_url: str = Field(min_length=1, max_length=2048)
+    # The elitea-worker identity's mTLS material: all three or none, and
+    # none only with nats:// (compose); tls:// requires all three.
+    nats_ca_path: Path | None = None
+    nats_certificate_path: Path | None = None
+    nats_private_key_path: Path | None = None
+    nats_stream: str = Field(min_length=1, max_length=64)
+    nats_consumer: str = Field(min_length=1, max_length=64)
     control_target: str = Field(min_length=1, max_length=512)
     output_target: str = Field(min_length=1, max_length=512)
     content_origin: str = Field(min_length=1, max_length=2048)
@@ -140,35 +150,20 @@ class RuntimeDeployConfig(BaseModel):
             raise ValueError("runtime identity is malformed")
         return value
 
-    @field_validator("redis_stream", "redis_group")
+    @field_validator("nats_url")
     @classmethod
-    def validate_redis_name(cls, value: str) -> str:
-        if not _bounded_text(value, 512):
-            raise ValueError("Redis stream or group is malformed")
-        return value
-
-    @field_validator("redis_url")
-    @classmethod
-    def validate_redis_url(cls, value: str) -> str:
-        if not _canonical_redis_url_text(value):
-            raise ValueError("Redis must use a canonical rediss ACL URL")
-        try:
-            parsed = urlsplit(value)
-            port = parsed.port
-        except ValueError as exc:
-            raise ValueError("Redis must use a canonical rediss ACL URL") from exc
-        if (
-            parsed.scheme != "rediss"
-            or not parsed.hostname
-            or port is None
-            or not _valid_acl_username(parsed.username)
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or parsed.path != "/0"
-            or not _canonical_explicit_port(parsed.netloc, port)
-        ):
-            raise ValueError("Redis must use a canonical rediss ACL URL")
+    def validate_nats_url(cls, value: str) -> str:
+        servers = value.split(",")
+        schemes: set[str] = set()
+        for server in servers:
+            if not _canonical_nats_url(server):
+                raise ValueError(
+                    "NATS must be a canonical nats:// or tls://host:port list "
+                    "without user information"
+                )
+            schemes.add(server.split("://", 1)[0])
+        if len(schemes) != 1:
+            raise ValueError("every NATS seed URL must use the same scheme")
         return value
 
     @field_validator("control_target", "output_target")
@@ -207,7 +202,6 @@ class RuntimeDeployConfig(BaseModel):
         "ed25519_keyring_path",
         "spool_root",
         "spool_key_path",
-        "redis_password_path",
     )
     @classmethod
     def validate_absolute_path(cls, value: Path) -> Path:
@@ -215,9 +209,14 @@ class RuntimeDeployConfig(BaseModel):
             raise ValueError("runtime material paths must be absolute")
         return value
 
-    @field_validator("agent_checkpoint_connection_path")
+    @field_validator(
+        "agent_checkpoint_connection_path",
+        "nats_ca_path",
+        "nats_certificate_path",
+        "nats_private_key_path",
+    )
     @classmethod
-    def validate_optional_agent_checkpoint_path(cls, value: Path | None) -> Path | None:
+    def validate_optional_absolute_path(cls, value: Path | None) -> Path | None:
         if value is not None and not value.is_absolute():
             raise ValueError("runtime material paths must be absolute")
         return value
@@ -226,7 +225,33 @@ class RuntimeDeployConfig(BaseModel):
     def validate_revision(self) -> RuntimeDeployConfig:
         if self.limits_revision != LIMITS_REVISION:
             raise ValueError("runtime limits revision is not compatible")
+        validate_route(self.nats_stream, self.nats_consumer)
+        material = (
+            self.nats_ca_path,
+            self.nats_certificate_path,
+            self.nats_private_key_path,
+        )
+        present = sum(path is not None for path in material)
+        if present not in (0, 3):
+            raise ValueError("NATS TLS material must be all three paths or none")
+        uses_tls = self.nats_url.startswith("tls://")
+        if uses_tls and present == 0:
+            raise ValueError("tls:// requires the NATS client TLS material")
+        if not uses_tls and present == 3:
+            raise ValueError("NATS client TLS material requires tls:// URLs")
         return self
+
+    @property
+    def nats_tls(self) -> NatsTlsPaths | None:
+        if self.nats_ca_path is None:
+            return None
+        assert self.nats_certificate_path is not None
+        assert self.nats_private_key_path is not None
+        return NatsTlsPaths(
+            ca_path=self.nats_ca_path,
+            certificate_path=self.nats_certificate_path,
+            private_key_path=self.nats_private_key_path,
+        )
 
 
 def load_deploy_config(path: Path) -> RuntimeDeployConfig:
@@ -321,27 +346,38 @@ def _bounded_text(value: str, max_bytes: int) -> bool:
     )
 
 
-def _valid_acl_username(value: str | None) -> bool:
-    if not value or len(value) > 256:
-        return False
-    return all(
-        character.isascii()
-        and (character.isalnum() or character in (".", "_", "-"))
+def _canonical_nats_url(value: str) -> bool:
+    """``nats://host:port`` or ``tls://host:port``: no userinfo, path, query.
+
+    User information is refused outright: nats-py would send it as a user or a
+    token, and the only identity this worker presents is its certificate.
+    """
+
+    if not value or not all(
+        0x21 <= ord(character) <= 0x7E and character not in ("%", "?", "#", "@")
         for character in value
+    ):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme in ("nats", "tls")
+        and parsed.hostname
+        and port is not None
+        and 0 < port < 65536
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == ""
+        and not parsed.query
+        and not parsed.fragment
+        and _canonical_explicit_port(parsed.netloc, port)
     )
 
 
-def _canonical_redis_url_text(value: str) -> bool:
-    return all(
-        0x21 <= ord(character) <= 0x7E and character not in ("%", "?", "#")
-        for character in value
-    )
-
-
-def _canonical_explicit_port(authority: str, port: int) -> bool:
-    _, separator, host_and_port = authority.rpartition("@")
-    if not separator:
-        return False
+def _canonical_explicit_port(host_and_port: str, port: int) -> bool:
     if host_and_port.startswith("["):
         closing = host_and_port.find("]")
         return closing > 0 and host_and_port[closing + 1 :] == f":{port}"

@@ -2766,3 +2766,201 @@ async fn a_fresh_session_with_no_skipped_application_children_gets_no_notice() {
         "a run with nothing skipped seeded a notice"
     );
 }
+
+/// A provider that streams one word per partial chunk and then closes the
+/// turn with an EMPTY terminal response — exactly what the OpenAI-compatible
+/// facade yields for a stream whose last chunk is `{"delta":{},
+/// "finish_reason":"stop"}` (deploy/mock-llm does this; so does Bifrost).
+struct WordStreamLlm {
+    words: &'static [&'static str],
+}
+
+#[async_trait]
+impl Llm for WordStreamLlm {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: LlmRequest,
+        _stream: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        let mut responses: Vec<adk_rust::Result<LlmResponse>> = self
+            .words
+            .iter()
+            .map(|word| {
+                Ok(LlmResponse {
+                    content: Some(Content::new("model").with_text(*word)),
+                    partial: true,
+                    ..LlmResponse::default()
+                })
+            })
+            .collect();
+        responses.push(Ok(LlmResponse {
+            finish_reason: Some(FinishReason::Stop),
+            turn_complete: true,
+            ..LlmResponse::default()
+        }));
+        Ok(Box::pin(adk_rust::futures::stream::iter(responses)))
+    }
+}
+
+const STREAMED_WORDS: &[&str] = &["tool ", "result ", "1 ", "said ", "ok "];
+const STREAMED_ANSWER: &str = "tool result 1 said ok ";
+
+/// Run one native invocation to EOS and return what the browser and the
+/// provisional store receive: the concatenated `agent_llm_chunk` text, the
+/// completed step text, and the `full_message` content.
+async fn project_streamed_run<C: NativeAgentCompletionSelector>(
+    mut assembled: super::runtime::AssembledNativeAgentInvocation<C>,
+) -> (String, Vec<String>, String) {
+    assembled
+        .project_start(Utc::now())
+        .expect("projected start");
+    let (mut native, mut projector, completion) = assembled.start().expect("native start");
+    let mut streamed = String::new();
+    let mut steps = Vec::new();
+    while let Some(event) = native.next_event().await.expect("native event") {
+        for projected in projector.project(&event).expect("projected event") {
+            let value: Value = serde_json::from_slice(
+                &encode_current_node_event_json(&projected).expect("canonical browser event"),
+            )
+            .expect("browser event JSON");
+            if value["type"] == "agent_llm_chunk" {
+                streamed.push_str(value["content"].as_str().unwrap_or_default());
+            }
+            if value["type"] == "agent_llm_end"
+                && let Some(text) = value["response_metadata"]["thinking_steps"][0]["text"].as_str()
+                && !text.is_empty()
+            {
+                steps.push(text.to_owned());
+            }
+        }
+    }
+    let completion = completion.select().await.expect("selected completion");
+    let full = projector
+        .finish_after_eos(completion, Utc::now())
+        .expect("projected completion")
+        .into_iter()
+        .map(|event| {
+            serde_json::from_slice::<Value>(
+                &encode_current_node_event_json(&event).expect("canonical browser event"),
+            )
+            .expect("browser event JSON")
+        })
+        .find(|value| value["type"] == "full_message")
+        .and_then(|value| value["content"].as_str().map(ToOwned::to_owned))
+        .expect("full message");
+    (streamed, steps, full)
+}
+
+/// #1082: ADK's Runner fills a content-less terminal event with every part
+/// the turn streamed. The projector appended that restatement as one more
+/// delta, so the provisional answer elitea-main stores held the reply twice
+/// until the terminal replaced it — the window the chat journeys read.
+/// Both durable-session shapes: with and without the completion enrichment.
+#[tokio::test]
+async fn a_streamed_turn_ending_in_an_empty_terminal_is_streamed_exactly_once() {
+    for durable in [true, false] {
+        let request = ordinary_request(AgentExecutionKind::Application);
+        let profile = OrdinaryNoToolProfile::validate(&request).expect("ordinary profile");
+        let plan = OrdinaryNativeAgentPlan::from_authorized(
+            &request,
+            &profile,
+            &AuthorizedNativeCommandBinding::fixture(),
+            &request.payload.input_attachments,
+        )
+        .expect("native plan");
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let model: Arc<dyn Llm> = Arc::new(WordStreamLlm {
+            words: STREAMED_WORDS,
+        });
+        let (streamed, steps, full) = if durable {
+            project_streamed_run(
+                assemble_ordinary_native_with_sessions(
+                    StreamingBoundModel {
+                        model,
+                        completed: STREAMED_ANSWER.to_owned(),
+                        durable: Arc::new(FixtureDurableCompletion {
+                            value: STREAMED_ANSWER.to_owned(),
+                        }),
+                    },
+                    plan,
+                    Vec::new(),
+                    SensitiveToolCatalog::default(),
+                    sessions,
+                )
+                .await
+                .expect("assembly"),
+            )
+            .await
+        } else {
+            project_streamed_run(
+                assemble_ordinary_native_with_sessions(
+                    FixtureBoundModel {
+                        model,
+                        completed: STREAMED_ANSWER.to_owned(),
+                    },
+                    plan,
+                    Vec::new(),
+                    SensitiveToolCatalog::default(),
+                    sessions,
+                )
+                .await
+                .expect("assembly"),
+            )
+            .await
+        };
+        assert_eq!(streamed, STREAMED_ANSWER, "durable enrichment: {durable}");
+        assert_eq!(steps, [STREAMED_ANSWER], "durable enrichment: {durable}");
+        assert_eq!(full, STREAMED_ANSWER, "durable enrichment: {durable}");
+    }
+}
+
+/// #1082, the journey that exposed it: the continuation after a sensitive-tool
+/// approval streams its answer once, not once plus a restatement.
+#[tokio::test]
+async fn an_approved_sensitive_call_continuation_streams_its_answer_exactly_once() {
+    let fixture = pause_read_only_sensitive_call().await;
+    let profile = OrdinaryNoToolProfile::validate(&fixture.request).expect("agent profile");
+    let decision =
+        DirectHitlDecision::from_payload(&approved_resume_payload(&fixture.interrupt_id))
+            .expect("approved decision");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &fixture.request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &fixture.request.payload.input_attachments,
+    )
+    .expect("resume native plan");
+    let tool: Arc<dyn Tool> = Arc::new(CountingTool {
+        calls: Arc::clone(&fixture.tool_calls),
+        read_only: true,
+    });
+    let toolset: Arc<dyn Toolset> = Arc::new(BasicToolset::new("fixture-tools", vec![tool]));
+    let sessions: Arc<dyn SessionService> = fixture.sessions.clone();
+    let resumed = assemble_direct_hitl_resume_with_sessions(
+        StreamingBoundModel {
+            model: Arc::new(WordStreamLlm {
+                words: STREAMED_WORDS,
+            }),
+            completed: STREAMED_ANSWER.to_owned(),
+            durable: Arc::new(FixtureDurableCompletion {
+                value: STREAMED_ANSWER.to_owned(),
+            }),
+        },
+        plan,
+        vec![toolset],
+        sensitive_catalog(),
+        decision,
+        sessions,
+    )
+    .await
+    .expect("read-only replay assembly");
+    let (streamed, steps, full) = project_streamed_run(resumed).await;
+    assert_eq!(fixture.tool_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(streamed, STREAMED_ANSWER);
+    assert_eq!(steps.last().map(String::as_str), Some(STREAMED_ANSWER));
+    assert_eq!(full, STREAMED_ANSWER);
+}

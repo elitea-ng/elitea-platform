@@ -35,12 +35,33 @@ from elitea_worker.execution.errors import (
 from elitea_worker.handlers.validation import ConfigurationValidationHandler
 from elitea_worker.protocol.codec import TestOnlyConformanceHmacAuthenticator
 from elitea_worker.transport.input_content import ClaimBoundInputRequestBuilder
-from elitea_worker.transport.redis_commands import RedisCommandDelivery
+from elitea_worker.transport.nats_jetstream import CommandDelivery
 
 _ROOT = Path(__file__).parents[4]
 _FIXTURES = _ROOT / "testdata/proto/runtime/v1/configuration-validation"
 _WORKLOAD_SESSION = "workload-session-conformance-v1"
 _PRODUCER = "python-reference-conformance-v1"
+
+def _command_delivery(
+    stream: str,
+    entry_id: str,
+    fields: dict[str, bytes],
+) -> CommandDelivery:
+    """A delivered command as the JetStream consumer hands it over.
+
+    The processors read only the signed envelope; the coordinates are what
+    the serve loop and the acker key on.
+    """
+
+    assert set(fields) == {"signed_envelope"}
+    return CommandDelivery(
+        stream="ELITEA_RT_V1_VALIDATE",
+        consumer="elitea-configuration-worker-v1",
+        subject=f"elitea.rt.v1.validate.d.{hashlib.sha256(f'{stream}/{entry_id}'.encode()).hexdigest()}",
+        stream_sequence=int(entry_id.split("-")[0]) if entry_id.split("-")[0].isdigit() else 1,
+        num_delivered=1,
+        signed_envelope=fields["signed_envelope"],
+    )
 
 
 @lru_cache(maxsize=1)
@@ -53,7 +74,7 @@ def _valid_delivery_case() -> tuple[
     command_pb2.WorkerCommandV1,
     input_pb2.ExecutionInputBundleV1,
     bytes,
-    RedisCommandDelivery,
+    CommandDelivery,
 ]:
     fixture = _FIXTURES / "valid"
     envelope = envelope_pb2.WorkerExecutionEnvelopeV1.FromString(
@@ -65,7 +86,7 @@ def _valid_delivery_case() -> tuple[
     manifest = input_pb2.ExecutionInputBundleV1.FromString(
         (fixture / "input-bundle.pb").read_bytes()
     )
-    delivery = RedisCommandDelivery(
+    delivery = _command_delivery(
         "configuration-validation.v1",
         "1-0",
         {
@@ -295,11 +316,11 @@ class _CountingInput:
 
 class _Acker:
     def __init__(self) -> None:
-        self.acked: list[RedisCommandDelivery] = []
+        self.acked: list[CommandDelivery] = []
         self.stable_delivery_ids: list[str] = []
 
     async def ack_after_settlement(
-        self, delivery: RedisCommandDelivery, stable_delivery_id: str
+        self, delivery: CommandDelivery, stable_delivery_id: str
     ) -> None:
         self.acked.append(delivery)
         self.stable_delivery_ids.append(stable_delivery_id)

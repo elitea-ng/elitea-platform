@@ -33,11 +33,9 @@ use crate::protocol::output::{
 use crate::spool::{
     EncryptedOutputSpool, ExecutionSpoolBinding, SpoolError, SpoolLimits, SpoolMasterKey,
 };
+use crate::transport::command_bus::{CommandBusError, CommandRetirementClient, CommandRetirer};
 use crate::transport::output_grpc::{
     FrameBoundProgressRejection, ProgressReplayDecision, ProgressReplaySession,
-};
-use crate::transport::redis_commands::{
-    RedisCommandError, RedisCommandRetirer, RedisRetirementClient,
 };
 use crate::transport::{
     ControlRpc, DurablyAckedTerminal, OutputGrpcConfig, OutputGrpcError, OutputGrpcSession,
@@ -93,7 +91,7 @@ impl EmptyAgentOutputRecovery {
     fn into_parts(
         self,
     ) -> (
-        crate::transport::redis_commands::RedisCommandDelivery,
+        crate::transport::command_bus::CommandDelivery,
         VerifiedAgentCommand,
         crate::protocol::control::AgentOutputRecovery,
         PreparedAgentOutput,
@@ -116,7 +114,7 @@ impl EmptyAgentOutput {
 
 /// Exact current-fence terminal output which must be replayed and settled.
 pub struct AcceptedTerminalOutputRecovery {
-    delivery: crate::transport::redis_commands::RedisCommandDelivery,
+    delivery: crate::transport::command_bus::CommandDelivery,
     verified: VerifiedAgentCommand,
     claim: AcceptedTerminalClaimRecovery,
     spool: PreparedOutputSpool,
@@ -139,7 +137,7 @@ impl AcceptedTerminalOutputRecovery {
     pub(crate) fn into_parts(
         self,
     ) -> (
-        crate::transport::redis_commands::RedisCommandDelivery,
+        crate::transport::command_bus::CommandDelivery,
         VerifiedAgentCommand,
         AcceptedTerminalClaimRecovery,
         PreparedOutputSpool,
@@ -157,7 +155,7 @@ impl AcceptedTerminalOutputRecovery {
     }
 }
 
-/// Non-authoritative summary for a delivery intentionally left in Redis.
+/// Non-authoritative summary for a delivery intentionally left on the command bus.
 pub struct AgentOutputRecoveryRequiredNoAck {
     execution_kind: AgentExecutionKind,
     kind: AgentOutputRecoveryRequiredKind,
@@ -546,7 +544,7 @@ pub(super) struct FreshAgentTerminalAck {
     pub(super) frame: ExecutionOutputFrameV1,
 }
 
-/// Stable terminalization failures which never authorize Redis retirement.
+/// Stable terminalization failures which never authorize command retirement.
 #[derive(Debug)]
 pub(super) enum FreshAgentTerminalError {
     RecoveryRequired(&'static str),
@@ -1561,7 +1559,7 @@ impl AgentTerminalRecoveryConfig {
     }
 }
 
-/// Confirmed outcome of replay, settlement and atomic Redis retirement.
+/// Confirmed outcome of replay, settlement and command retirement (double ack).
 #[derive(Debug)]
 pub struct AcceptedTerminalRecoveryCompletion {
     execution_kind: AgentExecutionKind,
@@ -1629,7 +1627,7 @@ pub(crate) enum AgentFailureTerminalError {
     Preflight(AgentOutputPreflightError),
     Output(OutputGrpcError),
     Settlement(AgentControlError),
-    Redis(RedisCommandError),
+    CommandBus(CommandBusError),
 }
 
 #[allow(dead_code)] // Observed by the next whole-delivery coordinator.
@@ -1647,7 +1645,7 @@ impl AgentFailureTerminalError {
             }
             Self::Output(_) => "agent_failure_terminal.output_rejected",
             Self::Settlement(_) => "agent_failure_terminal.settlement_failed",
-            Self::Redis(error) => error.code(),
+            Self::CommandBus(error) => error.code(),
         }
     }
 
@@ -1658,7 +1656,7 @@ impl AgentFailureTerminalError {
             Self::Preflight(error) => error.retryable(),
             Self::Output(error) => reconnectable_output(error),
             Self::Settlement(error) => error.retryable(),
-            Self::Redis(error) => error.retryable(),
+            Self::CommandBus(error) => error.retryable(),
             Self::Clock(_) | Self::InvalidDurableState(_) => false,
         }
     }
@@ -1675,7 +1673,9 @@ impl fmt::Display for AgentFailureTerminalError {
             Self::Preflight(error) => write!(formatter, "terminal spool recovery failed: {error}"),
             Self::Output(error) => write!(formatter, "terminal output delivery failed: {error}"),
             Self::Settlement(error) => write!(formatter, "terminal settlement failed: {error}"),
-            Self::Redis(error) => write!(formatter, "terminal Redis retirement failed: {error}"),
+            Self::CommandBus(error) => {
+                write!(formatter, "terminal command retirement failed: {error}")
+            }
         }
     }
 }
@@ -1688,7 +1688,7 @@ impl std::error::Error for AgentFailureTerminalError {
             Self::Preflight(error) => Some(error),
             Self::Output(error) => Some(error),
             Self::Settlement(error) => Some(error),
-            Self::Redis(error) => Some(error),
+            Self::CommandBus(error) => Some(error),
             Self::Clock(_) => None,
         }
     }
@@ -1702,7 +1702,7 @@ pub enum AgentTerminalRecoveryError {
     Preflight(AgentOutputPreflightError),
     Output(OutputGrpcError),
     Settlement(AgentControlError),
-    Redis(RedisCommandError),
+    CommandBus(CommandBusError),
 }
 
 impl AgentTerminalRecoveryError {
@@ -1718,7 +1718,7 @@ impl AgentTerminalRecoveryError {
             }
             Self::Output(_) => "agent_terminal_recovery.output_rejected",
             Self::Settlement(_) => "agent_terminal_recovery.settlement_failed",
-            Self::Redis(error) => error.code(),
+            Self::CommandBus(error) => error.code(),
         }
     }
 
@@ -1729,7 +1729,7 @@ impl AgentTerminalRecoveryError {
             Self::Preflight(error) => error.retryable(),
             Self::Output(error) => reconnectable_output(error),
             Self::Settlement(error) => error.retryable(),
-            Self::Redis(error) => error.retryable(),
+            Self::CommandBus(error) => error.retryable(),
             Self::InvalidConfiguration(_) | Self::InvalidDurableState(_) => false,
         }
     }
@@ -1745,7 +1745,9 @@ impl fmt::Display for AgentTerminalRecoveryError {
             Self::Preflight(error) => write!(formatter, "terminal spool recovery failed: {error}"),
             Self::Output(error) => write!(formatter, "terminal output replay failed: {error}"),
             Self::Settlement(error) => write!(formatter, "terminal settlement failed: {error}"),
-            Self::Redis(error) => write!(formatter, "terminal Redis retirement failed: {error}"),
+            Self::CommandBus(error) => {
+                write!(formatter, "terminal command retirement failed: {error}")
+            }
         }
     }
 }
@@ -1757,7 +1759,7 @@ impl std::error::Error for AgentTerminalRecoveryError {
             Self::Preflight(error) => Some(error),
             Self::Output(error) => Some(error),
             Self::Settlement(error) => Some(error),
-            Self::Redis(error) => Some(error),
+            Self::CommandBus(error) => Some(error),
             Self::InvalidConfiguration(_) => None,
         }
     }
@@ -1825,7 +1827,7 @@ impl ToolkitTerminalReplay for Channel {
 #[allow(dead_code)] // Enabled with the owned fresh-invocation coordinator.
 pub(crate) fn publish_pre_invocation_terminal<'a, R, C, T, K>(
     control: Arc<AgentControlClient<R>>,
-    retirer: &'a RedisCommandRetirer<C>,
+    retirer: &'a CommandRetirer<C>,
     replay: &'a T,
     terminal: PreInvocationTerminal,
     clock: Arc<K>,
@@ -1833,7 +1835,7 @@ pub(crate) fn publish_pre_invocation_terminal<'a, R, C, T, K>(
 ) -> TerminalFuture<'a, Result<AgentFailureTerminalCompletion, AgentFailureTerminalError>>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'a,
+    C: CommandRetirementClient + 'a,
     T: AgentTerminalReplay + 'a,
     K: UnixMillisClock,
 {
@@ -1861,7 +1863,7 @@ where
 #[allow(dead_code)] // Called by the next supervised authorization coordinator.
 pub(crate) fn publish_agent_failure_terminal<'a, R, C, T, K>(
     control: Arc<AgentControlClient<R>>,
-    retirer: &'a RedisCommandRetirer<C>,
+    retirer: &'a CommandRetirer<C>,
     replay: &'a T,
     terminal: AgentFailureTerminal,
     clock: Arc<K>,
@@ -1869,7 +1871,7 @@ pub(crate) fn publish_agent_failure_terminal<'a, R, C, T, K>(
 ) -> TerminalFuture<'a, Result<AgentFailureTerminalCompletion, AgentFailureTerminalError>>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'a,
+    C: CommandRetirementClient + 'a,
     T: AgentTerminalReplay + 'a,
     K: UnixMillisClock,
 {
@@ -1936,12 +1938,12 @@ where
                 .map_err(AgentFailureTerminalError::Settlement)?;
             tracing::info!(event = "agent_settlement_prepared");
             let settlement_receipt_id = receipt.receipt_id().to_owned();
-            tracing::info!(event = "agent_redis_retirement_started");
+            tracing::info!(event = "agent_command_retirement_started");
             retirer
                 .retire_agent_command(delivery, &verified, receipt.into())
                 .await
-                .map_err(AgentFailureTerminalError::Redis)?;
-            tracing::info!(event = "agent_redis_retirement_completed");
+                .map_err(AgentFailureTerminalError::CommandBus)?;
+            tracing::info!(event = "agent_command_retirement_completed");
             Ok(AgentFailureTerminalCompletion {
                 execution_kind,
                 sequence: frame.sequence,
@@ -1965,13 +1967,13 @@ where
 ///
 /// The replacement claim can neither load input nor enter ADK. A final lease
 /// poll chooses cancellation/deadline over the proposed safe failure, then the
-/// normal durable-output, settlement, and Redis-retirement chain closes the
+/// normal durable-output, settlement, and command-retirement chain closes the
 /// exact command. This bounds a `MAY_HAVE_STARTED` crash without risking a
 /// second model or tool invocation.
 #[allow(clippy::too_many_arguments)] // Every claim, lease, spool, and retirement owner is explicit.
 pub(crate) fn reconcile_empty_agent_output_recovery<'a, R, C, T, K>(
     control: Arc<AgentControlClient<R>>,
-    retirer: &'a RedisCommandRetirer<C>,
+    retirer: &'a CommandRetirer<C>,
     replay: &'a T,
     recovery: EmptyAgentOutputRecovery,
     proposed_failure: RuntimeFailureKind,
@@ -1981,7 +1983,7 @@ pub(crate) fn reconcile_empty_agent_output_recovery<'a, R, C, T, K>(
 ) -> TerminalFuture<'a, Result<AgentFailureTerminalCompletion, AgentFailureTerminalError>>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'a,
+    C: CommandRetirementClient + 'a,
     T: AgentTerminalReplay + 'a,
     K: UnixMillisClock,
 {
@@ -2048,12 +2050,12 @@ where
                 .map_err(AgentFailureTerminalError::Settlement)?;
             tracing::info!(event = "agent_settlement_prepared");
             let settlement_receipt_id = receipt.receipt_id().to_owned();
-            tracing::info!(event = "agent_redis_retirement_started");
+            tracing::info!(event = "agent_command_retirement_started");
             retirer
                 .retire_agent_command(delivery, &verified, receipt.into())
                 .await
-                .map_err(AgentFailureTerminalError::Redis)?;
-            tracing::info!(event = "agent_redis_retirement_completed");
+                .map_err(AgentFailureTerminalError::CommandBus)?;
+            tracing::info!(event = "agent_command_retirement_completed");
             Ok(AgentFailureTerminalCompletion {
                 execution_kind,
                 sequence: frame.sequence,
@@ -2079,11 +2081,11 @@ where
 /// path. The unique lease actor starts immediately but deliberately does not
 /// poll before the exact durable terminal's first output attempt. Only a bound
 /// output ACK can mint settlement authority, and only the validated settlement
-/// receipt can retire the Redis command.
-#[allow(dead_code)] // Enabled only after real TLS output and Redis composition lands.
+/// receipt can retire the bus command.
+#[allow(dead_code)] // Enabled only after real TLS output and command-bus composition lands.
 pub(crate) fn recover_accepted_terminal<'a, R, C, T, K>(
     control: Arc<AgentControlClient<R>>,
-    retirer: &'a RedisCommandRetirer<C>,
+    retirer: &'a CommandRetirer<C>,
     replay: &'a T,
     recovery: AcceptedTerminalOutputRecovery,
     clock: Arc<K>,
@@ -2092,7 +2094,7 @@ pub(crate) fn recover_accepted_terminal<'a, R, C, T, K>(
 ) -> TerminalFuture<'a, Result<AcceptedTerminalRecoveryCompletion, AgentTerminalRecoveryError>>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'a,
+    C: CommandRetirementClient + 'a,
     T: AgentTerminalReplay + 'a,
     K: UnixMillisClock,
 {
@@ -2126,12 +2128,12 @@ where
                 .map_err(AgentTerminalRecoveryError::Settlement)?;
             tracing::info!(event = "agent_settlement_prepared");
             let settlement_receipt_id = receipt.receipt_id().to_owned();
-            tracing::info!(event = "agent_redis_retirement_started");
+            tracing::info!(event = "agent_command_retirement_started");
             retirer
                 .retire_agent_command(delivery, &verified, receipt.into())
                 .await
-                .map_err(AgentTerminalRecoveryError::Redis)?;
-            tracing::info!(event = "agent_redis_retirement_completed");
+                .map_err(AgentTerminalRecoveryError::CommandBus)?;
+            tracing::info!(event = "agent_command_retirement_completed");
             Ok(AcceptedTerminalRecoveryCompletion {
                 execution_kind,
                 sequence: frame.sequence,
@@ -2340,7 +2342,7 @@ impl AgentOutputPreflight {
     ///
     /// Returns a stable failure for a producer-policy mismatch, unsafe or
     /// corrupt spool, invalid durable frame shape, or blocking-task failure.
-    /// No capacity, Begin, input, authorization, or Redis effect occurs.
+    /// No capacity, Begin, input, authorization, or command-bus effect occurs.
     pub async fn prepare(
         &self,
         fresh: FreshAgentDelivery,
@@ -2605,7 +2607,7 @@ impl AgentOutputPreflight {
 
     /// Replay retained progress exactly once, then require a fresh claim.
     /// Even an ACK cannot refresh the inspection's output watermark locally.
-    /// This method never grants model execution or retires the Redis delivery.
+    /// This method never grants model execution or retires the command delivery.
     #[allow(dead_code)] // Enabled with checkpoint intake after output replacement.
     pub(crate) async fn replay_checkpoint_progress<C: AgentProgressConnector>(
         &self,

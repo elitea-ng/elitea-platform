@@ -13,14 +13,14 @@ use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, execution_out
 use crate::protocol::output::validate_restored_toolkit_execute_read_output_frame;
 use crate::spool::ExecutionSpoolIdentity;
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandError, RedisCommandRetirer, RedisRetirementClient,
+use crate::transport::command_bus::{
+    CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
 
 #[derive(Debug)]
 pub(super) enum ToolkitDeliveryError {
     Control(AgentControlError),
-    Retirement(RedisCommandError),
+    Retirement(CommandBusError),
 }
 
 impl ToolkitDeliveryError {
@@ -57,21 +57,21 @@ impl From<AgentControlError> for ToolkitDeliveryError {
     }
 }
 
-impl From<RedisCommandError> for ToolkitDeliveryError {
-    fn from(value: RedisCommandError) -> Self {
+impl From<CommandBusError> for ToolkitDeliveryError {
+    fn from(value: CommandBusError) -> Self {
         Self::Retirement(value)
     }
 }
 
 pub(super) struct FreshToolkitDelivery {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedToolkitExecuteReadCommand,
     claim: AcceptedAgentClaim,
 }
 
 #[cfg(test)]
 pub(super) fn test_fresh_toolkit_delivery(
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedToolkitExecuteReadCommand,
     claim: AcceptedAgentClaim,
 ) -> FreshToolkitDelivery {
@@ -156,7 +156,7 @@ impl FreshToolkitDelivery {
     pub(super) fn into_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedToolkitExecuteReadCommand,
         AcceptedAgentClaim,
     ) {
@@ -166,7 +166,7 @@ impl FreshToolkitDelivery {
     pub(super) fn into_terminal_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedToolkitExecuteReadCommand,
         AcceptedTerminalClaimRecovery,
     ) {
@@ -179,7 +179,7 @@ impl FreshToolkitDelivery {
 }
 
 pub(super) struct ToolkitOutputRecoveryDelivery {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedToolkitExecuteReadCommand,
     recovery: AgentOutputRecovery,
 }
@@ -209,7 +209,7 @@ impl ToolkitOutputRecoveryDelivery {
     pub(super) fn into_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedToolkitExecuteReadCommand,
         AgentOutputRecovery,
     ) {
@@ -226,13 +226,13 @@ pub(super) enum ToolkitDeliveryRoute {
 
 pub(super) struct ToolkitDeliveryRouter<R, C> {
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<C>>,
+    retirer: Arc<CommandRetirer<C>>,
 }
 
 impl<R, C> ToolkitDeliveryRouter<R, C> {
     pub(super) const fn new(
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<C>>,
+        retirer: Arc<CommandRetirer<C>>,
     ) -> Self {
         Self { control, retirer }
     }
@@ -241,11 +241,11 @@ impl<R, C> ToolkitDeliveryRouter<R, C> {
 impl<R, C> ToolkitDeliveryRouter<R, C>
 where
     R: ControlRpc,
-    C: RedisRetirementClient,
+    C: CommandRetirementClient,
 {
     pub(super) async fn route(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedToolkitExecuteReadCommand,
         now_unix_millis: i64,
     ) -> Result<ToolkitDeliveryRoute, ToolkitDeliveryError> {

@@ -11,7 +11,7 @@ import (
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -79,7 +79,7 @@ func newCurrentToolkitCallToolRuntime(
 	toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator,
 	catalogue *CurrentToolkitCatalogueSnapshot,
 	capability *WorkerToolkitCapability,
-	producer *redisdispatch.ToolkitCallToolProducer,
+	producer *commandbus.ToolkitCallToolProducer,
 	policy repos.ToolkitCallToolDispatchPolicy,
 	deadline time.Duration,
 	records *repos.ToolCallRecordsRepository,

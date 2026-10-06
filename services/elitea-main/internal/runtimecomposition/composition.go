@@ -37,7 +37,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/output"
@@ -55,7 +55,7 @@ const (
 	capabilityVersion      = "1"
 	indexCapabilityVersion = "2"
 	agentCapabilityVersion = "1"
-	limitsRevision         = "elitea.runtime.limits.conformance.v2"
+	limitsRevision         = "elitea.runtime.limits.conformance.v3"
 
 	resourceClass          = "validation-small"
 	isolationClass         = "shared-claim-scoped-authority"
@@ -63,23 +63,24 @@ const (
 	inputGrantAudience     = "elitea.runtime.input.read.v1"
 	indexArtifactMediaType = "application/json"
 
-	maxWorkerCommandBytes         = 32 * 1024
-	maxSignedEnvelopeBytes        = 48 * 1024
-	maxRedisFieldBytes            = 48 * 1024
-	maxInputManifestBytes         = 64 * 1024
-	maxInputEntries               = 16
-	maxInputContentBytes          = executiondomain.MaxAgentExecutionInputBytes
-	maxOutputFrameBytes           = 64 * 1024
-	maxSafeStringBytes            = 256
-	maxGRPCRequestBytes           = 64 * 1024
-	maxGRPCResponseBytes          = 80 * 1024
-	maxContentRequests            = 16
-	maxIndexArtifactBytes         = 1 * 1024 * 1024
-	claimLeaseTTL                 = 30 * time.Second
-	productionIndexRedisEntrySize = (64 * 1024) - 1
-	agentResourceClass            = "agents"
-	agentIsolationClass           = "project"
-	agentDeadlineTTL              = 24 * time.Hour
+	maxWorkerCommandBytes                = 32 * 1024
+	maxSignedEnvelopeBytes               = 48 * 1024
+	maxTransportPayloadBytes             = 48 * 1024
+	maxInputManifestBytes                = 64 * 1024
+	maxInputEntries                      = 16
+	maxInputContentBytes                 = executiondomain.MaxAgentExecutionInputBytes
+	maxOutputFrameBytes                  = 64 * 1024
+	maxSafeStringBytes                   = 256
+	maxGRPCRequestBytes                  = 64 * 1024
+	maxGRPCResponseBytes                 = 80 * 1024
+	maxContentRequests                   = 16
+	maxIndexArtifactBytes                = 1 * 1024 * 1024
+	claimLeaseTTL                        = 30 * time.Second
+	productionIndexTransportMessageBytes = (64 * 1024) - 1
+	agentResourceClass                   = "agents"
+	agentIsolationClass                  = "project"
+	agentDeadlineTTL                     = 24 * time.Hour
+	validationDeadlineTTL                = time.Minute
 )
 
 type Dependencies struct {
@@ -212,15 +213,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, fmt.Errorf("load content listener TLS: %w", err)
 	}
 
-	controlRedis, err := NewControlRedisClient(ctx, config)
+	runtimeNATS, err := NewRuntimeNATSConn(NATSConnConfig{URL: config.NATSURL, Material: config.NATSMaterial}, dependencies.Logger)
 	if err != nil {
 		return nil, err
 	}
-	closeRedis := true
+	closeNATS := true
 	var sandboxSpoolDir string
 	defer func() {
-		if closeRedis {
-			_ = controlRedis.Close()
+		if closeNATS {
+			runtimeNATS.Close()
 			if sandboxSpoolDir != "" {
 				if err := os.RemoveAll(sandboxSpoolDir); err != nil {
 					dependencies.Logger.Error("sandbox bundle staging cleanup failed")
@@ -229,31 +230,35 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 	}()
 
-	limits := redisdispatch.Limits{
-		Revision:               limitsRevision,
-		MaxWorkerCommandBytes:  maxWorkerCommandBytes,
-		MaxSignedEnvelopeBytes: maxSignedEnvelopeBytes,
-		MaxRedisFieldBytes:     maxRedisFieldBytes,
-		MaxRedisEntryBytes:     productionRedisEntrySize,
-		MaxSignatureBytes:      256,
-		MaxStringBytes:         maxSafeStringBytes,
+	limits := commandbus.Limits{
+		Revision:                 limitsRevision,
+		MaxWorkerCommandBytes:    maxWorkerCommandBytes,
+		MaxSignedEnvelopeBytes:   maxSignedEnvelopeBytes,
+		MaxTransportPayloadBytes: maxTransportPayloadBytes,
+		MaxTransportMessageBytes: productionTransportMessageBytes,
+		MaxSignatureBytes:        256,
+		MaxStringBytes:           maxSafeStringBytes,
 	}
-	appenderConfig := redisdispatch.RedisStreamAppenderConfig{
-		MaxEntries:    config.StreamMaxEntries,
-		MaxEntryBytes: productionRedisEntrySize,
-	}
-	if appenderConfig.MaxEntryBytes > limits.MaxRedisEntryBytes {
-		return nil, errors.New("runtime Redis appender entry bound exceeds the producer bound")
-	}
-	appender, err := redisdispatch.NewRedisStreamAppender(controlRedis, appenderConfig)
+	// Every stream a route publishes into, verified against the contract
+	// (the bootstrap owns them; a drifted or absent one fails startup), and
+	// ONE appender bound to all of them.
+	runtimeJS, err := NewRuntimeJetStream(runtimeNATS)
 	if err != nil {
-		return nil, fmt.Errorf("construct bounded runtime Redis appender: %w", err)
+		return nil, err
 	}
-	signer, err := redisdispatch.NewEd25519CommandSigner(config.SigningKeyID, privateKey)
+	streamHandles, err := bindCommandStreams(ctx, runtimeJS, config, toolkitRoute)
+	if err != nil {
+		return nil, err
+	}
+	appender, err := commandbus.NewJetStreamAppender(runtimeJS, streamHandles...)
+	if err != nil {
+		return nil, fmt.Errorf("construct the command bus appender: %w", err)
+	}
+	signer, err := commandbus.NewEd25519CommandSigner(config.SigningKeyID, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime command signer: %w", err)
 	}
-	producer, err := redisdispatch.NewProducer(redisdispatch.ProducerConfig{
+	producer, err := commandbus.NewProducer(commandbus.ProducerConfig{
 		Stream:                 config.CommandStream,
 		ProtocolRevision:       protocolRevision,
 		EnvelopeSchemaRevision: envelopeSchemaRevision,
@@ -269,7 +274,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		ResourceClass:     resourceClass,
 		IsolationClass:    isolationClass,
 		Priority:          1,
-		DeadlineTTL:       time.Minute,
+		DeadlineTTL:       validationDeadlineTTL,
 		LimitsRevision:    limitsRevision,
 		MaxOutstanding:    config.MaxOutstanding,
 	}
@@ -444,29 +449,22 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, err
 	}
 	var indexPublisher publisherRunner
-	var toolkitCallToolProducer *redisdispatch.ToolkitCallToolProducer
-	var toolkitDiscoveryProducer *redisdispatch.ToolkitAvailableToolsProducer
+	var toolkitCallToolProducer *commandbus.ToolkitCallToolProducer
+	var toolkitDiscoveryProducer *commandbus.ToolkitAvailableToolsProducer
 	if config.IndexIngestDispatchEnabled {
 		indexLimits := limits
-		indexLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
-		indexAppender, err := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{
-			MaxEntries:    config.IndexIngestStreamMaxEntries,
-			MaxEntryBytes: productionIndexRedisEntrySize,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("construct bounded index ingest Redis appender: %w", err)
-		}
-		indexProducer, err := redisdispatch.NewIndexIngestProducer(redisdispatch.IndexIngestProducerConfig{
+		indexLimits.MaxTransportMessageBytes = productionIndexTransportMessageBytes
+		indexProducer, err := commandbus.NewIndexIngestProducer(commandbus.IndexIngestProducerConfig{
 			Stream:                 config.IndexIngestCommandStream,
-			ConsumerGroup:          config.IndexIngestConsumerGroup,
+			Consumer:               consumerFor(config.IndexIngestCommandStream),
 			ValidationStream:       config.CommandStream,
 			ProtocolRevision:       protocolRevision,
 			EnvelopeSchemaRevision: envelopeSchemaRevision,
 			CapabilityVersion:      indexCapabilityVersion,
 			Limits:                 indexLimits,
-		}, signer, indexAppender)
+		}, signer, appender)
 		if err != nil {
-			return nil, fmt.Errorf("construct index ingest Redis producer: %w", err)
+			return nil, fmt.Errorf("construct index ingest producer: %w", err)
 		}
 		indexOutbox, err := repos.NewCommandOutboxRepository(dependencies.AdmissionPool, config.IndexIngestCommandStream)
 		if err != nil {
@@ -491,28 +489,24 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if toolkitRoute.enabled {
 		toolkitLimits := limits
-		toolkitLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
-		toolkitAppender, buildErr := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{MaxEntries: toolkitRoute.maxEntries, MaxEntryBytes: productionIndexRedisEntrySize})
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		toolkitCallToolProducer, err = redisdispatch.NewToolkitCallToolProducer(
-			redisdispatch.ToolkitCallToolProducerConfig{
+		toolkitLimits.MaxTransportMessageBytes = productionIndexTransportMessageBytes
+		toolkitCallToolProducer, err = commandbus.NewToolkitCallToolProducer(
+			commandbus.ToolkitCallToolProducerConfig{
 				Stream:                 toolkitRoute.stream,
-				ConsumerGroup:          toolkitRoute.consumerGroup,
+				Consumer:               toolkitRoute.consumer,
 				ValidationStream:       config.CommandStream,
 				ProtocolRevision:       protocolRevision,
 				EnvelopeSchemaRevision: envelopeSchemaRevision,
 				CapabilityVersion:      toolkitCallToolCapabilityVersion,
 				Limits:                 toolkitLimits,
-			}, signer, toolkitAppender)
+			}, signer, appender)
 		if err != nil {
-			return nil, fmt.Errorf("construct tool-run Redis producer: %w", err)
+			return nil, fmt.Errorf("construct tool-run producer: %w", err)
 		}
 		if config.ToolkitDiscoveryEnabled {
-			toolkitDiscoveryProducer, err = redisdispatch.NewToolkitAvailableToolsProducer(redisdispatch.ToolkitAvailableToolsProducerConfig{
-				Stream: toolkitRoute.stream, ConsumerGroup: toolkitRoute.consumerGroup, ValidationStream: config.CommandStream, ProtocolRevision: protocolRevision, EnvelopeSchemaRevision: envelopeSchemaRevision, CapabilityVersion: toolkitCallToolCapabilityVersion, Limits: toolkitLimits,
-			}, signer, toolkitAppender)
+			toolkitDiscoveryProducer, err = commandbus.NewToolkitAvailableToolsProducer(commandbus.ToolkitAvailableToolsProducerConfig{
+				Stream: toolkitRoute.stream, Consumer: toolkitRoute.consumer, ValidationStream: config.CommandStream, ProtocolRevision: protocolRevision, EnvelopeSchemaRevision: envelopeSchemaRevision, CapabilityVersion: toolkitCallToolCapabilityVersion, Limits: toolkitLimits,
+			}, signer, appender)
 			if err != nil {
 				return nil, err
 			}
@@ -546,18 +540,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentNestedVersions storage.CurrentApplicationVersionSource
 	if config.AgentExecutionDispatchEnabled {
 		agentLimits := limits
-		agentLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
-		agentAppender, err := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{
-			MaxEntries:    config.AgentExecutionStreamMaxEntries,
-			MaxEntryBytes: productionIndexRedisEntrySize,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("construct bounded agent execution Redis appender: %w", err)
-		}
-		agentProducer, err := redisdispatch.NewAgentExecutionProducer(
-			redisdispatch.AgentExecutionProducerConfig{
+		agentLimits.MaxTransportMessageBytes = productionIndexTransportMessageBytes
+		agentProducer, err := commandbus.NewAgentExecutionProducer(
+			commandbus.AgentExecutionProducerConfig{
 				Stream:                       config.AgentExecutionCommandStream,
-				ConsumerGroup:                config.AgentExecutionConsumerGroup,
+				Consumer:                     consumerFor(config.AgentExecutionCommandStream),
 				ValidationStream:             config.CommandStream,
 				IndexIngestStream:            config.IndexIngestCommandStream,
 				ProtocolRevision:             protocolRevision,
@@ -568,10 +555,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				Limits:                       agentLimits,
 			},
 			signer,
-			agentAppender,
+			appender,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("construct agent execution Redis producer: %w", err)
+			return nil, fmt.Errorf("construct agent execution producer: %w", err)
 		}
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
@@ -681,7 +668,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
 		}
-		currentMainClient, targetErr := currentcore.NewTLSClient(config.RedisCAFile)
+		// The runtime CA: the same bundle the private listeners verify
+		// worker client certificates against.
+		currentMainClient, targetErr := currentcore.NewTLSClient(config.ControlTLS.ClientCAPath)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current Main policy client: %w", targetErr)
 		}
@@ -895,7 +884,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var replayMaintenance *executionReplayRetentionJanitor
 	var nodeEvents *repos.NodeEventsRepository
-	var replayWake *redisExecutionReplayWakeBus
+	var replayWake *natsExecutionReplayWakeBus
 	var replayWaiter executionapi.ReplayWaiter = pollingReplayWaiter{
 		interval: phaseOneReplayPollInterval,
 	}
@@ -904,7 +893,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct node event replay repository: %w", err)
 		}
-		replayWake, err = newRedisExecutionReplayWakeBus(controlRedis, dependencies.Logger)
+		replayWake, err = newNATSExecutionReplayWakeBus(runtimeNATS, dependencies.Logger)
 		if err != nil {
 			return nil, fmt.Errorf("construct execution replay wake bus: %w", err)
 		}
@@ -1099,7 +1088,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if codeOwnerClient != nil {
 		defer func() {
-			if codeOwnerClient != nil && closeRedis {
+			if codeOwnerClient != nil && closeNATS {
 				codeOwnerClient.Close()
 			}
 		}()
@@ -2019,11 +2008,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		publicRoutes.AgentTaskStatus = agentTaskStatus
 	}
 
-	closeRedis = false
+	closeNATS = false
 	return &Runtime{
 		publisher:              publisherRoot,
 		private:                privateServers,
-		controlRedis:           controlRedis,
+		runtimeNATS:            runtimeNATS,
 		sandboxSpoolDir:        sandboxSpoolDir,
 		codeOwnerClient:        codeOwnerClient,
 		publicRoutes:           publicRoutes,

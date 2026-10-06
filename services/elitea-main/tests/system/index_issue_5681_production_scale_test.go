@@ -3070,7 +3070,7 @@ return cjson.encode({removed_pending = removed, remaining = remaining})`
 		ctx,
 		"indexer-worker",
 		"--raw", "EVAL", script, "1",
-		indexCommandStream, indexConsumerGroup, syntheticConsumer,
+		indexCommandStream, indexConsumer, syntheticConsumer,
 	)
 	if err != nil {
 		t.Fatalf("remove synthetic Redis consumer: %v", err)

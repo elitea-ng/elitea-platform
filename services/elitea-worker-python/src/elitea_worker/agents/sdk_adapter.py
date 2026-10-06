@@ -567,7 +567,7 @@ class EliteaSdkAgentAdapter:
             )
         self._client = client
         # The claim-bound composition owns this checkpointer. It is never part
-        # of AgentExecutionInputV1 and never crosses Redis or gRPC. The SDK and
+        # of AgentExecutionInputV1 and never crosses the command bus or gRPC. The SDK and
         # LangGraph remain the only readers/writers of checkpoint state.
         self._memory = memory
         self._callbacks = list(callbacks or [])

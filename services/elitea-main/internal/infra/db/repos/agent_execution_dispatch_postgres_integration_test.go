@@ -8,7 +8,7 @@ import (
 	"time"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -188,14 +188,14 @@ func TestPostgresAgentDispatchHeldPublisherStillAppendsDurableWinner(t *testing.
 func newPostgresAgentProducer(
 	t *testing.T,
 	policy AgentExecutionDispatchPolicy,
-	signer redisdispatch.CommandSigner,
-	appender redisdispatch.StreamAppender,
-) *redisdispatch.AgentExecutionProducer {
+	signer commandbus.CommandSigner,
+	appender commandbus.StreamAppender,
+) *commandbus.AgentExecutionProducer {
 	t.Helper()
-	producer, err := redisdispatch.NewAgentExecutionProducer(
-		redisdispatch.AgentExecutionProducerConfig{
+	producer, err := commandbus.NewAgentExecutionProducer(
+		commandbus.AgentExecutionProducerConfig{
 			Stream:                       policy.StreamName,
-			ConsumerGroup:                "elitea-agent-worker-v1",
+			Consumer:                     "elitea-agent-worker-v1",
 			ValidationStream:             "elitea:runtime:validation:commands",
 			IndexIngestStream:            "elitea:runtime:index:commands",
 			ProtocolRevision:             "runtime-v1",
@@ -203,14 +203,14 @@ func newPostgresAgentProducer(
 			ApplicationCapabilityVersion: policy.CapabilityVersion,
 			AdhocCapabilityVersion:       policy.CapabilityVersion,
 			ToolkitReadCapabilityVersion: policy.CapabilityVersion,
-			Limits: redisdispatch.Limits{
-				Revision:               policy.LimitsRevision,
-				MaxWorkerCommandBytes:  8 * 1024,
-				MaxSignedEnvelopeBytes: 12 * 1024,
-				MaxRedisFieldBytes:     12 * 1024,
-				MaxRedisEntryBytes:     16 * 1024,
-				MaxSignatureBytes:      128,
-				MaxStringBytes:         512,
+			Limits: commandbus.Limits{
+				Revision:                 policy.LimitsRevision,
+				MaxWorkerCommandBytes:    8 * 1024,
+				MaxSignedEnvelopeBytes:   12 * 1024,
+				MaxTransportPayloadBytes: 12 * 1024,
+				MaxTransportMessageBytes: 16 * 1024,
+				MaxSignatureBytes:        128,
+				MaxStringBytes:           512,
 			},
 			AllowTestOnlyHMAC: true,
 		},
