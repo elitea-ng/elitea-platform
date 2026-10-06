@@ -4970,7 +4970,10 @@ export const getCancelChatExecutionUrl = (
  * transcript rather than waiting for a terminal frame.
  *
  * Only the conversation's author, or the user who asked the question,
- * may stop it (internal/api/v2/agentexecution/cancel.go).
+ * may stop it (internal/api/v2/agentexecution/cancel.go). The project
+ * permission check runs before the route reads anything, so an
+ * invalid project id answers 403, like a project the caller cannot
+ * use.
  *
  * Idempotent for the same caller: stopping an answer that this caller
  * already stopped answers 204 again, also after the run has settled.
