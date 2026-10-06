@@ -87,6 +87,11 @@ fn runtime(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Runtime, message)
 }
 
+/// The error of a child whose output cannot be read.
+fn unreadable(error: &str) -> EngineError {
+    runtime(format!("The wiki worker's output is unreadable: {error}"))
+}
+
 impl NativeRunner {
     /// The runner, with this process's own executable as the worker.
     ///
@@ -256,7 +261,7 @@ impl NativeRunner {
                     }
                     Some(Err(error)) => {
                         tracing::error!(%error, "the wiki worker's output is unreadable; killing it");
-                        last = Some(Err(runtime(format!("The wiki worker's output is unreadable: {error}"))));
+                        last = Some(Err(unreadable(&error)));
                         signal(pid, rustix::process::Signal::KILL);
                         lines_open = false;
                     }
@@ -278,8 +283,14 @@ impl NativeRunner {
         if lines_open {
             let drain = async {
                 while let Some(message) = lines.recv().await {
-                    if let Ok(line) = message {
-                        relay(line, context, stopped, &mut build_id, &mut last);
+                    match message {
+                        Ok(line) => relay(line, context, stopped, &mut build_id, &mut last),
+                        // The same as in the loop above (the child has
+                        // ended, so there is nothing to kill).
+                        Err(error) => {
+                            tracing::error!(%error, "the wiki worker's output is unreadable");
+                            last = Some(Err(unreadable(&error)));
+                        }
                     }
                 }
             };
@@ -555,6 +566,30 @@ mod tests {
         assert_eq!(error.error_type, ErrorType::Runtime);
         assert!(
             error.message.contains("ended without a result"),
+            "{}",
+            error.message
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_line_after_the_exit_is_reported() {
+        // The worker ends at once; a process that holds its stdout writes
+        // a line that is not JSON after the parent saw the exit.
+        let (runner, root) = scripted(
+            "#!/bin/sh
+(sleep 1; echo 'not json at all') &
+exit 0
+",
+        );
+        let (context, _receiver, _stop) = context();
+        let outcome = runner.run("generate_wiki", Map::new(), &context).await;
+        let error = outcome
+            .err()
+            .unwrap_or_else(|| panic!("an unreadable worker succeeded"));
+        assert_eq!(error.error_type, ErrorType::Runtime);
+        assert!(
+            error.message.contains("output is unreadable"),
             "{}",
             error.message
         );
