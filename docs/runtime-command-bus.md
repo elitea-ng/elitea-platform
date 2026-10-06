@@ -138,12 +138,15 @@ Worker behaviour:
 
 | Situation | Action |
 | --- | --- |
-| intake | fetch at most as many messages as there are free delivery permits (semaphore before pull), with a bounded expiry (the old BLOCK) |
+| intake | pull only as many messages as there are worker tasks free to start one now, plus at most a small fixed prefetch (semaphore before pull), so the queue behind running work stays short and a second replica can take what one replica cannot start. A pull waits up to its expiry for the FIRST message and returns as soon as it has one (it never holds a delivered command until the expiry) |
 | owned and working | `+WPI` (in progress) every 5s for every owned message, queued or active; it resets AckWait |
 | settled (terminal receipt from main), `SETTLED`, `OBSOLETE`, `RETIRED` | double ack (`AckSync`), after the settlement receipt only; "already acknowledged" is idempotent success |
 | `RETRY_LATER`, active lease held elsewhere, recovery not possible now | `NakWithDelay(60s)` |
-| poison: decode or signature failure, subject token mismatch, a command this worker cannot serve | `NakWithDelay(24h)` + a dead-letter record + an ERROR log `worker_command.dead_lettered` + the dead-letter counter. Never `Term`: that frees the subject and PostgreSQL re-offers the poison every 30s |
-| graceful shutdown | stop fetching, keep heartbeating owned work until it ends or the shutdown deadline passes; then stop without ack or nak, so AckWait redelivers |
+| poison that can never become valid: the envelope signature fails, or the subject's hash token is not `sha256(idempotency_key)` | dead-letter record, then `Term` (`+TERM`): it frees the stream's capacity at once. PostgreSQL may re-offer the same outbox row; it is checked, recorded and terminated again |
+| other poison: decode failure, a command this worker cannot serve | dead-letter record, then `NakWithDelay(24h)` + an ERROR log `worker_command.dead_lettered` + the dead-letter counter |
+| the dead-letter record cannot be written | no `Term` and no 24h park without a record: `NakWithDelay(retry)`, an ERROR log `worker_command.dead_letter_write_failed` and its counter; the next delivery retries the record |
+| any delayed nak | the delivery leaves the heartbeat set FIRST, and no heartbeat round still in flight may cross it: a `+WPI` after a delayed `-NAK` resets the redelivery timer to AckWait (nats-server `progressUpdate`), which would turn a 24h park into a 60s loop |
+| graceful shutdown | stop fetching; deliveries fetched but not started are given back with a zero-delay nak (another replica takes them now); running work keeps heartbeating until it ends or the shutdown deadline passes, then stops without ack or nak, so AckWait redelivers |
 
 A redelivery of a message whose earlier delivery is still running elsewhere
 reaches the claim, which answers active-lease; the worker naks it with the
@@ -152,7 +155,8 @@ is safe because an ack only ever follows a terminal PostgreSQL receipt.
 
 ### Dead letter (owner decision Q3)
 
-KV bucket `ELITEA_RT_V1_DEADLETTER`, created by the bootstrap, history 1, TTL
+KV bucket `ELITEA_RT_V1_DEADLETTER`, in the workers' own WORKER account,
+created by that account's bootstrap, history 1, TTL
 7 days. Key `<route>.<sha256(delivery_id)>`. Value (JSON,
 `schema: "elitea.runtime.dead-letter.v1"`): `stream`, `consumer`, `subject`,
 `stream_sequence`, `num_delivered`, `reason` (a stable low-cardinality code),
@@ -162,7 +166,10 @@ what the command said. The alert is the bucket being non-empty —
 `EliteaRuntimeCommandDeadLettered` in deploy/helm/nats/templates/prometheusrule.yaml,
 `nats_stream_total_messages{stream_name="KV_ELITEA_RT_V1_DEADLETTER"} > 0` —
 plus the workers' ERROR log line `worker_command.dead_lettered` and their
-in-process counter. `EliteaRuntimeCommandStreamNearlyFull` fires before a
+in-process counter. Deleting a record (`nats kv del`) leaves a delete marker,
+which `nats_stream_total_messages` still counts until the bucket's TTL; the
+alert therefore reads "records were written in the last 7 days", and
+`nats kv ls` is the current list. `EliteaRuntimeCommandStreamNearlyFull` fires before a
 stream starts backpressuring dispatch.
 
 ## Limits (owner decision Q6)
@@ -175,33 +182,62 @@ numbers are unchanged, and the limits revision moved to
 `elitea.runtime.limits.conformance.v3` so a v2 producer and a v3 worker never
 agree by accident.
 
-## Identities and permissions (the RUNTIME account)
+## Identities and permissions (the RUNTIME and WORKER accounts)
 
 The NATS server has one account per plane (`deploy/helm/nats/values.yaml`:
-MAIN, GATEWAY, RUNTIME). Everything on this page — the three streams, their
-durables, the dead-letter bucket and the replay wake-up subject — lives in
-**RUNTIME**, and so do the three identities below. RUNTIME neither exports nor
-imports anything: no other plane's identity can publish a command, read one or
-see the streams, and neither command bus identity can reach MAIN's or
-GATEWAY's subjects. Nobody may delete or purge a stream; only the bootstrap
+MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER). The three streams, their
+durables and the replay wake-up subject live in **RUNTIME**, with the
+producer. The workers are in **WORKER**, whose JetStream holds the
+dead-letter bucket and nothing else, and reach RUNTIME's three durables only
+through service imports: RUNTIME exports, to WORKER only, each durable's
+`CONSUMER.INFO`, `CONSUMER.MSG.NEXT` (response type stream) and
+`$JS.ACK.<stream>.<durable>.>`; WORKER imports the two API subjects under the
+JetStream API prefix `JS.RUNTIME.API` (`natsconn.WorkerRuntimeJSAPIPrefix`),
+which both workers use when they present an identity (async-nats
+`jetstream::with_prefix`, nats-py `nc.jetstream(prefix=...)`), and WORKER's
+own `$JS.API` for the bucket. Without an identity (compose's plaintext
+posture, one global account) both use the default prefix.
+
+Why the worker is not a RUNTIME user: the server answers a permitted
+JetStream API request on the requester's reply subject without checking it
+against the requester's permissions. In RUNTIME the worker could name
+`elitea.rt.v1.<route>.d.<token>` as the reply of a pull or an info request
+and have the server store the answer in a command stream: a signed command
+copied across routes, or info answers filling a stream to its MaxMsgs so the
+producer is refused, with no grant anywhere that could remove them. In WORKER
+the answer lands in WORKER. The bucket is WORKER's for the converse reason:
+in RUNTIME the producer could steer one of its own answers into
+`$KV.ELITEA_RT_V1_DEADLETTER.<key>` and forge a dead letter.
+`TestSecuredWorkerCannotStoreIntoCommandStreamsByReplySubject` proves both.
+
+No other plane's identity can publish a command, read one or see the
+streams, and neither command bus identity can reach MAIN's or GATEWAY's
+subjects. Nobody may delete or purge a stream; only an account's bootstrap
 creates or updates one, or creates a consumer.
 
-| NATS user (URI SAN `spiffe://elitea.internal/nats/<id>`) | Grants |
-| --- | --- |
-| `elitea-main-runtime` (elitea-main's runtime plane) | publish `elitea.rt.v1.{validate,agent,index}.d.*`; stream info and direct get on the three streams; consumer info on their durables; publish and subscribe `elitea.rt.v1.replay.wake`; inbox `_INBOX_elitea-main-runtime.>`. Denied: `$KV.>`, `$JS.ACK.>`, `MSG.NEXT`, stream and consumer admin |
-| `elitea-worker` (Rust and Python workers) | stream info on the three streams; consumer info, `MSG.NEXT` and `$JS.ACK` on each stream's own durable only; dead-letter KV puts and its stream info; inbox `_INBOX_elitea-worker.>`. Denied: `elitea.rt.v1.>` (no command, no wake-up), stream and consumer admin |
-| `elitea-nats-bootstrap-runtime` (the `nats-bootstrap` hook Job, short-lived certificate) | creates and reconciles the three streams, their durables and the dead-letter bucket (`bootstrap_runtime` in `bootstrap.sh`); no delete or purge |
+| NATS user (URI SAN `spiffe://elitea.internal/nats/<id>`) | Account | Grants |
+| --- | --- | --- |
+| `elitea-main-runtime` (elitea-main's runtime plane) | RUNTIME | publish `elitea.rt.v1.{validate,agent,index}.d.*`; stream info and direct get on the three streams; consumer info on their durables; publish and subscribe `elitea.rt.v1.replay.wake`; inbox `_INBOX_elitea-main-runtime.>`. Denied: `$KV.>`, `$JS.ACK.>`, `MSG.NEXT`, stream and consumer admin |
+| `elitea-nats-bootstrap-runtime` (the `nats-bootstrap` hook Job, short-lived certificate) | RUNTIME | creates and reconciles the three streams and their durables (`bootstrap_runtime` in `bootstrap.sh`); no delete or purge |
+| `elitea-worker` (Rust and Python workers) | WORKER | `JS.RUNTIME.API.CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on each stream's own durable only (the imports); dead-letter KV puts and the bucket's stream info; inbox `_INBOX_elitea-worker.>`. No stream info on the command streams (elitea-main verifies those). Denied: `elitea.rt.v1.>`, stream and consumer admin |
+| `elitea-nats-bootstrap-worker` (the hook Job) | WORKER | creates and reconciles the dead-letter bucket (`bootstrap_worker`); no delete or purge |
 
 ## Autoscaling (owner decision Q8)
 
-KEDA uses the `nats-jetstream` scaler on the worker's stream and durable. It
-scales on consumer lag (`num_pending`: published, not yet delivered), not on
-the old Redis pending-entries count (delivered, not yet acked), so the
-threshold is lower and an activation threshold of 1 wakes a scaled-to-zero
-fleet. The scaler reads `/jsz?acc=RUNTIME` on the NATS monitoring port
-(`worker.autoscaling.natsAccount`; a wrong account reads as zero lag, so
-`natstest` pins the answer), which the NATS chart's NetworkPolicy admits from
-the KEDA operator only.
+KEDA uses the `nats-jetstream` scaler on the worker's stream and durable. Its
+metric is `num_pending + num_ack_pending` (KEDA v2.10 through v2.21,
+`pkg/scalers/nats_jetstream_scaler.go` `getMaxMsgLag`): commands waiting AND
+commands a replica has pulled and not acked. Because a worker pulls only for
+its free delivery slots plus a small prefetch, a replica's share of that
+metric is its running work; `lagThreshold` defaults to
+`delivery_max_concurrency`, so KEDA asks for enough replicas to run
+everything waiting or running, and a scale-in does not strand a queue that
+only one pod could see. An activation threshold of 1 wakes a scaled-to-zero
+fleet. The scaler reads `/jsz?acc=RUNTIME` on the NATS monitoring port of the
+headless service (`worker.autoscaling.natsAccount`; a wrong account reads as
+zero lag, so `natstest` pins the answer); on the HA cluster it locates the
+consumer leader through `/varz`. The NATS chart's NetworkPolicy admits the
+KEDA operator there only.
 
 ## Worker configuration (`runtime.json`, schema `elitea.runtime-deploy.v1`)
 
