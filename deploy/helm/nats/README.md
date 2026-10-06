@@ -401,12 +401,15 @@ $N stream ls          # GATEWAY_BUDGET, GATEWAY_RATELIMIT, GATEWAY_BUDGET_DELTAS
 (`elitea-nats-bootstrap-main-nats-client-tls` the same way shows MAIN's
 `KV_ELITEA_CANVAS_PRESENCE`, and nothing of GATEWAY's.)
 
-Who is connected, as whom (from inside the pod; 8222 is reachable only from
-the KEDA operator):
+Who is connected, as whom. The server image is `scratch` (no shell, no
+`wget`), and 8222 is reachable in the cluster only from the KEDA operator,
+so read it through a port-forward, which goes through the kubelet:
 
 ```bash
-kubectl -n elitea exec elitea-nats-0 -c nats -- wget -qO- 'http://127.0.0.1:8222/connz?auth=1' \
+kubectl -n elitea port-forward pod/elitea-nats-0 18222:8222 &
+curl -fsS 'http://127.0.0.1:18222/connz?auth=1' \
   | jq -r '.connections[] | "\(.name)\t\(.account)\t\(.authorized_user)"'
+kill %1
 ```
 
 Every connection must show one of the `spiffe://elitea.internal/nats/…` users,

@@ -477,7 +477,8 @@ services:
       elitea-main:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      # curl, not wget: the Debian nginx image ships curl and no wget.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:80/app/ || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10
