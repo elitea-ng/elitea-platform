@@ -236,6 +236,64 @@ fn native_bundle_selection_requires_exact_platform() {
 }
 
 #[test]
+fn selected_native_profile_retains_exact_dependency_bundle_cohort() {
+    use crate::sandbox::request::{NativeDependencies, PreparedJob};
+    let template = binding();
+    let root = "c".repeat(64);
+    let other_root = "d".repeat(64);
+    let raw = manifest(vec![
+        (template.clone(), root.clone()),
+        (template.clone(), other_root.clone()),
+    ]);
+    let platform = NativePlatform {
+        os: "linux".into(),
+        arch: "arm64".into(),
+        abi: "gnu".into(),
+    };
+    let selected = config(&raw, root.clone())
+        .parse(
+            &raw,
+            &template.execution_image_digest,
+            &template.policy_revision,
+            Some(&platform),
+        )
+        .unwrap();
+    let job = || {
+        PreparedJob::new(
+            Language::Rust,
+            "pub fn run() {}".into(),
+            std::collections::BTreeMap::new(),
+            template.execution_image_digest.clone(),
+            template.policy_revision.clone(),
+            30,
+        )
+        .unwrap()
+    };
+    let native = || NativeDependencies {
+        kind: crate::sandbox::native_bundle::NativeKind::Cargo,
+        platform: platform.clone(),
+        preparation_sha256: "e".repeat(64),
+        source_sha256: ContentSha256::of(b"[dependencies]\nitoa='1'\n")
+            .as_str()
+            .into(),
+        dependencies_toml: Some("[dependencies]\nitoa='1'\n".into()),
+    };
+    assert!(!selected.matches_dependency_cohort(&job()));
+    assert!(
+        selected.matches_dependency_cohort(
+            &job().with_native_dependency_bundle(root, native()).unwrap()
+        )
+    );
+    assert!(
+        !selected.matches_dependency_cohort(
+            &job()
+                .with_native_dependency_bundle(other_root, native())
+                .unwrap()
+        )
+    );
+}
+
+#[test]
 fn optional_settings_refuse_missing_fields_and_unsafe_paths_or_pins() {
     for raw in [
         "{}",

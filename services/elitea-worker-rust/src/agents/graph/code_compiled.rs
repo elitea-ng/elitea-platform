@@ -99,15 +99,24 @@ impl RemoteCodeRuntime {
         {
             return Ok(None);
         }
-        let Some(snapshot_profile) = self
-            .selected_compiled_profile(profile)
-            .filter(|_| invocation.language == CodeLanguage::Rust)
+        let compilation_activation = compiled_activation(&invocation.activation);
+        let compilation_recorded = invocation.language == CodeLanguage::Rust
+            && recorded.is_none()
+            && self
+                .journal
+                .contains_activation(&scope, &compilation_activation)
+                .await
+                .map_err(|error| failed(&error.to_string()))?;
+        let Some(snapshot_profile) = compiled_profile_for_job(
+            self.selected_compiled_profile(profile)
+                .filter(|_| invocation.language == CodeLanguage::Rust)
+                .map(std::convert::AsRef::as_ref),
+            job,
+            recorded.is_some(),
+            compilation_recorded,
+        )?
         else {
-            return if recorded.is_some() {
-                Err(failed("The original compiled profile is unavailable.").into())
-            } else {
-                Ok(None)
-            };
+            return Ok(None);
         };
         let binding = self
             .authority
@@ -129,14 +138,7 @@ impl RemoteCodeRuntime {
             selected.recovery = true;
             return Ok(Some(selected));
         }
-        let compilation_activation = compiled_activation(&invocation.activation);
-        if recorded.is_none()
-            && self
-                .journal
-                .contains_activation(&scope, &compilation_activation)
-                .await
-                .map_err(|error| failed(&error.to_string()))?
-        {
+        if compilation_recorded {
             return self
                 .prepare_compiled_snapshot(
                     invocation,
@@ -215,6 +217,26 @@ impl RemoteCodeRuntime {
                 Ok(Some(selected))
             }
         }
+    }
+}
+
+// A fresh cohort miss selects ordinary execution before any compiled grant.
+// Any recorded compilation or execution keeps the original compiled path fenced.
+fn compiled_profile_for_job<'a>(
+    profile: Option<&'a crate::sandbox::compiled_snapshot::SnapshotProfile>,
+    job: &PreparedJob,
+    recorded_execution: bool,
+    recorded_compilation: bool,
+) -> Result<Option<&'a crate::sandbox::compiled_snapshot::SnapshotProfile>, GraphError> {
+    match profile {
+        Some(profile) if profile.matches_dependency_cohort(job) => Ok(Some(profile)),
+        Some(_) if recorded_execution || recorded_compilation => Err(failed(
+            "The original compiled dependency cohort is unavailable.",
+        )),
+        None if recorded_execution || recorded_compilation => {
+            Err(failed("The original compiled profile is unavailable."))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -423,5 +445,131 @@ mod tests {
         assert_ne!(compiler, compiled_activation(&[8; 32]));
         // Content belongs to the immutable request digest. The original activation alone
         // fixes the compiler identity, so conflicting content cannot create another job.
+    }
+}
+
+#[cfg(test)]
+mod cohort_tests {
+    use super::*;
+    use crate::sandbox::{
+        compiled_snapshot::{Binding, ContentSha256, SnapshotProfile},
+        native_bundle::{NativeKind, NativePlatform},
+        request::{Language, NativeDependencies},
+    };
+
+    fn profile() -> SnapshotProfile {
+        let template: Binding = serde_json::from_slice(include_bytes!(
+            "../../../tests/fixtures/compiled-snapshot-v1/binding.json"
+        ))
+        .unwrap();
+        SnapshotProfile::with_dependency_bundle(
+            template,
+            Some(ContentSha256::parse("c".repeat(64)).unwrap()),
+        )
+        .unwrap()
+    }
+
+    fn job(root: Option<&str>) -> PreparedJob {
+        let template: Binding = serde_json::from_slice(include_bytes!(
+            "../../../tests/fixtures/compiled-snapshot-v1/binding.json"
+        ))
+        .unwrap();
+        let job = PreparedJob::new(
+            Language::Rust,
+            "pub fn run() {}".into(),
+            std::collections::BTreeMap::new(),
+            template.execution_image_digest,
+            template.policy_revision,
+            30,
+        )
+        .unwrap();
+        if let Some(root) = root {
+            job.with_native_dependency_bundle(
+                root.into(),
+                NativeDependencies {
+                    kind: NativeKind::Cargo,
+                    platform: NativePlatform {
+                        os: "linux".into(),
+                        arch: "arm64".into(),
+                        abi: "gnu".into(),
+                    },
+                    preparation_sha256: "e".repeat(64),
+                    source_sha256: ContentSha256::of(b"[dependencies]\nitoa='1'\n")
+                        .as_str()
+                        .into(),
+                    dependencies_toml: Some("[dependencies]\nitoa='1'\n".into()),
+                },
+            )
+            .unwrap()
+        } else {
+            job
+        }
+    }
+
+    #[test]
+    fn fresh_dependency_free_rust_uses_unchanged_ordinary_request() {
+        let profile = profile();
+        let job = job(None);
+        let bytes = job.to_transport().unwrap();
+        let fingerprint = job.fingerprint().unwrap();
+        assert!(
+            compiled_profile_for_job(Some(&profile), &job, false, false)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(job.to_transport().unwrap(), bytes);
+        assert_eq!(job.fingerprint().unwrap(), fingerprint);
+        assert!(job.dependency_bundle_root().is_none());
+    }
+
+    #[test]
+    fn fresh_different_native_bundle_is_an_optional_cohort_miss() {
+        let profile = profile();
+        let job = job(Some(&"d".repeat(64)));
+        assert!(
+            compiled_profile_for_job(Some(&profile), &job, false, false)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn exact_cohort_preserves_fresh_and_recorded_compiled_selection() {
+        let profile = profile();
+        let job = job(Some(&"c".repeat(64)));
+        for (execution, compilation) in [(false, false), (true, false), (false, true)] {
+            let selected = compiled_profile_for_job(Some(&profile), &job, execution, compilation)
+                .unwrap()
+                .unwrap();
+            assert!(std::ptr::eq(
+                std::ptr::from_ref(selected),
+                std::ptr::from_ref(&profile)
+            ));
+        }
+    }
+
+    #[test]
+    fn recorded_execution_and_compilation_never_downgrade_on_cohort_change() {
+        let profile = profile();
+        for job in [job(None), job(Some(&"d".repeat(64)))] {
+            for (execution, compilation) in [(true, false), (false, true), (true, true)] {
+                assert!(
+                    compiled_profile_for_job(Some(&profile), &job, execution, compilation).is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_profile_is_optional_only_before_any_recorded_compiled_work() {
+        let job = job(None);
+        assert!(
+            compiled_profile_for_job(None, &job, false, false)
+                .unwrap()
+                .is_none()
+        );
+        for (execution, compilation) in [(true, false), (false, true), (true, true)] {
+            assert!(compiled_profile_for_job(None, &job, execution, compilation).is_err());
+        }
     }
 }

@@ -263,12 +263,28 @@ impl Binding {
 /// There is no environment or model-selected profile fallback.
 pub(crate) struct SnapshotProfile {
     template: Binding,
+    dependency_bundle_sha256: Option<ContentSha256>,
 }
 impl SnapshotProfile {
     #[allow(dead_code)] // Deployment assembly remains gated on verified profile producers.
     pub(crate) fn new(template: Binding) -> io::Result<Self> {
+        Self::with_dependency_bundle(template, None)
+    }
+    pub(crate) fn with_dependency_bundle(
+        template: Binding,
+        dependency_bundle_sha256: Option<ContentSha256>,
+    ) -> io::Result<Self> {
         template.validate()?;
-        Ok(Self { template })
+        Ok(Self {
+            template,
+            dependency_bundle_sha256,
+        })
+    }
+    pub(crate) fn matches_dependency_cohort(&self, job: &super::request::PreparedJob) -> bool {
+        self.dependency_bundle_sha256
+            .as_ref()
+            .map(ContentSha256::as_str)
+            == job.dependency_bundle_root()
     }
     pub(crate) fn binding(
         &self,
@@ -557,6 +573,46 @@ mod tests {
         )
         .unwrap();
         assert!(profile.binding(&image, "tenant", 2).is_err());
+    }
+    #[test]
+    fn empty_bundle_profile_matches_only_dependency_free_jobs() {
+        use crate::sandbox::{
+            native_bundle::{NativeKind, NativePlatform},
+            request::{Language, NativeDependencies, PreparedJob},
+        };
+        let template = Control::from_bytes(COMPILE, Purpose::Compile)
+            .unwrap()
+            .binding;
+        let profile = SnapshotProfile::new(template.clone()).unwrap();
+        let job = PreparedJob::new(
+            Language::Rust,
+            "pub fn run() {}".into(),
+            std::collections::BTreeMap::new(),
+            template.execution_image_digest,
+            template.policy_revision,
+            30,
+        )
+        .unwrap();
+        assert!(profile.matches_dependency_cohort(&job));
+        let job = job
+            .with_native_dependency_bundle(
+                "c".repeat(64),
+                NativeDependencies {
+                    kind: NativeKind::Cargo,
+                    platform: NativePlatform {
+                        os: "linux".into(),
+                        arch: "arm64".into(),
+                        abi: "gnu".into(),
+                    },
+                    preparation_sha256: "e".repeat(64),
+                    source_sha256: ContentSha256::of(b"[dependencies]\nitoa='1'\n")
+                        .as_str()
+                        .into(),
+                    dependencies_toml: Some("[dependencies]\nitoa='1'\n".into()),
+                },
+            )
+            .unwrap();
+        assert!(!profile.matches_dependency_cohort(&job));
     }
     #[cfg(feature = "sandbox-supervisor")]
     #[test]

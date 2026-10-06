@@ -159,7 +159,15 @@ impl RustCompiledSnapshotConfig {
         } else if !self.dependency_bundle_sha256.is_empty() {
             return Err(CompiledProfileError::Platform);
         }
-        SnapshotProfile::new(selected)
+        let dependency_bundle_sha256 = if self.dependency_bundle_sha256.is_empty() {
+            None
+        } else {
+            Some(
+                ContentSha256::parse(self.dependency_bundle_sha256.clone())
+                    .map_err(|_| CompiledProfileError::Configuration)?,
+            )
+        };
+        SnapshotProfile::with_dependency_bundle(selected, dependency_bundle_sha256)
             .map(Arc::new)
             .map_err(|_| CompiledProfileError::Profiles)
     }

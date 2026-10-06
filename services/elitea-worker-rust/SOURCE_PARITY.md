@@ -419,3 +419,12 @@ Rust runtime dependency.
   admitted Python/Go execution path does not yet support that state end to end.
   Rust must not advertise parked-child compatibility until cross-language
   delivery and projection tests pass.
+
+## Code compiled cohort follow-up, 2026-10-06
+
+The SDK remote sandbox supplies ordinary Code execution behavior without compiled-cache authority.
+Worker startup now retains the selected dependency cohort for exact compiled profile selection.
+Fresh unmatched Rust jobs keep ordinary execution; recorded compiled work retains its original recovery fence.
+Main's exact profile admission remains unchanged.
+The [source mapping](docs/source-mapping/code-compiled-cohort-selection-20261006.md) separates the failed four-language fixture from passing Cargo browser runs.
+Replacement CI and deployed correction acceptance remain required.

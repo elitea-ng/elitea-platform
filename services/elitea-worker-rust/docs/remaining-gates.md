@@ -916,3 +916,18 @@ The signed-in shell correction passes both browsers against the compiled shippin
 Replacement full-application CI remains required for both corrections.
 All four shipping images build, but this source validation does not update the running rehearsal.
 The controlled migration transition, replacement deployment, and remaining Code runtime acceptance stay open.
+
+### Pre-merge browser check and compiled cohort selection, 2026-10-06
+
+Commit `ca8fee8f4` finishes CI with 69 successful checks and three configured skips.
+The Web image deploys alone, preserving Main, Worker, Supervisor, and database state.
+Persistent chat 822 completes the saved Cargo fixture and retains its typed results after reload.
+The cold and repeated executions succeed at generation 1, with total 30 and three accepted records.
+
+The separate four-language editor fixture fails before Rust dispatch.
+The worker applies a dependency-enabled compiled profile to a dependency-free Rust request.
+The [cohort mapping](source-mapping/code-compiled-cohort-selection-20261006.md) records the source cause, persisted evidence, correction, and proof limits.
+Fresh unmatched jobs must use ordinary execution before compiled authority admission.
+Recorded compiled work must never fall back or move to another supervisor.
+The focused correction requires replacement CI, deployment, and the original fixture rerun.
+The passing Cargo fixture does not close that failure.
