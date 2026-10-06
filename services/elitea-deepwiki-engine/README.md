@@ -1332,6 +1332,13 @@ ELITEA_DEEPWIKI_DATABASE_URL=postgresql://… elitea-deepwiki-engine migrate
 Connect directly to PostgreSQL, not through a transaction-mode pooler
 (pgbouncer): the migration and the publish use session advisory locks.
 
+Connections per engine pod, for `max_connections`: 2 for the build
+reconciler, 2 for the delete of a killed worker's build,
+`ELITEA_DEEPWIKI_QUERY_POOL_SIZE` (default 8) for `ask`, `deep_research`
+and `resolve_wiki`, and 4 for each `generate_wiki` worker that runs. So a
+pod with the default and two generations at a time needs 20; set the query
+pool through `deepwiki.env` to change it.
+
 ### Compose
 
 `deploy/docker-compose.deepwiki-native.yml` on the standalone stack: the
