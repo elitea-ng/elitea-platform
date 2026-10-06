@@ -238,6 +238,14 @@ class WorkerServeLoop:
         )
         for _ in range(queue_capacity + max_concurrency):
             self._ownership_slots.put_nowait(None)
+        # Held by a heartbeat round for its whole send, and by every delayed
+        # nak around "stop owning it, then nak". A +WPI that reaches the server
+        # AFTER a -NAK with a delay resets that message's redelivery timer to
+        # AckWait (nats-server consumer.go progressUpdate), so a 24h poison
+        # delay, or the retry delay, would collapse into a 60s loop. Under this
+        # lock no heartbeat round can still be carrying a message that has
+        # been nak'd, and no later round sees it: it is no longer owned.
+        self._answer_lock = asyncio.Lock()
         self._event_sink = event_sink or (lambda _event, _error: None)
         #: Poison deliveries this process dead-lettered (an in-process count;
         #: the worker has no metrics endpoint, the alert is the bucket).
@@ -409,9 +417,38 @@ class WorkerServeLoop:
                 self._event_sink("nats_in_progress_unavailable", DependencyUnavailable())
 
     async def _heartbeat_owned(self) -> None:
-        owned = tuple(self._owned.values())
-        if owned:
-            await self._consumer.in_progress(owned)
+        async with self._answer_lock:
+            owned = tuple(self._owned.values())
+            if owned:
+                await self._consumer.in_progress(owned)
+
+    def _disown(self, key: tuple[str, int]) -> CommandDelivery | None:
+        """Stop owning (and heartbeating) one message; free its slot.
+
+        Returns the NEWEST delivery of it: when the server redelivered the
+        message while it was still running here, the newer copy's reply
+        subject is the one the server tracks, so that copy is the one an
+        answer must go to — and, being no longer owned, it is never
+        heartbeated or answered again.
+        """
+
+        delivery = self._owned.pop(key, None)
+        if delivery is not None:
+            self._release_delivery_capacity(1)
+        return delivery
+
+    async def _answer_owned(
+        self,
+        answer: Callable[[CommandDelivery], Awaitable[None]],
+        delivery: CommandDelivery,
+        event: str,
+    ) -> None:
+        """A delayed nak of an owned message, never crossed by a +WPI."""
+
+        key = (delivery.stream, delivery.stream_sequence)
+        async with self._answer_lock:
+            current = self._disown(key) or delivery
+            await self._answer(answer, current, event)
 
     async def _reserve_delivery_capacity(self) -> int:
         await self._ownership_slots.get()
@@ -521,14 +558,19 @@ class WorkerServeLoop:
                 self._event_sink("delivery_quarantine_full", error)
         self.dead_lettered += 1
         self._event_sink(DEAD_LETTERED_EVENT, _dead_letter_notice(error, delivery))
-        try:
-            await self._consumer.dead_letter(delivery, reason=error.code)
-        except asyncio.CancelledError:
-            raise
-        except WorkerError as exc:
-            self._event_sink("dead_letter_write_rejected", exc)
-        except Exception:
-            self._event_sink("dead_letter_write_unavailable", DependencyUnavailable())
+        async with self._answer_lock:
+            # The 24h nak inside dead_letter must not be crossed by a +WPI.
+            current = self._disown((delivery.stream, delivery.stream_sequence))
+            try:
+                await self._consumer.dead_letter(current or delivery, reason=error.code)
+            except asyncio.CancelledError:
+                raise
+            except WorkerError as exc:
+                self._event_sink("dead_letter_write_rejected", exc)
+            except Exception:
+                self._event_sink(
+                    "dead_letter_write_unavailable", DependencyUnavailable()
+                )
         await self._persist_quarantine(key, error)
 
     async def _worker(self) -> None:
@@ -547,7 +589,7 @@ class WorkerServeLoop:
                 result = await self._process(delivery)
                 self._event_sink(result.disposition.value, result.execution_error)
                 if result.disposition in _RETRY_LATER_DISPOSITIONS:
-                    await self._answer(
+                    await self._answer_owned(
                         self._consumer.retry_later, delivery, "nats_nak"
                     )
             except asyncio.CancelledError:
@@ -555,7 +597,7 @@ class WorkerServeLoop:
             except WorkerError as exc:
                 self._event_sink("delivery_rejected", exc)
                 if exc.retryable:
-                    await self._answer(
+                    await self._answer_owned(
                         self._consumer.retry_later, delivery, "nats_nak"
                     )
                 else:
@@ -569,11 +611,11 @@ class WorkerServeLoop:
             except Exception as exc:
                 _emit_unexpected_delivery_failure(exc)
                 self._event_sink("delivery_unavailable", DependencyUnavailable())
-                await self._answer(self._consumer.retry_later, delivery, "nats_nak")
+                await self._answer_owned(
+                    self._consumer.retry_later, delivery, "nats_nak"
+                )
             finally:
-                if key in self._owned:
-                    del self._owned[key]
-                    self._release_delivery_capacity(1)
+                self._disown(key)
                 self._queue.task_done()
 
 

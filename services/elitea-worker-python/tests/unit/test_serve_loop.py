@@ -1043,3 +1043,127 @@ def test_a_failure_after_the_ack_is_reported_never_dead_lettered() -> None:
         assert consumer.dead_lettered == []
 
     asyncio.run(run())
+
+
+# ── D2: no +WPI after a delayed nak ─────────────────────────────────────────
+
+
+class OrderedConsumer(FakeConsumer):
+    """Records the ORDER in which answers reach the server.
+
+    A heartbeat round's +WPI is recorded when its send COMPLETES, after
+    ``wpi_gate`` opens, which is how a round that started before a nak can
+    still land after it on a slow connection.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.wire: list[tuple[str, int, int]] = []
+        self.wpi_gate: asyncio.Event | None = None
+        self.wpi_started = asyncio.Event()
+
+    async def in_progress(self, deliveries: Sequence[CommandDelivery]) -> int:
+        self.wpi_started.set()
+        if self.wpi_gate is not None:
+            await self.wpi_gate.wait()
+        for delivery in deliveries:
+            self.wire.append(("+WPI", delivery.stream_sequence, delivery.num_delivered))
+        return await super().in_progress(deliveries)
+
+    async def retry_later(self, delivery: CommandDelivery) -> None:
+        self.wire.append(("-NAK", delivery.stream_sequence, delivery.num_delivered))
+        # The server honours the delay: no redelivery inside this test.
+        self._redeliver = False
+        await super().retry_later(delivery)
+
+    async def dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
+        self.wire.append(("-NAK24h", delivery.stream_sequence, delivery.num_delivered))
+        await super().dead_letter(delivery, reason=reason)
+
+
+def _no_wpi_after_nak(wire: list[tuple[str, int, int]], sequence: int) -> None:
+    naks = [
+        index
+        for index, (kind, seq, _) in enumerate(wire)
+        if kind.startswith("-NAK") and seq == sequence
+    ]
+    assert naks, f"no nak of {sequence} reached the wire: {wire}"
+    after = [
+        entry for entry in wire[naks[0] + 1 :] if entry[0] == "+WPI" and entry[1] == sequence
+    ]
+    assert after == [], f"a +WPI followed the delayed nak of {sequence}: {wire}"
+
+
+@pytest.mark.parametrize("poison", [False, True])
+def test_a_heartbeat_round_in_flight_never_lands_after_a_delayed_nak(poison: bool) -> None:
+    async def run() -> None:
+        consumer = OrderedConsumer((_delivery(1),))
+        consumer.wpi_gate = asyncio.Event()
+        stop = asyncio.Event()
+
+        async def process(_: CommandDelivery) -> DeliveryResult:
+            # A heartbeat round has snapshot this delivery and is mid-send...
+            await consumer.wpi_started.wait()
+            # ...and the processing ends while it is still in flight.
+            asyncio.get_running_loop().call_later(0.02, consumer.wpi_gate.set)
+            if poison:
+                raise InvalidInput("The signed command is malformed.")
+            return DeliveryResult(DeliveryDisposition.RETRY_LATER_NOACK)
+
+        async def stop_after_answer() -> None:
+            while not consumer.retried and not consumer.dead_lettered:
+                await asyncio.sleep(0)
+            # Several more heartbeat periods: none may carry sequence 1 now.
+            await asyncio.sleep(0.05)
+            stop.set()
+
+        watcher = asyncio.create_task(stop_after_answer())
+        try:
+            await asyncio.wait_for(_runtime(consumer, process).run(stop), timeout=2.0)
+        finally:
+            watcher.cancel()
+
+        _no_wpi_after_nak(consumer.wire, 1)
+        # The in-flight round did land — before the nak, not after it.
+        assert consumer.wire[0][0] == "+WPI"
+
+    asyncio.run(run())
+
+
+def test_a_redelivered_owned_message_is_answered_on_its_newest_copy_once() -> None:
+    """The server tracks the newest delivery; that copy gets the nak and is
+    then neither heartbeated nor answered again."""
+
+    async def run() -> None:
+        consumer = OrderedConsumer((_delivery(1),), redeliver=True)
+        stop = asyncio.Event()
+        calls = 0
+
+        async def process(_: CommandDelivery) -> DeliveryResult:
+            nonlocal calls
+            calls += 1
+            while not any(entry[0] == "+WPI" and entry[2] > 1 for entry in consumer.wire):
+                await asyncio.sleep(0)
+            return DeliveryResult(DeliveryDisposition.RETRY_LATER_NOACK)
+
+        async def stop_after_answer() -> None:
+            while not consumer.retried:
+                await asyncio.sleep(0)
+            await asyncio.sleep(0.02)
+            stop.set()
+
+        watcher = asyncio.create_task(stop_after_answer())
+        try:
+            await asyncio.wait_for(_runtime(consumer, process).run(stop), timeout=2.0)
+        finally:
+            watcher.cancel()
+
+        assert calls == 1
+        # The FIRST nak is the newest copy's; the processing future's own
+        # (older) copy is never answered.
+        nak = next(entry for entry in consumer.wire if entry[0] == "-NAK")
+        assert nak[2] > 1, consumer.wire
+        assert all(delivery.num_delivered > 1 for delivery in consumer.retried[:1])
+        _no_wpi_after_nak(consumer.wire, 1)
+
+    asyncio.run(run())
