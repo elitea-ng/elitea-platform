@@ -328,6 +328,7 @@ impl<S: IndexStore> Runner<'_, S> {
         &self,
         call: &Call,
         snapshot: &Vfs,
+        bounds: &vfs::Bounds,
         todos: &mut Option<Vec<Value>>,
     ) -> Result<(String, Vec<vfs::Update>), EngineError> {
         if !self.known.contains(&call.name.as_str()) {
@@ -367,7 +368,7 @@ impl<S: IndexStore> Runner<'_, S> {
             *todos = Some(list);
             return Ok((text, Vec::new()));
         }
-        if let Some(outcome) = vfs::run(snapshot, &call.name, &args) {
+        if let Some(outcome) = vfs::run(snapshot, bounds, &call.name, &args) {
             return Ok(outcome);
         }
         let text = self
@@ -376,7 +377,7 @@ impl<S: IndexStore> Runner<'_, S> {
             .await?
             .unwrap_or_default();
         if self.mode == Mode::Research {
-            let (text, update) = vfs::evict(snapshot, &call.name, &call.id, text);
+            let (text, update) = vfs::evict(bounds, &call.name, &call.id, text);
             return Ok((text, update.into_iter().collect()));
         }
         Ok((text, Vec::new()))
@@ -524,6 +525,8 @@ pub async fn run<S: IndexStore, M: Model>(
             events.tool_call(call);
         }
         let snapshot = vfs.clone();
+        // The bounds count every write of this turn as it is made.
+        let mut bounds = vfs.bounds();
         let mut updates: Vec<vfs::Update> = Vec::new();
         let mut new_todos: Option<Vec<Value>> = None;
         let parallel_todos = calls.iter().filter(|c| c.name == "write_todos").count() > 1;
@@ -551,7 +554,8 @@ pub async fn run<S: IndexStore, M: Model>(
                 if spec.mode == Mode::Ask {
                     spent += 1;
                 }
-                let (text, writes) = runner.run(call, &snapshot, &mut new_todos).await?;
+                let (text, writes) = runner.run(call, &snapshot, &bounds, &mut new_todos).await?;
+                bounds.record(&writes);
                 updates.extend(writes);
                 text
             };

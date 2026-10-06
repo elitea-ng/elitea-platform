@@ -949,7 +949,8 @@ the parity gate drives.
   Arguments are validated as pydantic did (lax coercions, the same error
   text) and then clamped (`k`, `max_depth`, `max_lines`, JQL `limit`); file
   paths cannot leave the virtual root; the file system holds at most 1 000
-  files and 16 MiB.
+  files and 16 MiB, and a write is checked with the earlier writes of its
+  turn counted (they apply only after the turn).
 * **Stop**: a checkpoint before every model call and every tool; a model
   call aborts at once.
 

@@ -6,7 +6,9 @@
 //! The files live in the agent's state, which `LangGraph` updates once per
 //! step: the tools of one model turn read the state the turn started
 //! with, and their writes apply after the turn, in call order. [`Vfs`] does
-//! the same ([`Vfs::apply`]).
+//! the same ([`Vfs::apply`]). The bounds are checked against [`Bounds`]:
+//! the sizes as they will be after the writes of the turn so far, so the
+//! (up to 25) calls of one turn cannot together pass them.
 //!
 //! Paths are validated as `validate_path` does (no `..` component, no
 //! leading `~`, no Windows drive; normalised under `/`). Nothing here
@@ -23,6 +25,7 @@ use crate::graph::pystr;
 use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Files the state may hold.
@@ -92,15 +95,45 @@ impl Vfs {
         }
     }
 
-    fn bytes(&self) -> usize {
-        self.files.values().map(|f| f.content.len()).sum()
+    /// The sizes of the files, to check a turn's writes against.
+    #[must_use]
+    pub fn bounds(&self) -> Bounds {
+        let sizes: HashMap<String, usize> = self
+            .files
+            .iter()
+            .map(|(path, file)| (path.clone(), file.content.len()))
+            .collect();
+        let bytes = sizes.values().sum();
+        Bounds { sizes, bytes }
+    }
+}
+
+/// The file sizes the state will have once the pending writes apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bounds {
+    sizes: HashMap<String, usize>,
+    bytes: usize,
+}
+
+impl Bounds {
+    /// Whether a write of `content` to `path` fits the bounds.
+    #[must_use]
+    pub fn fits(&self, path: &str, content: &str) -> bool {
+        let existing = self.sizes.get(path).copied().unwrap_or(0);
+        let count = self.sizes.len() + usize::from(!self.sizes.contains_key(path));
+        count <= MAX_FILES && self.bytes - existing + content.len() <= MAX_BYTES
     }
 
-    /// Whether a write of `content` to `path` fits the bounds.
-    fn fits(&self, path: &str, content: &str) -> bool {
-        let existing = self.files.get(path).map_or(0, |f| f.content.len());
-        let count = self.files.len() + usize::from(!self.files.contains_key(path));
-        count <= MAX_FILES && self.bytes() - existing + content.len() <= MAX_BYTES
+    /// Count `updates` as applied (in order, as [`Vfs::apply`] will).
+    pub fn record(&mut self, updates: &[Update]) {
+        for (path, content) in updates {
+            let size = content.as_ref().map(String::len);
+            let before = match size {
+                Some(size) => self.sizes.insert(path.clone(), size),
+                None => self.sizes.remove(path),
+            };
+            self.bytes = self.bytes - before.unwrap_or(0) + size.unwrap_or(0);
+        }
     }
 }
 
@@ -563,10 +596,16 @@ fn grep_tool(vfs: &Vfs, args: &super::args::Args) -> String {
     }
 }
 
-/// Run one file-system tool on the turn's snapshot. Returns the result
+/// Run one file-system tool on the turn's snapshot, its writes checked
+/// against `bounds` (the turn's earlier writes counted). Returns the result
 /// text and the writes to apply after the turn; `None` for another tool.
 #[must_use]
-pub fn run(vfs: &Vfs, tool: &str, args: &super::args::Args) -> Option<(String, Vec<Update>)> {
+pub fn run(
+    vfs: &Vfs,
+    bounds: &Bounds,
+    tool: &str,
+    args: &super::args::Args,
+) -> Option<(String, Vec<Update>)> {
     let checked = |raw: &str| validate_path(raw).map_err(|e| format!("Error: {e}"));
     let mut updates = Vec::new();
     let text = match tool {
@@ -607,7 +646,7 @@ pub fn run(vfs: &Vfs, tool: &str, args: &super::args::Args) -> Option<(String, V
             Err(e) => e,
             Ok(path) => {
                 let content = args.str("content");
-                if vfs.fits(&path, content) {
+                if bounds.fits(&path, content) {
                     updates.push((path.clone(), Some(content.to_owned())));
                     format!("Updated file {path}")
                 } else {
@@ -628,7 +667,7 @@ pub fn run(vfs: &Vfs, tool: &str, args: &super::args::Args) -> Option<(String, V
                     args.bool("replace_all"),
                 ) {
                     Err(e) => e,
-                    Ok((content, _)) if !vfs.fits(&path, &content) => format!(
+                    Ok((content, _)) if !bounds.fits(&path, &content) => format!(
                         "Error: the file system is full ({MAX_FILES} files, {MAX_BYTES} bytes); delete files you no longer need"
                     ),
                     Ok((content, count)) => {
@@ -694,7 +733,7 @@ fn content_preview(content: &str) -> String {
 /// `TOO_LARGE_TOOL_MSG`. Returns the text the model sees and the write.
 #[must_use]
 pub fn evict(
-    vfs: &Vfs,
+    bounds: &Bounds,
     tool: &str,
     tool_call_id: &str,
     content: String,
@@ -708,7 +747,7 @@ pub fn evict(
         tool_call_id.replace(['.', '/', '\\'], "_")
     };
     let path = format!("/large_tool_results/{sanitized}");
-    if !vfs.fits(&path, &content) {
+    if !bounds.fits(&path, &content) {
         return (content, None);
     }
     let text = format!(
@@ -747,8 +786,35 @@ mod tests {
     #[test]
     fn the_state_is_bounded() {
         let mut vfs = Vfs::default();
-        assert!(!vfs.fits("/a", &"x".repeat(MAX_BYTES + 1)));
+        assert!(!vfs.bounds().fits("/a", &"x".repeat(MAX_BYTES + 1)));
         vfs.apply(vec![("/a".into(), Some("x".into()))]);
-        assert!(vfs.fits("/a", "y"));
+        assert!(vfs.bounds().fits("/a", "y"));
+    }
+
+    #[test]
+    fn the_bounds_count_the_pending_writes() {
+        let vfs = Vfs::default();
+        let mut bounds = vfs.bounds();
+        let half = "x".repeat(MAX_BYTES / 2);
+        assert!(bounds.fits("/a", &half));
+        bounds.record(&[("/a".into(), Some(half.clone()))]);
+        assert!(bounds.fits("/b", &half));
+        bounds.record(&[("/b".into(), Some(half.clone()))]);
+        // Full: one more byte does not fit, a rewrite of the same size does.
+        assert!(!bounds.fits("/c", "y"));
+        assert!(bounds.fits("/a", &half));
+        // A pending delete frees its bytes.
+        bounds.record(&[("/a".into(), None)]);
+        assert!(bounds.fits("/c", "y"));
+        // The file count too.
+        let mut bounds = vfs.bounds();
+        let many: Vec<Update> = (0..MAX_FILES)
+            .map(|i| (format!("/f{i}"), Some(String::new())))
+            .collect();
+        bounds.record(&many);
+        assert!(!bounds.fits("/one-more", ""));
+        assert!(bounds.fits("/f0", "z"));
+        // The snapshot itself is unchanged.
+        assert_eq!(vfs, Vfs::default());
     }
 }

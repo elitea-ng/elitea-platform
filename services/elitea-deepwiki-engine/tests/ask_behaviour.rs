@@ -488,6 +488,65 @@ async fn the_document_results_follow_the_limit() {
 }
 
 #[tokio::test]
+async fn the_writes_of_one_turn_count_against_the_bound() {
+    // Two writes of 9 MiB in ONE turn: each fits the state the turn began
+    // with, together they do not.
+    let nine = "x".repeat(9 * 1024 * 1024);
+    let script = json!([
+        {"tool_calls": [
+            call("w1", "write_file", json!({"file_path": "/a", "content": nine})),
+            call("w2", "write_file", json!({"file_path": "/b", "content": nine})),
+            call("w3", "write_file", json!({"file_path": "/small", "content": "ok"})),
+        ]},
+        {"tool_calls": [call("r1", "ls", json!({"path": "/"}))]},
+        {"content": "done"},
+    ]);
+    let spec = ask::research_spec(
+        &request(),
+        None,
+        "gpt-4o",
+        false,
+        Limits::default(),
+        clock(),
+    )
+    .expect("spec");
+    let model = common::ScriptedModel::new(&script);
+    let (context, _receiver, _) = common::context();
+    let outcome = agent::run(
+        &spec,
+        &model,
+        &common::replay_index(),
+        &Embedder::None,
+        &context,
+    )
+    .await
+    .expect("runs");
+    let results: Vec<(String, String)> = outcome
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            Msg::Tool {
+                call_id, content, ..
+            } => Some((call_id.clone(), content.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results[0], ("w1".to_owned(), "Updated file /a".to_owned()));
+    assert_eq!(results[1].0, "w2");
+    assert!(
+        results[1].1.starts_with("Error: the file system is full"),
+        "{}",
+        results[1].1
+    );
+    assert_eq!(
+        results[2],
+        ("w3".to_owned(), "Updated file /small".to_owned())
+    );
+    // The refused write never reached the state.
+    assert_eq!(results[3].1, "['/a', '/small']");
+}
+
+#[tokio::test]
 async fn arguments_a_model_steers_are_checked() {
     let index = common::replay_index();
     let embedder = Embedder::Fixed(stand_in_embedding);
