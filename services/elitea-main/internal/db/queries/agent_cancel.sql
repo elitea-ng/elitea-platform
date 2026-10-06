@@ -181,6 +181,11 @@ SELECT EXISTS (SELECT 1 FROM deleted_response) AS deleted,
        EXISTS (SELECT 1 FROM deleted_question) AS question_deleted;
 
 -- name: IsCurrentAgentCancellationReplay :one
+-- A replay admits the same principals CancelCurrentAgentExecution does: the
+-- user who asked (the job's actor) and the conversation's author. A stop of a
+-- turn with no output deletes the question and the answer, so the author is
+-- resolved through the binding's client_stream_id, which admission pins to the
+-- conversation uuid, not through the deleted message rows.
 SELECT EXISTS (
     SELECT 1
     FROM elitea_runtime.execution_jobs AS job
@@ -188,11 +193,16 @@ SELECT EXISTS (
       ON binding.execution_id = job.execution_id
      AND binding.generation = job.generation
      AND binding.capability_id = job.capability_id
+    LEFT JOIN chat_conversations AS conversation
+      ON conversation.uuid::text = binding.client_stream_id
     WHERE binding.client_message_id = sqlc.arg(response_message_id)::text
       AND job.tenant_id = sqlc.arg(project_id)::integer::text
       AND job.resource_project_id = sqlc.arg(project_id)::integer
       AND job.projection_project_id = sqlc.arg(project_id)::integer
-      AND job.actor_id = sqlc.arg(actor_user_id)::bigint::text
+      AND (
+          job.actor_id = sqlc.arg(actor_user_id)::bigint::text
+          OR conversation.author_id = sqlc.arg(actor_user_id)::bigint
+      )
       AND job.capability_id IN (
           'agent.execute.application.v1',
           'agent.execute.adhoc.v1'
