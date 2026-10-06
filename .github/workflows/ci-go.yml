@@ -290,6 +290,14 @@ jobs:
           docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
+              # The same server binary, out of the container, for the
+              # restart test (TestNATSStoreFollowsTheBucketAcrossAServerRestart
+              # stops and starts its own server). Its path is read from the
+              # image, not assumed.
+              bin=$(docker exec ci-nats sh -c 'command -v nats-server')
+              docker cp "ci-nats:${bin}" "${RUNNER_TEMP}/nats-server"
+              chmod +x "${RUNNER_TEMP}/nats-server"
+              "${RUNNER_TEMP}/nats-server" --version
               exit 0
             fi
             sleep 1
@@ -351,6 +359,7 @@ jobs:
 
           # The NATS (JetStream) container started above.
           ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
+          ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
 
           # Opt-in real-service reliability tests. Each needs only the
           # PostgreSQL and Redis services this job already runs. Measured

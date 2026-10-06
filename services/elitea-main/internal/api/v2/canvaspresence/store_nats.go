@@ -75,8 +75,15 @@ const PresenceBucket = "ELITEA_CANVAS_PRESENCE"
 // store (deploy/helm/nats/values-*.yaml); the working set is one small
 // message per open canvas tab and lives at most MaxAge.
 type NATSStore struct {
-	kv  jetstream.KeyValue
-	now func() time.Time
+	// kvMu guards kv: the run loop swaps in a fresh handle when it has to
+	// recreate a bucket that disappeared from the server.
+	kvMu sync.RWMutex
+	kv   jetstream.KeyValue
+	// js and kvConfig recreate the bucket; nil js (tests over a bare
+	// KeyValue) disables recreation.
+	js       jetstream.JetStream
+	kvConfig jetstream.KeyValueConfig
+	now      func() time.Time
 
 	mu sync.RWMutex
 	// current is what List reads: roster prefix → user token → record.
@@ -112,6 +119,9 @@ type NATSStoreConfig struct {
 	// ephemeral, so R1 on an HA server only means a node loss empties rosters
 	// (they refill on the next beat) — it never loses data that matters.
 	Replicas int
+	// Bucket overrides the bucket name; empty means PresenceBucket. Tests
+	// use their own so deleting it cannot disturb a shared server.
+	Bucket string
 }
 
 // natsMirrorPruneInterval is how often the mirror drops expired entries and
@@ -119,9 +129,13 @@ type NATSStoreConfig struct {
 // bounds memory.
 const natsMirrorPruneInterval = 30 * time.Second
 
-// natsWatchRetryDelay spaces out restarts of a watcher that keeps failing
-// (e.g. while NATS is down), so the loop does not spin.
-const natsWatchRetryDelay = time.Second
+// natsWatchRetryDelay is the first pause before restarting a watcher that
+// failed; it doubles per consecutive failure up to natsWatchRetryMax, so a
+// long NATS outage (or a lost bucket) neither spins nor floods the log.
+const (
+	natsWatchRetryDelay = time.Second
+	natsWatchRetryMax   = 30 * time.Second
+)
 
 // NewNATSStore creates the bucket if it is absent (or updates its config),
 // starts the replica's bucket watcher and waits — bounded by ctx — until the
@@ -135,18 +149,24 @@ func NewNATSStore(ctx context.Context, js jetstream.JetStream, cfg NATSStoreConf
 	if replicas <= 0 {
 		replicas = 1
 	}
-	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:      PresenceBucket,
+	bucket := cfg.Bucket
+	if bucket == "" {
+		bucket = PresenceBucket
+	}
+	kvConfig := jetstream.KeyValueConfig{
+		Bucket:      bucket,
 		Description: "elitea-main canvas presence rosters (one entry per editor; TTL-bounded)",
 		History:     1,
 		TTL:         TTL,
 		Storage:     jetstream.FileStorage,
 		Replicas:    replicas,
-	})
+	}
+	kv, err := js.CreateOrUpdateKeyValue(ctx, kvConfig)
 	if err != nil {
-		return nil, fmt.Errorf("canvaspresence: create KV bucket %s: %w", PresenceBucket, err)
+		return nil, fmt.Errorf("canvaspresence: create KV bucket %s: %w", bucket, err)
 	}
 	store := newNATSStoreOver(kv)
+	store.js, store.kvConfig = js, kvConfig
 	ready := make(chan struct{})
 	loopCtx, stop := context.WithCancel(context.Background())
 	store.stop = stop
@@ -156,7 +176,7 @@ func NewNATSStore(ctx context.Context, js jetstream.JetStream, cfg NATSStoreConf
 		return store, nil
 	case <-ctx.Done():
 		store.Close()
-		return nil, fmt.Errorf("canvaspresence: initial sync of KV bucket %s: %w", PresenceBucket, ctx.Err())
+		return nil, fmt.Errorf("canvaspresence: initial sync of KV bucket %s: %w", bucket, ctx.Err())
 	}
 }
 
@@ -239,8 +259,14 @@ func (s *NATSStore) Touch(ctx context.Context, key string, editor Editor, ttl ti
 	if err != nil {
 		return fmt.Errorf("canvaspresence: marshal entry: %w", err)
 	}
-	revision, err := s.kv.Put(ctx, natsEntryKey(key, editor.UserID), value)
+	revision, err := s.bucket().Put(ctx, natsEntryKey(key, editor.UserID), value)
 	if err != nil {
+		if errors.Is(err, jetstream.ErrStreamNotFound) || errors.Is(err, jetstream.ErrNoStreamResponse) {
+			// The bucket is gone (deleted, or a node replaced without its
+			// storage). Wake the run loop, which recreates it; the next
+			// beat lands.
+			s.Resync()
+		}
 		return fmt.Errorf("canvaspresence: touch: %w", err)
 	}
 	// Read-your-writes: the heartbeat's own List must see this beat.
@@ -251,7 +277,7 @@ func (s *NATSStore) Touch(ctx context.Context, key string, editor Editor, ttl ti
 // Remove writes a delete marker. Removing an absent editor is not an error:
 // KV Delete does not check that the key exists.
 func (s *NATSStore) Remove(ctx context.Context, key string, userID string) error {
-	if err := s.kv.Delete(ctx, natsEntryKey(key, userID)); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if err := s.bucket().Delete(ctx, natsEntryKey(key, userID)); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return fmt.Errorf("canvaspresence: remove: %w", err)
 	}
 	// Read-your-writes. KV Delete does not return the marker's revision, so
@@ -375,20 +401,73 @@ func (s *NATSStore) run(ctx context.Context, ready chan struct{}) {
 	defer close(s.stopped)
 	prune := time.NewTicker(natsMirrorPruneInterval)
 	defer prune.Stop()
+	failures := 0
 	for {
 		err := s.watch(ctx, prune.C, ready)
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil {
-			slog.Warn("canvaspresence: bucket watcher ended; resyncing", "err", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(natsWatchRetryDelay):
+		if err == nil {
+			if failures > 0 {
+				slog.Info("canvaspresence: bucket watcher recovered", "failed_attempts", failures)
 			}
+			failures = 0
+			continue
+		}
+		failures++
+		// One Warn per outage, not one per retry.
+		if failures == 1 {
+			slog.Warn("canvaspresence: bucket watcher ended; retrying with backoff", "err", err)
+		} else {
+			slog.Debug("canvaspresence: bucket watcher still failing", "err", err, "attempt", failures)
+		}
+		s.ensureBucket(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.resync:
+		case <-time.After(retryDelay(failures)):
 		}
 	}
+}
+
+// retryDelay doubles natsWatchRetryDelay per consecutive failure, capped.
+func retryDelay(failures int) time.Duration {
+	delay := natsWatchRetryDelay
+	for i := 1; i < failures && delay < natsWatchRetryMax; i++ {
+		delay *= 2
+	}
+	return min(delay, natsWatchRetryMax)
+}
+
+func (s *NATSStore) bucket() jetstream.KeyValue {
+	s.kvMu.RLock()
+	defer s.kvMu.RUnlock()
+	return s.kv
+}
+
+// ensureBucket recreates the bucket when the server no longer has it. A
+// watcher only reconnects to a stream that still exists: after the bucket
+// is deleted, or a node is replaced without its storage, every WatchAll and
+// Put fails until something creates it again — that is this, not a restart.
+func (s *NATSStore) ensureBucket(ctx context.Context) {
+	if s.js == nil {
+		return
+	}
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := s.js.KeyValue(lookup, s.kvConfig.Bucket); err == nil || !errors.Is(err, jetstream.ErrBucketNotFound) {
+		return // present, or the server is unreachable (the retry covers it)
+	}
+	kv, err := s.js.CreateOrUpdateKeyValue(lookup, s.kvConfig)
+	if err != nil {
+		slog.Debug("canvaspresence: recreate KV bucket failed", "bucket", s.kvConfig.Bucket, "err", err)
+		return
+	}
+	s.kvMu.Lock()
+	s.kv = kv
+	s.kvMu.Unlock()
+	slog.Info("canvaspresence: recreated missing KV bucket", "bucket", s.kvConfig.Bucket)
 }
 
 // watch runs one watcher. It returns nil when a resync was requested and an
@@ -403,7 +482,7 @@ func (s *NATSStore) watch(ctx context.Context, prune <-chan time.Time, ready cha
 		s.mu.Unlock()
 	}()
 
-	watcher, err := s.kv.WatchAll(ctx)
+	watcher, err := s.bucket().WatchAll(ctx)
 	if err != nil {
 		return fmt.Errorf("watch bucket: %w", err)
 	}

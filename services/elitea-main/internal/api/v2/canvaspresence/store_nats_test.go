@@ -520,3 +520,53 @@ func TestNATSStoreFollowsTheBucketAcrossAServerRestart(t *testing.T) {
 		return containsUser(r, "before") && containsUser(r, "after")
 	})
 }
+
+// A bucket that disappears from the server (deleted, or a node replaced
+// without its storage) is recreated by the store: a watcher only reconnects
+// to a stream that still exists, so without this every beat would fail until
+// elitea-main restarted. A bucket of its own: deleting the shared one would
+// disturb other packages' tests on the same server.
+func TestNATSStoreRecreatesABucketThatDisappeared(t *testing.T) {
+	conn := natsTestConn(t)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	bucket := fmt.Sprintf("ELITEA_CANVAS_PRESENCE_TEST_%d", time.Now().UnixNano())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{Bucket: bucket})
+	if err != nil {
+		t.Fatalf("NewNATSStore: %v", err)
+	}
+	t.Cleanup(func() {
+		store.Close()
+		_ = js.DeleteKeyValue(context.Background(), bucket)
+	})
+	key := uniqueRoster(t)
+	if err := store.Touch(ctx, key, v2canvaspresence.Editor{UserID: "1", UserName: "ada"}, v2canvaspresence.TTL); err != nil {
+		t.Fatalf("touch before delete: %v", err)
+	}
+
+	if err := js.DeleteKeyValue(ctx, bucket); err != nil {
+		t.Fatalf("delete bucket: %v", err)
+	}
+
+	// Beats fail until the run loop has recreated the bucket, then land and
+	// show up in the roster again.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		err := store.Touch(ctx, key, v2canvaspresence.Editor{UserID: "2", UserName: "grace"}, v2canvaspresence.TTL)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("touch never succeeded after the bucket was deleted: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if _, err := js.KeyValue(ctx, bucket); err != nil {
+		t.Fatalf("bucket not recreated: %v", err)
+	}
+	eventuallyRoster(t, store, key, func(r []v2canvaspresence.Editor) bool { return containsUser(r, "2") })
+}
