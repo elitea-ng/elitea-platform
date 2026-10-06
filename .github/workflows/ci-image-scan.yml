@@ -479,8 +479,8 @@ jobs:
           # context: the binary embeds the service migrations from
           # services/elitea-deepwiki, outside the crate. `rustbinary` and
           # blocking for elitea-worker-rust's reasons: cargo-auditable makes
-          # the crate graph readable, and the distroless cc-debian12 base is
-          # the one the worker measured clean.
+          # the crate graph readable. The runtime is distroless
+          # base-nossl-debian13 plus libgcc_s: no system OpenSSL to scan.
           - name: elitea-deepwiki-engine-native
             context: .
             dockerfile: ./services/elitea-deepwiki-engine/Containerfile

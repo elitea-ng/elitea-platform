@@ -148,7 +148,7 @@ target "elitea-deepwiki-engine" {
 
 # The Rust-native DeepWiki engine (ADR-0026), and the engine sidecar the
 # chart runs for `deepwiki.engine.runner: native`. One binary on distroless
-# cc-debian12, built with cargo-auditable. Its own repository, not a tag
+# base-nossl-debian13 plus libgcc_s, built with cargo-auditable. Its own repository, not a tag
 # suffix of elitea-deepwiki: it is a different image with a different scan
 # surface (`rustbinary`, not `python-pkg`).
 #

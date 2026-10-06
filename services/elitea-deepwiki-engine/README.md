@@ -1254,7 +1254,10 @@ reports `runner: native`.
 `docker buildx bake elitea-deepwiki-engine-native` from
 `services/elitea-deepwiki-engine/Containerfile` with the repository root as
 the context. One binary (`/usr/local/bin/elitea-deepwiki-engine`) on
-`gcr.io/distroless/cc-debian12:nonroot`, built with `cargo auditable`, runs as
+`gcr.io/distroless/base-nossl-debian13:nonroot` plus `libgcc_s` from
+`cc-debian13` (Debian 13; no system OpenSSL, as the TLS is rustls; the build
+fails if the binary's library closure does not resolve in that runtime),
+built with `cargo auditable`, runs as
 uid 10001; `/run/deepwiki` is in the image, owned by 10001, mode 0777.
 Subcommands: `serve` (the default CMD), `healthcheck`, `migrate`, `worker`
 (started by `serve`, never by hand), `--version`.

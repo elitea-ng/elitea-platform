@@ -13,7 +13,28 @@
 # matrices and IMAGES array, and ci-image-scan.yml name it together, and
 # scripts/ci/image-matrix.sh holds them in step.
 
-FROM rust:1.97.1-bookworm AS builder
+# Debian 13 (trixie) throughout, the release every image in this repository
+# is based on. The runtime keeps glibc and CA roots and has NO system OpenSSL:
+# the engine's TLS is rustls (reqwest, gix), so OpenSSL would only be a
+# scanned package that nothing loads. The one other library the binary needs,
+# libgcc_s, comes from distroless cc-debian13 with its package record and
+# licence, as the worker's image does it.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
+FROM rust:1.97.1-trixie AS runtime-libraries
+COPY --from=runtime-cc /usr/lib/ /cc-lib/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-14-base/ /runtime-files/usr/share/doc/gcc-14-base/
+COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
+RUN cd /cc-lib && \
+    set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
+    mkdir -p /runtime-files/usr/lib && cp --parents "$1" /runtime-files/usr/lib && \
+    ln -s gcc-14-base /runtime-files/usr/share/doc/libgcc-s1
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
+COPY --from=runtime-libraries /runtime-files/ /
+
+FROM rust:1.97.1-trixie AS builder
 
 # `cargo auditable` embeds the dependency list trivy's `rustbinary` analyzer
 # reads; without it an image scan sees only the Debian base (see the
@@ -39,6 +60,31 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
 
+# Resolve every library the binary needs against the runtime image, without
+# starting it: no system OpenSSL linked or shipped, CA roots present, and the
+# whole closure found inside the runtime root. A base change that drops a
+# library fails HERE, not as a sidecar that cannot start.
+RUN --mount=from=runtime-base,target=/runtime-root,readonly <<'VERIFY'
+set -eu
+artifact=/usr/local/bin/elitea-deepwiki-engine
+readelf --sections --wide "$artifact" | grep -q '[.]dep-v0 '
+if readelf --dynamic "$artifact" | grep -Eq 'Shared library: \[(libssl|libcrypto)[.]'; then
+    echo 'System OpenSSL is not part of this runtime.' >&2
+    exit 1
+fi
+test -z "$(find /runtime-root/var/lib/dpkg/status.d -name 'libssl*')"
+test -z "$(find /runtime-root -name 'libssl.so*' -o -name 'libcrypto.so*')"
+test -s /runtime-root/etc/ssl/certs/ca-certificates.crt
+interpreter="$(readelf --program-headers --wide "$artifact" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')"
+test -n "$interpreter"
+triplet="$(gcc -dumpmachine)"
+"/runtime-root$interpreter" --inhibit-cache \
+    --library-path "/runtime-root/lib/$triplet:/runtime-root/usr/lib/$triplet:/runtime-root/lib:/runtime-root/usr/lib" \
+    --list "$artifact" > /tmp/runtime-libraries
+cat /tmp/runtime-libraries
+awk '$2 == "=>" && $3 !~ /^\/runtime-root\// { exit 1 }' /tmp/runtime-libraries
+VERIFY
+
 # The socket directory, built here because the runtime image has no shell.
 # A compose named volume (and Docker's fresh volume in particular) takes the
 # IMAGE path's ownership on first mount; without the directory in the image
@@ -48,7 +94,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # as another uid. The Python image's Containerfile carries the same rule.
 RUN mkdir -p /socket-dir/run/deepwiki && chmod 0777 /socket-dir/run/deepwiki
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM runtime-base AS runtime
 
 COPY --from=builder /usr/local/bin/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
 COPY --from=builder --chown=10001:10001 /socket-dir/run/ /run/
