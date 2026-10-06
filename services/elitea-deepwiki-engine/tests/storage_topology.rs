@@ -267,7 +267,7 @@ async fn replaced_edges_are_collapsed_and_clusters_written() {
     assert_eq!(written, 2);
     let clusters: Vec<(String, Option<i32>, Option<i32>)> = sqlx::query_as(
         "SELECT node_id, macro_cluster, micro_cluster FROM deepwiki_build.wiki_nodes \
-         WHERE build_id = $1 AND macro_cluster IS NOT NULL ORDER BY node_id",
+         WHERE build_id = $1 AND macro_cluster IS NOT NULL ORDER BY node_id COLLATE \"C\"",
     )
     .bind(&build_id)
     .fetch_all(&pool)
