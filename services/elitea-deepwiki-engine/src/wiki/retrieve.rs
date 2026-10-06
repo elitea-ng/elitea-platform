@@ -249,8 +249,14 @@ impl<S: PageSearch> RetrievalContext<S> {
             {
                 candidates.push(found);
             }
+            // Only the characters the cap can still keep are read.
+            let max_bytes = char_cap
+                .saturating_sub(total_chars)
+                .saturating_mul(4)
+                .saturating_add(8);
             for candidate in candidates {
-                let Some(bytes) = repo_files::read_contained(root, &candidate) else {
+                let Some(bytes) = repo_files::read_contained_prefix(root, &candidate, max_bytes)
+                else {
                     continue;
                 };
                 let text = pystr::decode_text(&bytes, pystr::Errors::Replace);
@@ -474,6 +480,38 @@ mod tests {
         let mut total = 0;
         assert_eq!(cap_chars("ééé", 2, &mut total), "éé");
         assert_eq!(total, 2);
+    }
+
+    /// A target read from disk is cut to what the cap keeps; the text is
+    /// the one a whole-file read gives (multi-byte characters, a `\r\n` at
+    /// the cut, a file under the cap).
+    #[test]
+    fn a_disk_target_reads_only_what_the_cap_keeps() {
+        let root = std::env::temp_dir().join(format!("dw-retrieve-prefix-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let char_cap = TARGET_DOC_TOKEN_CAP * 7 / 2;
+        let big = format!("{}\r\n{}", "é".repeat(char_cap - 1), "ü€".repeat(char_cap));
+        std::fs::write(root.join("big.md"), &big).unwrap();
+        std::fs::write(root.join("small.md"), "small\r\ntext").unwrap();
+        let context = RetrievalContext {
+            index: Arc::new(PageIndex::default()),
+            search: Arc::new(super::super::search::ReplaySearch::default()),
+            repo_root: Some(root.clone()),
+            flags: ExpansionFlags::default(),
+            budget: CONTEXT_TOKEN_BUDGET,
+            pylon: PylonPlugin::new(Some(root.clone())),
+        };
+        // The pre-change reading: the whole file, then the cap.
+        let whole = |text: &str, total: &mut usize| {
+            let decoded = pystr::decode_text(text.as_bytes(), pystr::Errors::Replace);
+            cap_chars(&decoded, char_cap, total)
+        };
+        let docs = context.explicit_target_docs(&["small.md".to_owned(), "big.md".to_owned()]);
+        let mut total = 0;
+        assert_eq!(docs[0].content, whole("small\r\ntext", &mut total));
+        assert_eq!(docs[1].content, whole(&big, &mut total));
+        assert_eq!(total, char_cap);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

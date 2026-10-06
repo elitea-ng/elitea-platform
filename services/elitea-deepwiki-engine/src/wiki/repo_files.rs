@@ -16,6 +16,7 @@
 //! was the directory's own order).
 
 use std::fs;
+use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 /// The checked path of `rel` under `root`, or `None` when it would escape
@@ -52,6 +53,20 @@ pub fn contained_path(root: &Path, rel: &Path) -> Option<PathBuf> {
 #[must_use]
 pub fn read_contained(root: &Path, rel: &Path) -> Option<Vec<u8>> {
     fs::read(contained_path(root, rel)?).ok()
+}
+
+/// At most the first `max_bytes` bytes of `rel` under `root` (see
+/// [`contained_path`]). A caller that keeps `n` characters reads
+/// `n * 4 + 8` bytes: no character is longer than 4 bytes, and the
+/// sequence a cut splits decodes past the `n` kept.
+#[must_use]
+pub fn read_contained_prefix(root: &Path, rel: &Path, max_bytes: usize) -> Option<Vec<u8>> {
+    let file = fs::File::open(contained_path(root, rel)?).ok()?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(max_bytes).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(bytes)
 }
 
 /// The first file named `name` in a top-down walk of `root` (sorted, no
@@ -117,6 +132,16 @@ mod tests {
             Some(PathBuf::from("docs/deep/b.md"))
         );
         assert!(find_by_name(&root, "link.md").is_none());
+        assert_eq!(
+            read_contained_prefix(&root, Path::new("docs/a.md"), 10),
+            Some(b"A".to_vec())
+        );
+        fs::write(root.join("docs/long.md"), "x".repeat(100)).unwrap();
+        assert_eq!(
+            read_contained_prefix(&root, Path::new("docs/long.md"), 10).map(|b| b.len()),
+            Some(10)
+        );
+        assert!(read_contained_prefix(&root, Path::new("docs/link.md"), 10).is_none());
         fs::remove_dir_all(&base).unwrap();
     }
 }
