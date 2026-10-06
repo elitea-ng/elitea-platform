@@ -16,7 +16,8 @@
 use super::synthetic_edge;
 use crate::graph::CodeGraph;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 /// Union-find with path halving.
 struct Components {
@@ -67,7 +68,9 @@ pub fn weakly_connected_components(graph: &CodeGraph) -> Vec<Vec<&str>> {
     components
 }
 
-/// `_dir_sim`: the shared mass of two directory histograms.
+/// `_dir_sim`: the shared mass of two directory histograms. The walk in
+/// [`best_earlier`] computes the same sums; this is its test reference.
+#[cfg(test)]
 fn dir_sim(a: &HashMap<String, usize>, b: &HashMap<String, usize>) -> usize {
     let (small, large) = if a.len() <= b.len() { (a, b) } else { (b, a) };
     small
@@ -84,37 +87,93 @@ fn dir_sim(a: &HashMap<String, usize>, b: &HashMap<String, usize>) -> usize {
 /// components that share a directory can score above 0, so an inverted
 /// index (directory → earlier components with their count) yields the same
 /// scores, and the same winner: the first strictly greater score in
-/// component order, starting from component 0's.
+/// component order, starting from component 0's. See [`best_earlier`] for
+/// how the walk stops early.
 fn bridge_targets(histograms: &[HashMap<String, usize>]) -> Vec<usize> {
     let mut targets = vec![0; histograms.len()];
-    let mut by_dir: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+    let mut by_dir: HashMap<&str, DirList> = HashMap::new();
     for (i, histogram) in histograms.iter().enumerate() {
         if i > 0 {
-            let mut scores: HashMap<usize, usize> = HashMap::new();
-            for (dir, &count) in histogram {
-                for &(j, other) in by_dir.get(dir.as_str()).into_iter().flatten() {
-                    *scores.entry(j).or_default() += count.min(other);
-                }
-            }
-            let mut best_target = 0;
-            let mut best_sim = scores.get(&0).copied().unwrap_or(0);
-            let mut candidates: Vec<(usize, usize)> =
-                scores.into_iter().filter(|&(j, _)| j > 0).collect();
-            candidates.sort_unstable();
-            for (j, sim) in candidates {
-                if sim > best_sim {
-                    best_sim = sim;
-                    best_target = j;
-                }
-            }
-            debug_assert_eq!(best_sim, dir_sim(histogram, &histograms[best_target]));
-            targets[i] = best_target;
+            targets[i] = best_earlier(histogram, &by_dir);
         }
         for (dir, &count) in histogram {
-            by_dir.entry(dir.as_str()).or_default().push((i, count));
+            let list = by_dir.entry(dir.as_str()).or_default();
+            list.entries.push((i, count));
+            list.max_count = list.max_count.max(count);
         }
     }
     targets
+}
+
+/// The components that have one directory, in component order, with their
+/// count in it; and the largest of those counts.
+#[derive(Default)]
+struct DirList {
+    entries: Vec<(usize, usize)>,
+    max_count: usize,
+}
+
+/// One directory `best_earlier` walks: the most it can add to a score, the
+/// component's own count in it, and the earlier components that have it.
+type SharedDir<'a> = (usize, usize, &'a [(usize, usize)]);
+
+/// The earlier component `histogram` bridges to: the first with the
+/// highest [`dir_sim`], component 0 when none scores above it.
+///
+/// The index lists of `histogram`'s directories are walked together in
+/// component order (each list is in that order already), so each
+/// candidate's score is complete when it is reached. A later candidate can
+/// only collect from the lists that are not exhausted, at most
+/// `min(own count, the list's largest count)` from each: once the best
+/// score reaches that bound, no later candidate can be STRICTLY greater,
+/// and the walk stops. The bound never exceeds the component's node count;
+/// without it, many components in one directory made the walk quadratic.
+fn best_earlier(histogram: &HashMap<String, usize>, by_dir: &HashMap<&str, DirList>) -> usize {
+    // (cap, own count, list) per shared directory.
+    let lists: Vec<SharedDir<'_>> = histogram
+        .iter()
+        .filter_map(|(dir, &count)| {
+            by_dir
+                .get(dir.as_str())
+                .filter(|list| !list.entries.is_empty())
+                .map(|list| (count.min(list.max_count), count, list.entries.as_slice()))
+        })
+        .collect();
+    let mut cursor = vec![0usize; lists.len()];
+    let mut heap: BinaryHeap<Reverse<(usize, usize)>> = lists
+        .iter()
+        .enumerate()
+        .map(|(k, (_, _, list))| Reverse((list[0].0, k)))
+        .collect();
+    let mut remaining: usize = lists.iter().map(|(cap, _, _)| cap).sum();
+    let (mut best_target, mut best_sim) = (0, 0);
+    while let Some(&Reverse((j, _))) = heap.peek() {
+        if best_sim >= remaining {
+            break;
+        }
+        let mut sim = 0;
+        while let Some(&Reverse((at, k))) = heap.peek() {
+            if at != j {
+                break;
+            }
+            heap.pop();
+            let (cap, count, list) = lists[k];
+            sim += count.min(list[cursor[k]].1);
+            cursor[k] += 1;
+            if let Some(&(next, _)) = list.get(cursor[k]) {
+                heap.push(Reverse((next, k)));
+            } else {
+                remaining -= cap;
+            }
+        }
+        if j == 0 {
+            best_sim = sim;
+        } else if sim > best_sim {
+            best_sim = sim;
+            best_target = j;
+        }
+    }
+    best_target
 }
 
 /// `bridge_disconnected_components`.
@@ -130,7 +189,7 @@ pub fn bridge_disconnected_components(graph: &mut CodeGraph) -> Value {
                 "bridges_added": 0,
             });
         }
-        components.sort_by_key(|component| std::cmp::Reverse(component.len()));
+        components.sort_by_key(|component| Reverse(component.len()));
         let table = super::degrees(graph);
         let histograms: Vec<HashMap<String, usize>> = components
             .iter()
@@ -268,6 +327,95 @@ mod tests {
             }
             assert_eq!(targets[i], best.0, "component {i}");
         }
+    }
+
+    /// The inverted-index walk this module used before [`best_earlier`]:
+    /// every earlier component sharing a directory is scored. The
+    /// reference the bounded walk must equal.
+    fn reference_bridge_targets(histograms: &[HashMap<String, usize>]) -> Vec<usize> {
+        let mut targets = vec![0; histograms.len()];
+        let mut by_dir: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+        for (i, histogram) in histograms.iter().enumerate() {
+            if i > 0 {
+                let mut scores: HashMap<usize, usize> = HashMap::new();
+                for (dir, &count) in histogram {
+                    for &(j, other) in by_dir.get(dir.as_str()).into_iter().flatten() {
+                        *scores.entry(j).or_default() += count.min(other);
+                    }
+                }
+                let mut best_target = 0;
+                let mut best_sim = scores.get(&0).copied().unwrap_or(0);
+                let mut candidates: Vec<(usize, usize)> =
+                    scores.into_iter().filter(|&(j, _)| j > 0).collect();
+                candidates.sort_unstable();
+                for (j, sim) in candidates {
+                    if sim > best_sim {
+                        best_sim = sim;
+                        best_target = j;
+                    }
+                }
+                targets[i] = best_target;
+            }
+            for (dir, &count) in histogram {
+                by_dir.entry(dir.as_str()).or_default().push((i, count));
+            }
+        }
+        targets
+    }
+
+    #[test]
+    fn the_bounded_walk_equals_the_full_index_scan_on_random_histograms() {
+        let mut seed: u64 = 99;
+        let mut next = move |bound: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(seed >> 33).unwrap() % bound
+        };
+        for round in 0..40 {
+            let dirs = 1 + next(12);
+            let max_count = 1 + next(5);
+            let histograms: Vec<HashMap<String, usize>> = (0..=next(300))
+                .map(|_| {
+                    (0..next(5))
+                        .map(|_| (format!("d{}", next(dirs)), 1 + next(max_count)))
+                        .collect()
+                })
+                .collect();
+            assert_eq!(
+                bridge_targets(&histograms),
+                reference_bridge_targets(&histograms),
+                "round {round}"
+            );
+        }
+    }
+
+    #[test]
+    fn many_components_in_one_directory_bridge_in_linear_time() {
+        // The full index scan took 8.9 s for 20k single-node components.
+        const COMPONENTS: usize = 20_000;
+        let histograms: Vec<HashMap<String, usize>> = (0..COMPONENTS)
+            .map(|i| {
+                // Every third has 2 nodes in `src`: the walk stops at the
+                // largest earlier count, not at its own.
+                let mut histogram =
+                    HashMap::from([("src".to_owned(), 1 + usize::from(i % 3 == 1))]);
+                if i % 5 == 0 {
+                    histogram.insert(format!("own{i}"), 1);
+                }
+                histogram
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let targets = bridge_targets(&histograms);
+        let elapsed = started.elapsed();
+        for (i, &target) in targets.iter().enumerate() {
+            assert_eq!(target, usize::from(i > 1 && i % 3 == 1), "component {i}");
+        }
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "{elapsed:?} for {COMPONENTS} components"
+        );
     }
 
     #[test]
