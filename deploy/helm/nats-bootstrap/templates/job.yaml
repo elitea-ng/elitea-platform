@@ -14,7 +14,7 @@ metadata:
 spec:
   backoffLimit: 6
   # Bounded so a wedged Job (e.g. NATS never comes up) does not hang the release.
-  activeDeadlineSeconds: 600
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
   template:
     metadata:
       labels:
@@ -42,6 +42,8 @@ spec:
               value: {{ join " " .Values.accounts | quote }}
             - name: NATS_ARGS
               value: {{ .Values.extraNatsArgs | quote }}
+            - name: NATS_CONNECT_WAIT
+              value: {{ .Values.connectWait | quote }}
             - name: NATS_REPLICAS
               value: {{ .Values.replicas | quote }}
             - name: NATS_ALERT_COOLDOWN

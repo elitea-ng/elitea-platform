@@ -45,8 +45,12 @@ tls:
       name: elitea-nats-ca
       kind: Issuer
     trustDomain: elitea.internal
-    duration: 2160h    # 90d
-    renewBefore: 360h  # 15d
+    # Short-lived on purpose: the bootstrap identities may create streams and
+    # consumers, and they are needed only while the hook Job runs. The
+    # Certificates are hooks deleted with the Job (templates/certificate.yaml),
+    # so nothing renews them; an hour covers the Job's own deadline.
+    duration: 1h
+    renewBefore: 15m
 
 # Stream/KV replicas — MUST match the NATS profile:
 #   scale-1 -> 1 (default; HA waived)
@@ -90,6 +94,17 @@ deltas:
 # heartbeat's entry is collected before its own deadline.
 presence:
   ttl: "2m"
+
+# Seconds bootstrap.sh waits for the server to accept each account's identity
+# before failing (NATS_CONNECT_WAIT). Covers NATS still starting and a
+# bootstrap certificate cert-manager is still (re-)issuing: an upgrade finds
+# last install's expired certificate in the Secret, and the kubelet takes up to
+# about a minute to show the re-issued one in the mounted volume.
+connectWait: 300
+
+# The Job's own deadline, bounding a wedged run (NATS never comes up). Also
+# bounds how long the hook bootstrap certificates are needed.
+activeDeadlineSeconds: 600
 
 resources:
   requests:

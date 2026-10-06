@@ -4,12 +4,29 @@
 # The {{ $acct }} account's bootstrap identity (#1076): a client certificate
 # from the dedicated NATS CA whose URI SAN the server maps to the one user in
 # that account that may create streams and consumers.
+#
+# It exists only while an install or upgrade runs. It is a hook in the Job's
+# own phase, ordered before it (weight -10 < the Job's 0), and deleted with
+# the Job once the phase succeeds — so cert-manager stops renewing it. The
+# certificate itself lives one hour (tls.certificate.duration). cert-manager
+# leaves the Secret behind unless it runs with --enable-certificate-owner-ref;
+# what is left holds a certificate that expires an hour after the install and
+# is never renewed, and the next install re-issues it before the Job dials.
+#
+# Not a pre-install hook: Helm treats a hook that is not a Job or Pod as done
+# the moment it is created, and would delete a pre-install Certificate at the
+# end of the pre-install phase — possibly before cert-manager issued it, and
+# always before the post-install Job mounts it.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ include "nats-bootstrap.fullname" $ }}-{{ $acct }}-nats-client
   labels:
     {{- include "nats-bootstrap.labels" $ | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
   duration: {{ $.Values.tls.certificate.duration }}

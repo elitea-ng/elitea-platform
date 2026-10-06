@@ -98,6 +98,7 @@ refuse "nats: NetworkPolicy off, unstated"    "networkPolicy.enabled is false" "
 refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" --set nats.config.cluster.tls.enabled=false
 refuse "bootstrap: nats:// URL"               "is not tls://"                elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=nats://elitea-nats:4222
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
+refuse "bootstrap: connectWait eats the deadline" "leaves the Job under a minute" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set connectWait=590
 refuse "bootstrap: an account left out"       "must be [main, gateway, runtime]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway}'
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.tls.enabled=false
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
@@ -241,6 +242,16 @@ check("the bootstrap issues one certificate per account", set(bcerts) == {f"elit
 for name, c in bcerts.items():
     check(f"{name}: URI SAN names its account's bootstrap user", c["spec"]["uris"] == [URI(name)] and URI(name) in users)
     check(f"{name}: issued by the NATS CA Issuer", c["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
+jobmeta = kinds(bs, "Job")[0]["metadata"].get("annotations", {})
+def dur_hours(d):
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", d or "")
+    return (int(m.group(1) or 0) + int(m.group(2) or 0) / 60 + int(m.group(3) or 0) / 3600) if m and d else 1e9
+for name, c in bcerts.items():
+    ann = c["metadata"].get("annotations", {})
+    check(f"{name}: a hook in the Job's own phase (exists only while an install runs)", ann.get("helm.sh/hook") == jobmeta.get("helm.sh/hook"), ann.get("helm.sh/hook"))
+    check(f"{name}: ordered before the Job", int(ann.get("helm.sh/hook-weight", "0")) < int(jobmeta.get("helm.sh/hook-weight", "0")))
+    check(f"{name}: deleted with the Job, so nothing renews it", "hook-succeeded" in ann.get("helm.sh/hook-delete-policy", "") and "before-hook-creation" in ann.get("helm.sh/hook-delete-policy", ""))
+    check(f"{name}: lives at most an hour", dur_hours(c["spec"].get("duration")) <= 1, c["spec"].get("duration"))
 job = kinds(bs, "Job")[0]["spec"]["template"]["spec"]
 env = {e["name"]: e.get("value") for e in job["containers"][0]["env"]}
 check("the bootstrap dials tls:// with no credential", env.get("NATS_URL", "").startswith("tls://") and "@" not in env.get("NATS_URL", ""))

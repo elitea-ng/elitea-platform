@@ -45,7 +45,15 @@ posture is compose's (`deploy/docker-compose.yml`), and
     `/etc/elitea/nats-client`, read via `<PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE`
     (`ELITEA_EVENTS_` for main, `GATEWAY_` for gateway and scheduler).
   * `elitea-nats-bootstrap-{main,gateway,runtime}`: issued by
-    `deploy/helm/nats-bootstrap`, one per account.
+    `deploy/helm/nats-bootstrap`, one per account, and only for the length
+    of an install: the Certificates are hooks in the Job's phase, ordered
+    before it and deleted with it, and each lives one hour. Nothing renews
+    them, so the identities that may create streams and consumers stop
+    working an hour after each install (the Secrets cert-manager leaves
+    behind hold the expired certificate; run cert-manager with
+    `--enable-certificate-owner-ref` to have them removed too). They may
+    create and update their account's assets and nothing else — no identity
+    may delete or purge a stream.
   * The clients (`libs/go/natsconn`) re-read the files on every TLS handshake,
     so a cert-manager renewal is presented on the next reconnect. TLS 1.3 only.
 * **URLs carry no credential**: `tls://elitea-nats.<ns>.svc.cluster.local:4222`
@@ -227,7 +235,9 @@ helm upgrade --install elitea-nats deploy/helm/nats \
 
 The server refuses a connection without a mapped certificate, so operator
 commands present one, and an identity sees only its own account. The GATEWAY
-bootstrap identity reads the gateway's streams:
+bootstrap identity reads the gateway's streams. Its certificate lives one hour
+after an install, so sync the `nats-bootstrap` release first (`helm upgrade`,
+or `argocd app sync nats-bootstrap`) and read within the hour:
 
 ```bash
 kubectl -n elitea get secret elitea-nats-bootstrap-gateway-nats-client-tls -o json \
