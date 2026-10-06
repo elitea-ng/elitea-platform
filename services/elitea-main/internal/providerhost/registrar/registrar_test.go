@@ -250,3 +250,34 @@ func TestNewRefusesWhatItCannotRegisterWith(t *testing.T) {
 		t.Fatal("a bad target accepted")
 	}
 }
+
+// A provider that starts after elitea-main (the usual order in a fresh
+// install) is registered within the first retry pause, not a full Interval
+// later: failures retry from 2s, doubling, capped at Interval.
+func TestRunRetriesAFailedProbeLongBeforeTheInterval(t *testing.T) {
+	p := newProvider(t)
+	p.down = true
+	store := &fakeStore{}
+	r := newRegistrar(t, p, store, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	time.Sleep(100 * time.Millisecond)
+	p.mu.Lock()
+	p.down = false
+	p.mu.Unlock()
+	deadline := time.Now().Add(6 * time.Second)
+	registered := false
+	for time.Now().Before(deadline) && !registered {
+		store.mu.Lock()
+		registered = len(store.registrations) == 1
+		store.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !registered {
+		t.Fatal("a provider that came up after boot was not registered before the next hourly probe")
+	}
+}

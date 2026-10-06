@@ -399,12 +399,19 @@ cmd_verify() {
 
   # ── 3. the facade registered the provider ──────────────────────────────────
   say "3. the facade registered the provider with the admission plane"
-  local registration
-  registration="$(psql_exec -tAc "
-      SELECT o.provider_id || ' healthy=' || p.healthy::text
-      FROM provider_hub.provider_origin_registration o
-      JOIN provider_hub.provider_health_projection p USING (project_id, provider_id)
-      WHERE o.provider_id = 'wikis'" 2>&1 | tr -d '\r' | sed '/^$/d')"
+  # Polled, bounded: the registrar probes on its own schedule (retrying a
+  # provider that is not up yet every few seconds), so a single read right
+  # after rollout can race a provider that started after elitea-main.
+  local registration="" attempt
+  for attempt in $(seq 1 45); do
+    registration="$(psql_exec -tAc "
+        SELECT o.provider_id || ' healthy=' || p.healthy::text
+        FROM provider_hub.provider_origin_registration o
+        JOIN provider_hub.provider_health_projection p USING (project_id, provider_id)
+        WHERE o.provider_id = 'wikis'" 2>&1 | tr -d '\r' | sed '/^$/d')"
+    [ "$registration" = "wikis healthy=true" ] && break
+    sleep 2
+  done
   if [ "$registration" != "wikis healthy=true" ]; then
     fail "provider_hub reports '${registration:-<nothing>}'; expected 'wikis healthy=true'"
   else
