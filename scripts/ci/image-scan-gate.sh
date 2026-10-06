@@ -19,7 +19,7 @@
 #   2. A report without the expected target type: the scan ran, and never
 #      reached what the image ships. `expect_type` names the APPLICATION
 #      content (a Go binary, the site-packages of a python image, the package
-#      database of an alpine runtime), so a scan that reads the base layers and
+#      database of the Debian nginx runtime), so a scan that reads the base layers and
 #      stops short fails instead of reading as clean.
 #   3. Any HIGH or CRITICAL finding, with the list.
 #

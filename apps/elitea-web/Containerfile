@@ -5,7 +5,7 @@
 # construction. Local builds: podman build -f apps/elitea-web/Containerfile .
 
 # ── Stage 1: build the SPA (three entries: app, admin, maintenance) ──────────
-FROM node:26-alpine AS builder
+FROM node:26-trixie-slim AS builder
 
 WORKDIR /build
 
@@ -32,58 +32,53 @@ RUN npm run build
 
 # ── Stage 2: serve the main SPA with nginx ────────────────────────────────────
 #
-# THE TAG IS AN ALIAS ON PURPOSE, AND THE `ADD` IS NOT A FILE THE IMAGE NEEDS.
+# ONE OS FAMILY. Every image this repository builds sits on Debian 13 (trixie):
+# the Go and Rust services on distroless debian13, the Python services on
+# python:*-slim-trixie, and this one on nginx's trixie build. It was
+# `nginx:stable-alpine` until 2026-10. The move costs about 37 MB compressed
+# (26 MB to 64 MB for amd64) and gives one package database, one advisory feed
+# and one set of tools across the fleet.
 #
-# History: nginx:1.27-alpine sat on Alpine 3.21.3 and carried 35 HIGH or
-# CRITICAL findings when the scan in ci-image-scan.yml first ran (#433) —
-# openssl, libxml2, libexpat, libpng, musl, zlib. 1.29-alpine (Alpine 3.23.4)
-# dropped that to 11, and `apk upgrade` was written here to clear the rest "on
-# the day WE build".
+# THE TAG IS AN ALIAS ON PURPOSE, AND THE `ADD`s ARE NOT FILES THE IMAGE NEEDS.
 #
-# Both halves of that then failed, quietly, and for different reasons:
+# History, from the Alpine days: nginx:1.27-alpine carried 35 HIGH or CRITICAL
+# findings when the scan in ci-image-scan.yml first ran (#433). Two fixes were
+# then written here, and both failed quietly, for different reasons:
 #
 #   1. `1.29-alpine` is a MAINLINE BRANCH TAG, and nginx stops rebuilding one
-#      once the next mainline opens. Its last rebuild was 2026-04-17; five
-#      months on it still shipped Alpine 3.23.4 with curl 8.17.0-r1. A branch
-#      tag is a slow-motion freeze, and it is how 1.27 rotted before it.
-#      `stable-alpine` is the alias nginx keeps rebuilding — nginx 1.30.4 on
-#      Alpine 3.24.1 today, with curl already at 8.22.0-r0. It is an alias
-#      BECAUSE this repository has no dependabot docker ecosystem: a pinned
-#      branch here is a bump nobody has scheduled, and the daily scan in
+#      once the next mainline opens. Five months after its last rebuild it still
+#      shipped the packages of that day. A branch tag is a slow-motion freeze.
+#      `stable-trixie` is the alias nginx keeps rebuilding (nginx 1.30.5 on
+#      Debian 13.7 on 2026-10-06). It names the Debian release, so a new Debian
+#      stable cannot move this image without an edit here; the nginx version
+#      and the Debian point release move on their own. The daily scan in
 #      ci-image-scan.yml is what watches an alias.
 #
-#   2. `RUN apk upgrade --no-cache` is a layer, and its command string never
-#      changes. With `cache-from: type=gha` in both ci-image-scan.yml and
-#      publish.yml, and a base digest that had stopped moving, BuildKit served
-#      it from cache on every build. The log said so in one word:
-#      `#19 [stage-1 2/8] RUN apk upgrade --no-cache` / `#19 CACHED`. So the
-#      image held the upgrade of whichever day that layer was FIRST built — on
-#      2026-09-06 that was curl 8.20.0-r0 and libuuid 2.41.4-r0, 22 HIGH
-#      findings — while the same command against the same base produced curl
-#      8.22.0-r0 and libuuid 2.41.6-r1 the moment it actually ran. "Takes the
-#      fixes on the day WE build" was true of the source and false of the build.
+#   2. The package upgrade is a layer, and its command string never changes.
+#      With `cache-from: type=gha` in both ci-image-scan.yml and publish.yml,
+#      and a base digest that had stopped moving, BuildKit served it from cache
+#      on every build (`#19 CACHED`). So the image held the upgrade of the day
+#      that layer was FIRST built (22 HIGH findings on 2026-09-06), while the
+#      same command run that day produced none of them. "Takes the fixes on the
+#      day WE build" was true of the source and false of the build.
 #
-# The ADD closes (2). BuildKit re-resolves a remote source on every build and
-# keys the layer on what it fetched, so the Alpine package index invalidates the
-# upgrade below exactly when Alpine publishes new packages, and never otherwise.
-# It is a STAMP: apk never reads it, and the `x86_64` in the path is not the
-# build's architecture — the per-arch indexes are regenerated together, so any
-# one of them dates the branch. `latest-stable` is an alias for the same reason
-# the image tag is: a branch number written here would need editing every time
-# the base moves to a new Alpine, and nothing would fail if nobody did it.
+# The ADDs close (2). BuildKit re-resolves a remote source on every build and
+# keys the layer on what it fetched, so the Debian release files invalidate the
+# upgrade below when Debian publishes new packages for trixie, and never
+# otherwise. They are STAMPS: apt never reads them. `trixie-security` carries
+# the security fixes; `trixie-updates` carries the stable-updates fixes that
+# arrive between point releases.
 #
-# The upgrade below is not a formality that the fresher base made redundant.
-# `nginx:stable-alpine` on its own still reports 7 HIGH lines for libuuid
-# 2.42.1-r0 (CVE-2026-53612/53613/53614/76642/78409/78410 fixed in 2.42.3-r0,
-# CVE-2026-78408 in 2.42.3-r1); the upgrade is what takes them.
-#
-# The cost of both aliases is reproducibility: two builds of the same commit can
+# The cost of the aliases is reproducibility: two builds of the same commit can
 # hold different nginx and package versions. That is the trade, and the scan —
 # on every pull request, every push to main, and daily — is what makes it
 # visible and what proves the result.
-FROM nginx:stable-alpine
-ADD https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz /usr/share/alpine-apkindex-stamp.tar.gz
-RUN apk upgrade --no-cache
+FROM nginx:stable-trixie
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /usr/share/debian-stamps/trixie-security.InRelease
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /usr/share/debian-stamps/trixie-updates.InRelease
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/dist/app /usr/share/nginx/html/spa
 # Embedded docs SPA (embedded-docs programme decision 5): its own dist

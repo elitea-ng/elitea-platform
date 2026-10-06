@@ -338,7 +338,7 @@ jobs:
           # The key holds an underscore, not a hyphen: a GitHub expression reads
           # `matrix.image.expect-type` as a subtraction.
           #   gobinary    the Go binary in a distroless image;
-          #   alpine      the package database of the nginx runtime image;
+          #   debian      the package database of the nginx runtime image (trixie);
           #   python-pkg  the site-packages of a Python service image.
           # Each value names the APPLICATION content, not only the operating
           # system, so a scan that reads the base layers and stops short still
@@ -380,13 +380,13 @@ jobs:
             context: .
             dockerfile: ./deploy/docker/Containerfile.elitea-ui
             target: ""
-            expect_type: alpine
+            expect_type: debian
             blocking: true
           - name: elitea-web
             context: .
             dockerfile: ./apps/elitea-web/Containerfile
             target: ""
-            expect_type: alpine
+            expect_type: debian
             blocking: true
           # Exemption recorded in #553 (findings) and #554 (what ends it).
           # See the header: this is the mixed case, not an upstream-only one.
