@@ -37,6 +37,10 @@ Written to ``<out-dir>``:
 ``{tool}/lines.jsonl``     the sidecar lines (``{"thinking": …}``, ``{"token": …}``)
 ``{tool}/result.json``     the worker's result
 ``tools.jsonl``            direct tool calls (``--calls``): name, arguments, result
+``resolve.json``            ``resolve_wiki``'s request and result (``resolve``)
+``vfs.jsonl``               the file-system probe (``vfs`` in the script)
+``replay.json``             every FTS5 / fused search the tools ran, with the
+                            node ids it answered (the Rust replay index)
 ``nodes.jsonl``, ``edges.jsonl``, ``embeddings.jsonl``  the index
 
     PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src \\
@@ -146,6 +150,64 @@ def sidecar_lines(printed: list[str], tool: str) -> list[dict]:
     return lines
 
 
+REPLAY: dict = {"fts": {}, "fts_any": {}, "hybrid": {}}
+
+
+def _key(*parts) -> str:
+    return json.dumps(list(parts), separators=(",", ":"), ensure_ascii=False)
+
+
+def install_replay_recorders() -> None:
+    """Record the searches whose ranking is SQLite's, for ``ReplayIndex``."""
+    import re  # noqa: PLC0415
+
+    from elitea_deepwiki.engine import unified_db  # noqa: PLC0415
+    from elitea_deepwiki.engine.deep_research import research_tools  # noqa: PLC0415
+
+    cls = unified_db.UnifiedWikiDB
+    original_fts = cls.search_fts5
+    original_hybrid = cls.search_hybrid
+
+    def search_fts5(self, query, path_prefix=None, cluster_id=None, symbol_types=None, limit=20):
+        rows = original_fts(self, query, path_prefix=path_prefix, cluster_id=cluster_id,
+                            symbol_types=symbol_types, limit=limit)
+        REPLAY["fts"][_key(query, path_prefix, symbol_types, limit)] = [
+            [r["node_id"], r.get("fts_rank"), r.get("score_norm")] for r in rows]
+        return rows
+
+    def search_hybrid(self, query, embedding=None, path_prefix=None, cluster_id=None,
+                      fts_weight=0.4, vec_weight=0.6, limit=20, fts_k=30, vec_k=30):
+        rows = original_hybrid(self, query, embedding=embedding, path_prefix=path_prefix,
+                               cluster_id=cluster_id, fts_weight=fts_weight, vec_weight=vec_weight,
+                               limit=limit, fts_k=fts_k, vec_k=vec_k)
+        REPLAY["hybrid"][_key(query, limit, fts_k, vec_k)] = [r["node_id"] for r in rows]
+        return rows
+
+    cls.search_fts5 = search_fts5
+    cls.search_hybrid = search_hybrid
+    original_any = research_tools._search_unified_db_fts
+
+    def search_any(db_path, query, k=10):
+        docs = original_any(db_path, query, k=k)
+        keywords = [w for w in re.split(r"\W+", query) if len(w) >= 2]
+        db = research_tools._open_unified_db_readonly(db_path)
+        ids = []
+        if keywords and db is not None:
+            try:
+                rows = db.conn.execute(
+                "SELECT n.node_id FROM repo_fts f JOIN repo_nodes n ON n.node_id = f.node_id "
+                "WHERE repo_fts MATCH ? AND n.symbol_type NOT IN ('module_doc', 'file_doc', 'readme') "
+                    "ORDER BY rank LIMIT ?", (" OR ".join(keywords), k)).fetchall()
+            except Exception:  # noqa: BLE001 - the tool answered [] too
+                rows = []
+            ids = [r[0] for r in rows]
+            db.close()
+        REPLAY["fts_any"][_key(keywords, k)] = ids
+        return docs
+
+    research_tools._search_unified_db_fts = search_any
+
+
 def run_worker(tool: str, base_path: Path, db_path: str, base_url: str, payload: dict,
                adr_reference: bool = True):
     from elitea_deepwiki.engine import repo_resolution  # noqa: PLC0415
@@ -224,6 +286,32 @@ def direct_calls(db_path: str, calls: list[dict]) -> list[dict]:
     return out
 
 
+def expand(value):
+    """``{"$repeat": [text, n]}`` is ``text * n`` (keeps the script small)."""
+    if isinstance(value, dict):
+        if set(value) == {"$repeat"}:
+            text, count = value["$repeat"]
+            return text * count
+        return {k: expand(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [expand(v) for v in value]
+    return value
+
+
+def compact(result):
+    """A long result as its length, SHA-256 and ends (keeps the golden small)."""
+    import hashlib  # noqa: PLC0415
+
+    if not isinstance(result, str) or len(result) <= 4000:
+        return {"result": result}
+    return {
+        "result_len": len(result),
+        "result_sha256": hashlib.sha256(result.encode("utf-8")).hexdigest(),
+        "result_head": result[:600],
+        "result_tail": result[-600:],
+    }
+
+
 def run_vfs_probe(base_url: str, recorded: list, stub, calls: list[dict]) -> list[dict]:
     """Each call alone in its own turn of a deep agent on ``StateBackend``
     (with the todo list, without the sub-agent), as deep research runs.
@@ -243,7 +331,8 @@ def run_vfs_probe(base_url: str, recorded: list, stub, calls: list[dict]) -> lis
                            streaming=False, max_tokens=8192)
         agent = create_deep_agent(model=model, tools=[], system_prompt="probe",
                                   backend=StateBackend(), middleware=[TodoListMiddleware()])
-        turns = [{"tool_calls": [dict(call, id=f"call_v{i}")]} for i, call in enumerate(calls)]
+        turns = [{"tool_calls": [dict(call, arguments=expand(call["arguments"]), id=f"call_v{i}")]}
+                 for i, call in enumerate(calls)]
         stub.set_script([*turns, {"content": "done"}])
         recorded.clear()
         agent.invoke({"messages": [{"role": "user", "content": "probe"}]})
@@ -252,7 +341,7 @@ def run_vfs_probe(base_url: str, recorded: list, stub, calls: list[dict]) -> lis
     final = recorded[-1]["messages"]
     by_id = {m["tool_call_id"]: m["content"] for m in final if m.get("role") == "tool"}
     return [
-        {"name": call["name"], "arguments": call["arguments"], "result": by_id.get(f"call_v{i}")}
+        {"name": call["name"], "arguments": call["arguments"], **compact(by_id.get(f"call_v{i}"))}
         for i, call in enumerate(calls)
     ]
 
@@ -287,12 +376,13 @@ def main() -> None:
     server, recorded, stub = pages.start_stub()
     base_url = f"http://127.0.0.1:{server.server_address[1]}/v1"
     freeze_date(args.date)
+    install_replay_recorders()
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         db_path = str(tmp / "index.wiki.db")
         _graph, udb = pages.build_index(args.repo.resolve(), db_path)
-        pages.dump_rows(udb, args.out)
+        pages.dump_rows(udb, args.out)  # equal to tests/fixtures/wiki/golden/ref
         udb.close()
         dump_embeddings(db_path, args.out)
 
@@ -323,6 +413,18 @@ def main() -> None:
                     handle.write(json.dumps(line, ensure_ascii=False) + "\n")
             (target / "result.json").write_text(
                 json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+        if "resolve" in script:
+            from elitea_deepwiki import wiki_query  # noqa: PLC0415
+
+            recorded.clear()
+            stub.set_script([])
+            result = wiki_query.resolve_wiki(
+                question=script["resolve"]["question"], wikis=script["resolve"]["wikis"],
+                llm_settings={"api_base": base_url[: -len("/v1")], "api_key": "stub-key",
+                              "model_name": "gpt-4o"})
+            (args.out / "resolve.json").write_text(json.dumps(
+                {"request": recorded[0] if recorded else None, "result": result},
+                indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         if "vfs" in script:
             with open(args.out / "vfs.jsonl", "w", encoding="utf-8") as handle:
                 for record in run_vfs_probe(base_url, recorded, stub, script["vfs"]):
@@ -332,6 +434,8 @@ def main() -> None:
             with open(args.out / "tools.jsonl", "w", encoding="utf-8") as handle:
                 for record in direct_calls(db_path, calls):
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        (args.out / "replay.json").write_text(
+            json.dumps(REPLAY, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
     server.shutdown()
 
 

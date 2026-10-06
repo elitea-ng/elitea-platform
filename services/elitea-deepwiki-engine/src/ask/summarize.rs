@@ -83,7 +83,14 @@ impl Msg {
                     .map(|c| ToolCall {
                         id: c.id.clone(),
                         name: c.name.clone(),
-                        arguments: c.raw.clone(),
+                        // `LangChain` sends the PARSED arguments back,
+                        // re-encoded (`json.dumps(args, ensure_ascii=False)`).
+                        arguments: match &c.args {
+                            Some(args) => {
+                                crate::pyjson::dumps_with(&Value::Object(args.clone()), None, false)
+                            }
+                            None => c.raw.clone(),
+                        },
                     })
                     .collect(),
             },

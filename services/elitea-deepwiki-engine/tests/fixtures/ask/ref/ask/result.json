@@ -1,0 +1,130 @@
+{
+  "agentic": true,
+  "answer": "Let me look closer.Notes are stored by `NoteStore` in `app/models.py`.\n\n---\n**Files Referenced:**\n- `app/models.py` — the store\n",
+  "documents_retrieved": 0,
+  "query_used": "[agentic] How are notes stored and searched?",
+  "sources": [],
+  "success": true,
+  "thinking_steps": [
+    {
+      "call_id": "call_a1",
+      "input": "{'query': 'note store'}",
+      "step": 1,
+      "timestamp": "2026-10-05T22:14:17.322921",
+      "tool": "search_symbols",
+      "tool_call_id": "call_a1",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_a2",
+      "input": "{'expression': 'type:class limit:5'}",
+      "step": 2,
+      "timestamp": "2026-10-05T22:14:17.322954",
+      "tool": "query_graph",
+      "tool_call_id": "call_a2",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_a1",
+      "output": "Found 4 symbols for: note store\n\n1. `BaseStore` (class [internal]) in app/base.py [5 refs] — A store that keeps notes by id.\n2. `NoteStore` (class [internal]) in app/models.py [15 refs] — Stores notes in memory.\n3. `handle_create` (function [internal]) in app/handlers.py [7 refs] — Create a note.\n4. `handle_search` (function [internal]) in app/handlers.py [4 refs] — Find notes whose body contains text.",
+      "output_length": 405,
+      "output_preview": "Found 4 symbols for: note store\n\n1. `BaseStore` (class [internal]) in app/base.py [5 refs] — A store that keeps notes by id.\n2. `NoteStore` (class [internal]) in app/models.py [15 refs] — Stores notes in memory.\n3. `handle_create` (function [internal]) in app/handlers.py [7 refs] — Create a note.\n4....",
+      "step": 3,
+      "timestamp": "2026-10-05T22:14:17.327645",
+      "tool": "search_symbols",
+      "tool_call_id": "call_a1",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_a2",
+      "output": "## Query Results: `type:class limit:5` (5 matches)\n\n- **Codec** (class) [internal] — `native/codec.h`\n- **BaseStore** (class) [internal] — `app/base.py`\n- **Note** (class) [internal] — `app/models.py`\n- **NoteStore** (class) [internal] — `app/models.py`\n- **API** (class) [internal] — `plugins/notes/api/v1/notes.py`",
+      "output_length": 316,
+      "output_preview": "## Query Results: `type:class limit:5` (5 matches)\n\n- **Codec** (class) [internal] — `native/codec.h`\n- **BaseStore** (class) [internal] — `app/base.py`\n- **Note** (class) [internal] — `app/models.py`\n- **NoteStore** (class) [internal] — `app/models.py`\n- **API** (class) [internal] — `plugins/notes/...",
+      "step": 4,
+      "timestamp": "2026-10-05T22:14:17.327675",
+      "tool": "query_graph",
+      "tool_call_id": "call_a2",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_b1",
+      "input": "{'symbol_name': 'NoteStore'}",
+      "step": 5,
+      "timestamp": "2026-10-05T22:14:17.332150",
+      "tool": "get_relationships_tool",
+      "tool_call_id": "call_b1",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_b2",
+      "input": "{'symbol_name': 'NoteStore', 'max_lines': 20}",
+      "step": 6,
+      "timestamp": "2026-10-05T22:14:17.332161",
+      "tool": "get_code",
+      "tool_call_id": "call_b2",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_b1",
+      "output": "Relationships for `NoteStore` (node: `python::models::NoteStore`):\n\n  → `BaseStore` (class) [inheritance] via inheritance@L16\n  → `BaseStore` (class) [references] via references@L16\n  → `save` (method) [defines] via defines@L0\n  → `load` (method) [defines] via defines@L0\n  → `__file__` (module) [component_bridge]\n  → `__file__` (module) [component_bridge]\n  ← `handle_create` (function) [directory_link]\n  ← `handle_search` (function) [directory_link]\n  ← `dispatch` (function) [directory_link]\n  ←",
+      "output_length": 2557,
+      "output_preview": "Relationships for `NoteStore` (node: `python::models::NoteStore`):\n\n  → `BaseStore` (class) [inheritance] via inheritance@L16\n  → `BaseStore` (class) [references] via references@L16\n  → `save` (method) [defines] via defines@L0\n  → `load` (method) [defines] via defines@L0\n  → `__file__` (module) [com...",
+      "step": 7,
+      "timestamp": "2026-10-05T22:14:17.336079",
+      "tool": "get_relationships_tool",
+      "tool_call_id": "call_b1",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_b2",
+      "output": "### `NoteStore` (class) — app/models.py:16-26\n\n```\nclass NoteStore(BaseStore):\n    \"\"\"Stores notes in memory.\"\"\"\n\n    def save(self, note):\n        if self.size() >= MAX_NOTES:\n            raise ValueError(\"full\")\n        self.items[note.note_id] = note\n        return note\n\n    def load(self, note_id):\n        return self.items.get(note_id)\n```",
+      "output_length": 346,
+      "output_preview": "### `NoteStore` (class) — app/models.py:16-26\n\n```\nclass NoteStore(BaseStore):\n    \"\"\"Stores notes in memory.\"\"\"\n\n    def save(self, note):\n        if self.size() >= MAX_NOTES:\n            raise ValueError(\"full\")\n        self.items[note.note_id] = note\n        return note\n\n    def load(self, note_i...",
+      "step": 8,
+      "timestamp": "2026-10-05T22:14:17.336112",
+      "tool": "get_code",
+      "tool_call_id": "call_b2",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_c1",
+      "input": "{'query': 'storage architecture'}",
+      "step": 9,
+      "timestamp": "2026-10-05T22:14:17.340147",
+      "tool": "search_docs",
+      "tool_call_id": "call_c1",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_c2",
+      "input": "{'reflection': 'NoteStore persists notes.'}",
+      "step": 10,
+      "timestamp": "2026-10-05T22:14:17.340166",
+      "tool": "think",
+      "tool_call_id": "call_c2",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_c1",
+      "output": "No documentation found for: storage architecture",
+      "output_length": 48,
+      "output_preview": "No documentation found for: storage architecture",
+      "step": 11,
+      "timestamp": "2026-10-05T22:14:17.344978",
+      "tool": "search_docs",
+      "tool_call_id": "call_c1",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_c2",
+      "output": "✓ Thinking recorded.\n\nReflection:\nNoteStore persists notes.",
+      "output_length": 59,
+      "output_preview": "✓ Thinking recorded.\n\nReflection:\nNoteStore persists notes.",
+      "step": 12,
+      "timestamp": "2026-10-05T22:14:17.344995",
+      "tool": "think",
+      "tool_call_id": "call_c2",
+      "type": "tool_result"
+    }
+  ]
+}

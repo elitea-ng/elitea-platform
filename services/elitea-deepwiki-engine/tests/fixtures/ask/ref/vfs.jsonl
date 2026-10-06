@@ -1,0 +1,55 @@
+{"name": "ls", "arguments": {"path": "/"}, "result": "No files found"}
+{"name": "write_file", "arguments": {"file_path": "/a.md", "content": "hello\nworld"}, "result": "Updated file /a.md"}
+{"name": "write_file", "arguments": {"file_path": "/a.md", "content": "x\ny\nx"}, "result": "Updated file /a.md"}
+{"name": "read_file", "arguments": {"file_path": "/a.md"}, "result": "1  x\n2  y\n3  x"}
+{"name": "read_file", "arguments": {"file_path": "/missing.md"}, "result": "Error: File '/missing.md' not found"}
+{"name": "read_file", "arguments": {"file_path": "/a.md", "offset": 1, "limit": 1}, "result": "2  y\n\n[Read 1 line (lines 2-2 of 3 total). 1 line remaining from offset 2.]"}
+{"name": "read_file", "arguments": {"file_path": "/a.md", "offset": 10}, "result": "Error: Line offset 10 exceeds file length (3 lines)"}
+{"name": "read_file", "arguments": {"file_path": "a.md"}, "result": "1  x\n2  y\n3  x"}
+{"name": "read_file", "arguments": {"file_path": "/../etc/passwd"}, "result": "Error: Path traversal not allowed: /../etc/passwd"}
+{"name": "read_file", "arguments": {"file_path": "/findings/../a.md"}, "result": "Error: Path traversal not allowed: /findings/../a.md"}
+{"name": "read_file", "arguments": {"file_path": "~/a.md"}, "result": "Error: Path traversal not allowed: ~/a.md"}
+{"name": "edit_file", "arguments": {"file_path": "/a.md", "old_string": "x", "new_string": "z"}, "result": "Error: String 'x' appears 2 times in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context."}
+{"name": "edit_file", "arguments": {"file_path": "/a.md", "old_string": "x", "new_string": "z", "replace_all": true}, "result": "Successfully replaced 2 instance(s) of the string in '/a.md'"}
+{"name": "edit_file", "arguments": {"file_path": "/a.md", "old_string": "q", "new_string": "z"}, "result": "Error: String not found in file: 'q'"}
+{"name": "edit_file", "arguments": {"file_path": "/a.md", "old_string": "z", "new_string": "z"}, "result": "Error: String 'z' appears 2 times in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context."}
+{"name": "edit_file", "arguments": {"file_path": "/nope.md", "old_string": "z", "new_string": "w"}, "result": "Error: File '/nope.md' not found"}
+{"name": "read_file", "arguments": {"file_path": "/a.md"}, "result": "1  z\n2  y\n3  z"}
+{"name": "write_file", "arguments": {"file_path": "/dir/b.py", "content": "def f():\n    return 1\n"}, "result": "Updated file /dir/b.py"}
+{"name": "write_file", "arguments": {"file_path": "/dir/sub/c.md", "content": "return here\nand return again\n"}, "result": "Updated file /dir/sub/c.md"}
+{"name": "write_file", "arguments": {"file_path": "/e.md", "content": ""}, "result": "Updated file /e.md"}
+{"name": "read_file", "arguments": {"file_path": "/e.md"}, "result": "System reminder: File exists but has empty contents"}
+{"name": "ls", "arguments": {"path": "/"}, "result": "['/a.md', '/dir/', '/e.md']"}
+{"name": "ls", "arguments": {"path": "/dir"}, "result": "['/dir/b.py', '/dir/sub/']"}
+{"name": "ls", "arguments": {"path": "/dir/"}, "result": "['/dir/b.py', '/dir/sub/']"}
+{"name": "ls", "arguments": {"path": "/nothing"}, "result": "No files found"}
+{"name": "ls", "arguments": {"path": "relative"}, "result": "No files found"}
+{"name": "glob", "arguments": {"pattern": "*.py"}, "result": "['/dir/b.py']"}
+{"name": "glob", "arguments": {"pattern": "/*.md"}, "result": "['/e.md', '/a.md']"}
+{"name": "glob", "arguments": {"pattern": "**/*.md"}, "result": "['/e.md', '/dir/sub/c.md', '/a.md']"}
+{"name": "glob", "arguments": {"pattern": "*.md", "path": "/dir"}, "result": "['/dir/sub/c.md']"}
+{"name": "glob", "arguments": {"pattern": "*.{py,md}"}, "result": "['/e.md', '/dir/sub/c.md', '/dir/b.py', '/a.md']"}
+{"name": "glob", "arguments": {"pattern": "["}, "result": "No files found"}
+{"name": "glob", "arguments": {"pattern": "*.zzz"}, "result": "No files found"}
+{"name": "grep", "arguments": {"pattern": "return"}, "result": "/dir/b.py\n/dir/sub/c.md"}
+{"name": "grep", "arguments": {"pattern": "return", "output_mode": "content"}, "result": "/dir/b.py:\n  2:     return 1\n/dir/sub/c.md:\n  1: return here\n  2: and return again"}
+{"name": "grep", "arguments": {"pattern": "return", "output_mode": "count"}, "result": "/dir/b.py: 1\n/dir/sub/c.md: 2"}
+{"name": "grep", "arguments": {"pattern": "return", "glob": "*.py"}, "result": "/dir/b.py"}
+{"name": "grep", "arguments": {"pattern": "return", "path": "/dir/sub"}, "result": "/dir/sub/c.md"}
+{"name": "grep", "arguments": {"pattern": "zzz"}, "result": "No matches found"}
+{"name": "grep", "arguments": {"pattern": "return", "output_mode": "content", "max_count": 1}, "result": "/dir/b.py:\n  2:     return 1\n\nNote: the search stopped early (it hit its time limit or the maximum match count). The matches above are valid but incomplete. Narrow the search (a more specific pattern or a narrower path), or raise max_count, to see the rest."}
+{"name": "grep", "arguments": {"pattern": "re.urn"}, "result": "No matches found"}
+{"name": "delete", "arguments": {"file_path": "/dir"}, "result": "Deleted /dir"}
+{"name": "delete", "arguments": {"file_path": "/dir"}, "result": "Error: File '/dir' not found"}
+{"name": "ls", "arguments": {"path": "/"}, "result": "['/a.md', '/e.md']"}
+{"name": "write_file", "arguments": {"file_path": "/big.txt", "content": {"$repeat": ["x", 100000]}}, "result": "Updated file /big.txt"}
+{"name": "read_file", "arguments": {"file_path": "/big.txt"}, "result_len": 80000, "result_sha256": "8cd7c5228d586e938bfc7a9a5a25ca48911a0b2b066f58c66e7797bd8c0ab50a", "result_head": "   1  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "result_tail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n[Output was truncated due to size limits. The file content is very large. Consider reformatting the file to make it easier to navigate. For example, if this is JSON, use execute(command='jq . /big.txt') to pretty-print it with line breaks. For other formats, you can use appropriate formatting tools to split long lines.]"}
+{"name": "write_file", "arguments": {"file_path": "/long.txt", "content": {"$repeat": ["a", 12000]}}, "result": "Updated file /long.txt"}
+{"name": "read_file", "arguments": {"file_path": "/long.txt"}, "result_len": 12017, "result_sha256": "a51912cd2ad3dfdb23f20e7e7a47c9d6eb5ab00c2f53d0bc02d8aee9b05a18ca", "result_head": "  1  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "result_tail": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+{"name": "write_todos", "arguments": {"todos": [{"content": "A", "status": "pending"}, {"content": "B", "status": "in_progress"}]}, "result": "Updated todo list to [{'content': 'A', 'status': 'pending'}, {'content': 'B', 'status': 'in_progress'}]"}
+{"name": "write_todos", "arguments": {"todos": [{"content": "A", "status": "bogus"}]}, "result": "Error invoking tool 'write_todos' with kwargs {'todos': [{'content': 'A', 'status': 'bogus'}]} with error:\n todos.0.status: Input should be 'pending', 'in_progress' or 'completed'\n Please fix the error and try again."}
+{"name": "write_todos", "arguments": {"todos": [{"content": "A"}]}, "result": "Error invoking tool 'write_todos' with kwargs {'todos': [{'content': 'A'}]} with error:\n todos.0.status: Field required\n Please fix the error and try again."}
+{"name": "write_todos", "arguments": {"todos": []}, "result": "Updated todo list to []"}
+{"name": "read_file", "arguments": {}, "result": "Error invoking tool 'read_file' with kwargs {} with error:\n file_path: Field required\n Please fix the error and try again."}
+{"name": "read_file", "arguments": {"file_path": "/a.md", "limit": "many"}, "result": "Error invoking tool 'read_file' with kwargs {'file_path': '/a.md', 'limit': 'many'} with error:\n limit: Input should be a valid integer, unable to parse string as an integer\n Please fix the error and try again."}
+{"name": "nonexistent_tool", "arguments": {"x": 1}, "result": "Error: nonexistent_tool is not a valid tool, try one of [ls, read_file, write_file, edit_file, delete, glob, grep, execute, write_todos]."}
