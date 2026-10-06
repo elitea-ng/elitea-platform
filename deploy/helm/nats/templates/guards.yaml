@@ -49,8 +49,8 @@ value and says why.
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if $n.config.cluster.enabled -}}
-{{- if not $n.config.cluster.tls.enabled -}}
+{{- if dig "config" "cluster" "enabled" false $n -}}
+{{- if not (dig "config" "cluster" "tls" "enabled" false $n) -}}
 {{- fail "nats.config.cluster.enabled with cluster.tls.enabled false: the routes between servers would carry every message in plaintext. values-ha.yaml enables it." -}}
 {{- end -}}
 {{- end -}}

@@ -38,20 +38,20 @@ spec:
         {{- with .Values.networkPolicy.extraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-    {{- if .Values.nats.config.cluster.enabled }}
+    {{- if dig "config" "cluster" "enabled" false .Values.nats }}
     # Cluster routes, between the NATS pods only.
     - ports:
-        - port: {{ .Values.nats.config.cluster.port | default 6222 }}
+        - port: {{ dig "config" "cluster" "port" 6222 .Values.nats }}
           protocol: TCP
       from:
         - podSelector:
             matchLabels:
               {{- include "elitea-nats.serverSelectorLabels" . | nindent 14 }}
     {{- end }}
-    {{- if and .Values.nats.promExporter.enabled .Values.networkPolicy.metricsFrom }}
+    {{- if and (dig "promExporter" "enabled" false .Values.nats) .Values.networkPolicy.metricsFrom }}
     # The prometheus exporter sidecar.
     - ports:
-        - port: {{ .Values.nats.promExporter.port | default 7777 }}
+        - port: {{ dig "promExporter" "port" 7777 .Values.nats }}
           protocol: TCP
       from:
         {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}

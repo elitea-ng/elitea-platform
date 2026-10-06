@@ -16,7 +16,7 @@ metadata:
   labels:
     {{- include "elitea-nats.labels" . | nindent 4 }}
 spec:
-  secretName: {{ .Values.nats.config.nats.tls.secretName }}
+  secretName: {{ dig "config" "nats" "tls" "secretName" "" .Values.nats | required "nats.config.nats.tls.secretName is required (values.yaml sets it)" }}
   duration: {{ .Values.security.serverCertificate.duration }}
   renewBefore: {{ .Values.security.serverCertificate.renewBefore }}
   isCA: false
@@ -30,7 +30,7 @@ spec:
     - {{ $svc }}.{{ $ns }}
     - {{ $svc }}.{{ $ns }}.svc
     - {{ $svc }}.{{ $ns }}.svc.cluster.local
-    {{- if .Values.nats.config.cluster.enabled }}
+    {{- if dig "config" "cluster" "enabled" false .Values.nats }}
     # Cluster routes dial each pod by its headless name.
     - "*.{{ $headless }}"
     - "*.{{ $headless }}.{{ $ns }}"
