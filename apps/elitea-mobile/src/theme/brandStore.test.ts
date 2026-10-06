@@ -62,6 +62,19 @@ it('persists the mapped theme and restores it at launch for the same workspace',
   expect(resolvePalette('dark', getBrandTheme()?.dark).accent).toBe('#6ae8fa');
 });
 
+it('persists and re-validates the unfiltered accent source', async () => {
+  expect(theme.accentSource).toMatchObject({ hue: '#6ae8fa', lightAccent: '#c428dd' });
+  setBrandTheme(theme, PACK_URL);
+  await flush();
+  __resetBrandThemeForTests();
+  await restoreBrandTheme(FIXTURE_ORIGIN);
+  expect(getBrandTheme()?.accentSource).toEqual(theme.accentSource);
+  await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.brandTheme, JSON.stringify({ ...theme, accentSource: { ...theme.accentSource, lightAccent: 'url(https://evil.example/x)' } }));
+  __resetBrandThemeForTests();
+  await restoreBrandTheme(FIXTURE_ORIGIN);
+  expect(getBrandTheme()?.accentSource?.lightAccent).toBeNull();
+});
+
 it('re-validates a restored theme (a tampered value cannot widen what is loaded)', async () => {
   const tampered = {
     ...theme,

@@ -1,0 +1,213 @@
+{
+  "$description": "Agent Zefir design tokens v1. Semantic colour sets for light and dark, the Agent Zefir primitives they are built from, and the non-colour scales. Read with design-system.md. Contrast ratios in `proofs` are WCAG 2.x, computed with the same formula as src/theme/color.ts (glass is proven composited over every gradient stop).",
+  "version": "1.0.0",
+  "primitives": {
+    "marshmallow": { "50": "#FFF4F8", "100": "#FCE4EE", "200": "#F8C7DA", "300": "#F2A6C3", "400": "#E77AA4", "500": "#D04F86", "600": "#B4306A", "700": "#93244F", "800": "#6E1A3B", "900": "#3D1E2D" },
+    "cream": { "50": "#FFFCFA", "100": "#FBF7F9", "200": "#F5EFF3" },
+    "coat": { "50": "#EEF6FB", "100": "#DDEBF5", "200": "#BFDDF3", "300": "#A8CCE6", "400": "#8DC3EA", "500": "#5E9CC8", "600": "#2D6894", "700": "#1E4A6B", "800": "#1C2C3A" },
+    "mint": { "50": "#EEF9F4", "100": "#E8F5EF", "200": "#CBE9DA", "300": "#9ED9D0", "500": "#3FA68A", "700": "#1D7A4C" },
+    "belt": { "100": "#FCEBD6", "300": "#F0B98C", "400": "#E4A176", "600": "#B8652A", "700": "#8F5300" },
+    "ink": { "0": "#FFFFFF", "50": "#F7F2F5", "100": "#E6DDE3", "300": "#BDB4C2", "400": "#9C93A2", "500": "#8E8592", "550": "#77707E", "600": "#6E6676", "700": "#5A5262", "900": "#1C1622" },
+    "night": { "950": "#100E13", "900": "#141118", "850": "#1D1A22", "800": "#221F28", "750": "#26222C", "700": "#2A2631", "600": "#332E3A" }
+  },
+  "color": {
+    "light": {
+      "background": "#FBF7F9",
+      "backgroundGradient": { "angleDeg": 160, "stops": ["#FCEBF2", "#F2EEFB", "#E8F5EF"], "positions": [0, 0.55, 1] },
+      "surface": "#FFFFFF",
+      "surfaceSunken": "#F5EFF3",
+      "surfaceGlass": { "rgb": "#FFFFFF", "alpha": 0.72, "blur": 24, "border": "rgba(255, 255, 255, 0.9)", "opaqueFallback": "#FFFFFF" },
+      "elevated": "#FFFFFF",
+      "textPrimary": "#1C1622",
+      "textSecondary": "#5A5262",
+      "textTertiary": "#6E6676",
+      "separator": "#E6DDE3",
+      "separatorStrong": "#8E8592",
+      "accent": "#B4306A",
+      "accentPressed": "#93244F",
+      "accentOn": "#FFFFFF",
+      "accentSoft": "#FCE4EE",
+      "accentSoftOn": "#93244F",
+      "secondary": "#2D6894",
+      "secondarySoft": "#DDEBF5",
+      "secondarySoftOn": "#1E4A6B",
+      "success": "#1D7A4C",
+      "successSoft": "#E8F5EF",
+      "warning": "#8F5300",
+      "warningSoft": "#FCEBD6",
+      "danger": "#C0262D",
+      "dangerOn": "#FFFFFF",
+      "dangerSoft": "#FBE0E0",
+      "bubbleUser": "#B4306A",
+      "bubbleUserText": "#FFFFFF",
+      "bubbleAgent": "#FFFFFF",
+      "bubbleAgentText": "#1C1622",
+      "bubbleAgentBorder": "#E6DDE3",
+      "chip": "#FFFFFF",
+      "chipText": "#1C1622",
+      "chipSelected": "#FCE4EE",
+      "chipSelectedText": "#93244F",
+      "badge": "#C0262D",
+      "badgeText": "#FFFFFF",
+      "focus": "#2D6894",
+      "scrim": "rgba(28, 22, 34, 0.40)",
+      "orb": { "stops": ["#F7A8C8", "#C9B6F2", "#9ED9D0"], "highlight": "rgba(255, 255, 255, 0.85)", "decorative": true },
+      "skeleton": "#EFE7EC"
+    },
+    "dark": {
+      "background": "#141118",
+      "backgroundGradient": { "angleDeg": 160, "stops": ["#1F1520", "#16151F", "#111B19"], "positions": [0, 0.55, 1] },
+      "surface": "#1D1A22",
+      "surfaceSunken": "#100E13",
+      "surfaceGlass": { "rgb": "#2A2631", "alpha": 0.72, "blur": 24, "border": "rgba(255, 255, 255, 0.08)", "opaqueFallback": "#26222C" },
+      "elevated": "#26222C",
+      "textPrimary": "#F7F2F5",
+      "textSecondary": "#BDB4C2",
+      "textTertiary": "#9C93A2",
+      "separator": "#332E3A",
+      "separatorStrong": "#77707E",
+      "accent": "#FF8CB8",
+      "accentPressed": "#FFA9CB",
+      "accentOn": "#3A0A1F",
+      "accentSoft": "#3D1E2D",
+      "accentSoftOn": "#FFC2DA",
+      "secondary": "#8DC3EA",
+      "secondarySoft": "#1C2C3A",
+      "secondarySoftOn": "#BFDDF3",
+      "success": "#5CD49C",
+      "successSoft": "#16291F",
+      "warning": "#F3B54A",
+      "warningSoft": "#2E2213",
+      "danger": "#FF8780",
+      "dangerOn": "#3A0705",
+      "dangerSoft": "#331717",
+      "bubbleUser": "#5B2541",
+      "bubbleUserText": "#FFFFFF",
+      "bubbleAgent": "#221F28",
+      "bubbleAgentText": "#F7F2F5",
+      "bubbleAgentBorder": "#332E3A",
+      "chip": "#26222C",
+      "chipText": "#F7F2F5",
+      "chipSelected": "#3D1E2D",
+      "chipSelectedText": "#FFC2DA",
+      "badge": "#FF8780",
+      "badgeText": "#3A0705",
+      "focus": "#8DC3EA",
+      "scrim": "rgba(0, 0, 0, 0.55)",
+      "orb": { "stops": ["#C2477E", "#6F5BB8", "#2F8C7E"], "highlight": "rgba(255, 255, 255, 0.55)", "decorative": true },
+      "skeleton": "#2A2631"
+    }
+  },
+  "proofs": [
+    ["textPrimary", "background"], ["textPrimary", "backgroundGradient"], ["textPrimary", "surface"], ["textPrimary", "surfaceGlass"], ["textPrimary", "elevated"], ["textPrimary", "surfaceSunken"],
+    ["textSecondary", "background"], ["textSecondary", "backgroundGradient"], ["textSecondary", "surface"], ["textSecondary", "surfaceGlass"], ["textSecondary", "elevated"],
+    ["textTertiary", "background"], ["textTertiary", "backgroundGradient"], ["textTertiary", "surface"], ["textTertiary", "surfaceGlass"], ["textTertiary", "elevated"],
+    ["accent", "background"], ["accent", "backgroundGradient"], ["accent", "surface"], ["accent", "surfaceGlass"], ["accent", "elevated"],
+    ["accentOn", "accent"], ["accentSoftOn", "accentSoft"],
+    ["secondary", "surface"], ["secondary", "backgroundGradient"], ["secondarySoftOn", "secondarySoft"],
+    ["success", "surface"], ["warning", "surface"], ["danger", "surface"], ["danger", "backgroundGradient"], ["dangerOn", "danger"],
+    ["bubbleUserText", "bubbleUser"], ["bubbleAgentText", "bubbleAgent"],
+    ["chipText", "chip"], ["chipText", "surfaceGlass"], ["chipSelectedText", "chipSelected"],
+    ["badgeText", "badge"],
+    ["separatorStrong", "surface"], ["separatorStrong", "background"],
+    ["focus", "background"], ["focus", "backgroundGradient"], ["focus", "surface"]
+  ],
+  "space": { "0": 0, "0.5": 2, "1": 4, "2": 8, "3": 12, "4": 16, "5": 20, "6": 24, "8": 32, "10": 40, "12": 48, "16": 64,
+    "aliases": { "screenGutter": 20, "screenGutterCompact": 16, "cardPadding": 16, "cardGap": 12, "sectionGap": 28, "listRowPaddingY": 12, "inlineGap": 8, "composerInset": 12 } },
+  "radius": { "xs": 6, "sm": 10, "md": 16, "lg": 22, "xl": 28, "sheet": 32, "pill": 9999,
+    "usage": { "chip": "pill", "button": "pill", "card": "lg", "actionCard": "xl", "bubble": "lg", "bubbleTail": "xs", "composer": "xl", "listRow": "md", "sheetTop": "sheet", "avatar": "pill", "orb": "pill" },
+    "note": "iOS: use continuous corners (borderCurve: 'continuous'). Android: plain radii; M3 shape scale medium=12, large=16, extra-large=28 are within one step of these." },
+  "elevation": {
+    "light": {
+      "e0": { "shadowColor": "#1C1622", "opacity": 0, "radius": 0, "offsetY": 0, "androidElevation": 0 },
+      "e1": { "shadowColor": "#6E1A3B", "opacity": 0.06, "radius": 12, "offsetY": 4, "androidElevation": 1, "use": "cards, chips on gradient" },
+      "e2": { "shadowColor": "#6E1A3B", "opacity": 0.10, "radius": 24, "offsetY": 8, "androidElevation": 3, "use": "floating composer, FAB, popovers" },
+      "e3": { "shadowColor": "#1C1622", "opacity": 0.16, "radius": 40, "offsetY": 16, "androidElevation": 6, "use": "sheets, menus" }
+    },
+    "dark": {
+      "note": "Dark mode expresses elevation with lighter surfaces (surface -> elevated -> surfaceGlass) and a 1px top highlight border rgba(255,255,255,0.06); shadows are kept but nearly invisible.",
+      "e1": { "shadowColor": "#000000", "opacity": 0.30, "radius": 12, "offsetY": 4, "androidElevation": 1 },
+      "e2": { "shadowColor": "#000000", "opacity": 0.40, "radius": 24, "offsetY": 8, "androidElevation": 3 },
+      "e3": { "shadowColor": "#000000", "opacity": 0.50, "radius": 40, "offsetY": 16, "androidElevation": 6 }
+    }
+  },
+  "typography": {
+    "family": { "ios": "System (SF Pro; SF Pro Rounded for display roles via fontFamily 'ui-rounded')", "android": "System (Roboto / Roboto Flex)", "mono": { "ios": "Menlo", "android": "monospace" }, "brand": "Workspace font (brand pack .ttf/.otf) may replace display + title roles only; never body/meta." },
+    "roles": {
+      "display":     { "ios": { "size": 34, "line": 41, "weight": "700", "textStyle": "largeTitle", "rounded": true },  "android": { "size": 36, "line": 44, "weight": "500", "m3": "displaySmall" },  "maxScale": 1.6 },
+      "title1":      { "ios": { "size": 28, "line": 34, "weight": "700", "textStyle": "title1" },  "android": { "size": 28, "line": 36, "weight": "500", "m3": "headlineMedium" }, "maxScale": 1.8 },
+      "title2":      { "ios": { "size": 22, "line": 28, "weight": "700", "textStyle": "title2" },  "android": { "size": 22, "line": 28, "weight": "500", "m3": "titleLarge" }, "maxScale": 2.0 },
+      "title3":      { "ios": { "size": 20, "line": 25, "weight": "600", "textStyle": "title3" },  "android": { "size": 18, "line": 24, "weight": "500", "m3": "titleLarge (18 variant)" }, "maxScale": 2.0 },
+      "headline":    { "ios": { "size": 17, "line": 22, "weight": "600", "textStyle": "headline" }, "android": { "size": 16, "line": 24, "weight": "500", "m3": "titleMedium" }, "maxScale": 2.2 },
+      "body":        { "ios": { "size": 17, "line": 22, "weight": "400", "textStyle": "body" },    "android": { "size": 16, "line": 24, "weight": "400", "m3": "bodyLarge" }, "maxScale": 2.4 },
+      "callout":     { "ios": { "size": 16, "line": 21, "weight": "400", "textStyle": "callout" }, "android": { "size": 14, "line": 20, "weight": "400", "m3": "bodyMedium" }, "maxScale": 2.4 },
+      "subheadline": { "ios": { "size": 15, "line": 20, "weight": "400", "textStyle": "subheadline" }, "android": { "size": 14, "line": 20, "weight": "500", "m3": "labelLarge" }, "maxScale": 2.2 },
+      "footnote":    { "ios": { "size": 13, "line": 18, "weight": "400", "textStyle": "footnote" }, "android": { "size": 12, "line": 16, "weight": "400", "m3": "bodySmall" }, "maxScale": 2.0 },
+      "caption":     { "ios": { "size": 12, "line": 16, "weight": "400", "textStyle": "caption1" }, "android": { "size": 12, "line": 16, "weight": "500", "m3": "labelMedium" }, "maxScale": 1.8 },
+      "label":       { "ios": { "size": 11, "line": 13, "weight": "600", "textStyle": "caption2" }, "android": { "size": 11, "line": 16, "weight": "500", "m3": "labelSmall" }, "maxScale": 1.5 },
+      "code":        { "ios": { "size": 15, "line": 20, "weight": "400" }, "android": { "size": 14, "line": 20, "weight": "400" }, "maxScale": 2.0 }
+    },
+    "scaling": { "minScaleAllowed": "no lower bound (system decides)", "accessibilityLayoutSwitchAt": 1.35, "rule": "Never set allowFontScaling={false} on text that carries content. Clamp only chrome (tab labels, badges) with maxFontSizeMultiplier." }
+  },
+  "size": {
+    "hitTarget": { "ios": 44, "android": 48 },
+    "iconInline": 20, "iconButton": 22, "iconTab": 24,
+    "circleButton": { "visual": 40, "compact": 36, "hitSlopTo": "hitTarget" },
+    "avatar": { "xs": 24, "sm": 28, "md": 36, "lg": 48, "xl": 64 },
+    "composerMinHeight": 52, "composerMaxLines": 6,
+    "orb": { "compact": 160, "regular": 220, "max": 260 },
+    "maxContentWidth": 640
+  },
+  "motion": {
+    "duration": { "instant": 100, "fast": 180, "base": 260, "slow": 400, "orbBreath": 2400 },
+    "easing": { "standard": [0.2, 0, 0, 1], "emphasizedDecelerate": [0.05, 0.7, 0.1, 1], "emphasizedAccelerate": [0.3, 0, 0.8, 0.15] },
+    "spring": { "default": { "damping": 20, "stiffness": 220, "mass": 1 }, "bouncy": { "damping": 14, "stiffness": 180, "mass": 1 }, "snappy": { "damping": 26, "stiffness": 320, "mass": 1 } },
+    "reducedMotion": "useReducedMotion() (Reanimated) or AccessibilityInfo.isReduceMotionEnabled: replace springs/translations/scales with 150 ms opacity cross-fades; orb breathing becomes a static level ring driven by audio level steps; streaming caret blink off; no parallax on the gradient."
+  },
+  "haptics": {
+    "library": "expo-haptics",
+    "events": {
+      "send": "impact.light",
+      "voiceStart": "impact.medium",
+      "voiceStop": "impact.light",
+      "copy": "notification.success",
+      "feedbackLikeDislike": "selection",
+      "swipeActionThreshold": "impact.rigid (iOS) / Android performAndroidHapticsAsync(Confirm) when available",
+      "approvalApprove": "notification.success",
+      "approvalReject": "notification.warning",
+      "error": "notification.error",
+      "tabOrChipChange": "selection"
+    },
+    "rule": "Haptics accompany a user-initiated action only, never streaming tokens or incoming notifications. Respect system setting (no in-app override needed; the OS mutes)."
+  },
+  "icons": {
+    "ios": "expo-symbols SymbolView (SF Symbols), weight matches adjacent text, scale 'medium'",
+    "android": "Material Symbols Rounded (weight 400, fill 0; fill 1 for selected tab) via expo-symbols' Android Material mapping or a bundled Material Symbols font",
+    "map": {
+      "home": ["house", "home"], "chats": ["bubble.left.and.bubble.right", "forum"], "discover": ["sparkles", "explore"], "settings": ["gearshape", "settings"],
+      "bell": ["bell", "notifications"], "newChat": ["square.and.pencil", "edit_square"], "arrowGo": ["arrow.up.right", "arrow_outward"],
+      "mic": ["mic", "mic"], "micFill": ["mic.fill", "mic"], "send": ["arrow.up", "arrow_upward"], "stop": ["stop.fill", "stop"],
+      "attach": ["paperclip", "attach_file"], "image": ["photo", "image"], "camera": ["camera", "photo_camera"],
+      "copy": ["doc.on.doc", "content_copy"], "like": ["hand.thumbsup", "thumb_up"], "dislike": ["hand.thumbsdown", "thumb_down"],
+      "readAloud": ["speaker.wave.2", "volume_up"], "regenerate": ["arrow.clockwise", "refresh"], "more": ["ellipsis", "more_vert"],
+      "back": ["chevron.backward", "arrow_back"], "close": ["xmark", "close"], "tool": ["wrench.and.screwdriver", "build"],
+      "approve": ["checkmark", "check"], "reject": ["xmark", "close"], "lock": ["lock.fill", "lock"], "workspace": ["building.2", "domain"],
+      "project": ["folder", "folder"], "qr": ["qrcode.viewfinder", "qr_code_scanner"], "delete": ["trash", "delete"], "pin": ["pin", "keep"], "archive": ["archivebox", "archive"],
+      "offline": ["wifi.slash", "wifi_off"], "search": ["magnifyingglass", "search"], "agent": ["sparkle", "smart_toy"]
+    }
+  },
+  "mascot": {
+    "name": "Agent Zefirca",
+    "assets": {
+      "bust": { "use": "agent avatar fallback, greeting avatar fallback, app icon foreground", "sizes": [24, 28, 36, 48, 64], "format": "PNG/WebP with alpha @1x/@2x/@3x, plus 1024 master" },
+      "full": { "use": "connect hero, empty states, About", "sizes": [96, 160, 240], "format": "PNG/WebP with alpha @2x/@3x, 2048 master" },
+      "silhouette": { "use": "Android themed (monochrome) icon, notification small icon (future)", "format": "single-colour vector (SVG -> VectorDrawable), white on transparent" }
+    },
+    "minSize": 24, "clearSpace": "0.15 x rendered width", "darkModeTreatment": "same artwork + soft rim light rgba(255,255,255,0.10) halo; never invert or recolour"
+  },
+  "branding": {
+    "overridable": ["accent", "accentPressed", "accentOn", "accentSoft", "accentSoftOn", "bubbleUser", "bubbleUserText", "chipSelected", "chipSelectedText", "backgroundGradient.stops[0] (tint only)", "orb.stops[0] (tint only)", "logoMark", "logoFull", "productName", "fontFamily (display/title roles)"],
+    "fixed": ["focus", "background", "surface*", "elevated", "text*", "separator*", "secondary*", "success*", "warning*", "danger*", "badge*", "bubbleAgent*", "chip", "chipText", "scrim", "skeleton", "spacing", "radius", "elevation", "typography scale", "motion", "haptics", "icons", "mascot"],
+    "targets": { "accentOnBackground": 4.5, "accentUiMinimum": 3.0, "accentOnAccent": 4.5, "gradientTintMaxChromaShare": 0.35 }
+  }
+}

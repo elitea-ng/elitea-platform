@@ -99,6 +99,22 @@ export interface BrandTheme {
   /** Same-origin faces to load; `fontFamily` is the alias to render with once loaded. */
   fontFaces: BrandFontFace[];
   fontFamily: string | null;
+  /**
+   * The pack's accent inputs as served, before `mapScheme`'s contrast filter and
+   * hue fill. The design system (`src/design/brand.ts`) corrects a weak accent
+   * instead of dropping it and derives a missing scheme from the other one, so
+   * it needs these. Optional: themes persisted before it existed lack it.
+   */
+  accentSource?: BrandAccentSource;
+}
+
+/** Plain colours (`formatColor` form) or null; never contrast-filtered. */
+export interface BrandAccentSource {
+  hue: string | null;
+  lightAccent: string | null;
+  darkAccent: string | null;
+  lightOn: string | null;
+  darkOn: string | null;
 }
 
 const RASTER_DATA_URI = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
@@ -199,6 +215,42 @@ export function mapScheme(tokens: Record<string, string>, hue: string): Partial<
   return out;
 }
 
+/** First plain colour among the pack token ids `TOKEN_MAP[key]`, in `formatColor` form. */
+function rawToken(tokens: Record<string, string> | undefined, key: PaletteKey): string | null {
+  for (const id of TOKEN_MAP[key]) {
+    const color = parseColor(tokens?.[id]);
+    if (color) return formatColor(color);
+  }
+  return null;
+}
+
+function plain(value: string | null | undefined): string | null {
+  const color = parseColor(value ?? undefined);
+  return color ? formatColor(color) : null;
+}
+
+/** The unfiltered accent inputs of a pack (see `BrandTheme.accentSource`). */
+export function accentSourceOf(schemes: { light?: Record<string, string>; dark?: Record<string, string> }, hue: string | null): BrandAccentSource {
+  return {
+    hue: plain(hue),
+    lightAccent: rawToken(schemes.light, 'accent'),
+    darkAccent: rawToken(schemes.dark, 'accent'),
+    lightOn: rawToken(schemes.light, 'onAccent'),
+    darkOn: rawToken(schemes.dark, 'onAccent'),
+  };
+}
+
+/** Re-validates a persisted accent source: anything that is not a plain colour becomes null. */
+export function cleanAccentSource(value: Partial<Record<keyof BrandAccentSource, string | null>>): BrandAccentSource {
+  return {
+    hue: plain(value.hue),
+    lightAccent: plain(value.lightAccent),
+    darkAccent: plain(value.darkAccent),
+    lightOn: plain(value.lightOn),
+    darkOn: plain(value.darkOn),
+  };
+}
+
 export function mapBrandPack(pack: BrandPack, origin: string, layers: string | null): BrandTheme {
   return {
     origin,
@@ -209,6 +261,7 @@ export function mapBrandPack(pack: BrandPack, origin: string, layers: string | n
     light: mapScheme(pack.schemes.light, pack.brand.hue),
     dark: mapScheme(pack.schemes.dark, pack.brand.hue),
     ...mapFonts(pack, origin),
+    accentSource: accentSourceOf(pack.schemes, pack.brand.hue),
   };
 }
 

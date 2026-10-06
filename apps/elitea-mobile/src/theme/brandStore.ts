@@ -7,7 +7,7 @@ import { isEndingSession, registerWipeHook } from '@/security/endSession';
 import { SECURE_KEYS, getSecureItem, setSecureItem } from '@/security/secureStorage';
 import { getSession } from '@/state/session';
 import { onDiscovery } from '@/state/workspaceInfo';
-import { acceptImage, brandFontAlias, fetchBrandTheme, mapScheme, type BrandTheme } from '@/theme/brandPack';
+import { acceptImage, brandFontAlias, cleanAccentSource, fetchBrandTheme, mapScheme, type BrandTheme } from '@/theme/brandPack';
 
 /**
  * The applied brand theme of the connected workspace.
@@ -86,6 +86,7 @@ const PersistedSchema = z.object({
   dark: z.record(z.string(), z.string()),
   fontFaces: z.array(z.object({ alias: z.string(), url: z.string() })).max(4),
   fontFamily: z.string().nullable(),
+  accentSource: z.record(z.string(), z.string().max(64).nullable()).optional(),
 });
 
 /**
@@ -112,6 +113,7 @@ export async function restoreBrandTheme(origin: string): Promise<void> {
       light: mapScheme(schemeTokens(parsed.light), ''),
       dark: mapScheme(schemeTokens(parsed.dark), ''),
       ...restoredFonts(parsed.fontFaces, parsed.fontFamily, origin),
+      accentSource: parsed.accentSource ? cleanAccentSource(parsed.accentSource) : undefined,
     };
     emit();
   } catch {

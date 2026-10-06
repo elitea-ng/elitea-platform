@@ -30,13 +30,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: identity.slug,
   version: '0.1.0',
   orientation: 'portrait',
-  icon: './assets/images/icon.png', // TODO: replace placeholder with the SaaS-default icon set.
+  // App icons and splash: Agent Zefirca head mark (docs/assets.md). The alternate workspace
+  // icon set ships with its config plugin (follow-up F1 in docs/design-system.md).
+  icon: './assets/images/icon.png',
   scheme: [...identity.connectSchemes, identity.oauthRedirectScheme],
   userInterfaceStyle: 'automatic',
   ios: {
     bundleIdentifier: identity.bundleId,
     supportsTablet: true,
-    icon: './assets/expo.icon', // TODO: placeholder (template icon); see docs/design.md "Icons".
+    // Icon Composer document: light and dark gradient fills; the system derives Dark, Tinted, Clear.
+    icon: './assets/zefirca.icon',
     infoPlist: {
       // iOS names the app by CFBundleName in system prompts, e.g. the sign-in sheet's
       // '"<name>" Wants to Use "<host>" to Sign In'. Prebuild leaves it as $(PRODUCT_NAME),
@@ -52,7 +55,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     package: identity.bundleId,
     allowBackup: false,
     adaptiveIcon: {
-      backgroundColor: '#E6F4FE',
+      backgroundColor: '#EDE4FA',
       foregroundImage: './assets/images/android-icon-foreground.png',
       backgroundImage: './assets/images/android-icon-background.png',
       monochromeImage: './assets/images/android-icon-monochrome.png',
@@ -68,9 +71,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       'expo-splash-screen',
       {
-        backgroundColor: '#208AEF',
-        image: './assets/images/splash-icon.png',
-        imageWidth: 76,
+        // The `background` tokens (src/design/tokens.ts), so the splash hands over without a flash.
+        backgroundColor: '#FBF7F9',
+        image: './assets/images/splash-mascot.png',
+        imageWidth: 200,
+        resizeMode: 'contain',
+        dark: { backgroundColor: '#141118', image: './assets/images/splash-mascot.png' },
       },
     ],
     // iOS crashes on Face ID use without NSFaceIDUsageDescription.
