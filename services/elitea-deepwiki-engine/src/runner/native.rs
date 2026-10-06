@@ -17,7 +17,11 @@
 //!    `{"build": id}` line is kept, not relayed; the last line is the
 //!    result or the error. The child's stderr (its logs) is copied to ours;
 //! 4. a stop (or a reader that went away) sends SIGTERM, then SIGKILL after
-//!    [`KILL_AFTER`], as the Python sidecar did;
+//!    [`KILL_AFTER`], as the Python sidecar did. The publish is a critical
+//!    section: between the child's `{"publishing": true}` and `false`
+//!    control lines (kept, not relayed) the kill waits up to the publish
+//!    `statement_timeout` plus [`PUBLISH_KILL_MARGIN`], and a run whose
+//!    publish committed is never reported as cancelled;
 //! 5. after the child has ended, its build — if it reported one — is
 //!    deleted, so a killed child leaves no staging rows (a published or
 //!    abandoned build is already gone and the delete is a no-op).
@@ -45,6 +49,11 @@ use tokio::sync::mpsc;
 
 /// How long a stopped child has between SIGTERM and SIGKILL.
 pub const KILL_AFTER: Duration = Duration::from_secs(3);
+
+/// What a stopped child that is publishing gets on top of the publish
+/// `statement_timeout` before SIGKILL: the commit and the statistics
+/// refresh after it.
+pub const PUBLISH_KILL_MARGIN: Duration = Duration::from_secs(30);
 
 /// The largest NDJSON line, newline included, that this engine sends: the
 /// result line carries every page. It is the Go host's limit — the
@@ -182,7 +191,9 @@ impl Drop for JobGuard {
             match tokio::runtime::Handle::try_current() {
                 Ok(handle) => {
                     let pool = self.pool.clone();
-                    handle.spawn(async move { delete_left_build(&pool, &build).await });
+                    handle.spawn(async move {
+                        delete_left_build(&pool, &build).await;
+                    });
                 }
                 Err(_) => {
                     tracing::warn!(build = %build, "no runtime to delete the wiki worker's build; the sweep removes it");
@@ -192,15 +203,18 @@ impl Drop for JobGuard {
     }
 }
 
-/// Delete the build a child left, logging the outcome.
-async fn delete_left_build(pool: &PgPool, build_id: &str) {
+/// Delete the build a child left, logging the outcome. Whether the build
+/// was still there (`None` when the delete failed).
+async fn delete_left_build(pool: &PgPool, build_id: &str) -> Option<bool> {
     match delete_build(pool, build_id).await {
         Ok(true) => {
             tracing::info!(build = %build_id, "deleted the build the wiki worker left");
+            Some(true)
         }
-        Ok(false) => {}
+        Ok(false) => Some(false),
         Err(error) => {
             tracing::warn!(build = %build_id, %error, "could not delete the wiki worker's build; the sweep removes it");
+            None
         }
     }
 }
@@ -405,12 +419,21 @@ impl NativeRunner {
         let mut last: Option<Result<Value, EngineError>> = None;
         let mut killed_by_parent = false;
         let mut cut_off: Option<String> = None;
+        // Between the child's `{"publishing": true}` and `false` lines.
+        let mut publishing = false;
         let status = loop {
             tokio::select! {
                 message = lines.recv(), if lines_open => match message {
                     None => lines_open = false,
                     Some(Ok(line)) => {
-                        relay(line, context, stopped, &mut guard.build, &mut last);
+                        if let Some(now) = relay(line, context, stopped, &mut guard.build, &mut last) {
+                            publishing = now;
+                            // A pending kill moves: out past the publish
+                            // when it starts, back when it ends.
+                            if kill_at.is_some() {
+                                kill_at = Some(tokio::time::Instant::now() + self.kill_after(publishing));
+                            }
+                        }
                     }
                     Some(Err(ReadFailure::Unreadable(error))) => {
                         tracing::error!(%error, "the wiki worker's output is unreadable; killing it");
@@ -428,10 +451,10 @@ impl NativeRunner {
                 () = stop.stopped(), if !stopped => {
                     stopped = true;
                     signal(pid, rustix::process::Signal::TERM);
-                    kill_at = Some(tokio::time::Instant::now() + KILL_AFTER);
+                    kill_at = Some(tokio::time::Instant::now() + self.kill_after(publishing));
                 }
                 () = sleep_until(kill_at), if kill_at.is_some() => {
-                    tracing::warn!(pid, "the wiki worker did not stop within 3 s of SIGTERM; killing it");
+                    tracing::warn!(pid, publishing, "the wiki worker did not stop in time after SIGTERM; killing it");
                     signal(pid, rustix::process::Signal::KILL);
                     killed_by_parent = true;
                     kill_at = None;
@@ -444,7 +467,13 @@ impl NativeRunner {
             let drain = async {
                 while let Some(message) = lines.recv().await {
                     match message {
-                        Ok(line) => relay(line, context, stopped, &mut guard.build, &mut last),
+                        Ok(line) => {
+                            if let Some(now) =
+                                relay(line, context, stopped, &mut guard.build, &mut last)
+                            {
+                                publishing = now;
+                            }
+                        }
                         // The same as in the loop above (the child has
                         // ended, so there is nothing to kill).
                         Err(ReadFailure::Unreadable(error)) => {
@@ -466,9 +495,23 @@ impl NativeRunner {
         if let Some(logs) = logs {
             let _ = tokio::time::timeout(Duration::from_secs(5), logs).await;
         }
-        let outcome = match (last, stopped) {
-            // A run that finished before it saw the stop keeps its result.
+        // Whether the build was still there: `Some(false)` after a
+        // committed publish (it deletes the build) or an abandon.
+        let build_left = match guard.build.take() {
+            Some(build_id) => delete_left_build(&self.pool, &build_id).await,
+            None => None,
+        };
+        match (last, stopped) {
+            // A run that finished before it saw the stop keeps its result,
+            // as does a stopped run whose publish committed.
             (Some(Ok(result)), _) => Ok(result),
+            // Killed inside the publish, after the commit: never "cancelled"
+            // for a wiki that is live.
+            (_, true) if publishing && killed_by_parent && build_left == Some(false) => {
+                Err(runtime(
+                    "The wiki worker was stopped while it published and killed before it reported: the publish committed, so the wiki's index is live, but the run's result was lost",
+                ))
+            }
             (_, true) => Err(EngineError::cancelled()),
             (Some(Err(error)), false) => Err(error),
             (None, false) => {
@@ -481,11 +524,21 @@ impl NativeRunner {
                 };
                 Err(exit_failure(&self.settings.worker, status, &facts))
             }
-        };
-        if let Some(build_id) = guard.build.take() {
-            delete_left_build(&self.pool, &build_id).await;
         }
-        outcome
+    }
+
+    /// How long a stopped child gets between SIGTERM and SIGKILL:
+    /// [`KILL_AFTER`], or while it publishes the publish
+    /// `statement_timeout` and [`PUBLISH_KILL_MARGIN`].
+    fn kill_after(&self, publishing: bool) -> Duration {
+        if publishing {
+            self.settings
+                .publish
+                .statement_timeout
+                .saturating_add(PUBLISH_KILL_MARGIN)
+        } else {
+            KILL_AFTER
+        }
     }
 }
 
@@ -544,18 +597,22 @@ fn exit_failure(
     }
 }
 
-/// One line of the child's output.
+/// One line of the child's output. Returns the publishing state a
+/// `{"publishing": …}` control line announces (it is not relayed).
 fn relay(
     line: Value,
     context: &Context,
     stopped: bool,
     build_id: &mut Option<String>,
     last: &mut Option<Result<Value, EngineError>>,
-) {
+) -> Option<bool> {
     let Value::Object(mut line) = line else {
         tracing::warn!("the wiki worker wrote a line that is not an object");
-        return;
+        return None;
     };
+    if let Some(Value::Bool(publishing)) = line.get(crate::worker::PUBLISHING_KEY) {
+        return Some(*publishing);
+    }
     if let Some(Value::String(text)) = line.get("thinking") {
         if !stopped {
             context.thinking(text.clone());
@@ -577,6 +634,7 @@ fn relay(
     } else {
         tracing::warn!("the wiki worker wrote a line this parent does not know");
     }
+    None
 }
 
 /// Signal the child. A child that already exited (a zombie until it is
@@ -987,6 +1045,20 @@ exit 0
         assert!(receiver.try_recv().is_err());
         assert_eq!(build.as_deref(), Some("b-1"));
         assert_eq!(last, Some(Err(EngineError::new(ErrorType::Value, "boom"))));
+        assert_eq!(
+            relay(
+                json!({"publishing": true}),
+                &context,
+                false,
+                &mut build,
+                &mut last,
+            ),
+            Some(true)
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "a control line is not relayed"
+        );
         relay(
             json!({"result": {"success": true}}),
             &context,

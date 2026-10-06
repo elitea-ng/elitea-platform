@@ -25,7 +25,9 @@ use axum::response::{IntoResponse, Response};
 use elitea_deepwiki_engine::config::Settings;
 use elitea_deepwiki_engine::graph::topology::replay::standin_embedding;
 use elitea_deepwiki_engine::runner::Runner;
-use elitea_deepwiki_engine::runner::native::{NativeRunner, WorkerCommand};
+use elitea_deepwiki_engine::runner::native::{
+    KILL_AFTER, NativeRunner, PUBLISH_KILL_MARGIN, WorkerCommand,
+};
 use elitea_deepwiki_engine::server;
 use elitea_deepwiki_engine::storage::build::WikiRecord;
 use elitea_deepwiki_engine::storage::search::IndexReader;
@@ -332,8 +334,12 @@ struct Engine {
 
 impl Engine {
     fn start(root: &Path, database: &str) -> Self {
+        Self::start_with(root, database, &[])
+    }
+
+    fn start_with(root: &Path, database: &str, extra: &[(&str, &str)]) -> Self {
         let scratch = root.join("scratch");
-        let environment: Vec<(String, String)> = [
+        let mut environment: Vec<(String, String)> = [
             ("ELITEA_DEEPWIKI_RUNNER", "native".to_owned()),
             ("ELITEA_DEEPWIKI_DATABASE_URL", database_url(database)),
             (
@@ -350,6 +356,11 @@ impl Engine {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
+        environment.extend(
+            extra
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+        );
         let map: HashMap<String, String> = environment.iter().cloned().collect();
         let settings = Settings::from_lookup(|name| map.get(name).cloned()).unwrap();
         let runner = NativeRunner::with_worker(
@@ -856,6 +867,152 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
         0,
         "the job's scratch is removed"
     );
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Start a run whose publish waits behind `holder`'s lock on the wiki
+/// (the advisory lock a publish of the same wiki takes), and stop it once
+/// it publishes. Returns the engine, the stream and the worker's pid.
+async fn stop_while_publishing(
+    root: &Path,
+    database: &str,
+    extra: &[(&str, &str)],
+    holder: &mut sqlx::PgConnection,
+) -> (Engine, mpsc::UnboundedReceiver<Value>, String) {
+    let wiki_id = fixture("page_names.json")["wiki_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sqlx::query("SELECT pg_advisory_lock(hashtext($1), hashtext($2))")
+        .bind(elitea_deepwiki_engine::storage::build::PUBLISH_WIKI_LOCK)
+        .bind(&wiki_id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let (served, _commit) = served_repository(root);
+    let git_port = serve_git(served).await;
+    let (gateway_port, _gateway) = serve_gateway(false).await;
+    let engine = Engine::start_with(root, database, extra);
+    let id = format!("inv-{database}");
+    let mut lines = engine.invoke(&id, &arguments(git_port, gateway_port)).await;
+    let deadline = Instant::now() + Duration::from_mins(5);
+    let mut pid = None;
+    loop {
+        let line = tokio::time::timeout_at(deadline.into(), lines.recv())
+            .await
+            .expect("the worker reached the publish")
+            .expect("the stream stayed open");
+        assert!(line.get("error").is_none(), "the run failed: {line}");
+        assert!(
+            line.get("publishing").is_none(),
+            "a control line was relayed"
+        );
+        let text = line["thinking"].as_str().unwrap_or_default();
+        if let Some(rest) = text.strip_prefix("DeepWiki worker started (pid ") {
+            pid = Some(rest.trim_end_matches(')').to_owned());
+        }
+        if text == "Publishing the index for query replicas" {
+            break;
+        }
+    }
+    // The publish is now queued behind the held lock.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let stopped = engine
+        .post(&format!("/engine/invocations/{id}/stop"), &json!({}))
+        .await;
+    assert_eq!(stopped.status().as_u16(), 202);
+    (engine, lines, pid.expect("the worker's pid"))
+}
+
+async fn last_line(lines: &mut mpsc::UnboundedReceiver<Value>, within: Duration) -> Option<Value> {
+    let mut last = None;
+    while let Some(line) = tokio::time::timeout(within, lines.recv())
+        .await
+        .expect("the stopped run ended")
+    {
+        last = Some(line);
+    }
+    last
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_during_the_publish_waits_and_keeps_a_committed_result() {
+    let Some(pool) = storage_common::fresh_database("native_stop_commit").await else {
+        return;
+    };
+    let root = scratch("stopc");
+    let mut holder = pool.acquire().await.unwrap();
+    let (engine, mut lines, pid) =
+        stop_while_publishing(&root, "native_stop_commit", &[], &mut holder).await;
+    // Past the 3 s a stop otherwise gets: the worker is still publishing.
+    tokio::time::sleep(KILL_AFTER + Duration::from_secs(2)).await;
+    assert!(alive(&pid), "the worker was killed inside its publish");
+    sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let last = last_line(&mut lines, Duration::from_mins(1)).await;
+    let result = last
+        .as_ref()
+        .and_then(|l| l.get("result"))
+        .unwrap_or_else(|| panic!("a committed publish reported {last:?}"));
+    assert_eq!(result["success"], true);
+    assert_eq!(result["errors"], json!([]));
+    assert_eq!(count(&pool, "SELECT count(*) FROM wikis").await, 1);
+    assert!(count(&pool, "SELECT count(*) FROM wiki_nodes").await > 10);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM deepwiki_build.builds").await,
+        0
+    );
+    assert_eq!(jobs_left(&engine.scratch), 0);
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_publish_that_never_commits_is_killed_and_cancelled() {
+    let Some(pool) = storage_common::fresh_database("native_stop_hang").await else {
+        return;
+    };
+    let root = scratch("stoph");
+    let mut holder = pool.acquire().await.unwrap();
+    // A 1 s statement timeout: the kill waits 1 s + the margin.
+    let (engine, mut lines, pid) = stop_while_publishing(
+        &root,
+        "native_stop_hang",
+        &[("ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS", "1")],
+        &mut holder,
+    )
+    .await;
+    let started = Instant::now();
+    let last = last_line(&mut lines, Duration::from_mins(2)).await;
+    let waited = started.elapsed();
+    assert!(waited >= PUBLISH_KILL_MARGIN, "killed after {waited:?}");
+    assert!(
+        waited < PUBLISH_KILL_MARGIN + Duration::from_secs(40),
+        "{waited:?}"
+    );
+    assert_eq!(
+        last,
+        Some(
+            json!({"error": {"message": "Invocation cancelled", "error_type": "RuntimeError", "error_category": "runtime_error"}})
+        )
+    );
+    assert!(!alive(&pid), "the worker {pid} outlived the stop");
+    // Nothing published; the killed worker's backend let go of the build,
+    // so the parent deleted it while this lock is still held.
+    assert_eq!(count(&pool, "SELECT count(*) FROM wikis").await, 0);
+    assert_eq!(count(&pool, "SELECT count(*) FROM wiki_nodes").await, 0);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM deepwiki_build.builds").await,
+        0
+    );
+    assert_eq!(jobs_left(&engine.scratch), 0);
+    sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
     drop(engine);
     let _ = std::fs::remove_dir_all(&root);
 }

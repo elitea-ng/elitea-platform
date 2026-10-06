@@ -171,8 +171,21 @@ caller. Each call checks the stop first.
 - on a stop, or a reader that went away, sends SIGTERM, then SIGKILL after
   3 s (the child stops at its next checkpoint, abandons its build and writes
   the stop line);
+- treats the publish as a critical section: the child writes a
+  `{"publishing": true}` control line (kept, never relayed) before it
+  publishes and `{"publishing": false}` after. A stop meanwhile is deferred:
+  the child does not interrupt the publish, and the parent moves its SIGKILL
+  out to the publish `statement_timeout` plus 30 s. A publish that
+  committed reports its result even though a stop came (never "cancelled"
+  for a wiki that is live); one that did not commit reports the stop. A
+  child killed inside the publish after the commit is reported as a
+  `RuntimeError` saying the index is live but the result was lost. The
+  child's connections set `client_connection_check_interval` (5 s), so the
+  backend of a killed child aborts its statement and releases its locks;
 - after the child ended, deletes its build if it reported one, so a killed
-  child leaves no staging rows (a no-op after a publish or an abandon).
+  child leaves no staging rows (a no-op after a publish or an abandon). The
+  delete has a 15 s `lock_timeout` and a 2 min `statement_timeout`; on a
+  timeout the sweep removes the build.
 
 The child limits itself before it reads the request (`rustix`'s safe
 `setrlimit`, so the crate stays `unsafe_code = "forbid"`), never above the

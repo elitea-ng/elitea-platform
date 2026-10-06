@@ -8,11 +8,15 @@
 //!   why they come this way and not through `argv` or the environment.
 //!   Stdin then stays open; its end (the parent went away) is a stop.
 //! * stdout: NDJSON, the socket's own line shapes — `{"thinking": …}`,
-//!   `{"token": …}` — plus `{"build": "<id>"}` once a build is open, and
-//!   last exactly one `{"result": …}` or `{"error": {…}}`.
+//!   `{"token": …}` — plus `{"build": "<id>"}` once a build is open,
+//!   `{"publishing": true}` before the publish and `{"publishing": false}`
+//!   after it, and last exactly one `{"result": …}` or `{"error": {…}}`.
 //! * stderr: the logs.
 //! * SIGTERM is a stop: the run ends at its next checkpoint, abandons its
-//!   build and writes the stop line. The parent kills it 3 s later anyway.
+//!   build and writes the stop line. The parent kills it 3 s later anyway,
+//!   except during the publish: the publish is not interrupted, the parent
+//!   waits for it (up to the publish statement timeout and a margin), and
+//!   a publish that committed reports its result, not the stop.
 //!
 //! # Limits
 //!
@@ -39,6 +43,10 @@ use tokio::sync::mpsc;
 
 /// The key of the line that names the open build.
 pub const BUILD_KEY: &str = "build";
+
+/// The key of the control line that opens (`true`) and closes (`false`)
+/// the publish. The parent keeps it; it is never relayed.
+pub const PUBLISHING_KEY: &str = "publishing";
 
 /// The largest request the child reads.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
@@ -209,10 +217,15 @@ pub async fn run(settings: &Settings) -> ExitCode {
     let on_build = move |id: &str| {
         let _ = build_lines.send(json!({ BUILD_KEY: id }));
     };
+    let publishing_lines = output.clone();
+    let on_publishing = move |publishing: bool| {
+        let _ = publishing_lines.send(json!({ PUBLISHING_KEY: publishing }));
+    };
     let job = Job {
         scratch: &request.scratch,
         boot_id: request.boot_id.as_deref(),
         on_build: &on_build,
+        on_publishing: &on_publishing,
     };
     let outcome = generate::generate_wiki(&request.arguments, settings, &context, &job).await;
     drop(request);
@@ -237,6 +250,7 @@ pub async fn run(settings: &Settings) -> ExitCode {
     let _ = output.send(last);
     drop(output);
     drop(on_build);
+    drop(on_publishing);
     let _ = writer.await;
     ExitCode::SUCCESS
 }

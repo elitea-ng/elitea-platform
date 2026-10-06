@@ -87,6 +87,11 @@ pub struct Job<'a> {
     /// Told the build id as soon as the build is open, so the parent can
     /// delete it if the child is killed before it abandons the build.
     pub on_build: &'a (dyn Fn(&str) + Send + Sync),
+    /// Told `true` just before the publish starts and `false` when it has
+    /// ended (committed or not). The parent defers a stop's kill while the
+    /// publish runs, so a stop never cuts a commit in two halves it cannot
+    /// tell apart.
+    pub on_publishing: &'a (dyn Fn(bool) + Send + Sync),
 }
 
 fn runtime(message: impl Into<String>) -> EngineError {
@@ -161,7 +166,7 @@ pub async fn generate_wiki(
             storage::DSN_ENV
         )));
     };
-    let pool = storage::lazy_pool(url.expose(), POOL_CONNECTIONS)
+    let pool = storage::worker_pool(url.expose(), POOL_CONNECTIONS)
         .map_err(|error| value_error(error.to_string()))?;
     let mut slot: Option<Build> = None;
     let outcome = Pipeline {
@@ -531,7 +536,15 @@ impl Pipeline<'_> {
         // host could not read.
         context.checkpoint()?;
         check_result_size(&mut result, MAX_RESULT_BYTES)?;
-        self.publish(&mut result, slot).await;
+        // The critical section: a stop that arrives from here on waits for
+        // the publish. A publish that committed reports its result; one
+        // that did not reports the stop.
+        (self.job.on_publishing)(true);
+        let committed = self.publish(&mut result, slot).await;
+        (self.job.on_publishing)(false);
+        if !committed && context.stop_signal().is_requested() {
+            return Err(EngineError::cancelled());
+        }
         context.thinking("[worker] Done");
         Ok(Value::Object(result))
     }
@@ -630,8 +643,9 @@ impl Pipeline<'_> {
     /// Publish the build as the wiki's live index. A failure is reported in
     /// band (`errors`), as `LegacyToolRunner._publish` did: the pages and the
     /// manifest are genuine and land; what is lost is answering questions
-    /// about the wiki. The build is left for the caller to abandon.
-    async fn publish(&self, result: &mut Map<String, Value>, slot: &mut Option<Build>) {
+    /// about the wiki. The build is left for the caller to abandon. Returns
+    /// whether the publish committed.
+    async fn publish(&self, result: &mut Map<String, Value>, slot: &mut Option<Build>) -> bool {
         let context = self.context;
         context.thinking("Publishing the index for query replicas");
         let registry: Map<String, Value> = [
@@ -662,6 +676,7 @@ impl Pipeline<'_> {
                     "Published {} nodes and {} vectors",
                     counts.nodes, counts.embeddings
                 ));
+                true
             }
             Err(error) => {
                 tracing::error!(%error, "publishing the index failed");
@@ -675,6 +690,7 @@ impl Pipeline<'_> {
                     }
                 }
                 context.thinking("Publishing the index FAILED");
+                false
             }
         }
     }
