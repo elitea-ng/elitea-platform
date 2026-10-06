@@ -950,7 +950,9 @@ the parity gate drives.
   text) and then clamped (`k`, `max_depth`, `max_lines`, JQL `limit`); file
   paths cannot leave the virtual root; the file system holds at most 1 000
   files and 16 MiB, and a write is checked with the earlier writes of its
-  turn counted (they apply only after the turn).
+  turn counted (they apply only after the turn). A large result that cannot
+  be saved because the file system is full reaches the model cut to the
+  eviction size, with a note, never whole.
 * **Stop**: a checkpoint before every model call and every tool; a model
   call aborts at once.
 

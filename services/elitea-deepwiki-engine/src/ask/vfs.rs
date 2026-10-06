@@ -35,6 +35,10 @@ pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// `NUM_CHARS_PER_TOKEN * tool_token_limit_before_evict`.
 pub const EVICT_CHARS: usize = 4 * 20_000;
+
+/// Follows a too-large result that could not be saved because the research
+/// file system is full (not in Python, which had no file-system bound).
+const FULL_FILESYSTEM_NOTE: &str = "... [result truncated: the research file system is full, so the whole result could not be saved; delete files you no longer need or ask for less]";
 const MAX_LINE_LENGTH: usize = 5_000;
 const TRUNCATION_GUIDANCE: &str =
     "... [results truncated, try being more specific with your parameters]";
@@ -748,7 +752,13 @@ pub fn evict(
     };
     let path = format!("/large_tool_results/{sanitized}");
     if !bounds.fits(&path, &content) {
-        return (content, None);
+        // The file system is full: the model gets the head of the result,
+        // never all of it, so one large result cannot fill its context.
+        let text = format!(
+            "{}\n{FULL_FILESYSTEM_NOTE}",
+            pyfmt::head(&content, EVICT_CHARS)
+        );
+        return (text, None);
     }
     let text = format!(
         "Tool result too large, the result of this tool call {tool_call_id} was saved in the filesystem at this path: {path}\n\nYou can read the result from the filesystem by using the read_file tool, but make sure to only read part of the result at a time.\n\nYou can do this by specifying an offset and limit in the read_file tool call. For example, to read the first 100 lines, you can use the read_file tool with offset=0 and limit=100.\n\nHere is a preview showing the head and tail of the result (lines of the form `... [N lines truncated] ...` indicate omitted lines in the middle of the content):\n\n{}\n",
@@ -760,6 +770,19 @@ pub fn evict(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_result_is_cut_when_the_file_system_is_full() {
+        let content = "x".repeat(EVICT_CHARS * 3);
+        let full = Bounds {
+            sizes: HashMap::new(),
+            bytes: MAX_BYTES,
+        };
+        let (text, update) = evict(&full, "search_codebase", "c1", content);
+        assert!(update.is_none());
+        assert!(text.ends_with(FULL_FILESYSTEM_NOTE), "{text}");
+        assert!(pyfmt::len(&text) <= EVICT_CHARS + 1 + pyfmt::len(FULL_FILESYSTEM_NOTE));
+    }
 
     #[test]
     fn paths_are_contained() {
