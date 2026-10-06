@@ -5,7 +5,7 @@
 # otel-collector, and pylon-indexer, since deleted by #339). They synced
 # independently, which meant nothing
 # ordered them against each other and nothing made them agree: each carried its
-# own copy of the database secret name, the NATS URL and the Redis address, and
+# own copy of the database secret name, the NATS URL and the (since removed) Redis address, and
 # they had already drifted apart. One chart, one Application, one values file.
 #
 # SYNC-WAVE 0 — after NATS (-2) and its JetStream bootstrap (-1), which the LLM
@@ -64,7 +64,8 @@
 #     elitea-worker) are issued by cert-manager from the NATS CA. deploy/runtime/README.md names the keys.
 #
 # CHAT is off unless you turn on `main.runtime.enabled` and `worker.enabled`
-# together; `runtimeRedis` is not needed for it. The chart refuses the
+# together. The chart refuses a values file that still sets `runtimeRedis`
+# (removed; docs/UPGRADING.md). It also refuses the
 # incoherent combinations at render time rather than installing something that
 # reports every pod Ready and then answers no message.
 apiVersion: argoproj.io/v1alpha1

@@ -17,10 +17,9 @@
 # EXTERNAL PREREQUISITE this root does NOT install: PostgreSQL. No chart in
 # deploy/helm provisions it, so the wave-1 elitea-main migration hook will fail
 # against a cluster where it does not already exist and where each
-# Application's values have not been pointed at it. Neither Redis this root
-# once listed is needed: the plain one is gone, and the runtime's TLS Redis
-# (`runtimeRedis`) has no client left — Form authentication keeps its state in
-# PostgreSQL and the chat runtime's commands travel on NATS JetStream.
+# Application's values have not been pointed at it. The platform needs no
+# Redis: Form authentication keeps its state in PostgreSQL and the chat
+# runtime's commands travel on NATS JetStream.
 #
 # NATS WITH JETSTREAM is installed HERE (applications/nats.yaml, wave -2, plus
 # its bootstrap at -1) in the platform's `elitea` namespace. The gateway's

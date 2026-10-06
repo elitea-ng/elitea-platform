@@ -11,7 +11,7 @@ An in-cluster service address, namespace-relative by default.
 chart installable into any namespace can honestly have. A hardcoded namespace
 in a shipped default is worse than a missing one: installing into `elitea-prod`
 while the default still says `.elitea.svc` silently points the new release at
-another environment's NATS or Redis — sharing its budget counters and rate
+another environment's NATS — sharing its budget counters and rate
 limits — and nothing reports it as a misconfiguration.
 
 Usage: {{ include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .) }}

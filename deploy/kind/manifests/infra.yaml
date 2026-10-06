@@ -1,9 +1,8 @@
 # The commodity infrastructure the chart deliberately does NOT create
 # (see the "What this chart does NOT create" block in values.yaml):
-# PostgreSQL and an S3-compatible object store. The runtime Redis the
-# Form authentication plane needs is NOT here — the chart renders that one
-# (runtimeRedis.enabled in values-kind.yaml). Nothing here is production
-# shaped: single replicas, emptyDir storage, passwords in plain manifests.
+# PostgreSQL and an S3-compatible object store. The Form authentication
+# plane keeps its sign-in state in PostgreSQL, so there is no Redis. Nothing
+# here is production shaped: single replicas, emptyDir storage, passwords in plain manifests.
 ---
 apiVersion: v1
 kind: ConfigMap

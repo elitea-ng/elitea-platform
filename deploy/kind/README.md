@@ -140,9 +140,8 @@ this stack started. It cannot satisfy check 3, and the chain is short:
   a credential reader plus a principal validator. Either plane answers now
   (`cmd/elitea-main/production_authentication.go`), so an OIDC-only install
   satisfies it too; this file uses the Form plane;
-* the Form graph keeps its session and attempt store in a **mutually
-  authenticated** Redis (`internal/authcomposition/redis.go` always builds a
-  TLS config), which is why `runtimeRedis` is on.
+* the Form graph keeps its session and attempt store in PostgreSQL
+  (elitea-main shared migration 0145), so no Redis is involved.
 
 So the DeepWiki facade needs none of this, and proving that the facade
 REGISTERED its provider does. The runtime dispatch plane, the worker and the

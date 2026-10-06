@@ -67,8 +67,8 @@ spec:
               value: {{ include "elitea-worker-python.materialFiles" . | quote }}
             - name: OWNER
               value: "{{ .Values.worker.runAsUser }}:{{ .Values.worker.runAsGroup }}"
-            # The pod's own name, which is what makes this replica's Redis
-            # consumer name different from its siblings'. The downward API is
+            # The pod's own name, which is what makes this replica's NATS
+            # connection name different from its siblings'. The downward API is
             # the only source that is unique per pod, stable for the pod's
             # life, and available before the worker starts.
             - name: POD_NAME
@@ -123,9 +123,7 @@ spec:
               # so `nats server report connections` tells replicas apart.
               # Every replica pulls from the SAME durable consumer and
               # JetStream tracks each delivery itself (+WPI heartbeats, acks,
-              # AckWait redelivery), so the name carries no correctness — it
-              # used to be the Redis consumer NAME, whose sharing made one
-              # replica refresh another's pending entries.
+              # AckWait redelivery), so the name carries no correctness.
               #
               # The security identities — workload_session_id, producer_id,
               # the runtime client certificate and the elitea-worker NATS

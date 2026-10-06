@@ -37,21 +37,6 @@ llmGateway:
   enabled: false
 worker:
   enabled: false
-# ON, and it is not optional here. Production Form authentication keeps its
-# session and attempt store in a MUTUALLY AUTHENTICATED Redis
-# (internal/authcomposition/redis.go always builds a TLS config), and Form
-# authentication is what ELITEA_CONFIGURATIONS_ENABLED needs, which is what
-# ELITEA_AI_PROJECT_ID needs, which is what arms the provider registrar. See
-# README.md, "Why this stack carries Form authentication".
-runtimeRedis:
-  enabled: true
-  materialSecretName: elitea-runtime-redis-material
-  persistence:
-    # kind has no ceph-rbd, and nothing here has to survive a restart.
-    enabled: false
-  bootstrap:
-    # The consumer groups belong to the runtime dispatch plane, which is off.
-    enabled: false
 otelCollector:
   enabled: false
 objectInit:

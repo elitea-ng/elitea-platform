@@ -124,7 +124,6 @@ build_images() {
 # `up` needs no registry at all.
 INFRA_IMAGES=(
   docker.io/pgvector/pgvector:0.8.5-pg16
-  docker.io/library/redis:7-alpine
   docker.io/rustfs/rustfs:latest
   rustfs/rc:latest
 )
@@ -132,7 +131,7 @@ INFRA_IMAGES=(
 load_images() {
   say "Loading images into the kind node"
   # What the node already has. Asked ONCE: each side-load is a full
-  # engine `save` plus a containerd import, and the four third-party images
+  # engine `save` plus a containerd import, and the three third-party images
   # alone are ~1.4 GB — re-doing that on every `up` cost more than everything
   # else in this script put together. Set KIND_FORCE_LOAD=1 after rebuilding
   # an image under a tag the node already carries.
@@ -204,33 +203,23 @@ install_cert_manager() {
 # The production-authentication material. deploy/scripts/gen-runtime-certs.sh
 # is the repository's own generator and is IDEMPOTENT — it exits without
 # touching anything when the tree is present and its certificates are valid —
-# so this reuses whatever a compose stack on this machine already minted. The
-# Redis server certificate it issues already carries DNS:elitea-runtime-redis,
-# the Kubernetes Service name, beside the compose one.
+# so this reuses whatever a compose stack on this machine already minted.
 ensure_runtime_material() {
   say "Preparing the runtime/auth material"
   bash "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
   local file
-  for file in runtime-ca.crt redis-server.crt redis-server.key redis-users.acl \
-              redis-bootstrap-password auth-attempt-key \
-              auth-pat-signing-key auth-form-users.json; do
+  for file in auth-attempt-key auth-pat-signing-key auth-form-users.json; do
     [ -f "${RUNTIME_MATERIAL_DIR}/${file}" ] || die "missing material: ${RUNTIME_MATERIAL_DIR}/${file}"
   done
 
-  # What redis-server reads: its keypair, the CA it presents against, the ACL
-  # file (which is what makes `user default off` real) and the bootstrap
-  # password its readiness probe authenticates with.
-  kc -n "$NS" create secret generic elitea-runtime-redis-material \
-    --from-file="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
-    --from-file="${RUNTIME_MATERIAL_DIR}/redis-server.crt" \
-    --from-file="${RUNTIME_MATERIAL_DIR}/redis-server.key" \
-    --from-file="${RUNTIME_MATERIAL_DIR}/redis-users.acl" \
-    --from-file="${RUNTIME_MATERIAL_DIR}/redis-bootstrap-password" \
-    --dry-run=client -o yaml | kc apply -f -
+  # A cluster made before the runtime Redis was removed still holds its
+  # material Secret. Nothing renders a reader for it any more.
+  kc -n "$NS" delete secret elitea-runtime-redis-material --ignore-not-found >/dev/null
 
   # The three files internal/authcomposition/material.go opens. Their names are
   # the contract: the chart derives every path in the auth document from them.
-  # The Form sign-in state is in PostgreSQL, so no Redis password or CA here.
+  # The Form sign-in state is in PostgreSQL, so the plane needs no store of
+  # its own.
   kc -n "$NS" create secret generic elitea-main-auth-material \
     --from-file="${RUNTIME_MATERIAL_DIR}/auth-attempt-key" \
     --from-file="${RUNTIME_MATERIAL_DIR}/auth-pat-signing-key" \
@@ -239,7 +228,7 @@ ensure_runtime_material() {
 }
 
 install_infra() {
-  say "Installing PostgreSQL, Redis, the object store and the OIDC provider"
+  say "Installing PostgreSQL, the object store and the OIDC provider"
   kc create namespace "$NS" --dry-run=client -o yaml | kc apply -f -
   kc apply -f "${SCRIPT_DIR}/manifests/infra.yaml"
 
