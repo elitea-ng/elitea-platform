@@ -166,7 +166,10 @@ networkPolicy:
 
 # Prometheus alerts on the runtime command bus (templates/prometheusrule.yaml):
 # a dead-lettered command, and a command stream nearly at capacity. Rendered
-# only where monitoring.coreos.com/v1 is served.
+# only where monitoring.coreos.com/v1 is served AND nats.promExporter is on
+# (the series come from the exporter; templates/guards.yaml refuses
+# alerts.enabled with the exporter off rather than render a rule that cannot
+# fire).
 alerts:
   enabled: true
   # The nearly-full threshold, in live messages (the streams hold at most
@@ -174,6 +177,15 @@ alerts:
   streamFullMessages: 900
 
 nats:
+  # The Prometheus exporter sidecar (-jsz=all -prefix=nats on 7777, scraping
+  # 8222 over localhost). ON by default: templates/prometheusrule.yaml reads
+  # its nats_stream_* series, and without it the command-bus alerts render
+  # into a rule that can never fire. networkPolicy.metricsFrom says who may
+  # scrape 7777. The PodMonitor needs the Prometheus Operator's CRDs, so it
+  # stays a profile choice (values-scale1.yaml, values-ha.yaml enable it).
+  promExporter:
+    enabled: true
+
   # The CA bundle the server verifies client certificates against. cert-manager
   # writes ca.crt (the NATS CA) into the server certificate's Secret.
   tlsCA:

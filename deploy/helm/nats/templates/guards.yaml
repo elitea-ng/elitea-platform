@@ -235,6 +235,9 @@ those, mapped as the workers' JetStream API prefix expects.
 {{- fail "security.routeIssuerRef names the same issuer as security.issuerRef. The route CA must be a different CA from the one that signs client identities, or a client certificate can join the cluster as a peer." -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.alerts.enabled (not (dig "promExporter" "enabled" false $n)) -}}
+{{- fail "alerts.enabled is true and nats.promExporter.enabled is false. The command-bus alerts (templates/prometheusrule.yaml) read the exporter's nats_stream_* series; without the exporter they would never fire. Turn the exporter on, or set alerts.enabled=false and watch the workers' worker_command.dead_lettered log line instead (#1081)." -}}
+{{- end -}}
 {{- if and (not .Values.networkPolicy.enabled) (not .Values.networkPolicy.externallyManaged) -}}
 {{- fail "networkPolicy.enabled is false. The ingress policy is the half of #1076 that keeps pods without a NATS identity off the port; mTLS alone still lets any pod hold a connection open to the TLS handshake. If your own policy already does this, say so with networkPolicy.externallyManaged=true." -}}
 {{- end -}}

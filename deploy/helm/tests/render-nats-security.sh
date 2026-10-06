@@ -39,6 +39,10 @@ NS=elitea
 "$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" \
   --api-versions policy.cert-manager.io/v1alpha1/CertificateRequestPolicy > "$TMP/nats-ha-ap.yaml"
 "$HELM" template elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" -n "$NS"                    > "$TMP/bootstrap.yaml"
+# The command-bus alerts (#1081 review G3): with the Prometheus Operator
+# served, the rule renders together with the exporter whose series it reads.
+"$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-scale1.yaml" \
+  --api-versions monitoring.coreos.com/v1 > "$TMP/nats-base-prom.yaml"
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea.yaml"
@@ -173,6 +177,7 @@ refuse "nats: another plane's bootstrap"      "is a bootstrap identity in accoun
 mutate "$TMP/m-password.yaml" 'user("MAIN","elitea-main")["password"] = "x"'
 refuse "nats: a password user"                "carries a password"           "${NA[@]}" -f "$TMP/m-password.yaml"
 refuse "nats: NetworkPolicy off, unstated"    "networkPolicy.enabled is false" "${NA[@]}" --set networkPolicy.enabled=false
+refuse "nats: alerts with the exporter off"   "nats.promExporter.enabled is false" "${NA[@]}" --set nats.promExporter.enabled=false
 HA=(elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml")
 refuse "nats: HA routes trust the client CA"   "must be /etc/nats-certs/cluster/ca.crt" "${HA[@]}" --set nats.config.cluster.tls.merge.ca_file=/etc/nats-ca-cert/ca.crt
 refuse "nats: HA routes reuse the client cert" "ROUTE certificate's own Secret" "${HA[@]}" --set nats.config.cluster.tls.secretName=elitea-nats-server-tls
@@ -243,6 +248,13 @@ ALERTS = "gateway.events.project.*.events"
 
 # ── the server ────────────────────────────────────────────────────────────
 scale1, ha = docs("nats-scale1.yaml"), docs("nats-ha.yaml")
+base = docs("nats-base-prom.yaml")
+rules = [x for x in base if x["kind"] == "PrometheusRule"]
+exporter = [c for x in base if x["kind"] == "StatefulSet" for c in x["spec"]["template"]["spec"]["containers"] if c["name"] == "prom-exporter"]
+check("the alert rule renders with the exporter it reads (jsz series, nats_ prefix)", bool(rules) and bool(exporter) and "-jsz=all" in exporter[0].get("args", []) and "-prefix=nats" in exporter[0].get("args", []), exporter[0].get("args") if exporter else None)
+dl = [r for x in rules for g in x["spec"]["groups"] for r in g["rules"] if r.get("alert") == "EliteaRuntimeCommandDeadLettered"]
+check("the dead-letter alert fires on NEW records (last_seq increase), not on delete markers left until the TTL",
+      dl and "increase(nats_stream_last_seq" in dl[0]["expr"] and "KV_ELITEA_RT_V1_DEADLETTER" in dl[0]["expr"] and "total_messages" not in dl[0]["expr"], dl)
 def nats_conf(d):
     cm = [x for x in d if x["kind"] == "ConfigMap" and "nats.conf" in x.get("data", {})]
     return conf_json(cm[0]["data"]["nats.conf"])

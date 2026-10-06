@@ -17,18 +17,24 @@ spec:
   groups:
     - name: elitea-runtime-command-bus
       rules:
-        # A worker could not verify or decode a command and parked it (24h
-        # nak) with a record in ELITEA_RT_V1_DEADLETTER. Nothing retries it
-        # into success: an operator reads the record (route, stream sequence,
-        # reason) and decides.
+        # A worker could not verify or decode a command and recorded it in
+        # ELITEA_RT_V1_DEADLETTER (then terminated it, or parked it with a
+        # 24h nak). Nothing retries it into success: an operator reads the
+        # record (route, stream sequence, reason) and decides.
+        #
+        # On NEW records, not on the bucket being non-empty: `nats kv del`
+        # writes a delete marker that nats_stream_total_messages keeps
+        # counting until the bucket's 7-day TTL, so "non-empty" kept firing
+        # for a week after the operator had handled the record. Any write
+        # moves the bucket's last sequence; an operator's delete moves it
+        # once too, so the alert can echo for at most the window below.
         - alert: EliteaRuntimeCommandDeadLettered
-          expr: max(nats_stream_total_messages{stream_name="KV_ELITEA_RT_V1_DEADLETTER"}) > 0
-          for: 1m
+          expr: max(increase(nats_stream_last_seq{stream_name="KV_ELITEA_RT_V1_DEADLETTER"}[1h])) > 0
           labels:
             severity: warning
           annotations:
-            summary: "A runtime command was dead-lettered"
-            description: "ELITEA_RT_V1_DEADLETTER holds {{ "{{" }} $value {{ "}}" }} record(s). `nats kv ls ELITEA_RT_V1_DEADLETTER` (as the bootstrap identity) lists them; each key is <route>.<sha256(delivery_id)>."
+            summary: "A runtime command was dead-lettered in the last hour"
+            description: "ELITEA_RT_V1_DEADLETTER took {{ "{{" }} $value {{ "}}" }} new write(s) in the last hour. `nats kv ls ELITEA_RT_V1_DEADLETTER` (as elitea-nats-bootstrap-worker) lists the current records; each key is <route>.<sha256(delivery_id)>. A worker that could not write a record logs worker_command.dead_letter_write_failed instead and retries on the next delivery."
         # A command stream near its MaxMsgs: dispatch is about to backpressure
         # (commands wait in the PostgreSQL outbox).
         - alert: EliteaRuntimeCommandStreamNearlyFull
