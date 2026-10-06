@@ -71,7 +71,7 @@ the emitted status events are `in_progress -> failed`.
 
 ## Disposable PostgreSQL/PgVector profile
 
-`run_pgvector.sh` starts an isolated `pgvector/pgvector:0.8.1-pg18` container when
+`run_pgvector.sh` starts an isolated `pgvector/pgvector:0.8.1-pg18-trixie` container when
 `ELITEA_CONFLUENCE_PARITY_PGVECTOR_URL` is not already supplied. It removes only
 the uniquely named container it creates.
 
@@ -121,7 +121,7 @@ currently mounted as a mandatory repository CI job. A valid execution:
 - checks out revision
   `48c51a16634a9924f6c5d5313c3bacedb0b5b56b` and validates its Git archive
   digest against `current_pylon_sdk_baseline.json`;
-- runs against `pgvector/pgvector:0.8.1-pg18`;
+- runs against `pgvector/pgvector:0.8.1-pg18-trixie`;
 - installs and verifies Poppler and Tesseract;
 - runs the complete HTTP, model-client, binary-media, ordered-event, and real
   PgVector characterization suite.

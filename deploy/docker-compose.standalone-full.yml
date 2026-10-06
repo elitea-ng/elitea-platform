@@ -172,7 +172,13 @@ services:
     #
     # Same PostgreSQL major as before (pg18), so the existing standalone_pg_data
     # volume is reused in place rather than re-initialized.
-    image: pgvector/pgvector:0.8.1-pg18
+    #
+    # `-trixie` (Debian 13), like every image in this stack. The tag without a
+    # suffix is Debian 12. The move changes glibc, so a volume an older image
+    # created needs its text indexes rebuilt once: `standalone-stack.sh up`
+    # runs `pg-collation-repair` before the rest of the stack starts (see
+    # deploy/README.md, "Upgrade notes").
+    image: pgvector/pgvector:0.8.1-pg18-trixie
     shm_size: '2g'
     # Raise the server-side budget for the enlarged #965 pooler pool
     # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128). The image

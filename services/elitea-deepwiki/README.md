@@ -702,7 +702,7 @@ cd services/elitea-deepwiki && python -m pip install -e ".[test]" && python -m p
 The storage-parity suite needs PostgreSQL with pgvector:
 
 ```bash
-podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki -e POSTGRES_DB=deepwiki -p 15434:5432 pgvector/pgvector:0.8.5-pg16
+podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki -e POSTGRES_DB=deepwiki -p 15434:5432 pgvector/pgvector:0.8.5-pg16-trixie
 ```
 
 ```bash

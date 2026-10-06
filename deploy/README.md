@@ -140,6 +140,35 @@ entirely and serves the Go runner's own copy of the same graph. Useful for
 isolating which half of the hop you are looking at; not needed for a normal
 demo now that the sidecar's fixture is populated by default.
 
+### Upgrade notes
+
+**Debian 13 PostgreSQL image (2026-10).** The `postgres` service moved from
+`pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`.
+The PostgreSQL major is the same, so the `standalone_pg_data` volume is reused
+in place. The C library changed (glibc 2.36 to 2.41), and with it the collation
+rules that ordered the existing text indexes. PostgreSQL logs this as
+`database "<name>" has a collation version mismatch`.
+
+`standalone-stack.sh up` repairs it. It starts `postgres` alone, then runs
+`pg-collation-repair` before the rest of the stack starts. For each database
+where `datcollversion` differs from `pg_database_collation_actual_version(oid)`,
+the repair runs `REINDEX DATABASE <db>` and then
+`ALTER DATABASE <db> REFRESH COLLATION VERSION`. The step is idempotent, and on
+a fresh volume it reports "nothing to reindex". To run it alone, against a
+stack that is already up:
+
+```bash
+deploy/scripts/standalone-stack.sh pg-collation-repair
+```
+
+REINDEX holds locks while it runs, and its time grows with the size of the
+indexes, so on a large volume run it before traffic arrives.
+
+The kind cluster (`deploy/kind/`) is not affected: its PostgreSQL uses an
+`emptyDir`, so a new image always starts on a fresh `initdb`. The Helm chart
+deploys no PostgreSQL of its own; an operator-run database is the operator's
+upgrade.
+
 ## Composition decision (issue #240)
 
 `deploy/helm/elitea-platform/` used to be an empty `.gitkeep` — an umbrella

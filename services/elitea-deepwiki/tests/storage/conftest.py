@@ -7,7 +7,7 @@ exact failure mode this whole phase exists to avoid.
 
     podman run -d --name dwpg -e POSTGRES_PASSWORD=deepwiki \\
         -e POSTGRES_USER=deepwiki -e POSTGRES_DB=deepwiki \\
-        -p 15434:5432 pgvector/pgvector:0.8.5-pg16
+        -p 15434:5432 pgvector/pgvector:0.8.5-pg16-trixie
     export DEEPWIKI_TEST_DSN=postgresql://deepwiki:deepwiki@127.0.0.1:15434/deepwiki
 """
 

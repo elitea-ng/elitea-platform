@@ -4,7 +4,14 @@
 #   certs        generate local mTLS + runtime-plane material (idempotent)
 #   build        rebuild the stack's images from source (`up` reuses existing
 #                tags, so a code change needs this first)
-#   up           bring the stack up and wait for healthy
+#   up           bring the stack up and wait for healthy. It starts postgres
+#                first and runs pg-collation-repair before the rest
+#   pg-collation-repair
+#                reindex every database whose recorded collation version
+#                differs from the C library's, then record the new version.
+#                Needed once on a volume that an older image created (the
+#                Debian 12 to Debian 13 move changed glibc). Idempotent, and
+#                a no-op on a fresh volume
 #   seed         E2E/DEV CONVENIENCE, not required for a working stack: schema
 #                + OIDC users + RBAC fixtures — delegates to the E2E seeder
 #   seed-runtime E2E/DEV CONVENIENCE, not required for a working stack: `up`
@@ -223,6 +230,48 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # ExitCode is 0 on a running container too, so it is read only in the exited
 # branch. A container whose health is `starting` or `unhealthy` is NOT settled:
 # this must never turn a real failure green.
+# ── Collation version repair ────────────────────────────────────────────────
+#
+# PostgreSQL records the C library's collation version per database. When the
+# image's glibc changes (pgvector/pgvector:*-pg18 moved from Debian 12 to
+# `-trixie`, glibc 2.36 to 2.41), text indexes built under the old rules can
+# be out of order, and the server logs "database ... has a collation version
+# mismatch". The repair is REINDEX DATABASE, then ALTER DATABASE ... REFRESH
+# COLLATION VERSION, for each database that reports a mismatch.
+#
+# Idempotent: after the refresh the versions match and the query returns
+# nothing. A fresh volume records the current version at initdb, so it is a
+# no-op there too. template0 accepts no connections and is skipped; nothing
+# builds indexes in it. REINDEX DATABASE reindexes only the database it is
+# connected to, so each one is run from inside its own database.
+pg_collation_repair() {
+  local dbs db
+  dbs="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
+           psql -U elitea -d postgres -v ON_ERROR_STOP=1 -tAc \
+           "SELECT datname FROM pg_database
+             WHERE datallowconn
+               AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid)")" || {
+    echo "ERROR: could not read collation versions from the postgres service." >&2
+    return 1
+  }
+  if [ -z "$dbs" ]; then
+    echo "→ PostgreSQL collation versions match; nothing to reindex."
+    return 0
+  fi
+  while IFS= read -r db; do
+    [ -n "$db" ] || continue
+    echo "→ Collation version changed for database ${db}: REINDEX, then REFRESH COLLATION VERSION…"
+    # psql interpolates :"db" (a quoted identifier) only in input it reads,
+    # not in -c, so the statements go in on stdin.
+    printf 'REINDEX DATABASE :"db";\n' |
+      $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+        psql -U elitea -d "$db" -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
+    printf 'ALTER DATABASE :"db" REFRESH COLLATION VERSION;\n' |
+      $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+        psql -U elitea -d postgres -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
+  done <<< "$dbs"
+}
+
 stack_is_settled() {
   $COMPOSE_BIN $COMPOSE_F ps --all --format json 2>/dev/null | python3 -c '
 import json, re, sys
@@ -827,6 +876,12 @@ case "${1:-}" in
       echo "         apps/elitea-web/scripts/e2e-stack.sh down" >&2
       exit 1
     fi
+    # PostgreSQL first, alone, so a volume created by an older image gets its
+    # collation repair before any service builds on its indexes. A fresh
+    # volume makes this a no-op.
+    echo "→ Starting PostgreSQL for the collation version check…"
+    $COMPOSE_BIN $COMPOSE_F up -d --wait postgres
+    pg_collation_repair
     echo "→ Bringing up the full standalone stack (${COMPOSE_BIN})…"
     # `--wait` returns 1 on a stack that is COMPLETELY healthy, because it reads
     # a one-shot job's exit as a failure even when the code is 0. This stack has
@@ -857,6 +912,10 @@ case "${1:-}" in
     echo "     OIDC provider http://localhost:${OIDC_PORT}"
     echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
+    ;;
+
+  pg-collation-repair)
+    pg_collation_repair
     ;;
 
   build)
