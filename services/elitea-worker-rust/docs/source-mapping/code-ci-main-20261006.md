@@ -17,6 +17,7 @@ The reconciliation does not apply or discard that stash.
 | --- | --- | --- |
 | Kubernetes render acceptance | `deploy/helm/tests/render-sandbox-kubernetes.sh` | Run positive and refusal assertions without an undeclared search executable. |
 | Sandbox image render acceptance | `deploy/helm/tests/render-sandbox-images.sh` | Retain digest and node-selection refusal checks. |
+| Private Code material mounts | `scripts/runtime/test_code_consumers_deployment.py` | Require explicit host-path refusal in authored Compose, across normalized JSON representations. |
 | Editor Test acceptance runner | `scripts/go/editor-lifecycle-postgres.sh` | Keep Go JSON events separate from compiler and download diagnostics. |
 | Editor Test acceptance gate | `scripts/go/editor-lifecycle-gate.py` | Reject missing, duplicate, failed, or skipped scenarios. |
 | Editor Test runner regression | `scripts/go/tests/test_editor_lifecycle_ci.py` | Preserve diagnostic output without corrupting required event parsing. |
@@ -40,6 +41,15 @@ Three affected render scripts pass with `rg` absent from their execution path.
 The same three scripts also pass with checksum-verified Helm `3.16.0`, the pinned CI version.
 Both runs exclude `rg` from their execution path.
 These local results do not replace the required CI result.
+
+The replacement Helm job passes chart rendering but fails its Code consumer packaging test.
+Its normalized Compose JSON omits `create_host_path: false`.
+The assertion now verifies the explicit safeguard in the authored overlay before it accepts an omitted false field.
+It also verifies all three exact targets, bind types, and read-only mounts.
+The regression rejects an absent authored safeguard and either authored or normalized `true`.
+Seven packaging tests, four material installation tests, and twenty-four public-trust tests pass without skips.
+All three charts pass local Helm `3.16.0` lint.
+These checks do not start services or read deployment credentials.
 
 Editor Test passes its Go tests but fails when download diagnostics reach the JSON parser.
 The runner now retains stderr in a separate artifact.
@@ -74,6 +84,21 @@ Thirty-two direct dependency versions differ from the incoming lock, and local N
 The tests establish the checked source behavior within that cache; they do not establish exact-lock CI equivalence.
 Replacement CI must install the incoming lock under its declared runtime and renderer before final acceptance.
 
+Replacement CI installs the exact lock under Node 26 and passes Web quality, Storybook, and production build checks.
+Its pinned full-application visual suite passes 67 cases.
+The enabled pause-control case passes its behavior assertions, then fails because its new baseline does not exist.
+The reviewed 1,602 by 848 pixel CI image becomes that baseline without any transformation.
+The remaining visual cases include all four updated editor baselines.
+No visual tolerance changes.
+
+One exact-lock Web shard times out while the idle editor Test fixture enters a multiline draft.
+The unchanged case passes locally; the timeout is not reproduced as a product deadlock.
+The fixture now preserves its first focused keystroke and Shift+Enter, then pastes the same bulk text.
+Pending preparation, attachment refusal, input identity, exact admission, and duplicate-send assertions remain.
+Twenty-two focused tests pass without skips; type checking and owning lint pass.
+No product code, dependency, timeout, or retry changes.
+The exact-lock replacement CI result remains required.
+
 The Rust worker's unchanged 2 MiB regression and all 67 output-delivery tests pass with current locked dependencies.
 All-target, all-feature strict Clippy also passes.
 These macOS results do not replace Linux CI stack verification.
@@ -93,11 +118,20 @@ Structural preservation does not prove generated client behavior or browser acce
 
 ## Remaining verification
 
-The failed CI results belong to commit `94e8b11704d5e569a4cf42217d2edd590ec2772b`.
+The initial CI failures belong to commit `94e8b11704d5e569a4cf42217d2edd590ec2772b`.
+Replacement commit `d14074ee8725253ff0ddb4d8b07498d8aa43ac1c` exposes the Compose normalization assertion failure.
+Its Code runner checks, required Editor Test lifecycle, compilation retention checks, and Helm install smoke test pass in CI.
+Its Worker PostgreSQL job also exposes two graph receipt fixture failures.
+The test step omits required-mode and disposable-database admission flags.
+Both fixtures pass locally with those flags against a fresh owned PostgreSQL 18 server, without skips or stack overrides.
+The fixture is removed after verification.
+See [the graph receipt mapping](graph-receipt-postgres-ci.md) for the unchanged checkpoint and test boundaries.
 The repairs preserve the existing resource limits and refusal assertions.
 No new test skips, increased thread stacks, or relaxed visual thresholds are introduced.
 The replacement head still requires the complete Linux CI matrix.
-The enabled pause-control visual case also requires a fresh pinned CI screenshot capture.
+The added enabled pause-control baseline still requires comparison in replacement CI.
+The WebKit journey also reports a pointer obstruction while clearing a saved pause control.
+That failure requires separate investigation before full browser acceptance.
 Read the resulting CI state before declaring this repair complete.
 
 The live rehearsal services and databases remain unchanged during these source checks.

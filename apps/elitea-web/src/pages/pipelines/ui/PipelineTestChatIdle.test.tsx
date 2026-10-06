@@ -188,7 +188,14 @@ describe("idle editor Test context", () => {
     // Browser focus completes before its native text input events run.
     await user.click(input);
     await waitFor(() => expect(routes.created).toHaveLength(1));
-    await user.keyboard("Run the Code source fixture.{Shift>}{Enter}{/Shift}Keep this first draft.");
+    expect(input).toBeEnabled();
+    expect(input).toHaveFocus();
+    // Keep real keyboard input and newline handling; paste bulk text without per-character renderer work.
+    await user.keyboard("R");
+    expect(input).toHaveValue("R");
+    await user.paste("un the Code source fixture.");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.paste("Keep this first draft.");
     expect(input).toHaveValue(question);
     expect(screen.getByRole("button", { name: "attach files" })).toBeDisabled();
     const file = new File(["fixture"], "fixture.txt", { type: "text/plain" });

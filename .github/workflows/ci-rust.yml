@@ -174,6 +174,8 @@ jobs:
       - name: Run all targets and features
         env:
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS: "1"
+          ELITEA_TEST_DATABASE_GUARD: "disposable-pg18"
         run: cargo test --locked --all-targets --all-features
 
       - name: Verify sandbox phase deadlines with PostgreSQL

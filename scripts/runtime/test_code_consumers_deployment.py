@@ -54,6 +54,49 @@ def code_environment(output):
 
 
 class PackagingTests(unittest.TestCase):
+    def assert_private_material_mounts(self, authored, normalized):
+        targets = {"/src/code-owner-client.crt", "/src/code-owner-client.key",
+                   "/src/code-platform-content-keys.json"}
+        for mounts in (authored, normalized):
+            self.assertEqual(len(mounts), len(targets))
+            self.assertEqual({mount["target"] for mount in mounts}, targets)
+            for mount in mounts:
+                self.assertEqual(mount["type"], "bind")
+                self.assertIs(mount["read_only"], True)
+        for mount in authored:
+            self.assertIs(mount.get("bind", {}).get("create_host_path"), False,
+                          "Private material must explicitly disable host-path creation")
+        for mount in normalized:
+            # Compose versions can omit false-valued fields from normalized JSON.
+            # The authored safeguard above must remain explicit.
+            self.assertIs(mount.get("bind", {}).get("create_host_path", False), False)
+
+    def test_private_material_mount_normalization_preserves_host_path_guard(self):
+        overlay = yaml.safe_load((ROOT / "deploy/docker-compose.code-consumers.yml").read_text())
+        authored = overlay["services"]["runtime-material"]["volumes"]
+        self.assert_private_material_mounts(authored, authored)
+        for omitted in ("create_host_path", "bind"):
+            normalized = copy.deepcopy(authored)
+            for mount in normalized:
+                if omitted == "bind":
+                    mount.pop("bind")
+                else:
+                    mount["bind"].pop("create_host_path")
+            with self.subTest(normalized_omits=omitted):
+                self.assert_private_material_mounts(authored, normalized)
+        for value in (None, True):
+            unsafe = copy.deepcopy(authored)
+            if value is None:
+                unsafe[0]["bind"].pop("create_host_path")
+            else:
+                unsafe[0]["bind"]["create_host_path"] = value
+            with self.subTest(authored_create_host_path=value), self.assertRaises(AssertionError):
+                self.assert_private_material_mounts(unsafe, authored)
+        unsafe = copy.deepcopy(authored)
+        unsafe[0]["bind"]["create_host_path"] = True
+        with self.assertRaises(AssertionError):
+            self.assert_private_material_mounts(authored, unsafe)
+
     def test_default_chart_does_not_enable_code_consumers(self):
         result = render({})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -166,10 +209,9 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(set(services), {"runtime-material", "elitea-main"})
         self.assertEqual(services["elitea-main"]["environment"], expected)
         material = services["runtime-material"]
-        for mount in material["volumes"]:
-            self.assertTrue(mount["read_only"])
-            self.assertFalse(mount["bind"]["create_host_path"])
-            self.assertTrue(mount["target"].startswith("/src/code-"))
+        overlay = yaml.safe_load((ROOT / "deploy/docker-compose.code-consumers.yml").read_text())
+        authored = overlay["services"]["runtime-material"]["volumes"]
+        self.assert_private_material_mounts(authored, material["volumes"])
         self.assertNotIn("ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED", material["environment"])
 
 
