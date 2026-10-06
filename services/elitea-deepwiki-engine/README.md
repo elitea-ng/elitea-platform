@@ -452,7 +452,9 @@ runner), `ask` and deep research use it.
   failures, `retry-after`, 0.5 s doubling to 8 s with jitter). A stop
   aborts a request or a wait at once.
 - Timeouts: connect 10 s, blocking call 600 s, stream silence 300 s,
-  stream total 30 min. SSE caps: 1 MiB per line and per event, 64 MiB
+  stream total 2 h (`ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`; Python
+  had no total limit, and a reasoning model writing a 48k-token page
+  streams for over an hour). SSE caps: 1 MiB per line and per event, 64 MiB
   per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
   BOM is skipped.
 - `ELITEA_DEEPWIKI_TLS_CA_FILE` is trusted in addition to the platform
@@ -1398,6 +1400,7 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | `14400` | at least 60; `RLIMIT_CPU` (hard limit 10 s above) |
 | `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 | at most 256 |
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
+| `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
 | `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the model gateway |
 | `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
 | `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |

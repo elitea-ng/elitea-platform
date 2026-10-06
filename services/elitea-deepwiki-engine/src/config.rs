@@ -210,6 +210,9 @@ pub struct ModelEnvSettings {
     /// `ELITEA_DEEPWIKI_EMBED_CONCURRENCY`: embedding requests in flight,
     /// default 4. The Python engine sent them one at a time.
     pub embed_concurrency: usize,
+    /// `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`: the longest one model
+    /// stream may run, default 7200 (Python had no limit).
+    pub stream_total: Duration,
 }
 
 fn model_settings(
@@ -233,6 +236,11 @@ fn model_settings(
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
+        stream_total: positive_seconds(
+            raw,
+            "MODEL_STREAM_TOTAL_SECONDS",
+            crate::llm::Timeouts::default().stream_total,
+        )?,
     })
 }
 
@@ -948,12 +956,14 @@ mod tests {
                 tls_ca_file: None,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
+                stream_total: Duration::from_hours(2),
             })
         );
         let set = settings(&[
             ("ELITEA_DEEPWIKI_TLS_CA_FILE", "/etc/ca.pem"),
             ("WIKI_EMBED_BATCH_SIZE", "16"),
             ("ELITEA_DEEPWIKI_EMBED_CONCURRENCY", "2"),
+            ("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "10800"),
         ])
         .map(|s| s.model);
         assert_eq!(
@@ -962,8 +972,10 @@ mod tests {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
                 embed_batch_size: 16,
                 embed_concurrency: 2,
+                stream_total: Duration::from_hours(3),
             })
         );
         assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
+        assert!(settings(&[("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "0")]).is_err());
     }
 }

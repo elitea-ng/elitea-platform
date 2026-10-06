@@ -42,6 +42,10 @@ impl From<&ModelEnvSettings> for TransportSettings {
     fn from(settings: &ModelEnvSettings) -> Self {
         Self {
             ca_file: settings.tls_ca_file.clone(),
+            timeouts: Timeouts {
+                stream_total: settings.stream_total,
+                ..Timeouts::default()
+            },
             ..Self::default()
         }
     }

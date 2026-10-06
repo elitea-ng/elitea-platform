@@ -55,7 +55,9 @@ pub struct Timeouts {
     /// and between two chunks. A reasoning model may think for minutes
     /// before its first token, so this is generous.
     pub stream_idle: Duration,
-    /// One whole stream.
+    /// One whole stream. A reasoning model writing a 48k-token page at
+    /// ~10 tokens/s streams for 80 minutes, so this is a backstop, not a
+    /// pace; the idle timeout catches a stalled stream. Python had none.
     pub stream_total: Duration,
 }
 
@@ -65,7 +67,7 @@ impl Default for Timeouts {
             connect: Duration::from_secs(10),
             request: Duration::from_mins(10),
             stream_idle: Duration::from_mins(5),
-            stream_total: Duration::from_mins(30),
+            stream_total: Duration::from_hours(2),
         }
     }
 }
