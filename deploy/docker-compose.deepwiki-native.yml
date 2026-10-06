@@ -51,6 +51,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # db-init creates the vector extension too; two concurrent
+      # CREATE EXTENSION IF NOT EXISTS can fail the loser on a fresh volume.
+      db-init:
+        condition: service_completed_successfully
     restart: "no"
 
   elitea-deepwiki-engine:
