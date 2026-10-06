@@ -45,9 +45,15 @@ use tokio::sync::mpsc;
 /// How long a stopped child has between SIGTERM and SIGKILL.
 pub const KILL_AFTER: Duration = Duration::from_secs(3);
 
-/// The largest stdout line the parent reads from a child: the result line
-/// carries every page.
-pub const MAX_RESULT_LINE: usize = 512 * 1024 * 1024;
+/// The largest NDJSON line, newline included, that this engine sends: the
+/// result line carries every page. It is the Go host's limit — the
+/// `bufio.Scanner` buffer of `services/elitea-subapp-host/internal/engine/
+/// engine.go` (`scanner.Buffer(…, 64*1024*1024)`) — so a larger line could
+/// never reach the host. The two numbers must stay equal; a test reads the
+/// Go source. The parent reads no longer line from its child, and the child
+/// refuses a result this large BEFORE it publishes
+/// (`generate::check_result_size`).
+pub const MAX_RESULT_LINE: usize = 64 * 1024 * 1024;
 
 /// The longest stderr line copied (longer ones are cut).
 const MAX_LOG_LINE: usize = 64 * 1024;
@@ -567,6 +573,32 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The product a Go integer expression such as `64*1024*1024` is.
+    fn go_product(expression: &str) -> Option<usize> {
+        expression
+            .split('*')
+            .map(|factor| factor.trim().parse::<usize>().ok())
+            .product()
+    }
+
+    #[test]
+    fn the_line_cap_is_the_go_hosts() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../elitea-subapp-host/internal/engine/engine.go");
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+        let call = source
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("scanner.Buffer("))
+            .unwrap_or_else(|| panic!("no scanner.Buffer call in {}", path.display()));
+        let maximum = call
+            .trim_end()
+            .strip_suffix(')')
+            .and_then(|args| args.rsplit_once(','))
+            .and_then(|(_, max)| go_product(max))
+            .unwrap_or_else(|| panic!("unreadable scanner.Buffer call: {call}"));
+        assert_eq!(maximum, MAX_RESULT_LINE);
     }
 
     #[test]

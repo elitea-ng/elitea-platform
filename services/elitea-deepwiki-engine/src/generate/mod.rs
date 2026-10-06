@@ -527,8 +527,10 @@ impl Pipeline<'_> {
         context.thinking(format!("[worker] Wiki ID for folder structure: {wiki_id}"));
         let mut result = pages.composed.result;
 
-        // The publish, before the result line.
+        // The publish, before the result line; never for a result the
+        // host could not read.
         context.checkpoint()?;
+        check_result_size(&mut result, MAX_RESULT_BYTES)?;
         self.publish(&mut result, slot).await;
         context.thinking("[worker] Done");
         Ok(Value::Object(result))
@@ -678,6 +680,36 @@ impl Pipeline<'_> {
     }
 }
 
+/// What the publish can add to the result line (an error in `errors`).
+const PUBLISH_MARGIN: usize = 64 * 1024;
+
+/// The largest result line, newline included, that is published: the
+/// host's line limit less [`PUBLISH_MARGIN`].
+const MAX_RESULT_BYTES: usize = crate::runner::native::MAX_RESULT_LINE - PUBLISH_MARGIN;
+
+/// Refuse a result whose line (`{"result": …}` and its newline) is longer
+/// than `limit` bytes: the host could not read it, so the run fails before
+/// anything is published.
+///
+/// # Errors
+///
+/// A `RuntimeError` naming the size and the limit.
+fn check_result_size(result: &mut Map<String, Value>, limit: usize) -> Result<(), EngineError> {
+    let line = json!({ "result": Value::Object(std::mem::take(result)) });
+    let size = crate::pyjson::dumps(&line).len() + 1;
+    if let Value::Object(mut line) = line
+        && let Some(Value::Object(back)) = line.remove("result")
+    {
+        *result = back;
+    }
+    if size > limit {
+        return Err(runtime(format!(
+            "The wiki result is too large: its line is {size} bytes and the host reads at most {limit}; nothing was published"
+        )));
+    }
+    Ok(())
+}
+
 /// The cluster planner's index: the rows in graph order with the cluster
 /// columns, and the edges Phase 2 persisted (the graph's, in its order).
 fn planner_index(
@@ -754,6 +786,25 @@ mod tests {
             ),
             EngineError::cancelled()
         );
+    }
+
+    #[test]
+    fn an_oversized_result_is_refused_before_the_publish() {
+        let mut result = Map::new();
+        result.insert("result".to_owned(), json!("x".repeat(100)));
+        let exact =
+            crate::pyjson::dumps(&json!({"result": Value::Object(result.clone())})).len() + 1;
+        let kept = result.clone();
+        assert_eq!(check_result_size(&mut result, exact), Ok(()));
+        assert_eq!(result, kept, "the result is handed back whole");
+        let refused = check_result_size(&mut result, exact - 1);
+        let Err(error) = refused else {
+            panic!("an oversized result passed");
+        };
+        assert_eq!(error.error_type, ErrorType::Runtime);
+        assert!(error.message.contains("nothing was published"), "{error}");
+        assert_eq!(result, kept);
+        const { assert!(MAX_RESULT_BYTES < crate::runner::native::MAX_RESULT_LINE) };
     }
 
     #[test]

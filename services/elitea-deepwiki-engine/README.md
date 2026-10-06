@@ -156,7 +156,11 @@ caller. Each call checks the stop first.
   `argv` or the environment); stdin stays open and its end stops the child;
 - relays the child's NDJSON `thinking` / `token` lines, keeps its
   `{"build": id}` line, takes the last line as the result or the error, and
-  copies its stderr (the logs) to its own;
+  copies its stderr (the logs) to its own. A line is at most 64 MiB, the Go
+  host's own line limit (`MAX_RESULT_LINE`, tested against `engine.go`);
+  the child refuses a larger result BEFORE it publishes (`RuntimeError`
+  "The wiki result is too large: …; nothing was published"), so a wiki the
+  host could never receive does not replace the live index;
 - on a stop, or a reader that went away, sends SIGTERM, then SIGKILL after
   3 s (the child stops at its next checkpoint, abandons its build and writes
   the stop line);
