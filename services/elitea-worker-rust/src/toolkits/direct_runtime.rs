@@ -124,7 +124,7 @@ impl DirectToolkitRuntime {
 
     /// Materialize and execute exactly one read-only selected operation.
     ///
-    /// No retry occurs here. Redis redelivery may repeat the provider read only
+    /// No retry occurs here. command redelivery may repeat the provider read only
     /// because the final tool object is independently required to declare
     /// `is_read_only()` immediately before invocation.
     pub(crate) async fn execute(

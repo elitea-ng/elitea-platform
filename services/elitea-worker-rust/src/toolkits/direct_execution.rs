@@ -4,7 +4,7 @@
 //! therefore accepts the toolsets produced by the normal claim-scoped
 //! materializers and invokes one original operation directly. It deliberately
 //! permits only tools whose runtime implementation declares them read-only;
-//! effectful calls need a durable effect receipt before Redis redelivery can be
+//! effectful calls need a durable effect receipt before command redelivery can be
 //! allowed to repeat them safely.
 
 use std::fmt;

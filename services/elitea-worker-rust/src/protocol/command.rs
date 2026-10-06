@@ -63,7 +63,7 @@ struct VerifiedWorkerCommand {
     command: WorkerCommandV1,
 }
 
-/// The sealed common view needed by claim, settlement and Redis retirement.
+/// The sealed common view needed by claim, settlement and command retirement.
 /// Capability code receives a concrete wrapper and cannot reinterpret one
 /// authenticated command as another capability after verification.
 pub(crate) trait VerifiedExecutionCommand {

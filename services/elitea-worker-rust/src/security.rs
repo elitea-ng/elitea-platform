@@ -17,15 +17,12 @@ use crate::protocol::command::{
     Ed25519CommandAuthenticator, Ed25519PublicKeyResolver, SignedCommandAuthenticator,
 };
 use crate::spool::SpoolMasterKey;
-use crate::transport::redis_streams::{RedisStreamsError, RedisTlsMaterial};
 
 const KEYRING_SCHEMA_VERSION: &str = "elitea.runtime-ed25519-keyring.v1";
-const MAX_CA_BYTES: usize = 1024 * 1024;
-const MAX_CERTIFICATE_BYTES: usize = 256 * 1024;
-const MAX_PRIVATE_KEY_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_CA_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_CERTIFICATE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_PRIVATE_KEY_BYTES: usize = 128 * 1024;
 const MAX_KEYRING_BYTES: usize = 64 * 1024;
-const MAX_REDIS_PASSWORD_FILE_BYTES: usize = 514;
-const MAX_REDIS_PASSWORD_BYTES: usize = 512;
 const MAX_KEY_ID_BYTES: usize = 256;
 const MAX_KEYS: usize = 64;
 
@@ -35,9 +32,7 @@ pub enum RuntimeTrustError {
     Material(RuntimeConfigError),
     InvalidTlsIdentity,
     InvalidSpoolKey,
-    InvalidRedisPassword,
     InvalidSigningKeyring,
-    InvalidRedisTls,
 }
 
 impl fmt::Display for RuntimeTrustError {
@@ -46,9 +41,7 @@ impl fmt::Display for RuntimeTrustError {
             Self::Material(_) => "runtime trust material is unavailable or unsafe",
             Self::InvalidTlsIdentity => "the workload TLS identity is invalid",
             Self::InvalidSpoolKey => "the output spool key is invalid",
-            Self::InvalidRedisPassword => "the Redis ACL password is invalid",
             Self::InvalidSigningKeyring => "the Ed25519 verification keyring is invalid",
-            Self::InvalidRedisTls => "the Redis TLS material is invalid",
         })
     }
 }
@@ -57,11 +50,7 @@ impl std::error::Error for RuntimeTrustError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Material(error) => Some(error),
-            Self::InvalidTlsIdentity
-            | Self::InvalidSpoolKey
-            | Self::InvalidRedisPassword
-            | Self::InvalidSigningKeyring
-            | Self::InvalidRedisTls => None,
+            Self::InvalidTlsIdentity | Self::InvalidSpoolKey | Self::InvalidSigningKeyring => None,
         }
     }
 }
@@ -85,8 +74,9 @@ impl Ed25519PublicKeyResolver for ExactEd25519PublicKeyResolver {
 }
 
 /// Process-owned private-plane material for gRPC/HTTP, command verification
-/// and encrypted output. Redis credentials are intentionally reloaded per
-/// connection generation through [`load_redis_tls_material`].
+/// and encrypted output. The command bus's NATS identity is separate material
+/// that its transport reads on every TLS handshake
+/// (`transport::nats_jetstream`).
 pub struct RuntimeTrustMaterial {
     ca_pem: Vec<u8>,
     certificate_pem: Vec<u8>,
@@ -151,58 +141,6 @@ impl RuntimeTrustMaterial {
     pub fn command_authenticator(&self) -> Arc<dyn SignedCommandAuthenticator> {
         Arc::new(Ed25519CommandAuthenticator::new(self.signing_keys.clone()))
     }
-}
-
-/// Reload the Redis password and workload TLS files for one fresh connection
-/// generation. The returned value owns zeroizing secret buffers.
-///
-/// # Errors
-///
-/// Returns a redacted trust error when any credential file or Redis-specific
-/// password/TLS invariant is invalid.
-pub fn load_redis_tls_material(
-    config: &RuntimeDeployConfig,
-) -> Result<RedisTlsMaterial, RuntimeTrustError> {
-    let password = load_redis_password(config)?;
-    let ca_pem = read_regular_file(&config.ca_path, MAX_CA_BYTES, false, "runtime CA bundle")?;
-    let certificate_pem = read_regular_file(
-        &config.certificate_path,
-        MAX_CERTIFICATE_BYTES,
-        false,
-        "workload certificate chain",
-    )?;
-    let private_key_pem = read_regular_file(
-        &config.private_key_path,
-        MAX_PRIVATE_KEY_BYTES,
-        true,
-        "workload private key",
-    )?;
-    RedisTlsMaterial::new(password, ca_pem, certificate_pem, private_key_pem)
-        .map_err(map_redis_tls_error)
-}
-
-fn load_redis_password(config: &RuntimeDeployConfig) -> Result<String, RuntimeTrustError> {
-    let mut bytes = Zeroizing::new(read_regular_file(
-        &config.redis_password_path,
-        MAX_REDIS_PASSWORD_FILE_BYTES,
-        true,
-        "Redis ACL password",
-    )?);
-    if bytes.ends_with(b"\n") {
-        bytes.pop();
-        if bytes.ends_with(b"\r") {
-            bytes.pop();
-        }
-    }
-    if bytes.is_empty()
-        || bytes.len() > MAX_REDIS_PASSWORD_BYTES
-        || bytes
-            .iter()
-            .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
-    {
-        return Err(RuntimeTrustError::InvalidRedisPassword);
-    }
-    String::from_utf8(bytes.to_vec()).map_err(|_| RuntimeTrustError::InvalidRedisPassword)
 }
 
 fn load_ed25519_keyring(
@@ -297,10 +235,6 @@ pub(crate) fn validate_tls_identity(
         .with_client_auth_cert(client_certificates, private_key)
         .map_err(|_| RuntimeTrustError::InvalidTlsIdentity)?;
     Ok(())
-}
-
-fn map_redis_tls_error(_error: RedisStreamsError) -> RuntimeTrustError {
-    RuntimeTrustError::InvalidRedisTls
 }
 
 #[derive(Deserialize)]

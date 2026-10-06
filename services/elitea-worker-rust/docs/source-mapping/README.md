@@ -335,14 +335,14 @@ Maintained Rust runtime ownership registry:
   `elitea.runtime-deploy.v1` admission, protocol-fixed transport limits,
   canonical private-plane endpoints, permission-bounded regular-file access,
   TLS 1.3 workload identity validation, exact Ed25519 command-key resolution
-  and zeroizing spool/Redis secret ownership. Redis password and TLS files are
-  reloaded for each connection generation;
-- `src/{lib,main,bootstrap}.rs`, `src/transport/redis_connector.rs` and
+  and zeroizing spool secret ownership. The command bus's NATS mTLS files are
+  read on every TLS handshake (`source-mapping/nats-command-delivery.md`);
+- `src/{lib,main,bootstrap}.rs`, `src/transport/nats_jetstream.rs` and
   `src/execution/production.rs`: one capability-disabled executable production ownership
   path from validated trust into private control/output/content/runtime-context/
-  model channels, the shared `agentstate` pool, reconnectable Redis generation,
+  model channels, the shared `agentstate` pool, the bound NATS JetStream consumer,
   output preflight, semantic delivery processor, direct/graph native assembler
-  and stop-aware Redis runtime. CLI `serve` preserves the shared
+  and stop-aware command delivery runtime. CLI `serve` preserves the shared
   `elitea.runtime-deploy.v1` file and separately requires a bounded mounted
   snapshot containing the runtime/admin `toolkit_security` dictionary. There
   is no missing-policy/default-policy branch. The multi-thread process owner
@@ -352,19 +352,19 @@ Maintained Rust runtime ownership registry:
   closed. An isolated Main, Redis, PostgreSQL, model facade and Rust-worker
   application/ad-hoc process proof now passes;
 - `src/diagnostics.rs`, model adapters, state adapters and
-  `src/execution/{agent_delivery_processor,agent_preparation,agent_coordinator,agent_invocation,invocation_supervisor,native_agent_lifecycle,output_delivery,redis_delivery}.rs`:
+  `src/execution/{agent_delivery_processor,agent_preparation,agent_coordinator,agent_invocation,invocation_supervisor,native_agent_lifecycle,output_delivery,command_delivery}.rs`:
   crate-scoped structured logs, standard OTLP export and authenticated
   lifecycle/assembly/tool correlation. Valid W3C `traceparent` values continue
   the upstream trace. Delivery, claim, preparation, ADK execution, model,
   session, checkpoint, output, settlement and retirement spans use allowlisted
   identity, phase, outcome and stable error-code fields only. The concrete
-  agent delivery processor keeps one raw Redis PEL owner alive through claim,
+  agent delivery processor keeps one JetStream delivery owner (`+WPI`) alive through claim,
   output preflight, preparation, supervised native execution and retirement
   for both application and ad-hoc commands.
   `agent_invocation.rs` keeps authorization inputs boxed until its async frame
   is allocated, preserving the default thread-stack bound as runtime variants
   grow.
-  Normal bootstrap must drain its Redis processing futures before closing the
+  Normal bootstrap must drain its command processing futures before closing the
   coordinator. The redacted panic hook retains only a sanitized source filename
   and line. Tokio-backed OTLP batching avoids exporter-thread reactor panics.
   The standalone proof also projects UI-shaped model configuration through

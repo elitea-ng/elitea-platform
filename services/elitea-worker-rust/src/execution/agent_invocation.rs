@@ -26,14 +26,14 @@ use super::output_delivery::{
 use crate::agents::AgentExecutionKind;
 use crate::protocol::control::{AgentControlClient, InvocationAuthorizationDecision};
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementClient};
+use crate::transport::command_bus::{CommandRetirementClient, CommandRetirer};
 
 pub(super) type OwnedFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 /// The sole continuation allowed to consume an authorized native run.
 ///
 /// Implementations must retain the complete run until ADK event production,
-/// terminal ACK, settlement, Redis retirement, and lease shutdown have reached
+/// terminal ACK, settlement, command retirement, and lease shutdown have reached
 /// one closed outcome. Returning earlier would violate the supervisor contract.
 pub(super) trait AuthorizedAgentLifecycle: Send + Sync + 'static {
     fn inspect_node_recovery<'a>(
@@ -161,7 +161,7 @@ pub(super) enum AgentAuthorizationJobCompletion {
     InvalidState(AgentAuthorizationJobError),
 }
 
-/// Stable local lifecycle errors. These never authorize output or Redis ACK.
+/// Stable local lifecycle errors. These never authorize output or command ack.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AgentAuthorizationJobError {
     InvalidState(&'static str),
@@ -189,7 +189,7 @@ impl std::error::Error for AgentAuthorizationJobError {}
 struct AgentAuthorizationInputs<R, C, T, K, D> {
     prepared: PreparedAgentAuthorization,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<C>>,
+    retirer: Arc<CommandRetirer<C>>,
     replay: Arc<T>,
     clock: Arc<K>,
     recovery_config: AgentTerminalRecoveryConfig,
@@ -215,7 +215,7 @@ pub(super) struct AgentAuthorizationJob<R, C, T, K, D> {
 impl<R, C, T, K, D> AgentAuthorizationJob<R, C, T, K, D>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'static,
+    C: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
@@ -224,7 +224,7 @@ where
     pub(super) fn new(
         prepared: PreparedAgentInvocation,
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<C>>,
+        retirer: Arc<CommandRetirer<C>>,
         replay: Arc<T>,
         clock: Arc<K>,
         recovery_config: AgentTerminalRecoveryConfig,
@@ -276,7 +276,7 @@ where
 impl<R, C, T, K, D> Future for AgentAuthorizationJob<R, C, T, K, D>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'static,
+    C: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
@@ -322,7 +322,7 @@ fn run_authorization<R, C, T, K, D>(
 ) -> OwnedFuture<AgentAuthorizationJobCompletion>
 where
     R: ControlRpc + 'static,
-    C: RedisRetirementClient + 'static,
+    C: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,

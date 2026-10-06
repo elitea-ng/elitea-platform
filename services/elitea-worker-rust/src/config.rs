@@ -21,11 +21,12 @@ pub const RUNTIME_DEPLOY_SCHEMA_VERSION: &str = "elitea.runtime-deploy.v1";
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_IDENTITY_BYTES: usize = 256;
-const MAX_REDIS_NAME_BYTES: usize = 512;
 const MAX_TARGET_BYTES: usize = 512;
 const MAX_ORIGIN_BYTES: usize = 2_048;
-const RUNTIME_REDIS_ENTRY_BYTES: usize = 64 * 1024;
-const RUNTIME_REDIS_FIELD_BYTES: usize = 48 * 1024;
+const RUNTIME_TRANSPORT_MESSAGE_BYTES: usize =
+    crate::transport::command_bus::MAX_TRANSPORT_MESSAGE_BYTES;
+const RUNTIME_TRANSPORT_PAYLOAD_BYTES: usize =
+    crate::transport::command_bus::MAX_TRANSPORT_PAYLOAD_BYTES;
 // Match Main's admitted agent bundle and the claim-bound content contract.
 // A smaller fetch limit rejects saved history before compaction can run.
 const RUNTIME_INPUT_CONTENT_BYTES: usize = 8 * 1024 * 1024;
@@ -33,7 +34,6 @@ const RUNTIME_OUTPUT_FRAME_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_REQUEST_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_RESPONSE_BYTES: usize = 80 * 1024;
 const MAX_LEASE_POLL_INTERVAL_MILLIS: u64 = 10_000;
-const MIN_REDIS_RECLAIM_IDLE_MILLIS: u64 = 60_000;
 
 /// Stable, data-free deployment configuration failure.
 #[derive(Debug)]
@@ -74,10 +74,17 @@ pub struct RuntimeDeployConfig {
     pub workload_session_id: String,
     pub producer_id: String,
     pub consumer_id: String,
-    pub redis_url: String,
-    pub redis_password_path: PathBuf,
-    pub redis_stream: String,
-    pub redis_group: String,
+    /// `tls://host:port` with the mTLS trio below, `nats://host:port`
+    /// without it (compose only). No user information.
+    pub nats_url: String,
+    /// The `elitea-worker` identity's mTLS material: all three or none.
+    pub nats_ca_path: Option<PathBuf>,
+    pub nats_certificate_path: Option<PathBuf>,
+    pub nats_private_key_path: Option<PathBuf>,
+    /// `ELITEA_RT_V1_VALIDATE`, `ELITEA_RT_V1_AGENT` or `ELITEA_RT_V1_INDEX`.
+    pub nats_stream: String,
+    /// That stream's bootstrap-created durable; any other pairing is refused.
+    pub nats_consumer: String,
     pub control_target: String,
     pub output_target: String,
     pub content_origin: String,
@@ -281,9 +288,24 @@ impl RuntimeDeployConfig {
         ] {
             require_bounded_text(identity, MAX_IDENTITY_BYTES)?;
         }
-        require_bounded_text(&self.redis_stream, MAX_REDIS_NAME_BYTES)?;
-        require_bounded_text(&self.redis_group, MAX_IDENTITY_BYTES)?;
-        validate_redis_url(&self.redis_url)?;
+        if !crate::transport::command_bus::valid_route_pair(&self.nats_stream, &self.nats_consumer)
+        {
+            return Err(invalid_config());
+        }
+        let tls_material = [
+            &self.nats_ca_path,
+            &self.nats_certificate_path,
+            &self.nats_private_key_path,
+        ];
+        let present = tls_material.iter().filter(|path| path.is_some()).count();
+        let (_, tls_scheme) = crate::transport::nats_jetstream::parse_server_urls(&self.nats_url)
+            .map_err(|_| invalid_config())?;
+        if !matches!(present, 0 | 3) || tls_scheme != (present == 3) {
+            return Err(invalid_config());
+        }
+        for path in tls_material.into_iter().flatten() {
+            require_absolute_path(path)?;
+        }
         validate_grpc_target(&self.control_target)?;
         validate_grpc_target(&self.output_target)?;
         if self.sandbox_runtimes.len() > 4 {
@@ -362,7 +384,6 @@ impl RuntimeDeployConfig {
         self.content_origin = canonical_https_origin(&self.content_origin)?;
         self.platform_origin = canonical_https_origin(&self.platform_origin)?;
         for path in [
-            &self.redis_password_path,
             &self.ca_path,
             &self.certificate_path,
             &self.private_key_path,
@@ -389,10 +410,14 @@ impl RuntimeDeployConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLimits {
-    pub redis_read_batch: usize,
-    pub redis_block_millis: u64,
-    pub redis_reclaim_idle_millis: u64,
-    pub redis_reclaim_interval_millis: u64,
+    /// Messages per pull, 1..64 (never more than the free delivery permits).
+    pub nats_fetch_batch: usize,
+    /// How long one pull waits, 100..30000.
+    pub nats_fetch_expires_millis: u64,
+    /// The `+WPI` period, 1000..15000 (at most a quarter of `AckWait`).
+    pub nats_in_progress_interval_millis: u64,
+    /// The retry-later nak delay, 1000..300000.
+    pub nats_retry_delay_millis: u64,
     pub dependency_retry_millis: u64,
     pub delivery_max_concurrency: usize,
     pub delivery_queue_capacity: usize,
@@ -422,11 +447,10 @@ fn default_model_timeout_millis() -> u64 {
 
 impl RuntimeLimits {
     fn validate(self) -> Result<(), RuntimeConfigError> {
-        let valid = (1..=64).contains(&self.redis_read_batch)
-            && (100..=30_000).contains(&self.redis_block_millis)
-            && (MIN_REDIS_RECLAIM_IDLE_MILLIS..=86_400_000)
-                .contains(&self.redis_reclaim_idle_millis)
-            && (100..=MAX_LEASE_POLL_INTERVAL_MILLIS).contains(&self.redis_reclaim_interval_millis)
+        let valid = (1..=64).contains(&self.nats_fetch_batch)
+            && (100..=30_000).contains(&self.nats_fetch_expires_millis)
+            && (1_000..=15_000).contains(&self.nats_in_progress_interval_millis)
+            && (1_000..=300_000).contains(&self.nats_retry_delay_millis)
             && (100..=60_000).contains(&self.dependency_retry_millis)
             && (1..=128).contains(&self.delivery_max_concurrency)
             && (1..=512).contains(&self.delivery_queue_capacity)
@@ -457,13 +481,13 @@ impl RuntimeLimits {
     }
 
     #[must_use]
-    pub const fn redis_max_entry_bytes(self) -> usize {
-        RUNTIME_REDIS_ENTRY_BYTES
+    pub const fn max_transport_message_bytes(self) -> usize {
+        RUNTIME_TRANSPORT_MESSAGE_BYTES
     }
 
     #[must_use]
-    pub const fn redis_max_field_bytes(self) -> usize {
-        RUNTIME_REDIS_FIELD_BYTES
+    pub const fn max_transport_payload_bytes(self) -> usize {
+        RUNTIME_TRANSPORT_PAYLOAD_BYTES
     }
 
     #[must_use]
@@ -597,48 +621,6 @@ pub fn validate_private_directory(
     Ok(canonical)
 }
 
-fn validate_redis_url(value: &str) -> Result<(), RuntimeConfigError> {
-    if value.len() > MAX_ORIGIN_BYTES
-        || !value
-            .bytes()
-            .all(|byte| (0x21..=0x7e).contains(&byte) && !matches!(byte, b'%' | b'?' | b'#'))
-    {
-        return Err(invalid_config());
-    }
-    let remainder = value.strip_prefix("rediss://").ok_or_else(invalid_config)?;
-    let (authority, database) = remainder.split_once('/').ok_or_else(invalid_config)?;
-    if database != "0" || authority.contains('/') {
-        return Err(invalid_config());
-    }
-    let (username, host_port) = authority.split_once('@').ok_or_else(invalid_config)?;
-    if authority.matches('@').count() != 1
-        || username.is_empty()
-        || username.len() > MAX_IDENTITY_BYTES
-        || !username
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return Err(invalid_config());
-    }
-    let (host, port_text) = if let Some(ipv6) = host_port.strip_prefix('[') {
-        let (host, suffix) = ipv6.split_once(']').ok_or_else(invalid_config)?;
-        let port = suffix.strip_prefix(':').ok_or_else(invalid_config)?;
-        (host, port)
-    } else {
-        host_port.rsplit_once(':').ok_or_else(invalid_config)?
-    };
-    let port = port_text.parse::<u16>().map_err(|_| invalid_config())?;
-    if host.is_empty()
-        || !host.is_ascii()
-        || port == 0
-        || port_text != port.to_string()
-        || (!host_port.starts_with('[') && host.contains(':'))
-    {
-        return Err(invalid_config());
-    }
-    Ok(())
-}
-
 fn validate_grpc_target(value: &str) -> Result<(), RuntimeConfigError> {
     require_bounded_text(value, MAX_TARGET_BYTES)?;
     if value.contains("://") || value.contains('/') || value.contains('@') || value.starts_with(':')
@@ -743,10 +725,10 @@ mod tests {
 
     fn config(root: &Path) -> Value {
         let limits = json!({
-            "redis_read_batch": 8,
-            "redis_block_millis": 1000,
-            "redis_reclaim_idle_millis": 60000,
-            "redis_reclaim_interval_millis": 5000,
+            "nats_fetch_batch": 8,
+            "nats_fetch_expires_millis": 1000,
+            "nats_in_progress_interval_millis": 5000,
+            "nats_retry_delay_millis": 60000,
             "dependency_retry_millis": 250,
             "delivery_max_concurrency": 4,
             "delivery_queue_capacity": 8,
@@ -771,10 +753,12 @@ mod tests {
             "workload_session_id": "session-1",
             "producer_id": "rust-worker-1",
             "consumer_id": "rust-worker-1-consumer",
-            "redis_url": "rediss://worker@redis.internal:6379/0",
-            "redis_password_path": root.join("redis-password"),
-            "redis_stream": "commands.v1.agent.shared.1.0",
-            "redis_group": "elitea-rust-workers",
+            "nats_url": "tls://nats.internal:4222",
+            "nats_ca_path": root.join("nats-ca.crt"),
+            "nats_certificate_path": root.join("nats-worker.crt"),
+            "nats_private_key_path": root.join("nats-worker.key"),
+            "nats_stream": "ELITEA_RT_V1_AGENT",
+            "nats_consumer": "elitea-agent-worker-v1",
             "control_target": "control.internal:9443",
             "output_target": "output.internal:9444",
             "content_origin": "https://content.internal:9445/",
@@ -976,8 +960,10 @@ mod tests {
         let loaded = load_deploy_config(&path).expect("valid runtime configuration");
 
         assert_eq!(loaded.content_origin, "https://content.internal:9445");
-        assert_eq!(loaded.limits.redis_max_entry_bytes(), 64 * 1024);
-        assert_eq!(loaded.limits.redis_max_field_bytes(), 48 * 1024);
+        assert_eq!(loaded.limits.max_transport_message_bytes(), 64 * 1024);
+        assert_eq!(loaded.limits.max_transport_payload_bytes(), 48 * 1024);
+        assert_eq!(loaded.nats_stream, "ELITEA_RT_V1_AGENT");
+        assert_eq!(loaded.limits.nats_in_progress_interval_millis, 5_000);
         assert_eq!(loaded.limits.content_max_body_bytes(), 8 * 1024 * 1024);
         assert_eq!(loaded.limits.grpc_max_request_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.grpc_max_response_bytes(), 80 * 1024);
@@ -993,12 +979,17 @@ mod tests {
             .expect("canonical temporary root");
         let path = root_path.join("runtime.json");
         let cases = [
-            ("redis_password", json!("must-not-be-inline")),
-            ("redis_url", json!("redis://worker@redis.internal:6379/0")),
-            (
-                "redis_url",
-                json!("rediss://worker:secret@redis.internal:6379/0"),
-            ),
+            ("nats_password", json!("must-not-be-inline")),
+            ("redis_url", json!("rediss://worker@redis.internal:6379/0")),
+            ("redis_stream", json!("commands.v1.agent.shared.1.0")),
+            ("nats_url", json!("nats://nats.internal:4222")),
+            ("nats_url", json!("tls://worker:secret@nats.internal:4222")),
+            ("nats_url", json!("tls://token@nats.internal:4222")),
+            ("nats_url", json!("rediss://worker@redis.internal:6379/0")),
+            ("nats_ca_path", Value::Null),
+            ("nats_private_key_path", json!("relative.key")),
+            ("nats_stream", json!("ELITEA_RT_V1_INDEX")),
+            ("nats_consumer", json!("elitea-rust-workers")),
             ("control_target", json!("https://control.internal:9443")),
             ("content_origin", json!("https://content.internal/path")),
         ];
@@ -1006,11 +997,44 @@ mod tests {
             let mut document = config(&root_path);
             document[field] = value;
             write_config(&path, &document);
-            assert!(matches!(
-                load_deploy_config(&path),
-                Err(RuntimeConfigError::InvalidConfiguration(_))
-            ));
+            assert!(
+                matches!(
+                    load_deploy_config(&path),
+                    Err(RuntimeConfigError::InvalidConfiguration(_))
+                ),
+                "accepted {field}"
+            );
         }
+    }
+
+    #[test]
+    fn plaintext_nats_is_admitted_only_without_any_tls_material() {
+        let root = tempdir().expect("temporary directory");
+        let root_path = root
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let path = root_path.join("runtime.json");
+        let mut document = config(&root_path);
+        document["nats_url"] = json!("nats://nats:4222");
+        let object = document.as_object_mut().expect("config object");
+        for field in [
+            "nats_ca_path",
+            "nats_certificate_path",
+            "nats_private_key_path",
+        ] {
+            object.remove(field);
+        }
+        write_config(&path, &document);
+        let loaded = load_deploy_config(&path).expect("compose profile");
+        assert!(loaded.nats_ca_path.is_none());
+        document["nats_url"] = json!("tls://nats:4222");
+        write_config(&path, &document);
+        assert!(load_deploy_config(&path).is_err(), "tls:// needs material");
+        document["nats_url"] = json!("nats://nats:4222");
+        document["nats_ca_path"] = json!(root_path.join("ca.crt"));
+        write_config(&path, &document);
+        assert!(load_deploy_config(&path).is_err(), "partial material");
     }
 
     #[test]
@@ -1024,8 +1048,14 @@ mod tests {
         for (field, value) in [
             ("delivery_queue_capacity", 3),
             ("sync_max_in_flight", 1),
-            ("redis_reclaim_idle_millis", 59_999),
-            ("redis_reclaim_interval_millis", 10_001),
+            ("nats_fetch_batch", 0),
+            ("nats_fetch_batch", 65),
+            ("nats_fetch_expires_millis", 99),
+            ("nats_fetch_expires_millis", 30_001),
+            ("nats_in_progress_interval_millis", 999),
+            ("nats_in_progress_interval_millis", 15_001),
+            ("nats_retry_delay_millis", 999),
+            ("nats_retry_delay_millis", 300_001),
             ("lease_poll_interval_millis", 10_001),
             ("output_max_queued_bytes", 65_535),
         ] {

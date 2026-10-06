@@ -485,7 +485,7 @@ The selected copied-skill and credential lifecycle cases have deployed evidence;
 Preserve complete history across replacement and verify the wider durability requirements independently.
 Keep detailed diagnostics under `OBS-RUST-01`.
 
-Production activation requires replacement, reclaim, lost-acknowledgement, Redis TLS/ACL, load, soak, and Kubernetes proofs.
+Production activation requires replacement, reclaim, lost-acknowledgement, NATS JetStream (mTLS, permission table, server restart/leader change), load, soak, and Kubernetes proofs.
 Another worker must continue unfinished work without the original process or its local spool.
 Do not count skipped tests, mocks, or a matching final answer as system proof.
 

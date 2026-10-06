@@ -13,13 +13,13 @@ use tonic::transport::Channel;
 use super::agent_delivery_processor::{AgentDeliveryProcessor, native_agent_delivery_processor};
 use super::agent_lease::SystemUnixMillisClock;
 use super::agent_preparation::AgentPreparationConfig;
+use super::command_delivery::{
+    CommandDeliveryIntakeConfig, CommandDeliveryRuntime, CommandDeliveryRuntimeConfig,
+};
 use super::execution_delivery_processor::ExecutionDeliveryProcessor;
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
 use super::native_agent_lifecycle::NativeAuthorizedAgentLifecycle;
 use super::output_delivery::{AgentOutputPreflight, AgentTerminalRecoveryConfig};
-use super::redis_delivery::{
-    RedisDeliveryIntakeConfig, RedisDeliveryRuntime, RedisDeliveryRuntimeConfig,
-};
 use super::toolkit_delivery_processor::ToolkitDeliveryProcessor;
 use crate::agents::native_runtime::NativeRuntimeAssembler;
 use crate::agents::ordinary::OrdinaryNativeAgentAssembler;
@@ -32,24 +32,23 @@ use crate::toolkits::{
     DirectToolkitRuntime, ToolAdmissionPolicy, ToolAdmissionPolicyError,
     ToolAdmissionPolicyErrorCode,
 };
-use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementConfig};
-use crate::transport::redis_connector::ProductionRedisConnector;
-use crate::transport::redis_generation::RedisStreamsHandle;
+use crate::transport::command_bus::{CommandRetirementConfig, CommandRetirer};
+use crate::transport::nats_jetstream::NatsCommandBus;
 use crate::transport::{OutputGrpcConfig, TonicControlRpc};
 
 type ProductionAssembler =
     NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAssembler>;
-type ProductionRedis = Arc<RedisStreamsHandle<ProductionRedisConnector>>;
+type ProductionCommandBus = Arc<NatsCommandBus>;
 type ProductionLifecycle = NativeAuthorizedAgentLifecycle<
     ProductionAssembler,
     Channel,
     TonicControlRpc,
-    ProductionRedis,
+    ProductionCommandBus,
     SystemUnixMillisClock,
 >;
 type ProductionAgentProcessor = AgentDeliveryProcessor<
     TonicControlRpc,
-    ProductionRedis,
+    ProductionCommandBus,
     Channel,
     SystemUnixMillisClock,
     ProductionLifecycle,
@@ -57,7 +56,7 @@ type ProductionAgentProcessor = AgentDeliveryProcessor<
 >;
 type ProductionProcessor = ExecutionDeliveryProcessor<
     TonicControlRpc,
-    ProductionRedis,
+    ProductionCommandBus,
     Channel,
     SystemUnixMillisClock,
     ProductionLifecycle,
@@ -185,7 +184,7 @@ fn load_tool_policy(path: &Path) -> Result<Arc<ToolAdmissionPolicy>, ProductionS
         .map_err(|error| map_policy_error(&error))
 }
 
-/// Stable composition failure before Redis intake or command authority exists.
+/// Stable composition failure before command intake or command authority exists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProductionRuntimeBuildError;
 
@@ -197,11 +196,11 @@ impl fmt::Display for ProductionRuntimeBuildError {
 
 impl std::error::Error for ProductionRuntimeBuildError {}
 
-/// One process-owned Redis delivery runtime plus its native invocation drain
+/// One process-owned command delivery runtime plus its native invocation drain
 /// owner. Construction requires the authoritative policy explicitly; there is
 /// no default or missing-policy branch.
 pub(crate) struct ProductionAgentRuntime {
-    delivery: RedisDeliveryRuntime<ProductionRedisConnector, ProductionProcessor>,
+    delivery: CommandDeliveryRuntime<NatsCommandBus, ProductionProcessor>,
     processor: Arc<ProductionProcessor>,
 }
 
@@ -218,7 +217,7 @@ impl ProductionAgentRuntime {
             command_authenticator,
             spool_root,
             spool_master_key,
-            redis,
+            command_bus,
             control,
             output,
             input,
@@ -261,12 +260,11 @@ impl ProductionAgentRuntime {
             output_config,
         );
         let retirer = Arc::new(
-            RedisCommandRetirer::new(
-                Arc::clone(&redis),
-                RedisRetirementConfig {
-                    stream: deployment.redis_stream.clone(),
-                    group: deployment.redis_group.clone(),
-                    consumer: deployment.consumer_id.clone(),
+            CommandRetirer::new(
+                Arc::clone(&command_bus),
+                CommandRetirementConfig {
+                    stream: deployment.nats_stream.clone(),
+                    consumer: deployment.nats_consumer.clone(),
                 },
             )
             .map_err(|_| ProductionRuntimeBuildError)?,
@@ -328,28 +326,30 @@ impl ProductionAgentRuntime {
             agent,
             toolkit,
         ));
-        let intake = RedisDeliveryIntakeConfig::new(
+        let intake = CommandDeliveryIntakeConfig::new(
             limits.delivery_max_concurrency,
             limits.delivery_queue_capacity,
-            limits.redis_block_millis,
-            limits.redis_reclaim_idle_millis,
-            limits.redis_reclaim_interval_millis,
+            limits.nats_fetch_batch,
+            limits.nats_fetch_expires_millis,
+            limits.nats_in_progress_interval_millis,
+            limits.nats_retry_delay_millis,
         )
         .map_err(|_| ProductionRuntimeBuildError)?;
-        let runtime_config = RedisDeliveryRuntimeConfig::new(
+        let runtime_config = CommandDeliveryRuntimeConfig::new(
             intake,
             limits.dependency_retry_millis,
             limits.shutdown_timeout_millis,
         )
         .map_err(|_| ProductionRuntimeBuildError)?;
-        let delivery = RedisDeliveryRuntime::new(redis, Arc::clone(&processor), runtime_config);
+        let delivery =
+            CommandDeliveryRuntime::new(command_bus, Arc::clone(&processor), runtime_config);
         Ok(Self {
             delivery,
             processor,
         })
     }
 
-    /// Run intake until Stop, drain all PEL-owned processing, then stop and
+    /// Run intake until Stop, drain all owned processing, then stop and
     /// await the native invocation supervisor. The future remains one-shot.
     pub(crate) async fn run(
         self,
@@ -506,12 +506,12 @@ mod tests {
             "the production agent runtime configuration is invalid"
         );
         let runtime = ProductionAgentRuntimeError {
-            code: "redis_delivery.drain_timeout",
+            code: "command_delivery.drain_timeout",
             retryable: true,
         };
-        assert_eq!(runtime.code(), "redis_delivery.drain_timeout");
+        assert_eq!(runtime.code(), "command_delivery.drain_timeout");
         assert!(runtime.retryable());
-        assert!(!runtime.to_string().contains("redis_delivery"));
+        assert!(!runtime.to_string().contains("command_delivery"));
         let shutdown = shutdown_timeout_error();
         assert_eq!(shutdown.code(), "worker_serve.shutdown_timeout");
         assert!(shutdown.retryable());

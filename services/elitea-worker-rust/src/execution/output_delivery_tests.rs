@@ -33,6 +33,7 @@ use super::agent_preparation::{
     AgentInputMaterializer, AgentPreparationConfig, AgentPreparationOutcome, PreInvocationTerminal,
     prepare_fresh_agent_invocation_with,
 };
+use super::command_delivery::CommandDeliveryProcessor;
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
 use super::invocation_supervisor::InvocationSupervisor;
 use super::native_agent_lifecycle::{AgentPauseAccumulator, NativeAuthorizedAgentLifecycle};
@@ -44,7 +45,6 @@ use super::output_delivery::{
     AgentTerminalRecoveryError, AgentTerminalReplay, FreshAgentProgressPublisher,
     publish_pre_invocation_terminal, recover_accepted_terminal,
 };
-use super::redis_delivery::RedisDeliveryProcessor;
 use crate::agents::events::{
     AgentEventProjectionContext, AgentEventProjector, CompletedAgentBrowserOutput,
 };
@@ -78,14 +78,13 @@ use crate::protocol::output::{
 };
 use crate::spool::{SpoolError, SpoolLimits, SpoolMasterKey};
 use crate::toolkits::ToolAdmissionPolicy;
+use crate::transport::command_bus::{
+    CommandDelivery, CommandRetirementClient, CommandRetirementClientError,
+    CommandRetirementConfig, CommandRetirementRequest, CommandRetirer,
+};
 use crate::transport::output_grpc::{
     ProgressRejectionWinner, ProgressReplayDecision, test_acknowledged_progress,
     test_acknowledged_terminal, test_rejected_progress,
-};
-use crate::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandLimits, RedisCommandRetirer, RedisRetirementClient,
-    RedisRetirementClientError, RedisRetirementConfig, RedisRetirementRequest,
-    RedisRetirementResponse,
 };
 use crate::transport::{
     ControlGrpcConfig, ControlRpc, DurablyAckedTerminal, OutputGrpcConfig, OutputGrpcError,
@@ -144,7 +143,7 @@ fn fresh_for_kind(kind: AgentExecutionKind) -> FreshAgentDelivery {
     let claim =
         test_accepted_agent_claim(&verified, claim_response(), "workload-1", "worker-1", NOW)
             .expect("accepted claim");
-    test_fresh_agent_delivery(redis_delivery(raw), verified, claim)
+    test_fresh_agent_delivery(bus_delivery(raw), verified, claim)
 }
 
 fn signed_command_for_kind(kind: AgentExecutionKind) -> Vec<u8> {
@@ -154,17 +153,8 @@ fn signed_command_for_kind(kind: AgentExecutionKind) -> Vec<u8> {
     })
 }
 
-fn redis_delivery(raw: Vec<u8>) -> RedisCommandDelivery {
-    RedisCommandDelivery::decode(
-        b"runtime.commands.v1",
-        b"1700000000000-0",
-        vec![(b"signed_envelope".to_vec(), raw)],
-        RedisCommandLimits {
-            max_entry_bytes: 64 * 1024,
-            max_field_bytes: 48 * 1024,
-        },
-    )
-    .expect("Redis delivery")
+fn bus_delivery(raw: Vec<u8>) -> CommandDelivery {
+    crate::transport::command_bus::test_agent_delivery(raw)
 }
 
 fn output_config(producer_id: &str) -> OutputGrpcConfig {
@@ -741,33 +731,32 @@ fn recovery_control_with_renew_failure(
     recovery_control_with_policy(trace, false, Some(0), [])
 }
 
-struct RecoveryRedis {
+struct RecoveryBus {
     trace: Arc<Mutex<Vec<&'static str>>>,
-    result: Result<RedisRetirementResponse, RedisRetirementClientError>,
+    result: Result<(), CommandRetirementClientError>,
 }
 
 #[async_trait]
-impl RedisRetirementClient for RecoveryRedis {
+impl CommandRetirementClient for RecoveryBus {
     async fn retire_delivery(
         &self,
-        request: RedisRetirementRequest,
-    ) -> Result<RedisRetirementResponse, RedisRetirementClientError> {
-        assert_eq!(request.stream(), "runtime.commands.v1");
-        self.trace.lock().expect("trace").push("redis");
+        request: CommandRetirementRequest,
+    ) -> Result<(), CommandRetirementClientError> {
+        assert_eq!(request.stream(), "ELITEA_RT_V1_AGENT");
+        self.trace.lock().expect("trace").push("retire");
         self.result
     }
 }
 
 fn recovery_retirer(
     trace: Arc<Mutex<Vec<&'static str>>>,
-    result: Result<RedisRetirementResponse, RedisRetirementClientError>,
-) -> RedisCommandRetirer<RecoveryRedis> {
-    RedisCommandRetirer::new(
-        RecoveryRedis { trace, result },
-        RedisRetirementConfig {
-            stream: "runtime.commands.v1".to_owned(),
-            group: "runtime-workers".to_owned(),
-            consumer: "worker-1".to_owned(),
+    result: Result<(), CommandRetirementClientError>,
+) -> CommandRetirer<RecoveryBus> {
+    CommandRetirer::new(
+        RecoveryBus { trace, result },
+        CommandRetirementConfig {
+            stream: "ELITEA_RT_V1_AGENT".to_owned(),
+            consumer: "elitea-agent-worker-v1".to_owned(),
         },
     )
     .expect("recovery retirer")
@@ -2721,14 +2710,7 @@ async fn pre_invocation_failure_polls_persists_replays_settles_and_retires_in_or
         [ReplayResult::Unavailable, ReplayResult::Acknowledged],
         Arc::clone(&trace),
     );
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let completion = publish_pre_invocation_terminal(
         control,
@@ -2770,7 +2752,7 @@ async fn pre_invocation_failure_polls_persists_replays_settles_and_retires_in_or
             "replay",
             "replay",
             "settlement",
-            "redis",
+            "retire",
         ]
     );
 }
@@ -2808,14 +2790,7 @@ async fn already_authorized_drops_request_authority_and_publishes_one_bound_inte
         [ReplayResult::Acknowledged],
         Arc::clone(&trace),
     ));
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let lifecycle = Arc::new(GatedAuthorizedLifecycle {
         trace: Arc::clone(&trace),
         started: Mutex::new(None),
@@ -2858,7 +2833,7 @@ async fn already_authorized_drops_request_authority_and_publishes_one_bound_inte
             "observe",
             "replay",
             "settlement",
-            "redis",
+            "retire",
         ]
     );
     drop(temporary);
@@ -2904,14 +2879,7 @@ async fn dropped_authorization_waiter_cannot_cancel_the_owned_authorized_lifecyc
         [ReplayResult::Acknowledged],
         Arc::clone(&trace),
     ));
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let (reservation, job) = AgentAuthorizationJob::new(
         *prepared,
         control,
@@ -2956,7 +2924,7 @@ async fn dropped_authorization_waiter_cannot_cancel_the_owned_authorized_lifecyc
 }
 
 #[tokio::test]
-async fn application_and_adhoc_share_native_events_terminal_settlement_and_redis_retirement() {
+async fn application_and_adhoc_share_native_events_terminal_settlement_and_command_retirement() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
         Box::pin(run_native_lifecycle_case(kind)).await;
     }
@@ -2998,14 +2966,7 @@ async fn run_native_lifecycle_case(kind: AgentExecutionKind) {
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let coordinator = native_agent_coordinator(
         admission.clone(),
         Arc::new(TestNativeAssembler {
@@ -3092,14 +3053,14 @@ async fn run_native_lifecycle_case(kind: AgentExecutionKind) {
             "renew",
             "observe",
             "settlement",
-            "redis",
+            "retire",
         ]
     );
     drop(temporary);
 }
 
 #[tokio::test]
-async fn redis_delivery_processor_owns_both_agent_kinds_through_retirement() {
+async fn command_delivery_processor_owns_both_agent_kinds_through_retirement() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
         Box::pin(run_delivery_processor_case(kind)).await;
     }
@@ -3117,14 +3078,7 @@ async fn ambiguous_output_recovery_terminalizes_without_reentering_business_exec
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let processor = native_agent_delivery_processor(
         Arc::new(TestOnlyConformanceHmacAuthenticator),
         preflight(output_root, "worker-1"),
@@ -3148,7 +3102,7 @@ async fn ambiguous_output_recovery_terminalizes_without_reentering_business_exec
     );
 
     processor
-        .process(redis_delivery(signed_command_for_kind(
+        .process(bus_delivery(signed_command_for_kind(
             AgentExecutionKind::Application,
         )))
         .await;
@@ -3156,7 +3110,7 @@ async fn ambiguous_output_recovery_terminalizes_without_reentering_business_exec
 
     assert_eq!(
         *trace.lock().expect("trace"),
-        ["claim", "renew", "observe", "settlement", "redis"]
+        ["claim", "renew", "observe", "settlement", "retire"]
     );
     assert_eq!(admission.available_capacity(), 1);
     let frames = progress_state.frames.lock().expect("frames");
@@ -3186,14 +3140,7 @@ async fn run_delivery_processor_case(kind: AgentExecutionKind) {
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let processor = native_agent_delivery_processor(
         Arc::new(TestOnlyConformanceHmacAuthenticator),
         preflight(output_root, "worker-1"),
@@ -3217,7 +3164,7 @@ async fn run_delivery_processor_case(kind: AgentExecutionKind) {
     );
 
     processor
-        .process(redis_delivery(signed_command_for_kind(kind)))
+        .process(bus_delivery(signed_command_for_kind(kind)))
         .await;
     processor.close().await.expect("delivery processor drain");
 
@@ -3238,7 +3185,7 @@ async fn run_delivery_processor_case(kind: AgentExecutionKind) {
             "renew",
             "observe",
             "settlement",
-            "redis",
+            "retire",
         ]
     );
     assert_eq!(progress_state.frames.lock().expect("frames").len(), 9);
@@ -3258,14 +3205,7 @@ async fn stopped_delivery_processor_closes_prepared_work_without_authorize_or_ac
     let connector = FakeProgressConnector {
         state: FakeProgressState::new([], []),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let processor = native_agent_delivery_processor(
         Arc::new(TestOnlyConformanceHmacAuthenticator),
         preflight(output_root, "worker-1"),
@@ -3290,7 +3230,7 @@ async fn stopped_delivery_processor_closes_prepared_work_without_authorize_or_ac
     processor.stop().expect("stop delivery processor");
 
     processor
-        .process(redis_delivery(signed_command_for_kind(
+        .process(bus_delivery(signed_command_for_kind(
             AgentExecutionKind::Application,
         )))
         .await;
@@ -3301,7 +3241,7 @@ async fn stopped_delivery_processor_closes_prepared_work_without_authorize_or_ac
     assert!(!trace.contains(&"begin"));
     assert!(!trace.contains(&"input"));
     assert!(!trace.contains(&"authorize"));
-    assert!(!trace.contains(&"redis"));
+    assert!(!trace.contains(&"retire"));
     assert_eq!(admission.available_capacity(), 1);
     drop(trace);
     drop(processor);
@@ -3342,14 +3282,7 @@ async fn stopped_native_coordinator_returns_an_explicitly_closeable_unstarted_jo
     let connector = FakeProgressConnector {
         state: FakeProgressState::new([], []),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let coordinator = native_agent_coordinator(
         admission.clone(),
         Arc::new(TestNativeAssembler {
@@ -3442,14 +3375,7 @@ async fn sensitive_interrupt_lifecycle_case() {
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
         Arc::new(TestNativeAssembler {
             trace: Arc::clone(&trace),
@@ -3633,14 +3559,7 @@ async fn run_durable_stop_case(sandbox_complete: Option<bool>) {
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Semaphore::new(0));
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
@@ -3701,7 +3620,7 @@ async fn run_durable_stop_case(sandbox_complete: Option<bool>) {
         let observed = trace.lock().unwrap();
         assert!(observed.contains(&"sandbox_stop"));
         assert!(!observed.contains(&"settlement"));
-        assert!(!observed.contains(&"redis"));
+        assert!(!observed.contains(&"retire"));
         assert_eq!(progress_state.frames.lock().unwrap().len(), 1);
         return;
     }
@@ -3733,7 +3652,7 @@ async fn run_durable_stop_case(sandbox_complete: Option<bool>) {
         trace
             .lock()
             .expect("trace")
-            .ends_with(&["settlement", "redis"])
+            .ends_with(&["settlement", "retire"])
     );
     drop(temporary);
 }
@@ -3785,14 +3704,7 @@ async fn run_stop_during_assembly_case() {
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let assembly_started = Arc::new(Notify::new());
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
         Arc::new(GatedNativeAssembler {
@@ -3848,7 +3760,7 @@ async fn run_stop_during_assembly_case() {
         trace
             .lock()
             .expect("trace")
-            .ends_with(&["settlement", "redis"])
+            .ends_with(&["settlement", "retire"])
     );
     drop(temporary);
 }
@@ -3898,14 +3810,7 @@ async fn run_deadline_during_native_case() {
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
-    let retirer = Arc::new(recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    ));
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Semaphore::new(0));
     let lifecycle_clock = Arc::clone(&clock);
@@ -3989,7 +3894,7 @@ async fn run_deadline_during_native_case() {
         trace
             .lock()
             .expect("trace")
-            .ends_with(&["settlement", "redis"])
+            .ends_with(&["settlement", "retire"])
     );
     drop(temporary);
 }
@@ -4032,14 +3937,7 @@ async fn supervisor_stop_race_returns_unpolled_authorization_for_noack_cleanup()
     let (reservation, job) = AgentAuthorizationJob::new(
         *prepared,
         control,
-        Arc::new(recovery_retirer(
-            Arc::clone(&trace),
-            Ok(RedisRetirementResponse {
-                acknowledged: 1,
-                deleted: 1,
-                unmapped: 1,
-            }),
-        )),
+        Arc::new(recovery_retirer(Arc::clone(&trace), Ok(()))),
         Arc::new(FakeReplay::new(
             [ReplayResult::Acknowledged],
             Arc::clone(&trace),
@@ -4073,7 +3971,7 @@ async fn supervisor_stop_race_returns_unpolled_authorization_for_noack_cleanup()
 }
 
 #[tokio::test]
-async fn unknown_authorization_effect_closes_locally_without_output_or_redis_ack() {
+async fn unknown_authorization_effect_closes_locally_without_output_or_command_ack() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, root) = root();
     let preflight = preflight(root, "worker-1");
@@ -4109,14 +4007,7 @@ async fn unknown_authorization_effect_closes_locally_without_output_or_redis_ack
     let (reservation, job) = AgentAuthorizationJob::new(
         *prepared,
         control,
-        Arc::new(recovery_retirer(
-            Arc::clone(&trace),
-            Ok(RedisRetirementResponse {
-                acknowledged: 1,
-                deleted: 1,
-                unmapped: 1,
-            }),
-        )),
+        Arc::new(recovery_retirer(Arc::clone(&trace), Ok(()))),
         Arc::new(FakeReplay::new(
             [ReplayResult::Acknowledged],
             Arc::clone(&trace),
@@ -4152,14 +4043,7 @@ async fn publication_deadline_is_sampled_after_the_final_lease_poll() {
     let (_temporary, control, terminal, admission) =
         pre_invocation_terminal_fixture(Arc::clone(&trace)).await;
     let replay = FakeReplay::new([ReplayResult::Acknowledged], Arc::clone(&trace));
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let completion = publish_pre_invocation_terminal(
         control,
@@ -4202,14 +4086,7 @@ async fn final_stop_beats_both_the_proposed_failure_and_deadline() {
     )
     .await;
     let replay = FakeReplay::new([ReplayResult::Acknowledged], Arc::clone(&trace));
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let completion = publish_pre_invocation_terminal(
         control,
@@ -4233,19 +4110,12 @@ async fn final_stop_beats_both_the_proposed_failure_and_deadline() {
 }
 
 #[tokio::test]
-async fn fatal_final_lease_loss_suppresses_output_settlement_and_redis() {
+async fn fatal_final_lease_loss_suppresses_output_settlement_and_retirement() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (_temporary, control, terminal, admission) =
         pre_invocation_terminal_fixture_with_policy(Arc::clone(&trace), Some(2), []).await;
     let replay = FakeReplay::new([ReplayResult::Acknowledged], Arc::clone(&trace));
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let error = publish_pre_invocation_terminal(
         control,
@@ -4264,7 +4134,7 @@ async fn fatal_final_lease_loss_suppresses_output_settlement_and_redis() {
     let trace = trace.lock().expect("trace");
     assert!(!trace.contains(&"replay"));
     assert!(!trace.contains(&"settlement"));
-    assert!(!trace.contains(&"redis"));
+    assert!(!trace.contains(&"retire"));
 }
 
 #[tokio::test]
@@ -4273,14 +4143,7 @@ async fn exhausted_fresh_terminal_replay_retains_bytes_and_reports_safe_policy()
     let (_temporary, control, terminal, admission) =
         pre_invocation_terminal_fixture(Arc::clone(&trace)).await;
     let replay = FakeReplay::new([ReplayResult::Unavailable], Arc::clone(&trace));
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let error = publish_pre_invocation_terminal(
         control,
@@ -4297,22 +4160,15 @@ async fn exhausted_fresh_terminal_replay_retains_bytes_and_reports_safe_policy()
     assert!(error.retryable());
     assert_eq!(admission.available_capacity(), 1);
     assert!(!trace.lock().expect("trace").contains(&"settlement"));
-    assert!(!trace.lock().expect("trace").contains(&"redis"));
+    assert!(!trace.lock().expect("trace").contains(&"retire"));
 }
 
 #[tokio::test]
-async fn accepted_terminal_replays_settles_and_only_then_retires_redis() {
+async fn accepted_terminal_replays_settles_and_only_then_retires_the_command() {
     let (_temporary, _preflight, recovery, frame) = pending_terminal_recovery().await;
     let trace = Arc::new(Mutex::new(Vec::new()));
     let replay = FakeReplay::new([ReplayResult::Acknowledged], Arc::clone(&trace));
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let completion = recover_accepted_terminal(
         recovery_control(Arc::clone(&trace), false),
@@ -4331,7 +4187,7 @@ async fn accepted_terminal_replays_settles_and_only_then_retires_redis() {
     assert_eq!(completion.settlement_receipt_id(), "settlement-receipt-1");
     assert_eq!(
         *trace.lock().expect("trace"),
-        ["replay", "settlement", "redis"]
+        ["replay", "settlement", "retire"]
     );
 }
 
@@ -4340,14 +4196,7 @@ async fn a_late_lease_failure_cannot_revoke_confirmed_terminal_retirement() {
     let (_temporary, _preflight, recovery, frame) = pending_terminal_recovery().await;
     let trace = Arc::new(Mutex::new(Vec::new()));
     let replay = FakeReplay::new([ReplayResult::AdvanceAndAcknowledged], Arc::clone(&trace));
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let completion = recover_accepted_terminal(
         recovery_control_with_renew_failure(Arc::clone(&trace)),
@@ -4364,7 +4213,7 @@ async fn a_late_lease_failure_cannot_revoke_confirmed_terminal_retirement() {
     assert_eq!(completion.sequence(), frame.sequence);
     assert_eq!(
         *trace.lock().expect("trace"),
-        ["replay", "renew", "settlement", "redis"]
+        ["replay", "renew", "settlement", "retire"]
     );
 }
 
@@ -4379,14 +4228,7 @@ async fn reconnect_uses_a_fresh_exact_spool_and_stops_at_the_bound() {
         ],
         Arc::clone(&trace),
     );
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let error = recover_accepted_terminal(
         recovery_control(Arc::clone(&trace), false),
@@ -4421,14 +4263,7 @@ async fn nonretryable_output_rejection_never_opens_a_second_session() {
         ],
         Arc::clone(&trace),
     );
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     let error = recover_accepted_terminal(
         recovery_control(Arc::clone(&trace), false),
@@ -4460,14 +4295,7 @@ async fn frame_bound_cancellation_replaces_exact_bytes_and_gets_a_fresh_budget()
         ],
         Arc::clone(&trace),
     );
-    let retirer = recovery_retirer(
-        Arc::clone(&trace),
-        Ok(RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        }),
-    );
+    let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
     recover_accepted_terminal(
         recovery_control(Arc::clone(&trace), false),
@@ -4504,35 +4332,31 @@ async fn frame_bound_cancellation_replaces_exact_bytes_and_gets_a_fresh_budget()
             "replay",
             "replay",
             "settlement",
-            "redis"
+            "retire"
         ]
     );
 }
 
 #[tokio::test]
-async fn settlement_or_redis_failure_cannot_skip_the_authority_order() {
-    for (settlement_fails, redis_result, expected_trace, expected_code) in [
+async fn settlement_or_retirement_failure_cannot_skip_the_authority_order() {
+    for (settlement_fails, retire_result, expected_trace, expected_code) in [
         (
             true,
-            Ok(RedisRetirementResponse {
-                acknowledged: 1,
-                deleted: 1,
-                unmapped: 1,
-            }),
+            Ok(()),
             vec!["replay", "settlement"],
             "agent_terminal_recovery.settlement_failed",
         ),
         (
             false,
-            Err(RedisRetirementClientError::DependencyUnavailable),
-            vec!["replay", "settlement", "redis"],
-            "redis_command.dependency_unavailable",
+            Err(CommandRetirementClientError::DependencyUnavailable),
+            vec!["replay", "settlement", "retire"],
+            "command_bus.dependency_unavailable",
         ),
     ] {
         let (_temporary, _preflight, recovery, _frame) = pending_terminal_recovery().await;
         let trace = Arc::new(Mutex::new(Vec::new()));
         let replay = FakeReplay::new([ReplayResult::Acknowledged], Arc::clone(&trace));
-        let retirer = recovery_retirer(Arc::clone(&trace), redis_result);
+        let retirer = recovery_retirer(Arc::clone(&trace), retire_result);
 
         let error = recover_accepted_terminal(
             recovery_control(Arc::clone(&trace), settlement_fails),
@@ -4558,14 +4382,7 @@ async fn a_second_frame_bound_winner_does_not_enter_a_replacement_loop() {
         let (_temporary, _preflight, recovery, _frame) = pending_terminal_recovery().await;
         let trace = Arc::new(Mutex::new(Vec::new()));
         let replay = FakeReplay::new([first_winner, first_winner], Arc::clone(&trace));
-        let retirer = recovery_retirer(
-            Arc::clone(&trace),
-            Ok(RedisRetirementResponse {
-                acknowledged: 1,
-                deleted: 1,
-                unmapped: 1,
-            }),
-        );
+        let retirer = recovery_retirer(Arc::clone(&trace), Ok(()));
 
         let error = recover_accepted_terminal(
             recovery_control(Arc::clone(&trace), false),
@@ -4619,7 +4436,7 @@ fn checkpoint_delivery() -> super::agent_delivery::CheckpointAgentDelivery {
         NOW,
     )
     .expect("inspection");
-    super::agent_delivery::test_checkpoint_delivery(redis_delivery(raw), verified, inspection)
+    super::agent_delivery::test_checkpoint_delivery(bus_delivery(raw), verified, inspection)
 }
 
 #[tokio::test]
@@ -4709,14 +4526,7 @@ async fn checkpoint_supervisor_owns_authorization_after_waiter_drop_and_rejects_
             InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
         );
         let control = authorized_control(trace.clone());
-        let retirer = Arc::new(recovery_retirer(
-            trace.clone(),
-            Ok(RedisRetirementResponse {
-                acknowledged: 1,
-                deleted: 1,
-                unmapped: 1,
-            }),
-        ));
+        let retirer = Arc::new(recovery_retirer(trace.clone(), Ok(())));
         let replay = Arc::new(FakeReplay::new([], trace.clone()));
         let (started_tx, started_rx) = oneshot::channel();
         let release = Arc::new(Semaphore::new(0));
@@ -4907,14 +4717,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
         let admission = InvocationAdmission::new(
             InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
         );
-        let retirer = Arc::new(recovery_retirer(
-            trace.clone(),
-            Ok(RedisRetirementResponse {
-                acknowledged: 1,
-                deleted: 1,
-                unmapped: 1,
-            }),
-        ));
+        let retirer = Arc::new(recovery_retirer(trace.clone(), Ok(())));
         let state = FakeProgressState::new([], [ReplayProgressAction::Acknowledge]);
         let replay = Arc::new(FakeProgressConnector {
             state: state.clone(),
@@ -4955,7 +4758,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
             parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
                 .expect("verified");
         processor
-            .process_verified_delivery(redis_delivery(raw), verified)
+            .process_verified_delivery(bus_delivery(raw), verified)
             .await;
         processor.close().await.expect("drain");
         let events = trace.lock().expect("trace");
@@ -4971,7 +4774,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
             usize::from(case == 0)
         );
         assert!(!events.contains(&"begin") && !events.contains(&"authorize"));
-        assert_eq!(events.contains(&"redis"), case >= 2);
+        assert_eq!(events.contains(&"retire"), case >= 2);
         assert_eq!(events.contains(&"settlement"), case >= 2);
         assert_eq!(state.replays.load(Ordering::SeqCst), usize::from(case == 1));
         if case >= 2 {

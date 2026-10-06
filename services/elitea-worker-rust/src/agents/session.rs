@@ -503,7 +503,7 @@ impl Agent for DelegatedAuthorizationEventAgent {
 /// Non-authority command fields needed by local ADK and browser projection.
 ///
 /// This value is created only from the already authenticated command and has
-/// no claim, fence, PAT, output, settlement, or Redis capability. Fields stay
+/// no claim, fence, PAT, output, settlement, or command-bus capability. Fields stay
 /// private so assembly cannot accidentally substitute request-carried routing
 /// values for command-authenticated identity.
 pub(crate) struct AuthorizedNativeCommandBinding {

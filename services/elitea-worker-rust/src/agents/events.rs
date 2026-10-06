@@ -57,7 +57,7 @@ const MAX_TOOL_RESULT_CHUNKS: usize = MAX_TOOL_RESULT_BYTES / INLINE_TEXT_CHUNK_
 /// projection failed with `ResourceExhausted` and the user saw a failed tool
 /// call for a file the toolkit's own 200,000-character cap admits. The frame
 /// bound is not this module's to raise (it is `max_output_frame_bytes` in the
-/// runtime limits conformance document, itself under the Redis field bound),
+/// runtime limits conformance document, itself under the transport payload bound),
 /// so an oversized result is instead emitted as an ORDERED SEQUENCE of
 /// ordinary node events that main reassembles onto the stored tool call
 /// (`services/elitea-main/internal/transport/runtimegrpc/nodeevent/

@@ -27,13 +27,13 @@ use super::output_delivery::{
 use crate::agents::runtime::NativeAgentAssembler;
 use crate::protocol::control::AgentControlClient;
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementClient};
+use crate::transport::command_bus::{CommandRetirementClient, CommandRetirer};
 
 /// Process-owned authorization and native-runtime task coordinator.
 pub(super) struct AgentInvocationCoordinator<R, RC, T, K, D> {
     supervisor: InvocationSupervisor,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     replay: Arc<T>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
@@ -43,7 +43,7 @@ pub(super) struct AgentInvocationCoordinator<R, RC, T, K, D> {
 impl<R, RC, T, K, D> AgentInvocationCoordinator<R, RC, T, K, D>
 where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
@@ -53,7 +53,7 @@ where
     pub(super) fn new(
         admission: InvocationAdmission,
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<RC>>,
+        retirer: Arc<CommandRetirer<RC>>,
         replay: Arc<T>,
         clock: Arc<K>,
         terminal_recovery: AgentTerminalRecoveryConfig,
@@ -203,7 +203,7 @@ pub(super) struct RejectedAgentInvocation<R, RC, T, K, D> {
 impl<R, RC, T, K, D> RejectedAgentInvocation<R, RC, T, K, D>
 where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,
@@ -233,7 +233,7 @@ pub(super) fn native_agent_coordinator<A, C, R, RC, K>(
     assembler: Arc<A>,
     connector: C,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     max_output_sessions: usize,
     terminal_recovery: AgentTerminalRecoveryConfig,
@@ -242,7 +242,7 @@ where
     A: NativeAgentAssembler,
     C: AgentProgressConnector + AgentTerminalReplay + Clone + Send + Sync + 'static,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(

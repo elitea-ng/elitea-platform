@@ -17,8 +17,8 @@ use crate::protocol::output::{
 };
 use crate::spool::ExecutionSpoolIdentity;
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandError, RedisCommandRetirer, RedisRetirementClient,
+use crate::transport::command_bus::{
+    CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
 
 /// Stable failure categories for the shared application/ad-hoc delivery route.
@@ -26,7 +26,7 @@ use crate::transport::redis_commands::{
 pub enum AgentDeliveryError {
     Protocol(ProtocolError),
     Control(AgentControlError),
-    Retirement(RedisCommandError),
+    Retirement(CommandBusError),
 }
 
 impl AgentDeliveryError {
@@ -96,8 +96,8 @@ impl From<AgentControlError> for AgentDeliveryError {
     }
 }
 
-impl From<RedisCommandError> for AgentDeliveryError {
-    fn from(value: RedisCommandError) -> Self {
+impl From<CommandBusError> for AgentDeliveryError {
+    fn from(value: CommandBusError) -> Self {
         Self::Retirement(value)
     }
 }
@@ -116,7 +116,7 @@ pub enum AgentDeliveryRouteKind {
 /// Its fields remain private so later execution stages cannot bypass the
 /// shared router or manufacture fresh business-input authority.
 pub struct FreshAgentDelivery {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     claim_handoff_watermark: u64,
     claim: AcceptedAgentClaim,
@@ -133,20 +133,14 @@ impl FreshAgentDelivery {
         self.claim_handoff_watermark
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        RedisCommandDelivery,
-        VerifiedAgentCommand,
-        AcceptedAgentClaim,
-    ) {
+    pub(crate) fn into_parts(self) -> (CommandDelivery, VerifiedAgentCommand, AcceptedAgentClaim) {
         (self.delivery, self.verified, self.claim)
     }
 
     pub(crate) fn into_terminal_recovery_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedAgentCommand,
         AcceptedTerminalClaimRecovery,
     ) {
@@ -220,7 +214,7 @@ impl FreshAgentDelivery {
 
 #[cfg(test)]
 pub(crate) fn test_fresh_agent_delivery(
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     claim: AcceptedAgentClaim,
 ) -> FreshAgentDelivery {
@@ -234,7 +228,7 @@ pub(crate) fn test_fresh_agent_delivery(
 
 /// An input-free redelivery which may only inspect and recover durable output.
 pub struct OutputRecoveryAgentDelivery {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     recovery: AgentOutputRecovery,
 }
@@ -284,13 +278,7 @@ impl OutputRecoveryAgentDelivery {
         }
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        RedisCommandDelivery,
-        VerifiedAgentCommand,
-        AgentOutputRecovery,
-    ) {
+    pub(crate) fn into_parts(self) -> (CommandDelivery, VerifiedAgentCommand, AgentOutputRecovery) {
         (self.delivery, self.verified, self.recovery)
     }
 }
@@ -302,7 +290,7 @@ pub enum AgentDeliveryCompletionKind {
     RecoveredSettlement,
 }
 
-/// Non-authoritative summary emitted only after atomic Redis retirement.
+/// Non-authoritative summary emitted only after command retirement (double ack).
 #[derive(Debug, Eq, PartialEq)]
 pub struct AgentDeliveryCompletion {
     kind: AgentDeliveryCompletionKind,
@@ -360,7 +348,7 @@ pub(crate) enum NodeRecoveryDeliveryRoute {
     Node(Box<NodeRecoveryAgentDelivery>),
 }
 pub(crate) struct NodeRecoveryAgentDelivery {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     inspection: crate::protocol::control::NodeRecoveryInspection,
 }
@@ -399,7 +387,7 @@ impl NodeRecoveryAgentDelivery {
     pub(crate) fn into_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedAgentCommand,
         crate::protocol::control::NodeRecoveryInspection,
     ) {
@@ -409,7 +397,7 @@ impl NodeRecoveryAgentDelivery {
 
 #[allow(dead_code)]
 pub(crate) struct CheckpointAgentDelivery {
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     inspection: crate::protocol::control::ModelCheckpointInspection,
 }
@@ -467,7 +455,7 @@ impl CheckpointAgentDelivery {
     pub(crate) fn into_terminal_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedAgentCommand,
         AcceptedTerminalClaimRecovery,
     ) {
@@ -481,7 +469,7 @@ impl CheckpointAgentDelivery {
     pub(crate) fn into_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedAgentCommand,
         crate::protocol::control::ModelCheckpointInspection,
     ) {
@@ -491,7 +479,7 @@ impl CheckpointAgentDelivery {
 
 #[cfg(test)]
 pub(crate) fn test_checkpoint_delivery(
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedAgentCommand,
     inspection: crate::protocol::control::ModelCheckpointInspection,
 ) -> CheckpointAgentDelivery {
@@ -507,16 +495,16 @@ pub(crate) fn test_checkpoint_delivery(
 /// This is not whole-delivery or invocation admission. It intentionally stops
 /// before capacity reservation, input materialization, output-spool recovery,
 /// `BeginExecution`, and ADK invocation. It does fully own terminal redelivery
-/// ordering: Claim -> optional `PrepareSettlement` -> atomic Redis retirement.
+/// ordering: Claim -> optional `PrepareSettlement` -> command retirement (double ack).
 /// No terminal route can return success before retirement.
 pub struct AgentDeliveryRouter<R, C> {
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<C>>,
+    retirer: Arc<CommandRetirer<C>>,
 }
 
 impl<R, C> AgentDeliveryRouter<R, C> {
     #[must_use]
-    pub fn new(control: AgentControlClient<R>, retirer: RedisCommandRetirer<C>) -> Self {
+    pub fn new(control: AgentControlClient<R>, retirer: CommandRetirer<C>) -> Self {
         Self {
             control: Arc::new(control),
             retirer: Arc::new(retirer),
@@ -525,11 +513,11 @@ impl<R, C> AgentDeliveryRouter<R, C> {
 
     /// Share the exact control and retirement owners with the later invocation
     /// coordinator. This prevents route and lifecycle wiring from drifting to
-    /// different worker identities or Redis generations.
+    /// different worker identities or transport connections.
     #[must_use]
     pub(crate) const fn from_shared(
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<C>>,
+        retirer: Arc<CommandRetirer<C>>,
     ) -> Self {
         Self { control, retirer }
     }
@@ -538,7 +526,7 @@ impl<R, C> AgentDeliveryRouter<R, C> {
 impl<R, C> AgentDeliveryRouter<R, C>
 where
     R: ControlRpc,
-    C: RedisRetirementClient,
+    C: CommandRetirementClient,
 {
     /// Verify, claim, and route one agent delivery without conflating fresh
     /// execution authority with recovery or terminal retirement authority.
@@ -546,10 +534,10 @@ where
     /// # Errors
     ///
     /// Returns a typed protocol, control, or retirement failure. A failure or
-    /// no-ACK route never calls a generic Redis ACK/delete operation.
+    /// no-ACK route never calls a generic ack/delete operation.
     pub async fn route(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         authenticator: &dyn SignedCommandAuthenticator,
         now_unix_millis: i64,
     ) -> Result<AgentDeliveryRoute, AgentDeliveryError> {
@@ -565,7 +553,7 @@ where
     /// preserving the public verify-and-route contract above.
     pub(crate) async fn route_verified(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
         now_unix_millis: i64,
     ) -> Result<AgentDeliveryRoute, AgentDeliveryError> {
@@ -582,7 +570,7 @@ where
     #[allow(dead_code)]
     pub(crate) async fn route_checkpoint_verified(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
         now_unix_millis: i64,
     ) -> Result<CheckpointDeliveryRoute, AgentDeliveryError> {
@@ -608,7 +596,7 @@ where
 
     pub(crate) async fn route_node_recovery_verified(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
         now_ms: i64,
     ) -> Result<NodeRecoveryDeliveryRoute, AgentDeliveryError> {
@@ -641,7 +629,7 @@ where
 
     async fn route_claim_decision(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
         decision: AgentClaimDecision,
     ) -> Result<AgentDeliveryRoute, AgentDeliveryError> {

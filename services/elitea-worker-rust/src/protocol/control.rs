@@ -867,7 +867,7 @@ pub(crate) struct ClaimBoundInputAuthority<'a> {
 /// The Rust worker allows Main to resolve the actual execution actor only after
 /// `AUTHORIZED_NOW`. This value is therefore minted at that exact durable boundary,
 /// is neither cloneable nor formattable, and zeroizes its duplicated fence bytes on drop.
-/// It cannot submit ADK work, publish output, or settle the Redis delivery.
+/// It cannot submit ADK work, publish output, or settle the command delivery.
 pub(crate) struct ClaimBoundRuntimeContextAuthority {
     sandbox: Option<Box<sandbox_authority::SandboxClaimBinding>>,
     execution_id: String,
@@ -881,7 +881,7 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
 ///
 /// This grant comes from invocation authorization or explicit checkpoint inspection.
 /// Inspection grants no provider or model submission authority. It carries the claim fence needed
-/// to activate durable session persistence, but no output, settlement, Redis,
+/// to activate durable session persistence, but no output, settlement, command bus,
 /// provider, or invocation-submission capability. The value is intentionally
 /// neither cloneable nor formattable and zeroizes its duplicated fence bytes
 /// on drop.
@@ -1836,7 +1836,7 @@ struct CommandRetirementBinding {
 }
 
 /// Consuming proof that one exact agent command reached a durable terminal
-/// state and may cross the Redis retirement boundary.
+/// state and may cross the command retirement boundary.
 pub enum AgentCommandRetirementAuthority {
     TerminalRedelivery(TerminalCommandAck),
     RecoveredSettlement(RecoveredSettlement),

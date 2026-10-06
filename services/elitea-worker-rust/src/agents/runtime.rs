@@ -960,7 +960,7 @@ impl<S> PendingRecoveredAgentInvocation<S> {
 
 /// Native runner, browser projector and explicit post-EOS result selector.
 ///
-/// This aggregate contains no claim, fence, settlement, or Redis authority.
+/// This aggregate contains no claim, fence, settlement, or command-bus authority.
 pub(crate) struct AssembledNativeAgentInvocation<S> {
     invocation: NativeAgentInvocation,
     // The projector grows with the browser compatibility surface. Heap-own it
@@ -1173,7 +1173,7 @@ impl NativeAgentInvocation {
     /// Seal one freshly assembled Runner with its exact typed session input.
     ///
     /// This constructor is crate-private and accepts no claim, fence, output,
-    /// settlement, or Redis authority. The authorized assembly layer keeps the
+    /// settlement, or command-bus authority. The authorized assembly layer keeps the
     /// resulting value inseparable from its projector and result selector.
     pub(crate) fn new(
         runner: Runner,

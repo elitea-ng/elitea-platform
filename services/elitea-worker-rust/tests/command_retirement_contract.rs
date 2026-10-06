@@ -17,10 +17,10 @@ use elitea_worker_rust::protocol::elitea::runtime::v1::{
     PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
     SignedWorkerCommandEnvelopeV1,
 };
-use elitea_worker_rust::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandError, RedisCommandLimits, RedisCommandRetirer,
-    RedisRetirementClient, RedisRetirementClientError, RedisRetirementConfig,
-    RedisRetirementRequest, RedisRetirementResponse,
+use elitea_worker_rust::transport::command_bus::{
+    CommandBusError, CommandBusLimits, CommandDelivery, CommandRetirementClient,
+    CommandRetirementClientError, CommandRetirementConfig, CommandRetirementRequest,
+    CommandRetirer, delivery_subject,
 };
 use elitea_worker_rust::transport::{ControlGrpcConfig, ControlRpc};
 use prost::Message;
@@ -126,25 +126,30 @@ async fn terminal_authority(command: &VerifiedAgentCommand) -> AgentCommandRetir
     authority.into()
 }
 
-fn limits() -> RedisCommandLimits {
-    RedisCommandLimits {
-        max_entry_bytes: 64 * 1024,
-        max_field_bytes: 48 * 1024,
-    }
+fn limits() -> CommandBusLimits {
+    CommandBusLimits::runtime_v1()
 }
 
-fn delivery(vector: &str) -> RedisCommandDelivery {
+const STREAM: &str = "ELITEA_RT_V1_AGENT";
+const CONSUMER: &str = "elitea-agent-worker-v1";
+const REPLY: &str =
+    "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.2.41.40.1700000000000000000.0";
+
+fn delivery(vector: &str) -> CommandDelivery {
     delivery_bytes(bytes(vector))
 }
 
-fn delivery_bytes(signed_envelope: Vec<u8>) -> RedisCommandDelivery {
-    RedisCommandDelivery::decode(
-        b"runtime.commands.v1",
-        b"1700000000000-0",
-        vec![(b"signed_envelope".to_vec(), signed_envelope)],
-        limits(),
-    )
-    .expect("Redis delivery")
+/// The fixtures' idempotency key, which names the delivery subject.
+fn delivery_bytes(signed_envelope: Vec<u8>) -> CommandDelivery {
+    delivery_on(&subject_for("outbox-1"), signed_envelope)
+}
+
+fn subject_for(delivery_id: &str) -> String {
+    delivery_subject(STREAM, delivery_id).expect("contract subject")
+}
+
+fn delivery_on(subject: &str, signed_envelope: Vec<u8>) -> CommandDelivery {
+    CommandDelivery::decode(subject, REPLY, signed_envelope, limits()).expect("command delivery")
 }
 
 fn push_varint(target: &mut Vec<u8>, mut value: u64) {
@@ -188,58 +193,55 @@ fn reordered_outer_envelope(vector: &str) -> Vec<u8> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CapturedRequest {
     stream: String,
-    group: String,
     consumer: String,
-    entry_id: String,
-    stable_delivery_id: String,
-    signed_envelope: Vec<u8>,
+    subject: String,
+    reply: String,
+    stream_sequence: u64,
 }
 
 struct FakeRetirementState {
-    response: Mutex<Result<RedisRetirementResponse, RedisRetirementClientError>>,
+    response: Mutex<Result<(), CommandRetirementClientError>>,
     requests: Mutex<Vec<CapturedRequest>>,
 }
 
 struct FakeRetirementClient(Arc<FakeRetirementState>);
 
 #[async_trait]
-impl RedisRetirementClient for FakeRetirementClient {
+impl CommandRetirementClient for FakeRetirementClient {
     async fn retire_delivery(
         &self,
-        request: RedisRetirementRequest,
-    ) -> Result<RedisRetirementResponse, RedisRetirementClientError> {
+        request: CommandRetirementRequest,
+    ) -> Result<(), CommandRetirementClientError> {
         self.0
             .requests
             .lock()
             .expect("retirement requests")
             .push(CapturedRequest {
                 stream: request.stream().to_owned(),
-                group: request.group().to_owned(),
                 consumer: request.consumer().to_owned(),
-                entry_id: request.entry_id().to_owned(),
-                stable_delivery_id: request.stable_delivery_id().to_owned(),
-                signed_envelope: request.signed_envelope().to_vec(),
+                subject: request.subject().to_owned(),
+                reply: request.reply().to_owned(),
+                stream_sequence: request.stream_sequence(),
             });
         *self.0.response.lock().expect("retirement response")
     }
 }
 
 fn retirer(
-    response: Result<RedisRetirementResponse, RedisRetirementClientError>,
+    response: Result<(), CommandRetirementClientError>,
 ) -> (
-    RedisCommandRetirer<FakeRetirementClient>,
+    CommandRetirer<FakeRetirementClient>,
     Arc<FakeRetirementState>,
 ) {
     let state = Arc::new(FakeRetirementState {
         response: Mutex::new(response),
         requests: Mutex::new(Vec::new()),
     });
-    let retirer = RedisCommandRetirer::new(
+    let retirer = CommandRetirer::new(
         FakeRetirementClient(Arc::clone(&state)),
-        RedisRetirementConfig {
-            stream: "runtime.commands.v1".to_owned(),
-            group: "rust-workers".to_owned(),
-            consumer: "worker-1".to_owned(),
+        CommandRetirementConfig {
+            stream: STREAM.to_owned(),
+            consumer: CONSUMER.to_owned(),
         },
     )
     .expect("command retirer");
@@ -247,45 +249,43 @@ fn retirer(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn durable_command_authority_retires_the_exact_verified_delivery() {
+async fn durable_command_authority_double_acks_the_exact_verified_delivery() {
     let verified = verified("signed_command");
     let authority = terminal_authority(&verified).await;
-    let (retirer, client) = retirer(Ok(RedisRetirementResponse {
-        acknowledged: 1,
-        deleted: 1,
-        unmapped: 1,
-    }));
+    let (retirer, client) = retirer(Ok(()));
+    let delivery = delivery("signed_command");
+    let settlement = delivery.settlement();
+    assert!(!settlement.retired());
 
     retirer
-        .retire_agent_command(delivery("signed_command"), &verified, authority)
+        .retire_agent_command(delivery, &verified, authority)
         .await
-        .expect("atomic retirement");
+        .expect("confirmed double ack");
 
+    assert!(
+        settlement.retired(),
+        "the runtime must see the confirmed ack"
+    );
     let requests = client.requests.lock().expect("retirement requests");
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0],
         CapturedRequest {
-            stream: "runtime.commands.v1".to_owned(),
-            group: "rust-workers".to_owned(),
-            consumer: "worker-1".to_owned(),
-            entry_id: "1700000000000-0".to_owned(),
-            stable_delivery_id: "outbox-1".to_owned(),
-            signed_envelope: bytes("signed_command"),
+            stream: STREAM.to_owned(),
+            consumer: CONSUMER.to_owned(),
+            subject: subject_for("outbox-1"),
+            reply: REPLY.to_owned(),
+            stream_sequence: 41,
         }
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn command_and_exact_envelope_substitution_fail_before_redis() {
+async fn command_and_exact_envelope_substitution_fail_before_the_ack() {
     let original = verified("signed_command");
     let authority = terminal_authority(&original).await;
     let changed = verified("signed_command_output_session");
-    let (retirer, client) = retirer(Ok(RedisRetirementResponse {
-        acknowledged: 1,
-        deleted: 1,
-        unmapped: 1,
-    }));
+    let (retirer, client) = retirer(Ok(()));
 
     assert!(matches!(
         retirer
@@ -295,7 +295,7 @@ async fn command_and_exact_envelope_substitution_fail_before_redis() {
                 authority
             )
             .await,
-        Err(RedisCommandError::AuthorizationFailed(_))
+        Err(CommandBusError::AuthorizationFailed(_))
     ));
     assert!(
         client
@@ -314,8 +314,32 @@ async fn command_and_exact_envelope_substitution_fail_before_redis() {
                 authority
             )
             .await,
-        Err(RedisCommandError::AuthorizationFailed(_))
+        Err(CommandBusError::AuthorizationFailed(_))
     ));
+    assert!(
+        client
+            .requests
+            .lock()
+            .expect("retirement requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_subject_that_names_another_delivery_is_never_acked() {
+    let verified = verified("signed_command");
+    let authority = terminal_authority(&verified).await;
+    let (retirer, client) = retirer(Ok(()));
+    let misrouted = delivery_on(&subject_for("outbox-2"), bytes("signed_command"));
+    let settlement = misrouted.settlement();
+
+    assert!(matches!(
+        retirer
+            .retire_agent_command(misrouted, &verified, authority)
+            .await,
+        Err(CommandBusError::AuthorizationFailed(_))
+    ));
+    assert!(!settlement.retired());
     assert!(
         client
             .requests
@@ -339,11 +363,7 @@ async fn same_identity_changed_intent_cannot_reuse_retirement_authority() {
         original.command().deadline_unix_millis,
         changed.command().deadline_unix_millis
     );
-    let (retirer, client) = retirer(Ok(RedisRetirementResponse {
-        acknowledged: 1,
-        deleted: 1,
-        unmapped: 1,
-    }));
+    let (retirer, client) = retirer(Ok(()));
 
     assert!(matches!(
         retirer
@@ -353,7 +373,7 @@ async fn same_identity_changed_intent_cannot_reuse_retirement_authority() {
                 authority
             )
             .await,
-        Err(RedisCommandError::AuthorizationFailed(_))
+        Err(CommandBusError::AuthorizationFailed(_))
     ));
     assert!(
         client
@@ -376,117 +396,135 @@ async fn verified_noncanonical_outer_envelope_retires_by_exact_bytes() {
     )
     .expect("verified noncanonical command envelope");
     let authority = terminal_authority(&verified).await;
-    let (retirer, client) = retirer(Ok(RedisRetirementResponse {
-        acknowledged: 1,
-        deleted: 1,
-        unmapped: 1,
-    }));
+    let (retirer, client) = retirer(Ok(()));
 
     retirer
-        .retire_agent_command(delivery_bytes(raw.clone()), &verified, authority)
+        .retire_agent_command(delivery_bytes(raw), &verified, authority)
         .await
         .expect("exact noncanonical delivery retirement");
-    let requests = client.requests.lock().expect("retirement requests");
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].signed_envelope, raw);
+    assert_eq!(
+        client.requests.lock().expect("retirement requests").len(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn only_exact_atomic_retirement_results_are_accepted() {
-    for response in [
-        RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 1,
-            unmapped: 1,
-        },
-        RedisRetirementResponse {
-            acknowledged: 2,
-            deleted: 0,
-            unmapped: 0,
-        },
+async fn only_a_confirmed_double_ack_retires() {
+    // "Already acknowledged" is confirmed by the server like a first ack, so
+    // the client reports Ok for both; anything unconfirmed stays retryable
+    // and leaves the settlement marker unset (the runtime then naks).
+    for (response, retryable) in [
+        (CommandRetirementClientError::Timeout, true),
+        (CommandRetirementClientError::DependencyUnavailable, true),
+        (CommandRetirementClientError::Authentication, false),
+        (CommandRetirementClientError::Protocol, false),
     ] {
         let verified = verified("signed_command");
         let authority = terminal_authority(&verified).await;
-        let (retirer, _) = retirer(Ok(response));
-        retirer
-            .retire_agent_command(delivery("signed_command"), &verified, authority)
+        let (retirer, _) = retirer(Err(response));
+        let delivery = delivery("signed_command");
+        let settlement = delivery.settlement();
+        let error = retirer
+            .retire_agent_command(delivery, &verified, authority)
             .await
-            .expect("confirmed retirement");
-    }
-
-    for response in [
-        RedisRetirementResponse {
-            acknowledged: 1,
-            deleted: 0,
-            unmapped: 0,
-        },
-        RedisRetirementResponse {
-            acknowledged: 2,
-            deleted: 1,
-            unmapped: 1,
-        },
-        RedisRetirementResponse {
-            acknowledged: -1,
-            deleted: 1,
-            unmapped: 1,
-        },
-    ] {
-        let verified = verified("signed_command");
-        let authority = terminal_authority(&verified).await;
-        let (retirer, _) = retirer(Ok(response));
-        assert!(matches!(
-            retirer
-                .retire_agent_command(delivery("signed_command"), &verified, authority)
-                .await,
-            Err(RedisCommandError::DependencyUnavailable(_))
-        ));
+            .expect_err("unconfirmed retirement");
+        assert_eq!(error.retryable(), retryable);
+        assert!(!settlement.retired());
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn the_retirer_binds_only_a_contract_route() {
+    let state = Arc::new(FakeRetirementState {
+        response: Mutex::new(Ok(())),
+        requests: Mutex::new(Vec::new()),
+    });
+    for (stream, consumer) in [
+        ("runtime.commands.v1", CONSUMER),
+        (STREAM, "elitea-index-worker-v1"),
+        (STREAM, "worker-1"),
+    ] {
+        assert!(
+            CommandRetirer::new(
+                FakeRetirementClient(Arc::clone(&state)),
+                CommandRetirementConfig {
+                    stream: stream.to_owned(),
+                    consumer: consumer.to_owned(),
+                },
+            )
+            .is_err()
+        );
+    }
+    // A delivery from another durable of the same contract is refused before
+    // the transport is asked.
+    let index_retirer = CommandRetirer::new(
+        FakeRetirementClient(Arc::clone(&state)),
+        CommandRetirementConfig {
+            stream: "ELITEA_RT_V1_INDEX".to_owned(),
+            consumer: "elitea-index-worker-v1".to_owned(),
+        },
+    )
+    .expect("index retirer");
+    let verified = verified("signed_command");
+    let authority = terminal_authority(&verified).await;
+    assert!(matches!(
+        index_retirer
+            .retire_agent_command(delivery("signed_command"), &verified, authority)
+            .await,
+        Err(CommandBusError::InvalidInput(_))
+    ));
+    assert!(state.requests.lock().expect("requests").is_empty());
+}
+
 #[test]
-fn redis_delivery_decode_preserves_duplicates_and_enforces_complete_bounds() {
+fn delivery_decode_enforces_the_subject_ack_subject_and_complete_bounds() {
     let signed = bytes("signed_command");
-    assert!(RedisCommandDelivery::decode(b"runtime.commands.v1", b"1-0", [], limits()).is_err());
+    let subject = subject_for("outbox-1");
+    assert!(CommandDelivery::decode(&subject, REPLY, signed.clone(), limits()).is_ok());
+    // Not an ack subject, another durable's ack subject, and a subject outside
+    // the stream's route.
+    assert!(CommandDelivery::decode(&subject, "_INBOX.reply", signed.clone(), limits()).is_err());
     assert!(
-        RedisCommandDelivery::decode(
-            b"runtime.commands.v1",
-            b"1-0",
-            vec![(b"unknown".to_vec(), signed.clone())],
+        CommandDelivery::decode(
+            &subject,
+            "$JS.ACK.ELITEA_RT_V1_AGENT.other-durable.1.1.1.1700000000000000000.0",
+            signed.clone(),
             limits(),
         )
         .is_err()
     );
     assert!(
-        RedisCommandDelivery::decode(
-            b"runtime.commands.v1",
-            b"1-0",
-            vec![
-                (b"signed_envelope".to_vec(), signed.clone()),
-                (b"signed_envelope".to_vec(), signed.clone()),
-            ],
+        CommandDelivery::decode(
+            &delivery_subject("ELITEA_RT_V1_INDEX", "outbox-1").expect("subject"),
+            REPLY,
+            signed.clone(),
             limits(),
         )
         .is_err()
     );
     assert!(
-        RedisCommandDelivery::decode(
-            b"runtime.commands.v1",
-            b"not-an-id",
-            vec![(b"signed_envelope".to_vec(), signed.clone())],
-            limits(),
+        CommandDelivery::decode(
+            "elitea.rt.v1.agent.d.outbox-1",
+            REPLY,
+            signed.clone(),
+            limits()
         )
         .is_err()
     );
     assert!(matches!(
-        RedisCommandDelivery::decode(
-            b"runtime.commands.v1",
-            b"1-0",
-            vec![(b"signed_envelope".to_vec(), signed)],
-            RedisCommandLimits {
-                max_entry_bytes: 8,
-                max_field_bytes: 8,
+        CommandDelivery::decode(&subject, REPLY, Vec::new(), limits()),
+        Err(CommandBusError::ResourceExhausted(_))
+    ));
+    assert!(matches!(
+        CommandDelivery::decode(
+            &subject,
+            REPLY,
+            signed,
+            CommandBusLimits {
+                max_message_bytes: 64,
+                max_payload_bytes: 8,
             },
         ),
-        Err(RedisCommandError::ResourceExhausted(_))
+        Err(CommandBusError::ResourceExhausted(_))
     ));
 }
