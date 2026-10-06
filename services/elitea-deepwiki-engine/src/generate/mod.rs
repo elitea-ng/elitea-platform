@@ -577,12 +577,12 @@ impl Pipeline<'_> {
         let flags = self.environment.phase1c;
         let build_root = root.to_owned();
         let (graph, discovery) = tokio::task::spawn_blocking(move || {
-            let (graph, _report, _phase1c) =
-                builder::build_index_graph_parsed(&build_root, &discovery, &flags);
-            (graph, discovery)
+            let built = builder::try_build_index_graph_parsed(&build_root, &discovery, &flags);
+            built.map(|(graph, _report, _phase1c)| (graph, discovery))
         })
         .await
-        .map_err(|e| join_failure(&e))?;
+        .map_err(|e| join_failure(&e))?
+        .map_err(|failure| runtime(format!("Repository indexing failed: {failure}")))?;
         if graph.node_count() == 0 {
             return Err(runtime(
                 "No documents found in repository. The repository may be empty, all files may be filtered out, or the branch may not exist.",

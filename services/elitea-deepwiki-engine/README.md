@@ -166,7 +166,11 @@ caller. Each call checks the stop first.
 The child limits itself before it reads the request (`rustix`'s safe
 `setrlimit`, so the crate stays `unsafe_code = "forbid"`), never above the
 hard limits it inherited, and on Linux asks for SIGKILL when its parent dies.
-A child that dies without a last line is reported by its cause: an
+A parser pool that cannot start its threads fails the run
+("Repository indexing failed: Parse error: the … parser could not start its
+worker threads"); it does not index the repository with every file of that
+language marked as failed. A child that dies without a last line is
+reported by its cause: an
 allocation failure (`MemoryError`, `out_of_memory`), SIGXCPU
 (`timeout_error`), anything else `RuntimeError`.
 
@@ -174,7 +178,7 @@ allocation failure (`MemoryError`, `out_of_memory`), SIGXCPU
 | --- | --- | --- |
 | `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB (at least 1 GiB) | `RLIMIT_AS`. It counts reserved address space (each parser thread reserves its stack, up to 256 MiB), not resident memory; it stops a runaway, the pod limit sizes the job. macOS does not enforce it (a warning is logged). |
 | `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | 14400 (at least 60) | `RLIMIT_CPU`, hard limit 10 s above |
-| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256) | the child's runtime and parser threads |
+| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256), lowered until it fits the memory cap | the child's runtime and parser threads. With the native runner, `threads × 256 MiB + 1 GiB` (each parser thread's stack reservation plus headroom) must fit `WORKER_MEMORY_BYTES`, or the start is refused. |
 | `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the job directories |
 
 All are strict-parsed. Still refused or not ported: `ask`, `deep_research`,

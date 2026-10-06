@@ -83,6 +83,24 @@ pub const MIN_WORKER_CPU_SECONDS: u64 = 60;
 /// The most worker threads a generation may use.
 pub const MAX_WORKER_THREADS: u64 = 256;
 
+/// The address space each worker thread is sized at: the largest parser
+/// stack (the Python parser's 256 MiB), which every thread of a parser
+/// pool reserves.
+pub const WORKER_THREAD_RESERVE_BYTES: u64 = crate::parsers::limits::LARGEST_PARSER_STACK as u64;
+
+/// The address space a worker needs besides its parser stacks (1 GiB):
+/// the heap, the malloc arenas, the runtime's own threads.
+pub const WORKER_MEMORY_HEADROOM_BYTES: u64 = 1 << 30;
+
+/// The address space `threads` parser threads need:
+/// `threads × 256 MiB + 1 GiB`.
+#[must_use]
+pub fn worker_memory_needed(threads: u64) -> u64 {
+    threads
+        .saturating_mul(WORKER_THREAD_RESERVE_BYTES)
+        .saturating_add(WORKER_MEMORY_HEADROOM_BYTES)
+}
+
 /// The limits of one `generate_wiki` worker child process (ADR-0026
 /// decision 10). The child applies them to itself before it reads its
 /// request.
@@ -330,7 +348,11 @@ fn worker_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<WorkerSettin
             "{ENV_PREFIX}WORKER_CPU_SECONDS must be at least {MIN_WORKER_CPU_SECONDS}, got {cpu_seconds}"
         )));
     }
-    let threads = positive_count(raw, "WORKER_THREADS", defaults.threads as u64)?;
+    // Unset: the default, lowered until its stacks fit the memory cap.
+    let fitting =
+        memory_bytes.saturating_sub(WORKER_MEMORY_HEADROOM_BYTES) / WORKER_THREAD_RESERVE_BYTES;
+    let default_threads = (defaults.threads as u64).min(fitting).max(1);
+    let threads = positive_count(raw, "WORKER_THREADS", default_threads)?;
     if threads > MAX_WORKER_THREADS {
         return Err(ConfigError(format!(
             "{ENV_PREFIX}WORKER_THREADS must be at most {MAX_WORKER_THREADS}, got {threads}"
@@ -342,6 +364,21 @@ fn worker_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<WorkerSettin
         threads: usize::try_from(threads)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}WORKER_THREADS is out of range")))?,
     })
+}
+
+/// Refuse a thread count whose parser stacks do not fit the worker's
+/// address-space cap: every parser pool would fail to start (or the run
+/// would die of an allocation failure) on every repository.
+fn check_worker_fits(worker: &WorkerSettings) -> Result<(), ConfigError> {
+    let threads = worker.threads as u64;
+    let needed = worker_memory_needed(threads);
+    if needed > worker.memory_bytes {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_THREADS={threads} does not fit {ENV_PREFIX}WORKER_MEMORY_BYTES={}: each worker thread reserves {WORKER_THREAD_RESERVE_BYTES} bytes of stack and the worker needs {WORKER_MEMORY_HEADROOM_BYTES} bytes more, so {threads} threads need {needed} bytes of address space. Lower the threads or raise the memory cap.",
+            worker.memory_bytes
+        )));
+    }
+    Ok(())
 }
 
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
@@ -430,6 +467,9 @@ impl Settings {
         }
         let publish = publish_settings(&raw)?;
         let worker = worker_settings(&raw)?;
+        if runner == RunnerKind::Native {
+            check_worker_fits(&worker)?;
+        }
         if runner == RunnerKind::Native && database_url.is_none() {
             return Err(ConfigError(format!(
                 "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine stages and publishes every index in the deepwiki PostgreSQL database (ADR-0026 decision 5) and has no other index storage. Set it to the database the migrations ran on, or use 'fixture' or 'unavailable'."
@@ -733,6 +773,55 @@ mod tests {
             let key = format!("ELITEA_DEEPWIKI_{name}");
             assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
         }
+    }
+
+    #[test]
+    fn native_threads_must_fit_the_memory_cap() {
+        let native = [
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ];
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut pairs = native.to_vec();
+            pairs.extend_from_slice(extra);
+            settings(&pairs)
+        };
+        // 8 threads × 256 MiB + 1 GiB = 3 GiB > 2 GiB.
+        let refused = with(&[
+            ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648"),
+            ("ELITEA_DEEPWIKI_WORKER_THREADS", "8"),
+        ]);
+        assert!(
+            matches!(&refused, Err(ConfigError(m)) if m.contains("WORKER_THREADS=8") && m.contains("3221225472")),
+            "{refused:?}"
+        );
+        // 4 threads need exactly 2 GiB.
+        let fits = with(&[
+            ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648"),
+            ("ELITEA_DEEPWIKI_WORKER_THREADS", "4"),
+        ]);
+        assert_eq!(fits.map(|s| s.worker.threads), Ok(4));
+        // Unset threads: the default is lowered to fit (at least 1).
+        let lowered = with(&[("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "1610612736")]);
+        assert_eq!(
+            lowered.map(|s| s.worker.threads),
+            Ok(default_worker_threads().min(2))
+        );
+        // 1 GiB holds no parser thread at all.
+        assert!(with(&[("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "1073741824")]).is_err());
+        // The fixture runner never starts a worker: not checked.
+        assert!(
+            settings(&[
+                ("ELITEA_DEEPWIKI_RUNNER", "fixture"),
+                ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "1073741824"),
+                ("ELITEA_DEEPWIKI_WORKER_THREADS", "8"),
+            ])
+            .is_ok()
+        );
     }
 
     #[test]
