@@ -95,6 +95,26 @@ deltas:
 presence:
   ttl: "2m"
 
+# The runtime command bus (docs/runtime-command-bus.md). The stream shape is
+# fixed by the contract; these are the per-route knobs.
+runtime:
+  # maxMsgs: the route's live-command capacity (1..1024). A full stream
+  # refuses the publish and the command waits in PostgreSQL's outbox.
+  # maxAge: a safety net that removes only commands PostgreSQL has already
+  # expired — the route's longest execution deadline plus margin.
+  # elitea-main refuses to start when maxAge is below its deadline + 2h.
+  validate:
+    maxMsgs: 1024
+    maxAge: "3h"     # validation deadline 1m
+  agent:
+    maxMsgs: 1024
+    maxAge: "26h"    # agent and tool-run deadline 24h
+  index:
+    maxMsgs: 1024
+    maxAge: "26h"    # index ingest deadline 24h
+  # ELITEA_RT_V1_DEADLETTER: how long a poison command's record is kept.
+  deadLetterTtl: "168h"
+
 # Seconds bootstrap.sh waits for the server to accept each account's identity
 # before failing (NATS_CONNECT_WAIT). Covers NATS still starting and a
 # bootstrap certificate cert-manager is still (re-)issuing: an upgrade finds

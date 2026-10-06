@@ -59,15 +59,17 @@ const (
 	// imports (SchedulerGatewayJSAPIPrefix).
 	IdentityScheduler = "elitea-scheduler"
 
-	// RUNTIME account, RESERVED for the runtime command bus (elitea.rt.v1.>).
-	// No client presents IdentityMainRuntime or IdentityWorker yet.
+	// RUNTIME account: the runtime command bus (elitea.rt.v1.>,
+	// docs/runtime-command-bus.md).
 	//
 	// IdentityMainRuntime is elitea-main's SECOND identity: the command bus
-	// producer, configured by EnvPrefixRuntime (ELITEA_RUNTIME_NATS_URL and
-	// ELITEA_RUNTIME_NATS_TLS_*), separate from the live-update plane's
-	// elitea-main identity so that neither plane's grants reach the other's
-	// account.
-	IdentityMainRuntime      = "elitea-main-runtime"
+	// producer and the execution-replay wake-up, configured by
+	// EnvPrefixRuntime (ELITEA_RUNTIME_NATS_URL and ELITEA_RUNTIME_NATS_TLS_*),
+	// separate from the live-update plane's elitea-main identity so that
+	// neither plane's grants reach the other's account.
+	IdentityMainRuntime = "elitea-main-runtime"
+	// IdentityWorker is the consumer of the command bus, presented by the
+	// Rust and the Python worker alike.
 	IdentityWorker           = "elitea-worker"
 	IdentityBootstrapRuntime = "elitea-nats-bootstrap-runtime"
 )
@@ -102,7 +104,7 @@ const (
 // lands on that reply subject in SCHEDULER, where nothing stores it.
 const SchedulerGatewayJSAPIPrefix = "JS.GATEWAY.API"
 
-// EnvPrefixRuntime is RESERVED for the runtime command bus producer
+// EnvPrefixRuntime configures the runtime command bus producer
 // (IdentityMainRuntime): ELITEA_RUNTIME_NATS_URL and the three
 // ELITEA_RUNTIME_NATS_TLS_*_FILE names EnvNames returns for it.
 const EnvPrefixRuntime = "ELITEA_RUNTIME"

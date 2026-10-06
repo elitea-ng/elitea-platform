@@ -7,12 +7,13 @@ One NATS JetStream server (or 3-node cluster) serves three clients:
 | `elitea-llm-gateway` | budget and rate-limit counters (`Nats-Incr`), write-behind deltas, the soft-alert cooldown KV, `budget.soft_alert` / ops events |
 | `elitea-scheduler` | the `budget-writeback` durable consumer that drains the deltas into Postgres (from its own `SCHEDULER` account, through service imports) |
 | `elitea-main` | the project SSE relay (`gateway.events.project.>`) and canvas presence (KV + `canvas.editors` rosters) |
+| `elitea-main-runtime` | elitea-main's runtime plane: PRODUCES the runtime command bus (`elitea.rt.v1.<route>.d.*`, `../../../docs/runtime-command-bus.md`) and the execution-replay wake-up |
+| `elitea-worker` | the Rust and Python workers: CONSUME the command bus (pull, +WPI, ack, nak-with-delay) and record dead letters |
 
 and one owner: the `nats-bootstrap` hook Job (`../nats-bootstrap`), which
 creates every asset, connecting to each plane's account as that account's own
-bootstrap identity. The runtime command bus (`elitea.rt.v1.>`), its producer
-and worker identities and its account (`RUNTIME`) are reserved in the
-permission table and land with that change.
+bootstrap identity — including the command bus's streams, durable consumers and
+dead-letter bucket in `RUNTIME`.
 
 ## Security (#1076)
 
@@ -129,7 +130,7 @@ account — its own subject space and, where it owns assets, its own
 JetStream — and every user is declared in exactly one. **Every account's sole
 writer is its owner**: MAIN's assets are written by elitea-main alone,
 GATEWAY's by the gateway alone (its bootstrap creates them and publishes no
-data), RUNTIME's (reserved) by its producer and worker; SCHEDULER stores
+data), RUNTIME's by its producer and worker; SCHEDULER stores
 nothing.
 
 | Account | Identities | Assets |
@@ -137,7 +138,7 @@ nothing.
 | `MAIN` | `elitea-main`, `elitea-nats-bootstrap-main` | `ELITEA_CANVAS_PRESENCE` (KV) |
 | `GATEWAY` | `elitea-llm-gateway`, `elitea-nats-bootstrap-gateway` | `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `GATEWAY_BUDGET_DELTAS`, `GATEWAY_ALERT_COOLDOWN` (KV) |
 | `SCHEDULER` | `elitea-scheduler` | none — no JetStream, no bootstrap |
-| `RUNTIME` (reserved) | `elitea-main-runtime`, `elitea-worker`, `elitea-nats-bootstrap-runtime` | the command bus's `ELITEA_RT_V1_*` streams and `ELITEA_RT_QUARANTINE` (KV), with that change |
+| `RUNTIME` | `elitea-main-runtime`, `elitea-worker`, `elitea-nats-bootstrap-runtime` | the command bus: `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` streams, their worker durables, `ELITEA_RT_V1_DEADLETTER` (KV), the replay wake-up |
 
 Why accounts and not only per-user permissions: a JetStream **push
 consumer's deliver subject is not checked against its creator's publish
@@ -221,14 +222,17 @@ subject), and the gateway holds no consumer grant at all.
 | GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
 | GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.{CREATE,INFO}` on `GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
 | SCHEDULER | `elitea-scheduler` | `JS.GATEWAY.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — the three imported services, nothing else; it binds to the consumer the GATEWAY bootstrap creates | `_INBOX_elitea-scheduler.>` |
-| RUNTIME | `elitea-main-runtime` (reserved) | `elitea.rt.v1.*.d.*`; `STREAM.INFO` and `CONSUMER.INFO` on `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}`. Denied: stream admin, consumer create/delete | `_INBOX_elitea-main-runtime.>` |
-| RUNTIME | `elitea-worker` (reserved) | `CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on `elitea-<route>-worker-v1` of `ELITEA_RT_V1_<ROUTE>`; `$KV.ELITEA_RT_QUARANTINE.>` + its `STREAM.INFO` (dead letters). Denied: `elitea.rt.v1.*.d.>` (no command injection), stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
-| RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams and `KV_ELITEA_RT_QUARANTINE`, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
+| RUNTIME | `elitea-main-runtime` | `elitea.rt.v1.{validate,agent,index}.d.*` (commands), `elitea.rt.v1.replay.wake`; `STREAM.INFO` and `DIRECT.GET` on `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}`; `CONSUMER.INFO` on their durables. Denied: `$JS.ACK.>`, `MSG.NEXT`, `$KV.>`, stream admin, consumer create/delete | `_INBOX_elitea-main-runtime.>`, `elitea.rt.v1.replay.wake` |
+| RUNTIME | `elitea-worker` | `STREAM.INFO` on the three streams; `CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on their own durables only (`elitea-configuration-worker-v1` on `ELITEA_RT_V1_VALIDATE`, `elitea-agent-worker-v1`, `elitea-index-worker-v1`); `$KV.ELITEA_RT_V1_DEADLETTER.>` + its `STREAM.INFO` (dead letters). Denied: `elitea.rt.v1.>` (no command injection, no wake-up), stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
+| RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams and `KV_ELITEA_RT_V1_DEADLETTER`, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
 
-The RUNTIME rows are what the runtime command bus change binds to: elitea-main
-presents `elitea-main-runtime` with `ELITEA_RUNTIME_NATS_URL` and
+The RUNTIME rows are the runtime command bus (`../../../docs/runtime-command-bus.md`):
+elitea-main presents `elitea-main-runtime` with `ELITEA_RUNTIME_NATS_URL` and
 `ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE`, separate from its live-update
-identity, and neither the producer nor the worker may create a consumer.
+identity; the Rust and Python workers present `elitea-worker`
+(`runtime.json` `nats_*`). Neither the producer nor the worker may create a
+consumer; the replay wake-up is published and subscribed by the producer only,
+inside RUNTIME.
 
 Every grant is exercised by a test that runs the service's REAL code against a
 nats-server started from this chart's rendered `nats.conf`, after the real
@@ -264,12 +268,14 @@ the `JS.GATEWAY.API` mapping are all pinned).
 ### Network
 
 `templates/networkpolicy.yaml` admits 4222 only from pods labelled
-`app.kubernetes.io/name` ∈ {`elitea-main`, `elitea-llm-gateway`,
-`elitea-scheduler`, `nats-bootstrap`} (`networkPolicy.clients`, per-entry
-namespace), 6222 only between the NATS pods (HA), and 7777 (exporter) from
-`networkPolicy.metricsFrom`. **8222 (monitoring) has no rule**: the exporter
-sidecar scrapes it over localhost and kubelet probes are not subject to
-NetworkPolicy. KEDA (runtime command bus) will need a 8222 rule then.
+`app.kubernetes.io/name` ∈ {`elitea-main`, `elitea-worker-python` (the worker
+pods, Rust or Python image), `elitea-llm-gateway`, `elitea-scheduler`,
+`nats-bootstrap`} (`networkPolicy.clients`, per-entry namespace), 6222 only
+between the NATS pods (HA), 7777 (exporter) from `networkPolicy.metricsFrom`,
+and 8222 (monitoring, `/jsz`) from `networkPolicy.monitoringFrom` — the KEDA
+operator, whose `nats-jetstream` scaler sizes the worker fleet on consumer lag.
+The exporter sidecar reads 8222 over localhost and kubelet probes are not
+subject to NetworkPolicy.
 
 ## Assets (all owned by `nats-bootstrap`)
 
@@ -281,6 +287,13 @@ NetworkPolicy. KEDA (runtime command bus) will need a 8222 rule then.
 | `GATEWAY_ALERT_COOLDOWN` | GATEWAY | KV (TTL 4h) | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
 | `ELITEA_CANVAS_PRESENCE` | MAIN | KV (TTL 2m, history 1) | canvas presence rosters |
 | `GATEWAY_BUDGET_DELTAS` / `budget-writeback` | GATEWAY | durable pull consumer (explicit ack, AckWait 30s, MaxDeliver 10) | the scheduler's write-back drain; it binds only |
+| `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` | RUNTIME | WorkQueue streams (discard new + per subject, 1 msg/subject, ≤1024 msgs, 64 MiB, 64 KiB msgs, MaxAge 3h/26h/26h, 2m dedup, allow_direct, deny delete/purge) | the runtime command bus, one stream per route |
+| `elitea-{configuration,agent,index}-worker-v1` | RUNTIME | durable pull consumers (AckWait 60s, MaxDeliver -1, MaxWaiting 512) | the workers' shared consumer, one per stream; they bind only |
+| `ELITEA_RT_V1_DEADLETTER` | RUNTIME | KV (TTL 7d, history 1) | poison commands the workers recorded |
+
+Every JetStream write is synced before it is acknowledged:
+`jetstream { sync_interval: always }` (`values.yaml`, owner decision for the
+command bus; it applies to every account's streams on the server).
 
 The services **bind** and verify what their code depends on (counter flag,
 direct get, dedup windows, TTLs); they create nothing, and a missing asset is a
@@ -349,8 +362,8 @@ $N stream ls          # GATEWAY_BUDGET, GATEWAY_RATELIMIT, GATEWAY_BUDGET_DELTAS
 (`elitea-nats-bootstrap-main-nats-client-tls` the same way shows MAIN's
 `KV_ELITEA_CANVAS_PRESENCE`, and nothing of GATEWAY's.)
 
-Who is connected, as whom (from inside the pod; 8222 is not reachable from
-elsewhere):
+Who is connected, as whom (from inside the pod; 8222 is reachable only from
+the KEDA operator):
 
 ```bash
 kubectl -n elitea exec elitea-nats-0 -c nats -- wget -qO- 'http://127.0.0.1:8222/connz?auth=1' \
@@ -358,5 +371,5 @@ kubectl -n elitea exec elitea-nats-0 -c nats -- wget -qO- 'http://127.0.0.1:8222
 ```
 
 Every connection must show one of the `spiffe://elitea.internal/nats/…` users,
-in its plane's account. A plaintext `nats pub` or a pod outside the four clients must fail
+in its plane's account. A plaintext `nats pub` or a pod outside the five client workloads must fail
 (the first with a TLS/authorization error, the second with a connect timeout).

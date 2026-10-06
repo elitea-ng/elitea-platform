@@ -6,8 +6,9 @@
 # all. The two are separate controls on purpose: a leaked client certificate is
 # useless from a pod this policy does not admit.
 #
-# 8222 (monitoring) has no rule: only the exporter sidecar (localhost) and
-# kubelet probes read it.
+# 8222 (monitoring) is admitted only from `monitoringFrom` (the KEDA
+# operator's nats-jetstream scaler); the exporter sidecar reads it over
+# localhost and kubelet probes are not subject to the policy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -47,6 +48,14 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "elitea-nats.serverSelectorLabels" . | nindent 14 }}
+    {{- end }}
+    {{- with .Values.networkPolicy.monitoringFrom }}
+    # /jsz for the KEDA nats-jetstream scaler.
+    - ports:
+        - port: {{ dig "config" "monitor" "port" 8222 $.Values.nats }}
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
     {{- end }}
     {{- if and (dig "promExporter" "enabled" false .Values.nats) .Values.networkPolicy.metricsFrom }}
     # The prometheus exporter sidecar.

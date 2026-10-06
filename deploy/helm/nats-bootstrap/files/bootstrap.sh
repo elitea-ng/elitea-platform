@@ -27,10 +27,12 @@
 #     consumer GATEWAY_BUDGET_DELTAS/budget-writeback
 #                                    the durable PULL consumer elitea-scheduler
 #                                    drains; it only binds to it
-#   account RUNTIME
-#     RESERVED for the runtime command bus. No assets yet: the run proves the
-#     RUNTIME bootstrap identity connects, and the command bus change adds
-#     its streams, per-route consumers and dead-letter KV to bootstrap_runtime.
+#   account RUNTIME (the runtime command bus, docs/runtime-command-bus.md)
+#     stream ELITEA_RT_V1_VALIDATE   } one WorkQueue stream per route, subjects
+#     stream ELITEA_RT_V1_AGENT      } elitea.rt.v1.<route>.d.<sha256(delivery_id)>,
+#     stream ELITEA_RT_V1_INDEX      } each with its durable pull consumer
+#                                      elitea-{configuration,agent,index}-worker-v1
+#     KV     ELITEA_RT_V1_DEADLETTER poison commands the workers recorded (7d)
 #
 # Create when absent, EDIT when present: re-running this script puts a drifted
 # asset back to the values below. An edit the server cannot apply (storage
@@ -83,6 +85,13 @@
 #   NATS_WRITEBACK_MAX_DELIVER  budget-writeback MaxDeliver (default 10)
 #   NATS_PRESENCE_TTL           ELITEA_CANVAS_PRESENCE TTL (default 2m — must
 #                               be at least elitea-main's 120s roster TTL)
+#   NATS_RT_VALIDATE_MAX_MSGS   } a command stream's capacity (MaxMsgs, 1..1024;
+#   NATS_RT_AGENT_MAX_MSGS      } default 1024). A full stream refuses the
+#   NATS_RT_INDEX_MAX_MSGS      } publish and the command waits in the outbox
+#   NATS_RT_VALIDATE_MAX_AGE    } a command stream's MaxAge: the route's longest
+#   NATS_RT_AGENT_MAX_AGE       } execution deadline plus margin (defaults 3h,
+#   NATS_RT_INDEX_MAX_AGE       } 26h, 26h); elitea-main refuses less at boot
+#   NATS_RT_DEADLETTER_TTL      ELITEA_RT_V1_DEADLETTER TTL (default 168h)
 set -eu
 
 ACCOUNTS="${NATS_BOOTSTRAP_ACCOUNTS:-main gateway runtime}"
@@ -97,6 +106,13 @@ DELTAS_MAX_MSGS="${NATS_DELTAS_MAX_MSGS:-5000000}"
 WRITEBACK_ACK_WAIT="${NATS_WRITEBACK_ACK_WAIT:-30s}"
 WRITEBACK_MAX_DELIVER="${NATS_WRITEBACK_MAX_DELIVER:-10}"
 PRESENCE_TTL="${NATS_PRESENCE_TTL:-2m}"
+RT_VALIDATE_MAX_MSGS="${NATS_RT_VALIDATE_MAX_MSGS:-1024}"
+RT_AGENT_MAX_MSGS="${NATS_RT_AGENT_MAX_MSGS:-1024}"
+RT_INDEX_MAX_MSGS="${NATS_RT_INDEX_MAX_MSGS:-1024}"
+RT_VALIDATE_MAX_AGE="${NATS_RT_VALIDATE_MAX_AGE:-3h}"
+RT_AGENT_MAX_AGE="${NATS_RT_AGENT_MAX_AGE:-26h}"
+RT_INDEX_MAX_AGE="${NATS_RT_INDEX_MAX_AGE:-26h}"
+RT_DEADLETTER_TTL="${NATS_RT_DEADLETTER_TTL:-168h}"
 CONNECT_WAIT="${NATS_CONNECT_WAIT:-120}"
 
 log() { echo "[nats-bootstrap] $*"; }
@@ -361,19 +377,120 @@ bootstrap_gateway() {
 }
 
 # ── account RUNTIME ─────────────────────────────────────────────────────────
-# RESERVED for the runtime command bus: its change adds the ELITEA_RT_V1_*
-# streams, the per-route durable consumers and the ELITEA_RT_QUARANTINE KV
-# here, with `expect` raised to match. Until then the connection above is the
-# whole job: it proves the RUNTIME bootstrap identity maps and is admitted.
-bootstrap_runtime() {
-  # Proves this identity may use the JetStream API in RUNTIME, which only the
-  # RUNTIME bootstrap may: the command bus's producer and worker identities
-  # are refused here.
-  if ! $NATS stream ls >/dev/null; then
-    log "FAILED: account runtime: this identity may not list RUNTIME's streams; it is not the RUNTIME bootstrap identity."
+# The runtime command bus (docs/runtime-command-bus.md). One WorkQueue stream
+# per route. The settings ARE the contract:
+#   WorkQueue          an ack removes the message, so capacity is released on
+#                      settlement; the server refuses an overlapping consumer
+#   discard new        a full stream refuses the publish (backpressure: the
+#                      command stays in PostgreSQL's outbox), never evicts
+#   max-msgs-per-subject 1 + discard-per-subject
+#                      one live message per delivery subject; a PostgreSQL
+#                      re-offer of a live delivery is refused atomically
+#   max-bytes 64 MiB, max-msg-size 65536 (payload + headers,
+#                      max_transport_message_bytes)
+#   max-age            the route's deadline + margin: a safety net only
+#   dupe-window 2m     Nats-Msg-Id de-duplication for an ambiguous retry
+#   allow-direct       the producer reads a live copy back for its compare
+#   deny-delete/purge  only an ack removes a command
+rt_stream() {
+  name="$1"; route="$2"; max_msgs="$3"; max_age="$4"
+  case "$max_msgs" in
+    ''|*[!0-9]*) log "FAILED: ${name} max msgs '${max_msgs}' is not a positive integer"; exit 1 ;;
+  esac
+  if [ "$max_msgs" -lt 1 ] || [ "$max_msgs" -gt 1024 ]; then
+    log "FAILED: ${name} max msgs ${max_msgs} is outside 1..1024"
     exit 1
   fi
-  log "account runtime: no assets yet (reserved for the runtime command bus)"
+  ensure_stream "$name" file \
+    --subjects "elitea.rt.v1.${route}.d.*" \
+    --replicas "${REPLICAS}" \
+    --retention work \
+    --discard new \
+    --discard-per-subject \
+    --max-msgs-per-subject 1 \
+    --max-msgs "${max_msgs}" \
+    --max-bytes 67108864 \
+    --max-msg-size 65536 \
+    --max-age "${max_age}" \
+    --dupe-window 2m \
+    --allow-direct \
+    --deny-delete \
+    --deny-purge \
+    --no-allow-rollup
+}
+
+# The route's ONE durable pull consumer, shared by every worker replica.
+# Workers bind and never create it: a worker that could create its consumer
+# could, after losing one, re-create it in a way that skips commands (and a
+# consumer-create grant could point a push consumer anywhere in RUNTIME).
+#   ack explicit, wait 60s   redelivery after twice the 30s claim lease; the
+#                            workers send +WPI every 5s for what they own
+#   max-deliver -1           PostgreSQL bounds retries, not the broker
+#   max-pending 1024         = the largest stream; never the binding limit
+#   max-waiting 512, max-pull-batch 64, max-pull-expire 30s
+# MaxWaiting is fixed at creation (the server refuses to edit it), so the
+# reconcile edits the rest; ensure_pull_consumer passes the same flags to
+# both, which is why the command bus has its own.
+ensure_rt_consumer() {
+  stream="$1"; durable="$2"; route="$3"
+  if $NATS consumer info "$stream" "$durable" >/dev/null 2>&1; then
+    log "consumer ${stream}/${durable} exists — reconciling its configuration"
+    $NATS consumer edit "$stream" "$durable" \
+      --wait 60s \
+      --max-deliver=-1 \
+      --max-pending 1024 \
+      --max-pull-batch 64 \
+      --max-pull-expire 30s \
+      --force >/dev/null
+  else
+    log "creating consumer ${stream}/${durable}"
+    $NATS consumer add "$stream" "$durable" \
+      --pull \
+      --filter "elitea.rt.v1.${route}.d.*" \
+      --deliver all \
+      --ack explicit \
+      --replay instant \
+      --wait 60s \
+      --max-deliver=-1 \
+      --max-pending 1024 \
+      --max-waiting 512 \
+      --max-pull-batch 64 \
+      --max-pull-expire 30s \
+      --no-headers-only \
+      --backoff none \
+      --defaults >/dev/null
+  fi
+}
+
+bootstrap_runtime() {
+  expect 7
+  rt_stream ELITEA_RT_V1_VALIDATE validate "${RT_VALIDATE_MAX_MSGS}" "${RT_VALIDATE_MAX_AGE}"
+  rt_stream ELITEA_RT_V1_AGENT agent "${RT_AGENT_MAX_MSGS}" "${RT_AGENT_MAX_AGE}"
+  rt_stream ELITEA_RT_V1_INDEX index "${RT_INDEX_MAX_MSGS}" "${RT_INDEX_MAX_AGE}"
+  ensure_rt_consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1 validate
+  ensure_rt_consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1 agent
+  ensure_rt_consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1 index
+
+  # ELITEA_RT_V1_DEADLETTER: poison commands (owner decision Q3). One record
+  # per poison delivery, key <route>.<sha256(delivery_id)>, written by the
+  # worker that could not verify or decode it. The record names where to
+  # look, never what the command said. The alert is the bucket being
+  # non-empty.
+  ensure_kv ELITEA_RT_V1_DEADLETTER \
+    --replicas "${REPLICAS}" \
+    --history 1 \
+    --ttl "${RT_DEADLETTER_TTL}" \
+    --max-value-size 4096 \
+    --max-bucket-size 67108864 \
+    --description "runtime command bus dead letters (poison commands; TTL-bounded)"
+
+  assert_asset stream ELITEA_RT_V1_VALIDATE
+  assert_asset stream ELITEA_RT_V1_AGENT
+  assert_asset stream ELITEA_RT_V1_INDEX
+  assert_asset consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1
+  assert_asset consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1
+  assert_asset consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1
+  assert_asset kv ELITEA_RT_V1_DEADLETTER
 }
 
 # ── Run ─────────────────────────────────────────────────────────────────────

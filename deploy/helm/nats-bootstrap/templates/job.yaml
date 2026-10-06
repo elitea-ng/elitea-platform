@@ -66,6 +66,20 @@ spec:
               value: {{ .Values.deltas.writeback.maxDeliver | quote }}
             - name: NATS_PRESENCE_TTL
               value: {{ .Values.presence.ttl | quote }}
+            - name: NATS_RT_VALIDATE_MAX_MSGS
+              value: {{ .Values.runtime.validate.maxMsgs | quote }}
+            - name: NATS_RT_VALIDATE_MAX_AGE
+              value: {{ .Values.runtime.validate.maxAge | quote }}
+            - name: NATS_RT_AGENT_MAX_MSGS
+              value: {{ .Values.runtime.agent.maxMsgs | quote }}
+            - name: NATS_RT_AGENT_MAX_AGE
+              value: {{ .Values.runtime.agent.maxAge | quote }}
+            - name: NATS_RT_INDEX_MAX_MSGS
+              value: {{ .Values.runtime.index.maxMsgs | quote }}
+            - name: NATS_RT_INDEX_MAX_AGE
+              value: {{ .Values.runtime.index.maxAge | quote }}
+            - name: NATS_RT_DEADLETTER_TTL
+              value: {{ .Values.runtime.deadLetterTtl | quote }}
           volumeMounts:
             - name: scripts
               mountPath: /scripts

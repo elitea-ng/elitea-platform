@@ -113,25 +113,29 @@ security:
 
 # Ingress to the NATS pods. 4222 (clients) is admitted only from the pods
 # named here; 6222 (cluster routes, HA) only from the NATS pods themselves;
-# 7777 (prometheus exporter) from `metricsFrom`. 8222 (monitoring) gets no
-# rule: the exporter sidecar scrapes it over localhost, and kubelet probes are
-# not subject to NetworkPolicy on the CNIs this chart is tested with.
+# 7777 (prometheus exporter) from `metricsFrom`, and 8222 (monitoring, /jsz)
+# from `monitoringFrom` only — the KEDA operator. The exporter sidecar scrapes
+# 8222 over localhost, and kubelet probes are not subject to NetworkPolicy on
+# the CNIs this chart is tested with.
 networkPolicy:
   enabled: true
   # Set true ONLY when `enabled` is false because your own NetworkPolicy (or
-  # an equivalent CNI policy) already admits nothing but the four clients to
+  # an equivalent CNI policy) already admits nothing but the five clients to
   # 4222. templates/guards.yaml refuses `enabled: false` without it: the chart
   # cannot see your policy, so this is a statement, not a probe.
   externallyManaged: false
   # Each entry admits pods labelled app.kubernetes.io/name=<name> in
-  # <namespace> ("" = this release's namespace). These are the four NATS
-  # clients that exist today; the agent worker is added with the runtime
-  # command bus, not before. The names are the platform chart's and the
+  # <namespace> ("" = this release's namespace). elitea-main's pods present
+  # two identities (elitea-main in MAIN, elitea-main-runtime in RUNTIME); the
+  # worker pods (Rust or Python image, both labelled elitea-worker-python)
+  # present elitea-worker. The names are the platform chart's and the
   # bootstrap chart's DEFAULT pod names: both refuse a nameOverride on a NATS
   # client unless the operator says this list was changed to match
   # (nats.networkPolicyClientNamesManaged / networkPolicyClientNameManaged).
   clients:
     - name: elitea-main
+      namespace: ""
+    - name: elitea-worker-python
       namespace: ""
     - name: elitea-llm-gateway
       namespace: ""
@@ -146,6 +150,27 @@ networkPolicy:
   # counts, not message data. Narrow this to your Prometheus namespace.
   metricsFrom:
     - namespaceSelector: {}
+  # Who may read the monitoring port 8222 (/jsz) directly: the KEDA operator,
+  # whose nats-jetstream scaler sizes the worker fleet on consumer lag
+  # (docs/runtime-command-bus.md). /jsz carries stream and consumer counters,
+  # not message data. Empty means no rule (the exporter sidecar and kubelet
+  # probes need none).
+  monitoringFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: keda
+      podSelector:
+        matchLabels:
+          app: keda-operator
+
+# Prometheus alerts on the runtime command bus (templates/prometheusrule.yaml):
+# a dead-lettered command, and a command stream nearly at capacity. Rendered
+# only where monitoring.coreos.com/v1 is served.
+alerts:
+  enabled: true
+  # The nearly-full threshold, in live messages (the streams hold at most
+  # 1024; the nats-bootstrap chart's runtime.<route>.maxMsgs).
+  streamFullMessages: 900
 
 nats:
   # The CA bundle the server verifies client certificates against. cert-manager
@@ -167,9 +192,18 @@ nats:
           # TLS handshake timeout, seconds.
           timeout: 3
 
+    # Every JetStream write is synced to disk before it is acknowledged
+    # (owner decision Q2, docs/runtime-command-bus.md): a runtime command
+    # publish, its ack, and — server-wide, every account — the gateway's
+    # counters too. The default (2 minutes) would let a node crash lose
+    # acknowledged commands and acks.
+    jetstream:
+      merge:
+        sync_interval: always
+
     # The upstream monitor port stays plain HTTP on 8222: the exporter sidecar
-    # scrapes it over localhost and kubelet probes read /healthz. The
-    # NetworkPolicy gives it no ingress rule.
+    # scrapes it over localhost, kubelet probes read /healthz, and the
+    # NetworkPolicy admits the KEDA operator (networkPolicy.monitoringFrom).
 
     merge:
       # ── THE ACCOUNTS AND THE PERMISSION TABLE ────────────────────────────
@@ -207,12 +241,14 @@ nats:
       #            copying deltas back into GATEWAY_BUDGET_DELTAS. Across a
       #            service import, the answer goes to the reply subject in
       #            SCHEDULER, where nothing stores anything.
-      #   RUNTIME  RESERVED for the runtime command bus (elitea.rt.v1.>,
-      #            streams ELITEA_RT_V1_*): elitea-main's producer identity and
-      #            the agent worker. Nothing presents these identities yet.
+      #   RUNTIME  the runtime command bus (elitea.rt.v1.>,
+      #            docs/runtime-command-bus.md): the ELITEA_RT_V1_* WorkQueue
+      #            streams, their durable pull consumers, the
+      #            ELITEA_RT_V1_DEADLETTER bucket and the execution-replay
+      #            wake-up. elitea-main's producer identity and the workers.
       #
       # Every account's sole WRITER is its owner: MAIN's is elitea-main,
-      # GATEWAY's the gateway, RUNTIME's (reserved) its producer and worker;
+      # GATEWAY's the gateway, RUNTIME's its producer and worker;
       # SCHEDULER stores nothing. The ONLY cross-account flows:
       #   * GATEWAY exports the stream of its per-project soft-alert subject
       #     to MAIN, and MAIN imports it, so the project SSE relay can forward
@@ -453,23 +489,38 @@ nats:
         RUNTIME:
           jetstream: enabled
           users:
-            # elitea-main-runtime: RESERVED. elitea-main's SECOND identity, the
-            # runtime command bus producer (ELITEA_RUNTIME_NATS_URL,
-            # ELITEA_RUNTIME_NATS_TLS_*). It publishes one command per
-            # delivery subject and reads the streams' and consumers' state;
-            # it creates nothing.
+            # elitea-main-runtime: elitea-main's SECOND identity, the PRODUCER
+            # of the command bus (ELITEA_RUNTIME_NATS_URL,
+            # ELITEA_RUNTIME_NATS_TLS_*). It publishes a command on its
+            # per-delivery subject, reads a live copy back for the idempotent
+            # re-offer compare, verifies the streams it publishes into at boot,
+            # reads the consumers for the "drained" preflight, and carries the
+            # advisory execution-replay wake-up between main replicas. It
+            # creates nothing and never pulls or acks.
             - user: "spiffe://elitea.internal/nats/elitea-main-runtime"
               permissions:
                 publish:
                   allow:
-                    - "elitea.rt.v1.*.d.*"
+                    - "elitea.rt.v1.validate.d.*"
+                    - "elitea.rt.v1.agent.d.*"
+                    - "elitea.rt.v1.index.d.*"
+                    - "elitea.rt.v1.replay.wake"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.*"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.*"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.*"
+                    # The re-offer conflict check: DIRECT.GET last_by_subj.
+                    - "$JS.API.DIRECT.GET.ELITEA_RT_V1_VALIDATE.>"
+                    - "$JS.API.DIRECT.GET.ELITEA_RT_V1_AGENT.>"
+                    - "$JS.API.DIRECT.GET.ELITEA_RT_V1_INDEX.>"
+                    # The drained preflight (cmd/index-v2-preflight) and the
+                    # boot check that the durable exists.
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
                   deny:
+                    - "$KV.>"
+                    - "$JS.ACK.>"
+                    - "$JS.API.CONSUMER.MSG.NEXT.>"
                     - "$JS.API.STREAM.CREATE.>"
                     - "$JS.API.STREAM.UPDATE.>"
                     - "$JS.API.STREAM.DELETE.>"
@@ -482,32 +533,40 @@ nats:
                 subscribe:
                   allow:
                     - "_INBOX_elitea-main-runtime.>"
+                    - "elitea.rt.v1.replay.wake"
 
-            # elitea-worker: RESERVED. Pulls and acks on its route's durable
-            # consumer (one per route, created by the RUNTIME bootstrap) and
-            # records a poisoned command in the dead-letter KV. It never
-            # publishes a command and never creates a consumer.
+            # elitea-worker: the CONSUMER of the command bus, presented by the
+            # Rust and the Python worker alike. It binds to the durables the
+            # RUNTIME bootstrap created, pulls, sends in-progress heartbeats,
+            # acks after settlement and naks with a delay, and records a
+            # poison command in the dead-letter bucket. It can never publish a
+            # command or the wake-up (the deny below wins over any allow),
+            # create a consumer, or touch a stream's configuration.
             - user: "spiffe://elitea.internal/nats/elitea-worker"
               permissions:
                 publish:
                   allow:
+                    # Bind: the stream and the durable must exist and match.
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-validate-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
-                    - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-validate-worker-v1"
+                    # Pull.
+                    - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
                     - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
                     - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
-                    - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-validate-worker-v1.>"
+                    # Ack, double ack, nak with delay, +WPI. The reply subject
+                    # of a delivery is $JS.ACK.<stream>.<durable>.<...>.
+                    - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
                     - "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
                     - "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
-                    # The dead-letter (quarantine) KV.
-                    - "$KV.ELITEA_RT_QUARANTINE.>"
-                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_QUARANTINE"
+                    # The dead-letter record: KV put, and the bucket bind.
+                    - "$KV.ELITEA_RT_V1_DEADLETTER.>"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
                   deny:
-                    - "elitea.rt.v1.*.d.>"
+                    - "elitea.rt.v1.>"
                     - "$JS.API.STREAM.CREATE.>"
                     - "$JS.API.STREAM.UPDATE.>"
                     - "$JS.API.STREAM.DELETE.>"
@@ -522,9 +581,8 @@ nats:
                     - "_INBOX_elitea-worker.>"
 
             # elitea-nats-bootstrap-runtime: creates and reconciles RUNTIME's
-            # streams, its per-route durable consumers and the dead-letter KV.
-            # The runtime command bus change adds the assets to bootstrap.sh;
-            # until then the Job only proves this identity connects.
+            # three command streams, their per-route durable pull consumers
+            # and the dead-letter bucket. Publishes no data.
             - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-runtime"
               permissions:
                 publish:
@@ -541,13 +599,13 @@ nats:
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
                     - "$JS.API.STREAM.CREATE.ELITEA_RT_V1_INDEX"
                     - "$JS.API.STREAM.UPDATE.ELITEA_RT_V1_INDEX"
-                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_QUARANTINE"
-                    - "$JS.API.STREAM.CREATE.KV_ELITEA_RT_QUARANTINE"
-                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_RT_QUARANTINE"
-                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_VALIDATE.elitea-validate-worker-v1.>"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.STREAM.CREATE.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-validate-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
                 subscribe:

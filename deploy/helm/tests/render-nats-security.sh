@@ -290,6 +290,27 @@ gwp = users.get(URI("elitea-llm-gateway"), {}).get("publish", {}).get("allow", [
 check("the gateway cannot publish on elitea-main's presence family", not any(p.startswith("elitea.") for p in gwp), gwp)
 check("RUNTIME neither exports nor imports", not accts["RUNTIME"].get("exports") and not accts["RUNTIME"].get("imports"))
 check("MAIN neither exports nor does GATEWAY import", not accts["MAIN"].get("exports") and not accts["GATEWAY"].get("imports"))
+# The runtime command bus (docs/runtime-command-bus.md): the producer publishes
+# commands and cannot consume them; the worker consumes and cannot publish one.
+rt_main = users.get(URI("elitea-main-runtime"), {}).get("publish", {})
+rt_worker = users.get(URI("elitea-worker"), {}).get("publish", {})
+check("elitea-main-runtime publishes the three command routes and the replay wake-up",
+      {"elitea.rt.v1.validate.d.*", "elitea.rt.v1.agent.d.*", "elitea.rt.v1.index.d.*", "elitea.rt.v1.replay.wake"} <= set(rt_main.get("allow", [])), rt_main.get("allow"))
+check("elitea-main-runtime subscribes the replay wake-up (its replicas carry it)",
+      "elitea.rt.v1.replay.wake" in users.get(URI("elitea-main-runtime"), {}).get("subscribe", {}).get("allow", []))
+check("elitea-main-runtime may not pull or ack a command",
+      not [p for p in rt_main.get("allow", []) if p.startswith(("$JS.ACK", "$JS.API.CONSUMER.MSG.NEXT"))] and "$JS.ACK.>" in rt_main.get("deny", []))
+check("elitea-worker may not publish a command or the wake-up (denied, not merely unlisted)",
+      "elitea.rt.v1.>" in rt_worker.get("deny", []) and not [p for p in rt_worker.get("allow", []) if p.startswith("elitea.rt.")])
+check("elitea-worker pulls and acks its route durables only",
+      sorted(p for p in rt_worker.get("allow", []) if p.startswith(("$JS.ACK", "$JS.API.CONSUMER.MSG.NEXT"))) == sorted(
+          [f"$JS.API.CONSUMER.MSG.NEXT.{s}.{d}" for s, d in (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))]
+          + [f"$JS.ACK.{s}.{d}.>" for s, d in (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))]),
+      rt_worker.get("allow"))
+check("elitea-worker writes the dead-letter bucket only",
+      [p for p in rt_worker.get("allow", []) if p.startswith("$KV.")] == ["$KV.ELITEA_RT_V1_DEADLETTER.>"])
+check("JetStream syncs every write before acknowledging it (sync_interval: always)",
+      all(c.get("jetstream", {}).get("sync_interval") == "always" for c in (c1, c3)), c1.get("jetstream"))
 cl = c3.get("cluster", {})
 check("HA: routes are tls:// with peer verification", cl.get("tls", {}).get("verify") is True and all(r.startswith("tls://") for r in cl.get("routes", [])))
 
@@ -332,8 +353,9 @@ for label, d in (("scale-1", scale1), ("HA", ha)):
     check(f"{label}: it selects the NATS pods", all(pod_labels.get(k) == v for k, v in sel.items()))
     rules = {r["ports"][0]["port"]: r for r in np["ingress"]}
     names = {p["podSelector"]["matchLabels"]["app.kubernetes.io/name"] for p in rules.get(4222, {}).get("from", []) if "podSelector" in p}
-    check(f"{label}: 4222 admits exactly the four clients", names == {"elitea-main", "elitea-llm-gateway", "elitea-scheduler", "nats-bootstrap"}, sorted(names))
-    check(f"{label}: 8222 (monitoring) has no ingress rule", 8222 not in rules)
+    check(f"{label}: 4222 admits exactly the five client workloads", names == {"elitea-main", "elitea-llm-gateway", "elitea-scheduler", "nats-bootstrap", "elitea-worker-python"}, sorted(names))
+    mon = [p.get("podSelector", {}).get("matchLabels", {}) for p in rules.get(8222, {}).get("from", [])]
+    check(f"{label}: 8222 (monitoring) admits the KEDA operator only", mon == [{"app": "keda-operator"}], mon)
     if label == "HA":
         check("HA: 6222 is admitted only from the NATS pods", 6222 in rules and all("namespaceSelector" not in p for p in rules[6222]["from"]))
 
