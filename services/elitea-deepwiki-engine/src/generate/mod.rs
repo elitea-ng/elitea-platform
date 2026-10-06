@@ -217,6 +217,27 @@ fn cluster_columns(assignments: &[ClusterAssignment]) -> ClusterColumns {
         .collect()
 }
 
+/// The run's error for a failed Phase 2: the stop line after a stop; the
+/// model service's own type (and so its category) when the gateway failed,
+/// worded as the node embedding words it; else a `RuntimeError`.
+fn phase2_failure(error: &topology::StoreError, stopped: bool, model: &str) -> EngineError {
+    if stopped {
+        return EngineError::cancelled();
+    }
+    match error.engine_error() {
+        Some(cause) => EngineError::new(
+            cause.error_type,
+            format!(
+                "Embedding an orphan node with {model} failed: {}",
+                cause.message
+            ),
+        ),
+        None => runtime(format!(
+            "Repository indexing failed: Phase 2 graph topology failed: {error}"
+        )),
+    }
+}
+
 /// `run_phase2`'s summary line, as `_write_unified_db` logged it.
 fn phase2_summary(stats: &Value) -> String {
     let number = |path: &[&str]| {
@@ -599,15 +620,8 @@ impl Pipeline<'_> {
         .await
         .map_err(|e| join_failure(&e))?;
         *slot = Some(parts.build);
-        let outcome = outcome.map_err(|error| {
-            if stop.is_requested() {
-                EngineError::cancelled()
-            } else {
-                runtime(format!(
-                    "Repository indexing failed: Phase 2 graph topology failed: {error}"
-                ))
-            }
-        })?;
+        let outcome = outcome
+            .map_err(|error| phase2_failure(&error, stop.is_requested(), embeddings.model()))?;
         Ok((graph, outcome))
     }
 
@@ -695,6 +709,52 @@ pub fn job_directory(scratch_root: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gateway_failure_in_phase_2_keeps_its_type_and_category() {
+        let refusals = [
+            EngineError::new(
+                ErrorType::Runtime,
+                "Embeddings inference refused: the gateway rejected the credential for model 'e' (HTTP 401)",
+            ),
+            EngineError::new(
+                ErrorType::Value,
+                "The model budget is exhausted: HTTP 402 for model 'e'",
+            ),
+            EngineError::new(
+                ErrorType::Runtime,
+                "Embeddings request for model 'e' hit a timeout after 3 attempt(s)",
+            ),
+            EngineError::new(
+                ErrorType::Runtime,
+                "The model service is busy: HTTP 429 for model 'e'",
+            ),
+        ];
+        for cause in refusals {
+            let error = topology::StoreError::from_engine(cause.clone());
+            let failure = phase2_failure(&error, false, "text-embedding-3-small");
+            assert_eq!(failure.error_type, cause.error_type, "{failure}");
+            assert_eq!(failure.category(), cause.category(), "{failure}");
+            assert!(failure.message.contains(&cause.message), "{failure}");
+        }
+        // An index failure stays a runtime error; a stop is the stop line.
+        let index = topology::StoreError::new("the build space could not answer: x");
+        let failure = phase2_failure(&index, false, "m");
+        assert_eq!(failure.error_type, ErrorType::Runtime);
+        assert!(
+            failure
+                .message
+                .starts_with("Repository indexing failed: Phase 2")
+        );
+        assert_eq!(
+            phase2_failure(
+                &topology::StoreError::from_engine(EngineError::new(ErrorType::Value, "x")),
+                true,
+                "m"
+            ),
+            EngineError::cancelled()
+        );
+    }
 
     #[test]
     fn the_phase2_line_reads_the_stats() {

@@ -114,7 +114,11 @@ argument errors are `ValueError`, index failures `RuntimeError`
 ("Repository indexing failed: …"), model failures the client's own
 (`timeout_error`, `service_busy`, …). Deliberate difference: a failed
 embedding request fails the run (Python skipped the batch and published a
-wiki with part of its vectors).
+wiki with part of its vectors). That includes an orphan's fallback
+embedding in Phase 2: a gateway refusal or timeout there fails the run with
+the gateway's own error type and category ("Embedding an orphan node with
+<model> failed: …"), not as a generic index failure (Python went on without
+the vector).
 
 **What the engine trusts.** The wiki is named by the clone, never by the
 caller: `wiki_id` is `normalize_wiki_id(repo:branch:sha8)` of the repository

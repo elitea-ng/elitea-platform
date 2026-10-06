@@ -185,7 +185,10 @@ async fn the_build_space_answers_phase_2() {
         })
         .await
         .unwrap();
-        assert_eq!(failed.map(|e| e.0), Some(STOPPED.to_owned()));
+        assert_eq!(
+            failed.map(|e| e.message().to_owned()),
+            Some(STOPPED.to_owned())
+        );
         let parts = store.into_parts();
         assert_eq!(parts.hubs, ["api.py::module"]);
         assert_eq!(parts.meta, [("phase2_completed".to_owned(), json!(true))]);

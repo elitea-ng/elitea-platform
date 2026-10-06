@@ -142,16 +142,21 @@ pub fn resolve_orphan_hybrid(
     let embedding = match stored {
         Some(vector) => Some(vector),
         None => match (fallback_text(ctx, id), ctx.embedder.as_deref_mut()) {
-            (Some(text), Some(embedder)) => {
-                let vector = embedder.embed(&text).ok();
-                if vector.is_none() {
+            (Some(text), Some(embedder)) => match embedder.embed(&text) {
+                Ok(vector) => Some(vector),
+                // The model service refused or timed out after its
+                // retries: the run fails with that error's type, as the
+                // node embedding does (DELIBERATE DIFFERENCE: Python went
+                // on without the vector).
+                Err(error) if error.engine_error().is_some() => return Err(error),
+                Err(_) => {
                     // Python's `embedding_fn` failing meant "no vector": the
                     // orphan goes on to the lexical pass. The error text is
                     // not logged: a model error can quote its request.
                     tracing::warn!(node_id = %id, "orphan embedding failed; no vector for it");
+                    None
                 }
-                vector
-            }
+            },
             _ => None,
         },
     };

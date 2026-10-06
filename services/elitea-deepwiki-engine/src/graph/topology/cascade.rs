@@ -571,7 +571,20 @@ mod tests {
     enum Model {
         Absent,
         Failing,
+        Refusing,
         Standin,
+    }
+
+    /// An embedder whose model service refuses the credential.
+    struct RefusingEmbedder;
+
+    impl TextEmbedder for RefusingEmbedder {
+        fn embed(&mut self, _text: &str) -> Result<Vec<f64>, StoreError> {
+            Err(StoreError::from_engine(crate::errors::EngineError::new(
+                crate::errors::ErrorType::Value,
+                "The model budget is exhausted: HTTP 402 for model 'e'",
+            )))
+        }
     }
 
     /// What one `resolve_orphans` run gave.
@@ -586,10 +599,12 @@ mod tests {
         let mut graph = orphan_graph();
         let mut failing = FailingEmbedder::default();
         let mut standin = super::super::replay::StandinEmbedder;
+        let mut refusing = RefusingEmbedder;
         let stats = {
             let embedder: Option<&mut dyn TextEmbedder> = match model {
                 Model::Absent => None,
                 Model::Failing => Some(&mut failing),
+                Model::Refusing => Some(&mut refusing),
                 Model::Standin => Some(&mut standin),
             };
             let mut ctx = Ctx::new(&mut graph, store, embedder, CalibrationProfile::Calibrated);
@@ -626,6 +641,16 @@ mod tests {
         // A working embedder does add the hybrid edge.
         let working = resolve(&mut FakeStore::default(), Model::Standin).unwrap();
         assert_eq!(working.stats["hybrid"], 1);
+    }
+
+    #[test]
+    fn a_model_service_refusal_fails_the_phase_with_its_type() {
+        let error = resolve(&mut FakeStore::default(), Model::Refusing).unwrap_err();
+        let cause = error.engine_error().cloned();
+        assert_eq!(
+            cause.map(|e| (e.error_type, e.category())),
+            Some((crate::errors::ErrorType::Value, "invalid_input"))
+        );
     }
 
     #[test]
