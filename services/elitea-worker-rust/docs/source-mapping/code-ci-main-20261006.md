@@ -34,6 +34,8 @@ The reconciliation does not apply or discard that stash.
 | Saved graph viewport | `apps/elitea-web/src/features/pipelines/ui/useFlowEditorLifecycle.ts` | Finish reset persistence and fitting before acknowledgement; keep authored graphs visible after refresh. |
 | Sandbox test schema | `services/elitea-worker-rust/src/sandbox/docker_*tests.rs` and `src/state/postgres_checkpointer_tests.rs` | Include Main's recovery migration in fresh test databases. |
 | Project Context save cache | `apps/elitea-web/src/pages/settings/ProjectContext.tsx` | Install the committed response before a pending background read can restore old content. |
+| Fixed graph control clearance | `apps/elitea-web/src/features/pipelines/ui/flowEditorFitView.ts` | Measure the control column and reserve horizontal fit padding before ordinary pointer actions. |
+| Signed-in shell readiness | `apps/elitea-web/e2e/journeys/shell/shell.redirect.spec.ts` | Wait for the signed-in shell before the existing Profile deep-link and Logout assertions. |
 
 Current-platform business behavior remains a reference through the existing Code and pipeline source mappings.
 These CI repairs change verification boundaries, not the current-platform behavior contract.
@@ -217,3 +219,59 @@ Their transient failures are retained without source changes or relaxed assertio
 The live rehearsal services and databases remain unchanged during these source checks.
 The earlier migration-transition proposal has no runtime proof.
 Fresh deployment and mandatory browser acceptance remain open.
+
+## Completed replacement matrix
+
+Commit `33880427e24e1beb3ae8abb5e041dd9d6c773858` finishes with 67 successful checks, two failures, and three skips.
+Replacement CI clears the previous sandbox fixture, Web unit, static, and Project Context Save failures.
+Rust release, PostgreSQL, Runner, image scans, Helm, Main, Web quality, coverage, and visual checks pass.
+The complete Web unit suite passes 16,538 tests and retains seven existing expected failures.
+The two failures belong to separate WebKit journey shards.
+Conditional contract parity, live toolkit credentials, and documentation screenshot capture remain skipped.
+Those skips provide no acceptance result.
+
+The pause-control case validates its saved identities, then cannot clear a checkbox with an ordinary pointer action.
+Its trace identifies the fixed `Toggle Interactivity` control as the interceptor on all three attempts.
+The earlier reset correction remains necessary, but default fit padding still permits this narrow-canvas overlap.
+Automatic fitting now measures the fixed control column and reserves its right edge plus a twelve-pixel gap.
+Wide-canvas fitting, vertical padding, missing measurements, reset timing, and persisted node identities retain their existing behavior.
+The journey retains its assertions, pointer actions, timeout, and retry policy.
+
+Four geometry regressions use React Flow's viewport calculation, including the 161-pixel canvas from CI.
+The six root verification suites pass 55 tests without skips.
+The independent candidate check passes 67 tests across its six selected suites.
+Full type checking, full lint, complexity budgets, layer checks, and dead-code checks pass.
+Chromium and WebKit each complete eight geometry checks, two version writes, and two separate metadata writes.
+Both isolated browsers save, reload, clear, save again, and reload with ordinary pointer actions.
+Both report zero unknown requests, page errors, and console errors; the central command returns exit zero.
+The screenshot review confirms that node controls clear the fixed control column.
+This production-editor fixture does not establish full AppShell or backend persistence acceptance.
+
+The Logout case navigates to Profile after cookie authentication but before the signed-in shell mounts.
+The failing trace shows an empty application root and cancelled module loads during the document change.
+WebKit then reports an entry-module failure in the Profile document.
+The test now waits for the existing signed-in sidebar control before its unchanged Profile deep link.
+The test retains actual Logout, both storage sweeps, surviving control keys, and unauthenticated-session assertions.
+Its sixty-two journey-shape checks pass without skips.
+Chromium and WebKit each pass a cookie-only control and the guarded full-shell case; the central command returns exit zero.
+The guarded cases hold session, author, and lazy-shell responses to prove the readiness boundary before Profile navigation.
+Both use the compiled shipping AppShell and Profile, then execute the actual Logout control and storage sweep.
+Both retain zero unknown requests, external requests, and page errors.
+The unguarded WebKit control reproduces the exact cancelled lazy-module import and the router's recorded recovery reload.
+Its narrow expected interruption applies only to that control; the guarded assertions remain unchanged.
+Seven owning response schemas validate the explicit synthetic backend fixtures.
+Missing author and budget fixtures fail earlier attempts; those receipts remain preserved without weakening the request fence.
+This proof does not establish real OIDC authentication or server-side session revocation.
+Replacement full-application CI remains required for both corrections.
+
+## Shipping image preparation
+
+The four Linux ARM64 shipping images build from a frozen source snapshot of `33880427e`.
+Main uses user `65532`; Worker and Supervisor use `10001:10001`.
+The Supervisor image is 29,626,836 bytes, and the Worker image is 48,291,961 bytes.
+The first Supervisor build exceeds the isolated compiler's eight-GiB limit.
+The unchanged release recipe succeeds with twelve GiB and one CPU within the approved sixteen-GiB Docker budget.
+This failure belongs to compilation; it does not establish a runtime resource failure.
+The source manifest and image receipts remain separate from deployment proof.
+The later Web correction requires a new Web build before deployment.
+Running services and database history remain unchanged.

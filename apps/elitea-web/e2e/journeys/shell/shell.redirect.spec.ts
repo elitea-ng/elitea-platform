@@ -241,6 +241,12 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
   const page = await context.newPage();
   await signInThroughOidc(page, 'e2e-member@autotest.local');
 
+  // The helper proves the cookie, while the app can still load its modules.
+  // CI navigated with an empty app root. WebKit cancelled those module loads
+  // and failed the next document's entry script. Wait for the signed-in shell
+  // before another document navigation. Keep the deep link and logout checks.
+  await expect(page.getByTestId('sidebar-collapse-toggle')).toBeVisible({ timeout: 30_000 });
+
   await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
 
   /*

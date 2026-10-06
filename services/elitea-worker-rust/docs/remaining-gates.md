@@ -907,3 +907,12 @@ Code acceptance remains open until the replacement cohort passes its remaining r
 Main advances again to `7ec27cd07fe0c01f32da6c8630f0ae2f169e959b` after the first reconciliation.
 The second merge and failed CI repairs are recorded in [the repair mapping](source-mapping/code-ci-main-20261006.md).
 Keep the Code delivery gate open until the composed source and replacement CI head pass.
+
+Commit `33880427e` finishes CI with 67 successful checks, two WebKit failures, and three configured skips.
+Rust, image scans, Helm, Main, Web units, and static gates pass.
+The remaining corrections reserve fixed graph-control space and wait for the signed-in shell before Profile navigation.
+The graph correction passes ordinary Chromium and WebKit save, reload, and clear actions in an isolated production-editor fixture.
+The signed-in shell correction passes both browsers against the compiled shipping shell with strict synthetic request fixtures.
+Replacement full-application CI remains required for both corrections.
+All four shipping images build, but this source validation does not update the running rehearsal.
+The controlled migration transition, replacement deployment, and remaining Code runtime acceptance stay open.
