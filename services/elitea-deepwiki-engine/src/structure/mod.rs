@@ -173,6 +173,35 @@ pub async fn plan_wiki_structure(
     classic_structure(model, analysis).await
 }
 
+/// The most pages a classic answer creates. Real answers hold tens of
+/// pages (the prompt scales them with the repository); every page is one
+/// model call and one file, so a runaway answer is cut here.
+pub const MAX_CLASSIC_PAGES: usize = 500;
+
+/// Keep the first `max_pages` pages in structure order and drop the rest
+/// (and the sections left without a page), with a warning.
+/// DELIBERATE DIFFERENCE: Python generated every page the model listed.
+pub fn cap_pages(spec: &mut WikiStructureSpec, max_pages: usize) {
+    let total: usize = spec.sections.iter().map(|s| s.pages.len()).sum();
+    if total <= max_pages {
+        return;
+    }
+    let mut room = max_pages;
+    for section in &mut spec.sections {
+        section.pages.truncate(room);
+        room -= section.pages.len();
+    }
+    let before = spec.sections.len();
+    spec.sections.retain(|s| !s.pages.is_empty());
+    tracing::warn!(
+        pages = total,
+        kept = max_pages,
+        sections_dropped = before - spec.sections.len(),
+        "the structure lists more pages than the cap; the rest are dropped"
+    );
+    spec.total_pages = i64::try_from(max_pages).unwrap_or(i64::MAX);
+}
+
 /// The classic planner's messages.
 ///
 /// # Errors
@@ -206,7 +235,8 @@ pub fn classic_messages(analysis: &RepositoryAnalysis) -> Result<Vec<ChatMessage
 
 /// The classic single-call planner: the structure prompt, the answer's
 /// JSON validated as a `WikiStructureSpec`; an answer that does not
-/// validate becomes the fallback structure (one "Overview" page).
+/// validate becomes the fallback structure (one "Overview" page). At most
+/// [`MAX_CLASSIC_PAGES`] pages are kept.
 ///
 /// # Errors
 ///
@@ -225,7 +255,10 @@ pub async fn classic_structure(
         )
     })?;
     match WikiStructureSpec::validate(&data) {
-        Ok(spec) => Ok(spec),
+        Ok(mut spec) => {
+            cap_pages(&mut spec, MAX_CLASSIC_PAGES);
+            Ok(spec)
+        }
         Err(error) => {
             tracing::warn!(
                 "WikiStructureSpec validation failed; using fallback structure. Error: {error}"
@@ -252,6 +285,35 @@ mod tests {
         );
         assert_eq!(PlannerChoice::resolve(Some("classic")), PlannerChoice::Auto);
         assert_eq!(PlannerChoice::resolve(None), PlannerChoice::Auto);
+    }
+
+    #[test]
+    fn a_classic_answer_keeps_at_most_the_page_cap() {
+        let section = |name: &str, pages: usize| {
+            serde_json::json!({
+                "section_name": name, "section_order": 1, "description": "d", "rationale": "r",
+                "pages": (0..pages).map(|i| serde_json::json!({
+                    "page_name": format!("{name} {i}"), "page_order": i, "description": "d",
+                    "content_focus": "c", "rationale": "r",
+                })).collect::<Vec<_>>(),
+            })
+        };
+        let data = serde_json::json!({
+            "wiki_title": "W", "overview": "o", "total_pages": 9,
+            "sections": [section("A", 3), section("B", 4), section("C", 2)],
+        });
+        let mut spec = WikiStructureSpec::validate(&data).expect("valid");
+        let unchanged = spec.clone();
+        cap_pages(&mut spec, 9);
+        assert_eq!(spec, unchanged);
+        cap_pages(&mut spec, 5);
+        let names: Vec<(&str, usize)> = spec
+            .sections
+            .iter()
+            .map(|s| (s.section_name.as_str(), s.pages.len()))
+            .collect();
+        assert_eq!(names, [("A", 3), ("B", 2)]);
+        assert_eq!(spec.total_pages, 5);
     }
 
     #[test]

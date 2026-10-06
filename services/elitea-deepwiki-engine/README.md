@@ -521,7 +521,9 @@ Dead in that path and not ported: the hierarchical and agentic modes
   sorted order.
 - **Colliding page slugs** in one directory get `-2`, `-3` (README links
   and the structure JSON follow). Python wrote both pages to one file. An
-  empty slug is `page` / `section` (Python lost the page).
+  empty slug is `page` / `section` (Python lost the page). A slug is cut
+  to 100 characters before the suffix (a title is model output; a name
+  over 255 bytes failed Python's export).
 - **Artifact order** is README, then the pages in structure order
   (Python: the temp directory's `rglob` order). The manifest's `pages`
   follow it.
@@ -682,6 +684,9 @@ duplicate sums, `reduceat` and pairwise sums, and the power iteration.
   every other failed naming call is replaced, as in Python.
 - `json.loads` takes `NaN` / `Infinity`; `serde_json` does not (the answer
   then takes the parse-failure path). Integer fields hold `i64` only.
+- **Page cap.** A classic answer keeps its first 500 pages
+  (`MAX_CLASSIC_PAGES`) in structure order; the rest, and the sections left
+  empty, are dropped with a warning. Python drafted every page listed.
 
 ## Parity with the Python engine
 

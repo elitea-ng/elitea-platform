@@ -16,6 +16,9 @@
 //! * colliding page slugs in one directory get `-2`, `-3`, … (the
 //!   README links and the structure JSON use the same names). Python wrote
 //!   them to one file, so the later page silently replaced the earlier;
+//! * a slug longer than [`MAX_SLUG_CHARS`] characters is cut there (a
+//!   title is model output; Python wrote any length and the file system
+//!   refused names over 255 bytes, failing the export);
 //! * an empty page slug is `page` and an empty section slug `section`.
 //!   Python wrote `.md` (which its own `suffix == '.md'` test then skipped,
 //!   losing the page) and put an unnamed section's pages next to the
@@ -81,6 +84,27 @@ pub fn safe_filename(title: &str) -> Result<String, EngineError> {
     let kept = drop.sub(title, "").map_err(|e| regex_error(&e))?;
     let slug = collapse.sub(&kept, "-").map_err(|e| regex_error(&e))?;
     Ok(slug.trim_matches('-').to_lowercase())
+}
+
+/// The longest slug a file or directory name takes, in characters, before
+/// a collision suffix.
+pub const MAX_SLUG_CHARS: usize = 100;
+
+/// A slug cut to [`MAX_SLUG_CHARS`] characters (no trailing `-` after the
+/// cut), or `default` when nothing is left.
+fn capped_slug(slug: String, default: &str) -> String {
+    let slug = if slug.chars().count() > MAX_SLUG_CHARS {
+        crate::graph::pystr::prefix_chars(&slug, MAX_SLUG_CHARS)
+            .trim_end_matches('-')
+            .to_owned()
+    } else {
+        slug
+    };
+    if slug.is_empty() {
+        default.to_owned()
+    } else {
+        slug
+    }
 }
 
 /// `artifact_export.normalize_wiki_id(repository=…, branch=…)` as
@@ -163,19 +187,13 @@ impl ArtifactExporter {
         let mut used: HashMap<String, HashSet<String>> = HashMap::new();
         let mut placed = Vec::new();
         for (section_index, section) in structure.sections.iter().enumerate() {
-            let mut section_dir = safe_filename(&section.section_name)?;
-            if section_dir.is_empty() {
-                "section".clone_into(&mut section_dir);
-            }
+            let section_dir = capped_slug(safe_filename(&section.section_name)?, "section");
             for (page_index, spec) in section.pages.iter().enumerate() {
                 let id = format!("{section_index}#{page_index}");
                 let Some(page) = matching_page(pages, &by_id, &id, &spec.page_name) else {
                     continue;
                 };
-                let mut base = safe_filename(&page.title)?;
-                if base.is_empty() {
-                    "page".clone_into(&mut base);
-                }
+                let base = capped_slug(safe_filename(&page.title)?, "page");
                 let taken = used.entry(section_dir.clone()).or_default();
                 let mut name = base.clone();
                 let mut n = 2;
@@ -364,5 +382,53 @@ mod tests {
         );
         assert_eq!(artifacts[3].data, "");
         assert!(artifacts[1].data.contains("- [A-b](s/a-b-2.md)\n"));
+    }
+
+    /// A model title of any length gives a name of at most 100 characters
+    /// (plus the collision suffix), cut on a character boundary.
+    #[test]
+    fn long_slugs_are_capped_before_the_suffix() {
+        let long = format!("{}-x", "é".repeat(99));
+        let title = format!("{long} tail words");
+        let section = "S ".repeat(300);
+        let structure = WikiStructureSpec {
+            wiki_title: "T".into(),
+            overview: "O".into(),
+            sections: vec![SectionSpec {
+                section_name: section.clone(),
+                section_order: 1,
+                description: String::new(),
+                rationale: String::new(),
+                pages: vec![spec(&title), spec(&title), spec("Short")],
+            }],
+            total_pages: 3,
+        };
+        let pages: Vec<WikiPage> = [&title, &title, "Short"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| WikiPage {
+                page_id: format!("0#{i}"),
+                title: (*t).to_owned(),
+                content: "c".into(),
+                status: PageStatus::Completed,
+            })
+            .collect();
+        let exporter = ArtifactExporter { wiki_id: None };
+        let artifacts = exporter
+            .export(&structure, &pages, "20260101_000000")
+            .unwrap();
+        let dir = format!("wiki_pages/{}", "s-".repeat(50).trim_end_matches('-'));
+        let base = "é".repeat(99);
+        let names: Vec<&str> = artifacts.iter().skip(2).map(|a| a.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                format!("{dir}/{base}.md"),
+                format!("{dir}/{base}-2.md"),
+                format!("{dir}/short.md"),
+            ]
+        );
+        assert_eq!(capped_slug("a".repeat(100), "page"), "a".repeat(100));
+        assert_eq!(capped_slug(String::new(), "page"), "page");
     }
 }
