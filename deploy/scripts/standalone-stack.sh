@@ -34,7 +34,7 @@
 #   seed-native  NATIVE-CLIENT CONFORMANCE CONVENIENCE (ADR-0025 WP7), not
 #                required for a working stack: gives the chat persona
 #                (NATIVE_CONFORMANCE_USER, default e2e-chat@autotest.local) the
-#                notification update grant inside its personal project and
+#                notification update and delete grants inside its personal project and
 #                one fresh unseen notification there, so the suite's
 #                notification delta has a row to change. It registers no
 #                native client: the suite does that itself through the admin
@@ -1308,8 +1308,9 @@ SQL
     # rule) carries HAND-LISTED grants, not the central corpus (see the seed's
     # comment on why: shared/0090's backfill skips any pair a project already
     # overrides). The list grants the notification LIST but not the UPDATE a
-    # client needs to mark one seen, so the grant is added here, beside the
-    # list, rather than widening the E2E seed every journey shares.
+    # client needs to mark one seen, nor the DELETE the 1.3 notification
+    # deletes need, so both grants are added here, beside the list, rather
+    # than widening the E2E seed every journey shares.
     #
     # The notification is inserted per run: the suite marks it seen, so a
     # re-run against the same stack needs a fresh unseen row. Fails loudly
@@ -1334,10 +1335,16 @@ BEGIN
       current_setting('native.user');
   END IF;
 END $$;
+-- update: mark one seen (notification_sync); delete: the 1.3 single and
+-- bulk notification deletes (contract_1_3), which require their own grant.
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
-SELECT r.project_id, r.id, 'models.notifications.notification.update'
+SELECT r.project_id, r.id, p.permission
 FROM public.auth_core__user u
 JOIN public.auth_core__project_role r ON r.project_id = 90100 + u.id AND r.name = 'admin'
+CROSS JOIN (VALUES
+    ('models.notifications.notification.update'),
+    ('models.notifications.notification.delete')
+) AS p(permission)
 WHERE u.email = current_setting('native.user')
 ON CONFLICT DO NOTHING;
 INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
