@@ -92,6 +92,7 @@ updates:
       - /libs/go/authlib
       - /libs/go/egresslib
       - /libs/go/eventslib
+      - /libs/go/natsconn
       - /libs/go/observability
       - /libs/go/rpclib
       - /gen/go
