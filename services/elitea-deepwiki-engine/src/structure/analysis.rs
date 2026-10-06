@@ -23,6 +23,13 @@
 //!   extension, highest first (ties in walk order), the first 50, joined
 //!   by the two characters `\n`.
 //!
+//! `analyze_repository`'s fallbacks over the graph builder's DOCUMENTS
+//! ([`IndexerDocuments`]: every architectural symbol, a code symbol only at
+//! top level, as `_generate_symbol_chunks` streamed them): no document at
+//! all fails with [`NO_DOCUMENTS`]; an empty walk takes the documents'
+//! paths as the file list; no sample from the files takes the documents'
+//! samples ([`code_samples_from_documents`]).
+//!
 //! The answer is the `repository_context` every later step reads (page
 //! generation, ask, deep research) and the `auto` planner measures.
 //!
@@ -38,13 +45,17 @@
 use super::files;
 use super::model::{ChatModel, user_request};
 use super::prompts;
-use crate::errors::EngineError;
+use crate::errors::{EngineError, ErrorType};
+use crate::graph::constants;
 use crate::graph::discover::Discovery;
-use crate::graph::documents;
+use crate::graph::documents::{self, DocResult};
+use crate::graph::helpers::is_package_or_namespace_parent;
 use crate::llm::ChatMessage;
+use crate::parsers::model::ParseResult;
 use indexmap::IndexMap;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// `_create_repository_tree`'s per-directory listing cap.
 pub const MAX_FILES_PER_DIR: usize = 25;
@@ -79,20 +90,276 @@ pub struct AnalysisInputs {
     pub file_stats: String,
 }
 
-/// Build the inputs of the analysis prompt.
-#[must_use]
-pub fn analysis_inputs(repo_root: &Path, discovery: &Discovery) -> AnalysisInputs {
-    let files = files::repository_files(repo_root);
+/// `analyze_repository`'s error when the indexer holds no document.
+pub const NO_DOCUMENTS: &str = "No documents found in indexer - ensure repository is indexed first";
+
+/// Build the inputs of the analysis prompt, with `analyze_repository`'s
+/// fallbacks:
+///
+/// * no indexer document at all: `ValueError` [`NO_DOCUMENTS`];
+/// * an empty file walk: the file list is the documents' `source` paths
+///   (Python: `list(set(…))`, hash-seed order; sorted here, which only
+///   the ties of the file statistics see);
+/// * no code sample from the files: the samples of the documents
+///   (`_extract_representative_code_samples`).
+///
+/// The documents are built only as far as a step needs them (see
+/// [`IndexerDocuments`]).
+///
+/// # Errors
+///
+/// [`NO_DOCUMENTS`] as `ValueError`.
+pub fn analysis_inputs(
+    repo_root: &Path,
+    discovery: &Discovery,
+) -> Result<AnalysisInputs, EngineError> {
+    let root = repo_root.to_string_lossy();
+    let documents = IndexerDocuments::new(discovery, &root);
+    if documents.is_empty() {
+        return Err(EngineError::new(ErrorType::Value, NO_DOCUMENTS));
+    }
+    let mut files = files::repository_files(repo_root);
+    if files.is_empty() {
+        let mut sources: Vec<String> = documents
+            .all()
+            .iter()
+            .filter(|d| !d.source.is_empty())
+            .map(|d| d.source.clone())
+            .collect();
+        sources.sort_unstable();
+        sources.dedup();
+        files = sources;
+    }
     let repository_tree = repository_tree(&files, MAX_FILES_PER_DIR);
     let readme_content = readme_from_documents(discovery, repo_root);
-    let code_samples = code_samples(repo_root, &files);
+    let mut code_samples = code_samples(repo_root, &files);
+    if code_samples.is_empty() || code_samples == NO_SAMPLES {
+        code_samples = code_samples_from_documents(documents.all());
+    }
     let file_stats = file_stats(&files);
-    AnalysisInputs {
+    Ok(AnalysisInputs {
         files,
         repository_tree,
         readme_content,
         code_samples,
         file_stats,
+    })
+}
+
+/// One document of `indexer.get_all_documents()`: its `source` metadata
+/// (the repository-relative path) and its `page_content`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerDocument {
+    pub source: String,
+    pub content: String,
+}
+
+/// `_is_architectural_symbol`: `ARCHITECTURAL_SYMBOLS | DOC_SYMBOL_TYPES`.
+fn architectural(symbol_type: &str) -> bool {
+    let symbol_type = symbol_type.to_lowercase();
+    constants::ARCHITECTURAL_SYMBOLS.contains(&symbol_type.as_str())
+        || constants::DOC_SYMBOL_TYPES.contains(&symbol_type.as_str())
+}
+
+/// One language's parse, in discovery order.
+enum Parsed {
+    Documentation(Vec<DocResult>),
+    Code(Vec<(String, ParseResult)>),
+}
+
+/// The graph builder's documents (`_generate_symbol_chunks` /
+/// `_iter_symbol_chunks`, `DEEPWIKI_DOC_SEPARATE_INDEX` off): language by
+/// language, file by file, every symbol whose type is architectural; a
+/// code symbol only at top level (`_is_package_or_namespace_parent`).
+/// Parsed with this engine's parsers on first need, at most once.
+pub struct IndexerDocuments<'d> {
+    discovery: &'d Discovery,
+    root: &'d str,
+    parsed: OnceLock<Vec<Parsed>>,
+    documents: OnceLock<Vec<IndexerDocument>>,
+}
+
+impl<'d> IndexerDocuments<'d> {
+    #[must_use]
+    pub fn new(discovery: &'d Discovery, root: &'d str) -> Self {
+        Self {
+            discovery,
+            root,
+            parsed: OnceLock::new(),
+            documents: OnceLock::new(),
+        }
+    }
+
+    fn parse_language(&self, language: &str, files: &[String]) -> Option<Parsed> {
+        match language {
+            "documentation" => Some(Parsed::Documentation(documents::parse_documentation_files(
+                files, self.root,
+            ))),
+            "sql" | "unknown" => None,
+            _ => crate::parsers::parser_for(language)
+                .map(|parser| Parsed::Code(parser.parse_files(files).into_iter().collect())),
+        }
+    }
+
+    fn parsed(&self) -> &[Parsed] {
+        self.parsed.get_or_init(|| {
+            self.discovery
+                .files_by_language
+                .iter()
+                .filter_map(|(language, files)| self.parse_language(language, files))
+                .collect()
+        })
+    }
+
+    /// Whether there is no document, parsing only as far as the answer
+    /// needs: a documentation chunk (the documentation files are tried
+    /// first, file by file) or a top-level code symbol settles it; a
+    /// parent that only the other files can classify needs the whole
+    /// parse.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        if let Some(documents) = self.documents.get() {
+            return documents.is_empty();
+        }
+        if self.parsed.get().is_none() {
+            let (docs, code): (Vec<_>, Vec<_>) = self
+                .discovery
+                .files_by_language
+                .iter()
+                .partition(|(language, _)| *language == "documentation");
+            for (language, files) in docs.into_iter().chain(code) {
+                let settled = match language.as_str() {
+                    "documentation" => files.iter().any(|file| {
+                        documents::parse_documentation_files(std::slice::from_ref(file), self.root)
+                            .iter()
+                            .any(|r| r.symbols.iter().any(|s| architectural(&s.symbol_type)))
+                    }),
+                    "sql" | "unknown" => false,
+                    _ => crate::parsers::parser_for(language).is_some_and(|parser| {
+                        parser.parse_files(files).values().any(|result| {
+                            result.symbols.iter().any(|s| {
+                                architectural(s.symbol_type.as_str())
+                                    && is_package_or_namespace_parent(
+                                        s.parent_symbol.as_deref(),
+                                        [],
+                                    )
+                            })
+                        })
+                    }),
+                };
+                if settled {
+                    return false;
+                }
+            }
+        }
+        self.all().is_empty()
+    }
+
+    /// Every document, in the graph builder's order.
+    #[must_use]
+    pub fn all(&self) -> &[IndexerDocument] {
+        self.documents.get_or_init(|| {
+            let parsed = self.parsed();
+            let code: Vec<&ParseResult> = parsed
+                .iter()
+                .filter_map(|p| match p {
+                    Parsed::Code(results) => Some(results.iter().map(|(_, r)| r)),
+                    Parsed::Documentation(_) => None,
+                })
+                .flatten()
+                .collect();
+            let mut out = Vec::new();
+            for language in parsed {
+                match language {
+                    Parsed::Documentation(results) => {
+                        for result in results {
+                            for symbol in &result.symbols {
+                                if !architectural(&symbol.symbol_type) {
+                                    continue;
+                                }
+                                let source = if symbol.rel_path.is_empty() {
+                                    documents::relative_path(&result.file_path, self.root)
+                                } else {
+                                    symbol.rel_path.as_str()
+                                };
+                                out.push(IndexerDocument {
+                                    source: source.to_owned(),
+                                    content: symbol.source_text.clone(),
+                                });
+                            }
+                        }
+                    }
+                    Parsed::Code(results) => {
+                        for (path, result) in results {
+                            let source = documents::relative_path(path, self.root);
+                            for symbol in &result.symbols {
+                                if !architectural(symbol.symbol_type.as_str())
+                                    || !is_package_or_namespace_parent(
+                                        symbol.parent_symbol.as_deref(),
+                                        code.iter().copied(),
+                                    )
+                                {
+                                    continue;
+                                }
+                                out.push(IndexerDocument {
+                                    source: source.to_owned(),
+                                    content: symbol.source_text.clone().unwrap_or_default(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        })
+    }
+}
+
+/// `_extract_representative_code_samples(all_documents)`: the first three
+/// documents whose `source` ends with `.py` (800 characters each), the
+/// first two whose lower-cased `source` CONTAINS one of the config words
+/// (a substring test: `cmd/init.go` holds `ini`; 400 each), the first two
+/// ending with `.md` that are not READMEs (the slice is taken first; 600
+/// each), joined by the two characters `\n`, at most 4,000 characters.
+// Python's `endswith` is case-sensitive here (`.PY` is not a sample).
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
+#[must_use]
+pub fn code_samples_from_documents(documents: &[IndexerDocument]) -> String {
+    const CONFIG_WORDS: [&str; 9] = [
+        "yaml", "json", "toml", "ini", "proto", "tf", "gradle", "wsdl", "xsd",
+    ];
+    let python = documents.iter().filter(|d| d.source.ends_with(".py"));
+    let config = documents.iter().filter(|d| {
+        let low = d.source.to_lowercase();
+        CONFIG_WORDS.iter().any(|word| low.contains(word))
+    });
+    let docs = documents.iter().filter(|d| d.source.ends_with(".md"));
+    let sample = |d: &IndexerDocument, max_chars: usize| {
+        format!(
+            "=== {} ===\\n{}\\n",
+            d.source,
+            crate::graph::pystr::prefix_chars(&d.content, max_chars)
+        )
+    };
+    let mut samples: Vec<String> = Vec::new();
+    samples.extend(python.take(3).map(|d| sample(d, 800)));
+    samples.extend(config.take(2).map(|d| sample(d, 400)));
+    samples.extend(
+        docs.take(2)
+            .filter(|d| !d.source.to_lowercase().contains("readme"))
+            .map(|d| sample(d, 600)),
+    );
+    let mut combined = samples.join("\\n");
+    if combined.chars().count() > 4000 {
+        combined = format!(
+            "{}\\n... [truncated for context length]",
+            crate::graph::pystr::prefix_chars(&combined, 4000)
+        );
+    }
+    if combined.is_empty() {
+        NO_SAMPLES.to_owned()
+    } else {
+        combined
     }
 }
 
@@ -311,9 +578,10 @@ pub fn analysis_messages(
 ///
 /// # Errors
 ///
-/// The model call's failure. Python logged it and went on without an
-/// analysis, after which structure planning refused ("Repository analysis
-/// missing from state"); the error is returned instead.
+/// [`NO_DOCUMENTS`], or the model call's failure. Python logged either and
+/// went on without an analysis, after which structure planning refused
+/// ("Repository analysis missing from state"); the error is returned
+/// instead.
 pub async fn analyze_repository(
     model: &impl ChatModel,
     repo_root: &Path,
@@ -322,7 +590,7 @@ pub async fn analyze_repository(
     branch: &str,
     structured: bool,
 ) -> Result<RepositoryAnalysis, EngineError> {
-    let inputs = analysis_inputs(repo_root, discovery);
+    let inputs = analysis_inputs(repo_root, discovery)?;
     let messages = analysis_messages(&inputs, repository_name, branch, structured)?;
     let repository_context = model.complete(&user_request(messages)).await?;
     if structured && serde_json::from_str::<serde_json::Value>(&repository_context).is_err() {

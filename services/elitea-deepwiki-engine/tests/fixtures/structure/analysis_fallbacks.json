@@ -1,0 +1,103 @@
+{
+ "cases": [
+  {
+   "name": "doc_samples",
+   "files": {
+    "cmd/init.go": "package cmd\n\nimport \"fmt\"\n\n// Init prepares the command tree.\nfunc Init() error {\n\tfmt.Println(\"init\")\n\treturn nil\n}\n\n// Version is the build version.\nconst Version = \"1.0\"\n\ntype Config struct {\n\tName string\n}\n",
+    "pkg/platform/state.go": "package platform\n\n// State is the platform state.\ntype State struct {\n\tReady bool\n}\n\nfunc NewState() *State {\n\treturn &State{Ready: true}\n}\n"
+   },
+   "documents": [
+    {
+     "source": "cmd/init.go",
+     "content": "func Init() error {\n\tfmt.Println(\"init\")\n\treturn nil\n}"
+    },
+    {
+     "source": "cmd/init.go",
+     "content": "Version = \"1.0\""
+    },
+    {
+     "source": "cmd/init.go",
+     "content": "type Config struct {\n\tName string\n}"
+    },
+    {
+     "source": "pkg/platform/state.go",
+     "content": "type State struct {\n\tReady bool\n}"
+    },
+    {
+     "source": "pkg/platform/state.go",
+     "content": "func NewState() *State {\n\treturn &State{Ready: true}\n}"
+    }
+   ],
+   "messages": [
+    [
+     "system",
+     "You are an expert software architect and comprehensive repository analysis specialist. Your mission is to perform exhaustive analysis of codebases, documenting every significant component without omission. You must analyze ALL architectural patterns, technologies, and relationships present in the repository to enable complete documentation coverage."
+    ],
+    [
+     "user",
+     "\nYou are a repository analysis specialist. Perform comprehensive bottom-up analysis of the provided codebase, focusing on capabilities and user workflows rather than abstract architecture.\n\n**REPOSITORY:** acme/notes | **BRANCH:** main\n\n**ANALYSIS FOUNDATION:**\nRepository Structure: Total files: 2\nShowing up to 25 files per directory\n📁 cmd/ (1 files)\n  📄 init.go\n📁 pkg/platform/ (1 files)\n  📄 state.go\nREADME Content: No README file found  \nCode Samples: === cmd/init.go ===\\nfunc Init() error {\n\tfmt.Println(\"init\")\n\treturn nil\n}\\n\\n=== cmd/init.go ===\\nVersion = \"1.0\"\\n\nFile Statistics: Total Files: 2\\nFile Type Distribution:\\n  - .go: 2 files\n\n**ANALYSIS DIRECTIVES:**\n\n**CAPABILITY INVENTORY:** For each major folder/file in the repository structure, identify its functional purpose, primary responsibilities, inputs/outputs, and user touchpoints. Group similar capabilities naturally.\n\n**WORKFLOW MAPPING:** Trace complete user and system workflows from entry points through data processing to outputs. Document normal operations, error scenarios, configuration flows, and integration patterns.\n\n**IMPLEMENTATION ANALYSIS:** Document how capabilities are technically implemented, including architecture patterns, data handling, component interactions, and external integrations.\n\n**OUTPUT STRUCTURE:**\n\n**Executive Summary**\n- Repository purpose and primary user workflows\n- Core capabilities and their file locations  \n- Key technical patterns and integration points\n- Overall complexity and architectural approach\n\n**Capability Catalog**\n- **Core Features:** User-facing functionality with specific file paths\n- **System Operations:** Background processes, monitoring, maintenance\n- **Integration Services:** External APIs, databases, third-party services\n- **Infrastructure:** Configuration, logging, security, utilities\n- **Development Tools:** Testing, building, deployment capabilities\n\n**Workflow Documentation**  \n- **User Journeys:** Step-by-step workflows with file references\n- **Data Flows:** Information transformation and movement patterns\n- **Integration Patterns:** External system interactions and protocols\n- **Error Handling:** Failure modes and recovery mechanisms\n- **Configuration Management:** Setup and customization procedures\n\n**Technical Implementation**\n- **Component Architecture:** How pieces connect with file mappings\n- **Data Architecture:** Storage, persistence, and transformation patterns\n- **Communication Patterns:** Inter-component and external communication\n- **Performance Considerations:** Optimization strategies and bottlenecks\n- **Security Implementation:** Protection mechanisms and access controls\n\n**Discovery Insights**\n- **Strengths:** Well-implemented functionality areas\n- **Opportunities:** Missing features or improvement areas\n- **Dependencies:** External services and their integration patterns\n- **Operational Notes:** Deployment, monitoring, maintenance guidance\n\n**QUALITY REQUIREMENTS:**\n- Document ALL significant components found in the provided content (no omissions)\n- Map every capability to specific file/folder locations from the repository structure\n- Base conclusions exclusively on provided repository content\n- Focus on functional value and actual usage patterns\n- Provide concrete examples from the code samples\n- Ensure comprehensive coverage of all major components and workflows\n\nAnalyze the repository systematically, building understanding from individual file functions to complete system capabilities.\n"
+    ]
+   ],
+   "repository_tree": "Total files: 2\nShowing up to 25 files per directory\n📁 cmd/ (1 files)\n  📄 init.go\n📁 pkg/platform/ (1 files)\n  📄 state.go",
+   "errors": null
+  },
+  {
+   "name": "doc_files",
+   "files": {
+    "bin/tool.go": "package cmd\n\nimport \"fmt\"\n\n// Init prepares the command tree.\nfunc Init() error {\n\tfmt.Println(\"init\")\n\treturn nil\n}\n\n// Version is the build version.\nconst Version = \"1.0\"\n\ntype Config struct {\n\tName string\n}\n",
+    "bin/state.go": "package platform\n\n// State is the platform state.\ntype State struct {\n\tReady bool\n}\n\nfunc NewState() *State {\n\treturn &State{Ready: true}\n}\n",
+    "out/guide.md": "# Guide\n\nHow to run the tool.\n"
+   },
+   "documents": [
+    {
+     "source": "out/guide.md",
+     "content": "[File: out/guide.md]\n# Guide  \nHow to run the tool."
+    },
+    {
+     "source": "bin/state.go",
+     "content": "type State struct {\n\tReady bool\n}"
+    },
+    {
+     "source": "bin/state.go",
+     "content": "func NewState() *State {\n\treturn &State{Ready: true}\n}"
+    },
+    {
+     "source": "bin/tool.go",
+     "content": "func Init() error {\n\tfmt.Println(\"init\")\n\treturn nil\n}"
+    },
+    {
+     "source": "bin/tool.go",
+     "content": "Version = \"1.0\""
+    },
+    {
+     "source": "bin/tool.go",
+     "content": "type Config struct {\n\tName string\n}"
+    }
+   ],
+   "messages": [
+    [
+     "system",
+     "You are an expert software architect and comprehensive repository analysis specialist. Your mission is to perform exhaustive analysis of codebases, documenting every significant component without omission. You must analyze ALL architectural patterns, technologies, and relationships present in the repository to enable complete documentation coverage."
+    ],
+    [
+     "user",
+     "\nYou are a repository analysis specialist. Perform comprehensive bottom-up analysis of the provided codebase, focusing on capabilities and user workflows rather than abstract architecture.\n\n**REPOSITORY:** acme/notes | **BRANCH:** main\n\n**ANALYSIS FOUNDATION:**\nRepository Structure: Total files: 3\nShowing up to 25 files per directory\n📁 bin/ (2 files)\n  📄 state.go\n  📄 tool.go\n📁 out/ (1 files)\n  📄 guide.md\nREADME Content: No README file found  \nCode Samples: === out/guide.md ===\n# Guide\n\nHow to run the tool.\n\n\nFile Statistics: Total Files: 3\\nFile Type Distribution:\\n  - .go: 2 files\\n  - .md: 1 files\n\n**ANALYSIS DIRECTIVES:**\n\n**CAPABILITY INVENTORY:** For each major folder/file in the repository structure, identify its functional purpose, primary responsibilities, inputs/outputs, and user touchpoints. Group similar capabilities naturally.\n\n**WORKFLOW MAPPING:** Trace complete user and system workflows from entry points through data processing to outputs. Document normal operations, error scenarios, configuration flows, and integration patterns.\n\n**IMPLEMENTATION ANALYSIS:** Document how capabilities are technically implemented, including architecture patterns, data handling, component interactions, and external integrations.\n\n**OUTPUT STRUCTURE:**\n\n**Executive Summary**\n- Repository purpose and primary user workflows\n- Core capabilities and their file locations  \n- Key technical patterns and integration points\n- Overall complexity and architectural approach\n\n**Capability Catalog**\n- **Core Features:** User-facing functionality with specific file paths\n- **System Operations:** Background processes, monitoring, maintenance\n- **Integration Services:** External APIs, databases, third-party services\n- **Infrastructure:** Configuration, logging, security, utilities\n- **Development Tools:** Testing, building, deployment capabilities\n\n**Workflow Documentation**  \n- **User Journeys:** Step-by-step workflows with file references\n- **Data Flows:** Information transformation and movement patterns\n- **Integration Patterns:** External system interactions and protocols\n- **Error Handling:** Failure modes and recovery mechanisms\n- **Configuration Management:** Setup and customization procedures\n\n**Technical Implementation**\n- **Component Architecture:** How pieces connect with file mappings\n- **Data Architecture:** Storage, persistence, and transformation patterns\n- **Communication Patterns:** Inter-component and external communication\n- **Performance Considerations:** Optimization strategies and bottlenecks\n- **Security Implementation:** Protection mechanisms and access controls\n\n**Discovery Insights**\n- **Strengths:** Well-implemented functionality areas\n- **Opportunities:** Missing features or improvement areas\n- **Dependencies:** External services and their integration patterns\n- **Operational Notes:** Deployment, monitoring, maintenance guidance\n\n**QUALITY REQUIREMENTS:**\n- Document ALL significant components found in the provided content (no omissions)\n- Map every capability to specific file/folder locations from the repository structure\n- Base conclusions exclusively on provided repository content\n- Focus on functional value and actual usage patterns\n- Provide concrete examples from the code samples\n- Ensure comprehensive coverage of all major components and workflows\n\nAnalyze the repository systematically, building understanding from individual file functions to complete system capabilities.\n"
+    ]
+   ],
+   "repository_tree": "Total files: 3\nShowing up to 25 files per directory\n📁 bin/ (2 files)\n  📄 state.go\n  📄 tool.go\n📁 out/ (1 files)\n  📄 guide.md",
+   "errors": null
+  },
+  {
+   "name": "no_documents",
+   "files": {
+    "data/blob.xyz": "opaque\n"
+   },
+   "documents": [],
+   "messages": null,
+   "repository_tree": null,
+   "errors": [
+    "Repository analysis failed: No documents found in indexer - ensure repository is indexed first"
+   ]
+  }
+ ]
+}

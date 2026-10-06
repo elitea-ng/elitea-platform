@@ -622,6 +622,13 @@ calls `structure::analysis::analyze_repository` and then
    graph builder chunked it (the file-based reader of the live path always
    says "No README file found"), code samples and file statistics. The answer
    is the `repository_context` page generation, ask and deep research read.
+   Python's fallbacks over the graph builder's documents are ported: no
+   document fails with `ValueError` "No documents found in indexer…"; an
+   empty file walk takes the documents' `source` paths as the file list
+   (sorted; Python's `set` order reached only file-statistics ties); no
+   code sample from the files takes the documents' samples
+   (`_extract_representative_code_samples`, whose config test is a
+   substring test: `cmd/init.go` holds `ini`).
 2. **Planner choice** — `planner_mode` / `planner_type` (the web app always
    sends `cluster`): `cluster`; `agent` / `agentic` / `deepagents`; anything
    else `auto`. `auto` takes deepagents at 2,000 files or a context of 8,000

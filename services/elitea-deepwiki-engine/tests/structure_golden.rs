@@ -286,3 +286,70 @@ fn an_empty_analysis_uses_the_summary() {
          documentation_files=['README.md'] configuration_files=[] test_files=[]"
     );
 }
+
+/// `analyze_repository`'s fallbacks against the Python engine
+/// (`parity/python_analysis_fallbacks.py`): the graph builder's documents,
+/// the code samples taken from them when the files give none, the file
+/// list taken from their `source` paths when the walk finds nothing, and
+/// "No documents found in indexer".
+#[tokio::test]
+async fn analysis_fallbacks_match_python() {
+    let golden = fixture("analysis_fallbacks.json");
+    for case in golden["cases"].as_array().expect("cases") {
+        let name = case["name"].as_str().expect("name");
+        let base = std::env::temp_dir().join(format!(
+            "dw-analysis-fallback-{}-{name}",
+            std::process::id()
+        ));
+        let repo = base.join("repo");
+        for (rel, text) in case["files"].as_object().expect("files") {
+            let path = repo.join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+            std::fs::write(&path, text.as_str().expect("text")).expect("write");
+        }
+        let repo = std::fs::canonicalize(&repo).expect("repo");
+        let root = repo.to_str().expect("utf-8");
+        let discovery = discover::discover_files(root);
+
+        let documents = analysis::IndexerDocuments::new(&discovery, root);
+        let got: Vec<Value> = documents
+            .all()
+            .iter()
+            .map(|d| serde_json::json!({"source": d.source, "content": d.content}))
+            .collect();
+        assert_eq!(Value::Array(got), case["documents"], "{name}: documents");
+        assert_eq!(
+            analysis::IndexerDocuments::new(&discovery, root).is_empty(),
+            case["documents"].as_array().expect("documents").is_empty(),
+            "{name}: is_empty"
+        );
+
+        let calls = if case["messages"].is_null() {
+            Vec::new()
+        } else {
+            vec![serde_json::json!({"messages": case["messages"], "answer": "analysis"})]
+        };
+        let model = ScriptedModel::new(calls);
+        let result =
+            analysis::analyze_repository(&model, &repo, &discovery, "acme/notes", "main", false)
+                .await;
+        model.finish();
+        if case["errors"].is_null() {
+            let repository = result.expect(name);
+            assert_eq!(
+                repository.repository_tree,
+                case["repository_tree"].as_str().expect("tree"),
+                "{name}: tree"
+            );
+        } else {
+            let error = result.expect_err(name);
+            assert_eq!(error.error_type, ErrorType::Value, "{name}");
+            assert_eq!(
+                case["errors"][0].as_str().expect("error"),
+                format!("Repository analysis failed: {}", error.message),
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(&base).expect("cleanup");
+    }
+}
