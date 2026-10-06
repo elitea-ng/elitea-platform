@@ -877,7 +877,12 @@ its own process — they are I/O-bound and stop at every model and tool step —
 through `ask::run_tool(tool, &arguments, &QueryDeps { pool, transport,
 embedding_options, limits, clock: Clock::System }, None, context)` after
 `runner::prepare_arguments`. The step limits are read once at start, so a bad
-value fails the start, not a request. No repository analysis is passed: the
+value fails the start, not a request. Their reads share their own pool of
+`ELITEA_DEEPWIKI_QUERY_POOL_SIZE` connections (default 8, 1 to 256; another
+value fails the start); a query waits up to 30 s for a free connection, so
+the pool also caps their concurrent reads. The delete of a killed worker's
+build has a separate pool of 2, so busy queries never hold up a clean-up.
+No repository analysis is passed: the
 Python ask read it from the analysis store on scratch, which a query replica
 does not have (decision 5). The generic entry points
 (`ask::run_agent` over any `store::IndexStore` and `agent::Model`) are what

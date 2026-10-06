@@ -91,9 +91,11 @@ pub struct WorkerCommand {
 pub struct NativeRunner {
     settings: Arc<Settings>,
     worker: Arc<WorkerCommand>,
-    /// For deleting the build of a child that was killed, and for the
-    /// query tools' reads.
+    /// For deleting the build of a child that was killed. Its own pool, so
+    /// busy query tools never hold up a clean-up.
     pool: PgPool,
+    /// The query tools' reads ([`Settings::query_pool_size`] connections).
+    query_pool: PgPool,
     /// The query tools' step limits, read once at start so a bad value
     /// fails the start rather than a request.
     query_limits: crate::ask::Limits,
@@ -266,12 +268,15 @@ impl NativeRunner {
         })?;
         let pool =
             crate::storage::lazy_pool(url.expose(), 2).map_err(|e| ConfigError(e.to_string()))?;
+        let query_pool = crate::storage::lazy_pool(url.expose(), settings.query_pool_size)
+            .map_err(|e| ConfigError(e.to_string()))?;
         let query_limits =
             crate::ask::Limits::from_env().map_err(|e| ConfigError(e.message.clone()))?;
         Ok(Self {
             settings: Arc::new(settings),
             worker: Arc::new(worker),
             pool,
+            query_pool,
             query_limits,
             cgroup: Cgroup::discover().map(Arc::new),
         })
@@ -298,7 +303,7 @@ impl NativeRunner {
         let transport =
             crate::llm::Transport::new(&crate::llm::TransportSettings::from(&self.settings.model))?;
         let deps = crate::ask::QueryDeps {
-            pool: self.pool.clone(),
+            pool: self.query_pool.clone(),
             transport,
             embedding_options: crate::llm::EmbeddingOptions::from(&self.settings.model),
             limits: self.query_limits,
@@ -816,6 +821,17 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         (runner, root)
+    }
+
+    #[tokio::test]
+    async fn the_query_tools_have_their_own_pool() {
+        let (runner, root) = scripted("#!/bin/sh\nexit 0\n");
+        assert_eq!(runner.pool.options().get_max_connections(), 2);
+        assert_eq!(
+            runner.query_pool.options().get_max_connections(),
+            crate::config::DEFAULT_QUERY_POOL_SIZE
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test(flavor = "multi_thread")]
