@@ -80,16 +80,18 @@ cleanup() {
     echo "→ Stack logs (${PROJECT}) — the run exited ${status}:"
     STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" \
       "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs 2>&1 || true
-    # The tail above is bounded per service, so it covers the LAST spec of a
-    # shard, not the one that failed earlier in it. The complete logs of the
-    # three services that decide a turn go into the report directory, which
-    # the workflow uploads, so a failure in the middle of a shard can be read
-    # by its timestamps (the regression in #1081's first run was one).
-    mkdir -p "${WEB_DIR}/playwright-report" 2>/dev/null || true
-    STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" STANDALONE_LOG_TAIL=all \
-      "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main llm-mock \
-      > "${WEB_DIR}/playwright-report/stack-logs.txt" 2>&1 || true
   fi
+  # The tail above is bounded per service, so it covers the LAST spec of a
+  # shard, not one that failed earlier in it — and a spec that failed and then
+  # passed on retry ("flaky") exits 0 and gets no dump at all. The complete
+  # logs of the three services that decide a turn go into the report
+  # directory on EVERY run (the workflow uploads it either way), so a failed
+  # or flaky turn can be read by its timestamps. #1081's first run failed a
+  # chat journey five minutes before the dump; a later run flaked one.
+  mkdir -p "${WEB_DIR}/playwright-report" 2>/dev/null || true
+  STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" STANDALONE_LOG_TAIL=all \
+    "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main llm-mock \
+    > "${WEB_DIR}/playwright-report/stack-logs.txt" 2>&1 || true
   if [ "$KEEP" -eq 0 ]; then
     echo "→ Tearing down ${PROJECT}…"
     STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" \
