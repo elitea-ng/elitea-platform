@@ -1,6 +1,6 @@
-import { REGISTERED_KEYS } from '@/security/secureStorage';
+import { DEVICE_KEYS, REGISTERED_KEYS } from '@/security/secureStorage';
 import { checkFreshInstall, type InstallMarker } from '@/security/freshInstall';
-import type { FakeSecureStore } from '@/test/fakeSecureStore';
+import { TEST_WORKSPACE, registryValue, wsKey, type FakeSecureStore } from '@/test/fakeSecureStore';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-file-system', () => ({ File: jest.fn(), Paths: { document: 'file:///doc/' } }));
@@ -36,6 +36,18 @@ describe('checkFreshInstall', () => {
     expect(result).toEqual({ fresh: true, purgeIncomplete: false });
     expect(fake.values.size).toBe(0);
     expect(JSON.parse(marker.contents!)).toEqual({ installedAt: 42 });
+  });
+
+  it("purges every connected workspace's items and the registry after a reinstall", async () => {
+    const other = 'bbbbbbbbbbbb';
+    fake.values.set(DEVICE_KEYS.workspaces, registryValue([TEST_WORKSPACE, other]));
+    for (const key of REGISTERED_KEYS) {
+      fake.values.set(wsKey(key), 'a');
+      fake.values.set(wsKey(key, other), 'b');
+    }
+    const result = await checkFreshInstall({ marker: memoryMarker(), platform: 'ios' });
+    expect(result).toEqual({ fresh: true, purgeIncomplete: false });
+    expect(fake.values.size).toBe(0);
   });
 
   it('purges nothing when the marker is present', async () => {

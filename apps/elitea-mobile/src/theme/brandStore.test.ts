@@ -2,9 +2,9 @@ import { FIXTURE_ORIGIN, brandPack } from '@/api/__fixtures__/nativeClient';
 import { resolvePalette } from '@/constants/use-palette';
 import { Colors } from '@/constants/theme';
 import { endSession } from '@/security/endSession';
-import { SECURE_KEYS, getSecureItem, setSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, getSecureItemIn, setSecureItemIn, bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests, setSession } from '@/state/session';
-import { BrandPackSchema, mapBrandPack, type BrandTheme } from '@/theme/brandPack';
+import { BrandPackSchema, brandFontAlias, mapBrandPack, type BrandTheme } from '@/theme/brandPack';
 import {
   __resetBrandThemeForTests,
   applyBrandFromDiscovery,
@@ -13,12 +13,14 @@ import {
   setBrandTheme,
 } from '@/theme/brandStore';
 
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 const PACK_URL = `${FIXTURE_ORIGIN}/api/v2/branding/pack.json?v=1`;
 const theme: BrandTheme = mapBrandPack(BrandPackSchema.parse(brandPack()), FIXTURE_ORIGIN, 'file');
 
 beforeEach(() => {
+  bindWorkspace(TEST_WORKSPACE);
   __resetSessionForTests();
   __resetBrandThemeForTests();
   setSession({ hydrated: true, serverOrigin: FIXTURE_ORIGIN });
@@ -67,12 +69,22 @@ it('re-validates a restored theme (a tampered value cannot widen what is loaded)
     light: { ...theme.light, accent: 'url(https://evil.example/x)', text: '#fefefe' },
     fontFaces: [{ alias: 'brand-x', url: 'https://evil.example/x.ttf' }],
   };
-  await setSecureItem(SECURE_KEYS.brandTheme, JSON.stringify(tampered));
+  await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.brandTheme, JSON.stringify(tampered));
   await restoreBrandTheme(FIXTURE_ORIGIN);
   const restored = getBrandTheme()!;
   expect(restored.logoMark).toBeNull();
   expect(restored.light).toEqual({}); // unreadable text: scheme dropped
   expect(restored.fontFaces).toEqual([]);
+});
+
+it('renames a restored face stored by an older build with the collision-resistant alias (WS-SEC-2)', async () => {
+  const url = `${FIXTURE_ORIGIN}/api/v2/branding/assets/acme.ttf`;
+  const older = { ...theme, fontFaces: [{ alias: 'brand-Acme-1a813e76', url }], fontFamily: 'brand-Acme-1a813e76' };
+  await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.brandTheme, JSON.stringify(older));
+  await restoreBrandTheme(FIXTURE_ORIGIN);
+  const restored = getBrandTheme()!;
+  expect(restored.fontFaces).toEqual([{ alias: brandFontAlias(FIXTURE_ORIGIN, url), url }]);
+  expect(restored.fontFamily).toBe(brandFontAlias(FIXTURE_ORIGIN, url));
 });
 
 it('ignores a persisted theme of another workspace', async () => {
@@ -88,7 +100,7 @@ it('is wiped with the workspace', async () => {
   await flush();
   await endSession({ reason: 'server_switch' });
   expect(getBrandTheme()).toBeNull();
-  expect(await getSecureItem(SECURE_KEYS.brandTheme)).toBeNull();
+  expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.brandTheme)).toBeNull();
 });
 
 // F7: a pack fetched while the session is ending must neither show nor be persisted.
@@ -100,5 +112,5 @@ it('drops a pack that arrives while the session is ending', async () => {
   await pending;
   await flush();
   expect(getBrandTheme()).toBeNull();
-  expect(await getSecureItem(SECURE_KEYS.brandTheme)).toBeNull();
+  expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.brandTheme)).toBeNull();
 });

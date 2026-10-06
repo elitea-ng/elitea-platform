@@ -15,8 +15,10 @@ import {
 } from '@/auth/nativeSession';
 import { TokenResponseSchema, type TokenOutcome } from '@/auth/tokenEndpoint';
 import { endSession } from '@/security/endSession';
-import { __resetSessionForTests, getBearerToken, getSession, setSession } from '@/state/session';
+import { __resetSessionForTests, getBearerToken, getSession, setCredential, setSession } from '@/state/session';
 
+import { bindWorkspace } from '@/security/secureStorage';
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 /**
@@ -54,6 +56,7 @@ function api(respond?: (token: string | null) => Response) {
 }
 
 beforeEach(async () => {
+  bindWorkspace(TEST_WORKSPACE);
   clock = 5_000_000;
   __resetSessionForTests();
   __resetNativeSessionForTests();
@@ -71,7 +74,7 @@ beforeEach(async () => {
     revoke: jest.fn(async () => true),
     clientVersion: () => '0.1.0',
   });
-  setSession({ hydrated: true, serverOrigin: FIXTURE_ORIGIN, projectId: 1 });
+  setSession({ hydrated: true, serverOrigin: FIXTURE_ORIGIN, workspaceId: TEST_WORKSPACE, projectId: 1 });
   await startNativeSession(TokenResponseSchema.parse(tokenResponse(1)), clock, BASE);
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'info').mockImplementation(() => {});
@@ -88,6 +91,24 @@ it('sends the native access token as a Bearer', async () => {
   await get(fetch);
   expect(tokens).toEqual([ACCESS_1]);
   expect(refresh).not.toHaveBeenCalled();
+});
+
+it('never sends another workspace\'s token: a switch during the refresh fails the request unsent', async () => {
+  clock += 899_000;
+  let release!: () => void;
+  refresh.mockImplementationOnce(async () => {
+    await new Promise<void>((resolve) => (release = resolve));
+    return { kind: 'ok', response: TokenResponseSchema.parse(tokenResponse(2)), receivedAt: clock };
+  });
+  const { fetch, tokens } = api();
+  const pending = get(fetch);
+  await new Promise((r) => setTimeout(r, 0));
+  // The user switched to another connected workspace on the same host meanwhile.
+  setSession({ workspaceId: 'bbbbbbbbbbbb' });
+  setCredential({ kind: 'oauth', token: 'token-of-the-other-workspace' });
+  release();
+  await expect(pending).rejects.toMatchObject({ kind: 'origin_mismatch' });
+  expect(tokens).toEqual([]);
 });
 
 it('refreshes before sending when the access token is about to expire', async () => {

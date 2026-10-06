@@ -11,11 +11,12 @@ import {
 } from '@/auth/nativeAuth';
 import { __resetNativeSessionForTests } from '@/auth/nativeSession';
 import { TokenResponseSchema, type TokenOutcome } from '@/auth/tokenEndpoint';
-import { SECURE_KEYS } from '@/security/secureStorage';
+import { SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests, getBearerToken, getSession, setSession } from '@/state/session';
 import { __resetWorkspaceInfoForTests, acceptDiscovery } from '@/state/workspaceInfo';
 import type { FakeSecureStore } from '@/test/fakeSecureStore';
 
+import { TEST_WORKSPACE, wsKey } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn(async () => ({ type: 'cancel' })) }));
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
@@ -66,6 +67,7 @@ function exchangeOk() {
 }
 
 beforeEach(() => {
+  bindWorkspace(TEST_WORKSPACE);
   store.values.clear();
   __resetSessionForTests();
   __resetWorkspaceInfoForTests();
@@ -176,7 +178,7 @@ describe('signInWithWorkspace', () => {
     });
     expect(getSession().credential).toEqual({ kind: 'oauth' });
     expect(getBearerToken()).toBe(tokenResponse().access_token);
-    expect(store.values.get(SECURE_KEYS.credentialKind)).toBe('oauth');
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind))).toBe('oauth');
   });
 
   it('refuses a response whose state does not match, without exchanging', async () => {
@@ -273,7 +275,7 @@ describe('signInWithWorkspace', () => {
       error: 'storage',
     });
     expect(getSession().credential).toBeNull();
-    expect(store.values.has(SECURE_KEYS.refreshToken)).toBe(false);
+    expect(store.values.has(wsKey(SECURE_KEYS.refreshToken))).toBe(false);
     expect(revoke).toHaveBeenCalledWith(
       FIXTURE_ORIGIN,
       endpoints.revocation_endpoint,

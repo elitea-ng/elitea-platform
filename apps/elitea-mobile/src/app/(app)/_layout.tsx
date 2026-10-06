@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { usePalette } from '@/constants/use-palette';
 import { NotificationBell } from '@/features/notifications/NotificationBell';
 import { ProjectChip } from '@/features/projects/ProjectChip';
+import { WorkspaceTitle } from '@/features/workspaces/WorkspaceTitle';
 import { useSelfIdentityRefresh } from '@/state/selfIdentity';
 
 export default function AppLayout() {
@@ -11,7 +12,8 @@ export default function AppLayout() {
   // "Who am I", once per session: tells my messages from other people's.
   useSelfIdentityRefresh();
   return (
-    <Stack>
+    // Every signed-in screen names the active workspace's host in its header.
+    <Stack screenOptions={{ headerTitle: (props) => <WorkspaceTitle title={props.children} /> }}>
       <Stack.Screen
         name="index"
         options={{
@@ -33,6 +35,7 @@ export default function AppLayout() {
       <Stack.Screen name="c/[id]" options={{ title: 'Conversation' }} />
       <Stack.Screen name="settings" options={{ title: 'Settings' }} />
       <Stack.Screen name="projects" options={{ title: 'Projects', presentation: 'modal' }} />
+      <Stack.Screen name="workspaces" options={{ title: 'Workspaces', presentation: 'modal' }} />
       <Stack.Screen name="new" options={{ title: 'New conversation', presentation: 'modal' }} />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
     </Stack>

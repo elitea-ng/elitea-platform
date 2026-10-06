@@ -4,30 +4,39 @@ import { DbOpenError, keyConnection } from '@/db/open';
 import { enforceRetention } from '@/db/retention';
 import { Db, type RawConnection } from '@/db/sql';
 import { log } from '@/lib/log';
-import { registerWipeHook } from '@/security/endSession';
+import { registerStoredWipeHook, registerWipeHook } from '@/security/endSession';
 import { getPolicy, type ClientPolicy } from '@/security/policy';
+import { boundWorkspace } from '@/security/secureStorage';
+import { LEGACY_DB_NAME, registerLegacyDatabaseRemover, workspaceDbName } from '@/security/workspaceRegistry';
 
 /**
  * The encrypted offline store (ADR-0025 WP6, plan-app B4.6): one SQLCipher
- * file per device, belonging to the connected workspace origin.
+ * file and one key PER WORKSPACE (the slot's meta names the file:
+ * `az-offline-<id>.db`, or `az-offline.db` for the slot migrated from the
+ * single-workspace layout). Only the active workspace's file is ever open;
+ * the others stay closed with their cache, outbox and sync cursors intact.
  *
  * Lifecycle (driven by src/db/offlineBinding.ts):
- * - `open(origin)`: only while signed in, unlocked and allowed by policy. The
+ * - `open(origin, workspaceId)`: only while signed in, unlocked, allowed by
+ *   policy, and while that workspace is the bound one. The
  *   key is read (or created) here and nowhere else; a missing key means any
  *   old file is unreadable, so the file is deleted first. A file that does not
  *   decrypt, a schema from a newer app, or a file of another origin is
  *   deleted and recreated with a new key: it is a cache, the server has the
  *   data. A binary without SQLCipher is refused for the rest of the process
  *   (nothing is ever written in plaintext).
- * - `close()`: on lock and sign-out; the connection and the key it holds go.
- * - `wipe()`: endSession (logout, device_revoked, server switch, …) and a
- *   policy that turns offline storage off. Close first, then the file with its
- *   -wal/-shm sidecars, then the key.
+ * - `close()`: on lock, sign-out and a workspace switch; the connection and
+ *   the key it holds go.
+ * - `wipe(workspaceId)`: endSession (logout, device_revoked, …), removing a
+ *   workspace that is not active, and a policy that turns offline storage
+ *   off. Close first when it is the open one, then the file with its -wal/-shm
+ *   sidecars, then the key.
  *
  * All three are serialised, so a wipe never races an open.
  */
 
-export const DB_NAME = 'az-offline.db';
+/** The file of the single-workspace layout (kept by the migrated slot). */
+export const DB_NAME = LEGACY_DB_NAME;
 
 export interface StoreDriver {
   open(name: string): Promise<RawConnection>;
@@ -38,9 +47,9 @@ export interface StoreDriver {
 }
 
 export interface StoreKeys {
-  read(): Promise<string | null>;
-  create(): Promise<string>;
-  remove(): Promise<void>;
+  read(workspaceId: string): Promise<string | null>;
+  create(workspaceId: string): Promise<string>;
+  remove(workspaceId: string): Promise<void>;
 }
 
 export interface OfflineStoreDeps {
@@ -53,15 +62,24 @@ export interface OfflineStoreDeps {
    * right before the key is read (the binding already checks it).
    */
   keyGate?: () => boolean;
+  /** The database file of a workspace (default: from its slot's meta). */
+  dbName?: (workspaceId: string) => Promise<string>;
+  /**
+   * True while `workspaceId` is the bound workspace (default: secure
+   * storage's binding). Checked right before the key is read, so an open
+   * queued before a switch never opens a file for the wrong workspace.
+   */
+  isActive?: (workspaceId: string) => boolean;
 }
 
 export type StoreStatus = 'closed' | 'open' | 'unavailable';
 
-const defaultKeys: StoreKeys = { read: readDbKey, create: () => createDbKey(), remove: deleteDbKey };
+const defaultKeys: StoreKeys = { read: readDbKey, create: (id) => createDbKey(id), remove: deleteDbKey };
 
 export class OfflineStore {
   private db: Db | null = null;
   private origin: string | null = null;
+  private workspaceId: string | null = null;
   private unavailable = false;
   private chain: Promise<unknown> = Promise.resolve();
   private readonly listeners = new Set<() => void>();
@@ -70,9 +88,13 @@ export class OfflineStore {
   private readonly now: () => number;
 
   private keyGate: () => boolean;
+  private readonly dbName: (workspaceId: string) => Promise<string>;
+  private readonly isActive: (workspaceId: string) => boolean;
 
   constructor(private readonly deps: OfflineStoreDeps) {
     this.keys = deps.keys ?? defaultKeys;
+    this.dbName = deps.dbName ?? workspaceDbName;
+    this.isActive = deps.isActive ?? ((id) => boundWorkspace() === id);
     this.policy = deps.getPolicy ?? getPolicy;
     this.now = deps.now ?? Date.now;
     this.keyGate = deps.keyGate ?? (() => false);
@@ -110,20 +132,34 @@ export class OfflineStore {
     return next;
   }
 
-  open(origin: string): Promise<Db | null> {
+  /** The workspace whose file is open, or null. */
+  get openWorkspace(): string | null {
+    return this.get() ? this.workspaceId : null;
+  }
+
+  open(origin: string, workspaceId: string): Promise<Db | null> {
     return this.serial(async () => {
-      if (this.db && !this.db.isClosed && this.origin === origin) return this.db;
+      if (this.db && !this.db.isClosed && this.origin === origin && this.workspaceId === workspaceId && this.isActive(workspaceId)) {
+        return this.db;
+      }
       if (this.db) await this.closeNow();
       if (this.unavailable) return null;
-      if (!this.keyGate()) return null;
+      if (!this.keyGate() || !this.isActive(workspaceId)) return null;
+      const name = await this.dbName(workspaceId);
       let db: Db | null = null;
       for (let attempt = 0; attempt < 2 && db === null; attempt++) {
-        db = await this.tryOpen(origin, attempt > 0);
+        db = await this.tryOpen(origin, workspaceId, name, attempt > 0);
         if (this.unavailable) return null;
       }
       if (db === null) return null;
+      if (!this.isActive(workspaceId)) {
+        // Switched away while opening: never leave another workspace's file open.
+        await db.close();
+        return null;
+      }
       this.db = db;
       this.origin = origin;
+      this.workspaceId = workspaceId;
       try {
         await enforceRetention(db, this.policy(), this.now());
       } catch (error) {
@@ -135,16 +171,16 @@ export class OfflineStore {
   }
 
   /** One open attempt; `fresh` starts over with a new key and no file. */
-  private async tryOpen(origin: string, fresh: boolean): Promise<Db | null> {
-    let key = fresh ? null : await this.keys.read();
+  private async tryOpen(origin: string, workspaceId: string, name: string, fresh: boolean): Promise<Db | null> {
+    let key = fresh ? null : await this.keys.read(workspaceId);
     if (key === null) {
       // No usable key: any file left behind cannot be decrypted.
-      await this.deps.driver.remove(DB_NAME);
-      key = await this.keys.create();
+      await this.deps.driver.remove(name);
+      key = await this.keys.create(workspaceId);
     }
     let raw: RawConnection | null = null;
     try {
-      raw = await this.deps.driver.open(DB_NAME);
+      raw = await this.deps.driver.open(name);
       await keyConnection(raw, key, { requireCipher: this.deps.driver.requireCipher });
       const db = new Db(raw);
       await migrate(db);
@@ -152,7 +188,7 @@ export class OfflineStore {
       if (stored !== null && stored.value !== origin) {
         await db.close();
         raw = null;
-        await this.deps.driver.remove(DB_NAME);
+        await this.deps.driver.remove(name);
         log.info('offline store belonged to another workspace; recreated');
         return null;
       }
@@ -169,13 +205,13 @@ export class OfflineStore {
       if (error instanceof DbOpenError && error.reason === 'no_cipher') {
         log.warn('this build has no SQLCipher; offline storage stays off');
         this.unavailable = true;
-        await this.deps.driver.remove(DB_NAME);
+        await this.deps.driver.remove(name);
         this.emit();
         return null;
       }
       const reason = error instanceof DbOpenError ? error.reason : error instanceof FutureSchemaError ? 'future_schema' : 'error';
       log.warn('offline store could not be opened; starting over', { reason });
-      await this.deps.driver.remove(DB_NAME);
+      await this.deps.driver.remove(name);
       return null;
     }
   }
@@ -184,6 +220,7 @@ export class OfflineStore {
     const db = this.db;
     this.db = null;
     this.origin = null;
+    this.workspaceId = null;
     if (db) {
       try {
         await db.close();
@@ -198,26 +235,43 @@ export class OfflineStore {
     return this.serial(() => this.closeNow());
   }
 
-  /** Closes, then deletes the file (with sidecars) and the key. Throws if a step failed. */
-  wipe(): Promise<void> {
+  /**
+   * Deletes `workspaceId`'s file (with sidecars) and key, closing it first
+   * when it is the open one. Other workspaces' files are not touched. Throws
+   * if a step failed.
+   */
+  wipe(workspaceId: string): Promise<void> {
     return this.serial(async () => {
       let failure: unknown = null;
-      try {
-        await this.closeNow();
-      } catch (error) {
-        failure = error;
+      if (this.workspaceId === workspaceId) {
+        try {
+          await this.closeNow();
+        } catch (error) {
+          failure = error;
+        }
       }
       try {
-        await this.deps.driver.remove(DB_NAME);
+        await this.deps.driver.remove(await this.dbName(workspaceId));
       } catch (error) {
         failure ??= error;
       }
       try {
-        await this.keys.remove();
+        await this.keys.remove(workspaceId);
       } catch (error) {
         failure ??= error;
       }
       if (failure !== null) throw failure;
+    });
+  }
+
+  /**
+   * Deletes a database file no workspace owns (the old layout's file after a
+   * discarded migration), with its sidecars. Never the open one.
+   */
+  removeOrphan(name: string): Promise<void> {
+    return this.serial(async () => {
+      if (this.db !== null && this.workspaceId !== null && name === (await this.dbName(this.workspaceId))) return;
+      await this.deps.driver.remove(name);
     });
   }
 
@@ -253,5 +307,10 @@ export const offlineStore = new OfflineStore({
   },
 });
 
-// Every end of a session (logout, device_revoked, server switch, reset) deletes the store.
-registerWipeHook('offline_store', () => offlineStore.wipe());
+// Every end of a session closes the connection; the workspace's file and key
+// are deleted by the stored-wipe hook, which also serves workspaces that are
+// not active (removed from the switcher, a wipe resumed at launch).
+registerWipeHook('offline_store', () => offlineStore.close());
+registerStoredWipeHook('offline_store', (workspaceId) => offlineStore.wipe(workspaceId));
+// A discarded single-workspace migration (an unfinished old-layout wipe): its file.
+registerLegacyDatabaseRemover(() => offlineStore.removeOrphan(LEGACY_DB_NAME));

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 
 import { resolveProjectSelection, useProjects, type Project } from '@/api/queries/projects';
 import { selectProject } from '@/state/projectSelection';
+import { usePersonalProjectId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
 
 export interface ProjectSelection {
@@ -15,12 +16,15 @@ export interface ProjectSelection {
 
 /**
  * Keeps the session's project valid against the server's list: a stale,
- * unknown or suspended selection falls back to the first usable project.
+ * unknown or suspended selection falls back to the personal project, else
+ * the first usable one. The choice is per workspace (it lives in the
+ * workspace's own secure-store namespace).
  */
 export function useProjectSelection(): ProjectSelection {
   const projects = useProjects();
   const projectId = useSession((s) => s.projectId);
-  const resolved = projects.data ? resolveProjectSelection(projects.data, projectId) : projectId;
+  const personal = usePersonalProjectId();
+  const resolved = projects.data ? resolveProjectSelection(projects.data, projectId, personal) : projectId;
 
   useEffect(() => {
     if (projects.data && resolved !== null && resolved !== projectId) {

@@ -99,9 +99,10 @@ src/
       index.tsx            conversations list
       c/[id].tsx           conversation thread, composer, live streaming
       new.tsx              new conversation (agent picker)
-      projects.tsx         project switcher
+      projects.tsx         project switcher (personal + team, per workspace)
       notifications.tsx    in-app notifications
       settings.tsx         workspace, device-lock policy, switch workspace, "Log out & wipe"
+      workspaces.tsx       workspace switcher (several connected workspaces, no wipe on switch)
   api/                     generated client (generated/), guarded fetch (token refresh + one replay),
                            errors, path guards, discovery document, anonymous requests,
                            react-query client and queries, sse/ (parser, transport, resumable stream)

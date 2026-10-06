@@ -5,11 +5,13 @@ import { restoreNativeSession } from '@/auth/nativeSession';
 import { restorePolicy } from '@/security/policyStore';
 import { log } from '@/lib/log';
 import { parseConnectLink } from '@/linking/parseConnectLink';
-import { WipeIncompleteError, resumePendingWipe } from '@/security/endSession';
+import { resumePendingWipes, wipeStoredWorkspace } from '@/security/endSession';
 import { checkFreshInstall } from '@/security/freshInstall';
-import { SECURE_KEYS, deleteSecureItem, getSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, bindWorkspace, deleteSecureItem, getSecureItem } from '@/security/secureStorage';
+import { migrateLegacyLayout, readRegistry } from '@/security/workspaceRegistry';
 import { restoreSelfIdentity } from '@/state/selfIdentity';
 import { getSession, setCredential, setSession } from '@/state/session';
+import { refreshWorkspaceList } from '@/state/workspaceList';
 import { restoreBrandTheme } from '@/theme/brandStore';
 
 /**
@@ -19,12 +21,16 @@ import { restoreBrandTheme } from '@/theme/brandStore';
  * Order:
  *   1. fresh-install check: the iOS Keychain outlives an uninstall, so a
  *      reinstall starts signed out (nothing is read);
- *   2. resume an interrupted wipe (`az.wipe.pending`). If it still cannot
- *      delete every secure item, NOTHING is restored and launch finishes
- *      signed out (the marker stays, so the next launch wipes again). Waiting
+ *   2. move the single-workspace layout of an older app version into the
+ *      first workspace slot (workspaceRegistry.ts; no data loss, no new
+ *      sign-in);
+ *   3. resume every interrupted wipe (a workspace's `az.wipe.pending`). A
+ *      workspace whose wipe still cannot delete every secure item is NOT
+ *      restored (the marker stays, so the next launch wipes again). Waiting
  *      for it instead would keep a permanently failing key on the splash
  *      screen forever;
- *   3. read the workspace origin, the credential and the selected project.
+ *   4. bind the registry's active workspace and read its origin, credential
+ *      and selected project (`restoreWorkspace`, also used by a switch).
  *
  * Secure items are `WHEN_UNLOCKED_THIS_DEVICE_ONLY`: reading them fails while
  * the device is locked. A read ERROR is therefore "try again when the app is
@@ -55,6 +61,8 @@ export function hydrateSession(options: HydrateOptions = {}): Promise<void> {
       }
     }
     if (!getSession().hydrated) setSession({ hydrated: true });
+    // The switcher's list (hosts, brand marks); never blocks the launch.
+    void refreshWorkspaceList();
   })();
   return started;
 }
@@ -75,26 +83,47 @@ async function hydrateOnce(options: HydrateOptions): Promise<void> {
   const { fresh } = await checkFreshInstall();
   if (fresh) return;
 
-  try {
-    await resumePendingWipe();
-  } catch (error) {
-    if (!(error instanceof WipeIncompleteError)) throw error;
-    log.warn('interrupted wipe still incomplete; starting signed out, nothing restored', { error });
+  await migrateLegacyLayout();
+  const active = (await readRegistry()).active;
+  const resumed = await resumePendingWipes();
+  const resumedActive = resumed.find((r) => r.workspaceId === active);
+  if (resumedActive) {
+    // The active workspace was being wiped: start on the connect screen, with
+    // the reason it ended (its other workspaces stay listed there).
+    setSession({ endReason: resumedActive.reason });
+    if (!resumedActive.wiped) log.warn('interrupted wipe still incomplete; that workspace is not restored');
     return;
   }
+  if (active === null) return;
+  await restoreWorkspace(active, options);
+}
 
+/**
+ * Binds `workspaceId` and restores it into the session: origin, project,
+ * policy, brand, "me", then the credential. Throws only when secure storage
+ * cannot be read (the caller retries). A slot whose origin is missing or not
+ * something `connect` wrote is wiped and nothing is restored.
+ */
+export async function restoreWorkspace(
+  workspaceId: string,
+  options: Pick<HydrateOptions, 'devSignIn' | 'allowPrivateHttp'> = {},
+): Promise<boolean> {
+  bindWorkspace(workspaceId);
   const storedOrigin = await getSecureItem(SECURE_KEYS.serverOrigin);
-  if (storedOrigin === null) return;
-  const parsed = parseConnectLink(storedOrigin, {
-    connectSchemes: [], // a stored origin is a bare URL, never a connect link
-    allowPrivateHttp: options.allowPrivateHttp ?? __DEV__,
-  });
-  if (!parsed.ok || parsed.origin !== storedOrigin) {
+  const parsed =
+    storedOrigin === null
+      ? null
+      : parseConnectLink(storedOrigin, {
+          connectSchemes: [], // a stored origin is a bare URL, never a connect link
+          allowPrivateHttp: options.allowPrivateHttp ?? __DEV__,
+        });
+  if (parsed === null || !parsed.ok || parsed.origin !== storedOrigin) {
     // Not something connect() wrote (or plain http stored by a dev build):
-    // start from the connect screen.
+    // drop the slot and start from the connect screen.
     log.warn('stored workspace origin rejected at launch');
-    await deleteSecureItem(SECURE_KEYS.serverOrigin);
-    return;
+    bindWorkspace(null);
+    await wipeStoredWorkspace(workspaceId, { reason: 'reset' });
+    return false;
   }
 
   const kind = await getSecureItem(SECURE_KEYS.credentialKind);
@@ -107,15 +136,19 @@ async function hydrateOnce(options: HydrateOptions): Promise<void> {
   await restoreBrandTheme(parsed.origin);
   // "Me" for shared conversations, so a launch offline still knows it.
   await restoreSelfIdentity(parsed.origin);
-  setSession({ serverOrigin: parsed.origin, projectId: Number.isSafeInteger(projectId) ? projectId : null });
+  setSession({
+    serverOrigin: parsed.origin,
+    workspaceId,
+    projectId: Number.isSafeInteger(projectId) ? projectId : null,
+  });
 
   if (kind === 'oauth') {
-    if (await restoreNativeSession(parsed.origin)) return;
+    if (await restoreNativeSession(parsed.origin)) return true;
   } else if (kind === 'pat' && (options.devSignIn ?? devSignInEnabled())) {
     const token = await getSecureItem(SECURE_KEYS.pat);
     if (token !== null && token.trim() !== '') {
       setCredential({ kind: 'pat', token });
-      return;
+      return true;
     }
   }
   if (kind !== null) {
@@ -129,6 +162,7 @@ async function hydrateOnce(options: HydrateOptions): Promise<void> {
     await deleteSecureItem(SECURE_KEYS.accessToken);
     await deleteSecureItem(SECURE_KEYS.credentialKind);
   }
+  return true;
 }
 
 /** Test helper. */

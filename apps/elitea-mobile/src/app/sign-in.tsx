@@ -19,8 +19,8 @@ import { identity } from '@/config/identity';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { displayHost } from '@/features/connect/connectFlow';
-import { endSession } from '@/security/endSession';
 import { useSession } from '@/state/session';
+import { leaveSignIn } from '@/state/workspace';
 import { refreshWorkspaceInfo, useWorkspaceInfo } from '@/state/workspaceInfo';
 import { BrandLogo } from '@/theme/BrandLogo';
 import { useBrandFontFamily } from '@/theme/brandFonts';
@@ -91,7 +91,7 @@ export default function SignInScreen() {
 
           <Pressable
             accessibilityRole="button"
-            onPress={() => void endSession({ reason: 'server_switch' })}
+            onPress={() => void leaveSignIn()}
             style={styles.linkButton}>
             <Text style={[styles.link, { color: palette.accent }]}>Use a different workspace</Text>
           </Pressable>

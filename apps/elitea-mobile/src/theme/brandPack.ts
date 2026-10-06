@@ -5,6 +5,7 @@ import { BRAND_PACK_PATH } from '@/api/discovery';
 import { isSameOrigin, originOf } from '@/api/paths';
 import type { Palette } from '@/constants/theme';
 import { log } from '@/lib/log';
+import { sha256Hex } from '@/lib/sha256';
 import { BLACK, WHITE, contrastRatio, formatColor, parseColor, type Rgba } from '@/theme/color';
 
 /**
@@ -139,8 +140,22 @@ function mapFonts(pack: BrandPack, origin: string): Pick<BrandTheme, 'fontFaces'
     .filter((face) => /\.(ttf|otf)$/i.test(pathOf(face.url) ?? ''))
     .slice(0, 1);
   if (faces.length === 0) return { fontFaces: [], fontFamily: null };
-  const alias = `brand-${family.replace(/\s+/g, '-')}`;
+  const alias = brandFontAlias(origin, faces[0].url);
   return { fontFaces: faces.map((face) => ({ alias, url: face.url })), fontFamily: alias };
+}
+
+/**
+ * The name a workspace's brand face is registered (and cached) under. Fonts
+ * are registered process-wide by name and the loader skips a name it already
+ * loaded, so the name must never be shared by two workspaces: it is 128 bits
+ * of SHA-256 over the workspace origin and the face URL. A hostile workspace
+ * can read another's (public) brand pack, so a short or non-cryptographic hash
+ * (32-bit FNV-1a, before) could be collided on purpose in seconds to make the
+ * other workspace render with its font. The family name is not part of it:
+ * it is chosen by the pack and carries nothing the digest does not.
+ */
+export function brandFontAlias(origin: string, faceUrl: string): string {
+  return `brand-${sha256Hex(`${origin}\n${faceUrl}`).slice(0, 32)}`;
 }
 
 /** The allowlisted, contrast-checked palette overrides of one scheme. */

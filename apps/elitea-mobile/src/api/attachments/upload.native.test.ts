@@ -7,6 +7,8 @@ import { __resetNativeSessionForTests, __setNativeSessionDepsForTests, startNati
 import { TokenResponseSchema, type TokenOutcome } from '@/auth/tokenEndpoint';
 import { __resetSessionForTests, setSession } from '@/state/session';
 
+import { bindWorkspace } from '@/security/secureStorage';
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-file-system', () => ({ File: jest.fn(), Directory: jest.fn(), Paths: { cache: 'file:///cache' } }));
 
@@ -18,6 +20,7 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 let clock = 5_000_000;
 
 beforeEach(async () => {
+  bindWorkspace(TEST_WORKSPACE);
   __resetSessionForTests();
   __resetNativeSessionForTests();
   __setNativeSessionDepsForTests({

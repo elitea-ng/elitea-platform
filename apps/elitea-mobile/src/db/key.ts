@@ -1,11 +1,12 @@
 import { getRandomBytes } from 'expo-crypto';
 
-import { SECURE_KEYS, deleteSecureItem, getSecureItem, setSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, deleteSecureItemIn, getSecureItemIn, setSecureItemIn } from '@/security/secureStorage';
 
 /**
  * The offline database key: 32 random bytes, hex encoded, kept in the
- * Keychain / Keystore (`az.db.key`, `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, wiped
- * with every other secure item by endSession).
+ * Keychain / Keystore (`az.db.key` in the workspace's namespace,
+ * `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, wiped with every other secure item of the
+ * workspace by endSession). Each workspace has its own key and file.
  *
  * Release rule: nothing reads the key until the device-lock gate is open
  * (src/db/offlineBinding.ts opens the store only while the lock controller
@@ -26,18 +27,18 @@ export function newDbKey(random: (count: number) => Uint8Array = getRandomBytes)
 }
 
 /** The stored key; null when absent or malformed (either way the old file cannot be opened). */
-export async function readDbKey(): Promise<string | null> {
-  const value = await getSecureItem(SECURE_KEYS.dbKey);
+export async function readDbKey(workspaceId: string): Promise<string | null> {
+  const value = await getSecureItemIn(workspaceId, SECURE_KEYS.dbKey);
   return value !== null && DB_KEY_RE.test(value) ? value : null;
 }
 
 /** Creates and stores a new key, replacing any old one. */
-export async function createDbKey(random?: (count: number) => Uint8Array): Promise<string> {
+export async function createDbKey(workspaceId: string, random?: (count: number) => Uint8Array): Promise<string> {
   const key = newDbKey(random);
-  await setSecureItem(SECURE_KEYS.dbKey, key);
+  await setSecureItemIn(workspaceId, SECURE_KEYS.dbKey, key);
   return key;
 }
 
-export async function deleteDbKey(): Promise<void> {
-  await deleteSecureItem(SECURE_KEYS.dbKey);
+export async function deleteDbKey(workspaceId: string): Promise<void> {
+  await deleteSecureItemIn(workspaceId, SECURE_KEYS.dbKey);
 }

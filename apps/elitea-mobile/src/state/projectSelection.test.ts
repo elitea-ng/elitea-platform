@@ -1,14 +1,16 @@
 import { queryClient } from '@/api/queryClient';
 import { inFlightCount, projectScope, registerAbortable, abortAll } from '@/lib/abortRegistry';
-import { SECURE_KEYS } from '@/security/secureStorage';
+import { SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
 import { selectProject } from '@/state/projectSelection';
 import { __resetSessionForTests, getSession, setSession } from '@/state/session';
 import type { FakeSecureStore } from '@/test/fakeSecureStore';
 
+import { TEST_WORKSPACE, wsKey } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 const fake = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
 beforeEach(() => {
+  bindWorkspace(TEST_WORKSPACE);
   __resetSessionForTests();
   abortAll();
   queryClient.clear();
@@ -33,7 +35,7 @@ describe('selectProject', () => {
     expect(inFlightCount()).toBe(1);
     expect(queryClient.getQueryData(['p', 1, 'conversations'])).toBeUndefined();
     expect(queryClient.getQueryData(['projects'])).toBe('list');
-    expect(fake.values.get(SECURE_KEYS.projectSelected)).toBe('2');
+    expect(fake.values.get(wsKey(SECURE_KEYS.projectSelected))).toBe('2');
   });
 
   it('is a no-op for the current project and rejects invalid ids', async () => {

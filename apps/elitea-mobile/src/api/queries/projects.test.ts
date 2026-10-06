@@ -1,6 +1,6 @@
 import { createApiClient } from '@/api/client';
 import type { BaseFetch } from '@/api/middleware';
-import { fetchProjects, resolveProjectSelection, selectableProjects, type Project } from '@/api/queries/projects';
+import { fetchProjects, groupProjects, resolveProjectSelection, selectableProjects, type Project } from '@/api/queries/projects';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
@@ -32,8 +32,33 @@ describe('resolveProjectSelection', () => {
     expect(resolveProjectSelection([], null)).toBeNull();
   });
 
+  it('falls back to the personal project before the first one', () => {
+    expect(resolveProjectSelection(projects, null, 7)).toBe(7);
+    expect(resolveProjectSelection(projects, 99, 7)).toBe(7);
+    // A kept selection wins over the personal project.
+    expect(resolveProjectSelection(projects, 5, 7)).toBe(5);
+    // A personal project not in the list (or suspended) is not chosen.
+    expect(resolveProjectSelection(projects, null, 3)).toBe(5);
+    expect(resolveProjectSelection(projects, null, 42)).toBe(5);
+  });
+
   it('hides suspended projects from the switcher', () => {
     expect(selectableProjects(projects).map((p) => p.id)).toEqual([5, 7]);
+  });
+});
+
+describe('groupProjects', () => {
+  // listProjects rows (ProjectWithGroups, client contract 1.2) after fetchProjects, with the
+  // personal project named by getCurrentAuthor's personal_project_id.
+  const list = [P(1), P(7), P(12), P(13, true)];
+
+  it('puts the personal project first and the usable team projects after it', () => {
+    expect(groupProjects(list, 7)).toEqual({ personal: P(7), team: [P(1), P(12)] });
+  });
+
+  it('lists everything as team projects until the personal project is known', () => {
+    expect(groupProjects(list, null)).toEqual({ personal: null, team: [P(1), P(7), P(12)] });
+    expect(groupProjects(list, 99)).toEqual({ personal: null, team: [P(1), P(7), P(12)] });
   });
 });
 

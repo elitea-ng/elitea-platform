@@ -26,3 +26,16 @@ export function fakeSecureStoreModule(): FakeSecureStore {
     }),
   };
 }
+
+/** The workspace id tests bind (`bindWorkspace(TEST_WORKSPACE)`). */
+export const TEST_WORKSPACE = 'aaaaaaaaaaaa';
+
+/** The physical keychain item of a workspace-scoped key (mirrors `physicalKey`). */
+export function wsKey(key: string, workspaceId: string = TEST_WORKSPACE): string {
+  return `az.ws.${workspaceId}.${key.slice('az.'.length)}`;
+}
+
+/** Registers `ids` (first = active) the way the workspace registry stores them. */
+export function registryValue(ids: string[], active: string | null = ids[0] ?? null): string {
+  return JSON.stringify({ v: 1, active, ids });
+}

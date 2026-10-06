@@ -18,10 +18,11 @@ import { getSession, useSession } from '@/state/session';
  * it) once per session, and cached in secure storage for the workspace, so a
  * launch offline still knows it. The cached value is part of the secure
  * registry and the in-memory copy has a wipe hook: both go with the session.
- * Only the id is kept; the profile's name, email and avatar are not stored.
+ * Only the ids are kept (the user id and, for the project switcher, the
+ * personal project id); the profile's name, email and avatar are not stored.
  */
 
-let self: { origin: string; userId: number } | null = null;
+let self: { origin: string; userId: number; personalProjectId: number | null } | null = null;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -47,6 +48,21 @@ export function useSelfUserId(): number | null {
   return useSyncExternalStore(subscribeSelfIdentity, getSelfUserId, getSelfUserId);
 }
 
+/**
+ * The caller's personal project in the connected workspace
+ * (`SocialAuthorProfile.personal_project_id`, contract 1.2), or null while
+ * unknown or still being provisioned.
+ */
+export function getPersonalProjectId(): number | null {
+  const origin = getSession().serverOrigin;
+  return self !== null && origin !== null && self.origin === origin ? self.personalProjectId : null;
+}
+
+export function usePersonalProjectId(): number | null {
+  useSession((s) => s.serverOrigin);
+  return useSyncExternalStore(subscribeSelfIdentity, getPersonalProjectId, getPersonalProjectId);
+}
+
 /** A user id as the server writes it in `SocialAuthorProfile.id` (a decimal string). */
 export function parseUserId(value: unknown): number | null {
   const text = typeof value === 'number' ? String(value) : value;
@@ -60,19 +76,24 @@ function sessionEnding(): boolean {
   return getSession().ending || isEndingSession();
 }
 
-function setSelf(origin: string, userId: number): void {
-  if (self?.origin === origin && self.userId === userId) return;
-  self = { origin, userId };
+function setSelf(origin: string, userId: number, personalProjectId: number | null): void {
+  if (self?.origin === origin && self.userId === userId && self.personalProjectId === personalProjectId) return;
+  self = { origin, userId, personalProjectId };
   emit();
 }
 
-const PersistedSchema = z.object({ origin: z.string().min(1), userId: z.number().int().positive() });
+const PersistedSchema = z.object({
+  origin: z.string().min(1),
+  userId: z.number().int().positive(),
+  // Added with the project switcher; absent in what earlier builds stored.
+  personalProjectId: z.number().int().positive().nullable().optional(),
+});
 
-async function persist(origin: string, userId: number): Promise<void> {
+async function persist(origin: string, userId: number, personalProjectId: number | null): Promise<void> {
   // A write landing after endSession's secure delete would outlive the wipe.
   if (sessionEnding()) return;
   try {
-    await setSecureItem(SECURE_KEYS.selfUser, JSON.stringify({ origin, userId }));
+    await setSecureItem(SECURE_KEYS.selfUser, JSON.stringify({ origin, userId, personalProjectId }));
   } catch (error) {
     log.info('self identity not persisted', { error });
   }
@@ -90,7 +111,7 @@ export async function restoreSelfIdentity(origin: string): Promise<void> {
   try {
     const parsed = PersistedSchema.parse(JSON.parse(raw));
     if (parsed.origin !== origin || parseUserId(parsed.userId) === null) return;
-    setSelf(parsed.origin, parsed.userId);
+    setSelf(parsed.origin, parsed.userId, parsed.personalProjectId ?? null);
   } catch {
     log.info('cached self identity ignored');
   }
@@ -104,11 +125,13 @@ export async function fetchSelfIdentity(client: ApiClient = sessionApiClient(), 
   const origin = getSession().serverOrigin;
   const profile = await unwrap(client.GET('/social/author', { signal }));
   const userId = parseUserId(profile?.id);
+  // "" while the personal project is still being provisioned.
+  const personalProjectId = parseUserId(profile?.personal_project_id);
   // Workspace changed (or wiped, or being wiped) while reading: drop it.
   if (userId === null || origin === null || getSession().serverOrigin !== origin || sessionEnding()) return userId;
-  const changed = self?.origin !== origin || self.userId !== userId;
-  setSelf(origin, userId);
-  if (changed) await persist(origin, userId);
+  const changed = self?.origin !== origin || self.userId !== userId || self.personalProjectId !== personalProjectId;
+  setSelf(origin, userId, personalProjectId);
+  if (changed) await persist(origin, userId, personalProjectId);
   return userId;
 }
 

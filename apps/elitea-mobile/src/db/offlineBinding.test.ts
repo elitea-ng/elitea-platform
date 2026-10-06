@@ -21,7 +21,14 @@ function source<T>(initial: T) {
   };
 }
 
-const signedIn: SessionState = { ...INITIAL_SESSION, hydrated: true, serverOrigin: ORIGIN, credential: { kind: 'oauth' } };
+const WS = 'aaaaaaaaaaaa';
+const signedIn: SessionState = {
+  ...INITIAL_SESSION,
+  hydrated: true,
+  serverOrigin: ORIGIN,
+  workspaceId: WS,
+  credential: { kind: 'oauth' },
+};
 const offlinePolicy: PolicyState = { source: 'server', policy: { ...STRICT_DEFAULTS, offline_retention_days: 14 } };
 const unlocked: LockState = { status: 'unlocked', authInFlight: false, lastFailure: null, bypassed: false };
 const locked: LockState = { ...unlocked, status: 'locked' };
@@ -66,7 +73,7 @@ describe('offlineAllowed', () => {
 describe('bindOfflineStore', () => {
   it('opens the store for the workspace once signed in, unlocked and allowed', () => {
     const { store } = setup();
-    expect(store.open).toHaveBeenCalledWith(ORIGIN);
+    expect(store.open).toHaveBeenCalledWith(ORIGIN, WS);
     expect(store.wipe).not.toHaveBeenCalled();
   });
 
@@ -130,5 +137,19 @@ describe('bindOfflineStore', () => {
     unbind();
     const gate = store.setKeyGate.mock.calls.at(-1)![0] as () => boolean;
     expect(gate()).toBe(false);
+  });
+
+  it("opens the other workspace's store after a switch, and wipes per workspace when offline storage is off", () => {
+    const { store, session, policy } = setup();
+    expect(store.open).toHaveBeenLastCalledWith(ORIGIN, WS);
+    session.set({ ...signedIn, credential: null, serverOrigin: null, workspaceId: null });
+    expect(store.close).toHaveBeenCalled();
+    session.set({ ...signedIn, serverOrigin: 'https://b.example.com', workspaceId: 'bbbbbbbbbbbb' });
+    expect(store.open).toHaveBeenLastCalledWith('https://b.example.com', 'bbbbbbbbbbbb');
+    policy.set({ source: 'server', policy: STRICT_DEFAULTS });
+    expect(store.wipe).toHaveBeenLastCalledWith('bbbbbbbbbbbb');
+    session.set(signedIn);
+    expect(store.wipe).toHaveBeenLastCalledWith(WS);
+    expect(store.wipe).toHaveBeenCalledTimes(2);
   });
 });

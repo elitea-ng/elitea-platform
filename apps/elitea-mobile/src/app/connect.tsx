@@ -18,9 +18,13 @@ import { identity } from '@/config/identity';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { ConnectConfirm } from '@/features/connect/ConnectConfirm';
-import { checkWorkspace, confirmConnection, type ConnectCheck } from '@/features/connect/connectFlow';
+import { checkWorkspace, confirmConnection, displayHost, type ConnectCheck } from '@/features/connect/connectFlow';
+import { WorkspaceRow } from '@/features/workspaces/WorkspaceRow';
 import { parseConnectLink, type ConnectLinkErrorCode } from '@/linking/parseConnectLink';
+import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
 import { setSession, useSession, type EndReason } from '@/state/session';
+import { returnToPreviousWorkspace, switchToWorkspace } from '@/state/workspace';
+import { useWorkspaceList } from '@/state/workspaceList';
 
 const ERROR_TEXT: Record<ConnectLinkErrorCode, string> = {
   empty: 'Enter your workspace address.',
@@ -38,13 +42,14 @@ const ERROR_TEXT: Record<ConnectLinkErrorCode, string> = {
 
 /**
  * Why the last session ended, when the user did not end it. Every end of a
- * session clears the workspace origin, so this screen (not sign-in) is where
- * it lands; connecting again clears `endReason`.
+ * session removes that workspace, so this screen (not sign-in) is where it
+ * lands, naming the workspace; connecting again clears `endReason`. Other
+ * connected workspaces are listed below and were not affected.
  */
-const END_REASON_TEXT: Partial<Record<EndReason, string>> = {
-  device_revoked: 'This device was signed out by the workspace. Its data was removed from this device.',
-  credential_rejected: 'The workspace no longer accepts your sign-in. Connect and sign in again.',
-  policy: "The workspace's security policy signed this device out.",
+const END_REASON_TEXT: Partial<Record<EndReason, (host: string) => string>> = {
+  device_revoked: (host) => `This device was signed out by the workspace ${host}. Its data was removed from this device.`,
+  credential_rejected: (host) => `The workspace ${host} no longer accepts your sign-in. Connect and sign in again.`,
+  policy: (host) => `The security policy of ${host} signed this device out.`,
 };
 
 export default function ConnectScreen() {
@@ -55,7 +60,13 @@ export default function ConnectScreen() {
   // After a rejected credential the last origin is kept (in memory only) as a hint.
   const lastOriginHint = useSession((s) => s.lastOriginHint);
   const endReason = useSession((s) => s.endReason);
-  const endNotice = endReason === null ? undefined : END_REASON_TEXT[endReason];
+  const endedOrigin = useSession((s) => s.endedOrigin);
+  const endNotice =
+    endReason === null ? undefined : END_REASON_TEXT[endReason]?.(endedOrigin ? displayHost(endedOrigin) : 'you were using');
+  // The other workspaces connected on this device (switching to one wipes nothing).
+  const workspaces = useWorkspaceList();
+  const returnTo = useSession((s) => s.returnWorkspaceId);
+  const returnHost = workspaces.find((w) => w.id === returnTo);
   const [address, setAddress] = useState(incoming || lastOriginHint || '');
   const [error, setError] = useState<string | null>(null);
   // Discovery result awaiting the user's confirmation; nothing is stored yet.
@@ -159,7 +170,18 @@ export default function ConnectScreen() {
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Text style={[styles.title, { color: palette.text }]}>Connect to your workspace</Text>
+          {returnHost ? (
+            <Pressable
+              accessibilityRole="button"
+              testID="connect-back"
+              onPress={() => void returnToPreviousWorkspace()}
+              style={styles.back}>
+              <Text style={[styles.link, { color: palette.accent }]}>‹ Back to {displayHost(returnHost.origin)}</Text>
+            </Pressable>
+          ) : null}
+          <Text style={[styles.title, { color: palette.text }]}>
+            {workspaces.length > 0 ? 'Add a workspace' : 'Connect to your workspace'}
+          </Text>
           {endNotice ? (
             <Text
               accessibilityRole="alert"
@@ -232,6 +254,30 @@ export default function ConnectScreen() {
               browser. {identity.displayName} never sees your password.
             </Text>
           </View>
+
+          {workspaces.length > 0 ? (
+            <View style={styles.saved}>
+              <Text accessibilityRole="header" style={[styles.label, { color: palette.textSecondary }]}>
+                Your workspaces on this device
+              </Text>
+              <View style={[styles.savedList, { backgroundColor: palette.backgroundElement }]}>
+                {workspaces.map((workspace) => (
+                  <WorkspaceRow
+                    key={workspace.id}
+                    workspace={workspace}
+                    active={false}
+                    onPress={() => void switchToWorkspace(workspace.id)}
+                  />
+                ))}
+              </View>
+              {workspaces.length >= MAX_WORKSPACES ? (
+                <Text style={[styles.small, { color: palette.textSecondary }]}>
+                  At most {MAX_WORKSPACES} workspaces can be connected. Open one and remove it from its
+                  Workspaces list to add another.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -247,7 +293,7 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
   },
-  title: { fontSize: 28, fontWeight: '700', marginTop: Spacing.five },
+  title: { fontSize: 28, fontWeight: '700', marginTop: Spacing.four },
   body: { fontSize: 16, lineHeight: 22 },
   label: { fontSize: 13, fontWeight: '600', marginTop: Spacing.three },
   input: {
@@ -273,5 +319,9 @@ const styles = StyleSheet.create({
   secondary: { borderWidth: 1.5 },
   buttonText: { fontSize: 16, fontWeight: '600' },
   footer: { marginTop: Spacing.four },
+  back: { marginTop: Spacing.three, alignSelf: 'flex-start' },
+  link: { fontSize: 16 },
+  saved: { marginTop: Spacing.four, gap: Spacing.two },
+  savedList: { borderRadius: 12 },
   small: { fontSize: 13, lineHeight: 18 },
 });

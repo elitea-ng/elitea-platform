@@ -3,10 +3,11 @@ import type { ConfigContext } from 'expo/config';
 import appConfig from '../../app.config';
 import { devSignInEnabled, pickDefaultProject, signInWithPat } from './devSignIn';
 import type { BaseFetch } from '@/api/middleware';
-import { SECURE_KEYS } from '@/security/secureStorage';
+import { SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests, getBearerToken, getSession, setSession } from '@/state/session';
 import type { FakeSecureStore } from '@/test/fakeSecureStore';
 
+import { TEST_WORKSPACE, wsKey } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
@@ -54,6 +55,7 @@ describe('signInWithPat', () => {
   }
 
   beforeEach(() => {
+  bindWorkspace(TEST_WORKSPACE);
     __resetSessionForTests();
     store.values.clear();
     jest.clearAllMocks();
@@ -72,8 +74,8 @@ describe('signInWithPat', () => {
     expect(calls).toEqual([
       { url: `${ORIGIN}/api/v2/projects/project/default/1`, auth: 'Bearer candidate-token' },
     ]);
-    expect(store.values.get(SECURE_KEYS.pat)).toBe('candidate-token');
-    expect(store.values.get(SECURE_KEYS.credentialKind)).toBe('pat');
+    expect(store.values.get(wsKey(SECURE_KEYS.pat))).toBe('candidate-token');
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind))).toBe('pat');
     for (const call of store.setItemAsync.mock.calls) {
       expect(call[2]).toEqual({ keychainAccessible: store.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
     }

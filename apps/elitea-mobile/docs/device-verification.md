@@ -95,11 +95,28 @@ says otherwise.
       screenshots (B4), Android may show content in Recents because the snapshot can
       be taken before JS renders the cover.
 
-## 5. Workspace switch and connect links (`src/state/workspace.tsx`, `src/linking/*`)
+## 5. Workspaces and connect links (`src/state/workspace.tsx`, `src/linking/*`)
 
-- [ ] Open `agentzefir://connect?server=https://<other host>` while signed in: "Switch
-      workspace?" names both hosts; Cancel changes nothing; "Switch & wipe" lands on
-      "Sign in" for the new host with nothing left from the old one.
+- [ ] **Upgrade.** Install the previous build, sign in, open a few conversations and
+      queue a message offline; install this build over it: the app opens signed in to
+      the same workspace and project, the cached conversations and the queued message
+      are still there (no new sign-in).
+- [ ] Open `agentzefir://connect?server=https://<other host>` while signed in: "Add
+      workspace?" names both hosts; Cancel changes nothing; "Add workspace" opens the
+      confirmation for the new host, and "Back to <old host>" returns to the old one
+      signed in. Confirm and sign in: both are listed in Workspaces.
+- [ ] Switch between the two from the header (host under the title) and from Settings:
+      each opens signed in with its own brand, project, conversations and policy; the
+      header always shows the right host; nothing is re-downloaded from scratch.
+- [ ] With one workspace requiring the device lock and the other not: switching into
+      the locked one from the unlocked-without-lock one prompts; switching between two
+      lock-requiring ones after unlocking does not prompt again.
+- [ ] Remove the workspace that is NOT active: its database file and Keychain items are
+      gone, its device appears revoked on the server, the active one is untouched.
+- [ ] Revoke the active workspace's device from the server: only that workspace is
+      wiped; the connect screen names it and lists the other one, which opens signed in.
+- [ ] Open a connect link for a workspace already connected (not active): "Switch
+      workspace?"; it opens without a wipe.
 - [ ] Open a connect link for the workspace already in use: nothing happens.
 - [ ] Open a connect link while the app is locked: no dialog until after unlocking.
 - [ ] Cold start from a connect link while not connected: the address field is filled.
@@ -181,14 +198,15 @@ Set `native_client_policy.offline_retention_days` > 0 on the workspace first; wi
       anything otherwise; a warning "this build has no SQLCipher" in the log means the
       plugin option did not reach the native build).
 - [ ] **No file without policy.** With `offline_retention_days = 0`, sign in and use
-      the app: no `az-offline.db` exists in the container. Turning offline off while
+      the app: no `az-offline*.db` exists in the container for that workspace. Turning offline off while
       signed in deletes the file at the next token refresh (or sign-in).
 - [ ] **Key behind the lock.** With `require_device_lock`, relaunch: the store opens
       only after Face ID / fingerprint / passcode (the key is read after unlock), and
       it is closed again when the app relocks after `idle_lock_seconds`.
-- [ ] **Wipe.** "Log out & wipe", a device revocation and a server switch each delete
-      `az-offline.db` with its `-wal`/`-shm` files and the `az.db.key` Keychain /
-      Keystore item.
+- [ ] **Wipe.** "Log out & wipe" and a device revocation each delete that workspace's
+      `az-offline-<id>.db` (or `az-offline.db` for the upgraded one) with its
+      `-wal`/`-shm` files and its `az.ws.<id>.db.key` Keychain / Keystore item, and
+      nothing of the other workspaces.
 - [ ] **Offline read.** Open a few conversations online, then turn on airplane mode
       and relaunch: after unlock, the list, those threads (with their latest
       messages) and the notifications show with the "Offline" line; a conversation

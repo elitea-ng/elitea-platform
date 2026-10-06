@@ -3,10 +3,13 @@ import {
   REVOKE_TIMEOUT_MS,
   endSession,
   registerRevokeHook,
+  registerStoredWipeHook,
   registerWipeHook,
-  resumePendingWipe,
+  resumePendingWipes,
+  wipeStoredWorkspace,
 } from '@/security/endSession';
-import { REGISTERED_KEYS, SECURE_KEYS } from '@/security/secureStorage';
+import { DEVICE_KEYS, REGISTERED_KEYS, SECURE_KEYS, bindWorkspace, boundWorkspace } from '@/security/secureStorage';
+import { __resetRegistryForTests } from '@/security/workspaceRegistry';
 import {
   __resetSessionForTests,
   getBearerToken,
@@ -14,7 +17,7 @@ import {
   setCredential,
   setSession,
 } from '@/state/session';
-import type { FakeSecureStore } from '@/test/fakeSecureStore';
+import { TEST_WORKSPACE, registryValue, wsKey, type FakeSecureStore } from '@/test/fakeSecureStore';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 // The app's caches directory: Library/Caches on iOS, where NSURLCache keeps Cache.db (DEF-R2).
@@ -33,14 +36,28 @@ jest.mock('expo-file-system', () => {
 
 const fake = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
+/** Another connected workspace, which no end of the active session may touch. */
+const OTHER = 'bbbbbbbbbbbb';
+
 function signedIn() {
+  bindWorkspace(TEST_WORKSPACE);
   setSession({ hydrated: true, serverOrigin: 'https://ai.example.com', projectId: 7 });
   setCredential({ kind: 'pat', token: 'tok' });
-  for (const key of REGISTERED_KEYS) fake.values.set(key, 'stored');
+  fake.values.set(DEVICE_KEYS.workspaces, registryValue([TEST_WORKSPACE, OTHER]));
+  for (const key of REGISTERED_KEYS) {
+    if (key !== SECURE_KEYS.wipePending) fake.values.set(wsKey(key), 'stored');
+    if (key !== SECURE_KEYS.wipePending) fake.values.set(wsKey(key, OTHER), 'other workspace');
+  }
+}
+
+/** Only the other workspace and the registry are left. */
+function onlyOtherLeft() {
+  return [...fake.values.keys()].filter((k) => k !== DEVICE_KEYS.workspaces && !k.startsWith(`az.ws.${OTHER}.`));
 }
 
 beforeEach(() => {
   __resetSessionForTests();
+  __resetRegistryForTests();
   abortAll();
   fake.values.clear();
   jest.clearAllMocks();
@@ -102,7 +119,7 @@ describe('endSession', () => {
     expect(result.errors).toEqual([]);
     expect(controller.signal.aborted).toBe(true);
     expect(inFlightCount()).toBe(0);
-    for (const key of REGISTERED_KEYS) expect(fake.values.has(key)).toBe(false);
+    for (const key of REGISTERED_KEYS) expect(fake.values.has(wsKey(key))).toBe(false);
     const session = getSession();
     expect(session.serverOrigin).toBeNull();
     expect(session.credential).toBeNull();
@@ -117,10 +134,10 @@ describe('endSession', () => {
     signedIn();
     await endSession({ reason: 'user_logout' });
     const writes = fake.setItemAsync.mock.calls.map((c) => c[0]);
-    expect(writes).toEqual([SECURE_KEYS.wipePending]);
+    expect(writes).toEqual([wsKey(SECURE_KEYS.wipePending), DEVICE_KEYS.workspaces]);
     expect(JSON.parse(fake.setItemAsync.mock.calls[0][1])).toMatchObject({ reason: 'user_logout' });
     const deletes = fake.deleteItemAsync.mock.calls.map((c) => c[0]);
-    expect(deletes[deletes.length - 1]).toBe(SECURE_KEYS.wipePending);
+    expect(deletes[deletes.length - 1]).toBe(wsKey(SECURE_KEYS.wipePending));
     expect(fake.setItemAsync.mock.invocationCallOrder[0]).toBeLessThan(
       Math.min(...fake.deleteItemAsync.mock.invocationCallOrder),
     );
@@ -154,22 +171,24 @@ describe('endSession', () => {
     expect(getSession().serverOrigin).toBeNull();
     expect(getBearerToken()).toBeNull();
     // A secure delete failed, so the wipe is unfinished: the marker stays.
-    expect(fake.values.has(SECURE_KEYS.wipePending)).toBe(true);
+    expect(fake.values.has(wsKey(SECURE_KEYS.wipePending))).toBe(true);
     unregister();
   });
 
   it('keeps the pending marker while any secure delete failed, so the next launch retries the wipe', async () => {
     signedIn();
     fake.deleteItemAsync.mockImplementation(async (key: string) => {
-      if (key === SECURE_KEYS.pat) throw new Error('keystore error');
+      if (key === wsKey(SECURE_KEYS.pat)) throw new Error('keystore error');
       fake.values.delete(key);
     });
 
     const result = await endSession({ reason: 'user_logout' });
 
     expect(result.errors.map((e) => e.step)).toContain(`delete:${SECURE_KEYS.pat}`);
-    expect(fake.values.get(SECURE_KEYS.pat)).toBe('stored');
-    expect(fake.values.has(SECURE_KEYS.wipePending)).toBe(true);
+    expect(fake.values.get(wsKey(SECURE_KEYS.pat))).toBe('stored');
+    // Still registered, so the next launch finds the marker and wipes again.
+    expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!).ids).toContain(TEST_WORKSPACE);
+    expect(fake.values.has(wsKey(SECURE_KEYS.wipePending))).toBe(true);
     // The in-memory session is still reset: the user is signed out now.
     expect(getBearerToken()).toBeNull();
   });
@@ -181,7 +200,7 @@ describe('endSession', () => {
     });
     const result = await endSession({ reason: 'user_logout' });
     expect(result.errors.map((e) => e.step)).toEqual(['hook:broken']);
-    expect(fake.values.size).toBe(0);
+    expect(onlyOtherLeft()).toEqual([]);
     unregister();
   });
 
@@ -211,11 +230,11 @@ describe('endSession', () => {
     signedIn();
     const order: string[] = [];
     fake.setItemAsync.mockImplementation(async (key: string, value: string) => {
-      order.push(`set:${key}`);
+      order.push(`set:${key === wsKey(SECURE_KEYS.wipePending) ? SECURE_KEYS.wipePending : key}`);
       fake.values.set(key, value);
     });
     fake.deleteItemAsync.mockImplementation(async (key: string) => {
-      order.push(key === SECURE_KEYS.wipePending ? 'delete:marker' : 'delete:key');
+      order.push(key === wsKey(SECURE_KEYS.wipePending) ? 'delete:marker' : 'delete:key');
       fake.values.delete(key);
     });
     const controller = new AbortController();
@@ -237,6 +256,7 @@ describe('endSession', () => {
       'revoke:token=tok:ending=true',
       'hook',
       'delete:key',
+      `set:${DEVICE_KEYS.workspaces}`,
       'delete:marker',
     ]);
     expect(getSession().serverOrigin).toBeNull();
@@ -258,7 +278,7 @@ describe('endSession', () => {
       const result = await done;
       expect(result.errors.map((e) => e.step)).toEqual(['server_revoke']);
       expect(revokeSignal!.aborted).toBe(true);
-      for (const key of REGISTERED_KEYS) expect(fake.values.has(key)).toBe(false);
+      for (const key of REGISTERED_KEYS) expect(fake.values.has(wsKey(key))).toBe(false);
       unregister();
     } finally {
       jest.useRealTimers();
@@ -275,38 +295,138 @@ describe('endSession', () => {
   });
 });
 
-describe('resumePendingWipe', () => {
-  it('does nothing without a pending marker', async () => {
+describe('the other connected workspaces', () => {
+  it('ends only the active workspace: the others keep every item and stay registered', async () => {
     signedIn();
-    fake.values.delete(SECURE_KEYS.wipePending);
-    await expect(resumePendingWipe()).resolves.toBe(false);
-    expect(fake.values.has(SECURE_KEYS.pat)).toBe(true);
+    const result = await endSession({ reason: 'device_revoked' });
+    expect(result.storageWiped).toBe(true);
+    expect(onlyOtherLeft()).toEqual([]);
+    for (const key of REGISTERED_KEYS) {
+      if (key !== SECURE_KEYS.wipePending) expect(fake.values.get(wsKey(key, OTHER))).toBe('other workspace');
+    }
+    expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!)).toEqual({ v: 1, active: null, ids: [OTHER] });
+    expect(boundWorkspace()).toBeNull();
+    expect(getSession()).toMatchObject({ endReason: 'device_revoked', endedOrigin: 'https://ai.example.com' });
   });
 
-  it('re-runs an interrupted wipe with the recorded reason', async () => {
+  it("deletes the active workspace's files through the stored-wipe hooks", async () => {
     signedIn();
-    fake.values.set(SECURE_KEYS.wipePending, JSON.stringify({ reason: 'credential_rejected', startedAt: 1 }));
-    await expect(resumePendingWipe()).resolves.toBe(true);
-    for (const key of REGISTERED_KEYS) expect(fake.values.has(key)).toBe(false);
-    expect(getSession().endReason).toBe('credential_rejected');
+    const removed: string[] = [];
+    const unregister = registerStoredWipeHook('probe', (id) => {
+      removed.push(id);
+    });
+    await endSession({ reason: 'user_logout' });
+    expect(removed).toEqual([TEST_WORKSPACE]);
+    unregister();
+  });
+});
+
+describe('wipeStoredWorkspace (a workspace that is not active)', () => {
+  it('revokes, deletes its files and items and forgets it, leaving the active session alone', async () => {
+    signedIn();
+    const removed: string[] = [];
+    const unregister = registerStoredWipeHook('probe', (id) => {
+      removed.push(id);
+    });
+    const revoke = jest.fn(async () => {});
+    const result = await wipeStoredWorkspace(OTHER, { reason: 'user_logout', revoke });
+    expect(result).toEqual({ wiped: true, errors: [] });
+    expect(revoke).toHaveBeenCalled();
+    expect(removed).toEqual([OTHER]);
+    expect([...fake.values.keys()].some((k) => k.startsWith(`az.ws.${OTHER}.`))).toBe(false);
+    expect(fake.values.get(wsKey(SECURE_KEYS.pat))).toBe('stored');
+    expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!).ids).toEqual([TEST_WORKSPACE]);
+    expect(getBearerToken()).toBe('tok');
+    expect(boundWorkspace()).toBe(TEST_WORKSPACE);
+    unregister();
   });
 
-  it('rejects, keeping the marker, when the resumed wipe still cannot delete a key', async () => {
+  it('keeps the marker and the registry entry when an item could not be deleted', async () => {
     signedIn();
-    fake.values.set(SECURE_KEYS.wipePending, JSON.stringify({ reason: 'user_logout', startedAt: 1 }));
     fake.deleteItemAsync.mockImplementation(async (key: string) => {
-      if (key === SECURE_KEYS.pat) throw new Error('keystore error');
+      if (key === wsKey(SECURE_KEYS.pat, OTHER)) throw new Error('keystore error');
       fake.values.delete(key);
     });
-    await expect(resumePendingWipe()).rejects.toThrow(/wipe/);
-    expect(fake.values.has(SECURE_KEYS.wipePending)).toBe(true);
+    const result = await wipeStoredWorkspace(OTHER, { reason: 'user_logout' });
+    expect(result.wiped).toBe(false);
+    expect(fake.values.has(wsKey(SECURE_KEYS.wipePending, OTHER))).toBe(true);
+    expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!).ids).toContain(OTHER);
+  });
+});
+
+describe('resumePendingWipes', () => {
+  it('does nothing without a pending marker', async () => {
+    signedIn();
+    await expect(resumePendingWipes()).resolves.toEqual([]);
+    expect(fake.values.has(wsKey(SECURE_KEYS.pat))).toBe(true);
+  });
+
+  it('re-runs an interrupted wipe with the recorded reason, for that workspace only', async () => {
+    signedIn();
+    fake.values.set(wsKey(SECURE_KEYS.wipePending), JSON.stringify({ reason: 'credential_rejected', startedAt: 1 }));
+    await expect(resumePendingWipes()).resolves.toEqual([
+      { workspaceId: TEST_WORKSPACE, reason: 'credential_rejected', wiped: true },
+    ]);
+    expect(onlyOtherLeft()).toEqual([]);
+    expect(fake.values.get(wsKey(SECURE_KEYS.pat, OTHER))).toBe('other workspace');
+  });
+
+  it('reports a resumed wipe that still cannot delete a key, keeping the marker', async () => {
+    signedIn();
+    fake.values.set(wsKey(SECURE_KEYS.wipePending), JSON.stringify({ reason: 'user_logout', startedAt: 1 }));
+    fake.deleteItemAsync.mockImplementation(async (key: string) => {
+      if (key === wsKey(SECURE_KEYS.pat)) throw new Error('keystore error');
+      fake.values.delete(key);
+    });
+    await expect(resumePendingWipes()).resolves.toEqual([
+      { workspaceId: TEST_WORKSPACE, reason: 'user_logout', wiped: false },
+    ]);
+    expect(fake.values.has(wsKey(SECURE_KEYS.wipePending))).toBe(true);
   });
 
   it('still wipes when the marker is unreadable JSON', async () => {
     signedIn();
-    fake.values.set(SECURE_KEYS.wipePending, 'garbage{');
-    await expect(resumePendingWipe()).resolves.toBe(true);
-    expect(fake.values.size).toBe(0);
-    expect(getSession().endReason).toBe('reset');
+    fake.values.set(wsKey(SECURE_KEYS.wipePending), 'garbage{');
+    const [resumed] = await resumePendingWipes();
+    expect(resumed).toMatchObject({ reason: 'reset', wiped: true });
+    expect(onlyOtherLeft()).toEqual([]);
+  });
+
+  it('rejects when a marker cannot be read (the caller retries once unlocked)', async () => {
+    signedIn();
+    fake.getItemAsync.mockImplementationOnce(async () => {
+      throw new Error('interaction not allowed');
+    });
+    await expect(resumePendingWipes()).rejects.toThrow();
+  });
+});
+
+// WS-4 (b): the slot's meta names its database file (the migrated slot keeps
+// az-offline.db). Deleted before the file, a retried wipe guessed the name
+// and reported success with the real file still on disk.
+describe('a database file that could not be deleted', () => {
+  it('keeps the workspace meta for the retry (endSession)', async () => {
+    signedIn();
+    const unregister = registerStoredWipeHook('probe', () => {
+      throw new Error('file busy');
+    });
+    const result = await endSession({ reason: 'user_logout' });
+    unregister();
+    expect(result.storageWiped).toBe(false);
+    expect(fake.values.get(wsKey(SECURE_KEYS.workspaceMeta))).toBe('stored');
+    expect(fake.values.has(wsKey(SECURE_KEYS.wipePending))).toBe(true);
+    expect(fake.values.has(wsKey(SECURE_KEYS.refreshToken))).toBe(false);
+  });
+
+  it('keeps the workspace meta for the retry (wipeStoredWorkspace)', async () => {
+    signedIn();
+    const unregister = registerStoredWipeHook('probe', () => {
+      throw new Error('file busy');
+    });
+    const result = await wipeStoredWorkspace(OTHER, { reason: 'user_logout' });
+    unregister();
+    expect(result.wiped).toBe(false);
+    expect(fake.values.get(wsKey(SECURE_KEYS.workspaceMeta, OTHER))).toBe('other workspace');
+    expect(fake.values.has(wsKey(SECURE_KEYS.refreshToken, OTHER))).toBe(false);
   });
 });

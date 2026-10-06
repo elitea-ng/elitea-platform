@@ -32,14 +32,25 @@ export interface SessionState {
   hydrated: boolean;
   /** Normalised origin of the workspace server (`https://host[:port]`), or null. */
   serverOrigin: string | null;
+  /** The active workspace slot (src/security/workspaceRegistry.ts), set together with `serverOrigin`. */
+  workspaceId: string | null;
   /** The kind of credential in use, or null when signed out. */
   credential: { kind: CredentialKind } | null;
   /** The selected project id, or null until one is chosen. */
   projectId: number | null;
   /** True while `endSession` is running: the UI shows "Signing out…", requests are refused. */
   ending: boolean;
+  /** True while the app switches between connected workspaces (nothing is wiped). */
+  switching: boolean;
+  /**
+   * The workspace that was active before "Add workspace" put it aside: the
+   * connect screen offers to go back to it. Null otherwise.
+   */
+  returnWorkspaceId: string | null;
   /** Why the last session ended, for a one-line notice on the next screen. */
   endReason: EndReason | null;
+  /** The origin of the workspace that ended (for that notice), or null. */
+  endedOrigin: string | null;
   /** Set when the server answered 426; the root layout shows a blocking screen. */
   upgradeRequired: UpgradeRequired | null;
   /**
@@ -58,10 +69,14 @@ export interface SessionState {
 export const INITIAL_SESSION: Readonly<SessionState> = Object.freeze({
   hydrated: false,
   serverOrigin: null,
+  workspaceId: null,
   credential: null,
   projectId: null,
   ending: false,
+  switching: false,
+  returnWorkspaceId: null,
   endReason: null,
+  endedOrigin: null,
   upgradeRequired: null,
   lastOriginHint: null,
   pendingConnectOrigin: null,
@@ -115,7 +130,8 @@ export function getBearerToken(): string | null {
  * running); `endReason` and `lastOriginHint` are set by the caller.
  */
 export function resetSession(
-  patch: Pick<SessionState, 'endReason' | 'lastOriginHint'> & Partial<Pick<SessionState, 'pendingConnectOrigin'>>,
+  patch: Pick<SessionState, 'endReason' | 'lastOriginHint'> &
+    Partial<Pick<SessionState, 'pendingConnectOrigin' | 'endedOrigin' | 'switching' | 'returnWorkspaceId'>>,
 ): void {
   bearerToken = null;
   state = { ...INITIAL_SESSION, hydrated: state.hydrated, ...patch };

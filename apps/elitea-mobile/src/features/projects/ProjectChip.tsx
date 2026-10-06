@@ -4,12 +4,17 @@ import { StyleSheet, Text } from 'react-native';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
+import { usePersonalProjectId } from '@/state/selfIdentity';
 
 /** Header chip showing the current project; opens the project switcher. */
 export function ProjectChip() {
   const palette = usePalette();
   const { project, projectId } = useProjectSelection();
-  const label = project?.name ?? (projectId !== null ? `Project ${projectId}` : 'Project');
+  const personal = usePersonalProjectId();
+  const label =
+    projectId !== null && projectId === personal
+      ? 'My project'
+      : (project?.name ?? (projectId !== null ? `Project ${projectId}` : 'Project'));
   return (
     <Link
       href="/projects"

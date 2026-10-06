@@ -122,7 +122,9 @@ export function createGuardedFetch(options: GuardedFetchOptions): (input: Reques
     let failure = await classify(response, token);
     if (failure && replay && shouldReplay(failure)) {
       const renewed = getBearerToken();
-      if (renewed !== null && renewed !== token) {
+      // Only the same workspace's renewed token (never one of another workspace switched to meanwhile).
+      const sameWorkspace = getSession().serverOrigin !== null && isSameOrigin(request.url, getSession().serverOrigin!);
+      if (renewed !== null && renewed !== token && sameWorkspace) {
         response = await send(replay, renewed);
         failure = await classify(response, renewed);
       }
@@ -207,7 +209,14 @@ export function refreshFailure(verdict: Exclude<RefreshVerdict, 'refreshed'>, st
 export function sessionBearerToken(): string | Promise<string> {
   const refresher = getCredentialRefresher();
   if (getSession().credential?.kind === 'oauth' && refresher !== null) {
+    // Several workspaces can be connected: if the active one changed while
+    // the token was being renewed, the token now in the session belongs to
+    // ANOTHER workspace and must never be sent to this request's origin.
+    const workspace = getSession().workspaceId;
     return refresher.ensureFresh().then((fresh) => {
+      if (getSession().workspaceId !== workspace) {
+        throw new ApiError('origin_mismatch', 'the workspace changed while the sign-in was renewed');
+      }
       if (fresh.ok) return fresh.token;
       throw refreshFailure(fresh.verdict);
     });

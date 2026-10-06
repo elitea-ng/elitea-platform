@@ -38,10 +38,15 @@ comes from the server at runtime.
   - Sync is incremental, using cursors or `updated_since`.
   - Attachments are encrypted at rest with AES-GCM, using per-file keys wrapped by the
     database key.
-- **Wipe** of every token, the database, attachments and the outbox in three cases:
-  - on logout
-  - on a server switch, after explicit confirmation
-  - on remote revocation (the server rejects the refresh token, or policy signals a wipe)
+- **Wipe** of one workspace's tokens, database, attachments and outbox in two cases
+  (every other connected workspace is untouched):
+  - on logout of that workspace ("Log out & wipe", or Remove in the switcher)
+  - on remote revocation of that workspace (the server rejects the refresh token, or
+    policy signals a wipe)
+  Switching between workspaces never wipes. "Can't unlock → reset" wipes every
+  workspace on the device.
+- **Several workspaces** (see "Multi-workspace" below): up to 8 connected at once, one
+  active, each fully isolated.
 - **Screen privacy:** a cover view in the app switcher, with screenshot blocking where
   policy requires it.
 - **Server-driven policy:** the server can set the lock timeout, offline allowed or not,
@@ -118,21 +123,25 @@ The app talks to the server only through its public HTTP API.
 The decisions above are implemented as follows. Native behaviour is checked by hand
 with [device-verification.md](device-verification.md).
 
-- **One exit path.** Every logout, revocation, rejected credential, server switch and
-  "can't unlock" reset goes through `src/security/endSession.ts`. It writes a
+- **One exit path.** Every logout, revocation, rejected credential and "can't unlock"
+  reset goes through `src/security/endSession.ts`, which ends the ACTIVE workspace only
+  (removing a workspace that is not active uses `wipeStoredWorkspace`). It writes a
   crash-resume marker first and removes it last; launch hydration re-runs an
   interrupted wipe before showing anything. Each step is attempted even if an earlier
   one fails. The server revoke (B4) is best effort and capped at 3 s.
 - **Key registry.** Every secure-storage key is declared in
   `src/security/secureStorage.ts` (lint forbids `expo-secure-store` elsewhere), so the
-  wipe covers new keys automatically.
+  wipe covers new keys automatically. Keys are stored per workspace
+  (`az.ws.<id>.<name>`); the registry of workspaces is the one device item
+  (`az.workspaces`).
 - **Reinstall.** The iOS Keychain outlives an uninstall; a marker file in the
   documents directory detects a reinstall and purges the registry
   (`src/security/freshInstall.ts`).
 - **Restore behind the splash.** The workspace origin, credential and selected project
   are restored at launch while the native splash is up. A storage read error
   (device locked) is retried when the app is active, never treated as signed out.
-- **Server switch.** A connect link for another workspace asks first, then wipes.
+- **Connect links.** A connect link for another workspace asks first, then switches to
+  it (already connected) or adds it next to the current one (new). Nothing is wiped.
 - **Device lock.** `src/security/lock/`: a session restored at launch is locked, the
   app relocks after `idle_lock_seconds` in the background (strict default 300 s),
   'inactive' alone never locks, biometrics fall back to the passcode, and a device
@@ -189,3 +198,39 @@ Additive; a 1.1 server keeps working.
   the pause is answered. A server before 1.2 sends `agent_tool_error` with the
   interrupt's repr instead; that is still recognised and shown as waiting.
 
+## Multi-workspace
+
+Several workspaces can be connected at once (`src/security/workspaceRegistry.ts`,
+`src/state/workspace.tsx`). One is active; the others are kept, signed in or not.
+
+- **Isolation.** Each workspace has a slot with a random 12-hex id: its own secure-store
+  namespace (`az.ws.<id>.*`: origin, credential and device session, selected project,
+  policy, brand, "me", database key, wipe marker), its own SQLCipher file
+  (`az-offline-<id>.db`) and therefore its own outbox and sync cursors. Unqualified
+  secure-store calls act on the bound (active) workspace and refuse while none is bound;
+  the physical key is resolved when a call starts, so a write begun for one workspace
+  cannot land in another's.
+- **Switching never wipes.** `suspendActiveWorkspace` aborts in-flight work and runs every
+  module's in-memory reset (query cache, live turns, credential, policy, brand, open
+  database), unbinds the slot and signs out in memory; the target is then restored from
+  its slot exactly as at launch. Guards against cross-workspace leaks: the offline store
+  opens only the bound workspace's file; an outbox pass stops when another workspace
+  becomes active; sync runs are keyed per database; a renewed native token is refused if
+  the active workspace changed meanwhile; requests must target the active origin.
+- **Device lock across a switch.** Presence carries over only when the user unlocked under
+  a lock-requiring policy; switching into a lock-requiring workspace otherwise locks and
+  prompts.
+- **The host is always visible.** Every signed-in header shows the active workspace's host
+  (and brand mark); the switcher, the connect screen's list and Settings name each host.
+  Brands are applied per active workspace.
+- **Removing.** The active workspace goes through `endSession`; another one is revoked
+  best effort from its stored refresh record and wiped from its slot. `device_revoked`
+  and rejected credentials end only the workspace they came from.
+- **Projects.** The project switcher lists the personal project (from "who am I",
+  `personal_project_id`) first and the team projects after it; the choice is stored in
+  the workspace's namespace, so each workspace keeps its own.
+- **Upgrade.** The single-workspace layout of earlier builds moves into a fixed first slot
+  on the first launch (copy, registry, delete the old items; idempotent across crashes):
+  no new sign-in, same project, same database file and key.
+- **Limits.** At most 8 workspaces. Only the active workspace syncs and drains its outbox
+  (no background execution); the others catch up when opened.

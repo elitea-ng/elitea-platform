@@ -306,6 +306,13 @@ export class OutboxDrainer {
         [item.questionId],
       );
       if (claim.changes === 0) continue;
+      // Another workspace became active (or the store closed) while this pass
+      // ran: its items belong to THIS database's workspace and must never be
+      // sent through the session of another one. The item stays 'sending'
+      // (resent with the same bytes when its workspace is active again).
+      // Checked in the same synchronous step that starts the send, which
+      // fixes the request's origin.
+      if (this.deps.getDb() !== db) break;
       this.notify();
       let outcome: Classified;
       try {
@@ -344,6 +351,7 @@ export class OutboxDrainer {
       }
       this.notify();
     }
+    if (this.deps.getDb() !== db) return result;
     if (held) this.cancelScheduledWake();
     else await this.scheduleWake(db);
     if (result.sent + result.failed > 0) log.info('outbox drained', { ...result });

@@ -2,6 +2,7 @@ import { FIXTURE_ORIGIN, brandPack } from '@/api/__fixtures__/nativeClient';
 import type { BaseFetch } from '@/api/middleware';
 import {
   BrandPackSchema,
+  brandFontAlias,
   acceptImage,
   fetchBrandTheme,
   firstFamily,
@@ -140,8 +141,59 @@ describe('fonts', () => {
       },
     });
     const theme = mapBrandPack(BrandPackSchema.parse(pack), FIXTURE_ORIGIN, 'file');
-    expect(theme.fontFaces).toEqual([{ alias: 'brand-Acme-Sans', url: `${FIXTURE_ORIGIN}/api/v2/branding/assets/acme.ttf` }]);
-    expect(theme.fontFamily).toBe('brand-Acme-Sans');
+    expect(theme.fontFaces).toEqual([{ alias: theme.fontFamily, url: `${FIXTURE_ORIGIN}/api/v2/branding/assets/acme.ttf` }]);
+    expect(theme.fontFamily).toMatch(/^brand-[0-9a-f]{32}$/);
+  });
+
+  it('gives the same family of two workspaces two font names (one never renders the other\'s face)', () => {
+    // Fonts are registered process-wide by name and the loader skips a name
+    // it already loaded: an alias made of the family alone let workspace B
+    // render with the font file workspace A downloaded.
+    const packFor = (origin: string) =>
+      BrandPackSchema.parse(
+        brandPack({
+          typography: {
+            fontFamily: '"Acme Sans", sans-serif',
+            fontFaces: [{ family: 'Acme Sans', url: `${origin}/api/v2/branding/assets/acme.ttf` }],
+          },
+        }),
+      );
+    const other = 'https://other.example.org';
+    const a = mapBrandPack(packFor(FIXTURE_ORIGIN), FIXTURE_ORIGIN, 'file');
+    const b = mapBrandPack(packFor(other), other, 'file');
+    expect(a.fontFamily).not.toBeNull();
+    expect(b.fontFamily).not.toBeNull();
+    expect(a.fontFamily).not.toBe(b.fontFamily);
+    expect(a.fontFaces[0].alias).toBe(a.fontFamily);
+    expect(b.fontFaces[0].alias).toBe(b.fontFamily);
+    // Stable for the same face (a relaunch reuses the persisted name).
+    expect(mapBrandPack(packFor(FIXTURE_ORIGIN), FIXTURE_ORIGIN, 'file').fontFamily).toBe(a.fontFamily);
+  });
+});
+
+// WS-SEC-2: the name must not be collidable by a hostile workspace. These two
+// face URLs (two origins) share one 32-bit FNV-1a value, found in seconds.
+describe('brand font names across workspaces', () => {
+  const packWith = (url: string) =>
+    BrandPackSchema.parse(
+      brandPack({
+        typography: { fontFamily: '"Acme Sans", sans-serif', fontFaces: [{ family: 'Acme Sans', url }] },
+      }),
+    );
+
+  it('differ even when the face URLs collide on a 32-bit hash', () => {
+    const victim = mapBrandPack(packWith(`${FIXTURE_ORIGIN}/api/v2/branding/assets/acme.ttf?v=164492`), FIXTURE_ORIGIN, 'file');
+    const hostile = 'https://evil.example.org';
+    const attacker = mapBrandPack(packWith(`${hostile}/api/v2/branding/assets/acme.ttf?v=1356820`), hostile, 'file');
+    expect(victim.fontFamily).not.toBeNull();
+    expect(attacker.fontFamily).not.toBeNull();
+    expect(attacker.fontFamily).not.toBe(victim.fontFamily);
+  });
+
+  it('carry a 128-bit SHA-256 digest of the origin and face URL', () => {
+    const theme = mapBrandPack(packWith(`${FIXTURE_ORIGIN}/api/v2/branding/assets/acme.ttf`), FIXTURE_ORIGIN, 'file');
+    expect(theme.fontFamily).toBe(brandFontAlias(FIXTURE_ORIGIN, `${FIXTURE_ORIGIN}/api/v2/branding/assets/acme.ttf`));
+    expect(theme.fontFamily).toMatch(/^brand-[0-9a-f]{32}$/);
   });
 });
 

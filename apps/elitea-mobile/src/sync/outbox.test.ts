@@ -276,3 +276,36 @@ describe('outbox status and backoff', () => {
     expect(outboxBackoffMs(1, 0)).toBe(1000);
   });
 });
+
+describe('several workspaces', () => {
+  it("stops a drain when another workspace becomes active: queued items are never sent through another workspace's session", async () => {
+    const a = new Db(openNodeSqlite());
+    await migrate(a);
+    const b = new Db(openNodeSqlite());
+    await migrate(b);
+    let active: Db = a;
+    const serverA = fakeServer();
+    const serverB = fakeServer();
+    serverA.on('POST', SEND, started('e1'));
+    serverB.on('POST', SEND, started('eb'));
+    const drainer = new OutboxDrainer({
+      getDb: () => active,
+      // The send goes to whichever workspace is active when it starts.
+      start: (prepared) => {
+        const result = startTurn(prepared, { client: (active === a ? serverA : serverB).client });
+        // Workspace A's first send is answered, then the user switches to B.
+        active = b;
+        return result;
+      },
+    });
+    await enqueue(a, turn(Q1, 'first for A'), UUID, 1);
+    await enqueue(a, turn(Q2, 'second for A'), UUID, 2);
+
+    await drainer.drain();
+
+    expect(sends(serverA)).toHaveLength(1);
+    expect(sends(serverB)).toHaveLength(0);
+    // The second item stays in A's outbox for when A is active again.
+    expect((await listOutbox(a, 7, UUID)).map((i) => i.questionId)).toEqual([Q2]);
+  });
+});

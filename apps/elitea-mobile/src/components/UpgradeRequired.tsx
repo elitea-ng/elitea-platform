@@ -6,7 +6,9 @@ import { identity } from '@/config/identity';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { endSession } from '@/security/endSession';
-import { getSession } from '@/state/session';
+import { getSession, useSession } from '@/state/session';
+import { beginAddWorkspace } from '@/state/workspace';
+import { useWorkspaceList } from '@/state/workspaceList';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
 
 /**
@@ -25,11 +27,14 @@ export async function checkVersionAgain(refresh: () => Promise<unknown> = refres
  * version is above this app's. Nothing is wiped: updating the app restores
  * access. It clears by itself when the workspace lowers its minimum (re-read
  * on every foreground, after every token response, and on "Check again") or
- * when a signed-in request succeeds again. "Log out & wipe" is the only other
- * way out.
+ * when a signed-in request succeeds again. "Log out & wipe" (this workspace
+ * only) and, with several workspaces connected, "Use another workspace" (no
+ * wipe) are the other ways out.
  */
 export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: string; overlay?: boolean }) {
   const palette = usePalette();
+  const workspaceId = useSession((s) => s.workspaceId);
+  const others = useWorkspaceList().filter((w) => w.id !== workspaceId).length;
   const [checking, setChecking] = useState(false);
   const [stillRequired, setStillRequired] = useState(false);
   const body =
@@ -75,6 +80,14 @@ export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: 
         <Text accessibilityRole="alert" style={[styles.hint, { color: palette.textSecondary }]}>
           The workspace still needs a newer version.
         </Text>
+      ) : null}
+      {others > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => void beginAddWorkspace()}
+          style={[styles.button, styles.outline, { borderColor: palette.accent }]}>
+          <Text style={[styles.buttonText, { color: palette.accent }]}>Use another workspace</Text>
+        </Pressable>
       ) : null}
       <Pressable
         accessibilityRole="button"

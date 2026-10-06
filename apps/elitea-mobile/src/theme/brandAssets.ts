@@ -1,10 +1,13 @@
-import { File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 
 import { anonymousFetch } from '@/api/anonymous';
 import type { BaseFetch } from '@/api/middleware';
 import { noRedirectFetch } from '@/api/noRedirectFetch';
 import { originOf } from '@/api/paths';
 import { log } from '@/lib/log';
+import { sha256Hex } from '@/lib/sha256';
+import { registerStoredWipeHook } from '@/security/endSession';
+import { SECURE_KEYS, getSecureItemIn } from '@/security/secureStorage';
 import type { BrandFontFace } from '@/theme/brandPack';
 
 /**
@@ -21,7 +24,24 @@ import type { BrandFontFace } from '@/theme/brandPack';
  * its type and size are checked, and only those bytes reach the image view
  * (as a `data:` URI) or the font loader (as a file in the caches directory,
  * which the session wipe empties).
+ *
+ * Font files live in a folder of their workspace's origin
+ * (`<caches>/brand-fonts/<digest of origin>/`), deleted with the workspace
+ * even when it is not the active one (removing it from the switcher, a wipe
+ * resumed at launch): the files name its brand and server.
  */
+
+export const BRAND_FONT_DIR = 'brand-fonts';
+
+function fontDirectory(origin: string): Directory {
+  return new Directory(Paths.cache, BRAND_FONT_DIR, sha256Hex(origin).slice(0, 32));
+}
+
+/** Deletes the brand font files downloaded for `origin`. Throws when they could not be deleted. */
+export function deleteBrandFonts(origin: string): void {
+  const directory = fontDirectory(origin);
+  if (directory.exists) directory.delete();
+}
 
 export const MAX_RASTER_BYTES = 512 * 1024;
 export const MAX_FONT_BYTES = 2 * 1024 * 1024;
@@ -74,8 +94,12 @@ export async function downloadBrandFont(face: BrandFontFace, fetchImpl: BaseFetc
   if (extension !== 'ttf' && extension !== 'otf') return null;
   const bytes = await fetchBrandAsset(face.url, FONT_TYPES, MAX_FONT_BYTES, fetchImpl);
   if (bytes === null) return null;
+  const origin = originOf(face.url);
+  if (origin === null) return null;
   try {
-    const file = new File(Paths.cache, `${face.alias}.${extension}`);
+    const directory = fontDirectory(origin);
+    if (!directory.exists) directory.create({ intermediates: true });
+    const file = new File(directory, `${face.alias}.${extension}`);
     if (file.exists) file.delete();
     file.create();
     file.write(bytes);
@@ -106,3 +130,10 @@ export function base64Of(bytes: Uint8Array): string {
   }
   return out;
 }
+
+// A workspace being wiped (active or not): its font files. The origin is read
+// from its slot before the slot's items are deleted.
+registerStoredWipeHook('brand_fonts', async (workspaceId) => {
+  const origin = await getSecureItemIn(workspaceId, SECURE_KEYS.serverOrigin);
+  if (origin !== null) deleteBrandFonts(origin);
+});

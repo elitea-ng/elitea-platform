@@ -4,10 +4,11 @@ import { clientPolicy, opaqueToken } from '@/api/__fixtures__/nativeClient';
 import { __resetNativeSessionForTests, getNativeTokenSet } from '@/auth/nativeSession';
 import { getPolicyState, resetPolicy } from '@/security/policy';
 import { resetPolicySources } from '@/security/policyStore';
-import { SECURE_KEYS } from '@/security/secureStorage';
+import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace, boundWorkspace } from '@/security/secureStorage';
+import { MIGRATED_WORKSPACE_ID, __resetRegistryForTests } from '@/security/workspaceRegistry';
 import { __resetHydrateForTests, hydrateSession } from '@/state/hydrate';
 import { __resetSessionForTests, getBearerToken, getSession } from '@/state/session';
-import type { FakeSecureStore } from '@/test/fakeSecureStore';
+import { TEST_WORKSPACE, registryValue, wsKey, type FakeSecureStore } from '@/test/fakeSecureStore';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('@/security/freshInstall', () => ({
@@ -35,14 +36,32 @@ function fakeAppState() {
   };
 }
 
-function stored(values: Partial<Record<keyof typeof SECURE_KEYS, string>>) {
+type Items = Partial<Record<keyof typeof SECURE_KEYS, string>>;
+
+/** A workspace slot (the active one unless `active` says otherwise), as this app version stores it. */
+function stored(values: Items, workspaceId = TEST_WORKSPACE, ids: string[] = [workspaceId], active: string | null = workspaceId) {
+  fake.values.set(DEVICE_KEYS.workspaces, registryValue(ids, active));
+  for (const [name, value] of Object.entries(values)) {
+    fake.values.set(wsKey(SECURE_KEYS[name as keyof typeof SECURE_KEYS], workspaceId), value!);
+  }
+}
+
+/** The single-workspace layout of the previous app version (every item under its logical name). */
+function legacy(values: Items) {
   for (const [name, value] of Object.entries(values)) {
     fake.values.set(SECURE_KEYS[name as keyof typeof SECURE_KEYS], value!);
   }
 }
 
+const has = (name: keyof typeof SECURE_KEYS, workspaceId = TEST_WORKSPACE) =>
+  fake.values.has(wsKey(SECURE_KEYS[name], workspaceId));
+/** Keys left of workspace `id`. */
+const left = (id = TEST_WORKSPACE) => [...fake.values.keys()].filter((k) => k.startsWith(`az.ws.${id}.`));
+
 beforeEach(() => {
   __resetSessionForTests();
+  __resetRegistryForTests();
+  bindWorkspace(null);
   __resetHydrateForTests();
   __resetNativeSessionForTests();
   resetPolicy();
@@ -75,16 +94,20 @@ describe('hydrateSession', () => {
     expect(checkFreshInstall.mock.invocationCallOrder[0]).toBeLessThan(
       fake.getItemAsync.mock.invocationCallOrder[0],
     );
-    expect(fake.getItemAsync.mock.calls.map((c) => c[0])).toEqual([
-      SECURE_KEYS.wipePending,
-      SECURE_KEYS.serverOrigin,
-      SECURE_KEYS.credentialKind,
-      SECURE_KEYS.projectSelected,
-      SECURE_KEYS.policy,
-      SECURE_KEYS.brandTheme,
-      SECURE_KEYS.selfUser,
-      SECURE_KEYS.pat,
+    const reads = fake.getItemAsync.mock.calls.map((c) => c[0]);
+    // The registry (with the upgrade check) comes first, then the workspace's own items.
+    expect(reads[0]).toBe(DEVICE_KEYS.workspaces);
+    expect(reads.filter((k) => k.startsWith('az.ws.'))).toEqual([
+      wsKey(SECURE_KEYS.wipePending),
+      wsKey(SECURE_KEYS.serverOrigin),
+      wsKey(SECURE_KEYS.credentialKind),
+      wsKey(SECURE_KEYS.projectSelected),
+      wsKey(SECURE_KEYS.policy),
+      wsKey(SECURE_KEYS.brandTheme),
+      wsKey(SECURE_KEYS.selfUser),
+      wsKey(SECURE_KEYS.pat),
     ]);
+    expect(boundWorkspace()).toBe(TEST_WORKSPACE);
   });
 
   it('resumes an interrupted wipe before reading anything else', async () => {
@@ -95,9 +118,10 @@ describe('hydrateSession', () => {
       pat: 'tok',
     });
     await hydrateSession({ devSignIn: true });
-    expect(fake.values.size).toBe(0);
+    expect(left()).toEqual([]);
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
     expect(getSession().endReason).toBe('user_logout');
+    expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!)).toEqual({ v: 1, active: null, ids: [] });
   });
 
   it('restores nothing while a resumed wipe cannot finish, starts signed out, and wipes again next launch', async () => {
@@ -110,7 +134,7 @@ describe('hydrateSession', () => {
     const appState = fakeAppState();
     let failPatDelete = true;
     fake.deleteItemAsync.mockImplementation(async (key: string) => {
-      if (failPatDelete && key === SECURE_KEYS.pat) throw new Error('keystore error');
+      if (failPatDelete && key === wsKey(SECURE_KEYS.pat)) throw new Error('keystore error');
       fake.values.delete(key);
     });
 
@@ -118,15 +142,15 @@ describe('hydrateSession', () => {
     await hydrateSession({ devSignIn: true, appState });
     expect(getBearerToken()).toBeNull();
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
-    expect(fake.values.has(SECURE_KEYS.wipePending)).toBe(true);
-    expect(fake.values.get(SECURE_KEYS.pat)).toBe('tok');
+    expect(has('wipePending')).toBe(true);
+    expect(fake.values.get(wsKey(SECURE_KEYS.pat))).toBe('tok');
 
     // Next launch: the delete works now, so the wipe finishes.
     failPatDelete = false;
     __resetHydrateForTests();
     __resetSessionForTests();
     await hydrateSession({ devSignIn: true, appState });
-    expect(fake.values.size).toBe(0);
+    expect(left()).toEqual([]);
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
   });
 
@@ -134,7 +158,8 @@ describe('hydrateSession', () => {
     checkFreshInstall.mockImplementation(async () => ({ fresh: true, purgeIncomplete: false }));
     stored({ serverOrigin: ORIGIN });
     await hydrateSession({ devSignIn: true });
-    expect(fake.getItemAsync).not.toHaveBeenCalled();
+    // No workspace item is read (the switcher may read the empty registry).
+    expect(fake.getItemAsync.mock.calls.filter((c) => c[0].startsWith('az.ws.'))).toEqual([]);
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null });
   });
 
@@ -183,8 +208,8 @@ describe('hydrateSession', () => {
     });
     await hydrateSession();
     expect(getSession()).toMatchObject({ serverOrigin: ORIGIN, credential: null });
-    expect(fake.values.has(SECURE_KEYS.refreshToken)).toBe(false);
-    expect(fake.values.has(SECURE_KEYS.credentialKind)).toBe(false);
+    expect(has('refreshToken')).toBe(false);
+    expect(has('credentialKind')).toBe(false);
     expect(getPolicyState().source).toBe('default'); // another workspace's policy is ignored
   });
 
@@ -192,15 +217,17 @@ describe('hydrateSession', () => {
     stored({ serverOrigin: ORIGIN, credentialKind: 'pat', pat: 'tok' });
     await hydrateSession({ devSignIn: false });
     expect(getSession()).toMatchObject({ serverOrigin: ORIGIN, credential: null });
-    expect(fake.values.has(SECURE_KEYS.pat)).toBe(false);
-    expect(fake.values.has(SECURE_KEYS.credentialKind)).toBe(false);
+    expect(has('pat')).toBe(false);
+    expect(has('credentialKind')).toBe(false);
   });
 
   it('drops a stored origin that is not a normalised https origin', async () => {
     stored({ serverOrigin: 'http://evil.example.com/path', credentialKind: 'pat', pat: 'tok' });
     await hydrateSession({ devSignIn: true, allowPrivateHttp: false });
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
-    expect(fake.values.has(SECURE_KEYS.serverOrigin)).toBe(false);
+    // The slot is dropped altogether.
+    expect(left()).toEqual([]);
+    expect(boundWorkspace()).toBeNull();
   });
 
   it('ignores a malformed project id', async () => {
@@ -218,7 +245,7 @@ describe('hydrateSession', () => {
     const done = hydrateSession({ devSignIn: true, appState });
     await new Promise((r) => setTimeout(r, 0));
     expect(getSession().hydrated).toBe(false);
-    expect(fake.values.has(SECURE_KEYS.pat)).toBe(true);
+    expect(has('pat')).toBe(true);
     appState.emit('inactive');
     expect(appState.size()).toBe(1);
     appState.emit('active');
@@ -229,5 +256,105 @@ describe('hydrateSession', () => {
   it('runs once', async () => {
     await Promise.all([hydrateSession(), hydrateSession()]);
     expect(checkFreshInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the active workspace only; the others stay stored and are not read', async () => {
+    const OTHER = 'bbbbbbbbbbbb';
+    stored({ serverOrigin: 'https://other.example.com', credentialKind: 'pat', pat: 'other' }, OTHER, [TEST_WORKSPACE, OTHER]);
+    stored({ serverOrigin: ORIGIN, credentialKind: 'pat', pat: 'tok' }, TEST_WORKSPACE, [TEST_WORKSPACE, OTHER]);
+    await hydrateSession({ devSignIn: true });
+    expect(getSession()).toMatchObject({ serverOrigin: ORIGIN, credential: { kind: 'pat' } });
+    expect(getBearerToken()).toBe('tok');
+    const reads = fake.getItemAsync.mock.calls.map((c) => c[0]);
+    expect(reads.filter((k) => k.startsWith(`az.ws.${OTHER}.`))).toEqual([wsKey(SECURE_KEYS.wipePending, OTHER)]);
+  });
+
+  it('starts on the connect screen when no workspace is active, keeping every slot', async () => {
+    stored({ serverOrigin: ORIGIN, credentialKind: 'pat', pat: 'tok' }, TEST_WORKSPACE, [TEST_WORKSPACE], null);
+    await hydrateSession({ devSignIn: true });
+    expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
+    expect(has('pat')).toBe(true);
+    expect(boundWorkspace()).toBeNull();
+  });
+});
+
+describe('upgrade from the single-workspace layout', () => {
+  const nativeItems = (): Items => ({
+    serverOrigin: ORIGIN,
+    credentialKind: 'oauth',
+    refreshToken: JSON.stringify({
+      v: 1,
+      origin: ORIGIN,
+      clientId: 'ca.zefir.agent',
+      tokenEndpoint: `${ORIGIN}/api/v2/auth/native/token`,
+      revocationEndpoint: `${ORIGIN}/api/v2/auth/native/revoke`,
+      refreshToken: opaqueToken('elnrt_', 1),
+      refreshExpiresAt: Date.now() + 1e9,
+      deviceId: 'd',
+    }),
+    accessToken: JSON.stringify({ v: 1, accessToken: opaqueToken('elnat_', 1), accessExpiresAt: Date.now() + 9e5 }),
+    projectSelected: '7',
+    dbKey: 'ab'.repeat(32),
+    policy: JSON.stringify({ v: 1, origin: ORIGIN, policy: clientPolicy({ require_device_lock: false }) }),
+  });
+
+  it('moves the signed-in workspace into the first slot: no new sign-in, same project, same database', async () => {
+    legacy(nativeItems());
+    await hydrateSession();
+    expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: ORIGIN, projectId: 7, credential: { kind: 'oauth' } });
+    expect(getBearerToken()).toBe(opaqueToken('elnat_', 1));
+    expect(boundWorkspace()).toBe(MIGRATED_WORKSPACE_ID);
+    expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!)).toEqual({
+      v: 1,
+      active: MIGRATED_WORKSPACE_ID,
+      ids: [MIGRATED_WORKSPACE_ID],
+    });
+    // The encrypted database keeps its file and key: its cache, outbox and sync cursors survive.
+    expect(fake.values.get(wsKey(SECURE_KEYS.dbKey, MIGRATED_WORKSPACE_ID))).toBe('ab'.repeat(32));
+    expect(JSON.parse(fake.values.get(wsKey(SECURE_KEYS.workspaceMeta, MIGRATED_WORKSPACE_ID))!)).toMatchObject({
+      v: 1,
+      dbName: 'az-offline.db',
+    });
+    // Nothing is left under the old names.
+    for (const key of Object.values(SECURE_KEYS)) expect(fake.values.has(key)).toBe(false);
+  });
+
+  it('is idempotent: a crash before the registry was written copies again next launch', async () => {
+    legacy(nativeItems());
+    const appState = fakeAppState();
+    fake.setItemAsync.mockImplementationOnce(async (key: string, value: string) => {
+      fake.values.set(key, value);
+    });
+    let failRegistry = true;
+    const realSet = fake.setItemAsync.getMockImplementation()!;
+    fake.setItemAsync.mockImplementation(async (key: string, value: string) => {
+      if (failRegistry && key === DEVICE_KEYS.workspaces) throw new Error('keychain busy');
+      return realSet(key, value);
+    });
+    const done = hydrateSession({ appState });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getSession().hydrated).toBe(false);
+    // The old items are still there: nothing was lost.
+    expect(fake.values.get(SECURE_KEYS.projectSelected)).toBe('7');
+    failRegistry = false;
+    appState.emit('active');
+    await done;
+    expect(getSession()).toMatchObject({ serverOrigin: ORIGIN, projectId: 7, credential: { kind: 'oauth' } });
+    expect(fake.values.has(SECURE_KEYS.projectSelected)).toBe(false);
+  });
+
+  it('finishes an interrupted single-workspace wipe instead of migrating it', async () => {
+    legacy({ ...nativeItems(), wipePending: JSON.stringify({ reason: 'device_revoked' }) });
+    await hydrateSession();
+    expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
+    expect([...fake.values.keys()]).toEqual([]);
+  });
+
+  it('deletes old items left behind once the registry exists', async () => {
+    stored({ serverOrigin: ORIGIN, credentialKind: 'pat', pat: 'tok' });
+    legacy({ pat: 'stale' });
+    await hydrateSession({ devSignIn: true });
+    expect(fake.values.has(SECURE_KEYS.pat)).toBe(false);
+    expect(getBearerToken()).toBe('tok');
   });
 });

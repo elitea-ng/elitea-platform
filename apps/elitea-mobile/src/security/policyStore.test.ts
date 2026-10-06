@@ -25,11 +25,12 @@ import {
   UPGRADE_RECHECK_INTERVAL_MS,
   restorePolicy,
 } from '@/security/policyStore';
-import { SECURE_KEYS, getSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, getSecureItemIn, bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests, getSession, setSession } from '@/state/session';
 import * as workspaceInfo from '@/state/workspaceInfo';
 import { __resetWorkspaceInfoForTests, acceptDiscovery } from '@/state/workspaceInfo';
 
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 const BASE = {
@@ -42,6 +43,7 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const discovery = (doc: unknown) => DiscoveryDocumentSchema.parse(doc);
 
 beforeEach(() => {
+  bindWorkspace(TEST_WORKSPACE);
   __resetSessionForTests();
   __resetNativeSessionForTests();
   __resetWorkspaceInfoForTests();
@@ -281,7 +283,7 @@ describe('minimum client version', () => {
 describe('persistence', () => {
   it('persists the server policy per workspace and restores it at launch', async () => {
     await applyServerPolicy(clientPolicy({ require_device_lock: false, idle_lock_seconds: 45 }));
-    expect(JSON.parse((await getSecureItem(SECURE_KEYS.policy))!)).toMatchObject({ v: 1, origin: FIXTURE_ORIGIN });
+    expect(JSON.parse((await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.policy))!)).toMatchObject({ v: 1, origin: FIXTURE_ORIGIN });
     resetPolicy();
     resetPolicySources();
     await restorePolicy(FIXTURE_ORIGIN);
@@ -300,7 +302,7 @@ describe('persistence', () => {
     await applyServerPolicy(clientPolicy({ require_device_lock: false, allow_screenshots: true }));
     await endSession({ reason: 'user_logout' });
     expect(getPolicyState()).toEqual({ policy: STRICT_DEFAULTS, source: 'default' });
-    expect(await getSecureItem(SECURE_KEYS.policy)).toBeNull();
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.policy)).toBeNull();
     // A discovery document after the wipe starts from scratch (no stale server policy).
     applyDiscoveryPolicy(discovery(discoveryWithoutNativeAuth()), '0.1.0');
     expect(getPolicyState().source).toBe('discovery');

@@ -11,7 +11,7 @@ import type { SessionState } from '@/state/session';
  *
  * | condition                                   | store  |
  * |---------------------------------------------|--------|
- * | signed out, or the session is ending         | closed (endSession wipes it) |
+ * | signed out, switching, or the session ending | closed (endSession wipes it) |
  * | policy has no offline storage                | wiped, never created |
  * | locked (or the lock not decided yet)         | closed, key not in memory |
  * | signed in, unlocked, offline allowed         | open   |
@@ -48,30 +48,32 @@ export function bindOfflineStore(deps: OfflineBindingDeps): () => void {
   const unlocked = () => deps.lock.get().status === 'unlocked';
   store.setKeyGate(unlocked);
 
-  let wipedWhileDisabled = false;
+  /** The workspace whose store a policy without offline storage already wiped. */
+  let wipedWhileDisabled: string | null = null;
   let lastPolicy = deps.policy.get().policy;
 
   const reconcile = () => {
     const session = deps.session.get();
     const policyState = deps.policy.get();
-    const signedIn = session.serverOrigin !== null && session.credential !== null && !session.ending;
+    const signedIn =
+      session.serverOrigin !== null && session.workspaceId !== null && session.credential !== null && !session.ending;
     if (!deps.supported || !signedIn) {
       void store.close();
       return;
     }
     if (!offlineAllowed(policyState)) {
-      if (!wipedWhileDisabled) {
-        wipedWhileDisabled = true;
-        store.wipe().catch((error: unknown) => log.warn('offline store wipe failed', { error }));
+      if (wipedWhileDisabled !== session.workspaceId) {
+        wipedWhileDisabled = session.workspaceId;
+        store.wipe(session.workspaceId as string).catch((error: unknown) => log.warn('offline store wipe failed', { error }));
       }
       return;
     }
-    wipedWhileDisabled = false;
+    wipedWhileDisabled = null;
     if (!unlocked()) {
       void store.close();
       return;
     }
-    store.open(session.serverOrigin as string).catch((error: unknown) => log.warn('offline store open failed', { error }));
+    store.open(session.serverOrigin as string, session.workspaceId as string).catch((error: unknown) => log.warn('offline store open failed', { error }));
     if (policyState.policy !== lastPolicy) {
       lastPolicy = policyState.policy;
       void store.retain();

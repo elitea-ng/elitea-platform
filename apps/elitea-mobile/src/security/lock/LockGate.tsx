@@ -3,9 +3,9 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { identity } from '@/config/identity';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
-import { endSession } from '@/security/endSession';
 import type { LockState } from '@/security/lock/lockController';
 import { lockController } from '@/security/lock/useLockController';
+import { removeAllWorkspaces } from '@/state/workspace';
 
 const FAILURE_TEXT: Record<NonNullable<LockState['lastFailure']>, string> = {
   cancelled: 'Unlock was cancelled.',
@@ -26,10 +26,10 @@ export function LockGate({ state }: { state: LockState }) {
   const onReset = () => {
     Alert.alert(
       "Can't unlock?",
-      `Log out and delete everything ${identity.displayName} stored on this device. You can sign in again afterwards.`,
+      `Log out of every workspace and delete everything ${identity.displayName} stored on this device. You can connect and sign in again afterwards.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Log out & wipe', style: 'destructive', onPress: () => void endSession({ reason: 'reset' }) },
+        { text: 'Log out & wipe all', style: 'destructive', onPress: () => void removeAllWorkspaces() },
       ],
     );
   };

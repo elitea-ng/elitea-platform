@@ -106,8 +106,13 @@ function notificationsSpec(client: ApiClient, projectId: number): ScopeSpec<Noti
 }
 
 export class SyncManager {
-  private readonly running = new Map<number, Promise<ProjectSyncResult | null>>();
-  private readonly again = new Set<number>();
+  /**
+   * Runs in progress, per database: each workspace has its own file, and the
+   * same project id can exist in two workspaces, so a run is never shared
+   * across a workspace switch.
+   */
+  private readonly running = new WeakMap<Db, Map<number, Promise<ProjectSyncResult | null>>>();
+  private readonly again = new WeakMap<Db, Set<number>>();
 
   constructor(private readonly deps: SyncManagerDeps) {}
 
@@ -117,23 +122,33 @@ export class SyncManager {
 
   /** Syncs a project; concurrent calls share the run (and one more run follows if asked meanwhile). */
   syncProject(projectId: number): Promise<ProjectSyncResult | null> {
-    const current = this.running.get(projectId);
+    const db = this.deps.getDb();
+    if (db === null) return Promise.resolve(null);
+    let running = this.running.get(db);
+    if (!running) this.running.set(db, (running = new Map()));
+    let again = this.again.get(db);
+    if (!again) this.again.set(db, (again = new Set()));
+    const current = running.get(projectId);
     if (current) {
-      this.again.add(projectId);
+      again.add(projectId);
       return current;
     }
+    const runs = running;
+    const repeat = again;
     const run = (async () => {
       let result: ProjectSyncResult | null = null;
       do {
-        this.again.delete(projectId);
-        result = await this.runProject(projectId);
-      } while (this.again.has(projectId) && result !== null && !result.dropped && result.conversations === 'ok');
+        repeat.delete(projectId);
+        // The store may have closed (lock, sign-out, switch) between runs.
+        if (this.deps.getDb() !== db) return result;
+        result = await this.runProject(db, projectId);
+      } while (repeat.has(projectId) && result !== null && !result.dropped && result.conversations === 'ok');
       return result;
     })().finally(() => {
-      this.running.delete(projectId);
-      this.again.delete(projectId);
+      runs.delete(projectId);
+      repeat.delete(projectId);
     });
-    this.running.set(projectId, run);
+    runs.set(projectId, run);
     return run;
   }
 
@@ -143,9 +158,7 @@ export class SyncManager {
     this.syncProject(projectId).catch((error: unknown) => log.warn('sync failed', { error }));
   }
 
-  private async runProject(projectId: number): Promise<ProjectSyncResult | null> {
-    const db = this.deps.getDb();
-    if (db === null) return null;
+  private async runProject(db: Db, projectId: number): Promise<ProjectSyncResult | null> {
     const client = this.client();
     const result: ProjectSyncResult = { conversations: 'ok', transcripts: 0, notifications: 'skipped', dropped: false };
     let changed = false;

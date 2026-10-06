@@ -318,3 +318,42 @@ describe('LockController', () => {
     });
   });
 });
+
+describe('workspace switch', () => {
+  it('carries the presence the user proved under a lock-requiring workspace: no second prompt', async () => {
+    const h = harness();
+    void h.controller.start('launch');
+    await h.flush();
+    await h.answer({ ok: true });
+    expect(h.controller.getState().status).toBe('unlocked');
+    h.controller.markSwitch();
+    h.controller.stop();
+    expect(h.controller.consumeSwitch()).toBe(true);
+    await h.controller.start('switch');
+    expect(h.controller.getState().status).toBe('unlocked');
+    expect(h.promptsOpen()).toBe(0);
+  });
+
+  it('locks and prompts when switching from a workspace without a lock into one that requires it', async () => {
+    const h = harness({ policy: { require_device_lock: false } });
+    await h.controller.start('launch');
+    expect(h.controller.getState().status).toBe('unlocked');
+    h.controller.markSwitch();
+    h.controller.stop();
+    h.setPolicy({ require_device_lock: true });
+    void h.controller.start('switch');
+    await h.flush();
+    expect(h.controller.getState().status).toBe('locked');
+    expect(h.promptsOpen()).toBe(1);
+  });
+
+  it('a development bypass is not carried across a switch', async () => {
+    const h = harness({ security: 'none', isDev: true });
+    await h.controller.start('launch');
+    h.controller.bypassForDevelopment();
+    h.controller.markSwitch();
+    h.controller.stop();
+    await h.controller.start('switch');
+    expect(h.controller.getState().status).toBe('no_device_security');
+  });
+});

@@ -86,8 +86,10 @@ export default function RootLayout() {
  * Then: no server → /connect; server but no credential → /sign-in;
  * signed in → the (app) group. Stack.Protected redirects automatically.
  *
- * A connect link received while connected asks before switching servers
- * (`useIncomingConnectLink`): a switch wipes local data.
+ * Several workspaces can be connected; one is active. A switch (nothing is
+ * wiped) shows "Switching workspace…" and mounts the new workspace's stack
+ * from scratch. A connect link received while connected asks before
+ * switching to (or adding) that workspace (`useIncomingConnectLink`).
  *
  * Device lock: a signed-in session is guarded by the lock controller. The
  * signed-in stack mounts only after the first unlock; after that a relock
@@ -99,7 +101,9 @@ export default function RootLayout() {
 function RootStack() {
   const hydrated = useSession((s) => s.hydrated);
   const ending = useSession((s) => s.ending);
+  const switching = useSession((s) => s.switching);
   const serverOrigin = useSession((s) => s.serverOrigin);
+  const workspaceId = useSession((s) => s.workspaceId);
   const upgradeRequired = useSession((s) => s.upgradeRequired);
   const credentialKind = useSession((s) => s.credential?.kind ?? null);
 
@@ -116,27 +120,32 @@ function RootStack() {
 
   const connected = serverOrigin !== null;
   const signedIn = connected && credentialKind !== null;
-  const lock = useLockController(signedIn, hydrated);
+  const lock = useLockController(signedIn, hydrated, workspaceId);
   const lockDecided = !signedIn || lock.status !== 'deciding';
 
-  // The signed-in stack mounts after the first unlock and then stays mounted.
-  const [stackReady, setStackReady] = useState(false);
-  if (signedIn && lock.status === 'unlocked' && !stackReady) setStackReady(true);
-  if (!signedIn && stackReady) setStackReady(false);
+  // The signed-in stack mounts after the first unlock and then stays mounted,
+  // per workspace: a switch starts the new workspace's stack from scratch.
+  const [stackReady, setStackReady] = useState<string | null>(null);
+  const stackKey = signedIn ? (workspaceId ?? 'workspace') : null;
+  if (stackKey !== null && lock.status === 'unlocked' && stackReady !== stackKey) setStackReady(stackKey);
+  if (stackReady !== null && stackReady !== stackKey && (stackKey === null || lock.status !== 'unlocked')) {
+    setStackReady(null);
+  }
 
   useEffect(() => {
     updateSplash(hydrated && lockDecided);
   }, [hydrated, lockDecided]);
-  useIncomingConnectLink(hydrated && !ending && (!signedIn || lock.status === 'unlocked'));
+  useIncomingConnectLink(hydrated && !ending && !switching && (!signedIn || lock.status === 'unlocked'));
 
   if (!hydrated) return <StatusScreen busy />;
   if (ending) return <StatusScreen busy title="Signing out…" />;
+  if (switching) return <StatusScreen busy title="Switching workspace…" />;
 
   // The update screen covers the app instead of replacing it (DEF-R4): the
   // navigation stack and the lock stay mounted and untouched, so a 426 never
   // restarts the lock, and the app is back where it was once it clears.
   const upgrade = upgradeRequired ? <UpgradeRequired minVersion={upgradeRequired.minVersion} overlay /> : null;
-  if (signedIn && !stackReady) {
+  if (signedIn && stackReady !== stackKey) {
     return (
       <>
         <LockGate state={lock} />
@@ -147,7 +156,7 @@ function RootStack() {
 
   return (
     <>
-      <RoutedStack connected={connected} signedIn={signedIn} />
+      <RoutedStack key={workspaceId ?? 'none'} connected={connected} signedIn={signedIn} />
       {signedIn ? <LockGate state={lock} /> : null}
       {upgrade}
     </>

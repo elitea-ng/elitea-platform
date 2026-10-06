@@ -11,6 +11,10 @@ import type { AuthOutcome, DeviceAuth } from '@/security/lock/deviceAuth';
  *   the unlock prompt opens straight away.
  * - Fresh sign-in: not locked (the user just proved who they are), but the
  *   device-security check still applies.
+ * - Workspace switch (`noteSwitch` then `start('switch')`): the user's
+ *   presence carries over only when the app was unlocked under a policy that
+ *   required the lock; otherwise a workspace that requires it locks and
+ *   prompts, like a launch.
  * - Resume: 'background' records the time; on 'active' the app locks when
  *   `now − t ≥ idle_lock_seconds`. 0 means it never relocks on resume (the
  *   server's definition, ADR-0025 `native_client_policy`); the launch lock
@@ -80,6 +84,8 @@ export class LockController {
   private backgroundAt: number | null = null;
   /** `require_device_lock` as last applied, to tell a tightening from a re-delivery. */
   private lockRequired = false;
+  /** The user proved presence before the current workspace switch (see `noteSwitch`). */
+  private presenceCarried = false;
   private generation = 0;
   private readonly now: () => number;
 
@@ -100,7 +106,9 @@ export class LockController {
    * Starts guarding a signed-in session. `launch`: the session was restored
    * at app start (lock first). `sign_in`: the user just signed in.
    */
-  async start(kind: 'launch' | 'sign_in'): Promise<void> {
+  async start(kind: 'launch' | 'sign_in' | 'switch'): Promise<void> {
+    const carried = this.presenceCarried;
+    this.presenceCarried = false;
     this.detach();
     const generation = this.generation;
     this.appSub = this.opts.appState.addEventListener('change', (s) => this.onAppState(s));
@@ -118,12 +126,35 @@ export class LockController {
       this.set({ status: 'no_device_security' });
       return;
     }
-    if (kind === 'sign_in') {
+    if (kind === 'sign_in' || (kind === 'switch' && carried)) {
       this.set({ status: 'unlocked' });
       return;
     }
     this.set({ status: 'locked' });
     await this.unlock();
+  }
+
+  /**
+   * The app is about to switch to another connected workspace: remembers
+   * whether the user has proved presence (unlocked under a lock-requiring
+   * policy, not a development bypass), for the `start('switch')` that follows.
+   */
+  private noteSwitch(): void {
+    this.presenceCarried = this.state.status === 'unlocked' && this.lockRequired && !this.state.bypassed;
+  }
+
+  private switchNoted = false;
+
+  /** Marks the next `start` as a switch (the binding asks `consumeSwitch`). */
+  markSwitch(): void {
+    this.noteSwitch();
+    this.switchNoted = true;
+  }
+
+  consumeSwitch(): boolean {
+    const noted = this.switchNoted;
+    this.switchNoted = false;
+    return noted;
   }
 
   /** Stops guarding (signed out). The state returns to 'deciding'. */

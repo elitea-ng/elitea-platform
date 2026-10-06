@@ -1,8 +1,9 @@
 import { fetchNotifications, markSeen } from '@/api/queries/notifications';
 import { endSession } from '@/security/endSession';
-import { SECURE_KEYS, getSecureItem, setSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, getSecureItemIn, setSecureItemIn, bindWorkspace } from '@/security/secureStorage';
 import {
   fetchSelfIdentity,
+  getPersonalProjectId,
   getSelfUserId,
   parseUserId,
   resetSelfIdentity,
@@ -11,6 +12,7 @@ import {
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
 
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 // getCurrentAuthor as the server answers it (client contract 1.2, `SocialAuthorProfile`).
@@ -44,19 +46,40 @@ beforeEach(async () => {
   resetSelfIdentity();
   await endSession({ reason: 'user_logout' });
   __resetSessionForTests();
+  bindWorkspace(TEST_WORKSPACE);
   setSession({ serverOrigin: FAKE_ORIGIN, projectId: 7 });
   setCredential({ kind: 'pat', token: 'tok' });
 });
 
 describe('self identity ("who am I")', () => {
-  it('reads the caller from getCurrentAuthor and caches only the id for the workspace', async () => {
+  it('reads the caller from getCurrentAuthor and caches only the ids for the workspace', async () => {
     const server = fakeServer();
     server.on('GET', '/social/author', { status: 200, body: author });
     await expect(fetchSelfIdentity(server.client)).resolves.toBe(42);
     expect(getSelfUserId()).toBe(42);
     expect(server.requests[0]).toMatchObject({ method: 'GET' });
     expect(server.requests[0].url.pathname).toBe('/api/v2/social/author');
-    expect(JSON.parse((await getSecureItem(SECURE_KEYS.selfUser))!)).toEqual({ origin: FAKE_ORIGIN, userId: 42 });
+    expect(JSON.parse((await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser))!)).toEqual({
+      origin: FAKE_ORIGIN,
+      userId: 42,
+      personalProjectId: 7,
+    });
+    expect(getPersonalProjectId()).toBe(7);
+  });
+
+  it('has no personal project while the server is still provisioning it ("")', async () => {
+    const server = fakeServer();
+    server.on('GET', '/social/author', { status: 200, body: { ...author, personal_project_id: '' } });
+    await fetchSelfIdentity(server.client);
+    expect(getSelfUserId()).toBe(42);
+    expect(getPersonalProjectId()).toBeNull();
+  });
+
+  it('restores an id cached by an earlier build (no personal project stored)', async () => {
+    await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser, JSON.stringify({ origin: FAKE_ORIGIN, userId: 42 }));
+    await restoreSelfIdentity(FAKE_ORIGIN);
+    expect(getSelfUserId()).toBe(42);
+    expect(getPersonalProjectId()).toBeNull();
   });
 
   it('no longer learns "me" from a notification recipient', async () => {
@@ -67,7 +90,7 @@ describe('self identity ("who am I")', () => {
   });
 
   it('restores the cached id at launch, for the same workspace only', async () => {
-    await setSecureItem(SECURE_KEYS.selfUser, JSON.stringify({ origin: FAKE_ORIGIN, userId: 42 }));
+    await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser, JSON.stringify({ origin: FAKE_ORIGIN, userId: 42 }));
     await restoreSelfIdentity('https://other.example.com');
     expect(getSelfUserId()).toBeNull();
     await restoreSelfIdentity(FAKE_ORIGIN);
@@ -79,14 +102,14 @@ describe('self identity ("who am I")', () => {
 
   it('ignores a malformed cached value', async () => {
     for (const raw of ['nope', JSON.stringify({ origin: FAKE_ORIGIN, userId: -1 }), JSON.stringify({ origin: FAKE_ORIGIN, userId: '42' })]) {
-      await setSecureItem(SECURE_KEYS.selfUser, raw);
+      await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser, raw);
       await restoreSelfIdentity(FAKE_ORIGIN);
       expect(getSelfUserId()).toBeNull();
     }
   });
 
   it('keeps the cached id when the read fails, and replaces it when the server names someone else', async () => {
-    await setSecureItem(SECURE_KEYS.selfUser, JSON.stringify({ origin: FAKE_ORIGIN, userId: 42 }));
+    await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser, JSON.stringify({ origin: FAKE_ORIGIN, userId: 42 }));
     await restoreSelfIdentity(FAKE_ORIGIN);
     const server = fakeServer();
     server.on('GET', '/social/author', { status: 503, body: {} }, { status: 200, body: { ...author, id: '43' } });
@@ -94,7 +117,7 @@ describe('self identity ("who am I")', () => {
     expect(getSelfUserId()).toBe(42);
     await expect(fetchSelfIdentity(server.client)).resolves.toBe(43);
     expect(getSelfUserId()).toBe(43);
-    expect(JSON.parse((await getSecureItem(SECURE_KEYS.selfUser))!)).toMatchObject({ userId: 43 });
+    expect(JSON.parse((await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser))!)).toMatchObject({ userId: 43 });
   });
 
   it('does not record an answer without a usable id', async () => {
@@ -102,7 +125,7 @@ describe('self identity ("who am I")', () => {
     server.on('GET', '/social/author', { status: 200, body: { ...author, id: '0' } });
     await expect(fetchSelfIdentity(server.client)).resolves.toBeNull();
     expect(getSelfUserId()).toBeNull();
-    expect(await getSecureItem(SECURE_KEYS.selfUser)).toBeNull();
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser)).toBeNull();
   });
 
   it('drops an answer that arrives after the workspace changed', async () => {
@@ -113,7 +136,7 @@ describe('self identity ("who am I")', () => {
     await pending;
     setSession({ serverOrigin: FAKE_ORIGIN });
     expect(getSelfUserId()).toBeNull();
-    expect(await getSecureItem(SECURE_KEYS.selfUser)).toBeNull();
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser)).toBeNull();
   });
 
   it('stores nothing for a session that is ending', async () => {
@@ -125,7 +148,7 @@ describe('self identity ("who am I")', () => {
     await expect(pending).resolves.toBe(42);
     expect(server.requests).toHaveLength(1);
     expect(getSelfUserId()).toBeNull();
-    expect(await getSecureItem(SECURE_KEYS.selfUser)).toBeNull();
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser)).toBeNull();
   });
 
   it('parses only positive integer ids', () => {
@@ -143,7 +166,7 @@ describe('self identity ("who am I")', () => {
     await endSession({ reason: 'user_logout' });
     setSession({ serverOrigin: FAKE_ORIGIN });
     expect(getSelfUserId()).toBeNull();
-    expect(await getSecureItem(SECURE_KEYS.selfUser)).toBeNull();
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.selfUser)).toBeNull();
   });
 });
 

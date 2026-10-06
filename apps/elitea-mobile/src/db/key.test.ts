@@ -1,6 +1,7 @@
 import { DB_KEY_RE, createDbKey, deleteDbKey, newDbKey, readDbKey } from '@/db/key';
-import { SECURE_KEYS, getSecureItem, setSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, getSecureItemIn, setSecureItemIn } from '@/security/secureStorage';
 
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 describe('database key', () => {
@@ -15,16 +16,18 @@ describe('database key', () => {
     expect(() => newDbKey(() => new Uint8Array(16))).toThrow();
   });
 
-  it('is stored under the registered secure key and read back', async () => {
-    const key = await createDbKey();
-    expect(await getSecureItem(SECURE_KEYS.dbKey)).toBe(key);
-    expect(await readDbKey()).toBe(key);
-    await deleteDbKey();
-    expect(await readDbKey()).toBeNull();
+  it("is stored under the workspace's registered secure key and read back", async () => {
+    const key = await createDbKey(TEST_WORKSPACE);
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.dbKey)).toBe(key);
+    expect(await readDbKey(TEST_WORKSPACE)).toBe(key);
+    // Another workspace has its own key.
+    expect(await readDbKey('bbbbbbbbbbbb')).toBeNull();
+    await deleteDbKey(TEST_WORKSPACE);
+    expect(await readDbKey(TEST_WORKSPACE)).toBeNull();
   });
 
   it('treats a malformed stored value as no key', async () => {
-    await setSecureItem(SECURE_KEYS.dbKey, "abc'; DROP TABLE x; --");
-    expect(await readDbKey()).toBeNull();
+    await setSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.dbKey, "abc'; DROP TABLE x; --");
+    expect(await readDbKey(TEST_WORKSPACE)).toBeNull();
   });
 });

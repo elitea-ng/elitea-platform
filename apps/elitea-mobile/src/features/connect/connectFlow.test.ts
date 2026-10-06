@@ -1,18 +1,20 @@
 import { FIXTURE_ORIGIN, brandPack, discoveryDocument, discoveryWithoutNativeAuth } from '@/api/__fixtures__/nativeClient';
 import { DiscoveryDocumentSchema, type DiscoveryResult } from '@/api/discovery';
 import { canConnect, checkWorkspace, confirmConnection, displayHost } from '@/features/connect/connectFlow';
-import { SECURE_KEYS, getSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, bindWorkspace, boundWorkspace, getSecureItemIn } from '@/security/secureStorage';
 import { __resetSessionForTests, getSession } from '@/state/session';
 import { __resetWorkspaceInfoForTests, getWorkspaceInfo } from '@/state/workspaceInfo';
 import { BrandPackSchema, mapBrandPack } from '@/theme/brandPack';
 import { __resetBrandThemeForTests, getBrandTheme } from '@/theme/brandStore';
 
+import { TEST_WORKSPACE } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 const noBrand = async () => null;
 const ok = (doc: unknown): DiscoveryResult => ({ ok: true, document: DiscoveryDocumentSchema.parse(doc) });
 
 beforeEach(() => {
+  bindWorkspace(null);
   __resetSessionForTests();
   __resetWorkspaceInfoForTests();
   __resetBrandThemeForTests();
@@ -27,7 +29,7 @@ describe('checkWorkspace', () => {
     });
     expect(check).toMatchObject({ kind: 'confirm', origin: FIXTURE_ORIGIN, assessment: { kind: 'ready' } });
     expect(getSession().serverOrigin).toBeNull();
-    expect(await getSecureItem(SECURE_KEYS.serverOrigin)).toBeNull();
+    expect(await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.serverOrigin)).toBeNull();
   });
 
   it('passes a failure through, offering only a clean canonical origin', async () => {
@@ -109,7 +111,10 @@ describe('confirmConnection', () => {
     expect(getBrandTheme()).toBeNull(); // nothing applied before the user confirms
 
     expect(await confirmConnection(check)).toBe(true);
-    expect(await getSecureItem(SECURE_KEYS.serverOrigin)).toBe(FIXTURE_ORIGIN);
+    // A workspace slot of its own, bound and active.
+    const slot = boundWorkspace();
+    expect(slot).toMatch(/^[0-9a-f]{12}$/);
+    expect(await getSecureItemIn(slot!, SECURE_KEYS.serverOrigin)).toBe(FIXTURE_ORIGIN);
     expect(getSession().serverOrigin).toBe(FIXTURE_ORIGIN);
     expect(getWorkspaceInfo()?.discovery.display_name).toBe('Elitea');
     expect(getBrandTheme()).toBe(brand);

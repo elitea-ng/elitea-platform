@@ -7,7 +7,7 @@ import { isEndingSession, registerWipeHook } from '@/security/endSession';
 import { SECURE_KEYS, getSecureItem, setSecureItem } from '@/security/secureStorage';
 import { getSession } from '@/state/session';
 import { onDiscovery } from '@/state/workspaceInfo';
-import { acceptImage, fetchBrandTheme, mapScheme, type BrandTheme } from '@/theme/brandPack';
+import { acceptImage, brandFontAlias, fetchBrandTheme, mapScheme, type BrandTheme } from '@/theme/brandPack';
 
 /**
  * The applied brand theme of the connected workspace.
@@ -111,12 +111,29 @@ export async function restoreBrandTheme(origin: string): Promise<void> {
       logoFull: image(parsed.logoFull),
       light: mapScheme(schemeTokens(parsed.light), ''),
       dark: mapScheme(schemeTokens(parsed.dark), ''),
-      fontFaces: parsed.fontFaces.filter((face) => face.url.startsWith(`${origin}/`)),
+      ...restoredFonts(parsed.fontFaces, parsed.fontFamily, origin),
     };
     emit();
   } catch {
     log.info('persisted brand theme ignored');
   }
+}
+
+/**
+ * The persisted faces of `origin`, renamed with the current alias (a theme
+ * stored by an older build carries a weaker name that another workspace
+ * could collide with).
+ */
+function restoredFonts(
+  faces: readonly { alias: string; url: string }[],
+  family: string | null,
+  origin: string,
+): Pick<BrandTheme, 'fontFaces' | 'fontFamily'> {
+  const kept = faces
+    .filter((face) => face.url.startsWith(`${origin}/`))
+    .map((face) => ({ alias: brandFontAlias(origin, face.url), url: face.url }));
+  if (family === null || kept.length === 0) return { fontFaces: [], fontFamily: null };
+  return { fontFaces: kept, fontFamily: kept[0].alias };
 }
 
 /** Re-expresses an app palette as pack token ids, so `mapScheme` re-validates it. */

@@ -237,3 +237,46 @@ describe('SyncManager.syncProject', () => {
     expect(server.requests).toEqual([]);
   });
 });
+
+describe('several workspaces', () => {
+  it('never folds a sync into a run of another workspace with the same project id', async () => {
+    const a = new Db(openNodeSqlite());
+    const b = new Db(openNodeSqlite());
+    await migrate(a);
+    await migrate(b);
+    const serverA = fakeServer();
+    const serverB = fakeServer();
+    let releaseA!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseA = resolve));
+    // Workspace A's server answers slowly.
+    const slowA = {
+      ...serverA.client,
+      GET: (async (...args: unknown[]) => {
+        await gate;
+        return (serverA.client.GET as (...a: unknown[]) => unknown)(...args);
+      }) as typeof serverA.client.GET,
+    };
+    let active: { db: Db; client: typeof serverA.client } = { db: a, client: slowA };
+    const manager = new SyncManager({ getDb: () => active.db, client: () => active.client });
+    serverA.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41)], { next: 'a-1' }) });
+    serverA.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41' }) });
+    serverA.on('GET', NOTIF, { status: 200, body: notificationDelta([], { next: 'na' }) });
+    serverB.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(77)], { next: 'b-1' }) });
+    serverB.on('GET', msgs(77), { status: 200, body: messageDelta([], { next: 'm77' }) });
+    serverB.on('GET', NOTIF, { status: 200, body: notificationDelta([], { next: 'nb' }) });
+
+    const runA = manager.syncProject(7);
+    // The user switches workspace while A's run is waiting for its server.
+    active = { db: b, client: serverB.client };
+    const runB = manager.syncProject(7);
+    expect(runB).not.toBe(runA);
+    expect(await runB).toMatchObject({ conversations: 'ok' });
+    expect(await ids(b, 'SELECT id FROM conversations')).toEqual([77]);
+    releaseA();
+    await runA;
+    // Each workspace's rows stay in its own database.
+    expect(await ids(a, 'SELECT id FROM conversations')).toEqual([41]);
+    expect(await ids(b, 'SELECT id FROM conversations')).toEqual([77]);
+    expect(serverB.requests.every((r) => !r.url.pathname.includes('/41'))).toBe(true);
+  });
+});

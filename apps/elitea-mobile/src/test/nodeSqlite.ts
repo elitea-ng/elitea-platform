@@ -109,6 +109,8 @@ export function nodeSqliteDriver(dir: string, options: { cipher?: boolean } = {}
     });
   };
 
+  // Which file each connection belongs to (a file cannot be deleted while open).
+  const fileOf = new Map<NodeSqliteConnection, string>();
   return {
     requireCipher: cipher,
     opened,
@@ -117,10 +119,11 @@ export function nodeSqliteDriver(dir: string, options: { cipher?: boolean } = {}
     open: async (name: string): Promise<NodeSqliteConnection> => {
       const conn = openNodeSqlite(join(dir, name));
       opened.push(conn);
+      fileOf.set(conn, name);
       return cipher ? withCipher(name, conn) : conn;
     },
     remove: jest.fn(async (name: string) => {
-      if (opened.some((c) => c.isOpen)) throw new Error('database is open');
+      if (opened.some((c) => c.isOpen && fileOf.get(c) === name)) throw new Error('database is open');
       fileKeys.delete(name);
       for (const suffix of ['', '-journal', '-wal', '-shm']) rmSync(join(dir, name + suffix), { force: true });
     }),

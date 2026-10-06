@@ -11,11 +11,12 @@ import {
   startNativeSession,
 } from '@/auth/nativeSession';
 import { TokenResponseSchema, type TokenOutcome } from '@/auth/tokenEndpoint';
-import { endSession } from '@/security/endSession';
-import { SECURE_KEYS } from '@/security/secureStorage';
+import { endSession, suspendActiveWorkspace, wipeStoredWorkspace } from '@/security/endSession';
+import { SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests, getBearerToken, getSession, setSession } from '@/state/session';
 import type { FakeSecureStore } from '@/test/fakeSecureStore';
 
+import { TEST_WORKSPACE, wsKey } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
@@ -52,6 +53,7 @@ async function signedIn(n = 1) {
 }
 
 beforeEach(() => {
+  bindWorkspace(TEST_WORKSPACE);
   clock = 1_000_000;
   store.values.clear();
   store.setItemAsync.mockClear();
@@ -70,17 +72,17 @@ describe('startNativeSession', () => {
     useDeps(jest.fn());
     await signedIn();
     expect(store.setItemAsync.mock.calls.map((c) => c[0])).toEqual([
-      SECURE_KEYS.refreshToken,
-      SECURE_KEYS.accessToken,
-      SECURE_KEYS.credentialKind,
+      wsKey(SECURE_KEYS.refreshToken),
+      wsKey(SECURE_KEYS.accessToken),
+      wsKey(SECURE_KEYS.credentialKind),
     ]);
-    expect(JSON.parse(store.values.get(SECURE_KEYS.refreshToken)!)).toMatchObject({
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!)).toMatchObject({
       origin: FIXTURE_ORIGIN,
       refreshToken: opaqueToken('elnrt_', 1),
       refreshExpiresAt: clock + 2592000 * 1000,
       deviceId: tokenResponse().device_id,
     });
-    expect(store.values.get(SECURE_KEYS.credentialKind)).toBe('oauth');
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind))).toBe('oauth');
     expect(getSession().credential).toEqual({ kind: 'oauth' });
     expect(getBearerToken()).toBe(opaqueToken('elnat_', 1));
     expect(getCredentialRefresher()).not.toBeNull();
@@ -143,9 +145,9 @@ describe('refresh', () => {
       store.values.set(key, value);
     });
     await refreshNativeSession();
-    expect(tokenAtWrite[SECURE_KEYS.refreshToken]).toBe(opaqueToken('elnat_', 1));
-    expect(tokenAtWrite[SECURE_KEYS.accessToken]).toBe(opaqueToken('elnat_', 1));
-    expect(JSON.parse(store.values.get(SECURE_KEYS.refreshToken)!).refreshToken).toBe(opaqueToken('elnrt_', 2));
+    expect(tokenAtWrite[wsKey(SECURE_KEYS.refreshToken)]).toBe(opaqueToken('elnat_', 1));
+    expect(tokenAtWrite[wsKey(SECURE_KEYS.accessToken)]).toBe(opaqueToken('elnat_', 1));
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!).refreshToken).toBe(opaqueToken('elnrt_', 2));
     expect(getBearerToken()).toBe(opaqueToken('elnat_', 2));
   });
 
@@ -180,8 +182,8 @@ describe('refresh', () => {
     expect(await refreshNativeSession()).toBe('device_revoked');
     await endSession({ reason: 'device_revoked' }); // joins the wipe already running
     expect(getSession()).toMatchObject({ credential: null, serverOrigin: null, endReason: 'device_revoked' });
-    expect(store.values.has(SECURE_KEYS.refreshToken)).toBe(false);
-    expect(store.values.has(SECURE_KEYS.accessToken)).toBe(false);
+    expect(store.values.has(wsKey(SECURE_KEYS.refreshToken))).toBe(false);
+    expect(store.values.has(wsKey(SECURE_KEYS.accessToken))).toBe(false);
     expect(revoke).not.toHaveBeenCalled();
     expect(getCredentialRefresher()).toBeNull();
   });
@@ -204,7 +206,7 @@ describe('refresh', () => {
       store.values.set(key, value);
     });
     await getCredentialRefresher()!.ensureFresh();
-    expect(JSON.parse(store.values.get(SECURE_KEYS.refreshToken)!).refreshToken).toBe(opaqueToken('elnrt_', 2));
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!).refreshToken).toBe(opaqueToken('elnrt_', 2));
   });
 });
 
@@ -220,7 +222,8 @@ describe('sign out', () => {
       expect.objectContaining({ signal: expect.anything() }),
     );
     expect(getNativeTokenSet()).toBeNull();
-    expect(store.values.size).toBe(0);
+    // Nothing of the workspace is left (the device's workspace registry stays).
+    expect([...store.values.keys()]).toEqual(['az.workspaces']);
   });
 });
 
@@ -239,7 +242,7 @@ describe('restoreNativeSession', () => {
   it('refreshes first when the access record is missing', async () => {
     const { refresh } = useDeps(jest.fn(async () => ok(2)));
     await signedIn();
-    store.values.delete(SECURE_KEYS.accessToken);
+    store.values.delete(wsKey(SECURE_KEYS.accessToken));
     __resetNativeSessionForTests();
     useDeps(refresh);
     expect(await restoreNativeSession(FIXTURE_ORIGIN)).toBe(true);
@@ -250,10 +253,10 @@ describe('restoreNativeSession', () => {
     useDeps(jest.fn());
     await signedIn();
     expect(await restoreNativeSession('https://other.example.com')).toBe(false);
-    const record = JSON.parse(store.values.get(SECURE_KEYS.refreshToken)!);
-    store.values.set(SECURE_KEYS.refreshToken, JSON.stringify({ ...record, tokenEndpoint: 'https://evil.example/token' }));
+    const record = JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!);
+    store.values.set(wsKey(SECURE_KEYS.refreshToken), JSON.stringify({ ...record, tokenEndpoint: 'https://evil.example/token' }));
     expect(await restoreNativeSession(FIXTURE_ORIGIN)).toBe(false);
-    store.values.set(SECURE_KEYS.refreshToken, 'not json');
+    store.values.set(wsKey(SECURE_KEYS.refreshToken), 'not json');
     expect(await restoreNativeSession(FIXTURE_ORIGIN)).toBe(false);
   });
 });
@@ -272,7 +275,7 @@ describe('a wipe during a token write', () => {
       writeStarted = resolve;
     });
     store.setItemAsync.mockImplementation(async (key: string, value: string) => {
-      if (key === SECURE_KEYS.refreshToken && value.includes(opaqueToken('elnrt_', 2))) {
+      if (key === wsKey(SECURE_KEYS.refreshToken) && value.includes(opaqueToken('elnrt_', 2))) {
         writeStarted();
         await gate;
       }
@@ -287,8 +290,8 @@ describe('a wipe during a token write', () => {
     const result = await wiping;
     await refreshing;
     expect(result.storageWiped).toBe(true);
-    expect(store.values.get(SECURE_KEYS.refreshToken)).toBeUndefined();
-    expect(store.values.get(SECURE_KEYS.accessToken)).toBeUndefined();
+    expect(store.values.get(wsKey(SECURE_KEYS.refreshToken))).toBeUndefined();
+    expect(store.values.get(wsKey(SECURE_KEYS.accessToken))).toBeUndefined();
     expect(getNativeTokenSet()).toBeNull();
   });
 
@@ -307,7 +310,7 @@ describe('a wipe during a token write', () => {
     });
     let rotatedWrites = 0;
     store.setItemAsync.mockImplementation(async (key: string, value: string) => {
-      if (key === SECURE_KEYS.refreshToken && value.includes(opaqueToken('elnrt_', 2))) {
+      if (key === wsKey(SECURE_KEYS.refreshToken) && value.includes(opaqueToken('elnrt_', 2))) {
         rotatedWrites++;
         if (rotatedWrites === 1) {
           writeStarted();
@@ -327,8 +330,107 @@ describe('a wipe during a token write', () => {
     for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
     expect(result.storageWiped).toBe(true);
     expect(rotatedWrites).toBe(1);
-    expect(store.values.get(SECURE_KEYS.refreshToken)).toBeUndefined();
-    expect(store.values.get(SECURE_KEYS.accessToken)).toBeUndefined();
+    expect(store.values.get(wsKey(SECURE_KEYS.refreshToken))).toBeUndefined();
+    expect(store.values.get(wsKey(SECURE_KEYS.accessToken))).toBeUndefined();
   });
 });
 
+
+// WS-1: a switch is not a wipe. A rotation that finishes after the workspace
+// was put aside belongs to THAT workspace's slot; dropping it leaves the slot
+// holding a refresh token the server already consumed (reuse -> wipe later).
+describe('a workspace switch during a refresh', () => {
+  const OTHER = 'bbbbbbbbbbbb';
+
+  it('stores the rotated pair in the workspace it was refreshed for, even after the switch', async () => {
+    let release!: (o: TokenOutcome) => void;
+    useDeps(jest.fn(() => new Promise<TokenOutcome>((resolve) => (release = resolve))));
+    await signedIn(1);
+    const refreshing = refreshNativeSession();
+    await suspendActiveWorkspace();
+    bindWorkspace(OTHER);
+    release(ok(2));
+    await refreshing;
+    for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!).refreshToken).toBe(opaqueToken('elnrt_', 2));
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.accessToken))!).accessToken).toBe(opaqueToken('elnat_', 2));
+    // Nothing leaked into the workspace switched to, and nothing was activated.
+    expect(store.values.get(wsKey(SECURE_KEYS.refreshToken, OTHER))).toBeUndefined();
+    expect(getNativeTokenSet()).toBeNull();
+  });
+
+  it('flushes a rotated pair that only lived in memory into its own slot when the workspace is put aside', async () => {
+    useDeps(jest.fn(async () => ok(2)));
+    await signedIn(1);
+    store.setItemAsync.mockRejectedValue(new Error('keychain busy'));
+    expect(await refreshNativeSession()).toBe('refreshed');
+    store.setItemAsync.mockImplementation(async (key: string, value: string) => {
+      store.values.set(key, value);
+    });
+    await suspendActiveWorkspace();
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!).refreshToken).toBe(opaqueToken('elnrt_', 2));
+  });
+
+  it('does not store a late rotation into a workspace whose wipe has begun', async () => {
+    let release!: (o: TokenOutcome) => void;
+    useDeps(jest.fn(() => new Promise<TokenOutcome>((resolve) => (release = resolve))));
+    await signedIn(1);
+    const refreshing = refreshNativeSession();
+    await suspendActiveWorkspace();
+    bindWorkspace(OTHER);
+    const wiping = wipeStoredWorkspace(TEST_WORKSPACE, { reason: 'user_logout' });
+    for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    release(ok(2));
+    await refreshing;
+    expect((await wiping).wiped).toBe(true);
+    for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(store.values.get(wsKey(SECURE_KEYS.refreshToken))).toBeUndefined();
+    expect(store.values.get(wsKey(SECURE_KEYS.accessToken))).toBeUndefined();
+  });
+});
+
+// WS-SEC-1: the refresh singleton and the restore of the workspace put aside.
+describe('the refresh of a workspace put aside', () => {
+  const OTHER = 'bbbbbbbbbbbb';
+
+  it('is not joined by the workspace switched to', async () => {
+    let release!: (o: TokenOutcome) => void;
+    const refresh = jest.fn((_origin: string, _endpoint: string, request: { refreshToken: string }) =>
+      request.refreshToken === opaqueToken('elnrt_', 1)
+        ? new Promise<TokenOutcome>((resolve) => (release = resolve))
+        : Promise.resolve(ok(6)),
+    );
+    useDeps(refresh as unknown as jest.Mock);
+    await signedIn(1);
+    const first = refreshNativeSession();
+    await suspendActiveWorkspace();
+    bindWorkspace(OTHER);
+    await signedIn(5);
+    expect(await refreshNativeSession()).toBe('refreshed');
+    expect(refresh).toHaveBeenLastCalledWith(FIXTURE_ORIGIN, BASE.tokenEndpoint, expect.objectContaining({ refreshToken: opaqueToken('elnrt_', 5) }));
+    expect(getBearerToken()).toBe(opaqueToken('elnat_', 6));
+    release(ok(2));
+    await first;
+    // A's answer went to A's slot, B kept its own session.
+    expect(JSON.parse(store.values.get(wsKey(SECURE_KEYS.refreshToken))!).refreshToken).toBe(opaqueToken('elnrt_', 2));
+    expect(getNativeTokenSet()?.refreshToken).toBe(opaqueToken('elnrt_', 6));
+  });
+
+  it('is waited for when switching back, so the restored session holds the rotated token', async () => {
+    let release!: (o: TokenOutcome) => void;
+    useDeps(jest.fn(() => new Promise<TokenOutcome>((resolve) => (release = resolve))));
+    await signedIn(1);
+    const first = refreshNativeSession();
+    await suspendActiveWorkspace();
+    bindWorkspace(OTHER);
+    await suspendActiveWorkspace();
+    bindWorkspace(TEST_WORKSPACE);
+    const restoring = restoreNativeSession(FIXTURE_ORIGIN);
+    for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    release(ok(2));
+    expect(await restoring).toBe(true);
+    await first;
+    expect(getNativeTokenSet()?.refreshToken).toBe(opaqueToken('elnrt_', 2));
+    expect(getBearerToken()).toBe(opaqueToken('elnat_', 2));
+  });
+});
