@@ -127,34 +127,112 @@ impl PageSearch for ReplaySearch {
 #[derive(Debug, Clone)]
 pub struct SubstringSearch {
     index: Arc<PageIndex>,
+    /// `LOWER(source_text)` of every node, in node order, built once:
+    /// SQLite's `LOWER` folds ASCII only.
+    lowered: Vec<String>,
 }
 
 impl SubstringSearch {
     #[must_use]
     pub fn new(index: Arc<PageIndex>) -> Self {
-        Self { index }
+        let lowered = index
+            .nodes()
+            .iter()
+            .map(|n| n.text().to_ascii_lowercase())
+            .collect();
+        Self { index, lowered }
     }
 }
 
-/// SQLite `LIKE '%pattern%'` on `LOWER(text)`: ASCII case-insensitive,
-/// `_` one character, `%` any run (no escape character).
-fn like_contains(text: &str, pattern: &str) -> bool {
-    let text: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
-    let pattern: Vec<char> = pattern.chars().map(|c| c.to_ascii_lowercase()).collect();
-    like_at(&text, &pattern)
+/// A compiled SQLite `LIKE '%pattern%'` (ASCII case-insensitive, `_` one
+/// character, `%` any run, no escape character) for texts that are
+/// already ASCII-lowercased.
+enum Like {
+    /// No wildcard: a plain substring search.
+    Literal(memchr::memmem::Finder<'static>),
+    /// The pattern's characters, wrapped in `%…%`, and its longest
+    /// literal run (it must occur in any matching text).
+    Wildcard {
+        pattern: Vec<char>,
+        required: memchr::memmem::Finder<'static>,
+    },
 }
 
-/// `%pattern%`: try the pattern at every start.
-fn like_at(text: &[char], pattern: &[char]) -> bool {
-    (0..=text.len()).any(|start| like_here(&text[start..], pattern))
+impl Like {
+    fn new(pattern: &str) -> Self {
+        let pattern: Vec<char> = pattern.chars().map(|c| c.to_ascii_lowercase()).collect();
+        if !pattern.iter().any(|&c| c == '%' || c == '_') {
+            let needle: String = pattern.into_iter().collect();
+            return Self::Literal(memchr::memmem::Finder::new(needle.as_bytes()).into_owned());
+        }
+        let required: String = pattern
+            .split(|&c| c == '%' || c == '_')
+            .max_by_key(|run| run.len())
+            .unwrap_or_default()
+            .iter()
+            .collect();
+        let mut wrapped = Vec::with_capacity(pattern.len() + 2);
+        wrapped.push('%');
+        wrapped.extend(pattern);
+        wrapped.push('%');
+        Self::Wildcard {
+            pattern: wrapped,
+            required: memchr::memmem::Finder::new(required.as_bytes()).into_owned(),
+        }
+    }
+
+    fn matches(&self, lowered: &str) -> bool {
+        match self {
+            Self::Literal(finder) => finder.find(lowered.as_bytes()).is_some(),
+            Self::Wildcard { pattern, required } => {
+                required.find(lowered.as_bytes()).is_some() && glob(lowered, pattern)
+            }
+        }
+    }
 }
 
-fn like_here(text: &[char], pattern: &[char]) -> bool {
-    match pattern.first() {
-        None => true,
-        Some('%') => (0..=text.len()).any(|skip| like_here(&text[skip..], &pattern[1..])),
-        Some('_') => !text.is_empty() && like_here(&text[1..], &pattern[1..]),
-        Some(&c) => text.first() == Some(&c) && like_here(&text[1..], &pattern[1..]),
+/// `LIKE` matching of the whole `text` against `pattern` (`%` any run,
+/// `_` one character): the iterative two-pointer match that backtracks
+/// to the last `%` only, O(len(text) · len(pattern)).
+fn glob(text: &str, pattern: &[char]) -> bool {
+    let next = |at: usize| at + text[at..].chars().next().map_or(1, char::len_utf8);
+    let (mut ti, mut pi) = (0, 0);
+    // The pattern position after the last `%`, and the text position it
+    // was tried at.
+    let mut star: Option<(usize, usize)> = None;
+    loop {
+        if let Some(&c) = pattern.get(pi) {
+            match c {
+                '%' => {
+                    pi += 1;
+                    star = Some((pi, ti));
+                    continue;
+                }
+                '_' if ti < text.len() => {
+                    ti = next(ti);
+                    pi += 1;
+                    continue;
+                }
+                '_' => {}
+                c if text[ti..].starts_with(c) => {
+                    ti += c.len_utf8();
+                    pi += 1;
+                    continue;
+                }
+                _ => {}
+            }
+        } else if ti == text.len() {
+            return true;
+        }
+        match star {
+            Some((after, tried)) if tried < text.len() => {
+                let retry = next(tried);
+                star = Some((after, retry));
+                pi = after;
+                ti = retry;
+            }
+            _ => return false,
+        }
     }
 }
 
@@ -174,13 +252,15 @@ impl PageSearch for SubstringSearch {
         cluster_id: Option<i64>,
         limit: usize,
     ) -> Result<Vec<String>, EngineError> {
-        let pattern = term.to_lowercase();
+        let like = Like::new(&term.to_lowercase());
         let mut rows: Vec<&IndexNode> = self
             .index
             .nodes()
             .iter()
-            .filter(|n| cluster_id.is_none() || n.macro_cluster == cluster_id)
-            .filter(|n| like_contains(n.text(), &pattern))
+            .zip(&self.lowered)
+            .filter(|(n, _)| cluster_id.is_none() || n.macro_cluster == cluster_id)
+            .filter(|(_, lowered)| like.matches(lowered))
+            .map(|(n, _)| n)
             .collect();
         rows.sort_by(|a, b| {
             a.rel_path
@@ -219,12 +299,104 @@ impl PageSearch for SubstringSearch {
 mod tests {
     use super::*;
 
+    /// `LIKE '%pattern%'` on `LOWER(text)` as the first port wrote it:
+    /// a recursive match at every start (exponential in `%`).
+    fn like_contains_reference(text: &str, pattern: &str) -> bool {
+        fn here(text: &[char], pattern: &[char]) -> bool {
+            match pattern.first() {
+                None => true,
+                Some('%') => (0..=text.len()).any(|skip| here(&text[skip..], &pattern[1..])),
+                Some('_') => !text.is_empty() && here(&text[1..], &pattern[1..]),
+                Some(&c) => text.first() == Some(&c) && here(&text[1..], &pattern[1..]),
+            }
+        }
+        let text: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
+        let pattern: Vec<char> = pattern.chars().map(|c| c.to_ascii_lowercase()).collect();
+        (0..=text.len()).any(|start| here(&text[start..], &pattern))
+    }
+
+    fn like_contains(text: &str, pattern: &str) -> bool {
+        Like::new(&pattern.to_lowercase()).matches(&text.to_ascii_lowercase())
+    }
+
     #[test]
     fn like_is_ascii_case_insensitive_with_underscore_wildcard() {
         assert!(like_contains("Call get_Owner here", "get_owner"));
         assert!(like_contains("getXowner", "get_owner"));
         assert!(!like_contains("getowner", "get_owner"));
         assert!(!like_contains("ÉCOLE", "école"));
+        assert!(like_contains("a\u{e9}b", "a_b"));
+        assert!(like_contains("anything", ""));
+    }
+
+    /// The compiled matcher against the recursive one on random texts and
+    /// patterns (ASCII case, a multi-byte letter, `%`, `_`).
+    #[test]
+    fn like_matches_the_recursive_reference() {
+        let text_chars: Vec<char> = "aAbB_%\u{e9}\u{c9}x ".chars().collect();
+        let pattern_chars: Vec<char> = "aAbB_%%__\u{e9}x".chars().collect();
+        let mut state = 0x853c_49e6_748f_ea9b_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % 1_000_003).unwrap()
+        };
+        for _ in 0..20_000 {
+            let text: String = (0..next() % 12)
+                .map(|_| text_chars[next() % text_chars.len()])
+                .collect();
+            let pattern: String = (0..next() % 6)
+                .map(|_| pattern_chars[next() % pattern_chars.len()])
+                .collect();
+            assert_eq!(
+                like_contains(&text, &pattern),
+                like_contains_reference(&text, &pattern.to_lowercase()),
+                "{text:?} LIKE %{pattern:?}%"
+            );
+        }
+    }
+
+    /// Many `%` made the recursive matcher exponential; this is linear in
+    /// the pattern and quadratic at worst.
+    #[test]
+    fn many_percent_signs_stay_fast() {
+        let text = "a".repeat(4000);
+        let pattern = format!("{}b", "a%".repeat(40));
+        let started = std::time::Instant::now();
+        assert!(!like_contains(&text, &pattern));
+        let pattern = format!("{}_", "%a".repeat(40));
+        assert!(like_contains(&text, &pattern));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn search_keeps_row_order_filters_and_limit() {
+        let node = |id: &str, path: &str, line: i64, text: &str, cluster: Option<i64>| IndexNode {
+            node_id: id.to_owned(),
+            rel_path: path.to_owned(),
+            start_line: Some(line),
+            source_text: Some(text.to_owned()),
+            macro_cluster: cluster,
+            ..IndexNode::default()
+        };
+        let index = Arc::new(PageIndex::new(
+            vec![
+                node("n1", "b.py", 1, "call Get_Owner()", Some(1)),
+                node("n2", "a.py", 9, "getXowner", Some(1)),
+                node("n3", "a.py", 2, "GET_OWNER", Some(2)),
+                node("n4", "a.py", 1, "nothing", Some(1)),
+            ],
+            Vec::new(),
+            super::super::index::GraphFacts::default(),
+        ));
+        let search = SubstringSearch::new(index);
+        assert_eq!(
+            search.search("get_owner", None, 9).unwrap(),
+            ["n3", "n2", "n1"]
+        );
+        assert_eq!(search.search("get_owner", Some(1), 1).unwrap(), ["n2"]);
+        assert_eq!(search.search("Get_Owner()", None, 9).unwrap(), ["n1"]);
     }
 
     #[test]

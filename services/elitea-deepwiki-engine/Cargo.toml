@@ -42,6 +42,9 @@ regex = "=1.13.1"
 # a seed gives one result), no gryf. Called only behind
 # `graph::clustering::Partitioner`.
 leiden-rs = { path = "vendor/leiden-rs", version = "=0.8.1", default-features = false }
+# Substring search over the page index (`wiki::search`). Already in the
+# tree (regex, gix, …); pinned to the locked version.
+memchr = "=2.8.3"
 # The model client (ADR-0026 decision 8): one small OpenAI-compatible client
 # for embeddings and chat completions. reqwest 0.13.5 is the copy gix already
 # pulls (with rustls/aws-lc-rs and the platform verifier), so the async

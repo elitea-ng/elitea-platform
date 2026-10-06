@@ -600,6 +600,7 @@ dependencies = [
  "hyper-util",
  "indexmap",
  "leiden-rs",
+ "memchr",
  "pgvector",
  "rayon",
  "rcgen",
