@@ -20,7 +20,7 @@ They do not establish the current Linux stack bound.
 ## October 6 correction
 
 The PostgreSQL 18 CI job aborts in the explicit `sensitive-hitl-2mib-stack` thread.
-The owning sensitive HITL regression uses fake control, progress, and Redis clients.
+The owning sensitive HITL regression uses fake control, progress, and command-bus clients.
 Its failing lifecycle path performs no PostgreSQL operation.
 
 Caller boxing still constructs terminal-future temporaries inside the caller's generated poll frame.

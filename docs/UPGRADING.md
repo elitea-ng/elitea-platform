@@ -24,8 +24,9 @@ and anyone using the mixed `deploy/centry-hybrid` stack.
   message naming this entry. The worker keys `worker.runtime.redisUrl`,
   `redisStream`, `redisGroup`, the `redis_*` limits, `main.runtime.redis` and
   an auth document `redis:` block were already refused.
-- Compose: the `runtime-redis` service, its `standalone_runtime_redis` volume
-  and `deploy/runtime/redis.conf` are gone.
+- Compose: the `runtime-redis` service, its `standalone_runtime_redis` material
+  volume, its `standalone_runtime_redis_data` AOF volume and
+  `deploy/runtime/redis.conf` are gone.
 - `deploy/scripts/gen-runtime-certs.sh` no longer mints `redis-server.crt`/`.key`,
   `redis-users.acl` or the `redis-{producer,worker,bootstrap}-password` files,
   and deletes them (and a leftover `redis-auth-password`) from an existing
@@ -66,7 +67,9 @@ and anyone using the mixed `deploy/centry-hybrid` stack.
    are still there. Nothing reads them, and they are live credentials to a
    server that no longer exists.
 4. Compose: `podman compose -f deploy/docker-compose.standalone-full.yml down`
-   with `--remove-orphans`, then `podman volume rm <project>_standalone_runtime_redis`.
+   with `--remove-orphans`, then `podman volume rm <project>_standalone_runtime_redis
+   <project>_standalone_runtime_redis_data` (the second exists only on stacks
+   that ran the AOF-persistent runtime-redis).
    Re-run `deploy/scripts/gen-runtime-certs.sh` (or `task standalone:up`,
    which runs it) to prune the retired files from `deploy/certs/runtime/`.
 5. Mixed-deployment users: there is no in-repo replacement for
